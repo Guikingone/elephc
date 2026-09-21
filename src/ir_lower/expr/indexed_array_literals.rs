@@ -444,9 +444,27 @@ pub(super) fn narrow_gradual_indexed_spread_source(
     if !matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
         return source;
     }
+    // Replace a callable descriptor with a boxed array FIRST, then unbox exactly as before.
+    //
+    // A `callable` slot holds a DESCRIPTOR, not the `[$object, 'method']` array the caller wrote,
+    // so `...$callable` had nothing to unpack. `__rt_mixed_spread_array` is Mixed -> Mixed and
+    // touches ONLY that shape, which is what keeps `MixedUnbox` in charge of everything it always
+    // did: the tag guard, PHP's "Only arrays and Traversables can be unpacked" message, and the
+    // invoker clone it makes for an `array<mixed>` result. Replacing the unbox outright dropped
+    // that clone and broke a gradual spread into a dynamic method call.
+    let materialized = ctx.emit_value(
+        Op::RuntimeCall,
+        vec![source.value],
+        Some(Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::MixedSpreadArray),
+        )),
+        PhpType::Mixed,
+        crate::ir::RuntimeFnId::MixedSpreadArray.effects(),
+        Some(span),
+    );
     let narrowed = ctx.emit_value(
         Op::MixedUnbox,
-        vec![source.value],
+        vec![materialized.value],
         Some(Immediate::I64(4)),
         PhpType::Array(Box::new(PhpType::Mixed)),
         Op::MixedUnbox.default_effects(),
@@ -579,14 +597,20 @@ pub(super) fn array_literal_element_type_for_ir(
                 .and_then(materializable_array_element_type)
                 .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
         }
-        ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
-            .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
-        ExprKind::PropertyAccess { object, property } => property_access_expr_type_for_ir(
-            ctx,
-            object,
-            property,
-        )
-        .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
+        // An index or property read the lowering cannot RESOLVE is unknown, and unknown is
+        // `Mixed` — the representation that holds whatever arrives. The syntactic pre-pass answers
+        // `Int` for anything it does not recognise, which as a storage stamp makes the backend read
+        // a boxed pointer as an integer. Symfony's twig-bridge built
+        // `[$view->vars['id'], $view->vars['name']]` over a `FormView` absent from the closed world
+        // and got `array<int>` over elements the same IR typed `mixed`.
+        ExprKind::ArrayAccess { array, .. } => {
+            array_access_expr_value_type_for_ir(ctx, array).unwrap_or(PhpType::Mixed)
+        }
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)
+                .map(ir_array_storage_type)
+                .unwrap_or(PhpType::Mixed)
+        }
         _ => ir_array_storage_type(infer_expr_type_syntactic(item)),
     }
 }

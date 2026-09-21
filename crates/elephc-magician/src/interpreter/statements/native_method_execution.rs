@@ -68,7 +68,14 @@ pub(super) fn eval_native_method_with_evaluated_args_bridge_scope(
             resolved_bridge_scope = Some(declaring_class.clone());
         }
         if !is_abstract
-            && validate_eval_member_access(&declaring_class, visibility, context).is_err()
+            && validate_eval_method_access(
+                &declaring_class,
+                method_name,
+                visibility,
+                context,
+                values,
+            )
+            .is_err()
         {
             if eval_native_instance_magic_method_available(class_name, context, values)? {
                 return eval_native_magic_instance_method_call(
@@ -206,7 +213,7 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
         values,
     )
     .map_err(|status| {
-        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        if crate::eval_trace::enabled() {
             eprintln!(
                 "[elephc-eval-trace] phase=native_method_error stage=bind class={class_name:?} method={method_name:?} status={status:?} class_scope={:?}",
                 context.current_class_scope(),
@@ -251,7 +258,7 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
     };
     match (call_result, writeback) {
         (Err(status), _) => {
-            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            if crate::eval_trace::enabled() {
                 eprintln!(
                     "[elephc-eval-trace] phase=native_method_error stage=invoke class={class_name:?} method={method_name:?} status={status:?} class_scope={:?}",
                     context.current_class_scope(),
@@ -260,7 +267,7 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
             Err(status)
         }
         (_, Err(status)) => {
-            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            if crate::eval_trace::enabled() {
                 eprintln!(
                     "[elephc-eval-trace] phase=native_method_error stage=writeback class={class_name:?} method={method_name:?} status={status:?} class_scope={:?}",
                     context.current_class_scope(),
@@ -269,7 +276,7 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
             Err(status)
         }
         (Ok(()), Ok(())) => {
-            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            if crate::eval_trace::enabled() {
                 let result_ptr = result.as_ptr();
                 let words = unsafe { std::slice::from_raw_parts(result_ptr.cast::<u64>(), 3) };
                 let tag = values.type_tag(result);
@@ -293,7 +300,7 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
             )
         }
         .map_err(|status| {
-            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            if crate::eval_trace::enabled() {
                 eprintln!(
                     "[elephc-eval-trace] phase=native_method_error stage=return_value class={class_name:?} method={method_name:?} status={status:?} class_scope={:?}",
                     context.current_class_scope(),
@@ -342,7 +349,14 @@ pub(super) fn eval_native_static_method_with_evaluated_args_bridge_scope(
         }
         if is_static
             && !is_abstract
-            && validate_eval_member_access(&declaring_class, visibility, context).is_err()
+            && validate_eval_method_access(
+                &declaring_class,
+                method_name,
+                visibility,
+                context,
+                values,
+            )
+            .is_err()
         {
             if eval_native_static_magic_method_available(class_name, context, values)? {
                 return eval_native_magic_static_method_call(
@@ -465,7 +479,7 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
     // Three things can refuse below and every one of them meant the same anonymous fatal: no
     // signature recorded for the owner, a binding that rejects the arguments, and the generated
     // static-call helper itself.
-    let traced = std::env::var_os("ELEPHC_EVAL_TRACE").is_some();
+    let traced = crate::eval_trace::enabled();
     if traced {
         eprintln!(
             "[elephc-eval-trace] phase=native_static_call class={class_name:?} method={method_name:?} owner={signature_owner:?} signature={} args={}",

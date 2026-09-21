@@ -39,6 +39,8 @@ struct ReflectionAttributeLayout {
     target_hi: usize,
     repeated_lo: usize,
     repeated_hi: usize,
+    string_lo: usize,
+    string_hi: usize,
 }
 
 /// Lowers `class_attribute_names(class)` into an indexed string array.
@@ -171,6 +173,7 @@ pub(in crate::codegen::lower_inst) fn emit_reflection_attribute_array(
             reflection_attribute_name_is_repeated(attr_names, attr_name),
             &layout,
         );
+        emit_set_string_property(ctx, attr_name, attr_arg_list, &layout);
         emit_append_reflection_attribute_object(ctx);
     }
 
@@ -206,6 +209,7 @@ fn reflection_attribute_layout(ctx: &FunctionContext<'_>) -> Result<ReflectionAt
     let factory_lo = reflection_property_offset(info, "__factory")?;
     let target_lo = reflection_property_offset(info, "__target")?;
     let repeated_lo = reflection_property_offset(info, "__is_repeated")?;
+    let string_lo = reflection_property_offset(info, "__string")?;
     Ok(ReflectionAttributeLayout {
         class_id: info.class_id,
         property_count: info.properties.len(),
@@ -219,6 +223,8 @@ fn reflection_attribute_layout(ctx: &FunctionContext<'_>) -> Result<ReflectionAt
         target_hi: target_lo + 8,
         repeated_lo,
         repeated_hi: repeated_lo + 8,
+        string_lo,
+        string_hi: string_lo + 8,
     })
 }
 
@@ -297,6 +303,46 @@ fn emit_set_name_property(
             abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
             abi::emit_store_to_address(ctx.emitter, "rax", object_reg, layout.name_lo);
             abi::emit_store_to_address(ctx.emitter, "rdx", object_reg, layout.name_hi);
+        }
+    }
+}
+
+/// Stores the rendering `ReflectionAttribute::__toString()` returns.
+///
+/// Computed here rather than at run time: the name and every argument are literals fixed at the
+/// attribute's declaration site, so the whole string is a compile-time constant. See
+/// [`crate::codegen_support::attribute_string`] for the format and how it was confirmed.
+///
+/// This emitter runs only when the eval bridge is OFF. With the bridge on, the objects come from
+/// `__elephc_eval_reflection_attribute_new`, which renders the same string from the interpreter's
+/// own metadata.
+fn emit_set_string_property(
+    ctx: &mut FunctionContext<'_>,
+    attr_name: &str,
+    attr_args: &[AttrArgEntry],
+    layout: &ReflectionAttributeLayout,
+) {
+    let rendered = crate::codegen_support::attribute_string::render_reflection_attribute_string(
+        attr_name, attr_args,
+    );
+    let (label, len) = ctx.data.add_string(rendered.as_bytes());
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+            abi::emit_store_to_address(ctx.emitter, "x1", object_reg, layout.string_lo);
+            abi::emit_store_to_address(ctx.emitter, "x2", object_reg, layout.string_hi);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rax", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+            abi::emit_store_to_address(ctx.emitter, "rax", object_reg, layout.string_lo);
+            abi::emit_store_to_address(ctx.emitter, "rdx", object_reg, layout.string_hi);
         }
     }
 }

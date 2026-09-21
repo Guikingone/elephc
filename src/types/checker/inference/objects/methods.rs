@@ -116,6 +116,39 @@ impl Checker {
                 if !return_types.is_empty() {
                     return Ok(self.normalize_union_type(return_types));
                 }
+                // No union MEMBER declares the method, but a concrete class implementing them may:
+                // Symfony's `Router` declares
+                // `protected UrlMatcherInterface|RequestMatcherInterface $matcher;` and calls
+                // `addExpressionLanguageProvider()` on it behind a `method_exists()` guard —
+                // declared on neither interface, and PHP resolves it on the runtime object.
+                // Codegen dispatches on the runtime class id exactly as it does for the members,
+                // so the implementors that DO declare it decide the return type, and one that does
+                // not faults at run time the way PHP does.
+                let implementor_returns =
+                    self.union_implementor_method_return_types(&object_classes, method, args, expr, env)?;
+                if !implementor_returns.is_empty() {
+                    return Ok(self.normalize_union_type(implementor_returns));
+                }
+            }
+            // The closed world only gets to refuse a call when it actually knows the receiver.
+            // A union naming a class this build never compiled says nothing about what the
+            // object has: Symfony's `RedisTrait` declares
+            // `\Redis|Relay\Relay|Relay\Cluster|\RedisArray|\RedisCluster|\Predis\ClientInterface`
+            // and none of those extensions or packages is installed here, so every member is
+            // absent and no implementor can be found. PHP dispatches on the runtime class, and
+            // so does codegen — the union is boxed, so this lowers through the same Mixed
+            // receiver path, over exactly the classes that declare the method.
+            let names_a_class_outside_the_build = object_classes.iter().any(|class_name| {
+                !self.classes.contains_key(class_name) && !self.interfaces.contains_key(class_name)
+            });
+            if names_a_class_outside_the_build {
+                self.record_unresolved_callee_argument_aliases(args);
+                for arg in args {
+                    self.infer_type(arg, env)?;
+                }
+                return Ok(self
+                    .mixed_receiver_method_return_type(method, args.len())
+                    .unwrap_or(PhpType::Mixed));
             }
             // No object class at all: re-run the strict check to surface its
             // diagnostic.
@@ -132,6 +165,17 @@ impl Checker {
                         self.infer_type(arg, env)?;
                     }
                     return Ok(PhpType::Callable);
+                }
+                // `$f->__invoke(...)` is the closure call written the long way. Its result is
+                // whatever the closure returns, which is not resolvable from the receiver's
+                // `callable` type, and its arguments go to a callee this does not know — so they
+                // are conservatively reference-aliased, exactly as `call` does below.
+                "__invoke" => {
+                    self.record_unresolved_callee_argument_aliases(args);
+                    for arg in args {
+                        self.infer_type(arg, env)?;
+                    }
+                    return Ok(PhpType::Mixed);
                 }
                 "call" => {
                     // `call` INVOKES the receiver closure with `$args[1..]`, and the receiver's
@@ -170,7 +214,14 @@ impl Checker {
                 .unwrap_or(PhpType::Mixed));
         }
         self.record_unresolved_callee_argument_aliases(args);
-        Ok(PhpType::Int)
+        // A receiver that is none of the shapes above — a scalar, an array, a `void` — cannot be
+        // dispatched on, and PHP fatals when it is reached. `Int` was the historical answer and it
+        // is a fabrication for exactly the reason the `Mixed` arm above spells out: it is
+        // indistinguishable from a real `int`, and a chain built on it hands the backend a raw
+        // integer where a receiver belongs. Symfony's `PdoAdapter::doFetch` is the case — `PDO` is
+        // absent from the build, `$stmt->execute()` answered `Int`, and the next link,
+        // `$result->iterateNumeric()`, reached codegen as `method call receiver for PHP type Int`.
+        Ok(PhpType::Mixed)
     }
 
     /// Computes the static return type of a method call on a `mixed` receiver as
@@ -186,40 +237,71 @@ impl Checker {
     fn mixed_receiver_method_return_type(&self, method: &str, arg_count: usize) -> Option<PhpType> {
         let method_key = php_symbol_key(method);
         let mut arity_matched: Vec<PhpType> = Vec::new();
-        let mut any_matched: Vec<PhpType> = Vec::new();
         for class_info in self.classes.values() {
             let Some(sig) = class_info.methods.get(&method_key) else {
                 continue;
             };
-            let ty = sig.return_type.clone();
-            if !any_matched.contains(&ty) {
-                any_matched.push(ty.clone());
+            if !Self::signature_accepts_argument_count(sig, arg_count) {
+                continue;
             }
-            if sig.params.len() == arg_count && !arity_matched.contains(&ty) {
+            let ty = sig.return_type.clone();
+            if !arity_matched.contains(&ty) {
                 arity_matched.push(ty);
             }
         }
-        let candidates = if arity_matched.is_empty() {
-            any_matched
-        } else {
-            arity_matched
-        };
+        // A candidate that cannot be CALLED with this many arguments is not a candidate. The
+        // fallback to `any_matched` existed because the arity test used to compare `params.len()`
+        // exactly and was therefore empty far too often; now that it accepts the callable range,
+        // falling back means answering with a signature the call could never reach. Symfony's
+        // `PdoAdapter::doFetch` is the case: `$stmt->execute()` on a gradual receiver matched
+        // `Console\Command\Command::execute($input, $output): int` — two required parameters, a
+        // class with nothing to do with a statement — so `$result` became `int` and the next link,
+        // `$result->iterateNumeric()`, reached the backend as `method call receiver for PHP type
+        // Int`.
+        let candidates = arity_matched;
         if candidates.is_empty() {
             None
         } else {
             let normalized = self.normalize_union_type(candidates);
             match &normalized {
+                // One candidate's class is not the receiver's, so a precise object type would name
+                // the wrong one.
                 PhpType::Object(_) => Some(PhpType::Mixed),
-                PhpType::Union(members)
-                    if members
-                        .iter()
-                        .any(|member| matches!(member, PhpType::Object(_))) =>
-                {
-                    Some(PhpType::Mixed)
-                }
+                // Candidates that DISAGREE are not a fact about this call — they are methods that
+                // share a name. Symfony's `--web` build unioned every `write()` in the program into
+                // `null|bool` for a `Twig\Compiler` receiver whose class is absent from the closed
+                // world (its own `write()` returns `$this` and was never a candidate), and the next
+                // link in the chain was refused against that. Codegen boxes a union exactly as it
+                // boxes a Mixed, so only the static reading changes.
+                PhpType::Union(_) => Some(PhpType::Mixed),
                 _ => Some(normalized),
             }
         }
+    }
+
+    /// Returns whether a signature can be CALLED with `arg_count` arguments.
+    ///
+    /// The arity filter above used to test `params.len() == arg_count`, which is the total
+    /// parameter count, not the callable range. A method with an optional parameter was therefore
+    /// excluded from its own call: `$pool->clear()` on a gradual receiver skipped every
+    /// `clear(string $prefix = '')` in the program and matched only the unrelated zero-parameter
+    /// `clear(): void` methods that happen to share the name. Symfony's `ProxyAdapter::clear()`
+    /// reads `$this->pool` — declared `private object $pool` in `ProxyTrait`, so fully gradual —
+    /// and the call came back `void` against its own declared `: bool`.
+    ///
+    /// A variadic tail takes any number beyond the fixed parameters, and `defaults` gives the
+    /// first optional position, so the accepted range is `[required, params.len()]` — exactly
+    /// what PHP checks at the call.
+    fn signature_accepts_argument_count(sig: &crate::types::FunctionSig, arg_count: usize) -> bool {
+        let required = sig
+            .defaults
+            .iter()
+            .position(|default| default.is_some())
+            .unwrap_or(sig.params.len());
+        if arg_count < required {
+            return false;
+        }
+        sig.variadic.is_some() || arg_count <= sig.params.len()
     }
 
     /// Returns a concrete reflected object type for tracked `ReflectionClass` construction helpers.
@@ -297,6 +379,18 @@ impl Checker {
                 };
             }
         }
+        // `$f?->__invoke(...)` over a `?\Closure` property: a callable is not an object class, so
+        // the object-receiver rule below cannot describe it, and PHP runs this every day —
+        // Symfony's `TraceableAdapter` guards each traced operation with
+        // `$this->disabled?->__invoke()`. It is the closure call with a null guard in front, so
+        // the result is the closure's, plus null from the guarded arm.
+        if php_symbol_key(method) == "__invoke" && Self::is_nullable_callable_type(&obj_ty) {
+            self.record_unresolved_callee_argument_aliases(args);
+            for arg in args {
+                self.infer_type(arg, env)?;
+            }
+            return Ok(PhpType::Mixed);
+        }
         let Some((class_name, nullable)) =
             self.nullsafe_object_receiver(&obj_ty, expr, "method call")?
         else {
@@ -317,6 +411,23 @@ impl Checker {
         } else {
             Ok(return_ty)
         }
+    }
+
+    /// Returns whether a type is a callable that may also be null (`?\Closure`, `callable|null`).
+    fn is_nullable_callable_type(php_type: &PhpType) -> bool {
+        let PhpType::Union(members) = php_type else {
+            return false;
+        };
+        let mut callable = false;
+        let mut nullable = false;
+        for member in members {
+            match member {
+                PhpType::Callable => callable = true,
+                PhpType::Void => nullable = true,
+                _ => return false,
+            }
+        }
+        callable && nullable
     }
 
     /// Recovers the concrete result of `ReflectionAttribute::newInstance()` from a filtered
@@ -442,6 +553,7 @@ impl Checker {
                 args,
                 expr,
                 env,
+                true,
             );
         };
         let normalized_args = self.normalize_named_call_args(
@@ -494,6 +606,62 @@ impl Checker {
         )
     }
 
+    /// Returns the receiver expression of a method-call expression, in either call form.
+    fn method_call_receiver_expr(expr: &Expr) -> Option<&Expr> {
+        match &expr.kind {
+            ExprKind::MethodCall { object, .. } | ExprKind::NullsafeMethodCall { object, .. } => {
+                Some(object)
+            }
+            _ => None,
+        }
+    }
+
+    /// Returns php's `TypeError` message when a forwarded constructor argument cannot bind.
+    ///
+    /// php checks argument types when the call RUNS, and it exempts constructors from inheritance
+    /// signature rules — an overriding `__construct` may declare a different parameter list
+    /// entirely and still call `parent::__construct` positionally, which lands arguments in
+    /// differently typed slots. That is legal, loadable php that throws only if the path executes.
+    /// `twig/twig`'s `ExtensionSet::convertInfixExpressionParser` is the shape: its anonymous
+    /// subclass declares `array $aliases` in the slot the parent declares `?string $description`,
+    /// and forwards it. Refusing the build there refused every program that merely CONTAINS Twig.
+    ///
+    /// Only a provable mismatch is reported, using the same acceptance the strict check uses, so a
+    /// call this returns `None` for still goes through `check_user_declared_call` unchanged.
+    fn deferred_constructor_argument_type_error(
+        &mut self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        env: &TypeEnv,
+        class_name: &str,
+    ) -> Result<Option<String>, CompileError> {
+        for (index, arg) in args.iter().enumerate() {
+            let Some((param_name, param_ty)) = sig.params.get(index) else {
+                break;
+            };
+            // A by-reference parameter binds storage rather than a value, and a spread has no
+            // single argument type to compare; both stay with the strict path.
+            if sig.ref_params.get(index).copied().unwrap_or(false)
+                || matches!(arg.kind, ExprKind::Spread(_))
+            {
+                continue;
+            }
+            let actual = self.infer_type(arg, env)?;
+            if Self::types_compatible(param_ty, &actual) || self.type_accepts(param_ty, &actual) {
+                continue;
+            }
+            return Ok(Some(format!(
+                "{}::__construct(): Argument #{} (${}) must be of type {}, {} given",
+                class_name,
+                index + 1,
+                param_name,
+                php_declared_type_spelling(param_ty),
+                php_value_type_spelling(&actual),
+            )));
+        }
+        Ok(None)
+    }
+
     /// Accepts a method absent from a nominal receiver when a compatible concrete subtype owns it.
     ///
     /// PHP dispatches on the runtime class. The closed-world backend mirrors that behavior with a
@@ -506,13 +674,43 @@ impl Checker {
         args: &[Expr],
         expr: &Expr,
         env: &TypeEnv,
+        receiver_is_interface: bool,
     ) -> Result<PhpType, CompileError> {
         let return_types = self.subtype_dispatch_return_types(receiver_type, method_key);
         if return_types.is_empty() {
-            return Err(CompileError::new(
-                expr.span,
-                &format!("Undefined method: {}::{}", receiver_type, method),
-            ));
+            // Nothing in the closed world declares it — a typo, unless the body itself asked
+            // whether the method is there. Twig's `getOperatorTokensFor()` is the second case: it
+            // calls `$parser->getOperatorTokens()` behind `method_exists()` so a 4.0 interface
+            // method can be adopted early, and no bundled parser implements it yet. The guarded
+            // call keeps PHP's outcome if it is reached — with no candidate,
+            // `lower_narrowed_interface_method_call` fatals with `Call to undefined method`.
+            let guarded = Self::method_call_receiver_expr(expr)
+                .is_some_and(|receiver| self.method_exists_capability_guarded(receiver, method_key));
+            // An INTERFACE receiver defers unguarded too, but ONLY in a program that can gain
+            // classes at run time -- the same condition `allows_absent_runtime_class` already
+            // uses, and for the same reason. There, the runtime class behind an interface is not
+            // something a closed world can enumerate: `Foo::class` is a string, so a class named
+            // only that way is never walked in, and a runtime include or a registered autoloader
+            // can declare one the compiler never saw. `twig/twig`'s CoreExtension is exactly that
+            // -- `$env->getExtension(SandboxExtension::class)` is declared `: ExtensionInterface`
+            // and the next line calls `$sandbox->isSandboxed()`, a method only the concrete
+            // extension has -- and refusing it stopped a build of code php runs.
+            //
+            // In a program with no such route the world really is closed, and a method that
+            // nothing anywhere declares is a typo: `$parser->getNmae()` keeps its diagnostic.
+            // Deferring is not accepting either way; with no candidate,
+            // `lower_narrowed_interface_method_call` fatals with php's `Call to undefined method`.
+            let defers_to_runtime = receiver_is_interface && self.program_defers_unknown_classes;
+            if !guarded && !defers_to_runtime {
+                return Err(CompileError::new(
+                    expr.span,
+                    &format!("Undefined method: {}::{}", receiver_type, method),
+                ));
+            }
+            for arg in args {
+                self.infer_type(arg, env)?;
+            }
+            return Ok(PhpType::Mixed);
         }
         for arg in args {
             self.infer_type(arg, env)?;
@@ -524,6 +722,31 @@ impl Checker {
     }
 
     /// Collects distinct return types from compatible concrete classes declaring a method.
+    /// Returns the largest declared parameter count for `method_key` across the receiver's family.
+    ///
+    /// PHP binds arguments against the RUNTIME class's signature, so a call that is over-supplied
+    /// for the type in hand can be exactly right for an override. Only classes the closed world
+    /// actually has are counted.
+    pub(crate) fn subtype_dispatch_max_param_count(
+        &self,
+        receiver_type: &str,
+        method_key: &str,
+    ) -> usize {
+        let mut widest = 0;
+        for (class_name, class_info) in &self.classes {
+            let Some(sig) = class_info.methods.get(method_key) else {
+                continue;
+            };
+            let is_compatible = class_name == receiver_type
+                || self.is_subclass_of(class_name, receiver_type)
+                || self.class_implements_interface(class_name, receiver_type);
+            if is_compatible {
+                widest = widest.max(sig.params.len());
+            }
+        }
+        widest
+    }
+
     fn subtype_dispatch_return_types(&self, receiver_type: &str, method_key: &str) -> Vec<PhpType> {
         let mut return_types = Vec::new();
         for (class_name, class_info) in &self.classes {
@@ -650,6 +873,17 @@ impl Checker {
                         &format!("Method {}::{}", class_name, method),
                         class_name,
                     )?;
+                } else if self.subtype_dispatch_max_param_count(class_name, &method_key)
+                    > effective_sig.params.len()
+                {
+                    self.check_user_declared_call_with_advisory_arity(
+                        &effective_sig,
+                        &normalized_args,
+                        expr.span,
+                        env,
+                        &format!("Method {}::{}", class_name, method),
+                        class_name,
+                    )?;
                 } else {
                     self.check_user_declared_call(
                         &effective_sig,
@@ -714,6 +948,7 @@ impl Checker {
                     args,
                     expr,
                     env,
+                    false,
                 );
             }
         }
@@ -1230,6 +1465,28 @@ impl Checker {
                     ),
                     env,
                 )?;
+                if method_key == "__construct" {
+                    // Cloned before the `&mut self` call below, so the borrow of `class_info`
+                    // that produced `sig` ends here rather than spanning it.
+                    let constructor_return_ty = sig.return_type.clone();
+                    if let Some(message) = self.deferred_constructor_argument_type_error(
+                        &effective_sig,
+                        &normalized_args,
+                        env,
+                        class_name,
+                    )? {
+                        crate::types::checker::record_throw_access_site(
+                            &mut self.throw_access_sites,
+                            self.current_loop_storage_scope.clone(),
+                            expr.span,
+                            crate::types::ThrowAccessInfo {
+                                span: expr.span,
+                                kind: crate::types::ThrowAccessKind::ArgumentType { message },
+                            },
+                        );
+                        return Ok(constructor_return_ty);
+                    }
+                }
                 if allow_by_ref_spread {
                     self.check_user_declared_call_allowing_by_ref_spread(
                         &effective_sig,
@@ -1561,6 +1818,47 @@ impl Checker {
                 .is_some_and(|name| php_symbol_key(name) == "mysqli_stmt_bind_param");
         pending_probe || bind_values
     }
+
+    /// Return types of the concrete classes implementing `union_members` that declare `method`.
+    ///
+    /// Used when no union member declares the method itself. A union of INTERFACES describes a
+    /// runtime object that may carry members none of them names — Symfony's `Router` holds a
+    /// `UrlMatcherInterface|RequestMatcherInterface` and calls
+    /// `addExpressionLanguageProvider()` on it behind `method_exists()`. Codegen already
+    /// dispatches such a receiver on the runtime class id, so the implementors that declare the
+    /// method are exactly the arms that can run, and their return types are what the call yields.
+    ///
+    /// Empty when nothing implements it, which leaves the caller's strict diagnostic in place.
+    fn union_implementor_method_return_types(
+        &mut self,
+        union_members: &[String],
+        method: &str,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<Vec<PhpType>, CompileError> {
+        let method_key = php_symbol_key(method);
+        let mut implementors: Vec<String> = self
+            .classes
+            .iter()
+            .filter(|(class_name, class_info)| {
+                !class_info.is_abstract
+                    && class_info.methods.contains_key(&method_key)
+                    && union_members.iter().any(|member| {
+                        self.object_type_implements_interface(class_name, member)
+                    })
+            })
+            .map(|(class_name, _)| class_name.clone())
+            .collect();
+        implementors.sort();
+        let mut return_types = Vec::with_capacity(implementors.len());
+        for class_name in &implementors {
+            return_types.push(
+                self.infer_method_call_on_class_type(class_name, method, args, expr, env)?,
+            );
+        }
+        Ok(return_types)
+    }
 }
 
 /// Resolves the visibility scope supplied to `Closure::bind()`.
@@ -1606,27 +1904,33 @@ fn closure_bind_property_receiver_type(
     args: &[Expr],
     env: &TypeEnv,
 ) -> Option<PhpType> {
-    let ExprKind::Closure { body, .. } = &args.first()?.kind else {
-        return None;
-    };
-    let [stmt] = body.as_slice() else {
-        return None;
-    };
-    let crate::parser::ast::StmtKind::Return(Some(value)) = &stmt.kind else {
-        return None;
-    };
-    let ExprKind::PropertyAccess { object, .. } = &value.kind else {
-        return None;
-    };
-    if !matches!(object.kind, ExprKind::This) {
+    // MUST stay in step with `bound_this_is_gradual` in
+    // `src/ir_lower/expr/static_method_calls.rs`, which asks the same question of the same two
+    // arguments and types the closure's `this` capture from the answer. The two disagreeing is a
+    // silent miscompile rather than a diagnostic: the checker would type `$this->p` against one
+    // class and the backend emit it against another.
+    //
+    // Only a closure LITERAL has a body this can retype; a bind of an already-built closure value
+    // cannot change how that body was compiled. What the body CONTAINS is not a condition —
+    // `Closure::bind` rebinds `$this` for the whole of it.
+    if !matches!(args.first()?.kind, ExprKind::Closure { .. }) {
         return None;
     }
-    checker
-        .infer_type(args.get(1)?, env)
-        .ok()
-        .as_ref()
-        .and_then(crate::types::checker::single_object_class_name)
-        .map(PhpType::Object)
+    let new_this = checker.infer_type(args.get(1)?, env).ok()?;
+    // A literal `null` target UNBINDS `$this`; the closure then has none, and answering `mixed`
+    // would admit `$this` where PHP raises.
+    if matches!(new_this, PhpType::Void) {
+        return None;
+    }
+    if let Some(class_name) = crate::types::checker::single_object_class_name(&new_this) {
+        return Some(PhpType::Object(class_name));
+    }
+    // A target this build cannot name is gradual, not the enclosing class — which is the one thing
+    // a bound `$this` is definitely not. Symfony's `RedisTrait` line 70 binds to
+    // `clone $redis->getOptions()` over a union of Redis classes none of which is installed, and
+    // reading `$this->options` against `RedisAdapter` reported an undefined property on a class
+    // that neither is the target nor owns it.
+    matches!(new_this.codegen_repr(), PhpType::Mixed).then_some(PhpType::Mixed)
 }
 
 /// Returns true when a method variadic parameter must keep runtime key information.
@@ -1687,5 +1991,50 @@ fn spread_source_keeps_runtime_keys(expr: &Expr, env: &TypeEnv) -> bool {
             crate::types::checker::infer_expr_type_syntactic(expr),
             PhpType::AssocArray { .. } | PhpType::Iterable
         ),
+    }
+}
+
+
+/// Spells a DECLARED parameter type the way php prints it in a `TypeError`.
+///
+/// Not `Display`: the compiler prints `array<mixed>` and `string|null` for shapes php calls
+/// `array` and `?string`. A nullable union of one member is php's `?T`; a wider union keeps the
+/// `A|B` form with `null` last, which is where php puts it.
+fn php_declared_type_spelling(ty: &PhpType) -> String {
+    match ty {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => "array".to_string(),
+        PhpType::Void => "null".to_string(),
+        PhpType::TaggedScalar => "?int".to_string(),
+        PhpType::Union(members) => {
+            let mut named: Vec<String> = members
+                .iter()
+                .filter(|member| !matches!(member, PhpType::Void))
+                .map(php_declared_type_spelling)
+                .collect();
+            let nullable = members.iter().any(|member| matches!(member, PhpType::Void));
+            match (named.len(), nullable) {
+                (1, true) => format!("?{}", named.remove(0)),
+                (_, true) => {
+                    named.push("null".to_string());
+                    named.join("|")
+                }
+                _ => named.join("|"),
+            }
+        }
+        other => other.to_string(),
+    }
+}
+
+/// Spells the type of a VALUE the way php names it after `given` in a `TypeError`.
+fn php_value_type_spelling(ty: &PhpType) -> String {
+    match ty {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => "array".to_string(),
+        PhpType::Void => "null".to_string(),
+        PhpType::False => "bool".to_string(),
+        PhpType::Resource(_) => "resource".to_string(),
+        PhpType::Callable => "Closure".to_string(),
+        PhpType::Object(name) if name.is_empty() => "object".to_string(),
+        PhpType::Union(_) | PhpType::Mixed | PhpType::TaggedScalar => "mixed".to_string(),
+        other => other.to_string(),
     }
 }

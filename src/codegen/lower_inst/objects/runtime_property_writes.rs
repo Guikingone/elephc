@@ -32,6 +32,18 @@ pub(in crate::codegen::lower_inst) fn lower_prop_set(ctx: &mut FunctionContext<'
     if object_is_builtin_stdclass(ctx, object)? {
         return lower_stdclass_prop_set(ctx, object, value, &property);
     }
+    // A receiver whose class the closed world does not contain. Its layout cannot be resolved,
+    // but the write is not unlowerable: the class can only come into existence at run time, and
+    // the by-name path already used for an untyped object receiver resolves it there.
+    //
+    // The shape is ordinary framework code. Symfony's `CacheAttributeListener` declares
+    // `processAttributeBeforeController(Cache $cache, …)` and assigns `$cache->if`; nothing
+    // constructs a `Cache` statically — instances only ever arrive through
+    // `ReflectionAttribute::newInstance()` — so the class is absent from the module while the
+    // method around it is compiled. Refusing the write made the whole listener uncompilable.
+    if object_class_is_absent_from_module(ctx, object)? {
+        return lower_generic_object_prop_set(ctx, object, value, &property, inst);
+    }
     if let Some(offset) = dynamic_property_hash_offset_for_object(ctx, object, &property)? {
         return lower_allow_dynamic_prop_set(ctx, object, value, &property, offset);
     }
@@ -859,4 +871,27 @@ fn emit_branch_if_property_marker_uninitialized(
                 .instruction(&format!("je {}", target_label));                 // branch without reading an unset property payload
         }
     }
+}
+
+/// Reports whether a receiver names a class the compiled module does not contain.
+///
+/// A named class missing from `class_infos` has no layout to resolve, so every slot-based path
+/// below would refuse it. It is NOT a broken program: PHP resolves a parameter's declared class
+/// only when an operation needs its metadata, so a class that nothing constructs statically is
+/// absent from the closed world while the code around it still compiles.
+///
+/// `stdClass` and the empty "some object" spelling are handled by their own paths above and are
+/// deliberately not reported here.
+fn object_class_is_absent_from_module(
+    ctx: &FunctionContext<'_>,
+    object: ValueId,
+) -> Result<bool> {
+    let PhpType::Object(class_name) = ctx.value_php_type(object)?.codegen_repr() else {
+        return Ok(false);
+    };
+    let normalized = class_name.trim_start_matches('\\');
+    if normalized.is_empty() {
+        return Ok(false);
+    }
+    Ok(!ctx.module.class_infos.contains_key(normalized))
 }

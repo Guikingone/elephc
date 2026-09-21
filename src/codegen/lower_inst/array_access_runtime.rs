@@ -110,6 +110,20 @@ pub(super) fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         ctx.load_value_to_result(value)?;
         return store_if_result(ctx, inst);
     }
+    if source_ty == PhpType::Iterable
+        && matches!(
+            inst.result_php_type.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        )
+    {
+        emit_iterable_to_array_contract(ctx, value)?;
+        // The EIR result of this conversion is OWNED, and the pointer that reached it is the
+        // property's own. Handing it over without a reference let the caller's release free an
+        // array the object still points at: `ChainLoader` then read a dead block, and its
+        // `is_array($this->loaders)` disagreed with `get_debug_type()` on the same value.
+        abi::emit_incref_if_refcounted(ctx.emitter, &inst.result_php_type.codegen_repr());
+        return store_if_result(ctx, inst);
+    }
     if inst.result_php_type.codegen_repr() == PhpType::TaggedScalar {
         ctx.load_value_to_result(value)?;
         coerce_loaded_value_to_tagged_scalar(ctx, &source_ty)?;
@@ -165,6 +179,62 @@ pub(super) fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "runtime_call from PHP type {:?} to PHP type {:?}",
         source_ty, inst.result_php_type
     )))
+}
+
+/// Narrows an `iterable` value to the `array` half of that hint, or throws php's `TypeError`.
+///
+/// `iterable` is `array|Traversable` and keeps one representation for both: a raw heap pointer
+/// whose kind tag says which it is. An `array` destination accepts only the first half, so the
+/// pointer passes through when the tag says indexed array or hash and raises the error php raises
+/// otherwise -- it does not guess. `twig/twig`'s `ChainLoader::getLoaders(): array` returns
+/// `private iterable $loaders` after converting it with `iterator_to_array()`, so the tag is an
+/// array every time the guard above it did its job, and the throw stands where php's would.
+fn emit_iterable_to_array_contract(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    let done = ctx.next_label("iterable_to_array_done");
+    let array_like = ctx.next_label("iterable_to_array_ok");
+    let not_array = ctx.next_label("iterable_to_array_throw");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(value, "x0")?;
+            ctx.emitter.instruction(&format!("cbz x0, {}", done));              // a null container has no kind tag and passes through
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp x0, #2");                              // heap kind 2 is an indexed array
+            ctx.emitter.instruction(&format!("b.eq {}", array_like));
+            ctx.emitter.instruction("cmp x0, #3");                              // heap kind 3 is a hash
+            ctx.emitter.instruction(&format!("b.ne {}", not_array));
+            ctx.emitter.label(&array_like);
+            abi::emit_pop_reg(ctx.emitter, "x0");                               // restore the container pointer as the result
+            ctx.emitter.instruction(&format!("b {}", done));
+            ctx.emitter.label(&not_array);
+            abi::emit_pop_reg(ctx.emitter, "x0");                               // keep the stack balanced before the throw
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(value, "rax")?;
+            ctx.emitter.instruction("test rax, rax");                           // a null container has no kind tag and passes through
+            ctx.emitter.instruction(&format!("je {}", done));
+            abi::emit_push_reg(ctx.emitter, "rax");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp rax, 2");                              // heap kind 2 is an indexed array
+            ctx.emitter.instruction(&format!("je {}", array_like));
+            ctx.emitter.instruction("cmp rax, 3");                              // heap kind 3 is a hash
+            ctx.emitter.instruction(&format!("jne {}", not_array));
+            ctx.emitter.label(&array_like);
+            abi::emit_pop_reg(ctx.emitter, "rax");                              // restore the container pointer as the result
+            ctx.emitter.instruction(&format!("jmp {}", done));
+            ctx.emitter.label(&not_array);
+            abi::emit_pop_reg(ctx.emitter, "rax");                              // keep the stack balanced before the throw
+        }
+    }
+    exceptions::emit_type_error(
+        ctx,
+        "Return value must be of type array, Traversable returned",
+    );
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Lowers an indexed read from a callable proven array-shaped by control flow. Callable arrays
@@ -806,6 +876,10 @@ pub(super) fn lower_boxed_array_access_interface_call(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &return_ty)?;
+    // The boxed key and value reach `offsetSet` as freshly allocated Mixed temporaries that the
+    // callee borrows rather than consumes, so this frame owns them and must release them after the
+    // dispatch, exactly as the direct object path below does.
+    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args)
 }
 

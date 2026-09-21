@@ -88,13 +88,35 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_obj_store_prop_tagged");                     // rebuild both the payload and the slot's own runtime tag
     emitter.instruction("ldr x9, [x3, #8]");                                    // typed scalar/object/hash: unbox the low word
     emitter.instruction("str x9, [x8]");                                        // store it inline in the slot
+    // A single-payload typed slot keeps its initialization marker in the HIGH word, and a
+    // property DECLARED WITHOUT A DEFAULT still carries the uninitialized sentinel there when
+    // unserialize() hydrates it. Writing only the payload left `private array $p;` reading back
+    // as "must not be accessed before initialization" while `private array $p = [];` worked --
+    // which is exactly how Symfony's second request died in ContainerParametersResource.
+    emitter.instruction("str xzr, [x8, #8]");                                   // an unserialized property is initialized
     emitter.instruction("ret");                                                 // property stored
+    // An `array`-typed slot carries the INDEXED descriptor tag whatever it ends up holding, so
+    // the parsed hash may only be flattened into an indexed array when its keys really are the
+    // list 0..n-1. Converting unconditionally renumbered every string key: Symfony's
+    // `['kernel.debug' => true]` came back as `[0 => true]`. A non-list keeps hash storage, the
+    // same thing `$obj->arr['k'] = v` leaves in the slot.
     emitter.label("__rt_obj_store_prop_arr");
+    emitter.instruction("ldr x9, [x3, #8]");                                    // parsed hash pointer (box low word)
     emitter.instruction("stp x8, x30, [sp, #-16]!");                            // save the slot address and return address
-    emitter.instruction("ldr x0, [x3, #8]");                                    // parsed hash pointer (box low word)
+    emitter.instruction("str x9, [sp, #-16]!");                                 // keep the parsed hash across the classification
+    emitter.instruction("mov x0, x9");                                          // classify the parsed hash
+    emitter.instruction("bl __rt_array_is_list");                               // are its keys exactly 0..n-1 in order?
+    emitter.instruction("ldr x9, [sp], #16");                                   // restore the parsed hash pointer
+    emitter.instruction("cbz x0, __rt_obj_store_prop_arr_keep_hash");           // a keyed array stays hash-backed
+    emitter.instruction("mov x0, x9");                                          // a list is flattened for indexed property access
     emitter.instruction("bl __rt_hash_to_indexed_array");                       // materialize a native indexed array
+    emitter.instruction("b __rt_obj_store_prop_arr_store");                     // store whichever container was chosen
+    emitter.label("__rt_obj_store_prop_arr_keep_hash");
+    emitter.instruction("mov x0, x9");                                          // store the parsed hash exactly as it was decoded
+    emitter.label("__rt_obj_store_prop_arr_store");
     emitter.instruction("ldp x8, x30, [sp], #16");                              // restore the slot address and return address
-    emitter.instruction("str x0, [x8]");                                        // store the indexed-array pointer
+    emitter.instruction("str x0, [x8]");                                        // store the array pointer
+    emitter.instruction("str xzr, [x8, #8]");                                   // an unserialized property is initialized
     emitter.instruction("ret");                                                 // property stored
     emitter.label("__rt_obj_store_prop_str");
     emitter.instruction("ldr x9, [x3, #8]");                                    // string pointer from the box

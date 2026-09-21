@@ -4858,3 +4858,49 @@ echo $total, "\n";
         out.stderr
     );
 }
+
+
+/// Regression test: a static property written from a borrowed parameter and read back through an
+/// accessor stays live for the whole loop, and the arrays it replaces are all released.
+///
+/// Under `--web` this is the difference between a worker that serves and one that dies: the
+/// request boundary releases what each static property holds, so a property left pointing at
+/// reclaimed storage releases a block the arena has already handed to somebody else. In a plain
+/// process it shows up as the count below — one live block per container the property still
+/// holds at exit, never a count that tracks the iteration count.
+#[test]
+fn test_static_property_store_and_return_stay_balanced_across_iterations() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+final class Registry {
+    private static array $entries = [];
+
+    public static function set(array $values): void { self::$entries = $values; }
+
+    public static function entries(): array { return self::$entries; }
+}
+
+$total = 0;
+for ($i = 0; $i < 50; $i++) {
+    Registry::set([$i, $i + 1, $i + 2]);
+    $total += count(Registry::entries());
+    if (Registry::entries()) {
+        $total++;
+    }
+}
+echo $total, "|", implode(",", Registry::entries()), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "200|49,50,51\n");
+    // Four blocks: the array the last iteration stored, plus its three boxed int elements. The
+    // count is what matters — the 50 iterations allocate 353 blocks and free 349, so a retain
+    // that was never released would make this track the iteration count instead of standing
+    // still.
+    assert!(
+        out.stderr
+            .contains("HEAP DEBUG: leak summary: live_blocks=4"),
+        "expected only the current static array and its elements to remain live, got: {}",
+        out.stderr
+    );
+}

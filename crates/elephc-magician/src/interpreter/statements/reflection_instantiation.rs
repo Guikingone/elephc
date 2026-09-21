@@ -351,6 +351,51 @@ pub(in crate::interpreter) fn validate_eval_member_access(
     }
 }
 
+/// Validates access to a METHOD, resolving a protected one against its ROOT declaring class.
+///
+/// php checks a protected method against the topmost ancestor whose declaration the override
+/// replaces (`zend_get_function_root_class`), not against the class that happens to carry the
+/// concrete body. Two SIBLINGS that both implement an abstract protected method of a shared
+/// parent may therefore call it on each other -- which is exactly what Twig does:
+/// `Twig\Template::yield()` calls `$this->doDisplay()` on a template object whose class is a
+/// sibling of the caller's, both extending `Twig\Template`. Checking against the concrete class
+/// refused that call and took every Twig render down with it.
+pub(in crate::interpreter) fn validate_eval_method_access(
+    declaring_class: &str,
+    method_name: &str,
+    visibility: EvalVisibility,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if visibility != EvalVisibility::Protected {
+        return validate_eval_member_access(declaring_class, visibility, context);
+    }
+    if validate_eval_member_access(declaring_class, visibility, context).is_ok() {
+        return Ok(());
+    }
+    let root = eval_method_root_declaring_class(declaring_class, method_name, context, values)?;
+    validate_eval_member_access(&root, visibility, context)
+}
+
+/// Returns the topmost ancestor of `declaring_class` that declares `method_name` itself.
+pub(in crate::interpreter) fn eval_method_root_declaring_class(
+    declaring_class: &str,
+    method_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let mut root = declaring_class.trim_start_matches('\\').to_string();
+    for ancestor in context.class_parent_names(declaring_class) {
+        let declares_here = context.class_own_method(&ancestor, method_name).is_some()
+            || eval_aot_method_dispatch_metadata(&ancestor, method_name, values)?
+                .is_some_and(|(declaring, ..)| same_eval_class_name(&declaring, &ancestor));
+        if declares_here {
+            root = ancestor;
+        }
+    }
+    Ok(root)
+}
+
 /// Returns true when two PHP class names refer to the same eval class.
 pub(super) fn same_eval_class_name(left: &str, right: &str) -> bool {
     left.trim_start_matches('\\')

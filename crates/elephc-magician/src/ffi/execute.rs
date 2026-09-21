@@ -27,7 +27,6 @@ use crate::parse_cache;
 use crate::runtime_hooks::ElephcRuntimeOps;
 use std::slice;
 
-const EVAL_TRACE_ENV: &str = "ELEPHC_EVAL_TRACE";
 
 /// Executes an eval fragment against a materialized caller scope.
 ///
@@ -128,7 +127,7 @@ pub extern "C" fn __elephc_eval_report_runtime_fatal(status: i64) {
 
 /// Returns whether opt-in eval bridge tracing is enabled for this process.
 fn eval_trace_enabled() -> bool {
-    std::env::var_os(EVAL_TRACE_ENV).is_some()
+    crate::eval_trace::enabled()
 }
 
 /// Emits the exact eval input and propagated call-site metadata before cache lookup.

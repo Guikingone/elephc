@@ -63,6 +63,9 @@ pub(super) fn ensure_property_value_supported(
     if can_store_array_as_iterable_property(value_ty, &slot.php_type) {
         return Ok(());
     }
+    if can_store_traversable_as_iterable_property(ctx, value_ty, &slot.php_type) {
+        return Ok(());
+    }
     if can_widen_int_to_float_property(value_ty, &slot.php_type) {
         return Ok(());
     }
@@ -189,12 +192,12 @@ pub(super) fn class_extends_class(ctx: &FunctionContext<'_>, class_name: &str, t
 
 /// Finds class metadata by PHP-case-insensitive name.
 pub(super) fn class_info_by_name<'a>(ctx: &'a FunctionContext<'_>, class_name: &str) -> Option<&'a ClassInfo> {
+    // Through the shared index: this used to scan every class and allocate a lowercased key for
+    // each one, which is thousands of allocations for a single answer. See
+    // `SharedCodegenState::class_name_for_key`.
     let wanted = php_symbol_key(class_name.trim_start_matches('\\'));
-    ctx.module
-        .class_infos
-        .iter()
-        .find(|(name, _)| php_symbol_key(name.trim_start_matches('\\')) == wanted)
-        .map(|(_, info)| info)
+    let actual = ctx.shared.class_name_for_key(ctx.module, &wanted)?;
+    ctx.module.class_infos.get(&actual)
 }
 
 /// Finds interface metadata by PHP-case-insensitive name.
@@ -203,11 +206,8 @@ pub(super) fn interface_info_by_name<'a>(
     interface_name: &str,
 ) -> Option<&'a InterfaceInfo> {
     let wanted = php_symbol_key(interface_name.trim_start_matches('\\'));
-    ctx.module
-        .interface_infos
-        .iter()
-        .find(|(name, _)| php_symbol_key(name.trim_start_matches('\\')) == wanted)
-        .map(|(_, info)| info)
+    let actual = ctx.shared.interface_name_for_key(ctx.module, &wanted)?;
+    ctx.module.interface_infos.get(&actual)
 }
 
 /// Compares class/interface names using PHP's case-insensitive symbol rules.
@@ -335,6 +335,30 @@ pub(super) fn can_store_array_as_iterable_property(value_ty: &PhpType, slot_ty: 
             value_ty.codegen_repr(),
             PhpType::Iterable | PhpType::Array(_) | PhpType::AssocArray { .. }
         )
+}
+
+/// Returns true for a Traversable object stored in an `iterable` slot.
+///
+/// php's `iterable` is `array|Traversable`, so the object half is not a conversion, it is one of
+/// the two shapes the hint names. `Iterable` keeps its own runtime representation -- a raw heap
+/// pointer whose heap-kind tag says what it is -- and an object pointer is exactly that, so the
+/// slot needs no adaptation. `twig/twig`'s `ChainLoader::addLoader` is the shape: it declares
+/// `private iterable $loaders = []` and assigns the `\Generator` an inline closure returns.
+pub(super) fn can_store_traversable_as_iterable_property(
+    ctx: &FunctionContext<'_>,
+    value_ty: &PhpType,
+    slot_ty: &PhpType,
+) -> bool {
+    if slot_ty.codegen_repr() != PhpType::Iterable {
+        return false;
+    }
+    let PhpType::Object(class_name) = value_ty.codegen_repr() else {
+        return false;
+    };
+    let class_name = class_name.trim_start_matches('\\');
+    // A bare `object` receiver names no class to check; php decides at the assignment, and the
+    // checker has already accepted the write, so the slot takes the pointer.
+    class_name.is_empty() || object_type_is_a(ctx, class_name, "Traversable")
 }
 
 /// Returns true for PHP's lossless integer widening into a float property.

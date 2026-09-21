@@ -448,6 +448,34 @@ fn capture_concat_base(ctx: &mut FunctionContext<'_>) {
     abi::store_at_offset(ctx.emitter, scratch, ctx.concat_base_offset);
 }
 
+/// Emits the call that runs PHP's `register_shutdown_function()` queue, when there is one.
+///
+/// php runs those callbacks on the normal end of the script AND on `exit()`, and `exit()` does
+/// NOT run `finally` blocks — measured on php 8.5.10 and reproduced on elephc, which is why the
+/// drain cannot live in a `try`/`finally` wrapper the way the `--web` request wrapper's does.
+/// The two sites that call this are the two process-exit paths compiled code owns:
+/// [`emit_main_epilogue`] for the normal end and `builtins::system::lower_exit` for
+/// `exit()`/`die()`.
+///
+/// Nothing is emitted unless the module still declares `__elephc_shutdown_run`
+/// (`FunctionContext::runs_php_shutdown_functions`), so a program that never names
+/// `register_shutdown_function` keeps a byte-identical exit sequence.
+///
+/// The callee is an ordinary compiled PHP function taking no arguments and returning `void`, so
+/// the call needs no argument marshalling and clobbers only caller-saved registers — which is
+/// what lets `lower_exit` emit it before it loads the exit status.
+pub(super) fn emit_php_shutdown_drain(ctx: &mut FunctionContext<'_>) {
+    if !ctx.runs_php_shutdown_functions() {
+        return;
+    }
+    ctx.emitter
+        .comment("run register_shutdown_function() callbacks before terminating");
+    abi::emit_call_label(
+        ctx.emitter,
+        &crate::names::function_symbol(crate::names::SHUTDOWN_RUN_FUNCTION),
+    );
+}
+
 /// Emits frame teardown and exits the process with status 0.
 ///
 /// The top-level body emits this epilogue INLINE at every `return` terminator
@@ -459,6 +487,11 @@ fn capture_concat_base(ctx: &mut FunctionContext<'_>) {
 pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.comment("epilogue + exit(0)");
+    // php runs `register_shutdown_function()` callbacks at the normal end of the script, BEFORE
+    // anything is torn down: they are ordinary PHP and may still touch globals, statics and
+    // objects, and their own output has to reach the flush below. So this goes first, ahead of
+    // the buffer drain and every cleanup step.
+    emit_php_shutdown_drain(ctx);
     // Drain still-active output buffers before any teardown so user output
     // handlers (including eval-registered ones) run while locals, statics, and
     // the eval context are still alive. The exit-path flush in abi::emit_exit
@@ -470,6 +503,14 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_main_local_epilogue_cleanup(ctx);
     emit_main_static_local_cleanup(ctx);
     emit_main_global_epilogue_cleanup(ctx);
+    // Shutdown collection, exactly where php-src runs one. `unset()` only BUFFERS possible roots
+    // now (`__rt_gc_safepoint`), so a cycle unset late in the script is still unreclaimed here,
+    // and its `__destruct` would never run. php-src collects at shutdown for the same reason.
+    //
+    // It calls the COLLECTOR, not the throttle: this is the forced pass, and it has to happen
+    // after locals, statics and globals were released — what remains is precisely the cyclic
+    // garbage — but before the exit below, so destructors still run as ordinary PHP callbacks.
+    abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles");
     // The exact root brackets every PHP callback that shutdown can invoke:
     // output handlers above and object destructors from the cleanup paths. If
     // it exits earlier, those functions become disconnected graph roots and
@@ -545,7 +586,7 @@ fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
             continue;
         }
         ctx.emitter.comment(&format!("epilogue cleanup global ${}", name));
-        if crate::superglobals::uses_shared_ref_cell(ctx.module, &name) {
+        if ctx.shared.uses_shared_ref_cell(ctx.module, &name) {
             abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), &symbol, 0);
             abi::emit_call_label(ctx.emitter, "__rt_global_ref_cell_decref");
         } else {
@@ -701,6 +742,15 @@ pub(super) fn emit_web_entry_stub(
     // request. (A `--no-web-heap-guard` opt-out for benchmarking is a follow-up.)
     ctx.emitter.comment("enable web heap-guard flag");
     abi::emit_enable_web_heap_guard_flag(ctx.emitter);
+    // `--heap-debug` raises its flag in `emit_main_prologue`, which a `--web` program never
+    // runs. Without this line the whole heap-debug apparatus -- free-list validation, freed
+    // payload poison, the double-free scan -- is present in the binary and never switched on,
+    // so `--web --heap-debug` silently debugs nothing.
+    if ctx.heap_debug {
+        ctx.emitter.comment("enable heap debug flag");
+        abi::emit_enable_heap_debug_flag(ctx.emitter);
+    }
+    emit_eval_metadata_priming(ctx);
     let argc_reg = abi::int_arg_reg_name(target, 0);
     let argv_reg = abi::int_arg_reg_name(target, 1);
     let handler_reg = abi::int_arg_reg_name(target, 2);
@@ -713,6 +763,40 @@ pub(super) fn emit_web_entry_stub(
     let bridge_entry = target.extern_symbol(isolation.bridge_symbol());
     abi::emit_call_label(ctx.emitter, &bridge_entry);
     abi::emit_exit_with_result_reg(ctx.emitter);
+}
+
+/// Describes the generated native surface to the interpreter ONCE, in the master, before the fork.
+///
+/// The description is a compile-time constant -- every class, method, parameter and property the
+/// binary carries -- and the interpreter caches it in a process-global snapshot that
+/// `__elephc_eval_context_try_sync_aot_metadata` hands to every later context for free. But a
+/// `--web` master that never ran PHP has no snapshot, so each forked handler built its own: a
+/// rendered Symfony page paid **95,000 of its 110,000 bridge crossings** on registration alone,
+/// once per request, which is where its 75ms went against php's 2ms.
+///
+/// Building it here puts the snapshot in the master's heap, and fork's copy-on-write hands it to
+/// every worker and every request handler at no cost. The context stays alive on purpose: the
+/// snapshot shares its maps by `Arc`, and the master runs no PHP that could need it back.
+///
+/// Emitted only when some eval site actually produced the registration helper; a program that
+/// never allocates an eval context has nothing to prime and calls nothing.
+fn emit_eval_metadata_priming(ctx: &mut FunctionContext<'_>) {
+    let Some(helper) = ctx.shared.eval_registration_helper() else {
+        return;
+    };
+    ctx.emitter
+        .comment("prime the eval AOT metadata snapshot before elephc_web_run forks");
+    let context_new = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_context_new");
+    abi::emit_call_label(ctx.emitter, &context_new);
+    abi::emit_reg_move(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        abi::int_result_reg(ctx.emitter),
+    );
+    abi::emit_call_label(ctx.emitter, &helper);
 }
 
 /// Zero-initializes cleanup-tracked locals so skipped assignments stay safe at epilogue.
@@ -2059,7 +2143,7 @@ fn store_argv_global_if_needed(ctx: &mut FunctionContext<'_>) {
     // the box by releasing that original reference after publishing the owner.
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, &symbol, 0);
-    if crate::superglobals::uses_shared_ref_cell(ctx.module, "argv") {
+    if ctx.shared.uses_shared_ref_cell(ctx.module, "argv") {
         abi::emit_load_from_address(ctx.emitter, result_reg, result_reg, 0);
     }
     abi::emit_load_from_address(ctx.emitter, result_reg, result_reg, 8);
@@ -2068,7 +2152,7 @@ fn store_argv_global_if_needed(ctx: &mut FunctionContext<'_>) {
 
 /// Publishes a boxed process argument using the module's global representation.
 fn store_process_global_box(ctx: &mut FunctionContext<'_>, name: &str, symbol: &str) {
-    if crate::superglobals::uses_shared_ref_cell(ctx.module, name) {
+    if ctx.shared.uses_shared_ref_cell(ctx.module, name) {
         crate::codegen::lower_inst::lower_store_shared_global(ctx, symbol, &PhpType::Mixed)
             .expect("boxed process globals have a supported shared-cell representation");
     } else {

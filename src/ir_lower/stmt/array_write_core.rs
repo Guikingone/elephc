@@ -235,15 +235,43 @@ fn assoc_array_write_updated_type(current_ty: PhpType, value_ty: PhpType) -> Opt
     let PhpType::AssocArray { key, value } = current_ty.codegen_repr() else {
         return None;
     };
-    let current_value = normalize_array_write_element_type(value.codegen_repr());
-    let written_value = normalize_array_write_element_type(value_ty.codegen_repr());
-    if current_value == PhpType::Mixed || current_value == written_value {
+    if hash_storage_represents_written_value(&value.codegen_repr(), &value_ty.codegen_repr()) {
         return None;
     }
     Some(PhpType::AssocArray {
         key,
         value: Box::new(PhpType::Mixed),
     })
+}
+
+/// Returns true when a hash stamped with `storage` can hold a `written` value as it stands.
+///
+/// The question is about the RUNTIME REPRESENTATION, not about PHP assignability: an entry is
+/// stored as a raw payload plus the tag `storage` dictates, and every later read materializes it
+/// through `storage` as well. So the only writes that need no widening are the ones whose payload
+/// already has the stored shape.
+///
+/// `normalize_array_write_element_type` cannot answer this: it maps every refcounted non-string
+/// type to `Mixed`, which conflates a hash whose entries are raw object pointers with one whose
+/// entries are boxed Mixed cells. Under that conflation an `array<string, N>` looked like it
+/// already accepted anything -- `$nodes = ['node' => $node]; $nodes['n'] = 1;` compiled and then
+/// segfaulted reading an integer as an object, and `twig/twig`'s
+/// `TestExpression::__construct` -- which writes a `?Node` parameter into exactly such a literal --
+/// stopped the backend with `hash_set value PHP type Mixed`.
+fn hash_storage_represents_written_value(storage: &PhpType, written: &PhpType) -> bool {
+    // Boxed storage describes every payload: each entry carries its own tag.
+    if matches!(storage, PhpType::Mixed | PhpType::Iterable) {
+        return true;
+    }
+    if storage == written {
+        return true;
+    }
+    // An object payload is a pointer whose class is read from the object itself -- property and
+    // method access dispatch on the runtime class id -- so two classes share one representation.
+    // A container payload does NOT: its ELEMENT type is what a read of `$hash[k][i]` materializes,
+    // so `['x' => [1, 2]]` followed by `$a['y'] = ['s', 't']` must widen. Letting the two share a
+    // slot printed the element's raw pointer as an integer.
+    matches!((storage, written), (PhpType::Object(_), PhpType::Object(_)))
 }
 
 /// Coerces a buffer element write value into the scalar storage accepted by `BufferSet`.

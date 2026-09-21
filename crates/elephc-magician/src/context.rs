@@ -76,4 +76,11 @@ static GLOBAL_EVAL_AOT_METADATA: OnceLock<Mutex<Option<Arc<GlobalEvalAotMetadata
 thread_local! {
     static NATIVE_FRAME_CALLED_CLASS_OVERRIDES: RefCell<Vec<NativeFrameCalledClassOverride>> =
         RefCell::new(Vec::new());
+    /// Lexical class of the COMPILED frame currently calling into the bridge.
+    ///
+    /// A compiled body that owns no eval context hands the bridge a null caller, and the
+    /// interpreter then has nothing to read a calling scope from -- so a protected method
+    /// reached from such a body was refused "from global scope". This carries the one fact
+    /// that was missing, without an eval context and without widening the call ABI.
+    static NATIVE_CALLER_CLASSES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }

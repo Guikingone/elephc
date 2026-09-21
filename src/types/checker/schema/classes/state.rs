@@ -37,6 +37,7 @@ pub(super) struct ClassBuildState {
     pub(super) property_declared_slots: Vec<bool>,
     pub(super) final_properties: HashSet<String>,
     pub(super) readonly_properties: HashSet<String>,
+    pub(super) backed_hooked_properties: HashSet<String>,
     pub(super) reference_properties: HashSet<String>,
     pub(super) promoted_properties: HashSet<String>,
     pub(super) property_reference_slots: Vec<bool>,
@@ -203,6 +204,7 @@ impl ClassBuildState {
             property_declared_slots: self.property_declared_slots,
             final_properties: self.final_properties,
             readonly_properties: self.readonly_properties,
+            backed_hooked_properties: self.backed_hooked_properties,
             reference_properties: self.reference_properties,
             owned_reference_properties: HashSet::new(),
             promoted_properties: self.promoted_properties,
@@ -461,6 +463,9 @@ impl ClassBuildState {
             }
             if parent.readonly_properties.contains(name) {
                 self.readonly_properties.insert(name.clone());
+            }
+            if parent.backed_hooked_properties.contains(name) {
+                self.backed_hooked_properties.insert(name.clone());
             }
             if parent.reference_properties.contains(name) {
                 self.reference_properties.insert(name.clone());

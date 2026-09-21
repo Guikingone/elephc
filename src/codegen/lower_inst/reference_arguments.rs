@@ -216,10 +216,16 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
         arg_temp_bytes += call_arg_temp_slot_size(&abi_param_types[param_index]);
     }
     for param_index in operands.len()..param_types.len() {
-        if param_index == 0 || ref_params[param_index] {
+        if param_index == 0 {
             return Err(CodegenIrError::unsupported(
-                "receiver-register method call with missing non-value parameter",
+                "receiver-register method call with no receiver operand",
             ));
+        }
+        if ref_params[param_index] {
+            materialize_omitted_ref_arg_address(ctx, param_index, arg_temp_bytes, &ref_temp_cells)?;
+            abi::emit_push_result_value(ctx.emitter, &PhpType::Int);
+            arg_temp_bytes += call_arg_temp_slot_size(&abi_param_types[param_index]);
+            continue;
         }
         let param_ty = param_types[param_index].codegen_repr();
         match param_ty {
@@ -238,6 +244,11 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
                 )));
             }
         }
+        // THE CELL BLOCK SITS BELOW EVERY STAGED ARGUMENT, so a by-reference address staged
+        // after this point is `arg_temp_bytes + cell_offset`. The loop used to push without
+        // advancing the count because nothing read it afterwards; an omitted by-reference
+        // parameter does.
+        arg_temp_bytes += call_arg_temp_slot_size(&abi_param_types[param_index]);
     }
     Ok(CallArgMaterialization {
         overflow_bytes: abi::materialize_outgoing_args(ctx.emitter, &assignments),
@@ -385,12 +396,84 @@ pub(super) fn plan_ref_arg_temp_cells(
         }
         cells.push(RefArgTempCell {
             param_index,
-            source_value: *value,
+            source_value: Some(*value),
+            cell_ty: param_types[param_index].codegen_repr(),
+            cell_offset: 0,
+        });
+    }
+    // PARAMETERS THE CALLER NEVER WROTE. Every other materializer asserts one argument per
+    // parameter, so this range is empty for them; the receiver-register path is the one that
+    // can be short, because `lower_mixed_method_candidate` builds `param_types` from EACH
+    // CANDIDATE's own signature and one candidate's third parameter is another's second — no
+    // caller-side padding satisfies them all at once.
+    //
+    // The callee still writes through the pointer, so the omitted position gets a discarded
+    // cell exactly like an argument with no caller variable: seeded to null below, released
+    // with the rest of the block by `emit_ref_arg_writebacks`.
+    for param_index in args.len()..param_types.len() {
+        if !ref_params[param_index] {
+            continue;
+        }
+        cells.push(RefArgTempCell {
+            param_index,
+            source_value: None,
             cell_ty: param_types[param_index].codegen_repr(),
             cell_offset: 0,
         });
     }
     Ok(cells)
+}
+
+/// Seeds a discarded cell that stands in for an OMITTED by-reference argument.
+///
+/// PHP's default for such a parameter is `null` in every case elephc can reach here: a
+/// by-reference parameter may not carry a non-null constant default and still be omitted by a
+/// caller that means to read the write back. The refusal is kept for representations with no
+/// null this runtime can spell, rather than pushing a zero that
+/// [`emit_ref_arg_writebacks`] would then hand to a refcount helper.
+fn emit_omitted_ref_cell_seed(ctx: &mut FunctionContext<'_>, cell_ty: &PhpType) -> Result<()> {
+    match cell_ty.codegen_repr() {
+        PhpType::Mixed => {
+            objects::emit_boxed_null(ctx);
+            Ok(())
+        }
+        PhpType::TaggedScalar => {
+            crate::codegen::sentinels::emit_tagged_scalar_null(ctx.emitter);
+            Ok(())
+        }
+        PhpType::Int | PhpType::Bool | PhpType::False => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            Ok(())
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "omitted by-reference parameter cell for ABI type {other:?}"
+        ))),
+    }
+}
+
+/// Loads the address of the discarded cell standing in for an OMITTED by-reference argument.
+fn materialize_omitted_ref_arg_address(
+    ctx: &mut FunctionContext<'_>,
+    param_index: usize,
+    arg_temp_bytes: usize,
+    temp_cells: &[RefArgTempCell],
+) -> Result<()> {
+    let cell = temp_cells
+        .iter()
+        .find(|cell| cell.param_index == param_index)
+        .ok_or_else(|| {
+            // `plan_ref_arg_temp_cells` plans no cells at all for `MayOutliveCall`, where a
+            // caller-stack cell would be a use-after-free. Refusing is the right answer there.
+            CodegenIrError::unsupported(
+                "receiver-register method call with an unplanned omitted by-reference parameter",
+            )
+        })?;
+    abi::emit_temporary_stack_address(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        arg_temp_bytes + cell.cell_offset,
+    );
+    Ok(())
 }
 
 /// Emits the caller-side by-reference cell block: the Mixed writeback cells first, then the
@@ -422,8 +505,13 @@ pub(super) fn emit_ref_arg_cell_block(
     }
     let pushed = writebacks.len();
     for (index, cell) in temp_cells.iter_mut().enumerate() {
-        let source_ty = ctx.load_value_to_result(cell.source_value)?;
-        coerce_ref_cell_store_value(ctx, cell.source_value, &source_ty, &cell.cell_ty)?;
+        match cell.source_value {
+            Some(source_value) => {
+                let source_ty = ctx.load_value_to_result(source_value)?;
+                coerce_ref_cell_store_value(ctx, source_value, &source_ty, &cell.cell_ty)?;
+            }
+            None => emit_omitted_ref_cell_seed(ctx, &cell.cell_ty)?,
+        }
         abi::emit_push_result_value(ctx.emitter, &cell.cell_ty);
         // A push writes ONE word for every representation except `Str`/`TaggedScalar`, so
         // the cell's second word is whatever the stack happened to hold. The heap path this

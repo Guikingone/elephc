@@ -501,6 +501,7 @@ pub(crate) fn insert_enum_metadata(
             property_declared_slots,
             final_properties,
             readonly_properties,
+            backed_hooked_properties: HashSet::new(),
             reference_properties,
             owned_reference_properties: HashSet::new(),
             promoted_properties: HashSet::new(),
@@ -607,11 +608,12 @@ fn enum_interface_names(
 
 /// Resolves one interface name to the declaration's canonical spelling.
 fn canonical_interface_name(checker: &Checker, interface_name: &str) -> String {
-    let key = php_symbol_key(interface_name);
+    // Same predicate, no lowercased `String` per interface: `php_symbol_key` is the ASCII
+    // fold, and this runs once per parent hop of a recursive interface walk.
     checker
         .interfaces
         .keys()
-        .find(|candidate| php_symbol_key(candidate) == key)
+        .find(|candidate| candidate.eq_ignore_ascii_case(interface_name))
         .cloned()
         .unwrap_or_else(|| interface_name.to_string())
 }
@@ -637,10 +639,9 @@ fn append_interface_parents(
 
 /// Adds one interface name when no PHP-case-insensitive equivalent is present.
 fn push_unique_interface_name(interface_name: &str, interfaces: &mut Vec<String>) -> bool {
-    let key = php_symbol_key(interface_name);
     if interfaces
         .iter()
-        .any(|candidate| php_symbol_key(candidate) == key)
+        .any(|candidate| candidate.eq_ignore_ascii_case(interface_name))
     {
         return false;
     }

@@ -55,6 +55,33 @@ pub(super) fn lower_default_initial_array_reduce(
     ))
 }
 
+/// Routes `is_callable($value, $syntax_only[, &$name])` to the prelude, keeping the one-argument
+/// form on the backend predicate.
+///
+/// The backend answers one question -- can this value be called -- and `$syntax_only` asks another
+/// one, whether it merely has callable SHAPE. `symfony/http-kernel`'s `ServiceValueResolver` uses
+/// the second form to decide whether `[$class, $method]` can be flattened to `Class::method`.
+pub(super) fn lower_is_callable_with_options(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if php_symbol_key(name.trim_start_matches('\\')) != "is_callable"
+        || !matches!(args.len(), 2 | 3)
+        || crate::types::call_args::has_named_args(args)
+        || args.iter().any(is_spread_arg)
+    {
+        return None;
+    }
+    Some(lower_function_call(
+        ctx,
+        &crate::names::Name::unqualified(crate::is_callable_prelude::IS_CALLABLE_EXT_NAME),
+        args,
+        expr,
+    ))
+}
+
 /// Routes narrowly supported builtin arities to their elephc-PHP compatibility helpers.
 pub(super) fn lower_backend_gap_builtin_shape(
     ctx: &mut LoweringContext<'_, '_>,
@@ -141,6 +168,95 @@ pub(super) fn lower_backend_gap_builtin_shape(
             ctx,
             &crate::names::Name::unqualified(
                 crate::backend_gap_prelude::ARRAY_COMBINE_GRADUAL_NAME,
+            ),
+            args,
+            expr,
+        ));
+    }
+    // Only the two-argument form: `preserve_keys` changes the result SHAPE and a gradual
+    // source's keys are not known statically, so the three-argument form stays on its own path.
+    //
+    // `array<mixed>` is included deliberately. It is what a declared `array` parameter and an
+    // untyped property both get, and it does NOT promise indexed storage -- the same reason
+    // `lower_array_union` picks its gradual helper for that pair. Leaving it native ran the dense
+    // indexed walk over hash storage and produced a short, malformed result. Only a NARROWER
+    // element type guarantees the dense representation the native path needs.
+    if builtin == "array_chunk"
+        && (2..=3).contains(&args.len())
+        && match materialized_expr_type_for_merge(ctx, &args[0]).codegen_repr() {
+            // A DENSE source keeps its native path in the three-argument form: both arms are
+            // lowerable there, and redirecting it to the prelude handed the call site a result
+            // shaped like the helper's rather than its own, which printed empty chunks.
+            PhpType::Array(element) => args.len() == 2 && element.codegen_repr() == PhpType::Mixed,
+            PhpType::Mixed | PhpType::Union(_) | PhpType::AssocArray { .. } => true,
+            _ => false,
+        }
+    {
+        // The three-argument form takes its own helper: its chunks carry the source keys and are
+        // therefore hashes, where the two-argument helper's are dense arrays.
+        let helper = if args.len() == 3 {
+            crate::backend_gap_prelude::ARRAY_CHUNK_GRADUAL_FLAGGED_NAME
+        } else {
+            crate::backend_gap_prelude::ARRAY_CHUNK_GRADUAL_NAME
+        };
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(helper),
+            args,
+            expr,
+        ));
+    }
+    // A callback the lowering cannot recover a native pointer for -- a boxed callable in a local,
+    // a parameter, a property -- has no static binding for the array runtime, so the whole call
+    // goes to the PHP helper, which calls it the way php does. `twig/twig`'s
+    // `CoreExtension::filter($env, $isSandboxed, $array, $arrow)` forwards an untyped parameter.
+    if builtin == "array_filter"
+        && (2..=3).contains(&args.len())
+        && matches!(
+            materialized_expr_type_for_merge(ctx, &args[1]).codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        )
+    {
+        let mut helper_args = vec![args[0].clone(), args[1].clone()];
+        helper_args.push(match args.get(2) {
+            Some(mode) => mode.clone(),
+            // php's default mode: the value is the callback's only argument.
+            None => Expr::new(ExprKind::IntLiteral(0), expr.span),
+        });
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(
+                crate::array_filter_prelude::ARRAY_FILTER_CALLBACK_NAME,
+            ),
+            &helper_args,
+            expr,
+        ));
+    }
+    // A gradual or hash `array_rand()`: the native helper only walks a dense indexed array, and a
+    // hash's key is as likely to be a string. The prelude helper collects the keys first.
+    if builtin == "array_rand"
+        && (1..=2).contains(&args.len())
+        && !matches!(
+            materialized_expr_type_for_merge(ctx, &args[0]).codegen_repr(),
+            PhpType::Array(_)
+        )
+    {
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(
+                crate::backend_gap_prelude::ARRAY_RAND_GRADUAL_NAME,
+            ),
+            &args[..1],
+            expr,
+        ));
+    }
+    // The three-argument `array_column()` re-keys its result from the data, which is a hash the
+    // backend has no lowering for. The prelude helper answers it in PHP.
+    if builtin == "array_column" && args.len() == 3 {
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(
+                crate::backend_gap_prelude::ARRAY_COLUMN_INDEXED_NAME,
             ),
             args,
             expr,

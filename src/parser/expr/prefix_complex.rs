@@ -959,6 +959,39 @@ pub(super) fn parse_new_object(
         ));
     }
 
+    // `new (expression)(args)` — PHP 8.0's parenthesized class-name reference. The parentheses
+    // are unambiguous here: no other `new` form starts with one, and what they hold is an ordinary
+    // expression evaluated to a class name or object. Twig's
+    // `BinaryOperatorExpressionParser::parse` is `new ($this->nodeClass)($left, $right, …)`.
+    if matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::LParen)) {
+        *pos += 1;
+        let name_expr = parse_expr(tokens, pos)?;
+        if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
+            return Err(CompileError::new(span, "Expected ')' after new class expression"));
+        }
+        *pos += 1;
+        if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
+            reject_dynamic_new_class_reference(tokens, *pos)?;
+            return Ok(Expr::new(
+                ExprKind::NewDynamic {
+                    name_expr: Box::new(name_expr),
+                    args: Vec::new(),
+                },
+                span,
+            ));
+        }
+        *pos += 1;
+        let args = parse_args(tokens, pos, span)?;
+        let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
+        return Ok(Expr::new(
+            ExprKind::NewDynamic {
+                name_expr: Box::new(name_expr),
+                args,
+            },
+            span,
+        ));
+    }
+
     let class_name = parse_name(tokens, pos, span, "Expected class name after 'new'")?;
     if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
         reject_parenthesis_free_new_postfix(tokens, *pos)?;

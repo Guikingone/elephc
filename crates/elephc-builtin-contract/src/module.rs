@@ -119,6 +119,8 @@ php_modules! {
     Cairo => "cairo",
     /// PECL `pdo_ibm` (not bundled with php-src); provided by the PDO prelude.
     PdoIbm => "pdo_ibm",
+    /// PECL `apcu` (not bundled with php-src); only its constants are declared.
+    Apcu => "apcu",
 }
 
 impl PhpModule {
@@ -136,12 +138,17 @@ impl PhpModule {
     }
 
     /// Returns whether php-src bundles this module. PECL modules elephc happens to provide
-    /// (`imagick`, `gmagick`, `cairo`, `pdo_ibm`) are real PHP modules but never appear in
-    /// the vendored php-src baseline, so coverage pages report them separately.
+    /// (`imagick`, `gmagick`, `cairo`, `pdo_ibm`, `apcu`) are real PHP modules but never appear
+    /// in the vendored php-src baseline, so coverage pages report them separately.
     pub const fn is_bundled(self) -> bool {
         !matches!(
             self,
-            Self::Elephc | Self::Imagick | Self::Gmagick | Self::Cairo | Self::PdoIbm
+            Self::Elephc
+                | Self::Imagick
+                | Self::Gmagick
+                | Self::Cairo
+                | Self::PdoIbm
+                | Self::Apcu
         )
     }
 }
@@ -163,7 +170,7 @@ mod tests {
         assert_eq!(PhpModule::parse("SPL"), Some(PhpModule::Spl));
         assert_eq!(PhpModule::parse("nope"), None);
         assert!(!PhpModule::Elephc.is_php());
-        assert_eq!(PhpModule::ALL.len(), 68 + 4 + 1);
+        assert_eq!(PhpModule::ALL.len(), 68 + 5 + 1);
         assert!(!PhpModule::Imagick.is_bundled() && PhpModule::Imagick.is_php());
     }
 }

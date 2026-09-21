@@ -2,6 +2,60 @@
 
 use super::*;
 
+/// Verifies `isset()`, `empty()` and `??` probe a typed property through a receiver whose class
+/// is only known at run time. An UNTYPED parameter carries no class for the compiler to name a
+/// slot in, so these all fell back to the ordinary read and died with "Typed property Box::$name
+/// must not be accessed before initialization" — where PHP answers false, true and the default.
+/// Every generated Symfony container factory is written `static function f($container)`, so this
+/// is the receiver shape the whole DI container is built on. PHP outputs
+/// "unset|set|empty|filled|fallback|ready".
+#[test]
+fn test_typed_property_probes_through_an_untyped_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public string $name;
+    public string $ready = 'ready';
+}
+
+function probeIsset($o): string { return isset($o->name) ? 'set' : 'unset'; }
+function probeIssetReady($o): string { return isset($o->ready) ? 'set' : 'unset'; }
+function probeEmpty($o): string { return empty($o->name) ? 'empty' : 'filled'; }
+function probeEmptyReady($o): string { return empty($o->ready) ? 'empty' : 'filled'; }
+function probeCoalesce($o): string { return $o->name ?? 'fallback'; }
+function probeCoalesceReady($o): string { return $o->ready ?? 'fallback'; }
+
+$box = new Box();
+echo probeIsset($box), '|', probeIssetReady($box), '|';
+echo probeEmpty($box), '|', probeEmptyReady($box), '|';
+echo probeCoalesce($box), '|', probeCoalesceReady($box);
+"#,
+    );
+    assert_eq!(out, "unset|set|empty|filled|fallback|ready");
+}
+
+/// Verifies `??=` assigns through an untyped receiver whose typed slot is uninitialized, and
+/// leaves an already-initialized one alone. PHP outputs "assigned|already".
+#[test]
+fn test_coalesce_assign_through_an_untyped_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public string $name;
+    public string $ready = 'already';
+}
+
+function fill($o): string { return $o->name ??= 'assigned'; }
+function keep($o): string { return $o->ready ??= 'overwritten'; }
+
+$box = new Box();
+echo fill($box), '|', keep($box);
+"#,
+    );
+    assert_eq!(out, "assigned|already");
+}
+
+
 #[test]
 fn test_eval_closure_constructor_argument_can_be_stored_and_invoked_natively() {
     let out = compile_and_run(r#"<?php

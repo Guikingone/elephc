@@ -45,6 +45,11 @@ impl FunctionVariantKey {
             function_key: php_symbol_key(function_name),
         }
     }
+
+    /// The physical file the keyed declaration was written in.
+    pub(in crate::resolver) fn canonical(&self) -> &Path {
+        &self.canonical
+    }
 }
 
 /// Metadata for a single discovered function variant.

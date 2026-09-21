@@ -103,7 +103,12 @@ fn preserve_keys_type_supported(ty: &PhpType) -> bool {
         | PhpType::Int
         | PhpType::Float
         | PhpType::Str
-        | PhpType::Void => true,
+        | PhpType::Void
+        // A gradual value is what an UNTYPED parameter carries, and PHP coerces whatever it holds
+        // to bool like any other flag. `emit_preserve_keys_truthiness` already lowers `Mixed`
+        // through `__rt_mixed_cast_bool`; only this predicate refused it, which rejected Twig's
+        // `CoreExtension::toArray($seq, $preserveKeys = true)`.
+        | PhpType::Mixed => true,
         PhpType::Union(members) => members.iter().all(preserve_keys_type_supported),
         _ => false,
     }
@@ -134,10 +139,21 @@ pub(crate) fn iterator_to_array_return_type(
 ) -> PhpType {
     match preserve_keys {
         Some(value) => iterator_to_array_static_return_type(source_ty, value),
-        None => checker.normalize_union_type(vec![
-            iterator_to_array_static_return_type(source_ty, true),
-            iterator_to_array_static_return_type(source_ty, false),
-        ]),
+        None => {
+            let preserved = iterator_to_array_static_return_type(source_ty, true);
+            let renumbered = iterator_to_array_static_return_type(source_ty, false);
+            if preserved == renumbered {
+                return preserved;
+            }
+            // The two shapes are a hash and a dense array, and the backend boxes whichever arm
+            // runs. A UNION of them is the precise answer but it does not survive being stored:
+            // a local holding both array shapes types as `iterable`, and every array builtin
+            // refuses `iterable` because it may be a Traversable. `Mixed` is the same boxed cell
+            // and stays array-acceptable, which is what `shuffle(self::toArray($item, false))` in
+            // twig's `CoreExtension` needs.
+            let _ = checker;
+            PhpType::Mixed
+        }
     }
 }
 

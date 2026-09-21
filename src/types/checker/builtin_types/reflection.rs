@@ -111,7 +111,13 @@ pub(crate) fn reflection_virtual_property_backing(
         "name"
             if matches!(
                 class_name,
-                "ReflectionClass"
+                // The INTERFACE too: every implementation of `Reflector` carries a public
+                // `$name` — ReflectionClass/Object/Enum, the function abstracts, Property,
+                // Parameter, ClassConstant, the enum cases, and the two extension reflectors.
+                // Symfony's `ReflectionCaster` reads `$m->name` off a value narrowed to
+                // `\Reflector`, which is valid PHP and was refused.
+                "Reflector"
+                    | "ReflectionClass"
                     | "ReflectionObject"
                     | "ReflectionEnum"
                     | "ReflectionFunctionAbstract"

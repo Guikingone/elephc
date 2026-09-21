@@ -19,6 +19,9 @@ pub(super) fn lower(
     target: RuntimeFnId,
 ) -> Option<Result<()>> {
     match target {
+        RuntimeFnId::MixedSpreadArray => Some({
+            crate::codegen::lower_inst::mixed_array_runtime::lower_mixed_spread_array(ctx, inst)
+        }),
         RuntimeFnId::ArrayPtrSeek => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_ptr_seek(ctx, inst)
         }),

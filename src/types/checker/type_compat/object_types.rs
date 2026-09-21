@@ -58,6 +58,27 @@ impl Checker {
                 .eq_ignore_ascii_case(type_name.trim_start_matches('\\'))
     }
 
+    /// Returns whether `type_name` names a class-like THE CLOSED WORLD DOES NOT HAVE, in a context
+    /// that is allowed to leave an absent class to PHP's runtime.
+    ///
+    /// [`Checker::unresolved_new_object_defers_to_runtime`] answers the same question, but only
+    /// when the expression at hand is the `new` itself. A declared return type carries the name
+    /// just as far: `AbstractController::denyAccessUnlessGranted` does
+    /// `$e = $this->createAccessDeniedException(...); ...; throw $e;`, and
+    /// `createAccessDeniedException(): AccessDeniedException` names a class that only ships with
+    /// `symfony/security-core`. Without this the checker decided a class it has never seen does not
+    /// implement `Throwable` and refused to compile the file — for a branch that is guarded by
+    /// `class_exists()` and, in an app without that package, never runs.
+    pub(crate) fn absent_class_defers_to_runtime(&self, type_name: &str) -> bool {
+        if type_name.is_empty() {
+            return false;
+        }
+        if self.classes.contains_key(type_name) || self.interfaces.contains_key(type_name) {
+            return false;
+        }
+        self.allows_absent_runtime_class()
+    }
+
     /// Checks whether the current class context can access a member with the given visibility
     /// declared in `declaring_class`. Public members are always accessible; protected members
     /// are accessible throughout the same inheritance family; private members are only

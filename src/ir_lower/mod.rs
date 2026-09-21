@@ -30,6 +30,12 @@ mod stmt;
 mod tests;
 
 pub(crate) use expr::body_contains_eval_call;
+/// Whether an op writes its string result into the shared concat scratch arena.
+///
+/// Codegen's synthetic builtin callable wrappers ask the same question return lowering does,
+/// so they persist a scratch-backed result instead of handing the arena pointer to a caller.
+pub(crate) use expr::body_writes_local;
+pub(crate) use expr::string_op_uses_scratch_storage;
 
 use std::fmt;
 use std::path::Path;

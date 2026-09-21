@@ -19,6 +19,20 @@ pub enum EvalPcntlSignalHandler {
     Callable(RuntimeCellHandle),
 }
 
+/// How much of the process-global class registry one context has already imported.
+///
+/// The counts are prefix lengths into the registry's push-only name lists; `generation` is the
+/// registry's own, and a mismatch means the lists were emptied and every count is meaningless.
+#[derive(Clone, Copy, Default)]
+pub(super) struct GlobalEvalSyncMark {
+    pub(super) generation: u64,
+    pub(super) classes: usize,
+    pub(super) interfaces: usize,
+    pub(super) traits: usize,
+    pub(super) enums: usize,
+    pub(super) aliases: usize,
+}
+
 /// Process-level eval context passed opaquely across the C ABI.
 ///
 /// Generated code never inspects this layout directly; it only passes pointers
@@ -27,14 +41,29 @@ pub enum EvalPcntlSignalHandler {
 pub struct ElephcEvalContext {
     pub(super) abi_version: u32,
     pub(crate) native_global_sync: Option<NativeGlobalSyncHooks>,
-    pub(super) classes: HashMap<String, EvalClass>,
+    /// SHARED, not owned: a context imports class-likes another context declared on every
+    /// `sync_global_eval_classes`, and a deep copy of each `EvalClass` — method bodies and
+    /// all — was ~13% of a Symfony request, paid again on teardown when the request-scoped
+    /// context dropped every copy.
+    pub(super) classes: HashMap<String, Arc<EvalClass>>,
+    /// How much of the process-global class registry this context has already imported.
+    pub(super) global_eval_sync: GlobalEvalSyncMark,
     pub(super) class_source_files: HashMap<String, String>,
     pub(super) class_aliases: HashMap<String, EvalClassAlias>,
+    /// Names declared before this context adopted the snapshot: SHARED, never written.
     pub(super) declared_class_names: Arc<Vec<String>>,
+    /// Names this context declared itself, appended without copying the shared prefix.
+    pub(super) own_declared_class_names: Vec<String>,
     pub(super) interfaces: HashMap<String, EvalInterface>,
+    /// Names declared before this context adopted the snapshot: SHARED, never written.
     pub(super) declared_interface_names: Arc<Vec<String>>,
+    /// Names this context declared itself, appended without copying the shared prefix.
+    pub(super) own_declared_interface_names: Vec<String>,
     pub(super) traits: HashMap<String, EvalTrait>,
+    /// Names declared before this context adopted the snapshot: SHARED, never written.
     pub(super) declared_trait_names: Arc<Vec<String>>,
+    /// Names this context declared itself, appended without copying the shared prefix.
+    pub(super) own_declared_trait_names: Vec<String>,
     pub(super) enums: HashMap<String, EvalEnum>,
     pub(super) declared_enum_names: Vec<String>,
     pub(super) enum_cases: HashMap<(String, String), RuntimeCellHandle>,
@@ -167,13 +196,17 @@ impl ElephcEvalContext {
             abi_version: ABI_VERSION,
             native_global_sync: None,
             classes: HashMap::new(),
+            global_eval_sync: GlobalEvalSyncMark::default(),
             class_source_files: HashMap::new(),
             class_aliases: HashMap::new(),
             declared_class_names: Arc::default(),
+            own_declared_class_names: Vec::new(),
             interfaces: HashMap::new(),
             declared_interface_names: Arc::default(),
+            own_declared_interface_names: Vec::new(),
             traits: HashMap::new(),
             declared_trait_names: Arc::default(),
+            own_declared_trait_names: Vec::new(),
             enums: HashMap::new(),
             declared_enum_names: Vec::new(),
             enum_cases: HashMap::new(),
@@ -270,13 +303,17 @@ impl ElephcEvalContext {
             abi_version,
             native_global_sync: None,
             classes: HashMap::new(),
+            global_eval_sync: GlobalEvalSyncMark::default(),
             class_source_files: HashMap::new(),
             class_aliases: HashMap::new(),
             declared_class_names: Arc::default(),
+            own_declared_class_names: Vec::new(),
             interfaces: HashMap::new(),
             declared_interface_names: Arc::default(),
+            own_declared_interface_names: Vec::new(),
             traits: HashMap::new(),
             declared_trait_names: Arc::default(),
+            own_declared_trait_names: Vec::new(),
             enums: HashMap::new(),
             declared_enum_names: Vec::new(),
             enum_cases: HashMap::new(),

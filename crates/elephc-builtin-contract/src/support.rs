@@ -193,6 +193,7 @@ const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] = &[
     "hash_init",
     "hash_update",
     "levenshtein",
+    "parse_str",
     "var_export",
 ];
 
@@ -333,13 +334,11 @@ fn is_aot_implementation_pending(id: BuiltinId) -> bool {
 /// have nowhere to bind. Listed rather than silently registered, because a registry binding that
 /// did nothing would report a handler installed and never call it.
 ///
-/// `parse_str` joins them for a different reason: its `$result` parameter is by-reference with NO
-/// compiled-side counterpart at all (no `RuntimeFnId`, no lowering, no prelude declaration --
-/// confirmed by grep across `crates/` and `src/` before this contract was added). It already had
-/// an interpreter implementation, dispatched from `eval_call`'s own hard-coded ladder rather than
-/// the registry, before this contract made it visible to `function_exists()`/`is_callable()`.
+/// `parse_str` used to be listed here for a different reason — a by-reference `$result` with no
+/// compiled-side counterpart of any kind — and is no longer: `crate::parse_str_prelude` declares
+/// it as an injected PHP function, where the out-parameter is an ordinary by-reference parameter.
 const AOT_IMPLEMENTATION_PENDING: &[&str] =
-    &["parse_str", "register_tick_function", "unregister_tick_function"];
+    &["register_tick_function", "unregister_tick_function"];
 
 fn is_eval_only_reflection(id: BuiltinId) -> bool {
     [
@@ -372,14 +371,11 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "dechex",
     "decoct",
     "header_remove",
-    "headers_sent",
     "hexdec",
     "join",
     "octdec",
     "preg_grep",
     "setlocale",
-    "strncasecmp",
-    "strncmp",
     "unpack",
     "zval_free",
     "zval_pack",
@@ -433,13 +429,13 @@ mod tests {
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         // Sixty-four of these are the `xml_*` / `xmlwriter_*` contracts, which eval binds
         // through forwarding homes (see `eval_support`).
-        assert_eq!(eval_registry, 607 + curl_surface);
+        assert_eq!(eval_registry, 610 + curl_surface);
         // 82 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use.
         assert_eq!(eval_internal, 99);
         // Registry builtins awaiting eval homes, plus the PHP-visible prelude-provided and
         // name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 363);
+        assert_eq!(eval_pending, 360);
         // Main's BCMath registry adds fourteen AOT contracts; this branch also
         // promotes get_object_vars from an external surface into the registry and
         // adds the ten iconv contracts, thirty-five PCNTL contracts, forty-three
@@ -450,10 +446,16 @@ mod tests {
         // Constructs, dedicated syntax and hash surfaces, the prelude-provided and
         // name-resolver-rewritten contracts (54 of them the xml prelude, seven the `--web`
         // handler stack this branch contracted), and the curl prelude when published.
-        assert_eq!(aot_external, 414 + curl_surface);
+        //
+        // One more than main: `parse_str` moved here from `AOT_IMPLEMENTATION_PENDING` when
+        // `crate::parse_str_prelude` started declaring it as an injected PHP function, where its
+        // out-parameter is an ordinary by-reference parameter rather than a by-reference the
+        // compiled side has no counterpart for. It is the same contract on the other side of the
+        // `aot_unsupported` count below, which drops by the same one.
+        assert_eq!(aot_external, 415 + curl_surface);
         // `get_called_class`, `get_class_methods` and `get_class_vars` from main, plus this
-        // branch's `parse_str`, `register_tick_function` and `unregister_tick_function`.
-        assert_eq!(aot_unsupported, 6);
+        // branch's `register_tick_function` and `unregister_tick_function`.
+        assert_eq!(aot_unsupported, 5);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.
@@ -498,10 +500,10 @@ mod tests {
         }
 
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
-        assert_eq!(shared_runtime, 19);
+        assert_eq!(shared_runtime, 20);
         assert_eq!(hybrid_adapter, 2);
-        assert_eq!(interpreter_adapter, 586 + curl_surface);
-        assert_eq!(unsupported, 462);
+        assert_eq!(interpreter_adapter, 588 + curl_surface);
+        assert_eq!(unsupported, 459);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

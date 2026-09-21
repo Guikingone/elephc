@@ -59,6 +59,26 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
     }
     let source_php_ty = ctx.builder.value_php_type(value.value).clone();
     let source_ty = source_php_ty.codegen_repr();
+    // A `callable` parameter's storage is a DESCRIPTOR, and an `[$object, 'method']` pair is a
+    // hash pointer: handing one straight over type-checks and then faults on the first call
+    // through it. `Op::NormalizeCallable` is the conversion the callable-array path already uses,
+    // and it owns its result, which the ordinary argument-ownership rules then release.
+    if param_ty == PhpType::Callable
+        && matches!(
+            &source_ty,
+            PhpType::Array(element)
+                if matches!(element.codegen_repr(), PhpType::Mixed | PhpType::Str)
+        )
+    {
+        return ctx.emit_value(
+            Op::NormalizeCallable,
+            vec![value.value],
+            None,
+            PhpType::Callable,
+            Op::NormalizeCallable.default_effects(),
+            Some(arg.span),
+        );
+    }
     if bindable && param_ty == PhpType::Mixed && source_ty != PhpType::Mixed {
         return ctx.box_value_as_mixed(value, PhpType::Mixed, Some(arg.span));
     }
@@ -175,13 +195,27 @@ fn guard_nominal_object_param(
     expected: &PhpType,
     span: Option<crate::span::Span>,
 ) -> LoweredValue {
-    let source_type = ctx.builder.value_php_type(value.value).codegen_repr();
+    let source_php_type = ctx.builder.value_php_type(value.value).clone();
+    let source_type = source_php_type.codegen_repr();
+    // A union naming several classes still has ONE that a value of this argument's own class
+    // could be; see `nominal_object_boundary_target_for_source`. That target is resolved BEFORE
+    // the `needs_nominal_guard` test, because the two `*_requires_runtime_nominal_guard`
+    // predicates both ask `nominal_object_boundary_target`, which turns such a union away — the
+    // guard would have been skipped entirely and a class PHP rejects would have crossed silently.
+    let narrowed_target = crate::types::param_binding::nominal_object_boundary_target_for_source(
+        expected,
+        &source_php_type,
+        &|candidate, source| nominal_boundary_classes_are_related(ctx, candidate, source),
+    );
     let gradual_source =
         crate::types::param_binding::gradual_object_requires_runtime_nominal_guard(
             expected,
             &source_type,
-        );
+        )
+        || (narrowed_target.is_some()
+            && matches!(source_type, PhpType::Mixed | PhpType::Union(_)));
     let needs_nominal_guard = gradual_source
+        || narrowed_target.is_some()
         || crate::types::param_binding::object_requires_runtime_nominal_guard(
             expected,
             &source_type,
@@ -191,8 +225,8 @@ fn guard_nominal_object_param(
     {
         return value;
     }
-    let Some(target_name) =
-        crate::types::param_binding::nominal_object_boundary_target(expected)
+    let Some(target_name) = crate::types::param_binding::nominal_object_boundary_target(expected)
+        .or(narrowed_target)
     else {
         return value;
     };
@@ -441,6 +475,32 @@ pub(super) fn coerce_operands_to_params(
             };
             operands[index] = ctx
                 .box_value_as_mixed(lowered, PhpType::Mixed, None)
+                .value;
+        } else if matches!(param_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+            && operand_ty == PhpType::Iterable
+        {
+            // `iterable` is `array|Traversable` and carries a representation the array helpers
+            // cannot walk. Materialising it here is what makes the binding SOUND: re-typing the
+            // value instead -- which is what a narrowing rule would do -- hands the callee
+            // something it reads as fixed-size slots, and it segfaults. Keys are preserved, which
+            // is both `iterator_to_array()`'s default and what php does when the value is already
+            // an array.
+            operands[index] = ctx
+                .emit_value(
+                    Op::RuntimeCall,
+                    vec![value],
+                    Some(Immediate::RuntimeCall(
+                        crate::ir::RuntimeCallTarget::Function(
+                            crate::ir::RuntimeFnId::IteratorToArray,
+                        ),
+                    )),
+                    PhpType::AssocArray {
+                        key: Box::new(PhpType::Mixed),
+                        value: Box::new(PhpType::Mixed),
+                    },
+                    crate::ir::RuntimeFnId::IteratorToArray.effects(),
+                    None,
+                )
                 .value;
         } else if param_ty == PhpType::Float
             && matches!(operand_ty, PhpType::Int | PhpType::Bool)
@@ -692,4 +752,38 @@ fn lower_args_with_signature_options(
         operands.push(lower_variadic_tail_array(ctx, sig, tail).value);
     }
     coerce_operands_to_params(ctx, sig, operands)
+}
+
+/// Returns whether two class names name the same class or one descends from the other.
+///
+/// PHP has single inheritance, so two unrelated classes can never describe one value. An interface
+/// on either side answers true: a class may implement any number of them, so relatedness cannot be
+/// ruled out and the union stays ambiguous (which turns the caller's guard selection away).
+fn nominal_boundary_classes_are_related(
+    ctx: &LoweringContext<'_, '_>,
+    candidate: &str,
+    source: &str,
+) -> bool {
+    if candidate.eq_ignore_ascii_case(source) {
+        return true;
+    }
+    if !ctx.classes.contains_key(candidate) || !ctx.classes.contains_key(source) {
+        return true;
+    }
+    class_descends_from(ctx, candidate, source) || class_descends_from(ctx, source, candidate)
+}
+
+/// Walks the parent chain of `class_name` looking for `ancestor`.
+fn class_descends_from(ctx: &LoweringContext<'_, '_>, class_name: &str, ancestor: &str) -> bool {
+    let mut current = Some(class_name.to_string());
+    while let Some(name) = current {
+        if name.eq_ignore_ascii_case(ancestor) {
+            return true;
+        }
+        current = ctx
+            .classes
+            .get(name.as_str())
+            .and_then(|class_info| class_info.parent.clone());
+    }
+    false
 }

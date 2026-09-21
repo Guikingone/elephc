@@ -14,6 +14,23 @@ pub(super) fn lower_iterator_iterator_new(ctx: &mut FunctionContext<'_>, inst: &
     let source = expect_operand(inst, 0)?;
     let source_ty = ctx.value_php_type(source)?.codegen_repr();
     let PhpType::Object(source_name) = &source_ty else {
+        // php's answer for a SCALAR argument is a TypeError, and emitting it is both what php does
+        // and the only honest lowering: the constructor has no Traversable to wrap. Refusing the
+        // whole program instead is what a fabricated scalar parameter type turned into a build
+        // failure -- `twig/twig`'s `CoreExtension::filter($env, $isSandboxed, $array, $arrow)` has
+        // no compiled caller, its untyped parameters keep the `int` inference seed, and
+        // `new \IteratorIterator($array)` is reached only past `if (!is_iterable($array)) throw`,
+        // so the throw this emits stands where the guard already made the code unreachable.
+        if let Some(given) = scalar_type_error_name(&source_ty) {
+            exceptions::emit_type_error(
+                ctx,
+                &format!(
+                    "IteratorIterator::__construct(): Argument #1 ($iterator) must be of type Traversable, {} given",
+                    given
+                ),
+            );
+            return store_if_result(ctx, inst);
+        }
         return Err(CodegenIrError::unsupported(format!(
             "IteratorIterator source PHP type {:?}",
             source_ty
@@ -82,6 +99,18 @@ pub(super) fn lower_iterator_iterator_new(ctx: &mut FunctionContext<'_>, inst: &
         result,
         &slot,
     )
+}
+
+/// Returns php's name for a scalar type in a TypeError message, or `None` for anything else.
+fn scalar_type_error_name(php_type: &PhpType) -> Option<&'static str> {
+    match php_type {
+        PhpType::Int | PhpType::TaggedScalar => Some("int"),
+        PhpType::Float => Some("float"),
+        PhpType::Bool | PhpType::False => Some("bool"),
+        PhpType::Str => Some("string"),
+        PhpType::Void => Some("null"),
+        _ => None,
+    }
 }
 
 /// Stores IteratorIterator::$inner after converting IteratorAggregate inputs through getIterator().

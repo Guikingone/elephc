@@ -68,7 +68,7 @@ pub(super) fn store_mixed_scope_cell_to_global(
     ctx.data.add_comm(symbol.clone(), ty.stack_size().max(8));
     match &ty {
         PhpType::Mixed | PhpType::Union(_) => {
-            if crate::superglobals::uses_shared_ref_cell(ctx.module, &global.name) {
+            if ctx.shared.uses_shared_ref_cell(ctx.module, &global.name) {
                 // The replacing store releases its old owner even if this is
                 // the same borrowed cell. Acquire the new share first.
                 abi::emit_call_label(ctx.emitter, "__rt_incref");
@@ -105,7 +105,7 @@ pub(super) fn store_mixed_scope_cell_to_global(
             ctx.emitter
                 .instruction(&format!("mov {}, {}", result_reg, payload_reg)); // move the unboxed array payload into the ABI result register
             abi::emit_incref_if_refcounted(ctx.emitter, &ty);
-            if crate::superglobals::uses_shared_ref_cell(ctx.module, &global.name) {
+            if ctx.shared.uses_shared_ref_cell(ctx.module, &global.name) {
                 return super::super::super::globals_constants::lower_store_shared_global(
                     ctx,
                     &symbol,
@@ -202,7 +202,7 @@ pub(super) fn store_missing_scope_entry_to_global(
     ctx: &mut FunctionContext<'_>,
     global: &EvalSyncGlobal,
 ) -> Result<()> {
-    if crate::superglobals::uses_shared_ref_cell(ctx.module, &global.name)
+    if ctx.shared.uses_shared_ref_cell(ctx.module, &global.name)
         && !crate::superglobals::is_superglobal(&global.name)
     {
         super::super::super::globals_constants::unset_global_name(ctx, &global.name);
@@ -238,7 +238,7 @@ pub(super) fn store_missing_scope_entry_to_global(
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
-            if crate::superglobals::uses_shared_ref_cell(ctx.module, &global.name) {
+            if ctx.shared.uses_shared_ref_cell(ctx.module, &global.name) {
                 return super::super::super::globals_constants::lower_store_shared_global(
                     ctx,
                     &symbol,

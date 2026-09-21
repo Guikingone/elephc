@@ -23,7 +23,7 @@ fn parse_fragment_accepts_abstract_and_final_class_members() {
     .expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ClassDecl(EvalClass::with_modifiers(
+        &[EvalStmt::class_decl(EvalClass::with_modifiers(
             "DynEvalAbstract",
             true,
             false,
@@ -247,7 +247,7 @@ class DynEvalUsesTrait {
                     }))]
                 )],
             )),
-            EvalStmt::ClassDecl(EvalClass::with_modifiers_and_traits(
+            EvalStmt::class_decl(EvalClass::with_modifiers_and_traits(
                 "DynEvalUsesTrait",
                 false,
                 false,

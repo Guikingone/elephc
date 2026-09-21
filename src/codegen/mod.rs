@@ -39,6 +39,7 @@ mod shared_count_guard;
 mod shared_helper;
 mod shared_mixed_callable;
 mod shared_mixed_string;
+mod shared_static_throw;
 mod shared_reflection;
 mod shared_state;
 pub(crate) mod stack_guard;
@@ -204,6 +205,9 @@ pub struct CodegenIrError {
     message: String,
     /// Optional source location attached by the block walker.
     location: Option<String>,
+    /// Set only by the codegen worker's deferral watch: not a fault, a request to re-emit this
+    /// body on the serial pass. It survives `at()` because the abort happens inside a block.
+    deferred: bool,
 }
 
 impl CodegenIrError {
@@ -212,6 +216,7 @@ impl CodegenIrError {
         Self {
             message: message.into(),
             location: None,
+            deferred: false,
         }
     }
 
@@ -220,6 +225,7 @@ impl CodegenIrError {
         Self {
             message: format!("unsupported EIR backend feature: {}", message.into()),
             location: None,
+            deferred: false,
         }
     }
 
@@ -228,6 +234,7 @@ impl CodegenIrError {
         Self {
             message: format!("EIR backend missing {} with id {}", kind, raw),
             location: None,
+            deferred: false,
         }
     }
 
@@ -240,6 +247,28 @@ impl CodegenIrError {
     /// Returns the location-free cause used to group inventory failures.
     pub(super) fn message(&self) -> &str {
         &self.message
+    }
+
+    /// Stops a body a codegen worker is going to discard anyway.
+    ///
+    /// A worker cannot emit a body that reaches a shared cache, because the helper behind that
+    /// cache belongs to the module once and the worker cannot know whether another worker is
+    /// emitting it too. That was discovered by emitting the WHOLE body and then rolling it back:
+    /// on the Symfony module, 2 101 439 143 of 2 398 603 000 bytes — 87.6% — were emitted twice,
+    /// once into a worker that threw them away and once into the serial pass. Stopping at the
+    /// instruction that touched the cache leaves the same set of bodies deferred and throws away
+    /// a prefix instead of a body.
+    pub(super) fn deferred_body() -> Self {
+        Self {
+            message: "codegen body deferred to the serial pass".to_string(),
+            location: None,
+            deferred: true,
+        }
+    }
+
+    /// Returns whether this is the deferral signal rather than a backend fault.
+    pub(super) fn is_deferred_body(&self) -> bool {
+        self.deferred
     }
 }
 
@@ -360,7 +389,6 @@ fn finalize_user_asm(
     let emit_eval_reflection_metadata =
         eval_bridge || module.required_runtime_features.eval_scope;
     if eval_bridge {
-        eval_property_helpers::emit_eval_property_helpers(module, &mut emitter, &mut data);
         eval_static_property_helpers::emit_eval_static_property_helpers(
             module,
             &mut emitter,
@@ -379,8 +407,17 @@ fn finalize_user_asm(
         &mut emitter,
         &mut data,
         eval_callable_support_needed,
+        eval_bridge,
     );
     if eval_bridge {
+        // After the callable support: a `\Closure`-typed property slot converts the boxed eval
+        // callback into a descriptor with the same cast a `callable` parameter uses.
+        eval_property_helpers::emit_eval_property_helpers(
+            module,
+            &mut emitter,
+            &mut data,
+            &eval_callable_support,
+        );
         eval_constructor_helpers::emit_eval_constructor_helpers(
             module,
             &mut emitter,

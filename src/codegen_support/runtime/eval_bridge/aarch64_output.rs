@@ -244,7 +244,7 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_warning");
     emitter.instruction("mov x2, x1");                                          // move warning length into the runtime diagnostic length register
     emitter.instruction("mov x1, x0");                                          // move warning pointer into the runtime diagnostic buffer register
-    emitter.instruction("b __rt_diag_warning");                                 // emit or suppress one eval runtime warning
+    emitter.instruction("b __rt_diag_message");                                 // one WHOLE interpreted diagnostic: it carries no trailing newline
 
     label_c_global(emitter, "__elephc_eval_fatal");
     emitter.instruction("mov x2, x1");                                          // move fatal length into the stderr write-length register

@@ -314,6 +314,12 @@ pub(super) fn eval_reflection_named_type_variant_metadata(
             allows_null,
             is_builtin: false,
         }),
+        EvalParameterTypeVariant::False => {
+            Some(eval_reflection_builtin_named_type("false", allows_null))
+        }
+        EvalParameterTypeVariant::True => {
+            Some(eval_reflection_builtin_named_type("true", allows_null))
+        }
         EvalParameterTypeVariant::Float => {
             Some(eval_reflection_builtin_named_type("float", allows_null))
         }

@@ -24,7 +24,7 @@ use std::path::Path;
 
 use crate::parser::ast::{BinOp, Program, Stmt, StmtKind};
 use crate::synthetic_class::{
-    e_array, e_binop, e_call, e_const, e_int, e_null, e_static_prop, s_assign, s_expr, s_if, s_try,
+    e_binop, e_call, e_const, e_int, e_static_prop, s_assign, s_expr, s_if, s_try,
 };
 
 use crate::prelude_prune::usage;
@@ -68,6 +68,15 @@ pub const fn sapi_name(web: bool) -> &'static str {
 /// `build` spells out what there is to keep.
 pub(crate) mod build;
 
+/// Prelude inventory group holding the engine-diagnostic dispatch pair.
+///
+/// Defined by `crate::error_handling_prelude`, which now owns the dispatch pair itself and
+/// hands the same declarations to this prelude and to the non-`--web` injection. Re-exported
+/// here because `pipeline::compile` spells it `web_prelude::DIAG_DISPATCH_GROUP`, and because
+/// the two injection sites MUST force one and the same group: the constant is what makes that
+/// a fact rather than two matching string literals.
+pub(crate) use crate::error_handling_prelude::DIAG_DISPATCH_GROUP;
+
 
 /// The catch-all wrapper: the whole handler body goes inside its `try` so an uncaught exception
 /// becomes a 500 before response commitment, or aborts an already-streaming response, instead of
@@ -76,10 +85,21 @@ pub(crate) mod build;
 /// statements by [`inject_if_web`].
 ///
 /// `finally` first drains the `register_shutdown_function()` registry — PHP runs those callbacks
-/// after the script body on the success AND the exception path, and this is the only place in a
-/// request that qualifies — and then closes an active session, which is what makes
-/// `session_write_close()` run on the exception path too. `__ElephcSessionState::$shutdown` is the
-/// latch a `session_write_close()` in user code clears so it does not run twice.
+/// after the script body on the success AND the exception path — and then closes an active
+/// session, which is what makes `session_write_close()` run on the exception path too.
+/// `__ElephcSessionState::$shutdown` is the latch a `session_write_close()` in user code clears
+/// so it does not run twice.
+///
+/// It is NOT the only place in a request that qualifies, and believing that was a hole: a handler
+/// that calls `exit()` never reaches this `finally` at all — `lower_exit`'s `--web` arm jumps
+/// straight to the handler epilogue, exactly as the CLI arm jumps to the exit syscall. The
+/// shutdown drain is therefore ALSO emitted at `lower_exit`, which closes that half; the
+/// `session_write_close()` half below is still skipped by an `exit()` and is an open gap.
+///
+/// The drain is spelled as the nullary `__elephc_shutdown_run()` rather than
+/// `__elephc_shutdown_function_state(null, [], 2)` because codegen has to call the same entry by
+/// symbol, with no arguments to marshal. Calling it from here is also what keeps it REACHABLE
+/// under `--web`, where nothing forces its group.
 pub(crate) fn web_wrap_stmt() -> Stmt {
     crate::synthetic_class::internal_declarations(|| {
         vec![s_try(
@@ -93,10 +113,7 @@ pub(crate) fn web_wrap_stmt() -> Stmt {
                 ))],
             )],
             Some(vec![
-                s_expr(e_call(
-                    "__elephc_shutdown_function_state",
-                    vec![e_null(), e_array(vec![]), e_int(2)],
-                )),
+                s_expr(e_call(crate::names::SHUTDOWN_RUN_FUNCTION, vec![])),
                 s_if(
                     e_binop(
                         e_binop(
@@ -132,6 +149,16 @@ pub fn inject_if_web(
     if !web {
         return program;
     }
+    // A program that declares one of the SHARED error-handling names for itself loses that
+    // declaration to the prelude's, which is what php does and what elephc already does for a
+    // registry builtin. `if (!function_exists('trigger_error')) { function trigger_error(…) }`
+    // is ordinary library code: php never takes the branch, but elephc EMITS the guarded body
+    // as a symbol anyway, and this prelude declaring the same name failed the link with
+    // `duplicate symbol '_fn_trigger_u_error'`. See
+    // `error_handling_prelude::without_shadowing_declarations` for why the prelude has to be
+    // the side that wins. Scoped to that module's own names — the session and `ini_*` surface
+    // below carries the identical hazard and is deliberately left as it was.
+    let program = crate::error_handling_prelude::without_shadowing_declarations(program);
     let user_usage = usage::collect(&program);
     let needs_callable_session_handler = user_usage.references("session_set_save_handler")
         || user_usage.dynamic_function_call;
@@ -170,6 +197,16 @@ pub fn inject_if_web(
     // declarations are heavy and a program that never mentions `session_set_save_handler` cannot
     // want them, which is a different question from what it can reach.
     inventory.record_program("web", &combined);
+    // See `DIAG_DISPATCH_GROUP`: these two are reached from the generated runtime, not from PHP.
+    let diag_group = inventory.group_mut(DIAG_DISPATCH_GROUP);
+    diag_group
+        .functions
+        .insert(crate::names::php_symbol_key("__elephc_diag_dispatch"));
+    diag_group
+        .functions
+        .insert(crate::names::php_symbol_key(
+            crate::names::DIAG_RENDER_FUNCTION,
+        ));
     combined.extend(program);
 
     // The catch-all try wrap below reorders the top level (declarations hoisted

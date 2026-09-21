@@ -585,11 +585,24 @@ fn eval_generator_begin_delegation(
         }
         EVAL_TAG_OBJECT => {
             let identity = values.object_identity(source)?;
-            if !context.has_eval_generator(identity) {
-                return Err(EvalStatus::UnsupportedConstruct);
+            if context.has_eval_generator(identity) {
+                eval_generator_prime(identity, context, values)?;
+                frame.delegate = Some(EvalGeneratorDelegate::Generator { identity });
+                return Ok(());
             }
-            eval_generator_prime(identity, context, values)?;
-            frame.delegate = Some(EvalGeneratorDelegate::Generator { identity });
+            // Not one of ours. php accepts any Traversable here, and a compiled generator is one:
+            // it answers the same `valid`/`current`/`key`/`next` methods, so pump it through those.
+            if !values.object_is_a(source, "Traversable", false)? {
+                return eval_throw_error(
+                    "Can use \"yield from\" only with arrays and Traversables",
+                    context,
+                    values,
+                );
+            }
+            frame.delegate = Some(EvalGeneratorDelegate::Foreign {
+                object: values.retain(source)?,
+                generator: identity,
+            });
             Ok(())
         }
         _ => eval_throw_error(
@@ -617,6 +630,19 @@ fn eval_generator_produce_from_delegate(
             }
             let key = values.array_iter_key(array, position)?;
             let value = values.array_get(array, key)?;
+            eval_generator_set_current(frame, key, value, values)?;
+            Ok(true)
+        }
+        Some(EvalGeneratorDelegate::Foreign { generator, .. }) => {
+            if !crate::runtime_hooks::native_generator_valid(generator) {
+                return Ok(false);
+            }
+            let (Some(key), Some(value)) = (
+                crate::runtime_hooks::native_generator_key(generator),
+                crate::runtime_hooks::native_generator_current(generator),
+            ) else {
+                return Ok(false);
+            };
             eval_generator_set_current(frame, key, value, values)?;
             Ok(true)
         }
@@ -659,11 +685,20 @@ fn eval_generator_advance_delegate(
             *position += 1;
             Ok(())
         }
+        Some(EvalGeneratorDelegate::Foreign { generator, .. }) => {
+            // `send()` into a foreign delegate would need `__rt_gen_send`; a plain advance is what
+            // `yield from` does when nothing was sent, which is every case a compiled generator
+            // reaches today.
+            let _ = sent;
+            crate::runtime_hooks::native_generator_next(generator);
+            Ok(())
+        }
         Some(EvalGeneratorDelegate::Generator { identity }) => {
             eval_generator_step(identity, sent, true, context, values)
         }
     }
 }
+
 
 /// Clears an exhausted delegation and hands its return value to the waiting `into` slot.
 fn eval_generator_end_delegation(
@@ -680,6 +715,17 @@ fn eval_generator_end_delegation(
         Some(EvalGeneratorDelegate::Generator { identity }) => context
             .eval_generator(identity, |inner| inner.return_value)
             .flatten(),
+        Some(EvalGeneratorDelegate::Foreign { object, generator }) => {
+            // `$x = yield from $gen;` takes the delegate's own return value, which only a
+            // Generator has. Anything else Traversable produces none, exactly as in php.
+            let produced = if values.object_is_a(object, "Generator", false)? {
+                crate::runtime_hooks::native_generator_return(generator)
+            } else {
+                None
+            };
+            values.release(object)?;
+            produced
+        }
         None => None,
     };
     let Some(name) = frame.pending_send_slot.take() else {

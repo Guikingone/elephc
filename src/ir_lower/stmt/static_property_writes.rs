@@ -38,6 +38,15 @@ fn reference_element_type(container: &PhpType) -> PhpType {
 ///   (e.g. `Class::$h = $handler` where `$handler` is a `?SessionHandlerInterface`
 ///   parameter) leaves the property dangling once the borrow's owner releases its
 ///   reference, so a later read dispatches on freed memory (a fatal "on null").
+///
+///   A heap load from a local slot only *looks* like an owning temporary. Main
+///   classifies concrete array/object local loads that way for provisional
+///   unbox-release tracking, but the slot stays the owner and the frame epilogue
+///   releases it, so moving from one hands the property a reference the epilogue
+///   then takes back. `throw $e` reached the same conclusion first (issue #448):
+///   publishing a pointer somewhere that outlives the frame is not a transfer.
+///   A static property outlives it by the widest margin there is — the process —
+///   so a local-slot load is acquired here like any other borrow.
 pub(super) fn lower_static_property_assign(
     ctx: &mut LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
@@ -68,7 +77,9 @@ pub(super) fn lower_static_property_assign(
         }
         return;
     }
-    let value = if ctx.value_is_owning_temporary(value) {
+    let transferable =
+        ctx.value_is_owning_temporary(value) && !ctx.value_is_owned_unboxed_local_load(value.value);
+    let value = if transferable {
         value
     } else {
         crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))

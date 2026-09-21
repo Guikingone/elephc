@@ -47,7 +47,12 @@ pub(in crate::interpreter) fn eval_preg_capture_array(
     let len = captures.map_or(0, |captures| {
         eval_preg_visible_capture_len(captures, unmatched_as_null)
     });
-    if regex.name_count() == 0 {
+    // A MARK verb forces the hash shape for the same reason a declared name does: `MARK` is a
+    // STRING key. php appends it AFTER every capture, and reports it as a bare string even under
+    // `PREG_OFFSET_CAPTURE` (measured with `php -n` 8.5), which is why it is not built through
+    // `eval_preg_capture_value`.
+    let mark = captures.and_then(|_| regex.last_mark());
+    if regex.name_count() == 0 && mark.is_none() {
         let mut result = values.array_new(len)?;
         if let Some(captures) = captures {
             for index in 0..len {
@@ -83,6 +88,11 @@ pub(in crate::interpreter) fn eval_preg_capture_array(
             let index_key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
             result = values.array_set(result, index_key, value)?;
         }
+    }
+    if let Some(mark) = mark {
+        let mark_key = values.string_bytes_value(b"MARK")?;
+        let mark_value = values.string_bytes_value(&mark)?;
+        result = values.array_set(result, mark_key, mark_value)?;
     }
     Ok(result)
 }

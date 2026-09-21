@@ -196,9 +196,14 @@ fn string_replace_array_replacement(
         {
             Ok(true)
         }
-        PhpType::Array(_) | PhpType::AssocArray { .. } => Err(CodegenIrError::unsupported(format!(
-            "{} with a non-string-element array replacement argument",
-            name
+        // The TYPE is part of the message: 'non-string-element' does not say which element type,
+        // and the answer decides what to do. Symfony's twig-bridge hits this with Array(Int) — the
+        // legacy unknown-type sentinel, not real ints — because the replacement reads properties of
+        // a class the closed world does not contain. Without the type in the message that reads as
+        // a missing int conversion rather than as an absent dependency.
+        other @ (PhpType::Array(_) | PhpType::AssocArray { .. }) => Err(CodegenIrError::unsupported(format!(
+            "{} with a non-string-element array replacement argument ({:?})",
+            name, other
         ))),
         _ => Ok(false),
     }
@@ -638,6 +643,13 @@ fn lower_chunk_split_x86_64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 pub(crate) fn lower_strtr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count_between(inst, "strtr", 2, 3)?;
     let pairs = expect_operand(inst, 1)?;
+    // THE THREE-ARGUMENT FORM IS THE ONLY ONE THAT MAY REACH `lower_strtr_pairwise`. Falling into
+    // it from the two-argument form used to be the `_` arm here, and it is silent: the pairwise
+    // lowering reads a `$to` that is not there, gets a zero-length destination list, and returns
+    // the subject UNCHANGED. `strtr($s, (array) $mixed)` answered `abc` for `['a' => 'X']`.
+    if inst.operands.len() >= 3 {
+        return lower_strtr_pairwise(ctx, inst);
+    }
     let (helper, mixed_values) = match ctx.value_php_type(pairs)? {
         PhpType::AssocArray { value, .. } => {
             ("__rt_strtr_hash", value.codegen_repr() == PhpType::Mixed)
@@ -645,7 +657,7 @@ pub(crate) fn lower_strtr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
         PhpType::Array(value) => {
             ("__rt_strtr_array", value.codegen_repr() == PhpType::Mixed)
         }
-        _ => return lower_strtr_pairwise(ctx, inst),
+        _ => return lower_strtr_dynamic_pairs(ctx, inst, pairs),
     };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -665,6 +677,62 @@ pub(crate) fn lower_strtr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
         }
     }
     abi::emit_call_label(ctx.emitter, helper);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `strtr($string, $pairs)` when `$pairs` is only known to be an array at run time.
+///
+/// The two container shapes have separate helpers, so the tag decides which one runs. Values in a
+/// gradual container are boxed Mixed cells, which is what the helpers' last argument reports.
+///
+/// A runtime tag that is neither container is php-src's `TypeError`; elephc has no general
+/// throw-from-codegen helper here, so it takes the indexed-array helper, which walks an empty
+/// container and returns the subject. That is the one behaviour this path does not reproduce.
+fn lower_strtr_dynamic_pairs(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    pairs: ValueId,
+) -> Result<()> {
+    let hash_case = ctx.next_label("strtr_pairs_hash");
+    let done = ctx.next_label("strtr_pairs_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "strtr", "x1", "x2")?;
+            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // preserve the subject across the container unboxing
+            ctx.load_value_to_result(pairs)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");              // x0 = runtime tag, x1 = container pointer
+            ctx.emitter.instruction("mov x4, x0");                              // keep the tag out of the helper's argument registers
+            ctx.emitter.instruction("mov x5, x1");                              // keep the container pointer likewise
+            ctx.emitter.instruction("ldp x1, x2, [sp], #16");                   // restore the subject into the helper's first argument pair
+            ctx.emitter.instruction("mov x0, x5");                              // the container is the helper's first argument
+            abi::emit_load_int_immediate(ctx.emitter, "x3", 1);                 // a gradual container always carries boxed Mixed values
+            ctx.emitter.instruction("cmp x4, #5");                              // runtime tag 5 identifies a hash
+            ctx.emitter.instruction(&format!("b.eq {}", hash_case));
+            abi::emit_call_label(ctx.emitter, "__rt_strtr_array");
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&hash_case);
+            abi::emit_call_label(ctx.emitter, "__rt_strtr_hash");
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "strtr", "rax", "rdx")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");                 // preserve the subject across the container unboxing
+            ctx.load_value_to_result(pairs)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");              // rax = runtime tag, rdi = container pointer
+            ctx.emitter.instruction("mov r10, rax");                            // keep the tag out of the helper's argument registers
+            ctx.emitter.instruction("mov r11, rdi");                            // keep the container pointer likewise
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");                  // restore the subject
+            ctx.emitter.instruction("mov rdi, r11");                            // the container is the helper's first argument
+            abi::emit_load_int_immediate(ctx.emitter, "rcx", 1);                // a gradual container always carries boxed Mixed values
+            ctx.emitter.instruction("cmp r10, 5");                              // runtime tag 5 identifies a hash
+            ctx.emitter.instruction(&format!("je {}", hash_case));
+            abi::emit_call_label(ctx.emitter, "__rt_strtr_array");
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&hash_case);
+            abi::emit_call_label(ctx.emitter, "__rt_strtr_hash");
+            ctx.emitter.label(&done);
+        }
+    }
     store_if_result(ctx, inst)
 }
 

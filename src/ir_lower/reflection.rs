@@ -351,11 +351,13 @@ fn insert_builtin_reflection_method(
 
 /// Resolves a class spelling to the canonical builtin Reflection name.
 pub(super) fn canonical_builtin_reflection_class_name(class_name: &str) -> Option<&'static str> {
-    let key = crate::names::php_symbol_key(class_name.trim_start_matches('\\'));
+    // `php_symbol_key` is `to_ascii_lowercase`, so comparing two of its results is exactly
+    // `eq_ignore_ascii_case` — with a `String` allocated per candidate, on every call.
+    let wanted = class_name.trim_start_matches('\\');
     BUILTIN_REFLECTION_CLASS_NAMES
         .iter()
         .copied()
-        .find(|candidate| crate::names::php_symbol_key(candidate) == key)
+        .find(|candidate| candidate.eq_ignore_ascii_case(wanted))
 }
 
 /// Lowers all concrete synthetic methods for one builtin reflection class.

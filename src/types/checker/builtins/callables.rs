@@ -779,11 +779,11 @@ fn resolve_static_receiver_class(
 
 /// Resolves class name using the available compile-time metadata.
 fn resolve_class_name<'a>(checker: &'a Checker, class_name: &str) -> Option<&'a str> {
-    let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
+    let wanted = class_name.trim_start_matches('\\');
     checker
         .classes
         .keys()
-        .find(|existing| php_symbol_key(existing) == class_key)
+        .find(|existing| existing.eq_ignore_ascii_case(wanted))
         .map(String::as_str)
 }
 
@@ -1454,7 +1454,7 @@ pub(crate) fn check_function_exists(
 ) -> Result<PhpType, CompileError> {
     let function_ty = checker.infer_type(&args[0], env)?;
     if !matches!(args[0].kind, ExprKind::StringLiteral(_))
-        && function_ty.codegen_repr() != PhpType::Str
+        && !function_exists_argument_reaches_lookup_as_string(&function_ty)
     {
         return Err(CompileError::new(
             span,
@@ -1537,4 +1537,24 @@ fn static_array_filter_mode_value(expr: &Expr) -> Option<i64> {
         }
         _ => None,
     }
+}
+
+
+/// Returns whether a `function_exists()` argument reaches the lookup as a string.
+///
+/// The membership test the backend bakes needs a real string, and the only conversion available
+/// at a builtin argument boundary is the one `coerce_scalar_arg_to_param_storage` emits for a
+/// `string` parameter: it converts a BOXED source — `Mixed`, a tagged scalar, or a union — and
+/// leaves every concrete representation alone. This predicate lists exactly those sources, so the
+/// checker accepts precisely what the lowering can carry; widening it would trade this diagnostic
+/// for `unsupported EIR backend feature` at codegen time.
+///
+/// Accepting the boxed sources is what real code needs: Symfony's `ControllerResolver` calls
+/// `\function_exists($controller)` on a value it has just proved is neither an array nor an
+/// object, and that value's static type is `mixed`.
+fn function_exists_argument_reaches_lookup_as_string(ty: &PhpType) -> bool {
+    matches!(
+        ty.codegen_repr(),
+        PhpType::Str | PhpType::Mixed | PhpType::TaggedScalar | PhpType::Union(_)
+    )
 }

@@ -208,6 +208,37 @@ impl ElephcEvalContext {
         self.functions.get(name)
     }
 
+    /// Adopts a function another eval context declared, so this one can call it.
+    ///
+    /// PHP's function table is process-global; elephc's contexts are per compiled frame that
+    /// evals or includes. `sync_global_eval_classes` already imports class-likes across that
+    /// boundary, and this is the same import for a function.
+    ///
+    /// Known divergence: `static` locals are keyed per context, so a function adopted by two
+    /// contexts gets one static scope in each where PHP has one. The alternative was
+    /// `call to undefined function`, and the shape this exists for -- a Composer `files`
+    /// autoload shim like `trigger_deprecation()` -- declares no statics.
+    ///
+    /// Registration is deliberately NOT repeated: the global table already names the declaring
+    /// context as the owner, and re-registering would report a redeclaration.
+    #[cfg(not(test))]
+    pub(crate) fn adopt_global_function(&mut self, name: &str) -> bool {
+        if self.functions.contains_key(name) || self.native_functions.contains_key(name) {
+            return true;
+        }
+        let Some(function) = crate::context::global_eval_function_declaration(name) else {
+            return false;
+        };
+        self.functions.insert(name.to_string(), function);
+        true
+    }
+
+    /// Keeps unit-test builds independent from the process-global function registry.
+    #[cfg(test)]
+    pub(crate) fn adopt_global_function(&mut self, _name: &str) -> bool {
+        false
+    }
+
     /// Returns a dynamic eval closure by its synthetic callable name.
     pub fn closure(&self, name: &str) -> Option<&EvalClosure> {
         self.closures.get(name)

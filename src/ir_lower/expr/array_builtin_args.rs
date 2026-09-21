@@ -57,7 +57,63 @@ pub(super) fn lower_static_array_push(
         expr.span,
     );
     crate::ir_lower::stmt::release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, expr.span);
-    Some(lower_null(ctx, expr))
+    // PHP answers the array's new element count. Reload first: an append that grew the container
+    // reallocated it, and the write-back above is what published the pointer that is now live.
+    let grown = ctx.load_local(array_name, Some(args[0].span));
+    Some(ctx.emit_value(
+        Op::ArrayLen,
+        vec![grown.value],
+        None,
+        PhpType::Int,
+        Op::ArrayLen.default_effects(),
+        Some(expr.span),
+    ))
+}
+
+/// Promotes an indexed-array local to hash storage before a sort that KEEPS its keys.
+///
+/// `asort([3, 1, 2])` answers keys `1|2|0` in PHP: the key travels with the value, which is the
+/// entire difference from `sort()`. An indexed array has no key storage to carry, so the slot
+/// permuter the backend uses for a list renumbered them — the values came out ordered and the keys
+/// came out `0|1|2`, a silent wrong answer. The result is only representable as a hash.
+///
+/// This is the same promotion `unset($list[$k])` performs at its own site
+/// (`lower_unset_indexed_element`), and the codegen already routes a hash receiver to
+/// `__rt_hash_asort` / `__rt_hash_arsort`, so nothing downstream changes.
+///
+/// `uasort` has the same fault and is deliberately absent: no `__rt_hash_uasort` exists, so
+/// promoting it would replace a wrong answer with a refusal to compile.
+fn promote_indexed_receiver_for_key_preserving_sort(
+    ctx: &mut LoweringContext<'_, '_>,
+    canonical: &str,
+    args: &[Expr],
+) {
+    if !matches!(canonical, "asort" | "arsort") {
+        return;
+    }
+    let Some(receiver) = args.first() else {
+        return;
+    };
+    let ExprKind::Variable(name) = &receiver.kind else {
+        return;
+    };
+    let PhpType::Array(element) = ctx.local_type(name).codegen_repr() else {
+        return;
+    };
+    let array_value = ctx.load_local(name, Some(receiver.span));
+    let assoc_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Int),
+        value: Box::new(element.codegen_repr()),
+    };
+    let hash = ctx.emit_value(
+        Op::ArrayToHash,
+        vec![array_value.value],
+        None,
+        assoc_ty.clone(),
+        Op::ArrayToHash.default_effects(),
+        Some(receiver.span),
+    );
+    ctx.store_mutated_local(name, hash, assoc_ty, Some(receiver.span));
 }
 
 /// Lowers builtin call operands, applying builtin-specific preservation where source order matters.
@@ -74,6 +130,8 @@ pub(super) fn lower_builtin_call_args(
     if canonical == "eval" {
         return lower_eval_args(ctx, sig, args);
     }
+    prepare_regex_match_output_local(ctx, &canonical, args);
+    promote_indexed_receiver_for_key_preserving_sort(ctx, &canonical, args);
     let pcntl_outputs = prepare_pcntl_output_locals(ctx, &canonical, sig, args);
     let argument_lowering = crate::builtins::registry::lookup(&canonical)
         .map(|def| def.spec.semantics.argument_lowering)
@@ -214,6 +272,48 @@ fn prepare_pcntl_output_locals(
         }
     }
     outputs
+}
+
+/// Widens a `preg_match`/`preg_match_all` `$matches` destination that cannot hold a match array.
+///
+/// `$m = []; preg_match($re, $s, $m);` types the local from the empty literal — `array<never>`,
+/// an element type no written value satisfies — and the by-reference write never widened the
+/// frame storage, so the backend refused the destination outright:
+/// `unsupported EIR backend feature: preg_match matches destination PHP type Array(Never)`.
+/// Symfony's `UrlMatcher::matchCollection` opens `$hostMatches = []` exactly like that, which is
+/// what kept the routing component out of the compiled world.
+///
+/// Only `array<never>` is touched. Any other destination already describes storage the runtime
+/// can fill, and `set_local_type` would REPLACE the logical type rather than join it, so widening
+/// a `Mixed` destination here would narrow it.
+///
+/// The shape comes from [`crate::types::checker::regex_matches_destination_type`], the same
+/// function the checker types the destination with — deciding it again here is how an indexed
+/// destination ends up holding a named-capture hash and reads back renumbered.
+fn prepare_regex_match_output_local(
+    ctx: &mut LoweringContext<'_, '_>,
+    canonical: &str,
+    args: &[Expr],
+) {
+    if canonical != "preg_match" && canonical != "preg_match_all" {
+        return;
+    }
+    let Some(Expr {
+        kind: ExprKind::Variable(name),
+        ..
+    }) = args.get(2)
+    else {
+        return;
+    };
+    // The RAW local type, not `codegen_repr()`: the representation mapping erases `Never` into
+    // the element type an array can actually hold, so the empty-literal destination this exists
+    // for reads back as an ordinary array and the guard never fires.
+    if !matches!(ctx.local_type(name), PhpType::Array(element) if matches!(*element, PhpType::Never))
+    {
+        return;
+    }
+    let widened = crate::types::checker::regex_matches_destination_type(canonical, args);
+    ctx.set_local_type(name, widened);
 }
 
 /// Widens one direct PCNTL output slot without reinterpreting its pre-call value.

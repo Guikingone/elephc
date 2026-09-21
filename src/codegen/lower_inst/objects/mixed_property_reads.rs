@@ -309,6 +309,76 @@ pub(super) fn lower_declared_mixed_prop_get(
     store_if_result(ctx, inst)
 }
 
+/// Probes a declared typed slot through a receiver whose class is only known at run time.
+///
+/// `isset()`, `empty()` and `??` all ask this question before reading, precisely so they never
+/// raise on an uninitialized typed property. Until this path existed the question could only be
+/// asked of a receiver whose class the compiler knew, so an UNTYPED parameter — `function
+/// f($container) { return isset($container->name); }`, and every generated Symfony container
+/// factory is written that way — fell back to the ordinary read and died with
+/// "Typed property C::$name must not be accessed before initialization" where PHP answers false.
+///
+/// Only the declared-slot branches answer for themselves. A stdClass receiver, a class that does
+/// not declare the property at all, and every other miss answer "initialized", which sends the
+/// caller to the ordinary read it has always taken — magic `__isset`, dynamic properties and the
+/// undefined-property warning all keep behaving exactly as before. A receiver that is not an
+/// object answers false, which is what PHP says for `isset($notAnObject->p)`.
+pub(super) fn lower_mixed_prop_initialized(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    property: &str,
+) -> Result<()> {
+    let candidates = declared_mixed_property_candidates(ctx, property, inst)?;
+    let not_object_label = ctx.next_label("mixed_prop_init_not_object");
+    let fallthrough_label = ctx.next_label("mixed_prop_init_fallthrough");
+    let stdclass_label = ctx.next_label("mixed_prop_init_stdclass");
+    let done_label = ctx.next_label("mixed_prop_init_done");
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!(
+                "mixed_prop_init_{}",
+                label_fragment(&candidate.slot.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_mixed_object_payload_or_null(ctx, &not_object_label);
+    emit_mixed_property_class_dispatch(
+        ctx,
+        &candidates,
+        &match_labels,
+        &stdclass_label,
+        &fallthrough_label,
+    );
+
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        let base_reg = abi::int_result_reg(ctx.emitter);
+        if candidate.slot.is_declared {
+            emit_typed_property_initialized_bool(ctx, &candidate.slot, base_reg);
+        } else {
+            // An untyped slot is plain null from construction, so it is always initialized.
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+        }
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&stdclass_label);
+    ctx.emitter.label(&fallthrough_label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&not_object_label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+
+    ctx.emitter.label(&done_label);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers a `Mixed` receiver through the runtime stdClass-style property helper.
 pub(super) fn lower_runtime_mixed_prop_get(
     ctx: &mut FunctionContext<'_>,

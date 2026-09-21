@@ -20,7 +20,7 @@ class DynEvalAttributed {}"#,
     .expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ClassDecl(
+        &[EvalStmt::class_decl(
             EvalClass::new("DynEvalAttributed", Vec::new(), Vec::new()).with_attributes(vec![
                 EvalAttribute::new(
                     "Route",
@@ -101,7 +101,7 @@ fn parse_fragment_accepts_class_member_attribute_metadata() {
     .expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ClassDecl(
+        &[EvalStmt::class_decl(
             EvalClass::with_modifiers_traits_and_constants(
                 "DynEvalMemberAttrs",
                 false,
@@ -148,7 +148,7 @@ fn parse_fragment_accepts_legacy_var_properties() {
     .expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ClassDecl(EvalClass::new(
+        &[EvalStmt::class_decl(EvalClass::new(
             "DynEvalVarProps",
             vec![
                 EvalClassProperty::new(

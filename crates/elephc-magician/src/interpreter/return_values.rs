@@ -231,7 +231,11 @@ fn eval_declared_return_variant_accepts_exact(
         EvalParameterTypeVariant::Bool => Ok(tag == EVAL_TAG_BOOL),
         EvalParameterTypeVariant::Callable => Ok(matches!(
             tag,
-            EVAL_TAG_STRING | EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT
+            EVAL_TAG_STRING
+                | EVAL_TAG_ARRAY
+                | EVAL_TAG_ASSOC
+                | EVAL_TAG_OBJECT
+                | EVAL_TAG_CALLABLE
         )),
         EvalParameterTypeVariant::Class(class_name) => eval_declared_return_class_accepts(
             value,
@@ -242,6 +246,9 @@ fn eval_declared_return_variant_accepts_exact(
             context,
             values,
         ),
+        // PHP 8.2 value types accept ONE boolean each, not either.
+        EvalParameterTypeVariant::False => Ok(tag == EVAL_TAG_BOOL && !values.truthy(value)?),
+        EvalParameterTypeVariant::True => Ok(tag == EVAL_TAG_BOOL && values.truthy(value)?),
         EvalParameterTypeVariant::Float => Ok(tag == EVAL_TAG_FLOAT),
         EvalParameterTypeVariant::Int => Ok(tag == EVAL_TAG_INT),
         EvalParameterTypeVariant::Iterable => {
@@ -286,7 +293,7 @@ fn eval_declared_return_class_accepts(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    if tag != EVAL_TAG_OBJECT {
+    if tag != EVAL_TAG_OBJECT && tag != EVAL_TAG_CALLABLE {
         return Ok(false);
     }
     let target = eval_declared_return_runtime_class_name(
@@ -295,6 +302,14 @@ fn eval_declared_return_class_accepts(
         called_class_name,
         context,
     )?;
+    // A closure built by COMPILED code crosses the bridge as a callable descriptor (tag 10), which
+    // is its only representation there — there is no object to ask for a class name. It is still a
+    // `Closure` to PHP, and returning one is ordinary: Symfony's
+    // `HtmlErrorRenderer::isDebug(): \Closure` hands one to interpreted code on every error-handler
+    // build, and refusing it took the whole request down.
+    if tag == EVAL_TAG_CALLABLE {
+        return Ok(target.eq_ignore_ascii_case("Closure"));
+    }
     let identity = values.object_identity(value)?;
     if context.dynamic_object_is_a(identity, &target) {
         return Ok(true);
@@ -302,7 +317,7 @@ fn eval_declared_return_class_accepts(
     if values.object_is_a(value, &target, false)? {
         return Ok(true);
     }
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         let actual = values
             .object_class_name(value)
             .and_then(|name| {
@@ -419,6 +434,7 @@ fn eval_declared_variant_spelling(variant: &EvalParameterTypeVariant) -> String 
         EvalParameterTypeVariant::Bool => "bool".to_string(),
         EvalParameterTypeVariant::Callable => "callable".to_string(),
         EvalParameterTypeVariant::Class(name) => name.trim_start_matches('\\').to_string(),
+        EvalParameterTypeVariant::False => "false".to_string(),
         EvalParameterTypeVariant::Float => "float".to_string(),
         EvalParameterTypeVariant::Int => "int".to_string(),
         EvalParameterTypeVariant::Iterable => "iterable".to_string(),
@@ -426,6 +442,7 @@ fn eval_declared_variant_spelling(variant: &EvalParameterTypeVariant) -> String 
         EvalParameterTypeVariant::Never => "never".to_string(),
         EvalParameterTypeVariant::Object => "object".to_string(),
         EvalParameterTypeVariant::String => "string".to_string(),
+        EvalParameterTypeVariant::True => "true".to_string(),
         EvalParameterTypeVariant::Void => "void".to_string(),
     }
 }

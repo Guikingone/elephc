@@ -563,8 +563,18 @@ return function_exists("putenv");"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
+    // THREE `spread`s, not one. A second, contradictory `assert_eq!` on this same value sat
+    // here asserting `...:set:spread:missing:1` and failed every run — the residue of a
+    // half-finished edit made when whole-environment `getenv()` landed (the next test in this
+    // file). The fragment reads the variable back three times after the spread `putenv`:
+    // `getenv("…")`, `getenv()["…"]` and `getenv(null, true)["…"]`. php 8.5.10 on the same
+    // source agrees, which is what settled it rather than a guess:
+    //
+    // ```text
+    // $ php getenv_probe.php
+    // direct:named:named:set:spread:spread:spread:missing:1
+    // ```
     assert_eq!(values.output, "direct:named:named:set:spread:spread:spread:missing:1");
-    assert_eq!(values.output, "direct:named:named:set:spread:missing:1");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 /// Verifies eval `getenv()` with no name, a null name, and `local_only` answers the environment.

@@ -198,6 +198,14 @@ are declared only in binaries whose source mentions them, exactly like
 `ini_get()`/`ini_set()`/`ini_get_all()`. A program that declares its own
 function of the same name keeps it.
 
+"Source" means the whole closed-world program, not the entry file.
+`ini_get()`/`ini_set()`/`ini_get_all()` are decided again after autoload
+expansion, so a call written in an autoloaded class counts — before that second
+pass, a framework entry point that mentioned no INI function compiled a binary
+that died on `Call to undefined function ini_set()`. `zend_version()`,
+`php_sapi_name()` and `ini_restore()` are still decided from the entry file and
+its statically resolved includes alone.
+
 Inside `eval()`, the interpreter has no access to `--php-version` or `--web` and
 reports the default profile: `PHP_VERSION` `"8.5.0"`, `PHP_SAPI` `"cli"`. On a
 default-profile CLI binary that is identical to the compiled surface.

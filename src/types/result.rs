@@ -53,6 +53,18 @@ pub enum ThrowAccessKind {
         /// Property name without the leading `$` (e.g. `x`).
         property: String,
     },
+    /// An argument whose type the checker proved incompatible with the parameter it binds.
+    ///
+    /// php performs this check when the call RUNS, so a program that never reaches the call is
+    /// perfectly loadable — and real code relies on that. php also exempts constructors from
+    /// inheritance signature rules, so an overriding `__construct` may declare a completely
+    /// different parameter list and still forward positionally to `parent::__construct`, landing
+    /// arguments in differently typed slots. `twig/twig`'s `ExtensionSet` does exactly that in a
+    /// deprecated conversion path, and refusing it at compile time stopped the whole build.
+    ArgumentType {
+        /// The complete `TypeError` message, already in php's wording.
+        message: String,
+    },
 }
 
 #[derive(Debug)]

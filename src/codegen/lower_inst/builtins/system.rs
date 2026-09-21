@@ -724,8 +724,27 @@ pub(crate) fn lower_usleep(
 }
 
 /// Lowers `exit(status?)` and `die(status?)` by terminating the current process.
+///
+/// The FIRST thing emitted is the `register_shutdown_function()` drain, and its position is the
+/// whole point of the surface: php runs those callbacks on `exit()` and does NOT run `finally`
+/// blocks there, so a `try`/`finally` drain — which is what `--web` had, and all a CLI copy of
+/// it would have given — misses exactly the path a console application takes
+/// (`Application::run()` ends in `exit($code)`). Measured on php 8.5.10 and on elephc alike:
+/// `try { exit(3); } finally { echo "FINALLY"; }` prints no `FINALLY` in either.
+///
+/// It goes ahead of the status load rather than after it because the callbacks are PHP and may
+/// write output, and that output must be produced before the `__rt_ob_flush_all` below. The
+/// status operand survives the call: it is loaded from its frame home afterwards, the same way
+/// it already survives whatever `exit(f())` called to compute it. The `--web` arm gets the same
+/// call for the same reason — `exit()` in a request handler returns through the handler
+/// epilogue and never reaches the request wrapper's `finally` either.
+///
+/// `emit_php_shutdown_drain` emits nothing when the program has no shutdown registry, so a
+/// program that never names `register_shutdown_function` keeps its previous exit sequence byte
+/// for byte.
 pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "exit", 0, 1)?;
+    crate::codegen::frame::emit_php_shutdown_drain(ctx);
     if ctx.web {
         // A web worker invokes the compiled top level once per HTTP request. PHP `exit` ends
         // that request, not the prefork worker: flush captured output and return to

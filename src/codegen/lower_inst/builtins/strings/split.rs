@@ -453,6 +453,11 @@ pub(crate) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         PhpType::Mixed | PhpType::Union(_) => {
             return lower_implode_gradual(ctx, inst, array, array_index);
         }
+        // `array<mixed>` is the one indexed contract a HASH can be stored under, so its
+        // container has to be identified at runtime rather than assumed.
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed => {
+            return lower_implode_mixed_array(ctx, inst, array, array_index);
+        }
         _ => {}
     }
     let runtime_label = implode_runtime_label(ctx, inst, array_index)?;
@@ -478,6 +483,88 @@ pub(crate) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `implode()` when the operand is typed `array<mixed>`, whose container may be a hash.
+///
+/// `Array(Mixed)` is the only indexed contract associative storage is ever stored under, and it
+/// gets there two ways: `coerce_container_to_return_type` restamps a hash as a bare `array` return
+/// contract rather than converting it (a conversion would discard string keys), and a
+/// by-reference write promotes a live array to a hash in place — the same case
+/// `lower_array_to_mixed` asks `__rt_heap_kind` about. Reading such a container through the packed
+/// renderer walks a header that is not there, which is how `implode(',', $tokens)` answered the
+/// empty string for an array `count()`, `$a[0]`, `foreach` and `json_encode()` all read correctly.
+///
+/// Both branches leave an OWNED array in the result register — the hash branch builds the values
+/// copy `array_values()` makes, the indexed branch increfs the borrowed payload — so the single
+/// `__rt_decref_array` after the join balances either one. The indexed path therefore pays a
+/// refcount pair, not a copy. Null containers and the missed-read sentinel are not managed heap
+/// pointers, so all three runtime helpers skip them and the join sees them exactly as before.
+fn lower_implode_mixed_array(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    array_index: usize,
+) -> Result<()> {
+    let hash_label = ctx.next_label("implode_mixed_hash");
+    let join_label = ctx.next_label("implode_mixed_join");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_implode_glue_aarch64(ctx, inst, array_index)?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            ctx.load_value_to_reg(array, "x0")?;
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("mov x9, x0");                              // keep the reported heap kind while the array pointer comes back
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            ctx.emitter.instruction("cmp x9, #3");                              // heap kind 3 = associative storage under this indexed contract
+            ctx.emitter.instruction(&format!("b.eq {}", hash_label));           // copy the hash values before joining them
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+            ctx.emitter.instruction(&format!("b {}", join_label));              // an owned indexed payload joins directly
+
+            ctx.emitter.label(&hash_label);
+            super::super::arrays::values::emit_loaded_assoc_array_values(ctx, &PhpType::Mixed)?;
+
+            ctx.emitter.label(&join_label);
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_push_reg(ctx.emitter, "x0");
+            ctx.emitter.instruction("mov x3, x0");                              // pass the owned indexed values array to implode
+            abi::emit_call_label(ctx.emitter, "__rt_implode");
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 16);
+            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_pop_reg(ctx.emitter, "x9");
+        }
+        Arch::X86_64 => {
+            load_implode_glue_x86_64(ctx, inst, array_index)?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            ctx.load_value_to_reg(array, "rax")?;
+            abi::emit_push_reg(ctx.emitter, "rax");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("mov r10, rax");                            // keep the reported heap kind while the array pointer comes back
+            abi::emit_pop_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("cmp r10, 3");                              // heap kind 3 = associative storage under this indexed contract
+            ctx.emitter.instruction(&format!("je {}", hash_label));             // copy the hash values before joining them
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+            ctx.emitter.instruction(&format!("jmp {}", join_label));            // an owned indexed payload joins directly
+
+            ctx.emitter.label(&hash_label);
+            super::super::arrays::values::emit_loaded_assoc_array_values(ctx, &PhpType::Mixed)?;
+
+            ctx.emitter.label(&join_label);
+            abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
+            abi::emit_push_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("mov rdx, rax");                            // pass the owned indexed values array to implode
+            abi::emit_call_label(ctx.emitter, "__rt_implode");
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 16);
+            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+            abi::emit_pop_reg(ctx.emitter, "r10");
+        }
+    }
     store_if_result(ctx, inst)
 }
 

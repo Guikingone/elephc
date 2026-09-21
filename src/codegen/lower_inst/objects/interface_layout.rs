@@ -16,7 +16,7 @@ pub(super) fn class_interfaces_require_missing_method_symbols(
     class_info: &ClassInfo,
 ) -> bool {
     let emitted_methods = emitted_instance_method_keys(ctx);
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut stack = class_info
         .interfaces
         .iter()

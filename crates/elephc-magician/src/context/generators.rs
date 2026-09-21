@@ -95,6 +95,21 @@ pub enum EvalGeneratorDelegate {
     },
     /// Another generator, pumped through the same protocol.
     Generator { identity: u64 },
+    /// A Traversable the interpreter does NOT own -- a compiled generator, or any Iterator --
+    /// pumped through its php-visible `valid`/`current`/`key`/`next` methods.
+    ///
+    /// A compiled class whose generator method is inherited by an eval-declared subclass produces
+    /// exactly this: `twig/twig`'s `Template::yield()` is compiled, the template's `doDisplay()` is
+    /// interpreted, and each one delegates to the other. Without this the delegation could not
+    /// start, and the outer loop re-read the same first value for ever.
+    Foreign {
+        /// The boxed cell, retained so the delegate cannot be freed mid-iteration.
+        object: RuntimeCellHandle,
+        /// The generator object itself, which is what `__rt_gen_*` takes -- passing the boxed
+        /// cell instead read a header that is not a generator's and reported "finished" on the
+        /// first `valid()`, so the delegation ended before producing anything.
+        generator: u64,
+    },
 }
 
 /// Where a generator is in its lifecycle.

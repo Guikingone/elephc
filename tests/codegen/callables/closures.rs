@@ -9,6 +9,77 @@
 
 use crate::support::*;
 
+/// Verifies `get_debug_type()` names a BOXED callable. A closure or first-class callable reaching
+/// a `mixed` slot is carried as a callable descriptor, a tag `gettype()` already routes to its
+/// object arm and `instanceof \Closure` already answers true for — but which `get_debug_type()`
+/// left out of its dispatch, so it fell through to the null arm and answered "null".
+/// PHP outputs "Closure,object,obj,callable,closure" for both shapes, and keeps naming a string
+/// callable "string" and an array callable "array".
+#[test]
+fn test_get_debug_type_names_a_boxed_callable() {
+    let out = compile_and_run(
+        r#"<?php
+class Svc { public function run(int $n): int { return $n; } }
+function double(int $n): int { return $n * 2; }
+
+function probe(mixed $c): string {
+    return implode(',', [
+        get_debug_type($c),
+        gettype($c),
+        is_object($c) ? 'obj' : 'notobj',
+        is_callable($c) ? 'callable' : 'notcallable',
+        $c instanceof \Closure ? 'closure' : 'notclosure',
+    ]);
+}
+
+echo probe(static fn (int $n): int => $n), '|';
+echo probe(double(...)), '|';
+echo get_debug_type('double'), '|';
+echo get_debug_type([new Svc(), 'run']);
+"#,
+    );
+    assert_eq!(
+        out,
+        "Closure,object,obj,callable,closure|Closure,object,obj,callable,closure|string|array"
+    );
+}
+
+/// Verifies a `callable` value satisfies a `string|array|object` destination. PHP has no
+/// `callable` property type, so code that stores one declares the three shapes a callable can
+/// actually take at run time — Symfony's `ControllerEvent::$controller` is exactly
+/// `private string|array|object $controller;`, written straight from a `callable $controller`
+/// parameter. PHP outputs "Closure=5|Closure=8".
+#[test]
+fn test_callable_satisfies_a_string_array_object_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Holder {
+    private string|array|object $controller;
+
+    public function __construct(callable $controller) {
+        $this->controller = $controller;
+    }
+
+    public function describe(): string { return get_debug_type($this->controller); }
+
+    public function run(int $n): int {
+        $c = $this->controller;
+
+        return $c($n);
+    }
+}
+
+function double(int $n): int { return $n * 2; }
+
+$closure = new Holder(static fn (int $n): int => $n + 1);
+echo $closure->describe(), '=', $closure->run(4), '|';
+$named = new Holder(double(...));
+echo $named->describe(), '=', $named->run(4);
+"#,
+    );
+    assert_eq!(out, "Closure=5|Closure=8");
+}
+
 // --- Anonymous functions (closures) and arrow functions ---
 
 /// Verifies basic anonymous function creation, assignment to variable, and invocation with one argument.

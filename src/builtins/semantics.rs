@@ -621,9 +621,20 @@ fn callable_accepts_any_source(_source: Option<&PhpType>) -> bool {
     true
 }
 
-/// Accepts runtime wrapper sources that already use concrete string storage.
+/// Accepts runtime wrapper sources a string builtin can be called with.
+///
+/// A GRADUAL element is admitted because the wrapper now casts it to the declared parameter type
+/// before the builtin's lowering sees it (`coerce_gradual_wrapper_operands`), which is what php
+/// does at the call. Refusing it emitted no descriptor case at all, so
+/// `array_map('strtolower', $gradual)` compiled and then aborted at run time -- `twig/twig`'s
+/// `CoreExtension::getAttribute` does exactly that on every property access of a template.
 pub fn callable_accepts_string_source(source: Option<&PhpType>) -> bool {
-    source.is_none_or(|source| source.codegen_repr() == PhpType::Str)
+    source.is_none_or(|source| {
+        matches!(
+            source.codegen_repr(),
+            PhpType::Str | PhpType::Mixed | PhpType::Union(_)
+        )
+    })
 }
 
 /// Accepts the dynamic string-like sources supported by shared `strlen` validation.

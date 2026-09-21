@@ -28,3 +28,5 @@ mod ternary;
 mod match_expressions;
 #[path = "control_flow/closures.rs"]
 mod closures;
+#[path = "control_flow/goto_jumps.rs"]
+mod goto_jumps;

@@ -9,6 +9,65 @@
 
 use super::*;
 
+/// Verifies element writes into a property the compiler never saw declared. A stdClass built by
+/// `(object) [...]` carries keys no class schema records, so `$state->vars[] = $v` and
+/// `$state->routes[$k] = $v` had no declared slot to name and were refused with "Undefined
+/// property: stdClass::vars" — even though the plain `$state->mark = 7` beside them was accepted.
+/// Symfony's `CompiledUrlMatcherDumper` builds its entire working state exactly this way.
+/// PHP outputs "7|a,b|3|n1,n2|v|5".
+#[test]
+fn test_stdclass_dynamic_property_element_writes() {
+    let out = compile_and_run(
+        r#"<?php
+$state = (object) [
+    'mark' => 0,
+    'vars' => [],
+    'routes' => [],
+];
+
+$state->vars[] = 'a';
+$state->vars[] = 'b';
+$state->routes['x'] = 1;
+$state->routes['y'] = 2;
+$state->mark = 7;
+
+$state->fresh[] = 'n1';
+$state->fresh[] = 'n2';
+$state->keyed['k'] = 'v';
+
+echo $state->mark, '|';
+echo implode(',', $state->vars), '|';
+echo $state->routes['x'] + $state->routes['y'], '|';
+echo implode(',', $state->fresh), '|';
+echo $state->keyed['k'], '|';
+echo count((array) $state);
+"#,
+    );
+    assert_eq!(out, "7|a,b|3|n1,n2|v|5");
+}
+
+/// Verifies the same element writes through `#[\AllowDynamicProperties]`, where an undeclared
+/// property lives in the per-object side table while the declared one keeps its slot.
+/// PHP outputs "p,q|n|1".
+#[test]
+fn test_allow_dynamic_properties_element_writes() {
+    let out = compile_and_run(
+        r#"<?php
+#[\AllowDynamicProperties]
+class Loose {
+    public int $declared = 1;
+}
+
+$loose = new Loose();
+$loose->bag[] = 'p';
+$loose->bag[] = 'q';
+$loose->map['m'] = 'n';
+echo implode(',', $loose->bag), '|', $loose->map['m'], '|', $loose->declared;
+"#,
+    );
+    assert_eq!(out, "p,q|n|1");
+}
+
 /// Verifies prefix increment on a property returns the updated value while mutating the slot.
 #[test]
 fn test_prefix_increment_property_expression_returns_updated_value() {

@@ -23,7 +23,7 @@ use super::{
     load_value_to_first_int_arg, store_if_result,
 };
 
-mod common;
+pub(in crate::codegen::lower_inst) mod common;
 mod compression;
 mod hash;
 mod network;
@@ -182,6 +182,21 @@ const STR_SPLIT_NON_POSITIVE_LENGTH_MESSAGE: &str =
 /// php-src's verbatim `ValueError` wording for `str_word_count()` with an unknown `$format`.
 const STR_WORD_COUNT_FORMAT_MESSAGE: &str =
     "str_word_count(): Argument #2 ($format) must be a valid format value";
+
+/// php-src's verbatim `ValueError` wording for a `substr_compare()` `$offset` past the end of
+/// `$haystack`.
+///
+/// `$offset === strlen($haystack)` is LEGAL in php (it compares an empty window), so only a
+/// strictly greater offset reaches this message.
+const SUBSTR_COMPARE_OFFSET_OUT_OF_RANGE_MESSAGE: &str =
+    "substr_compare(): Argument #3 ($offset) must be contained in argument #1 ($haystack)";
+
+/// php-src's verbatim `ValueError` wording for `substr_compare()` with a negative `$length`.
+///
+/// Unlike `substr_count()`, php 8 refuses a negative `substr_compare()` `$length` outright
+/// instead of measuring it back from the subject end, and it checks this BEFORE `$offset`.
+const SUBSTR_COMPARE_NEGATIVE_LENGTH_MESSAGE: &str =
+    "substr_compare(): Argument #4 ($length) must be greater than or equal to 0";
 
 /// php-src's verbatim `ValueError` wording for `substr_count()` with an empty `$needle`.
 const SUBSTR_COUNT_EMPTY_NEEDLE_MESSAGE: &str =
@@ -380,6 +395,7 @@ pub(crate) use split::lower_dec_to_base;
 pub(crate) use split::lower_length_limited_compare;
 pub(crate) use replace_wrap::lower_str_word_count;
 pub(crate) use replace_wrap::lower_strtr;
+pub(crate) use search::lower_substr_compare;
 pub(crate) use search::lower_substr_count;
 
 /// php-src's verbatim `ValueError` wording for a `substr_count()` `$length` outside the subject.

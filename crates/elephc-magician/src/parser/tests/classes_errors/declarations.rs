@@ -16,7 +16,7 @@ fn parse_fragment_accepts_empty_class_declaration_source() {
     let program = parse_fragment(b"class DynEvalClass {};").expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ClassDecl(EvalClass::new(
+        &[EvalStmt::class_decl(EvalClass::new(
             "DynEvalClass",
             Vec::new(),
             Vec::new()
@@ -31,7 +31,7 @@ fn parse_fragment_retains_class_doc_comment() {
         .expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ClassDecl(
+        &[EvalStmt::class_decl(
             EvalClass::new("DynEvalDocumentedClass", Vec::new(), Vec::new())
                 .with_doc_comment_option(Some("/** Dynamic class docs */".to_string()))
         )]
@@ -70,7 +70,7 @@ fn parse_fragment_accepts_class_extends_and_implements_source() {
     .expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ClassDecl(EvalClass::with_relations(
+        &[EvalStmt::class_decl(EvalClass::with_relations(
             "DynEvalChild",
             Some("DynEvalBase".to_string()),
             vec!["DynEvalIface".to_string(), "Root\\Iface".to_string()],

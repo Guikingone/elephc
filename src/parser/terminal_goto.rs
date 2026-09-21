@@ -56,10 +56,262 @@ pub(super) fn parse_label(
 }
 
 /// Rewrites supported gotos within one PHP executable scope without crossing function boundaries.
+///
+/// Two shapes are supported, tried in this order:
+/// 1. A BACKWARD jump — every `goto L` for the label sits inside the label's own tail — becomes a
+///    real loop (see [`desugar_restart_loops`]). This is the "restart" idiom.
+/// 2. A FORWARD jump to a label whose tail always returns or throws becomes a clone of that tail
+///    at the jump site (see [`collect_labels`]).
 pub(super) fn desugar_scope(statements: &mut Vec<Stmt>) -> Result<(), CompileError> {
+    desugar_restart_loops(statements);
     let mut labels = HashMap::new();
-    collect_labels(statements, &mut labels)?;
+    collect_labels(statements, &[], &mut labels)?;
     rewrite_gotos(statements, &labels)
+}
+
+/// Turns each backward `goto` into the loop it actually is.
+///
+/// PHP's restart idiom — used verbatim by Symfony's `ControllerAttributesListener` — is
+///
+/// ```php
+/// restart:
+/// foreach ($items as $item) {
+///     if ($changed) { $items = refresh(); goto restart; }
+/// }
+/// ```
+///
+/// The tail-cloning strategy [`collect_labels`] uses cannot express this: the tail contains the
+/// jump, so cloning it would never terminate, and the tail does not return or throw either. But a
+/// jump backwards to a label in the same statement list, taken only from within that label's own
+/// tail, IS a loop — nothing more. Wrapping the tail in `while (true) { … break; }` and turning
+/// each `goto` into `continue <n>` reproduces it exactly, with no new control-flow machinery:
+/// `continue` unwinds the loops the jump sits inside and re-enters the synthetic one, and the
+/// trailing `break` gives the fall-through exit the label's end-of-list position already meant.
+///
+/// `<n>` is one more than the number of `break`-able constructs (loops AND `switch`, which PHP
+/// counts in its level arithmetic) between the jump and the tail's own level. Pre-existing
+/// `break N` / `continue N` inside the tail are renumbered by the same reasoning: one that already
+/// reaches past the tail's level targets a construct OUTSIDE the new `while`, so it must count it.
+///
+/// Anything this does not recognize is left untouched for [`collect_labels`] to accept as a
+/// terminal tail or reject with its own diagnostic.
+fn desugar_restart_loops(statements: &mut Vec<Stmt>) {
+    let mut index = 0;
+    while index < statements.len() {
+        let Some(name) = marker_name(&statements[index], LABEL_MARKER_PREFIX).map(str::to_string)
+        else {
+            descend_restart_loops(&mut statements[index]);
+            index += 1;
+            continue;
+        };
+        let tail = &statements[index + 1..];
+        // A jump from BEFORE the label is a forward jump into the tail, which this rewrite cannot
+        // express — the `while` would have to be entered past its own top. Leave the whole label
+        // to `collect_labels`, which accepts it when the tail is terminal and rejects it otherwise.
+        if tail.is_empty()
+            || !contains_goto(tail, &name)
+            || contains_goto(&statements[..index], &name)
+            || contains_label_marker(tail)
+        {
+            descend_restart_loops(&mut statements[index]);
+            index += 1;
+            continue;
+        }
+        let span = statements[index].span;
+        let mut body: Vec<Stmt> = statements.split_off(index + 1);
+        statements.pop(); // the label marker itself
+        rewrite_restart_gotos(&mut body, &name, 0);
+        body.push(Stmt::new(StmtKind::Break(1), span));
+        statements.push(Stmt::new(
+            StmtKind::While {
+                condition: Expr::new(ExprKind::BoolLiteral(true), span),
+                body,
+            },
+            span,
+        ));
+        // The tail is now the loop body; its own nested labels were excluded above, but the body
+        // still has to be visited for labels sitting deeper inside it.
+        let loop_index = statements.len() - 1;
+        descend_restart_loops(&mut statements[loop_index]);
+        index += 1;
+    }
+}
+
+/// Applies [`desugar_restart_loops`] to every statement list nested in one statement, staying
+/// inside the current function scope exactly as [`collect_nested_labels`] does.
+fn descend_restart_loops(statement: &mut Stmt) {
+    for_each_nested_body(statement, &mut desugar_restart_loops);
+}
+
+/// Replaces each `goto <name>` in `statements` with the `continue` that reaches the synthetic
+/// loop wrapping the tail, and renumbers the `break`/`continue` levels that now have to count it.
+///
+/// `depth` is how many `break`-able constructs enclose `statements` within the tail, so the
+/// synthetic loop is level `depth + 1` from here.
+fn rewrite_restart_gotos(statements: &mut [Stmt], name: &str, depth: usize) {
+    for statement in statements.iter_mut() {
+        if marker_name(statement, GOTO_MARKER_PREFIX) == Some(name) {
+            statement.kind = StmtKind::Continue(depth + 1);
+            continue;
+        }
+        match &mut statement.kind {
+            // `levels > depth` reaches past the tail, so it targets a construct outside the
+            // synthetic loop and has to count it; anything at or below `depth` stays put.
+            StmtKind::Break(levels) if *levels > depth => *levels += 1,
+            StmtKind::Continue(levels) if *levels > depth => *levels += 1,
+            StmtKind::While { body, .. }
+            | StmtKind::DoWhile { body, .. }
+            | StmtKind::For { body, .. }
+            | StmtKind::Foreach { body, .. } => rewrite_restart_gotos(body, name, depth + 1),
+            StmtKind::Switch { cases, default, .. } => {
+                for (_, body) in cases {
+                    rewrite_restart_gotos(body, name, depth + 1);
+                }
+                if let Some(body) = default {
+                    rewrite_restart_gotos(body, name, depth + 1);
+                }
+            }
+            _ => for_each_nested_body(statement, &mut |body| {
+                rewrite_restart_gotos(body, name, depth)
+            }),
+        }
+    }
+}
+
+/// Returns whether a `goto <name>` marker appears anywhere in this scope's statement lists.
+fn contains_goto(statements: &[Stmt], name: &str) -> bool {
+    statements.iter().any(|statement| {
+        marker_name(statement, GOTO_MARKER_PREFIX) == Some(name)
+            || nested_bodies(statement)
+                .iter()
+                .any(|body| contains_goto(body, name))
+    })
+}
+
+/// Returns whether any label marker appears anywhere in this scope's statement lists.
+fn contains_label_marker(statements: &[Stmt]) -> bool {
+    statements.iter().any(|statement| {
+        marker_name(statement, LABEL_MARKER_PREFIX).is_some()
+            || nested_bodies(statement)
+                .iter()
+                .any(|body| contains_label_marker(body))
+    })
+}
+
+/// Borrows every statement list nested directly in `statement`, with the same scope boundary
+/// [`for_each_nested_body`] observes.
+fn nested_bodies(statement: &Stmt) -> Vec<&[Stmt]> {
+    let mut bodies: Vec<&[Stmt]> = Vec::new();
+    match &statement.kind {
+        StmtKind::If {
+            then_body,
+            elseif_clauses,
+            else_body,
+            ..
+        } => {
+            bodies.push(then_body);
+            bodies.extend(elseif_clauses.iter().map(|(_, body)| body.as_slice()));
+            if let Some(body) = else_body {
+                bodies.push(body);
+            }
+        }
+        StmtKind::IfDef {
+            then_body,
+            else_body,
+            ..
+        } => {
+            bodies.push(then_body);
+            if let Some(body) = else_body {
+                bodies.push(body);
+            }
+        }
+        StmtKind::While { body, .. }
+        | StmtKind::DoWhile { body, .. }
+        | StmtKind::For { body, .. }
+        | StmtKind::Foreach { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. }
+        | StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::Synthetic(body) => bodies.push(body),
+        StmtKind::Switch { cases, default, .. } => {
+            bodies.extend(cases.iter().map(|(_, body)| body.as_slice()));
+            if let Some(body) = default {
+                bodies.push(body);
+            }
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            bodies.push(try_body);
+            bodies.extend(catches.iter().map(|catch| catch.body.as_slice()));
+            if let Some(body) = finally_body {
+                bodies.push(body);
+            }
+        }
+        _ => {}
+    }
+    bodies
+}
+
+/// Runs `visit` on every statement list nested directly in `statement`, without crossing into a
+/// nested function, closure or class body — those are separate PHP scopes with their own labels.
+fn for_each_nested_body(statement: &mut Stmt, visit: &mut dyn FnMut(&mut Vec<Stmt>)) {
+    match &mut statement.kind {
+        StmtKind::If {
+            then_body,
+            elseif_clauses,
+            else_body,
+            ..
+        } => {
+            visit(then_body);
+            for (_, body) in elseif_clauses {
+                visit(body);
+            }
+            if let Some(body) = else_body {
+                visit(body);
+            }
+        }
+        StmtKind::IfDef {
+            then_body,
+            else_body,
+            ..
+        } => {
+            visit(then_body);
+            if let Some(body) = else_body {
+                visit(body);
+            }
+        }
+        StmtKind::While { body, .. }
+        | StmtKind::DoWhile { body, .. }
+        | StmtKind::For { body, .. }
+        | StmtKind::Foreach { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. }
+        | StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::Synthetic(body) => visit(body),
+        StmtKind::Switch { cases, default, .. } => {
+            for (_, body) in cases {
+                visit(body);
+            }
+            if let Some(body) = default {
+                visit(body);
+            }
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            visit(try_body);
+            for catch in catches {
+                visit(&mut catch.body);
+            }
+            if let Some(body) = finally_body {
+                visit(body);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Creates a parser-only marker statement for a goto or label.
@@ -94,13 +346,25 @@ fn marker_name<'a>(statement: &'a Stmt, prefix: &str) -> Option<&'a str> {
 }
 
 /// Collects each supported label and the terminal statement tail that begins after it.
+///
+/// `continuation` is what runs when this statement list falls off its end, for the block shapes
+/// where that is statically the code after the enclosing statement — an `if` branch, essentially.
+/// A label's tail is its own block's remainder, and when that alone does not terminate the
+/// continuation is appended, because executing from the label really does run both.
+/// `Symfony\Component\Routing\Matcher\Dumper\CompiledUrlMatcherTrait::match` needs exactly
+/// that: `redirect_scheme:` opens an `elseif` branch that can fall through, and what it falls
+/// through to is the `throw` after the whole chain.
 fn collect_labels(
     statements: &[Stmt],
+    continuation: &[Stmt],
     labels: &mut HashMap<String, Vec<Stmt>>,
 ) -> Result<(), CompileError> {
     for (index, statement) in statements.iter().enumerate() {
         if let Some(name) = marker_name(statement, LABEL_MARKER_PREFIX) {
-            let tail = statements[index + 1..].to_vec();
+            let mut tail = statements[index + 1..].to_vec();
+            if !statements_terminate(&tail) {
+                tail.extend_from_slice(continuation);
+            }
             if tail.is_empty() || !statements_terminate(&tail) || contains_marker(&tail) {
                 return Err(unsupported_goto_error(
                     statement.span,
@@ -115,29 +379,43 @@ fn collect_labels(
                 ));
             }
         }
-        collect_nested_labels(statement, labels)?;
+        let inner_continuation = block_continuation(statements, index, continuation);
+        collect_nested_labels(statement, &inner_continuation, labels)?;
     }
     Ok(())
+}
+
+/// Returns what runs after the statement at `index` falls through, for its own nested blocks.
+///
+/// Only the statements that follow it in this list, plus this list's own continuation. Building it
+/// here keeps `collect_nested_labels` a pure dispatch over the shapes that may USE it.
+fn block_continuation(statements: &[Stmt], index: usize, continuation: &[Stmt]) -> Vec<Stmt> {
+    let mut inner = statements[index + 1..].to_vec();
+    inner.extend_from_slice(continuation);
+    inner
 }
 
 /// Descends through structured statement bodies while staying inside the current function scope.
 fn collect_nested_labels(
     statement: &Stmt,
+    continuation: &[Stmt],
     labels: &mut HashMap<String, Vec<Stmt>>,
 ) -> Result<(), CompileError> {
     match &statement.kind {
+        // A branch that falls off its end runs whatever follows the whole `if`, so its labels may
+        // borrow the continuation.
         StmtKind::If {
             then_body,
             elseif_clauses,
             else_body,
             ..
         } => {
-            collect_labels(then_body, labels)?;
+            collect_labels(then_body, continuation, labels)?;
             for (_, body) in elseif_clauses {
-                collect_labels(body, labels)?;
+                collect_labels(body, continuation, labels)?;
             }
             if let Some(body) = else_body {
-                collect_labels(body, labels)?;
+                collect_labels(body, continuation, labels)?;
             }
         }
         StmtKind::IfDef {
@@ -145,23 +423,29 @@ fn collect_nested_labels(
             else_body,
             ..
         } => {
-            collect_labels(then_body, labels)?;
+            collect_labels(then_body, continuation, labels)?;
             if let Some(body) = else_body {
-                collect_labels(body, labels)?;
+                collect_labels(body, continuation, labels)?;
             }
         }
+        // A transparent block is its enclosing list, so it keeps the same continuation.
+        StmtKind::IncludeOnceGuard { body, .. } | StmtKind::NamespaceBlock { body, .. } => {
+            collect_labels(body, continuation, labels)?
+        }
+        // Falling off a LOOP body starts the next iteration and falling off a `switch` case leaves
+        // the switch, so neither reaches the continuation; falling off a `try` runs `finally`
+        // first. None of those may borrow it, so they collect with an empty one and a label there
+        // still needs a tail that terminates on its own.
         StmtKind::While { body, .. }
         | StmtKind::DoWhile { body, .. }
         | StmtKind::For { body, .. }
-        | StmtKind::Foreach { body, .. }
-        | StmtKind::IncludeOnceGuard { body, .. }
-        | StmtKind::NamespaceBlock { body, .. } => collect_labels(body, labels)?,
+        | StmtKind::Foreach { body, .. } => collect_labels(body, &[], labels)?,
         StmtKind::Switch { cases, default, .. } => {
             for (_, body) in cases {
-                collect_labels(body, labels)?;
+                collect_labels(body, &[], labels)?;
             }
             if let Some(body) = default {
-                collect_labels(body, labels)?;
+                collect_labels(body, &[], labels)?;
             }
         }
         StmtKind::Try {
@@ -169,16 +453,16 @@ fn collect_nested_labels(
             catches,
             finally_body,
         } => {
-            collect_labels(try_body, labels)?;
+            collect_labels(try_body, &[], labels)?;
             for catch in catches {
-                collect_labels(&catch.body, labels)?;
+                collect_labels(&catch.body, &[], labels)?;
             }
             if let Some(body) = finally_body {
-                collect_labels(body, labels)?;
+                collect_labels(body, &[], labels)?;
             }
         }
         StmtKind::Synthetic(body) if marker_name(statement, LABEL_MARKER_PREFIX).is_none() => {
-            collect_labels(body, labels)?;
+            collect_labels(body, continuation, labels)?;
         }
         _ => {}
     }

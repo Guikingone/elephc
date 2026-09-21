@@ -6,7 +6,7 @@
 use std::fmt::Write;
 use std::path::Path;
 mod bridge;
-pub(super) use bridge::{emit_state_helpers, emit_state_install};
+pub(super) use bridge::{deferred_class_symbol, emit_state_helpers, emit_state_install};
 
 /// Encodes the exact canonical path into an assembly-safe, collision-free symbol.
 /// Identity lookup still uses SourceId/catalog metadata, never decoding this name.

@@ -70,6 +70,54 @@ pub(in crate::interpreter) fn bind_method_scope_args(
     alias_duplicate_method_ref_args(method_scope, params, bound_args);
 }
 
+/// Re-binds a GENERATOR's by-value parameters as cells the generator's own scope OWNS.
+///
+/// A generator body does not run during the call that creates it: PHP evaluates the arguments,
+/// binds them, and hands back a `Generator` whose scope OUTLIVES this frame. But
+/// [`bind_method_scope_args`] binds every by-value parameter `Borrowed`, and the caller releases
+/// its own reference (`release_owned_bound_args`) as soon as the generator object exists. For an
+/// argument the CALLER OWNS -- a literal, a concatenation, any temporary -- that release is the
+/// last one, and the generator later reads a freed cell:
+///
+///     function gen($a, $b) { yield $a . '|' . $b; }
+///     gen('L1', 'L2');        // yielded '|' -- both literals were gone
+///     $x = 'V1'; gen($x, $b); // fine: the caller's VARIABLE kept it alive
+///
+/// That asymmetry is why this only ever reproduced with literal arguments. Twig hits it on every
+/// render (`$this->unwrap()->yieldBlock('title', $context, $blocks)` in every compiled template),
+/// where the lost `$name` surfaced as `Block "" on template "base.html.twig" does not exist`.
+///
+/// Retaining here and marking the cell `Owned` is the same rule the `$this` binding at each
+/// generator site already follows, for the same reason: net zero against the caller's release,
+/// and the generator's own teardown frees it.
+///
+/// BY-REFERENCE parameters are skipped: they alias caller storage that the caller keeps alive,
+/// exactly as `bind_method_scope_args` binds them.
+///
+/// `owned` is NOT consulted. It records who must release the incoming cell when this call ends,
+/// which is a different question from whether the cell survives until the generator runs. A
+/// COMPILED caller marks every argument it packs `owned: false` -- the interpreter must not
+/// release them -- and then releases the boxed cells itself the instant the bridge returns
+/// (`emit_release_eval_boxed_operands`). Skipping those left a compiled `$this->doDisplay($ctx)`
+/// handing an eval generator a cell that was freed before the first `foreach` resumed it, which
+/// read back as an empty array.
+pub(in crate::interpreter) fn retain_generator_scope_args(
+    generator_scope: &mut ElephcEvalScope,
+    params: &[String],
+    parameter_is_by_ref: &[bool],
+    bound_args: &[BoundMethodArg],
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for (position, (name, bound_arg)) in params.iter().zip(bound_args.iter()).enumerate() {
+        if parameter_is_by_ref.get(position).copied().unwrap_or(false) {
+            continue;
+        }
+        let retained = values.retain(bound_arg.value)?;
+        generator_scope.set(name.clone(), retained, ScopeCellOwnership::Owned);
+    }
+    Ok(())
+}
+
 /// Creates local aliases when two by-reference method parameters point at the same caller variable.
 pub(super) fn alias_duplicate_method_ref_args(
     method_scope: &mut ElephcEvalScope,
@@ -371,7 +419,7 @@ pub(super) fn eval_invoker_slot_ref_target_value(
         }
         EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE => {
             let word = unsafe { *(slot as *const u64) };
-            values.raw_word_value(source_tag, word)
+            raw_slot_word_value(source_tag, word, values)
         }
         EVAL_TAG_MIXED => {
             let value = unsafe { *(slot as *const RuntimeCellHandle) };

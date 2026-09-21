@@ -65,6 +65,20 @@ use crate::types::PhpType; // used for void stores and plain-scalar checks
 /// this only bounds pathological code-size blowup and protects against bugs.
 const MAX_INLINES_PER_FUNCTION: usize = 10_000;
 
+/// Returns the per-host inline budget, overridable for measurement.
+///
+/// At the default a single host may absorb 10,000 callees of up to 24 instructions each —
+/// a quarter of a million instructions spliced into one body — which is the shape the Symfony
+/// `--web` build shows (`ReflectionParameter::getDefaultValue` emits 1.2 million assembly
+/// lines). `ELEPHC_INLINE_BUDGET` exists to measure how much of that volume the inliner is
+/// responsible for before deciding whether the cap should move.
+fn inline_budget() -> usize {
+    std::env::var("ELEPHC_INLINE_BUDGET")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(MAX_INLINES_PER_FUNCTION)
+}
+
 /// Returns true if `n` is a direct user-function call opcode we consider for inlining.
 fn is_user_call_op(op: Op) -> bool {
     matches!(op, Op::Call | Op::FunctionVariantCall)
@@ -1026,7 +1040,7 @@ fn inline_into_function(
     recursive: &HashSet<String>,
 ) -> bool {
     let mut any = false;
-    let mut fuel = MAX_INLINES_PER_FUNCTION;
+    let mut fuel = inline_budget();
     loop {
         // Recompute after every splice because an inlined body can add blocks to
         // an existing loop and can itself contain further eligible call sites.

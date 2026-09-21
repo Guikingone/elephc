@@ -69,6 +69,16 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
                     )?;
                 }
             }
+            // A callback that is only a boxed value at run time is answered by
+            // `__elephc_array_filter_callback`, whose result is the key-preserving HASH php's own
+            // `array_filter` produces. The redirect in `compat_preludes` tests the same shape, and
+            // the two must agree or the call site reads the helper's result as its own.
+            if callback_is_gradual(cx)? {
+                return Ok(PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(PhpType::Mixed),
+                });
+            }
             Ok(arr_ty)
         }
         PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
@@ -77,4 +87,19 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             "array_filter() first argument must be array",
         )),
     }
+}
+
+/// Returns whether the callback argument is a value the backend cannot bind statically.
+fn callback_is_gradual(cx: &mut BuiltinCheckCtx) -> Result<bool, CompileError> {
+    let Some(callback) = cx.args.get(1).cloned() else {
+        return Ok(false);
+    };
+    if matches!(callback.kind, crate::parser::ast::ExprKind::Null) {
+        return Ok(false);
+    }
+    let callback_ty = cx.checker.infer_type(&callback, cx.env)?;
+    Ok(matches!(
+        callback_ty.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ))
 }

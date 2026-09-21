@@ -1575,12 +1575,21 @@ fn test_string_variable_callee_arg_not_killable() {
 /// follows widens instead, because an unresolved callee is handed the slot's ADDRESS for the
 /// duration of the call and nothing ref-binds the name (see `Checker::ref_bound_locals`);
 /// `--strict-locals` keeps the hard error.
+///
+/// UNRESOLVED is the whole premise, so the third source names a method NO class declares. It
+/// used to declare `C::m(&$x)` and still qualified, but only because `$o` was not `mixed`: `g`
+/// is never called, and an uncalled function's undeclared parameter was seeded `PhpType::Int`,
+/// so the call fell past the mixed-receiver path entirely. With the seed corrected to `mixed`
+/// the receiver reaches that path, `mixed_receiver_by_ref_signature` finds the single class
+/// declaring `m` by reference, and the callee is known — `$a` is then genuinely ref-bound and a
+/// reference may hold a new type, which is
+/// `test_a_single_by_ref_candidate_on_a_mixed_receiver_is_resolved` below.
 #[test]
 fn test_unknown_callee_siblings_not_killable() {
     for source in [
         "<?php class C { static function m(&$x) { $x = 2; } } function g() { $a = 1; $c = \"C\"; $c::m($a); unset($a); $a = \"s\"; echo $a; }",
         "<?php function g(string $c) { $a = 1; $x = new $c($a); unset($a); $a = \"s\"; echo $a, $x; }",
-        "<?php class C { function m(&$x) { $x = 2; } } function g($o) { $a = 1; $o->m($a); unset($a); $a = \"s\"; echo $a; }",
+        "<?php class C { function other(&$x) { $x = 2; } } function g($o) { $a = 1; $o->m($a); unset($a); $a = \"s\"; echo $a; }",
     ] {
         let result =
             check_source_full(source).expect("an unresolved callee's argument must type-check");
@@ -1596,6 +1605,23 @@ fn test_unknown_callee_siblings_not_killable() {
         );
         expect_error_strict(source, "cannot reassign");
     }
+}
+
+/// Verifies a `mixed` receiver takes its by-reference shape from the classes declaring the method.
+///
+/// The counterpart to the test above: there the method is declared by nobody and the argument
+/// stays conservatively aliased, here exactly one class declares it BY REFERENCE, so the shape is
+/// a fact rather than a guess. `$a` is ref-bound, which both keeps the `unset` kill refused — the
+/// callee holds its address — and allows the store that follows even under `--strict-locals`,
+/// because what a reference may be assigned is not limited by what it held.
+///
+/// This is the rule Symfony's `PdoAdapter::doSave` needs: `$stmt->bindParam(1, $id)` on a gradual
+/// receiver defines `$id` when a class declares that parameter by reference.
+#[test]
+fn test_a_single_by_ref_candidate_on_a_mixed_receiver_is_resolved() {
+    expect_no_error_strict(
+        "<?php class C { function m(&$x) { $x = 2; } } function g($o) { $a = 1; $o->m($a); $a = \"s\"; echo $a; }",
+    );
 }
 
 /// The conservatism is per-ARGUMENT, not per-body: an unresolvable call that never mentions `$a`
@@ -3138,19 +3164,35 @@ fn test_an_is_array_guard_does_not_produce_false_advice() {
 }
 
 /// Controls: the guards whose warning is TRUE keep it. `is_object` is not a narrowing predicate the
-/// checker supports at all, `isset` is self-negating (its branch sees the COMPLEMENT), and
-/// `is_callable` narrows to a target that rejects a `string` — all three really do make
-/// `--strict-locals` report `cannot reassign`, so the advice is accurate and stays.
+/// checker supports at all, and `isset` is self-negating (its branch sees the COMPLEMENT) — both
+/// really do make `--strict-locals` report `cannot reassign`, so the advice is accurate and stays.
+///
+/// `is_callable` used to sit here on the strength of narrowing to a target that rejects a `string`.
+/// It no longer does: it narrows to `callable|string`, because PHP accepts a function-name string
+/// there. Its case moved to `test_an_is_callable_guard_does_not_produce_false_advice`.
 #[test]
 fn test_guards_whose_advice_is_true_still_warn() {
     for source in [
         "<?php $a = 1; if (is_object($a)) { $a = \"x\"; } echo $a;",
         "<?php $a = 1; if (isset($a)) { $a = \"x\"; } echo $a;",
-        "<?php $a = 1; if (is_callable($a)) { $a = \"x\"; } echo $a;",
     ] {
         expect_warning(source, "boxed mixed storage");
         expect_error_strict(source, "cannot reassign $a");
     }
+}
+
+/// Verifies an `is_callable` guard does not advise an error `--strict-locals` does not make.
+///
+/// The guard narrows to `callable|string`, so assigning a string inside the branch is a write the
+/// checker accepts — and the mixed-storage scan has to use the SAME target, or the body warns
+/// "compile with --strict-locals to make this an error" while strict compiles it clean and the
+/// frame slot is boxed for nothing. The `is_array` case above is the same failure on the same table.
+#[test]
+fn test_an_is_callable_guard_does_not_produce_false_advice() {
+    let source = "<?php $a = 1; if (is_callable($a)) { $a = \"x\"; } echo $a;";
+    expect_no_warning(source, "boxed mixed storage");
+    expect_no_error(source);
+    expect_no_error_strict(source);
 }
 
 /// A guard region containing a pre-bound name's FIRST in-body assignment IS transparent: the guard

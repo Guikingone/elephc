@@ -186,6 +186,13 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
             receiver, method, ..
         } => static_method_call_expr_type_for_ir(ctx, receiver, method)
             .unwrap_or_else(|| fallback_expr_type(expr)),
+        // `!` and `instanceof` produce a bool in every PHP program, whatever their operand is.
+        // Without these arms they reached the scalar-biased syntactic fallback, which answers
+        // `int` for an expression it cannot type — and `wider_type_for_merge` then widened a
+        // bool/int pair to `int`, so `$flag ?? !in_array(…)` materialized an INT merge temp and
+        // a `bool` property refused the store. Symfony's `DebugHandlersListener::__construct`
+        // writes exactly that.
+        ExprKind::Not(_) | ExprKind::InstanceOf { .. } => PhpType::Bool,
         _ => fallback_expr_type(expr),
     }
 }

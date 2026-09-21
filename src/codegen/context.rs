@@ -9,9 +9,10 @@
 //! Key details:
 //! - Phase 04 stores every SSA value in a stack slot and reloads result registers at use sites.
 //! - The context delegates target-specific movement to `crate::codegen::abi`.
-//! - Local labels carry a module-unique trailing id from `SharedCodegenState::next_label_id()`.
-//!   The readable part is `crate::names::label_fragment()`, which is intentionally lossy, so the
-//!   id — not the fragment — is what keeps two similarly named functions from colliding.
+//! - Local labels carry a trailing `<body hash>_<body counter>` pair. The readable part is
+//!   `crate::names::label_fragment()`, which is intentionally lossy, so that pair — not the
+//!   fragment — is what keeps two similarly named functions from colliding. Both halves are
+//!   fixed before emission starts, which is what lets bodies be emitted independently.
 
 use std::collections::{HashMap, HashSet};
 
@@ -34,6 +35,50 @@ use super::shared_state::SharedCodegenState;
 use super::value_placement::ValuePlacement;
 use super::{CodegenIrError, Result};
 
+/// Returns the readable part of a label: the body's name, collapsed and capped.
+///
+/// The cap is what keeps 3.65 million labels from spelling out a fully-qualified PHP name each.
+/// It is safe because it is only the READABLE part — a label's uniqueness comes from the
+/// `<body hash>_<body counter>` pair `next_body_label_id()` appends, and `label_fragment()` was
+/// already lossy (`a_b` and `aéb` collapse to the same text), so nothing depended on the
+/// fragment being complete.
+const LABEL_FRAGMENT_BUDGET: usize = 24;
+
+/// The readable part of a label minted inside a shared-helper scope.
+///
+/// Spelling the host body's name there would make an identical helper look different in every
+/// worker that emitted it, which is exactly what the keyed scope exists to prevent.
+const SHARED_HELPER_FRAGMENT: &str = "shared";
+
+/// Opens the emitted region holding one shared helper, followed by its key scope in hex.
+pub(crate) const HELPER_MARKER_OPEN: &str = "@helper key=";
+
+/// Closes the region opened by `HELPER_MARKER_OPEN`.
+pub(crate) const HELPER_MARKER_CLOSE: &str = "@endhelper";
+
+fn capped_label_fragment(name: &str) -> String {
+    let fragment = label_fragment(name);
+    match fragment.char_indices().nth(LABEL_FRAGMENT_BUDGET) {
+        Some((cut, _)) => fragment[..cut].to_string(),
+        None => fragment,
+    }
+}
+
+/// Returns the 48-bit label scope for one body name.
+///
+/// FNV-1a rather than a standard-library hasher: the value ends up in the emitted assembly, so
+/// it has to be identical on every run and every host, which `RandomState` is not. 48 bits keeps
+/// the label short while leaving collisions across a few thousand bodies negligible — and a
+/// collision is an assembler error, never silent.
+fn body_label_scope(name: &str) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in name.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash & 0x0000_ffff_ffff_ffff
+}
+
 /// Runtime representation known for one local slot at the current EIR instruction.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LocalSlotRepresentation {
@@ -52,6 +97,16 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) placement: ValuePlacement,
     pub(super) allocation: Allocation,
     pub(super) callee_saved_offsets: Vec<(&'static str, usize)>,
+    /// 48-bit FNV-1a of the emitting body's name: the half of a label id that separates two
+    /// bodies whose readable fragments collapse to the same text.
+    label_scope: u64,
+    /// Labels emitted by THIS body so far. Private to the context so a body's labels do not
+    /// shift when another body is emitted before it.
+    label_counter: usize,
+    /// The key scope of the shared helper currently being emitted, if any. While it is set,
+    /// labels spell `shared` rather than the host body's name, so every worker that emits this
+    /// helper spells it identically.
+    helper_scope: Option<u64>,
     local_offsets: HashMap<LocalSlotId, usize>,
     ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
     local_analysis: LocalSlotAnalysis,
@@ -72,6 +127,14 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) heap_debug: bool,
     pcntl_async_signals: bool,
     pcntl_signal_handlers: bool,
+    /// True when this module still declares `__elephc_shutdown_run`, the nullary drain every
+    /// process-exit site calls to run the `register_shutdown_function()` queue.
+    ///
+    /// The call is a HARD REFERENCE to a symbol only the prelude defines, so it may only be
+    /// emitted when the declaration SURVIVED reachability pruning — read from the module's own
+    /// function list, exactly as `runtime_features::diag_user_handler` is. When false the exit
+    /// sites keep the shape they have always had, which is what makes the surface pay-for-use.
+    php_shutdown_drain: bool,
     pub(super) epilogue_label: Option<String>,
     block_labels: Vec<String>,
 }
@@ -91,24 +154,37 @@ impl<'a> FunctionContext<'a> {
         epilogue_label: Option<String>,
     ) -> Self {
         let callable_reachability = CallableReachabilityAnalysis::new(module, function);
-        let pcntl_async_signals = module_uses_pcntl_async_signals(module);
-        let pcntl_signal_handlers = module_uses_pcntl_signal_handlers(module);
-        let function_fragment = label_fragment(&function.name);
+        let label_scope = body_label_scope(&function.name);
+        // Both of these walk the WHOLE module, and this constructor runs once per body, so
+        // asking them directly is quadratic; `SharedCodegenState` answers each one once.
+        let pcntl_async_signals =
+            shared.pcntl_async_signals(|| module_uses_pcntl_async_signals(module));
+        let pcntl_signal_handlers =
+            shared.pcntl_signal_handlers(|| module_uses_pcntl_signal_handlers(module));
+        let php_shutdown_drain = shared.php_shutdown_drain(|| module_declares_shutdown_drain(module));
+        let function_fragment = capped_label_fragment(&function.name);
         // Indexed by raw block id, matching `Function::block()`'s positional lookup.
         // The platform-local prefix keeps every intra-function label out of the object's
         // symbol table: without it, profilers name frames after the nearest block label
         // (`_eir_hot_leaf_for_body_2`) instead of the PHP function DWARF describes.
         let local_prefix = emitter.target.platform.local_label_prefix();
+        // The block labels take the first ids of this body's own counter, and `next_label()`
+        // continues from there. Drawing them from the module-wide counter instead was the last
+        // thing tying a body's labels to how many labels other bodies had already emitted.
+        let mut label_counter = 0usize;
         let block_labels = function
             .blocks
             .iter()
             .map(|block| {
+                let id = label_counter;
+                label_counter += 1;
                 format!(
-                    "{}_eir_{}_{}_{}",
+                    "{}_eir_{}_{}_{:012x}_{}",
                     local_prefix,
                     function_fragment,
                     label_fragment(&block.name),
-                    shared.next_label_id()
+                    label_scope,
+                    id
                 )
             })
             .collect();
@@ -125,6 +201,9 @@ impl<'a> FunctionContext<'a> {
             ref_cell_state_offsets: layout.ref_cell_state_offsets,
             local_analysis: layout.local_analysis,
             callable_reachability,
+            label_scope,
+            label_counter,
+            helper_scope: None,
             current_inst: None,
             current_inst_promoted_ref_cells: HashSet::new(),
             try_handler_offsets: layout.try_handler_offsets,
@@ -139,6 +218,7 @@ impl<'a> FunctionContext<'a> {
             heap_debug,
             pcntl_async_signals,
             pcntl_signal_handlers,
+            php_shutdown_drain,
             epilogue_label,
             block_labels,
         }
@@ -146,16 +226,76 @@ impl<'a> FunctionContext<'a> {
 
     /// Returns a module-unique local label carrying a readable but lossy prefix.
     ///
-    /// Uniqueness comes solely from the module-wide trailing id: `label_fragment()` collapses
-    /// every non-alphanumeric byte, so `a_b` and `aéb` share a readable prefix and only the id
-    /// keeps their labels apart.
+    /// Uniqueness comes from the trailing `<body hash>_<body counter>`: `label_fragment()`
+    /// collapses every non-alphanumeric byte, so `a_b` and `aéb` share a readable prefix and
+    /// only that pair keeps their labels apart. The hash identifies the emitting body and the
+    /// counter is private to this context, so a body's labels do not depend on how many labels
+    /// other bodies emitted first — which is what allows bodies to be emitted independently.
     pub(super) fn next_label(&mut self, prefix: &str) -> String {
         format!(
             "{}_eir_{}_{}_{}",
             self.emitter.target.platform.local_label_prefix(),
-            label_fragment(&self.function.name),
+            self.label_owner_fragment(),
             label_fragment(prefix),
-            self.shared.next_label_id()
+            self.next_body_label_id()
+        )
+    }
+
+    /// Returns this body's next label id: its name hash and a counter private to the context.
+    fn next_body_label_id(&mut self) -> String {
+        let id = self.label_counter;
+        self.label_counter += 1;
+        format!("{:012x}_{}", self.label_scope, id)
+    }
+
+    /// Returns the readable part of a label: the helper's key when one is open, else the body.
+    fn label_owner_fragment(&self) -> String {
+        match self.helper_scope {
+            Some(_) => SHARED_HELPER_FRAGMENT.to_string(),
+            None => capped_label_fragment(&self.function.name),
+        }
+    }
+
+    /// Emits a shared helper whose labels depend only on `key`, and brackets it for the merge.
+    ///
+    /// A helper belongs to the module once, but any body may be the one that reaches it first.
+    /// Scoping its labels to the key instead of to the host makes every worker's copy spell the
+    /// same names, so a parallel emission pass can keep one copy and drop the duplicates instead
+    /// of giving up and re-emitting the whole body serially.
+    ///
+    /// The scope is saved and restored, so a helper emitted in the middle of a body leaves the
+    /// body's own label numbering untouched.
+    pub(super) fn emit_keyed_helper<R>(
+        &mut self,
+        key: &str,
+        emit: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let scope = body_label_scope(key);
+        let saved_scope = std::mem::replace(&mut self.label_scope, scope);
+        let saved_counter = std::mem::replace(&mut self.label_counter, 0);
+        let saved_helper = std::mem::replace(&mut self.helper_scope, Some(scope));
+        self.emitter
+            .comment(&format!("{}{:012x}", HELPER_MARKER_OPEN, scope));
+        let result = emit(self);
+        self.emitter.comment(HELPER_MARKER_CLOSE);
+        self.label_scope = saved_scope;
+        self.label_counter = saved_counter;
+        self.helper_scope = saved_helper;
+        result
+    }
+
+    /// Mints a shared helper's entry symbol from its cache key, emitting nothing.
+    ///
+    /// The entry symbol has to be identical in every worker that reaches this helper, because
+    /// bodies in other workers spell it to call it. It is the one label that must come from the
+    /// key rather than from whoever happened to emit the helper.
+    pub(super) fn keyed_global_label(&mut self, key: &str, prefix: &str) -> String {
+        let scope = body_label_scope(key);
+        format!(
+            "_eir_{}_{}_{:012x}_0",
+            SHARED_HELPER_FRAGMENT,
+            label_fragment(prefix),
+            scope
         )
     }
 
@@ -167,9 +307,9 @@ impl<'a> FunctionContext<'a> {
     pub(super) fn next_global_label(&mut self, prefix: &str) -> String {
         format!(
             "_eir_{}_{}_{}",
-            label_fragment(&self.function.name),
+            self.label_owner_fragment(),
             label_fragment(prefix),
-            self.shared.next_label_id()
+            self.next_body_label_id()
         )
     }
 
@@ -181,6 +321,11 @@ impl<'a> FunctionContext<'a> {
     /// Returns whether this module owns process-wide PCNTL handler registrations.
     pub(super) const fn uses_pcntl_signal_handlers(&self) -> bool {
         self.pcntl_signal_handlers
+    }
+
+    /// Returns whether a process-exit site may call the PHP shutdown-function drain.
+    pub(super) const fn runs_php_shutdown_functions(&self) -> bool {
+        self.php_shutdown_drain
     }
 
     /// Emits an unconditional target-aware branch to one local assembly label.
@@ -1041,6 +1186,12 @@ impl<'a> FunctionContext<'a> {
     /// that grows past its initial capacity leaves the global symbol pointing at
     /// freed storage (corruption / crash). No-op unless `value` came from
     /// `Op::LoadGlobal`.
+    ///
+    /// A function `static` is the OTHER program-lifetime place with this exact exposure — its
+    /// storage is a `.comm` symbol the frame does not own — so this also republishes to
+    /// `Op::LoadStaticLocal` sources, via [`Self::writeback_static_local_array_source`]. The
+    /// name says `global` for the sixteen call sites that predate that; read it as "publish a
+    /// relocated container back to whichever program-lifetime storage it was read from".
     pub(super) fn writeback_global_array_source(&mut self, value: ValueId) -> Result<()> {
         let Some(value_ref) = self.function.value(value) else {
             return Err(CodegenIrError::missing_entry("value", value.as_raw()));
@@ -1051,6 +1202,9 @@ impl<'a> FunctionContext<'a> {
         let Some(inst_ref) = self.function.instruction(inst) else {
             return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
         };
+        if inst_ref.op == Op::LoadStaticLocal {
+            return self.writeback_static_local_array_source(value);
+        }
         if inst_ref.op != Op::LoadGlobal {
             return Ok(());
         }
@@ -1060,7 +1214,7 @@ impl<'a> FunctionContext<'a> {
         let name = self.global_name_data(data)?.to_string();
         let symbol = crate::names::ir_global_symbol(&name);
         let ty = self.value_php_type(value)?;
-        if crate::superglobals::uses_shared_ref_cell(self.module, &name) {
+        if self.shared.uses_shared_ref_cell(self.module, &name) {
             self.load_value_to_result(value)?;
             return crate::codegen::lower_inst::lower_store_shared_global(
                 self,
@@ -1071,6 +1225,87 @@ impl<'a> FunctionContext<'a> {
         self.data.add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
         self.load_value_to_result(value)?;
         abi::emit_store_result_to_symbol(self.emitter, &symbol, &ty, false);
+        Ok(())
+    }
+
+    /// The function-`static` twin of [`Self::writeback_global_array_source`].
+    ///
+    /// A `static` local lives in a `.comm` symbol, not a frame slot, so the ordinary
+    /// `store_value_to_local` write-back every array/hash mutation performs reaches the SSA
+    /// value's frame home and never the storage the next CALL will read. `Op::LoadStaticLocal`
+    /// is simply a third spelling of "a place this container can be published back to", and it
+    /// was missing from every resolver that names one — so `static $q = ['s']; $q[] = 'x';`
+    /// past the array's initial capacity left the symbol pointing at the pre-`__rt_array_grow`
+    /// allocation: the appended elements were unreachable and the pointer was freed storage.
+    ///
+    /// No refcount traffic. The slot already owns this container; only its ADDRESS changed, and
+    /// the relocating helper (`__rt_array_grow`'s realloc, `__rt_array_ensure_unique`'s split)
+    /// has already accounted for the old one. That is the same contract
+    /// `store_mutated_container_to_local` states for a frame slot, which is why this passes
+    /// `release_previous: false` rather than going through the ordinary static-local store.
+    ///
+    /// No-op unless `value` came from `Op::LoadStaticLocal`.
+    pub(super) fn writeback_static_local_array_source(&mut self, value: ValueId) -> Result<()> {
+        let Some(slot) = self.static_local_source_slot(value)? else {
+            return Ok(());
+        };
+        self.store_relocated_container_to_static_local(slot, value)
+    }
+
+    /// Resolves the static-local slot a value was loaded from, if it was loaded from one.
+    pub(super) fn static_local_source_slot(
+        &self,
+        value: ValueId,
+    ) -> Result<Option<LocalSlotId>> {
+        let Some(value_ref) = self.function.value(value) else {
+            return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+        };
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return Ok(None);
+        };
+        let Some(inst_ref) = self.function.instruction(inst) else {
+            return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+        };
+        if inst_ref.op != Op::LoadStaticLocal {
+            return Ok(None);
+        }
+        match inst_ref.immediate {
+            Some(crate::ir::Immediate::LocalSlot(slot)) => Ok(Some(slot)),
+            _ => Ok(None),
+        }
+    }
+
+    /// Publishes a relocated container pointer into a static local's symbol storage.
+    ///
+    /// See [`Self::writeback_static_local_array_source`] for why this does no refcount work.
+    pub(super) fn store_relocated_container_to_static_local(
+        &mut self,
+        slot: LocalSlotId,
+        value: ValueId,
+    ) -> Result<()> {
+        let local = self
+            .function
+            .locals
+            .get(slot.as_raw() as usize)
+            .ok_or_else(|| CodegenIrError::missing_entry("local slot", slot.as_raw()))?;
+        let Some(name) = local.name.clone() else {
+            return Err(CodegenIrError::invalid_module(
+                "static local container write-back is missing a source name",
+            ));
+        };
+        let slot_ty = local.php_type.codegen_repr();
+        let symbol = crate::names::static_local_symbol(&self.function.name, &name);
+        self.data.add_comm(symbol.clone(), 16);
+        let source_ty = self.load_value_to_result(value)?.codegen_repr();
+        // A gradual slot holds a boxed Mixed cell whose identity the mutation preserved, so the
+        // concrete container pointer in the result register is NOT what belongs in the symbol.
+        // Writing it there would replace the cell with a raw array pointer and every later read
+        // would unbox garbage. The boxed cell already points at the relocated container: the
+        // dynamic mutation paths publish through it.
+        if slot_ty == PhpType::Mixed && source_ty != PhpType::Mixed {
+            return Ok(());
+        }
+        abi::emit_store_result_to_symbol(self.emitter, &symbol, &slot_ty, false);
         Ok(())
     }
 
@@ -1395,6 +1630,19 @@ impl<'a> FunctionContext<'a> {
             .copied()
             .ok_or_else(|| CodegenIrError::invalid_module(format!("missing try handler token {}", token)))
     }
+}
+
+/// Returns whether the module still declares the nullary shutdown drain.
+///
+/// A FUNCTION-LIST question, not an instruction one: `__elephc_shutdown_run` has no PHP caller
+/// off `--web`, so nothing in the instruction stream would show it. Its presence is decided
+/// earlier, by `error_handling_prelude::inject_if_used` plus the forced-group rule in
+/// `pipeline::compile`, and reading the surviving list here is how codegen learns the answer.
+fn module_declares_shutdown_drain(module: &Module) -> bool {
+    module
+        .functions
+        .iter()
+        .any(|function| function.name == crate::names::SHUTDOWN_RUN_FUNCTION)
 }
 
 /// Scans every emitted function-like body for `pcntl_async_signals()` state changes.

@@ -70,12 +70,27 @@ fn literal_preserve_keys(flag: Option<&Expr>) -> Option<bool> {
 /// pre-validated by the registry.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    let preserve = literal_preserve_keys(cx.args.get(3)).ok_or_else(|| {
-        CompileError::new(
-            cx.span,
-            "array_slice() preserve_keys argument must be a literal bool in AOT mode",
-        )
-    })?;
+    let Some(preserve) = literal_preserve_keys(cx.args.get(3)) else {
+        // A flag known only at run time: an INDEXED source has two arms the backend can both
+        // emit, so the call answers with their union and the branch picks one, the same shape
+        // `array_reverse()` and `iterator_to_array()` use. Twig's `CoreExtension::slice()`
+        // forwards an untyped parameter here, which no caller can make literal.
+        //
+        // Every other source keeps the diagnostic: a gradual one routes its key-preserving arm
+        // through the compatibility prelude rather than a native lowering, so the two arms are not
+        // both available at the branch, and a hash has no `array_slice` lowering at all.
+        let PhpType::Array(elem) = ty.clone() else {
+            return Err(CompileError::new(
+                cx.span,
+                "array_slice() preserve_keys argument must be a literal bool in AOT mode",
+            ));
+        };
+        let preserved = PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value: elem,
+        };
+        return Ok(cx.checker.normalize_union_type(vec![ty, preserved]));
+    };
     if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
         if preserve {
             return Ok(PhpType::AssocArray {

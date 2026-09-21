@@ -129,18 +129,20 @@ impl Checker {
     /// Returns true if `name` resolves to any declared function: user declaration, variant group, or
     /// extern. Resolution is case-insensitive via PHP symbol key matching.
     pub(crate) fn has_function_decl_folded(&self, name: &str) -> bool {
-        let key = php_symbol_key(name);
+        // `php_symbol_key` is the ASCII fold, so this is the same predicate with nothing
+        // allocated. It scans THREE whole tables and is asked per function reference, so the
+        // old form allocated a lowercased `String` per declared function per reference.
         self.fn_decls
             .keys()
-            .any(|existing| php_symbol_key(existing) == key)
+            .any(|existing| existing.eq_ignore_ascii_case(name))
             || self
                 .function_variant_groups
                 .keys()
-                .any(|existing| php_symbol_key(existing) == key)
+                .any(|existing| existing.eq_ignore_ascii_case(name))
             || self
                 .extern_functions
                 .keys()
-                .any(|existing| php_symbol_key(existing) == key)
+                .any(|existing| existing.eq_ignore_ascii_case(name))
     }
 
     /// Returns the canonical (case-matching) name of a user function identified by `name` by
@@ -172,7 +174,11 @@ impl Checker {
         for name in unchecked {
             if let Some(decl) = self.fn_decls.get(&name).cloned() {
                 match self.initial_function_param_types(&name, &decl) {
-                    Ok(param_types) => {
+                    Ok(mut param_types) => {
+                        Self::widen_unrefined_params_of_an_uncalled_function(
+                            &decl,
+                            &mut param_types,
+                        );
                         if let Err(error) =
                             self.resolve_function_signature(&name, &decl, param_types)
                         {
@@ -184,6 +190,40 @@ impl Checker {
             }
         }
         self.resolve_function_variant_groups(errors);
+    }
+
+    /// Makes an UNCALLED function's undeclared parameters `mixed` instead of the `Int` seed.
+    ///
+    /// `initial_function_param_types` seeds an undeclared parameter with `PhpType::Int` as a
+    /// gradual starting point that the FIRST call site then discards and replaces with the real
+    /// argument type. This path is the one where that call site never comes — the function is
+    /// resolved precisely because nothing calls it — so the seed is not a starting point, it is
+    /// the final answer, and it is a fabrication: PHP reads an undeclared parameter as `mixed`.
+    ///
+    /// Left alone it does not stay contained either, because the body is still checked and every
+    /// call it makes carries the fabricated `int` outward. Twig's deprecated
+    /// `twig_array_filter(Environment $env, $array, $arrow)` is called by nothing, and passing
+    /// its two `int` locals to `CoreExtension::filter()` locked that method's `$array` and
+    /// `$arrow` to `int` for the whole build — so `$arrow($v, $k)` inside it read as "Cannot call
+    /// $arrow — not a callable (got Int)" and `new \IteratorIterator($array)` as "expects
+    /// Object(Traversable), got Int", on code PHP runs.
+    ///
+    /// The methods equivalent already behaves this way: `method_body_param_type` answers `mixed`
+    /// for an undeclared parameter that no call site has specialized.
+    fn widen_unrefined_params_of_an_uncalled_function(
+        decl: &crate::types::checker::FnDecl,
+        param_types: &mut [(String, crate::types::PhpType)],
+    ) {
+        for (idx, (_, param_ty)) in param_types.iter_mut().enumerate() {
+            let declared = decl.param_types.get(idx).and_then(|ty| ty.as_ref()).is_some();
+            let has_default = decl.defaults.get(idx).and_then(|d| d.as_ref()).is_some();
+            let by_ref = decl.ref_params.get(idx).copied().unwrap_or(false);
+            // Only the seed itself is replaced: a declared `int`, a default, or a by-reference
+            // parameter each carry a real fact and keep it.
+            if !declared && !has_default && !by_ref && *param_ty == crate::types::PhpType::Int {
+                *param_ty = crate::types::PhpType::Mixed;
+            }
+        }
     }
 
     /// Iterates all variant groups that are not yet in `functions` and calls
@@ -320,8 +360,7 @@ impl Checker {
 /// matching) key if one exists. Used to translate case-insensitive names to their actual declared
 /// spelling.
 fn folded_map_key<T>(map: &HashMap<String, T>, name: &str) -> Option<String> {
-    let key = php_symbol_key(name);
     map.keys()
-        .find(|existing| php_symbol_key(existing) == key)
+        .find(|existing| existing.eq_ignore_ascii_case(name))
         .cloned()
 }

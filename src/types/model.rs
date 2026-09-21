@@ -108,6 +108,41 @@ impl PhpType {
         }
     }
 
+    /// True for the type of an EMPTY array literal — an array whose element type is the
+    /// `Never` placeholder, meaning "nothing has ever been stored here".
+    ///
+    /// The distinction matters wherever storage OUTLIVES the expression that typed it. For a
+    /// plain local, `$a = []; $a[] = 'x';` is flow-sensitive and the second statement retypes
+    /// the binding, so `array<never>` is only ever read where it is true. For a `static` local
+    /// the initializer runs on the FIRST call only, while the declaration re-types the name on
+    /// EVERY call — so `array<never>` there is a claim about what an earlier call left behind,
+    /// which the declaration cannot know. `array<never>`'s element slots are zero width, and
+    /// codegen trusts that: `array_shift`/`array_pop` lower "read the removed payload" to
+    /// `mov x11, #0`, producing a silent `NULL` where php returns the element.
+    pub fn is_empty_array_literal(&self) -> bool {
+        match self.codegen_repr() {
+            PhpType::Array(elem) => matches!(elem.codegen_repr(), PhpType::Never | PhpType::Void),
+            PhpType::AssocArray { value, .. } => {
+                matches!(value.codegen_repr(), PhpType::Never | PhpType::Void)
+            }
+            _ => false,
+        }
+    }
+
+    /// The storage an empty-array literal must take when it seeds a slot that outlives the call.
+    ///
+    /// BOXED ELEMENTS, NOT A BOXED SLOT. Widening the whole slot to `Mixed` would put a boxed
+    /// cell in the static's symbol, and a `mixed &$param` argument is then handed that cell as
+    /// its reference — which the callee's `store_ref_cell` releases and replaces without the
+    /// symbol ever learning, turning `sort($staticQueue)` from a stale answer into a DESTROYED
+    /// one. `array<mixed>` keeps the slot a plain container pointer, which is the representation
+    /// `Op::ArrayToMixed` already produces for a static (`local_slot_kind_is_convertible` lists
+    /// `LocalKind::StaticLocal`) and which `static_local_value_type_matches` already accepts an
+    /// `Array(Never)` initializer for.
+    pub fn gradual_empty_array_storage() -> PhpType {
+        PhpType::Array(Box::new(PhpType::Mixed))
+    }
+
     /// Size in bytes on the stack.
     pub fn stack_size(&self) -> usize {
         match self {

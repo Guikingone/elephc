@@ -40,17 +40,15 @@ builtin! {
 /// arguments and a non-literal flag are rejected. Arity is pre-validated and every argument
 /// has already been inferred once by the registry's common path.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    // `None` means the flag is only known at run time. Twig's
+    // `CoreExtension::reverse($charset, $item, $preserveKeys = false)` forwards an UNTYPED
+    // parameter straight into the call, which no caller makes literal.
     let preserve = match cx.args.get(1) {
-        None => false,
+        None => Some(false),
         Some(flag) => match flag.kind {
-            ExprKind::BoolLiteral(value) => value,
-            ExprKind::IntLiteral(value) => value != 0,
-            _ => {
-                return Err(CompileError::new(
-                    cx.span,
-                    "array_reverse() preserve_keys argument must be a literal bool in AOT mode",
-                ))
-            }
+            ExprKind::BoolLiteral(value) => Some(value),
+            ExprKind::IntLiteral(value) => Some(value != 0),
+            _ => None,
         },
     };
     let inferred = cx.checker.infer_type(&cx.args[0], cx.env)?;
@@ -81,20 +79,39 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             ))
         }
     };
-    if preserve && gradual {
+    if preserve.unwrap_or(true) && gradual {
         return Err(CompileError::new(
             cx.span,
             "array_reverse() cannot preserve keys for a gradual array type in AOT mode",
         ));
     }
+    let Some(preserve) = preserve else {
+        // Both shapes are possible, so the call answers with their union and the backend picks the
+        // branch at run time, exactly as `iterator_to_array()` already does for its own flag. An
+        // indexed array reverses to an array or an integer-keyed hash; a hash reverses to a hash
+        // either way, its `false` arm being the key-preserving reverse followed by
+        // `__rt_hash_reindex`. A GRADUAL source has already been refused above: it has no two
+        // statically known arms to emit.
+        let preserved = array_reverse_preserved_type(ty.clone());
+        return Ok(cx.checker.normalize_union_type(vec![ty, preserved]));
+    };
     if !preserve {
         return Ok(ty);
     }
+    Ok(array_reverse_preserved_type(ty))
+}
+
+/// Returns the type `array_reverse($value, true)` produces for one already-validated array type.
+///
+/// An indexed array keeps its integer keys in reversed insertion order, which is a hash keyed by
+/// `Int`; a source that is already associative keeps its own shape, because reordering a hash
+/// preserves its keys.
+fn array_reverse_preserved_type(ty: PhpType) -> PhpType {
     match ty {
-        PhpType::Array(elem) => Ok(PhpType::AssocArray {
+        PhpType::Array(elem) => PhpType::AssocArray {
             key: Box::new(PhpType::Int),
             value: elem,
-        }),
-        other => Ok(other),
+        },
+        other => other,
     }
 }

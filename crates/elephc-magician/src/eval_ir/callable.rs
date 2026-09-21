@@ -246,6 +246,12 @@ pub enum EvalParameterTypeVariant {
     Bool,
     Callable,
     Class(String),
+    /// PHP 8.2's standalone `false` type. Kept distinct from `Bool` because it accepts only the
+    /// one value: `function f(): false` returning `true` is a TypeError in PHP. Without it both
+    /// `false` and `true` parsed as a CLASS named "false", so Symfony's
+    /// `ControllerResolver::getController(): callable|false` threw on its ordinary
+    /// "no `_controller` attribute" path — the 404 route — instead of returning.
+    False,
     Float,
     Int,
     Iterable,
@@ -253,6 +259,8 @@ pub enum EvalParameterTypeVariant {
     Never,
     Object,
     String,
+    /// PHP 8.2's standalone `true` type, the mirror of [`EvalParameterTypeVariant::False`].
+    True,
     Void,
 }
 

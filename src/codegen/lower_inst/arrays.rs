@@ -348,23 +348,31 @@ pub(super) fn lower_mixed_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
             source_ty
         )));
     }
+    // The RESULT type picks the owned container this boundary builds: a list target keeps an
+    // indexed source indexed, which is what every consumer that trusts the static type needs.
+    let list_result = matches!(inst.result_php_type.codegen_repr(), PhpType::Array(_));
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     ctx.load_value_to_reg(source, arg_reg)?;
     abi::emit_push_reg(ctx.emitter, arg_reg);
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     let accepted = ctx.next_label("mixed_to_hash_array");
+    let indexed = ctx.next_label("mixed_to_hash_indexed");
     let wrong = ctx.next_label("mixed_to_hash_wrong_type");
+    let done = ctx.next_label("mixed_to_hash_done");
+    // A hash target accepts both runtime shapes at one label; a list target has to tell them
+    // apart, because only the indexed shape survives without discarding keys.
+    let indexed_label = if list_result { &indexed } else { &accepted };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmp x0, #4");                              // runtime tag 4 denotes indexed array storage
-            ctx.emitter.instruction(&format!("b.eq {}", accepted));             // indexed arrays satisfy the generic PHP array boundary
+            ctx.emitter.instruction(&format!("b.eq {}", indexed_label));        // indexed arrays satisfy the generic PHP array boundary
             ctx.emitter.instruction("cmp x0, #5");                              // runtime tag 5 denotes associative array storage
             ctx.emitter.instruction(&format!("b.eq {}", accepted));             // associative arrays satisfy the same array boundary
             ctx.emitter.instruction(&format!("b {}", wrong));                   // every other runtime type violates the boundary
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp rax, 4");                              // runtime tag 4 denotes indexed array storage
-            ctx.emitter.instruction(&format!("je {}", accepted));               // indexed arrays satisfy the generic PHP array boundary
+            ctx.emitter.instruction(&format!("je {}", indexed_label));          // indexed arrays satisfy the generic PHP array boundary
             ctx.emitter.instruction("cmp rax, 5");                              // runtime tag 5 denotes associative array storage
             ctx.emitter.instruction(&format!("je {}", accepted));               // associative arrays satisfy the same array boundary
             ctx.emitter.instruction(&format!("jmp {}", wrong));                 // every other runtime type violates the boundary
@@ -379,10 +387,52 @@ pub(super) fn lower_mixed_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
         &type_error_label,
         &|given| format!("Value must be of type array, {} given", given),
     );
+    if list_result {
+        ctx.emitter.label(&indexed);
+        emit_owned_mixed_list_from_unboxed_payload(ctx);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction(&format!("b {}", done)),   // the list is already owned and element-normalized
+            Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {}", done)),  // the list is already owned and element-normalized
+        }
+    }
     ctx.emitter.label(&accepted);
     abi::emit_pop_reg(ctx.emitter, arg_reg);
     abi::emit_call_label(ctx.emitter, "__rt_mixed_to_owned_hash");
+    ctx.emitter.label(&done);
     store_if_result(ctx, inst)
+}
+
+/// Turns the just-unboxed INDEXED payload into an owned list whose slots hold boxed Mixed cells.
+///
+/// `__rt_mixed_unbox` left the array pointer in the payload register and this boundary's saved
+/// copy of the boxed cell on the stack, which the pop here drops. The incref before the widening
+/// is not bookkeeping: `__rt_array_to_mixed` consumes an owner slot and splits through
+/// `__rt_array_ensure_unique`, which only clones when the refcount says the array is SHARED, so a
+/// borrowed source that reached it looking unique had its element slots rewritten in place —
+/// the caller-corruption the argument boundary was fixed for. Making it visibly shared forces the
+/// clone and the same call consumes that reference, leaving one owned list behind.
+fn emit_owned_mixed_list_from_unboxed_payload(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_pop_reg(ctx.emitter, "x9");                               // drop the saved boxed cell; the payload register holds the array
+            ctx.emitter.instruction("mov x0, x1");                              // widen the unboxed indexed payload, not the cell
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+            ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load the packed header to recover the runtime slot tag
+            ctx.emitter.instruction("lsr x1, x1, #8");                          // move the runtime value_type byte into the low bits
+            ctx.emitter.instruction("and x1, x1, #0x7f");                       // isolate the source element tag for Mixed boxing
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+        }
+        Arch::X86_64 => {
+            abi::emit_pop_reg(ctx.emitter, "r10");                              // drop the saved boxed cell; the payload register holds the array
+            ctx.emitter.instruction("mov rax, rdi");                            // widen the unboxed indexed payload, not the cell
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the owned indexed array to the widening helper
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // load the packed header to recover the runtime slot tag
+            ctx.emitter.instruction("shr rsi, 8");                              // move the runtime value_type byte into the low bits
+            ctx.emitter.instruction("and rsi, 0x7f");                           // isolate the source element tag for Mixed boxing
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+        }
+    }
 }
 
 /// Selects what an indexed-array element read does with the payload it loads.
@@ -878,10 +928,41 @@ fn lower_array_set_mixed_key_x86_64(
 pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let array = expect_operand(inst, 0)?;
     let value = expect_operand(inst, 1)?;
+    lower_array_push_value(ctx, inst, array, value)
+}
+
+/// Appends ONE named value to an indexed array, for callers that do not hold it in operand 1.
+///
+/// `array_push($a, $x, $y)` is N appends against the same array, so the variadic builtin arm walks
+/// its operand tail through here. `inst` is still carried for the diagnostics the storage
+/// predicates attach to it, not to read operands from.
+pub(super) fn lower_array_push_value(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    value: ValueId,
+) -> Result<()> {
     let array_ty = ctx.value_php_type(array)?;
+    let source_local = source_load_local_slot(ctx, array)?;
+    // A HASH receiver is ordinary php: `array_push()` appends under the next free integer key
+    // whatever storage the array has. `lower_runtime_promotable_array_push` already dispatches on
+    // the runtime heap kind, so a statically associative receiver reaches the same hash append the
+    // promoted-at-runtime case does. `twig/twig`'s `ArrayExpression::addElement` is the shape:
+    // `array_push($this->nodes, $key, $value)` on a `Node`'s string-keyed child map.
+    if matches!(
+        array_ty.codegen_repr(),
+        PhpType::AssocArray { ref value, .. } if value.codegen_repr() == PhpType::Mixed
+    ) {
+        lower_runtime_promotable_array_push(ctx, array, value)?;
+        ctx.store_result_value(array)?;
+        if let Some(slot) = source_local {
+            ctx.store_value_to_local(slot, array)?;
+        }
+        ctx.writeback_global_array_source(array)?;
+        return Ok(());
+    }
     require_indexed_array(array_ty.clone(), inst)?;
     let elem_ty = indexed_array_element_type(&array_ty, inst)?;
-    let source_local = source_load_local_slot(ctx, array)?;
     if elem_ty.codegen_repr() == PhpType::Mixed {
         lower_runtime_promotable_array_push(ctx, array, value)?;
     } else {
@@ -951,6 +1032,18 @@ pub(super) fn lower_mixed_array_append(
 ) -> Result<()> {
     let receiver = expect_operand(inst, 0)?;
     let value = expect_operand(inst, 1)?;
+    lower_mixed_array_append_value(ctx, receiver, value)
+}
+
+/// Appends ONE named value through a boxed Mixed array cell.
+///
+/// The twin of [`lower_array_push_value`]: `array_push($a, $x, $y)` walks its operand tail through
+/// here when the receiver is a boxed cell rather than an indexed array.
+pub(super) fn lower_mixed_array_append_value(
+    ctx: &mut FunctionContext<'_>,
+    receiver: ValueId,
+    value: ValueId,
+) -> Result<()> {
     match ctx.value_php_type(receiver)?.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) => {}
         other => {
@@ -1640,7 +1733,7 @@ fn emit_array_get_for_write_in_bounds_x86_64(
 }
 
 /// Copies a loaded Mixed slot into a fresh zval cell, dereferencing ref-cell markers first.
-fn emit_mixed_array_get_deref_invoker_ref_cell(
+pub(super) fn emit_mixed_array_get_deref_invoker_ref_cell(
     ctx: &mut FunctionContext<'_>,
     mixed_reg: &str,
 ) {
@@ -1762,13 +1855,80 @@ pub(super) fn emit_branch_if_invoker_ref_cell_tag(
     }
 }
 
+/// Publishes the raise site's `FILE`/`LINE` for the diagnostic that is about to be raised.
+///
+/// php appends ` in FILE on line N` to every displayed diagnostic and hands both to a
+/// `set_error_handler()` callback, but the runtime warning helpers are SHARED code with no
+/// source position of their own: `__rt_warn_undefined_array_key_int` is one symbol serving every
+/// missing-key read in the program. The position therefore travels out of band, written here —
+/// at the lowered site, which does know it — into three globals that the next flush in
+/// `__rt_diag_warning` reads AND CLEARS. A raise site that does not call this leaves them zero
+/// and its diagnostic reports no location, which is why the clear matters: an uninstrumented
+/// site must not inherit an instrumented one's line.
+///
+/// Cheap where it sits: these are the cold miss paths, and the whole sequence is three stores.
+/// Skipped entirely when no PHP dispatch function was compiled in, so a build that cannot have
+/// an error handler keeps exactly the code it had.
+///
+/// The registers are chosen to survive the raise-site ABI: on AArch64 the value goes through
+/// x10 and the symbol address through x9 (the warning helpers take their key in x0/x1/x2), and
+/// on x86_64 through r10 with RIP-relative stores (the helpers take rax/rdi/rsi).
+pub(super) fn emit_publish_diag_location(ctx: &mut FunctionContext<'_>) {
+    if !ctx.module.required_runtime_features.diag_user_handler {
+        return;
+    }
+    let Some(span) = ctx.current_instruction_span() else {
+        return;
+    };
+    // A synthetic node carries a line far above any real one (`Span::SYNTHETIC_LINE_BASE`) and a
+    // missing span degrades to 0; neither is a position php would print, so both report none.
+    if span.line == 0 {
+        return;
+    }
+    let Some(file) = diag_location_file(ctx) else {
+        return;
+    };
+    let (file_label, file_len) = ctx.data.add_string(file.as_bytes());
+    let value_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x10",
+        Arch::X86_64 => "r10",
+    };
+    abi::emit_symbol_address(ctx.emitter, value_reg, &file_label);
+    abi::emit_store_reg_to_symbol(ctx.emitter, value_reg, "_rt_diag_file_ptr", 0);
+    abi::emit_load_int_immediate(ctx.emitter, value_reg, file_len as i64);
+    abi::emit_store_reg_to_symbol(ctx.emitter, value_reg, "_rt_diag_file_len", 0);
+    abi::emit_load_int_immediate(ctx.emitter, value_reg, i64::from(span.line));
+    abi::emit_store_reg_to_symbol(ctx.emitter, value_reg, "_rt_diag_line", 0);
+}
+
+/// Returns the source file the currently lowered function came from.
+///
+/// A function the autoloader or an `include` contributed is recorded in
+/// `declared_function_source_files`; top-level code and anything else falls back to the entry
+/// script, which is the file `__FILE__` resolves to there.
+fn diag_location_file(ctx: &FunctionContext<'_>) -> Option<String> {
+    if let Some(file) = ctx
+        .module
+        .declared_function_source_files
+        .get(&ctx.function.name)
+    {
+        return Some(file.clone());
+    }
+    ctx.module
+        .source_path
+        .as_ref()
+        .cloned()
+}
+
 /// Emits PHP's undefined integer array-key warning for the key in the result register.
 fn emit_undefined_array_key_warning(ctx: &mut FunctionContext<'_>) {
+    emit_publish_diag_location(ctx);
     abi::emit_call_label(ctx.emitter, "__rt_warn_undefined_array_key_int");
 }
 
 /// Emits PHP's warning for a direct array-offset read whose receiver is null.
 pub(super) fn emit_array_offset_on_null_warning(ctx: &mut FunctionContext<'_>) {
+    emit_publish_diag_location(ctx);
     abi::emit_call_label(ctx.emitter, "__rt_warn_array_offset_on_null");
 }
 

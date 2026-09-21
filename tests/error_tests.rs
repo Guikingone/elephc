@@ -334,20 +334,48 @@ fn test_error_iterator_aggregate_cannot_be_redeclared() {
     );
 }
 
-/// Verifies the error diagnostic for iterator method requires declared return type.
+/// Verifies an undeclared `Iterator::current()` return is a DEPRECATION, not an error.
+///
+/// `Iterator::current(): mixed` is one of the return types PHP 8.1 declared TENTATIVELY: `php -n`
+/// 8.5 runs this class and prints "Return type of Bad::current() should either be compatible with
+/// Iterator::current(): mixed, or the #[\ReturnTypeWillChange] attribute should be used to
+/// temporarily suppress the notice". Refusing it outright is what stopped `Twig\Node\Node` — and
+/// with it every Twig node class — from registering at all.
 #[test]
 fn test_error_iterator_method_requires_declared_return_type() {
-    expect_error(
-        "<?php
+    let source = "<?php
 class Bad implements Iterator {
     public function current() { return 1; }
     public function key(): mixed { return 0; }
     public function next(): void {}
     public function valid(): bool { return true; }
     public function rewind(): void {}
-}",
-        "Cannot implement interface method Bad::current without declaring a compatible return type",
+}";
+    expect_no_error(source);
+    expect_warning(
+        source,
+        "Return type of Bad::current() should either be compatible with Iterator::current(): mixed",
     );
+}
+
+/// Verifies `#[\ReturnTypeWillChange]` suppresses the tentative-return deprecation, as in PHP.
+///
+/// Silencing the notice is the whole of what the attribute does: it does NOT make an undeclared
+/// return legal against a userland parent, which is why acceptance is decided by the declaring
+/// interface instead.
+#[test]
+fn test_return_type_will_change_suppresses_the_tentative_notice() {
+    let source = r"<?php
+class Ok implements Iterator {
+    #[\ReturnTypeWillChange]
+    public function current() { return 1; }
+    public function key(): mixed { return 0; }
+    public function next(): void {}
+    public function valid(): bool { return true; }
+    public function rewind(): void {}
+}";
+    expect_no_error(source);
+    expect_no_warning(source, "should either be compatible with");
 }
 
 /// Verifies the error diagnostic for iterator method rejects incompatible return type.

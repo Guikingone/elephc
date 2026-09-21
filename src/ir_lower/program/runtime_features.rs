@@ -34,6 +34,15 @@ pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module)
     // "something that makes a fiber" would be an approximation of it.
     module.required_runtime_features.fiber |= module.class_infos.contains_key("Fiber");
     module.required_runtime_features.generator |= module.class_infos.contains_key("Generator");
+    // Also a fact rather than an analysis: `__rt_diag_warning` calls the compiled PHP function
+    // `__elephc_diag_render` by its own symbol, so the reference is legal exactly when the
+    // program still declares it. Read from the surviving function list — AFTER declaration
+    // reachability has pruned — so a build that dropped the dispatch prelude never emits a
+    // runtime that refers to it.
+    module.required_runtime_features.diag_user_handler |= module
+        .functions
+        .iter()
+        .any(|function| function.name == crate::names::DIAG_RENDER_FUNCTION);
 }
 
 /// Derives optional runtime features from the actual EIR instruction stream.

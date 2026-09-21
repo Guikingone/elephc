@@ -53,6 +53,7 @@ impl Checker {
                 .entry((*name).to_string())
                 .or_insert_with(crate::superglobals::superglobal_type);
         }
+        Self::seed_vivified_array_locals(&mut local_env, &decl.body);
         let function_key = name.to_string();
         let callable_param_names: Vec<String> = param_types
             .iter()
@@ -185,7 +186,12 @@ impl Checker {
             |checker| {
                 for stmt in &decl.body {
                     if let Err(error) = checker.check_stmt(stmt, &mut local_env) {
-                        errors.extend(error.flatten());
+                        // Naming the enclosing function is what lets `pipeline` recover the FILE:
+                        // after autoload expansion every spliced file shares one line-number
+                        // space, so `line:col` alone identifies nothing.
+                        errors.extend(
+                            error.within_declaration(function_key.as_str()).flatten(),
+                        );
                     }
                     checker.collect_return_infos(stmt, &local_env, &mut all_return_infos);
                     checker.collect_return_callable_sigs(

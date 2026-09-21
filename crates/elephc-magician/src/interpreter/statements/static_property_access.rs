@@ -49,7 +49,7 @@ pub(in crate::interpreter) fn eval_static_property_get_result(
         if property.property_type().is_none() {
             return values.null();
         }
-        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        if crate::eval_trace::enabled() {
             eprintln!(
                 "[elephc-eval-trace] phase=static_property_uninitialized class={:?} declaring={declaring_class:?} property={:?}",
                 class_name,

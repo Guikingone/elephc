@@ -388,10 +388,10 @@ pub(super) fn resolve_reflection_class<'a>(
     class_name: &str,
 ) -> Option<(&'a str, &'a crate::types::ClassInfo)> {
     let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
+    let actual = ctx.shared.class_name_for_key(ctx.module, &class_key)?;
     ctx.module
         .class_infos
-        .iter()
-        .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == class_key)
+        .get_key_value(&actual)
         .map(|(name, info)| (name.as_str(), info))
 }
 
@@ -408,29 +408,22 @@ pub(super) fn resolve_reflection_interface<'a>(
     interface_name: &str,
 ) -> Option<&'a str> {
     let interface_key = php_symbol_key(interface_name.trim_start_matches('\\'));
+    let actual = ctx.shared.interface_name_for_key(ctx.module, &interface_key)?;
     ctx.module
         .interface_infos
-        .keys()
-        .find(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == interface_key)
-        .map(String::as_str)
+        .get_key_value(&actual)
+        .map(|(name, _)| name.as_str())
 }
 
 /// Looks up a declared trait by PHP-style case-insensitive name.
 pub(super) fn resolve_reflection_trait<'a>(ctx: &'a FunctionContext<'_>, trait_name: &str) -> Option<&'a str> {
     let trait_key = php_symbol_key(trait_name.trim_start_matches('\\'));
-    ctx.module
-        .trait_table
-        .names
-        .iter()
-        .find(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == trait_key)
-        .map(String::as_str)
+    let position = ctx.shared.trait_position_for_key(ctx.module, &trait_key)?;
+    ctx.module.trait_table.names.get(position).map(String::as_str)
 }
 
 /// Looks up enum metadata by PHP-style case-insensitive name.
 pub(super) fn is_reflection_enum(ctx: &FunctionContext<'_>, enum_name: &str) -> bool {
     let enum_key = php_symbol_key(enum_name.trim_start_matches('\\'));
-    ctx.module
-        .enum_infos
-        .keys()
-        .any(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == enum_key)
+    ctx.shared.enum_name_for_key(ctx.module, &enum_key).is_some()
 }

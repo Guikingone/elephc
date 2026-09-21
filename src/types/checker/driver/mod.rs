@@ -83,6 +83,21 @@ pub(super) fn check_types_impl(
     target: Target,
     options: CheckOptions,
 ) -> Result<(Checker, TypeEnv), CompileError> {
+    // The 19 s of "Checking types" has never been split, and it is ten documented phases with a
+    // fixed point in the middle and a top-level pass run twice. `ELEPHC_TYPECHECK_TIMES=1`
+    // prints where the time is before anything is changed on a guess.
+    let trace = std::env::var("ELEPHC_TYPECHECK_TIMES").is_ok();
+    let start = std::time::Instant::now();
+    let mut mark = std::time::Instant::now();
+    let mut lap = |label: &str, mark: &mut std::time::Instant| {
+        if trace {
+            eprintln!(
+                "[elephc-typecheck] {label}={:.2}s",
+                mark.elapsed().as_secs_f64()
+            );
+        }
+        *mark = std::time::Instant::now();
+    };
     let mut checker = Checker::new(target);
     checker.strict_locals = options.strict_locals;
     // Program-wide and computed once, BEFORE any body is walked: the top-level `unset` that has to
@@ -152,13 +167,12 @@ pub(super) fn check_types_impl(
             constants,
         } = &stmt.kind
         {
-            let interface_key = php_symbol_key(name);
             if interface_map
                 .keys()
-                .any(|existing| php_symbol_key(existing) == interface_key)
+                .any(|existing| existing.eq_ignore_ascii_case(name))
                 || class_map
                     .keys()
-                    .any(|existing| php_symbol_key(existing) == interface_key)
+                    .any(|existing| existing.eq_ignore_ascii_case(name))
             {
                 errors.push(CompileError::new(
                     stmt.span,
@@ -428,21 +442,30 @@ pub(super) fn check_types_impl(
     // guarantee the callee is reached first — the top level is checked before
     // `resolve_unchecked_functions` ever touches a free function's body. See
     // `Checker::scan_widened_ref_params`.
+    lap("declarations", &mut mark);
     checker.scan_widened_ref_params(program, &flattened_classes);
+    lap("widened_ref_scan", &mut mark);
 
     let (_, initial_top_level_errors) = checker.check_top_level_program(program);
+    lap("top_level_first", &mut mark);
 
     checker.resolve_unchecked_functions(&mut errors);
+    lap("unchecked_functions", &mut mark);
     // Enum method bodies are not part of `flattened_classes` (enums are registered separately via
     // the enum schema pass), so they would otherwise skip body checking entirely. Flatten them
     // into method-checkable units here — their signatures already live in `checker.classes`.
     let mut methods_to_check = flattened_classes.clone();
     methods_to_check.extend(flatten_enum_methods(program, &flattened_enums));
+    lap("collect_method_units", &mut mark);
     checker.type_check_methods_until_stable(&methods_to_check, &mut errors)?;
+    lap("methods_until_stable", &mut mark);
+    checker.publish_unspecialized_method_param_seeds();
     patch_builtin_spl_storage_signatures(&mut checker);
     apply_implicit_stringable_interfaces(&mut checker.classes);
+    lap("post_passes", &mut mark);
 
     let (final_global_env, final_top_level_errors) = checker.check_top_level_program(program);
+    lap("top_level_final", &mut mark);
     for (initial_errors, final_errors) in initial_top_level_errors
         .into_iter()
         .zip(final_top_level_errors.into_iter())
@@ -465,6 +488,12 @@ pub(super) fn check_types_impl(
     // parameter the callee widens is boxed on both sides of the call. See
     // `Checker::publish_widened_ref_param_signatures`.
     checker.publish_widened_ref_param_signatures();
+    if trace {
+        eprintln!(
+            "[elephc-typecheck] total={:.2}s",
+            start.elapsed().as_secs_f64()
+        );
+    }
 
     Ok((checker, final_global_env))
 }

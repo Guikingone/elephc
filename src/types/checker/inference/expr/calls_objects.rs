@@ -24,6 +24,7 @@ impl Checker {
             ExprKind::FunctionCall { name, args } => {
                 let name = name.as_str().to_string();
                 let args = args.clone();
+                self.record_method_exists_capability_guard(&name, &args);
                 if name == crate::names::DYNAMIC_INCLUDE_FUNCTION {
                     if args.len() != 3 {
                         return Err(CompileError::new(
@@ -206,6 +207,10 @@ impl Checker {
                     PhpType::Array(elem_ty) => Ok(*elem_ty),
                     PhpType::AssocArray { value, .. } => Ok(*value),
                     PhpType::Iterable | PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
+                    // `callable` is a PREDICATE, not a storage shape: the value behind it may be
+                    // the two-element `[$object, 'method']` array PHP unpacks. EIR lowering
+                    // rebuilds both elements from the descriptor, so the element type is gradual.
+                    PhpType::Callable => Ok(PhpType::Mixed),
                     PhpType::Object(name) if self.object_type_implements_iterable(&name) => {
                         Ok(PhpType::Mixed)
                     }

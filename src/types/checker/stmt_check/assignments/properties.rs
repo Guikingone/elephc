@@ -144,6 +144,9 @@ pub(super) fn check_property_array_push(
                 )?;
                 return Ok(());
             }
+            if object_property_write_is_dynamic(checker, class_name, property) {
+                return Ok(());
+            }
             let (prop_ty, property_has_declared_type) =
                 resolve_object_array_property(checker, class_name, property, span)?;
             let updated_prop_ty = updated_array_property_push_type(
@@ -224,6 +227,12 @@ pub(super) fn check_property_array_assign(
                     &val_ty,
                     span,
                 )?;
+                return Ok(());
+            }
+            if object_property_write_is_dynamic(checker, class_name, property) {
+                if !is_php_array_key_type(&normalized_idx_ty) {
+                    return Err(CompileError::new(span, "Array index must be integer"));
+                }
                 return Ok(());
             }
             let (prop_ty, property_has_declared_type) =
@@ -431,13 +440,30 @@ fn check_object_property_write(
                 .property_declaring_classes
                 .get(property)
                 .is_some_and(|owner| owner.trim_start_matches('\\').eq_ignore_ascii_case("PDOStatement"));
+        // php's rule is about SCOPE, not about the constructor: "readonly properties can only be
+        // initialized once, and only from the scope where they have been declared". Any method of
+        // the declaring class may perform that one write, and the once-only half is dynamic --
+        // it depends on whether the slot is already initialized, which this pass cannot know.
+        //
+        // Requiring `__construct` rejected the ordinary lazy-readonly idiom, which is an
+        // uninitialized readonly typed property written once behind an `isset()` guard:
+        //
+        //     private readonly Foo $slot;
+        //     public function get(): Foo {
+        //         if (isset($this->slot)) { return $this->slot; }
+        //         return $this->slot = new Foo();
+        //     }
+        //
+        // php runs that; elephc raised `Cannot modify readonly property` on the FIRST write.
+        // Accepting it means a genuine second write is no longer refused here -- that one is a
+        // runtime `Error` in php too, and fabricating an error for valid code is the worse half
+        // of the trade.
         if class_info.readonly_properties.contains(property)
-            && !(checker.current_class.as_deref()
-                == class_info
+            && checker.current_class.as_deref()
+                != class_info
                     .property_declaring_classes
                     .get(property)
                     .map(String::as_str)
-                && checker.current_method.as_deref() == Some("__construct"))
             && !internal_pdo_statement_initializer
             && !readonly_non_null_coalesce_keep
         {
@@ -475,7 +501,13 @@ fn check_object_property_write(
                 method == php_symbol_key(&property_hook_get_method(property))
                     || method == php_symbol_key(&property_hook_set_method(property))
             });
-        if has_get_hook && !has_set_hook && !in_own_accessor {
+        // A hooked property is only unwritable when it is VIRTUAL — no hook names `$this-><prop>`,
+        // so there is no slot to write. A hook that does name it keeps ordinary storage, and PHP
+        // writes that store directly (subject to `set` visibility, checked below). Symfony's
+        // `ViewEvent::$controllerArgumentsEvent` declares a get hook that does
+        // `$this->controllerArgumentsEvent ??= …` and the constructor assigns it.
+        let is_backed = class_info.backed_hooked_properties.contains(property);
+        if has_get_hook && !has_set_hook && !in_own_accessor && !is_backed {
             return Err(CompileError::new(
                 span,
                 &format!(
@@ -814,6 +846,30 @@ fn check_pointer_property_write(
     Ok(())
 }
 
+/// Returns whether `property` is a slot this class simply does not declare but still accepts.
+///
+/// `check_object_property_write` already lets a plain `$o->newProp = v` through for exactly these
+/// classes; an element write (`$o->newProp[] = v`, `$o->newProp[$k] = v`) is the same write with
+/// an index on it and has to agree. It did not: `(object) ['vars' => []]` gives a stdClass whose
+/// keys the compiler never sees, and Symfony's `CompiledUrlMatcherDumper` — which builds its whole
+/// working state that way and then does `$state->vars[] = $m[1]` — was rejected with
+/// "Undefined property: stdClass::vars".
+///
+/// Magic `__set` is deliberately NOT included: PHP answers an element write on an overloaded
+/// property with "Indirect modification of overloaded property has no effect", so accepting it
+/// here would promise something the language does not do.
+fn object_property_write_is_dynamic(checker: &Checker, class_name: &str, property: &str) -> bool {
+    if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
+        return true;
+    }
+    checker
+        .classes
+        .get(class_name)
+        .is_some_and(|class_info| {
+            class_info.allow_dynamic_properties && class_info.visible_property(property).is_none()
+        })
+}
+
 /// Resolves the type of a named property on a class object, for array property operations.
 ///
 /// Looks up the property in `checker.classes`, validates existence and access, and returns
@@ -891,6 +947,12 @@ fn updated_array_property_push_type(
             span,
             "buffer<T> does not support push; allocate with buffer_new<T>(len)",
         )),
+        // The boxed storage type is preserved and the runtime writer performs the mutation and
+        // PHP's auto-vivification, exactly as `updated_array_property_assign_type` already does
+        // for the KEYED write. Only the push arm was missing, so `$this->brackets[] = $x` against
+        // an untyped `private $brackets;` was refused where `$this->brackets[$k] = $x` was not.
+        // Twig's `Lexer` writes it five times.
+        PhpType::Mixed => Ok(prop_ty.clone()),
         PhpType::AssocArray { key, value } => {
             let merged_value = checker
                 .merge_array_element_type(value, val_ty)
@@ -1136,6 +1198,17 @@ fn update_object_property_type(
     {
         return;
     }
+    // An INFERRED property's stored type may only widen. Overwriting it let one pass narrow what
+    // an earlier pass had widened, and the method-pass fixpoint then alternated between the two
+    // forever instead of settling. The join is also the honest answer: the slot has to hold every
+    // value any site assigns to it.
+    let updated_prop_ty = if property_has_declared_type {
+        updated_prop_ty
+    } else {
+        checker
+            .merged_assignment_type(&current_type, &updated_prop_ty)
+            .unwrap_or(PhpType::Mixed)
+    };
     propagate_object_property_type(checker, &declaring_class, property, updated_prop_ty);
 }
 

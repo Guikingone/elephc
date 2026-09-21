@@ -76,6 +76,21 @@ pub(crate) fn unregister_dynamic_objects_for_context(context: *mut ElephcEvalCon
     }
 }
 
+/// Forgets every dynamic object at a generated web request boundary.
+///
+/// The key is the object's IDENTITY, which is its address in the PHP arena, and `__rt_web_reset`
+/// hands that whole arena back to pure-bump allocation. Keeping the map means the next request's
+/// object lands on a previous request's address and inherits its entry: `__rt_heap_free` then
+/// asks this registry for an owner, gets one, and runs a `__destruct()` belonging to a class the
+/// new object never had, through a context whose own tables were emptied at the same boundary.
+/// Nothing in the map can still be valid after the wipe, so the whole map goes.
+#[cfg(not(test))]
+pub(crate) fn reset_dynamic_object_contexts() {
+    if let Ok(mut contexts) = dynamic_destructor_contexts().lock() {
+        contexts.clear();
+    }
+}
+
 /// Looks up the eval context that owns one dynamic object identity.
 #[cfg(not(test))]
 pub(crate) fn dynamic_object_owner_context(identity: u64) -> Option<*mut ElephcEvalContext> {

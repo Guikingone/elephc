@@ -197,11 +197,89 @@ pub(in crate::codegen::lower_inst) fn load_value_as_string_to_regs(
                 len_reg,
             )
         }
+        PhpType::Callable => load_callable_as_borrowed_string_to_regs(ctx, value, ptr_reg, len_reg),
         other => Err(CodegenIrError::unsupported(format!(
             "{} string coercion for PHP type {:?}",
             name, other
         ))),
     }
+}
+
+/// Reads a callable descriptor's PHP name as the string the callable was built from.
+///
+/// A `callable` slot holds a descriptor, not the value the caller passed, so a string operation on
+/// one has nothing to read — which is why it used to refuse to compile. The descriptor does keep
+/// the name it resolved (`"strlen"`, `"Foo::bar"`), and for a callable that CAME from a string
+/// that name is the original string, character for character.
+///
+/// A closure, an `__invoke` object or a `[$object, 'method']` array has no string form — PHP
+/// raises there too — so those kinds get the `Error` PHP raises instead of a made-up name.
+/// Symfony's `ControllerEvent::setController` is the caller that needs this: its `callable
+/// $controller` reaches `explode('::', $controller, 2)` under an `\is_string($controller)` guard.
+pub(in crate::codegen::lower_inst) fn load_callable_as_borrowed_string_to_regs(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    ptr_reg: &str,
+    len_reg: &str,
+) -> Result<()> {
+    use crate::codegen_support::callable_descriptor as descriptor;
+
+    let descriptor_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let kind_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let unsupported = ctx.next_label("callable_to_string_unsupported");
+    let done = ctx.next_label("callable_to_string_done");
+    ctx.load_value_to_reg(value, descriptor_reg)?;
+    abi::emit_load_from_address(ctx.emitter, kind_reg, descriptor_reg, 0);
+    for kind in [
+        descriptor::CALLABLE_DESC_KIND_CLOSURE,
+        descriptor::CALLABLE_DESC_KIND_ARRAY,
+        descriptor::CALLABLE_DESC_KIND_OBJECT_INVOKE,
+    ] {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter
+                    .instruction(&format!("cmp {}, #{}", kind_reg, kind));
+                ctx.emitter
+                    .instruction(&format!("b.eq {}", unsupported));       // this callable shape has no PHP string form
+            }
+            Arch::X86_64 => {
+                ctx.emitter
+                    .instruction(&format!("cmp {}, {}", kind_reg, kind));
+                ctx.emitter.instruction(&format!("je {}", unsupported)); // this callable shape has no PHP string form
+            }
+        }
+    }
+    abi::emit_load_from_address(
+        ctx.emitter,
+        ptr_reg,
+        descriptor_reg,
+        descriptor::CALLABLE_DESC_NAME_OFFSET,
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cbz {}, {}", ptr_reg, unsupported)); // a descriptor without a name has nothing to read
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("test {}, {}", ptr_reg, ptr_reg));
+            ctx.emitter.instruction(&format!("jz {}", unsupported));     // a descriptor without a name has nothing to read
+        }
+    }
+    abi::emit_load_from_address(
+        ctx.emitter,
+        len_reg,
+        descriptor_reg,
+        descriptor::CALLABLE_DESC_NAME_LEN_OFFSET,
+    );
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&unsupported);
+    super::super::super::exceptions::emit_type_error(
+        ctx,
+        "Object of class Closure could not be converted to string",
+    );
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Invokes a concrete object's `__toString()`, copies its owned result into concat scratch, and

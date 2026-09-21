@@ -55,6 +55,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_hash_key_eq(emitter);
     arrays::emit_hash_normalize_key(emitter);
     arrays::emit_hash_clone_shallow(emitter);
+    arrays::emit_hash_debug_validate_chain(emitter);
     arrays::emit_hash_ensure_unique(emitter);
     arrays::emit_hash_new(emitter);
     arrays::emit_hash_grow(emitter);
@@ -90,6 +91,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_merge_str(emitter);
     arrays::emit_array_slice(emitter);
     arrays::emit_array_slice_refcounted(emitter);
+    arrays::emit_array_slice_str(emitter);
     arrays::emit_array_slice_to_hash(emitter);
     arrays::emit_array_chunk_to_hash(emitter);
     arrays::emit_range(emitter);
@@ -139,6 +141,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_to_hash_reverse(emitter);
     arrays::emit_array_to_hash_unique(emitter);
     arrays::emit_hash_to_hash_reverse(emitter);
+    arrays::emit_hash_reindex(emitter);
     arrays::emit_hash_to_hash_unique(emitter);
     arrays::emit_array_replace(emitter);
     arrays::emit_array_replace_recursive(emitter);
@@ -161,6 +164,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_reduce(emitter);
     arrays::emit_array_reduce_str(emitter);
     arrays::emit_array_walk(emitter);
+    arrays::emit_array_walk_ref(emitter);
     arrays::emit_array_walk_recursive(emitter);
     arrays::emit_array_udiff_uintersect(emitter);
     arrays::emit_php_compare_slots(emitter);
@@ -192,6 +196,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_gc_note_child_ref(emitter);
     arrays::emit_gc_mark_reachable(emitter);
     arrays::emit_gc_collect_cycles(emitter);
+    arrays::emit_gc_safepoint(emitter);
     arrays::emit_mixed_clone(emitter);
     arrays::emit_mixed_from_value(emitter);
     arrays::emit_mixed_cast_array(emitter);

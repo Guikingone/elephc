@@ -18,6 +18,49 @@ use crate::errors::EvalStatus;
 use crate::eval_ir::EvalBinOp;
 use crate::value::RuntimeCellHandle;
 
+/// Which generated AOT name table `aot_member_names` should scan.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AotMemberNameKind {
+    /// `__elephc_eval_reflection_method_names`.
+    Method,
+}
+
+impl AotMemberNameKind {
+    /// A short, stable tag so one memo table can hold every kind without colliding.
+    ///
+    /// It occupies the `member_name` half of the memo key, which no real member name can equal:
+    /// the tags are chosen to be spellings PHP rejects as identifiers.
+    pub(crate) fn memo_tag(self) -> &'static str {
+        match self {
+            Self::Method => "#method",
+        }
+    }
+}
+
+/// Copies one generated AOT name array into owned strings and releases the array.
+///
+/// Kept as a free function so the trait default and the memoizing adapter override run the very
+/// same code on a miss; a second transcription of it would be free to drift.
+pub fn aot_member_names_uncached<V: RuntimeValueOps>(
+    values: &mut V,
+    kind: AotMemberNameKind,
+    class_name: &str,
+) -> Result<Vec<String>, EvalStatus> {
+    let array = match kind {
+        AotMemberNameKind::Method => values.reflection_method_names(class_name)?,
+    };
+    let len = values.array_len(array)?;
+    let mut names = Vec::with_capacity(len);
+    for position in 0..len {
+        let key = values.int(position as i64)?;
+        let value = values.array_get(array, key)?;
+        let bytes = values.string_bytes(value)?;
+        names.push(String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)?);
+    }
+    values.release(array)?;
+    Ok(names)
+}
+
 /// Runtime value hooks required by the EvalIR interpreter.
 pub trait RuntimeValueOps {
     /// Calls a typed boxed-cell runtime builtin when this implementation supports it.
@@ -264,12 +307,17 @@ pub trait RuntimeValueOps {
     }
 
     /// Materializes a synthetic `ReflectionAttribute` object through generated private-layout code.
+    ///
+    /// `rendered` is PHP's `ReflectionAttribute::__toString()` text. It is produced HERE rather
+    /// than in the emitted helper because it spells out every literal argument, and only the
+    /// interpreter holds those for a runtime-declared class.
     fn reflection_attribute_new(
         &mut self,
         name: &str,
         args: RuntimeCellHandle,
         target: u64,
         repeated: bool,
+        rendered: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
     /// Materializes a synthetic ReflectionClass/Method/Property object through generated private-layout code.
@@ -312,6 +360,27 @@ pub trait RuntimeValueOps {
         &mut self,
         class_name: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Returns generated AOT member names for one class as owned strings.
+    ///
+    /// Every caller of the handle-returning scanners above copies the array out and releases it
+    /// on the spot -- the handle is always a throwaway. Asking for the owned list instead lets
+    /// the generated-runtime adapter answer from a memo, because the tables being scanned are
+    /// read-only generated data and the answer is a constant of the program.
+    ///
+    /// The default is exactly what those callers wrote by hand, so an implementation whose
+    /// tables are NOT compile-time constant -- the test adapter, which registers class-likes as
+    /// a fixture runs -- keeps re-reading them.
+    fn aot_member_names(
+        &mut self,
+        kind: AotMemberNameKind,
+        class_name: &str,
+    ) -> Result<Vec<String>, EvalStatus>
+    where
+        Self: Sized,
+    {
+        aot_member_names_uncached(self, kind, class_name)
+    }
 
     /// Returns the generated program source file used for AOT reflection metadata.
     fn reflection_source_file(&mut self) -> Result<Option<String>, EvalStatus> {
@@ -845,6 +914,30 @@ pub(super) const EVAL_TAG_NULL: u64 = 8;
 pub(super) const EVAL_TAG_RESOURCE: u64 = 9;
 pub(super) const EVAL_TAG_CALLABLE: u64 = 10;
 pub(super) const EVAL_TAG_INVOKER_REF_CELL: u64 = 11;
+
+/// Boxes one raw native slot word, recovering an array's LIVE shape instead of trusting its tag.
+///
+/// A compiled `array` parameter is spelled with the packed runtime tag whatever it ends up
+/// holding, because the static type is the only thing the caller's frame layout records. A
+/// string-keyed hash forwarded through one would therefore be read back here as a packed array,
+/// and every key would be lost. The heap-kind byte on the payload is the only honest source for
+/// the shape, and `raw_heap_word_value` reads it.
+///
+/// The declared tag stays the answer for everything that carries no heap kind — a callable
+/// descriptor, an empty slot — so this narrows to the two array tags and keeps the old path as
+/// the fallback.
+pub(super) fn raw_slot_word_value(
+    source_tag: u64,
+    word: u64,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if word != 0 && matches!(source_tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        if let Ok(value) = values.raw_heap_word_value(word) {
+            return Ok(value);
+        }
+    }
+    values.raw_word_value(source_tag, word)
+}
 
 pub(super) const EVAL_REFLECTION_OWNER_CLASS: u64 = 0;
 pub(super) const EVAL_REFLECTION_OWNER_METHOD: u64 = 1;

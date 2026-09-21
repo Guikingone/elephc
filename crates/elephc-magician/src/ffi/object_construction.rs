@@ -311,13 +311,13 @@ unsafe fn eval_new_object_inner(
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
     match interpreter::execute_context_new_object_outcome(context, &name, args, &mut values) {
         Ok(outcome) => {
-            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            if crate::eval_trace::enabled() {
                 eprintln!("[elephc-eval-trace] phase=new_object_ok class={name:?}");
             }
             write_outcome(outcome, out).code()
         }
         Err(status) => {
-            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            if crate::eval_trace::enabled() {
                 eprintln!(
                     "[elephc-eval-trace] phase=new_object_error class={name:?} status={status:?}",
                 );
@@ -356,14 +356,14 @@ unsafe fn eval_try_new_object_from_global_autoload_contexts(
             source,
         ) {
             Ok(Some(outcome)) => {
-                if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                if crate::eval_trace::enabled() {
                     eprintln!("[elephc-eval-trace] phase=try_new_object_ok class={name:?}");
                 }
                 return write_outcome(outcome, out).code();
             }
             Ok(None) => {}
             Err(status) => {
-                if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                if crate::eval_trace::enabled() {
                     eprintln!(
                         "[elephc-eval-trace] phase=try_new_object_error class={name:?} status={status:?}",
                     );
@@ -373,32 +373,39 @@ unsafe fn eval_try_new_object_from_global_autoload_contexts(
         }
     }
 
-    let mut fallback_context = ElephcEvalContext::new();
-    crate::context::sync_global_eval_aot_metadata(&mut fallback_context);
-    let mut values = ElephcRuntimeOps::with_context(&fallback_context);
-    match execute_native_new_at(
-        &mut fallback_context,
-        name,
-        args.to_vec(),
-        &mut values,
-        source,
-    ) {
+    // HEAP, not the stack. A newly constructed eval object REGISTERS its context as its owner
+    // and reads that pointer back when it is destroyed -- which is long after this frame has
+    // returned. A stack context therefore handed the destructor an address whose storage had
+    // been reused: `dynamic_object_class()` then probed a HashMap made of stack garbage and
+    // spun forever, which is what hung the first `new` of an eval class inside any compiled
+    // method body. `__elephc_eval_context_free` defers the teardown while the object is alive,
+    // so releasing it here is right whether or not the object retained it.
+    let fallback_context = crate::ffi::context::__elephc_eval_context_new();
+    let Some(context) = (unsafe { fallback_context.as_mut() }) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    crate::context::sync_global_eval_aot_metadata(context);
+    let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+    let status = match execute_native_new_at(context, name, args.to_vec(), &mut values, source) {
         Ok(Some(outcome)) => {
-            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            if crate::eval_trace::enabled() {
                 eprintln!("[elephc-eval-trace] phase=try_new_object_ok class={name:?}");
             }
             write_outcome(outcome, out).code()
         }
         Ok(None) => -1,
         Err(status) => {
-            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            if crate::eval_trace::enabled() {
                 eprintln!(
                     "[elephc-eval-trace] phase=try_new_object_error class={name:?} status={status:?}",
                 );
             }
             status.code()
         }
-    }
+    };
+    drop(values);
+    unsafe { crate::ffi::context::__elephc_eval_context_free(fallback_context) };
+    status
 }
 
 /// Runs the dynamic object-construction probe ABI body after installing a panic boundary.
@@ -444,14 +451,14 @@ unsafe fn eval_try_new_object_inner(
     let outcome = execute_native_new_at(context, &name, args, &mut values, source);
     match outcome {
         Ok(Some(outcome)) => {
-            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            if crate::eval_trace::enabled() {
                 eprintln!("[elephc-eval-trace] phase=try_new_object_ok class={name:?}");
             }
             write_outcome(outcome, out).code()
         }
         Ok(None) => -1,
         Err(status) => {
-            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            if crate::eval_trace::enabled() {
                 eprintln!(
                     "[elephc-eval-trace] phase=try_new_object_error class={name:?} status={status:?}",
                 );
@@ -623,6 +630,18 @@ unsafe fn eval_method_call_inner(
             context.push_called_class_scope(called_class_scope.clone());
         }
     }
+    // A COMPILED frame with no eval context of its own publishes its lexical class here instead
+    // of forwarding scopes, and that class is the calling scope php would use: the call really
+    // is made from inside that class body. Without it a protected override -- Twig's
+    // `Template::yield()` calling `$this->doDisplay()` -- was refused "from global scope".
+    let native_caller_class = forwarded_scopes
+        .is_none()
+        .then(crate::context::current_native_caller_class)
+        .flatten()
+        .filter(|class_name| !class_name.is_empty());
+    if let Some(class_name) = &native_caller_class {
+        context.push_class_scope(class_name.clone());
+    }
     let arg_count = *arg_pack;
     let arg_ptrs = arg_pack.add(1) as *const *mut RuntimeCell;
     let args = if arg_count == 0 {
@@ -635,7 +654,7 @@ unsafe fn eval_method_call_inner(
     };
     clear_result(out);
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         let call_site = context.call_site();
         eprintln!(
             "[elephc-eval-trace] phase=method_call_start method={method:?} class_scope={:?} called_class_scope={:?} file={:?} line={}",
@@ -660,10 +679,13 @@ unsafe fn eval_method_call_inner(
             context.pop_class_scope();
         }
     }
+    if native_caller_class.is_some() {
+        context.pop_class_scope();
+    }
     match outcome {
         Ok(outcome) => write_outcome(outcome, out).code(),
         Err(status) => {
-            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            if crate::eval_trace::enabled() {
                 let call_site = context.call_site();
                 eprintln!(
                     "[elephc-eval-trace] phase=method_call_error method={method:?} status={status:?} class_scope={:?} called_class_scope={:?} file={:?} line={}",

@@ -281,6 +281,9 @@ pub(super) fn check_ref_assign(
     // it cannot hold.
     checker.ref_aliased_locals.insert(target.to_string());
     checker.ref_bound_locals.insert(target.to_string());
+    // A `=&` cell is not the boxed capture cell, so this name loses the widening exemption
+    // even if a by-reference capture had granted it earlier in the body.
+    checker.by_ref_capture_boxed_locals.remove(target);
     checker.record_ref_bound_alias_root(source);
     let result = match &source.kind {
         ExprKind::Variable(source_name) => {
@@ -944,11 +947,11 @@ fn resolve_static_receiver_class(
 
 /// Resolves class name using the available compile-time metadata.
 fn resolve_class_name<'a>(checker: &'a Checker, class_name: &str) -> Option<&'a str> {
-    let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
+    let wanted = class_name.trim_start_matches('\\');
     checker
         .classes
         .keys()
-        .find(|existing| php_symbol_key(existing) == class_key)
+        .find(|existing| existing.eq_ignore_ascii_case(wanted))
         .map(String::as_str)
 }
 
@@ -1402,6 +1405,15 @@ pub(super) fn check_list_unpack(
         // lowering already routes boxed Mixed sources through `__rt_mixed_array_get`, which
         // validates the runtime tag before reading the positional keys.
         PhpType::Mixed => PhpType::Mixed,
+        // `never` is NOT accepted here, deliberately. It arises from a loop-carried accumulator
+        // that is still `[]` where the loop is typed and only gains its shape from an append
+        // further down the same body — Symfony's `CompiledUrlMatcherDumper` iterates
+        // `foreach ($dynamicRegex as [$hostRx, $rx, $prefix])` over exactly that. Treating it as
+        // gradual makes the CHECKER accept the program, but the foreach still lowers against
+        // `array<never>` storage and reads every element as null: measured, the loop body printed
+        // nothing and warned "Trying to access array offset on null" where PHP prints the rows.
+        // The fix belongs in loop-carried storage widening, not here; until then the compile-time
+        // refusal is the truthful answer.
         // A union containing an array remains representation-boxed. The runtime reader applies
         // PHP's missing/non-array element semantics to whichever member arrives at execution.
         PhpType::Union(_) if array_arg_is_gradually_acceptable(&arr_ty) => PhpType::Mixed,
@@ -1525,6 +1537,17 @@ pub(super) fn check_global(
 /// Infers the type of the initializer expression, marks the variable as static in
 /// `checker.active_statics`, and inserts the inferred type into the local environment.
 /// Static variables retain their values across function calls.
+///
+/// The type this inserts is the CHECKER's view, used for acceptance and diagnostics. The STORAGE
+/// a `static` gets is decided separately, at the declaration's lowering, by
+/// `LoweringContext::required_static_local_storage_type` — and for an EMPTY ARRAY initializer the
+/// two deliberately differ. `static $q = [];` runs its initializer on the first call only while
+/// the declaration re-enters the environment on every call, so `array<never>` asserts, on call
+/// two, that nothing call one stored is there. `array<never>` element slots are ZERO WIDTH and
+/// codegen believes it: `array_shift($q)` lowered the removed payload as `mov x11, #0` and
+/// returned `NULL` while the array shrank correctly. The storage rule widens that to
+/// `array<mixed>`; the checker keeps the literal's own type, because every narrowing and
+/// acceptance rule the body relies on is already written against it.
 pub(super) fn check_static_var(
     checker: &mut Checker,
     name: &str,

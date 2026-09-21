@@ -21,6 +21,7 @@ mod getdate;
 mod gmdate;
 mod gmmktime;
 mod header;
+mod headers_sent;
 mod hrtime;
 mod http_response_code;
 mod localtime;

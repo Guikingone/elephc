@@ -375,9 +375,29 @@ fn emit_static_exception_at(
         class_name, message, suffix
     );
     let (fatal_label, fatal_len) = ctx.data.add_string(fatal_message.as_bytes());
+    let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
+
+    // Fifty-odd lines of this sequence are the same at every raise in the program; only the five
+    // values below differ. They become one interned record and the site becomes its address plus
+    // a call — `--counters` and `--instrument` keep the inlined form, and are what still tests it.
+    if let Some(helper) = crate::codegen::shared_static_throw::shared_throw_label(ctx) {
+        let record = crate::codegen::shared_static_throw::throw_descriptor(
+            ctx.data,
+            class_id_symbol,
+            &message_label,
+            message_len,
+            creation_line,
+            &fatal_label,
+            fatal_len,
+            crate::codegen::shared_static_throw::REPORT_UNCAUGHT,
+        );
+        abi::emit_symbol_address(ctx.emitter, abi::int_result_reg(ctx.emitter), &record);
+        abi::emit_call_label(ctx.emitter, helper);
+        return;
+    }
+
     emit_uncaught_exception_fatal_if_no_handler(ctx, &fatal_label, fatal_len);
 
-    let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             crate::codegen_support::throwable_layout::emit_allocate(ctx.emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);

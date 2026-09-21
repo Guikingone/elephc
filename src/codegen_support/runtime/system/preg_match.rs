@@ -23,6 +23,7 @@ pub(crate) fn emit_preg_match(emitter: &mut Emitter) {
         emit_preg_match_capture_linux_x86_64(emitter);
         emit_preg_offset_pair_linux_x86_64(emitter);
         emit_preg_offset_matches_linux_x86_64(emitter);
+        emit_preg_match_row_linux_x86_64(emitter);
         return;
     }
 
@@ -136,6 +137,7 @@ pub(crate) fn emit_preg_match(emitter: &mut Emitter) {
     emit_preg_match_capture_arm64(emitter);
     emit_preg_offset_pair_arm64(emitter);
     emit_preg_offset_matches_arm64(emitter);
+    emit_preg_match_row_arm64(emitter);
 }
 
 /// Emits ARM64 `__rt_preg_offset_pair`, PHP's `[capture text, byte offset]` element.
@@ -321,6 +323,216 @@ fn emit_preg_offset_matches_arm64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the matches hash in x0
 }
 
+/// Emits ARM64 `__rt_preg_match_row`, one `$matches` row for a single completed match.
+///
+/// This is the plain-string sibling of `__rt_preg_offset_matches`: same inputs, same
+/// name-before-numeric key order, but each value is the bare capture string PHP builds when
+/// `PREG_OFFSET_CAPTURE` is absent. `preg_match_all()` calls it once per match to build a
+/// `PREG_SET_ORDER` row; a pattern with no declared group name produces a dense list instead of
+/// a hash, exactly as `preg_match()` does, so the caller is told which storage it received.
+///
+/// Input:  x0=compiled pattern handle, x1=offset-pair vector, x2=highest capture index,
+///         x3=the bytes those offsets index into (the current search cursor, not the subject
+///         base, because `preg_match_all` re-runs PCRE on each remaining suffix)
+/// Output: x0=row storage pointer owned by the caller, x1=runtime value tag for it
+///         (4 = indexed array, 5 = hash-backed array)
+fn emit_preg_match_row_arm64(emitter: &mut Emitter) {
+    let handle_off = 0;
+    let pairs_off = handle_off + 8;
+    let max_group_off = pairs_off + 8;
+    let subject_off = max_group_off + 8;
+    let out_off = subject_off + 8;
+    let group_idx_off = out_off + 8;
+    let value_ptr_off = group_idx_off + 8;
+    let value_len_off = value_ptr_off + 8;
+    let name_ptr_off = value_len_off + 8;
+    let name_len_off = name_ptr_off + 8;
+    let key_lo_off = name_len_off + 8;
+    let key_hi_off = key_lo_off + 8;
+    let mark_ptr_off = key_hi_off + 8;
+    let mark_len_off = mark_ptr_off + 8;
+    // The literal `MARK` is built in this slot rather than interned: this emitter is handed no
+    // data section, and four immediate bytes cost less than threading one through.
+    let mark_key_off = mark_len_off + 8;
+    let stack_size = (mark_key_off + 8 + 48 + 15) & !15;
+    let save_off = stack_size - 16;
+
+    emitter.blank();
+    emitter.comment("--- runtime: preg_match_row ---");
+    emitter.label_global("__rt_preg_match_row");
+
+    emitter.instruction(&format!("sub sp, sp, #{}", stack_size));               // allocate the single-row construction frame
+    emitter.instruction(&format!("stp x29, x30, [sp, #{}]", save_off));         // save frame pointer and return address
+    emitter.instruction(&format!("add x29, sp, #{}", save_off));                // establish the row construction frame pointer
+    emitter.instruction(&format!("str x0, [sp, #{}]", handle_off));             // hold the compiled pattern for group-name lookups
+    emitter.instruction(&format!("str x1, [sp, #{}]", pairs_off));              // hold the populated offset-pair vector
+    emitter.instruction(&format!("str x2, [sp, #{}]", max_group_off));          // hold the highest capture index to materialize
+    emitter.instruction(&format!("str x3, [sp, #{}]", subject_off));            // hold the bytes the pair offsets index into
+    emitter.instruction(&format!("str xzr, [sp, #{}]", group_idx_off));         // start with capture index zero
+
+    // -- PCRE's MARK verb forces the hash row too: `MARK` is a STRING key --
+    // Read before anything else looks at the handle. `pcre2_get_mark()` reports the mark of the
+    // MOST RECENT match, and nothing between here and the match disturbs it, but a later helper
+    // could; taking it first makes that ordering explicit rather than incidental.
+    emitter.instruction(&format!("str xzr, [sp, #{}]", mark_ptr_off));          // clear the mark pointer before the query
+    emitter.instruction(&format!("str xzr, [sp, #{}]", mark_len_off));          // clear the mark length before the query
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // the match data hangs off the compiled pattern handle
+    emitter.instruction(&format!("add x1, sp, #{}", mark_ptr_off));             // receive the mark name pointer
+    emitter.instruction(&format!("add x2, sp, #{}", mark_len_off));             // receive the mark name length
+    emitter.bl_c("elephc_pcre2_v1_last_mark");                                  // ask PCRE2 which MARK the match passed
+
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // the name table lives inside the compiled pattern
+    emitter.bl_c("elephc_pcre2_v1_name_count");                                 // ask PCRE2 how many capture groups were named
+    emitter.instruction("cbnz x0, __rt_preg_match_row_named");                  // any named group forces the hash-backed row
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", mark_ptr_off));           // a pattern with no name can still carry a mark
+    emitter.instruction("cbnz x0, __rt_preg_match_row_named");                  // a mark alone forces the hash-backed row
+
+    // -- no declared name: PHP's row is a dense list of capture strings --
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", max_group_off));          // size the row from the emitted capture count
+    emitter.instruction("add x0, x0, #1");                                      // the highest index is inclusive
+    emitter.instruction("mov x1, #16");                                         // string arrays use pointer/length payload slots
+    emitter.instruction("bl __rt_array_new");                                   // allocate the indexed capture row
+    emitter.instruction(&format!("str x0, [sp, #{}]", out_off));                // save the row pointer across pushes
+
+    emitter.label("__rt_preg_match_row_list_loop");
+    emitter.instruction(&format!("ldr x12, [sp, #{}]", group_idx_off));         // reload current capture index
+    emitter.instruction(&format!("ldr x13, [sp, #{}]", max_group_off));         // reload highest capture index
+    emitter.instruction("cmp x12, x13");                                        // have all required captures been materialized?
+    emitter.instruction("b.gt __rt_preg_match_row_list_done");                  // finish after the highest populated capture
+    emitter.instruction("lsl x14, x12, #4");                                    // scale capture index by the fixed 16-byte pair stride
+    emitter.instruction(&format!("ldr x15, [sp, #{}]", pairs_off));             // load the offset-pair vector base
+    emitter.instruction("add x14, x15, x14");                                   // compute address of this offset pair
+    emitter.instruction("ldr x15, [x14]");                                      // load signed-64-bit capture start
+    emitter.instruction("ldr x16, [x14, #8]");                                  // load signed-64-bit capture end
+    emitter.instruction("cmp x15, #0");                                         // detect captures that did not participate
+    emitter.instruction("b.lt __rt_preg_match_row_list_empty");                 // an interior unmatched capture is PHP's empty string
+    emitter.instruction("sub x2, x16, x15");                                    // capture length = rm_eo - rm_so
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_off));            // reload the byte base these offsets index into
+    emitter.instruction("add x1, x1, x15");                                     // compute capture string pointer
+    emitter.instruction("b __rt_preg_match_row_list_push");                     // append this capture string
+    emitter.label("__rt_preg_match_row_list_empty");
+    emitter.instruction("mov x1, #0");                                          // an unmatched capture has a null pointer
+    emitter.instruction("mov x2, #0");                                          // an unmatched capture has zero length
+    emitter.label("__rt_preg_match_row_list_push");
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", out_off));                // reload the row receiver
+    emitter.instruction("bl __rt_array_push_str");                              // persist and append the capture string
+    emitter.instruction(&format!("str x0, [sp, #{}]", out_off));                // save a possibly-grown row pointer
+    emitter.instruction(&format!("ldr x12, [sp, #{}]", group_idx_off));         // reload capture index after helper calls
+    emitter.instruction("add x12, x12, #1");                                    // advance to next capture index
+    emitter.instruction(&format!("str x12, [sp, #{}]", group_idx_off));         // save next capture index
+    emitter.instruction("b __rt_preg_match_row_list_loop");                     // continue materializing captures
+
+    emitter.label("__rt_preg_match_row_list_done");
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", out_off));                // return the finished indexed row
+    emitter.instruction("mov x1, #4");                                          // runtime value tag 4 = indexed array
+    emitter.instruction("b __rt_preg_match_row_return");                        // share the single epilogue
+
+    // -- a compiled name table means PHP's row is an ordered hash, not a list --
+    emitter.label("__rt_preg_match_row_named");
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", max_group_off));          // size the table from the emitted capture count
+    emitter.instruction("add x0, x0, #1");                                      // the highest index is inclusive
+    emitter.instruction("lsl x0, x0, #1");                                      // reserve one bucket per numeric key and one per name
+    emitter.instruction("mov x1, #1");                                          // string-valued hash: the shape a PHP string array builds
+    emitter.instruction("bl __rt_hash_new");                                    // allocate the ordered hash carrying both key kinds
+    emitter.instruction(&format!("str x0, [sp, #{}]", out_off));                // save the row pointer across inserts
+
+    emitter.label("__rt_preg_match_row_named_loop");
+    emitter.instruction(&format!("ldr x12, [sp, #{}]", group_idx_off));         // reload current capture index
+    emitter.instruction(&format!("ldr x13, [sp, #{}]", max_group_off));         // reload highest capture index
+    emitter.instruction("cmp x12, x13");                                        // have all required captures been materialized?
+    emitter.instruction("b.gt __rt_preg_match_row_named_done");                 // finish after the highest populated capture
+    emitter.instruction("lsl x14, x12, #4");                                    // scale capture index by the fixed 16-byte pair stride
+    emitter.instruction(&format!("ldr x15, [sp, #{}]", pairs_off));             // load the offset-pair vector base
+    emitter.instruction("add x14, x15, x14");                                   // compute address of this offset pair
+    emitter.instruction("ldr x15, [x14]");                                      // load signed-64-bit capture start
+    emitter.instruction("ldr x13, [x14, #8]");                                  // load signed-64-bit capture end
+    emitter.instruction("cmp x15, #0");                                         // detect captures that did not participate
+    emitter.instruction("b.lt __rt_preg_match_row_named_empty");                // an interior unmatched capture is PHP's empty string
+    emitter.instruction("sub x2, x13, x15");                                    // capture length = rm_eo - rm_so
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_off));            // reload the byte base these offsets index into
+    emitter.instruction("add x1, x1, x15");                                     // compute capture string pointer
+    emitter.instruction("b __rt_preg_match_row_named_value");                   // insert this capture under every key it owns
+    emitter.label("__rt_preg_match_row_named_empty");
+    emitter.instruction("mov x1, #0");                                          // an unmatched capture has a null pointer
+    emitter.instruction("mov x2, #0");                                          // an unmatched capture has zero length
+    emitter.label("__rt_preg_match_row_named_value");
+    emitter.instruction(&format!("str x1, [sp, #{}]", value_ptr_off));          // hold the capture pointer across helper calls
+    emitter.instruction(&format!("str x2, [sp, #{}]", value_len_off));          // hold the capture length across helper calls
+
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // pass the compiled pattern holding the name table
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", group_idx_off));          // ask for this capture group's declared name
+    emitter.instruction(&format!("add x2, sp, #{}", name_ptr_off));             // receive the name pointer into pattern storage
+    emitter.instruction(&format!("add x3, sp, #{}", name_len_off));             // receive the name length
+    emitter.bl_c("elephc_pcre2_v1_group_name");                                 // resolve the name without exposing PCRE2 table layouts
+    emitter.instruction("cbnz w0, __rt_preg_match_row_named_int");              // an unnamed group only gets its numeric key
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", name_ptr_off));           // load the resolved group name pointer
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", name_len_off));           // load the resolved group name length
+    emitter.instruction("bl __rt_hash_normalize_key");                          // apply PHP's numeric-string key normalization
+    emitter.instruction(&format!("str x1, [sp, #{}]", key_lo_off));             // hold the normalized key across the value persist
+    emitter.instruction(&format!("str x2, [sp, #{}]", key_hi_off));             // hold the key discriminant across the value persist
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", value_ptr_off));          // reload the capture pointer to persist
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", value_len_off));          // reload the capture length to persist
+    emitter.instruction("bl __rt_str_persist");                                 // the named entry owns its own copy of the capture bytes
+    emitter.instruction("mov x3, x1");                                          // pass the persisted capture as the entry value payload
+    emitter.instruction("mov x4, x2");                                          // pass the persisted capture length
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", key_lo_off));             // reload the normalized key
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", key_hi_off));             // reload the key discriminant
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", out_off));                // reload the row hash pointer
+    emitter.instruction("mov x5, #1");                                          // runtime value tag 1 = string
+    emitter.instruction("bl __rt_hash_set");                                    // insert the named key ahead of its numeric twin
+    emitter.instruction(&format!("str x0, [sp, #{}]", out_off));                // save a possibly-grown row hash pointer
+
+    emitter.label("__rt_preg_match_row_named_int");
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", value_ptr_off));          // reload the capture pointer to persist
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", value_len_off));          // reload the capture length to persist
+    emitter.instruction("bl __rt_str_persist");                                 // the numeric entry owns its own copy of the capture bytes
+    emitter.instruction("mov x3, x1");                                          // pass the persisted capture as the entry value payload
+    emitter.instruction("mov x4, x2");                                          // pass the persisted capture length
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", group_idx_off));          // the capture index is the numeric key
+    emitter.instruction("mov x2, #-1");                                         // a key discriminant of -1 marks an integer key
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", out_off));                // reload the row hash pointer
+    emitter.instruction("mov x5, #1");                                          // runtime value tag 1 = string
+    emitter.instruction("bl __rt_hash_set");                                    // insert this capture under its numeric key
+    emitter.instruction(&format!("str x0, [sp, #{}]", out_off));                // save a possibly-grown row hash pointer
+    emitter.instruction(&format!("ldr x12, [sp, #{}]", group_idx_off));         // reload capture index after helper calls
+    emitter.instruction("add x12, x12, #1");                                    // advance to next capture index
+    emitter.instruction(&format!("str x12, [sp, #{}]", group_idx_off));         // save next capture index
+    emitter.instruction("b __rt_preg_match_row_named_loop");                    // continue materializing captures
+
+    emitter.label("__rt_preg_match_row_named_done");
+    // -- PHP appends `MARK` after every capture key, so it is inserted last --
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", mark_ptr_off));           // did the match pass a MARK verb?
+    emitter.instruction("cbz x9, __rt_preg_match_row_no_mark");                 // no mark: the row is already complete
+    emitter.instruction("movz w9, #0x414d");                                    // little-endian 'M','A'
+    emitter.instruction("movk w9, #0x4b52, lsl #16");                           // little-endian 'R','K'
+    emitter.instruction(&format!("str w9, [sp, #{}]", mark_key_off));           // materialize the literal key bytes
+    emitter.instruction(&format!("add x1, sp, #{}", mark_key_off));             // pass the key bytes
+    emitter.instruction("mov x2, #4");                                          // `MARK` is four bytes
+    emitter.instruction("bl __rt_hash_normalize_key");                          // apply PHP's numeric-string key normalization
+    emitter.instruction(&format!("str x1, [sp, #{}]", key_lo_off));             // hold the normalized key across the value persist
+    emitter.instruction(&format!("str x2, [sp, #{}]", key_hi_off));             // hold the key discriminant across the value persist
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", mark_ptr_off));           // the mark name is the entry value
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", mark_len_off));           // pass the mark name length
+    emitter.instruction("bl __rt_str_persist");                                 // the row owns its own copy of the mark bytes
+    emitter.instruction("mov x3, x1");                                          // pass the persisted mark as the entry value payload
+    emitter.instruction("mov x4, x2");                                          // pass the persisted mark length
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", key_lo_off));             // reload the normalized key
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", key_hi_off));             // reload the key discriminant
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", out_off));                // reload the row hash pointer
+    emitter.instruction("mov x5, #1");                                          // runtime value tag 1 = string
+    emitter.instruction("bl __rt_hash_set");                                    // insert `MARK` last, the way PHP orders it
+    emitter.instruction(&format!("str x0, [sp, #{}]", out_off));                // save a possibly-grown row hash pointer
+
+    emitter.label("__rt_preg_match_row_no_mark");
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", out_off));                // return the finished hash row
+    emitter.instruction("mov x1, #5");                                          // runtime value tag 5 = hash-backed array
+
+    emitter.label("__rt_preg_match_row_return");
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_off));         // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", stack_size));               // release the row construction frame
+    emitter.instruction("ret");                                                 // return the row pointer and its storage tag
+}
+
 /// Emits ARM64 `__rt_preg_match_capture`, returning the match flag and `$matches` array.
 fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     let handle_off = 0;
@@ -345,7 +557,11 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     let key_lo_off = value_len_off + 8;
     let key_hi_off = key_lo_off + 8;
     let php_flags_off = key_hi_off + 8;
-    let stack_size = (php_flags_off + 8 + 48 + 15) & !15;
+    let mark_ptr_off = php_flags_off + 8;
+    let mark_len_off = mark_ptr_off + 8;
+    // `MARK` is built in this slot rather than interned: this emitter is handed no data section.
+    let mark_key_off = mark_len_off + 8;
+    let stack_size = (mark_key_off + 8 + 48 + 15) & !15;
     let save_off = stack_size - 16;
 
     emitter.blank();
@@ -451,9 +667,21 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.label("__rt_preg_match_capture_plain");
 
     // -- a compiled name table means PHP's $matches is an ordered hash, not a list --
+    // A MARK verb has the same consequence for a different reason: `MARK` is a STRING key, and an
+    // indexed row cannot hold one. Symfony's dumped route matcher is built on this -- each
+    // alternative ends in `(*:<offset>)` and the matcher indexes `$this->dynamicRoutes` by it.
+    emitter.instruction(&format!("str xzr, [sp, #{}]", mark_ptr_off));          // clear the mark pointer before the query
+    emitter.instruction(&format!("str xzr, [sp, #{}]", mark_len_off));          // clear the mark length before the query
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // the match data hangs off the compiled pattern handle
+    emitter.instruction(&format!("add x1, sp, #{}", mark_ptr_off));             // receive the mark name pointer
+    emitter.instruction(&format!("add x2, sp, #{}", mark_len_off));             // receive the mark name length
+    emitter.bl_c("elephc_pcre2_v1_last_mark");                                  // ask PCRE2 which MARK the match passed
+
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // the name table lives inside the compiled pattern
     emitter.bl_c("elephc_pcre2_v1_name_count");                                 // ask PCRE2 how many capture groups were named
     emitter.instruction("cbnz x0, __rt_preg_match_capture_named");              // any named group forces the hash-backed matches array
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", mark_ptr_off));           // a pattern with no name can still carry a mark
+    emitter.instruction("cbnz x0, __rt_preg_match_capture_named");              // a mark alone forces the hash-backed matches array
 
     // -- allocate and fill matches array --
     emitter.instruction(&format!("ldr x0, [sp, #{}]", nmatch_off));             // allocate enough slots for every compiled capture
@@ -502,7 +730,7 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x12, [sp, #{}]", group_idx_off));         // reload current capture index
     emitter.instruction(&format!("ldr x13, [sp, #{}]", max_group_off));         // reload highest capture index
     emitter.instruction("cmp x12, x13");                                        // have all required captures been materialized?
-    emitter.instruction("b.gt __rt_preg_match_capture_success");                // finish after the highest populated capture
+    emitter.instruction("b.gt __rt_preg_match_capture_mark");                   // every capture is in; append `MARK` if the match set one
     emitter.instruction("lsl x14, x12, #4");                                    // scale capture index by the fixed 16-byte pair stride
     emitter.instruction(&format!("ldr x15, [sp, #{}]", regmatches_ptr_off));    // load dynamic offset-pair buffer base
     emitter.instruction("add x14, x15, x14");                                   // compute address of this offset pair
@@ -558,6 +786,30 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction("add x12, x12, #1");                                    // advance to next capture index
     emitter.instruction(&format!("str x12, [sp, #{}]", group_idx_off));         // save next capture index
     emitter.instruction("b __rt_preg_match_capture_named_loop");                // continue materializing captures
+
+    // -- PHP appends `MARK` after every capture key, so it is inserted last --
+    emitter.label("__rt_preg_match_capture_mark");
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", mark_ptr_off));           // did the match pass a MARK verb?
+    emitter.instruction("cbz x9, __rt_preg_match_capture_success");             // no mark: the array is already complete
+    emitter.instruction("movz w9, #0x414d");                                    // little-endian 'M','A'
+    emitter.instruction("movk w9, #0x4b52, lsl #16");                           // little-endian 'R','K'
+    emitter.instruction(&format!("str w9, [sp, #{}]", mark_key_off));           // materialize the literal key bytes
+    emitter.instruction(&format!("add x1, sp, #{}", mark_key_off));             // pass the key bytes
+    emitter.instruction("mov x2, #4");                                          // `MARK` is four bytes
+    emitter.instruction("bl __rt_hash_normalize_key");                          // apply PHP's numeric-string key normalization
+    emitter.instruction(&format!("str x1, [sp, #{}]", key_lo_off));             // hold the normalized key across the value persist
+    emitter.instruction(&format!("str x2, [sp, #{}]", key_hi_off));             // hold the key discriminant across the value persist
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", mark_ptr_off));           // the mark name is the entry value
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", mark_len_off));           // pass the mark name length
+    emitter.instruction("bl __rt_str_persist");                                 // the array owns its own copy of the mark bytes
+    emitter.instruction("mov x3, x1");                                          // pass the persisted mark as the entry value payload
+    emitter.instruction("mov x4, x2");                                          // pass the persisted mark length
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", key_lo_off));             // reload the normalized key
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", key_hi_off));             // reload the key discriminant
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", matches_array_off));      // reload the matches hash pointer
+    emitter.instruction("mov x5, #1");                                          // runtime value tag 1 = string
+    emitter.instruction("bl __rt_hash_set");                                    // insert `MARK` last, the way PHP orders it
+    emitter.instruction(&format!("str x0, [sp, #{}]", matches_array_off));      // save a possibly-grown matches hash pointer
 
     emitter.label("__rt_preg_match_capture_success");
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload the pattern now every group name has been read
@@ -712,7 +964,10 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     let key_lo_off = value_len_off + 8;
     let key_hi_off = key_lo_off + 8;
     let php_flags_off = key_hi_off + 8;
-    let stack_size = (php_flags_off + 8 + 32 + 15) & !15;
+    let mark_ptr_off = php_flags_off + 8;
+    let mark_len_off = mark_ptr_off + 8;
+    let mark_key_off = mark_len_off + 8;
+    let stack_size = (mark_key_off + 8 + 32 + 15) & !15;
 
     emitter.blank();
     emitter.comment("--- runtime: preg_match_capture ---");
@@ -811,10 +1066,21 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_preg_match_capture_plain_linux_x86_64");
 
     // -- a compiled name table means PHP's $matches is an ordered hash, not a list --
+    // A MARK verb has the same consequence for a different reason (see the ARM64 twin).
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", mark_ptr_off)); // clear the mark pointer before the query
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", mark_len_off)); // clear the mark length before the query
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // the match data hangs off the compiled pattern handle
+    emitter.instruction(&format!("lea rsi, [rsp + {}]", mark_ptr_off));         // receive the mark name pointer
+    emitter.instruction(&format!("lea rdx, [rsp + {}]", mark_len_off));         // receive the mark name length
+    emitter.bl_c("elephc_pcre2_v1_last_mark");                                  // ask PCRE2 which MARK the match passed
+
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // the name table lives inside the compiled pattern
     emitter.bl_c("elephc_pcre2_v1_name_count");                                 // ask PCRE2 how many capture groups were named
     emitter.instruction("test rax, rax");                                       // did the pattern declare any group name?
     emitter.instruction("jnz __rt_preg_match_capture_named_linux_x86_64");      // any named group forces the hash-backed matches array
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", mark_ptr_off)); // a pattern with no name can still carry a mark
+    emitter.instruction("test rax, rax");                                       // did the match pass a MARK verb?
+    emitter.instruction("jnz __rt_preg_match_capture_named_linux_x86_64");      // a mark alone forces the hash-backed matches array
 
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", nmatch_off)); // allocate enough slots for every compiled capture
     emitter.instruction("mov rsi, 16");                                         // string arrays use pointer/length payload slots
@@ -864,7 +1130,7 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", group_idx_off)); // reload current capture index
     emitter.instruction(&format!("mov r8, QWORD PTR [rsp + {}]", max_group_off)); // reload highest capture index
     emitter.instruction("cmp r9, r8");                                          // have all required captures been materialized?
-    emitter.instruction("jg __rt_preg_match_capture_success_linux_x86_64");     // finish after the highest populated capture
+    emitter.instruction("jg __rt_preg_match_capture_mark_linux_x86_64");        // every capture is in; append `MARK` if the match set one
     emitter.instruction("mov r10, r9");                                         // copy capture index before scaling
     emitter.instruction("shl r10, 4");                                          // scale capture index by the fixed 16-byte pair stride
     emitter.instruction(&format!("add r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // compute address of this offset pair
@@ -922,6 +1188,29 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r9, 1");                                           // advance to next capture index
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", group_idx_off)); // save next capture index
     emitter.instruction("jmp __rt_preg_match_capture_named_loop_linux_x86_64"); // continue materializing captures
+
+    // -- PHP appends `MARK` after every capture key, so it is inserted last --
+    emitter.label("__rt_preg_match_capture_mark_linux_x86_64");
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", mark_ptr_off)); // did the match pass a MARK verb?
+    emitter.instruction("test rax, rax");                                       // no mark leaves the array as it stands
+    emitter.instruction("jz __rt_preg_match_capture_success_linux_x86_64");     // skip straight to the epilogue
+    emitter.instruction(&format!("mov DWORD PTR [rsp + {}], 0x4b52414d", mark_key_off)); // little-endian 'M','A','R','K'
+    emitter.instruction(&format!("lea rax, [rsp + {}]", mark_key_off));         // pass the key bytes
+    emitter.instruction("mov rdx, 4");                                          // `MARK` is four bytes
+    emitter.instruction("call __rt_hash_normalize_key");                        // apply PHP's numeric-string key normalization
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", key_lo_off)); // hold the normalized key across the value persist
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", key_hi_off)); // hold the key discriminant across the value persist
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", mark_ptr_off)); // the mark name is the entry value
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", mark_len_off)); // pass the mark name length
+    emitter.instruction("call __rt_str_persist");                               // the array owns its own copy of the mark bytes
+    emitter.instruction("mov rcx, rax");                                        // pass the persisted mark as the entry value payload
+    emitter.instruction("mov r8, rdx");                                         // pass the persisted mark length
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", key_lo_off)); // reload the normalized key
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", key_hi_off)); // reload the key discriminant
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", matches_array_off)); // reload the matches hash pointer
+    emitter.instruction("mov r9d, 1");                                          // runtime value tag 1 = string
+    emitter.instruction("call __rt_hash_set");                                  // insert `MARK` last, the way PHP orders it
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off)); // save a possibly-grown matches hash pointer
 
     emitter.label("__rt_preg_match_capture_success_linux_x86_64");
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload the pattern now every group name has been read
@@ -1136,6 +1425,207 @@ fn emit_preg_offset_matches_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("add rsp, {}", stack_size));                   // release the offset-capture construction storage
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the matches hash in rax
+}
+
+/// Emits Linux x86_64 `__rt_preg_match_row`; see the ARM64 sibling for the contract.
+///
+/// Input:  rdi=compiled pattern handle, rsi=offset-pair vector, rdx=highest capture index,
+///         rcx=the bytes those offsets index into
+/// Output: rax=row storage pointer owned by the caller, rdx=runtime value tag
+///         (4 = indexed array, 5 = hash-backed array)
+fn emit_preg_match_row_linux_x86_64(emitter: &mut Emitter) {
+    let handle_off = 0;
+    let pairs_off = handle_off + 8;
+    let max_group_off = pairs_off + 8;
+    let subject_off = max_group_off + 8;
+    let out_off = subject_off + 8;
+    let group_idx_off = out_off + 8;
+    let value_ptr_off = group_idx_off + 8;
+    let value_len_off = value_ptr_off + 8;
+    let name_ptr_off = value_len_off + 8;
+    let name_len_off = name_ptr_off + 8;
+    let key_lo_off = name_len_off + 8;
+    let key_hi_off = key_lo_off + 8;
+    let mark_ptr_off = key_hi_off + 8;
+    let mark_len_off = mark_ptr_off + 8;
+    let mark_key_off = mark_len_off + 8;
+    let stack_size = (mark_key_off + 8 + 32 + 15) & !15;
+
+    emitter.blank();
+    emitter.comment("--- runtime: preg_match_row ---");
+    emitter.label_global("__rt_preg_match_row");
+
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving row storage
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the row slots
+    emitter.instruction(&format!("sub rsp, {}", stack_size));                   // reserve local storage for the row and per-capture state
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdi", handle_off)); // hold the compiled pattern for group-name lookups
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rsi", pairs_off));  // hold the populated offset-pair vector
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", max_group_off)); // hold the highest capture index to materialize
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", subject_off)); // hold the bytes the pair offsets index into
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", group_idx_off)); // start with capture index zero
+
+    // -- PCRE's MARK verb forces the hash row too: `MARK` is a STRING key (see the ARM64 twin) --
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", mark_ptr_off)); // clear the mark pointer before the query
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", mark_len_off)); // clear the mark length before the query
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // the match data hangs off the compiled pattern handle
+    emitter.instruction(&format!("lea rsi, [rsp + {}]", mark_ptr_off));         // receive the mark name pointer
+    emitter.instruction(&format!("lea rdx, [rsp + {}]", mark_len_off));         // receive the mark name length
+    emitter.bl_c("elephc_pcre2_v1_last_mark");                                  // ask PCRE2 which MARK the match passed
+
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // the name table lives inside the compiled pattern
+    emitter.bl_c("elephc_pcre2_v1_name_count");                                 // ask PCRE2 how many capture groups were named
+    emitter.instruction("test rax, rax");                                       // did the pattern declare any group name?
+    emitter.instruction("jnz __rt_preg_match_row_named_linux_x86_64");          // any named group forces the hash-backed row
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", mark_ptr_off)); // a pattern with no name can still carry a mark
+    emitter.instruction("test rax, rax");                                       // did the match pass a MARK verb?
+    emitter.instruction("jnz __rt_preg_match_row_named_linux_x86_64");          // a mark alone forces the hash-backed row
+
+    // -- no declared name: PHP's row is a dense list of capture strings --
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", max_group_off)); // size the row from the emitted capture count
+    emitter.instruction("add rdi, 1");                                          // the highest index is inclusive
+    emitter.instruction("mov rsi, 16");                                         // string arrays use pointer/length payload slots
+    emitter.instruction("call __rt_array_new");                                 // allocate the indexed capture row
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", out_off));    // save the row pointer across pushes
+
+    emitter.label("__rt_preg_match_row_list_loop_linux_x86_64");
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", group_idx_off)); // reload current capture index
+    emitter.instruction(&format!("mov r8, QWORD PTR [rsp + {}]", max_group_off)); // reload highest capture index
+    emitter.instruction("cmp r9, r8");                                          // have all required captures been materialized?
+    emitter.instruction("jg __rt_preg_match_row_list_done_linux_x86_64");       // finish after the highest populated capture
+    emitter.instruction("mov r10, r9");                                         // copy capture index before scaling
+    emitter.instruction("shl r10, 4");                                          // scale capture index by the fixed 16-byte pair stride
+    emitter.instruction(&format!("add r10, QWORD PTR [rsp + {}]", pairs_off));  // compute address of this offset pair
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // load signed-64-bit capture start
+    emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // load signed-64-bit capture end
+    emitter.instruction("cmp r11, 0");                                          // detect captures that did not participate
+    emitter.instruction("jl __rt_preg_match_row_list_empty_linux_x86_64");      // an interior unmatched capture is PHP's empty string
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_off)); // reload the byte base these offsets index into
+    emitter.instruction("add rsi, r11");                                        // compute capture string pointer
+    emitter.instruction("mov rdx, rcx");                                        // copy capture end offset before subtracting start
+    emitter.instruction("sub rdx, r11");                                        // capture length = rm_eo - rm_so
+    emitter.instruction("jmp __rt_preg_match_row_list_push_linux_x86_64");      // append this capture string
+    emitter.label("__rt_preg_match_row_list_empty_linux_x86_64");
+    emitter.instruction("xor esi, esi");                                        // an unmatched capture has a null pointer
+    emitter.instruction("xor edx, edx");                                        // an unmatched capture has zero length
+    emitter.label("__rt_preg_match_row_list_push_linux_x86_64");
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", out_off));    // reload the row receiver
+    emitter.instruction("call __rt_array_push_str");                            // persist and append the capture string
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", out_off));    // save a possibly-grown row pointer
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", group_idx_off)); // reload capture index after helper calls
+    emitter.instruction("add r9, 1");                                           // advance to next capture index
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", group_idx_off)); // save next capture index
+    emitter.instruction("jmp __rt_preg_match_row_list_loop_linux_x86_64");      // continue materializing captures
+
+    emitter.label("__rt_preg_match_row_list_done_linux_x86_64");
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", out_off));    // return the finished indexed row
+    emitter.instruction("mov edx, 4");                                          // runtime value tag 4 = indexed array
+    emitter.instruction("jmp __rt_preg_match_row_return_linux_x86_64");         // share the single epilogue
+
+    // -- a compiled name table means PHP's row is an ordered hash, not a list --
+    emitter.label("__rt_preg_match_row_named_linux_x86_64");
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", max_group_off)); // size the table from the emitted capture count
+    emitter.instruction("add rdi, 1");                                          // the highest index is inclusive
+    emitter.instruction("shl rdi, 1");                                          // reserve one bucket per numeric key and one per name
+    emitter.instruction("mov esi, 1");                                          // string-valued hash: the shape a PHP string array builds
+    emitter.instruction("call __rt_hash_new");                                  // allocate the ordered hash carrying both key kinds
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", out_off));    // save the row pointer across inserts
+
+    emitter.label("__rt_preg_match_row_named_loop_linux_x86_64");
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", group_idx_off)); // reload current capture index
+    emitter.instruction(&format!("mov r8, QWORD PTR [rsp + {}]", max_group_off)); // reload highest capture index
+    emitter.instruction("cmp r9, r8");                                          // have all required captures been materialized?
+    emitter.instruction("jg __rt_preg_match_row_named_done_linux_x86_64");      // finish after the highest populated capture
+    emitter.instruction("mov r10, r9");                                         // copy capture index before scaling
+    emitter.instruction("shl r10, 4");                                          // scale capture index by the fixed 16-byte pair stride
+    emitter.instruction(&format!("add r10, QWORD PTR [rsp + {}]", pairs_off));  // compute address of this offset pair
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // load signed-64-bit capture start
+    emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // load signed-64-bit capture end
+    emitter.instruction("cmp r11, 0");                                          // detect captures that did not participate
+    emitter.instruction("jl __rt_preg_match_row_named_empty_linux_x86_64");     // an interior unmatched capture is PHP's empty string
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_off)); // reload the byte base these offsets index into
+    emitter.instruction("add rsi, r11");                                        // compute capture string pointer
+    emitter.instruction("mov rdx, rcx");                                        // copy capture end offset before subtracting start
+    emitter.instruction("sub rdx, r11");                                        // capture length = rm_eo - rm_so
+    emitter.instruction("jmp __rt_preg_match_row_named_value_linux_x86_64");    // insert this capture under every key it owns
+    emitter.label("__rt_preg_match_row_named_empty_linux_x86_64");
+    emitter.instruction("xor esi, esi");                                        // an unmatched capture has a null pointer
+    emitter.instruction("xor edx, edx");                                        // an unmatched capture has zero length
+    emitter.label("__rt_preg_match_row_named_value_linux_x86_64");
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rsi", value_ptr_off)); // hold the capture pointer across helper calls
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", value_len_off)); // hold the capture length across helper calls
+
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // pass the compiled pattern holding the name table
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", group_idx_off)); // ask for this capture group's declared name
+    emitter.instruction(&format!("lea rdx, [rsp + {}]", name_ptr_off));         // receive the name pointer into pattern storage
+    emitter.instruction(&format!("lea rcx, [rsp + {}]", name_len_off));         // receive the name length
+    emitter.bl_c("elephc_pcre2_v1_group_name");                                 // resolve the name without exposing PCRE2 table layouts
+    emitter.instruction("test eax, eax");                                       // did this capture group carry a declared name?
+    emitter.instruction("jnz __rt_preg_match_row_named_int_linux_x86_64");      // an unnamed group only gets its numeric key
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", name_ptr_off)); // load the resolved group name pointer
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", name_len_off)); // load the resolved group name length
+    emitter.instruction("call __rt_hash_normalize_key");                        // apply PHP's numeric-string key normalization
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", key_lo_off)); // hold the normalized key across the value persist
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", key_hi_off)); // hold the key discriminant across the value persist
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", value_ptr_off)); // reload the capture pointer to persist
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", value_len_off)); // reload the capture length to persist
+    emitter.instruction("call __rt_str_persist");                               // the named entry owns its own copy of the capture bytes
+    emitter.instruction("mov rcx, rax");                                        // pass the persisted capture as the entry value payload
+    emitter.instruction("mov r8, rdx");                                         // pass the persisted capture length
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", key_lo_off)); // reload the normalized key
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", key_hi_off)); // reload the key discriminant
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", out_off));    // reload the row hash pointer
+    emitter.instruction("mov r9d, 1");                                          // runtime value tag 1 = string
+    emitter.instruction("call __rt_hash_set");                                  // insert the named key ahead of its numeric twin
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", out_off));    // save a possibly-grown row hash pointer
+
+    emitter.label("__rt_preg_match_row_named_int_linux_x86_64");
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", value_ptr_off)); // reload the capture pointer to persist
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", value_len_off)); // reload the capture length to persist
+    emitter.instruction("call __rt_str_persist");                               // the numeric entry owns its own copy of the capture bytes
+    emitter.instruction("mov rcx, rax");                                        // pass the persisted capture as the entry value payload
+    emitter.instruction("mov r8, rdx");                                         // pass the persisted capture length
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", group_idx_off)); // the capture index is the numeric key
+    emitter.instruction("mov rdx, -1");                                         // a key discriminant of -1 marks an integer key
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", out_off));    // reload the row hash pointer
+    emitter.instruction("mov r9d, 1");                                          // runtime value tag 1 = string
+    emitter.instruction("call __rt_hash_set");                                  // insert this capture under its numeric key
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", out_off));    // save a possibly-grown row hash pointer
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", group_idx_off)); // reload capture index after helper calls
+    emitter.instruction("add r9, 1");                                           // advance to next capture index
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", group_idx_off)); // save next capture index
+    emitter.instruction("jmp __rt_preg_match_row_named_loop_linux_x86_64");     // continue materializing captures
+
+    emitter.label("__rt_preg_match_row_named_done_linux_x86_64");
+    // -- PHP appends `MARK` after every capture key, so it is inserted last --
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", mark_ptr_off)); // did the match pass a MARK verb?
+    emitter.instruction("test rax, rax");                                       // no mark leaves the row as it stands
+    emitter.instruction("jz __rt_preg_match_row_no_mark_linux_x86_64");         // skip straight to the epilogue
+    emitter.instruction(&format!("mov DWORD PTR [rsp + {}], 0x4b52414d", mark_key_off)); // little-endian 'M','A','R','K'
+    emitter.instruction(&format!("lea rax, [rsp + {}]", mark_key_off));         // pass the key bytes
+    emitter.instruction("mov rdx, 4");                                          // `MARK` is four bytes
+    emitter.instruction("call __rt_hash_normalize_key");                        // apply PHP's numeric-string key normalization
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", key_lo_off)); // hold the normalized key across the value persist
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", key_hi_off)); // hold the key discriminant across the value persist
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", mark_ptr_off)); // the mark name is the entry value
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", mark_len_off)); // pass the mark name length
+    emitter.instruction("call __rt_str_persist");                               // the row owns its own copy of the mark bytes
+    emitter.instruction("mov rcx, rax");                                        // pass the persisted mark as the entry value payload
+    emitter.instruction("mov r8, rdx");                                         // pass the persisted mark length
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", key_lo_off)); // reload the normalized key
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", key_hi_off)); // reload the key discriminant
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", out_off));    // reload the row hash pointer
+    emitter.instruction("mov r9d, 1");                                          // runtime value tag 1 = string
+    emitter.instruction("call __rt_hash_set");                                  // insert `MARK` last, the way PHP orders it
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", out_off));    // save a possibly-grown row hash pointer
+
+    emitter.label("__rt_preg_match_row_no_mark_linux_x86_64");
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", out_off));    // return the finished hash row
+    emitter.instruction("mov edx, 5");                                          // runtime value tag 5 = hash-backed array
+
+    emitter.label("__rt_preg_match_row_return_linux_x86_64");
+    emitter.instruction(&format!("add rsp, {}", stack_size));                   // release the row construction storage
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the row pointer and its storage tag
 }
 
 #[cfg(test)]

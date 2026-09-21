@@ -226,6 +226,12 @@ fn native_callable_type_variant(
         "array" => EvalParameterTypeVariant::Array,
         "bool" => EvalParameterTypeVariant::Bool,
         "callable" => EvalParameterTypeVariant::Callable,
+        // PHP 8.2 value types, mapped exactly as the eval parser maps them. The two sides compare
+        // variants directly when an eval class implements an AOT interface, so a name spelled one
+        // way here and another way there makes an identical signature look incompatible — which is
+        // what stopped `ControllerResolver::getController(): callable|false` from declaring.
+        "false" => EvalParameterTypeVariant::False,
+        "true" => EvalParameterTypeVariant::True,
         "float" => EvalParameterTypeVariant::Float,
         "int" => EvalParameterTypeVariant::Int,
         "iterable" => EvalParameterTypeVariant::Iterable,

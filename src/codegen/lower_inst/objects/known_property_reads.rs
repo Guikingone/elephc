@@ -112,7 +112,16 @@ fn private_declared_property_slot(
     if property_abstract_receiver(ctx, object, property)?.is_some() {
         return Ok(false);
     }
-    let slot = resolve_property_slot(ctx, object, property, inst)?;
+    // A receiver with no slot for this property is not an answer of "no" to this question — it
+    // has no answer at all, and the routes below (stdClass, allow-dynamic, magic `__get`) are
+    // where it belongs. Propagating the resolver's error here refused the whole read before they
+    // were reached: `(object) ['vars' => []]` then `$state->vars` died with "prop_get for dynamic
+    // or missing property stdClass::$vars" even though `lower_native_prop_get_nonnull` has a
+    // stdClass arm three lines further on. A property that is genuinely missing still reports
+    // that, from the resolve call at the end of that function.
+    let Ok(slot) = resolve_property_slot(ctx, object, property, inst) else {
+        return Ok(false);
+    };
     if !slot.is_declared {
         return Ok(false);
     }
@@ -343,6 +352,14 @@ pub(in crate::codegen::lower_inst) fn lower_prop_initialized(
     let property = property_name_immediate(ctx, inst)?.to_string();
     if let Some((class_name, true)) = nullable_object_receiver_class(ctx, object)? {
         return lower_nullable_prop_initialized(ctx, inst, object, &class_name, &property);
+    }
+    // A receiver with no single object layout — an untyped parameter, a `mixed` local, a union of
+    // two classes — has no slot to read here; its class is settled by runtime dispatch instead.
+    if !matches!(
+        ctx.value_php_type(object)?.codegen_repr(),
+        PhpType::Object(_)
+    ) {
+        return lower_mixed_prop_initialized(ctx, inst, object, &property);
     }
     let slot = resolve_property_slot(ctx, object, &property, inst)?;
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);

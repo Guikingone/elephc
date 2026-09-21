@@ -420,6 +420,7 @@ mod tests {
             property_declared_slots: Vec::new(),
             final_properties: HashSet::new(),
             readonly_properties: HashSet::new(),
+            backed_hooked_properties: HashSet::new(),
             reference_properties: HashSet::new(),
             owned_reference_properties: HashSet::new(),
             promoted_properties: HashSet::new(),

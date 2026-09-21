@@ -47,6 +47,10 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     }
     match &from {
         PhpType::Array(_) | PhpType::AssocArray { .. } => {}
+        // A gradual `$from` is what an untyped helper hands back, and the backend dispatches on
+        // the runtime tag for it. Twig's `CoreExtension::replace()` does
+        // `strtr($str ?? '', self::toArray($from))`, where `toArray()` is untyped.
+        ty if gradual_pairs_type(ty) => {}
         _ => {
             return Err(CompileError::new(
                 cx.span,
@@ -55,6 +59,21 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         }
     }
     Ok(PhpType::Str)
+}
+
+/// Returns whether `$from`'s type leaves the array/string choice to run time.
+///
+/// `Mixed` always does. A union qualifies only when one of its members IS an array, so a union of
+/// scalars keeps php-src's `TypeError` wording at compile time rather than deferring a call that
+/// can never be the two-argument form.
+fn gradual_pairs_type(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Mixed => true,
+        PhpType::Union(members) => members
+            .iter()
+            .any(|member| matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. })),
+        _ => false,
+    }
 }
 
 /// Returns the `$from` argument expression from a call's source-order argument list.

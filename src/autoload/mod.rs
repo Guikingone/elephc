@@ -157,14 +157,21 @@ pub fn run_collecting_included_with_defines_and_sources(
             if let Some(path) = resolve_class(&fqn, registry) {
                 let canonical = path.canonicalize().unwrap_or(path);
                 if included.insert(canonical.clone()) {
-                    let (loaded, loaded_includes, loaded_sources) =
-                        load_autoloaded_file(&canonical, base_dir, defines)?;
-                    if !autoload_target_can_bind(&loaded, &fqn, &declared, registry) {
-                        continue;
+                    let bundle = load_autoloaded_bundle(
+                        &fqn,
+                        &canonical,
+                        base_dir,
+                        defines,
+                        registry,
+                        &declared,
+                        &mut included,
+                        &mut nested_includes,
+                        &mut declaration_sources,
+                        0,
+                    )?;
+                    if !bundle.is_empty() {
+                        insertions.push((stmt_idx, bundle));
                     }
-                    nested_includes.extend(loaded_includes);
-                    declaration_sources.extend(loaded_sources)?;
-                    insertions.push((stmt_idx, loaded));
                 }
             }
         }
@@ -183,6 +190,62 @@ pub fn run_collecting_included_with_defines_and_sources(
     let mut loaded_files: Vec<PathBuf> = included.into_iter().collect();
     loaded_files.sort();
     Ok((program, loaded_files, declaration_sources))
+}
+
+/// Returns the class-like names the program only ever hands to an existence probe.
+///
+/// See [`walk::probe_only_class_names`]: these are the classes a closed-world build carries
+/// solely so `class_exists()` can answer, and which `class_exists($name, false)` must therefore
+/// still report as NOT LOADED.
+pub fn probe_only_class_names(program: &Program) -> std::collections::HashSet<String> {
+    walk::probe_only_class_names(program)
+}
+
+/// Records what the AUTOLOAD PASS already did, so the runtime does not try to do it again.
+///
+/// Two facts, both derived from the same pass and both needed by the generated program:
+///
+/// - `preincluded_sources`: the compiler opened these files and spliced their declarations in,
+///   which is the inclusion php's autoloader would have performed. An `include_once` reaching
+///   one of them at runtime must answer "already included" instead of redeclaring everything.
+/// - `deferred_class_loads`: the classes among them that the program only ever hands to an
+///   existence probe. php would never have loaded those, so `class_exists($n, false)` has to
+///   keep reporting them as not loaded until a probe with autoloading asks for one.
+///
+/// Every compile path has to call this -- the CLI pipeline and the test harness alike -- or the
+/// two behave differently on the same program.
+pub fn record_compile_time_inclusions(
+    module: &mut crate::ir::Module,
+    program: &Program,
+    autoloaded_files: &[std::path::PathBuf],
+) {
+    module.preincluded_sources = autoloaded_files
+        .iter()
+        .map(|path| path.canonicalize().unwrap_or_else(|_| path.clone()))
+        .collect();
+    let probe_only: std::collections::HashSet<String> = probe_only_class_names(program)
+        .into_iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect();
+    if probe_only.is_empty() {
+        return;
+    }
+    let autoloaded: std::collections::HashSet<std::path::PathBuf> =
+        module.preincluded_sources.iter().cloned().collect();
+    module.deferred_class_loads = module
+        .declared_class_source_files
+        .iter()
+        .filter(|(name, file)| {
+            // Both sides are canonicalized: a declaration path can arrive in the `/var/...`
+            // spelling while the autoload pass reports `/private/var/...` for the same file,
+            // and comparing them raw silently matches nothing.
+            let declared = std::path::PathBuf::from(file);
+            let declared = declared.canonicalize().unwrap_or(declared);
+            probe_only.contains(&name.trim_start_matches('\\').to_ascii_lowercase())
+                && autoloaded.contains(&declared)
+        })
+        .map(|(name, _)| name.trim_start_matches('\\').to_ascii_lowercase())
+        .collect();
 }
 
 /// Lower any top-level literal `class_alias()` calls left after another
@@ -338,6 +401,81 @@ fn direct_binding_dependencies(program: &Program, target: &str) -> Option<Vec<St
     None
 }
 
+/// How deep one autoload demand may chase its own dependencies before the outer fixpoint loop
+/// takes over. Real inheritance chains are a dozen links at most; the cap only stops a pathological
+/// or cyclic graph from overflowing the stack.
+const AUTOLOAD_BUNDLE_MAX_DEPTH: usize = 64;
+
+/// Loads one autoloaded file together with the files its own file-scope execution demands,
+/// ordered dependency-first.
+///
+/// PHP's autoloader is DEPTH-FIRST: asking for `AsciiSlugger` runs the loader again for
+/// `LocaleAwareInterface` before the class binds, and again for whatever that interface needs.
+/// Appending each discovered file at its own first reference point instead is breadth-first, and
+/// it can place a dependency AFTER the file that demanded it. `symfony/string`'s `AsciiSlugger.php`
+/// guards its whole body with `if (!interface_exists(LocaleAwareInterface::class)) { throw ... }`;
+/// the interface landed nine statements too late and the compiled program threw
+/// "the symfony/translation-contracts package is not installed" before the entry file's first
+/// statement ran.
+///
+/// Returns an empty program when the target cannot bind here, which is the caller's signal to
+/// insert nothing — the path stays in `included` either way, exactly as before.
+#[allow(clippy::too_many_arguments)]
+fn load_autoloaded_bundle(
+    fqn: &str,
+    canonical: &Path,
+    base_dir: &Path,
+    defines: &HashSet<String>,
+    registry: &Registry,
+    declared: &HashSet<String>,
+    included: &mut HashSet<PathBuf>,
+    nested_includes: &mut HashSet<PathBuf>,
+    declaration_sources: &mut DeclarationSourceFiles,
+    depth: usize,
+) -> Result<Program, CompileError> {
+    let (loaded, loaded_includes, loaded_sources) =
+        load_autoloaded_file(canonical, base_dir, defines)?;
+    if !autoload_target_can_bind(&loaded, fqn, declared, registry) {
+        return Ok(Vec::new());
+    }
+
+    let mut bundle: Program = Vec::new();
+    if depth < AUTOLOAD_BUNDLE_MAX_DEPTH {
+        let mut seen: HashSet<String> = HashSet::new();
+        for dependency in walk::collect_file_scope_dependencies(&loaded) {
+            if declared.contains(&dependency) || !seen.insert(dependency.clone()) {
+                continue;
+            }
+            let Some(path) = resolve_class(&dependency, registry) else {
+                continue;
+            };
+            let dependency_path = path.canonicalize().unwrap_or(path);
+            // Inserting before the recursion is what breaks a dependency cycle: the second
+            // visit finds the path already claimed and stops.
+            if !included.insert(dependency_path.clone()) {
+                continue;
+            }
+            bundle.extend(load_autoloaded_bundle(
+                &dependency,
+                &dependency_path,
+                base_dir,
+                defines,
+                registry,
+                declared,
+                included,
+                nested_includes,
+                declaration_sources,
+                depth + 1,
+            )?);
+        }
+    }
+
+    nested_includes.extend(loaded_includes);
+    declaration_sources.extend(loaded_sources)?;
+    bundle.extend(loaded);
+    Ok(bundle)
+}
+
 /// Load, parse, and resolve a single autoloaded PHP file, returning its statements plus the
 /// canonical paths of every `include`/`require` target the file itself pulled in (surfaced for
 /// the OPcache script manifest — see [`run_collecting_included`]).
@@ -385,7 +523,174 @@ fn load_autoloaded_file(
     // name_resolver has already flattened namespace nodes and canonicalized
     // declarations, so we splice the statements directly into the top-level
     // program.
+    let canonicalized = activate_interface_declarations(canonicalized, path, &|_| true);
     Ok((canonicalized, nested_includes, declaration_sources))
+}
+
+/// Adds the activation events the ENTRY program's own interface declarations need.
+///
+/// The resolver strips an `include`d file's interfaces into activation events and the autoload pass
+/// does the same for the files it splices, but the entry file's own declarations travel neither
+/// path: they reach EIR as declarations, lower to a no-op, and leave the overlay cell that
+/// `interface_exists()` reads at zero. `interface_exists()` therefore answered FALSE for an
+/// interface declared in the very program being compiled, before and after its declaration.
+///
+/// Call this after `name_resolver::resolve` (namespaces flattened, every included file's
+/// declaration already replaced) and before [`run_collecting_included_with_defines_and_sources`],
+/// where the remaining top-level interface declarations are exactly the entry file's own.
+pub fn activate_entry_interface_declarations(program: Program, entry_path: &Path) -> Program {
+    // An INCLUDED file's declarations are hoisted to the entry program's top level while its
+    // activation event stays behind at the include site, which may be nested, conditional, or
+    // never reached. From here those declarations look exactly like the entry file's own, and the
+    // only thing that tells them apart is the event they already carry. A second event
+    // re-declares the interface at runtime -- `Cannot redeclare interface
+    // Symfony\\...\\KernelInterface` on a front controller that `require_once`s a vendor interface
+    // file -- and one added for a file the program never enters makes `interface_exists()` answer
+    // true for an interface PHP never declared.
+    let mut activated: HashSet<String> = HashSet::new();
+    collect_activated_class_like_names(&program, &mut activated);
+    activate_interface_declarations(program, entry_path, &|name| {
+        !activated.contains(&crate::names::php_symbol_key(name))
+    })
+}
+
+/// Collects every class-like name that already carries an activation event, at any depth.
+///
+/// The event can sit inside an include-once guard, a conditional, a loop, a function body, or a
+/// method, so a top-level scan is not enough.
+fn collect_activated_class_like_names(program: &[Stmt], out: &mut HashSet<String>) {
+    for statement in program {
+        match &statement.kind {
+            StmtKind::ClassLikeActivate { name, .. } => {
+                out.insert(crate::names::php_symbol_key(name.trim_start_matches('\\')));
+            }
+            StmtKind::NamespaceBlock { body, .. }
+            | StmtKind::Synthetic(body)
+            | StmtKind::While { body, .. }
+            | StmtKind::DoWhile { body, .. }
+            | StmtKind::Foreach { body, .. }
+            | StmtKind::IncludeOnceGuard { body, .. }
+            | StmtKind::FunctionDecl { body, .. } => {
+                collect_activated_class_like_names(body, out)
+            }
+            StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body,
+                ..
+            } => {
+                collect_activated_class_like_names(then_body, out);
+                for (_, body) in elseif_clauses {
+                    collect_activated_class_like_names(body, out);
+                }
+                if let Some(body) = else_body {
+                    collect_activated_class_like_names(body, out);
+                }
+            }
+            StmtKind::IfDef {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_activated_class_like_names(then_body, out);
+                if let Some(body) = else_body {
+                    collect_activated_class_like_names(body, out);
+                }
+            }
+            StmtKind::For {
+                init, update, body, ..
+            } => {
+                if let Some(init) = init {
+                    collect_activated_class_like_names(std::slice::from_ref(init.as_ref()), out);
+                }
+                if let Some(update) = update {
+                    collect_activated_class_like_names(std::slice::from_ref(update.as_ref()), out);
+                }
+                collect_activated_class_like_names(body, out);
+            }
+            StmtKind::Switch { cases, default, .. } => {
+                for case in cases {
+                    collect_activated_class_like_names(&case.1, out);
+                }
+                if let Some(body) = default {
+                    collect_activated_class_like_names(body, out);
+                }
+            }
+            StmtKind::Try {
+                try_body,
+                catches,
+                finally_body,
+            } => {
+                collect_activated_class_like_names(try_body, out);
+                for catch in catches {
+                    collect_activated_class_like_names(&catch.body, out);
+                }
+                if let Some(body) = finally_body {
+                    collect_activated_class_like_names(body, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Adds the activation event every interface this file declares needs to be visible to
+/// `interface_exists()`.
+///
+/// `interface_exists()` answers from a per-request activation cell, and NOTHING BUT a
+/// `ClassLikeActivate` event ever writes that cell. `crate::resolver` emits one for each interface
+/// it strips out of an `include`d file, but an autoloaded file never travels that path: it kept an
+/// overlay cell that no statement could set, so `interface_exists()` answered false for the rest of
+/// the program however early the declaration ran. `symfony/string`'s `AsciiSlugger.php` opens with
+/// `if (!interface_exists(LocaleAwareInterface::class)) { throw ... }` and threw its
+/// "symfony/translation-contracts is not installed" LogicException on boot because of it.
+///
+/// The declaration statement itself stays: unlike the include path, nothing has extracted it yet.
+///
+/// PHP early-binds an interface that extends nothing — it exists from the moment its file is
+/// entered, ahead of the file's own statements. One that extends another interface binds where it
+/// is written.
+fn activate_interface_declarations(
+    program: Program,
+    path: &Path,
+    accept: &dyn Fn(&str) -> bool,
+) -> Program {
+    use crate::parser::ast::ClassLikeKind;
+
+    let mut early: Program = Vec::new();
+    let mut rest: Program = Vec::with_capacity(program.len());
+    for stmt in program {
+        let StmtKind::InterfaceDecl {
+            ref name,
+            ref extends,
+            ..
+        } = stmt.kind
+        else {
+            rest.push(stmt);
+            continue;
+        };
+        if !accept(name.trim_start_matches('\\')) {
+            rest.push(stmt);
+            continue;
+        }
+        let event = Stmt::new(
+            StmtKind::ClassLikeActivate {
+                name: name.clone(),
+                kind: ClassLikeKind::Interface,
+                source_path: path.to_path_buf(),
+            },
+            stmt.span,
+        );
+        if extends.is_empty() {
+            early.push(event);
+            rest.push(stmt);
+        } else {
+            rest.push(stmt);
+            rest.push(event);
+        }
+    }
+    early.extend(rest);
+    early
 }
 
 /// Collects canonical declaration names associated with one physical source file.
@@ -523,6 +828,52 @@ enum Choice implements EnumContract {
             assert!(
                 !references.contains(name),
                 "signature type unexpectedly triggered autoload: {name}; collected {references:?}"
+            );
+        }
+    }
+
+    /// Verifies a `[Foo::class, 'method']` callable array is an autoload root, and a bare
+    /// `Foo::class` still is not.
+    ///
+    /// The distinction is the whole point. PHP resolves `Foo::class` lexically and never consults
+    /// the autoloader for it — a `sprintf()` argument naming a class from a package the app does
+    /// not install must stay ignored, which was measured when collecting every `::class` pulled
+    /// `DoctrineDbalAdapter` into a Symfony build off exactly such an argument. A CALLABLE ARRAY
+    /// is built to be called, and calling it is what runs the loader.
+    ///
+    /// Twig's `EscaperExtension` is the case: `[FileExtensionEscapingStrategy::class, 'guess']` was
+    /// the program's only reference to that class, and the build reported `Undefined class` for a
+    /// file sitting in the same package.
+    #[test]
+    fn reference_points_include_callable_array_class_constants() {
+        let tokens = crate::lexer::tokenize(
+            r#"<?php
+namespace Fixtures;
+class Carrier {
+    public function build(): array {
+        $strategy = [EscapingStrategy::class, 'guess'];
+        $pair = [DataOnly::class, 42];
+        $message = \sprintf('%s is not enabled', MentionedOnly::class);
+        return [$strategy, $pair, $message];
+    }
+}
+"#,
+        )
+        .expect("tokenization should succeed");
+        let parsed = crate::parser::parse(&tokens).expect("parsing should succeed");
+        let resolved = crate::name_resolver::resolve(parsed).expect("resolution should succeed");
+        let references = collect_reference_points(&resolved)
+            .into_iter()
+            .map(|(_, name)| name)
+            .collect::<HashSet<_>>();
+        assert!(
+            references.contains("Fixtures\\EscapingStrategy"),
+            "a callable array's class must autoload; collected {references:?}"
+        );
+        for name in ["Fixtures\\DataOnly", "Fixtures\\MentionedOnly"] {
+            assert!(
+                !references.contains(name),
+                "`::class` outside a callable array must not autoload: {name}; collected {references:?}"
             );
         }
     }

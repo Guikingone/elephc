@@ -11,6 +11,10 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
+/// The diagnostic an overlapping clone allocation reports.
+pub(crate) const CLONE_OVERLAP_MSG: &str =
+    "Fatal error: heap debug detected a hash clone overlapping its source\n";
+
 /// hash_clone_shallow: duplicate a hash table for copy-on-write semantics.
 /// Keys are re-persisted, string values are re-persisted, refcounted values are
 /// retained for the cloned owner, and insertion order is preserved exactly.
@@ -54,6 +58,25 @@ pub fn emit_hash_clone_shallow(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x21");                                         // x1 = cloned table runtime value_type
     emitter.instruction("bl __rt_hash_new");                                    // allocate a fresh destination hash table
     emitter.instruction("mov x20, x0");                                         // x20 = cloned hash pointer
+
+    // -- heap-debug: the destination must not land on the source we are about to read --
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_debug_enabled");
+    emitter.instruction("ldr x9, [x9]");                                        // load the heap-debug enabled flag
+    emitter.instruction("cbz x9, __rt_hash_clone_shallow_overlap_checked");     // skip the range test outside heap-debug
+    emitter.instruction("sub x9, x19, #16");                                    // x9 = source block header address
+    emitter.instruction("ldr w10, [x9]");                                       // x10 = source payload size
+    emitter.instruction("add x10, x19, x10");                                   // x10 = first address past the source block
+    emitter.instruction("sub x11, x20, #16");                                   // x11 = destination block header address
+    emitter.instruction("ldr w12, [x11]");                                      // x12 = destination payload size
+    emitter.instruction("add x12, x20, x12");                                   // x12 = first address past the destination block
+    emitter.instruction("cmp x12, x9");                                         // does the destination end at or before the source?
+    emitter.instruction("b.ls __rt_hash_clone_shallow_overlap_checked");        // disjoint below the source
+    emitter.instruction("cmp x10, x11");                                        // does the source end at or before the destination?
+    emitter.instruction("b.ls __rt_hash_clone_shallow_overlap_checked");        // disjoint above the source
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_heap_dbg_overlap_msg");
+    emitter.instruction(&format!("mov x2, #{}", CLONE_OVERLAP_MSG.len()));      // pass the exact overlap-diagnostic length
+    emitter.instruction("b __rt_heap_debug_fail");                              // report the overlapping allocation immediately
+    emitter.label("__rt_hash_clone_shallow_overlap_checked");
     emitter.instruction("and x22, x22, #0xffff");                               // preserve only the persistent kind/COW bits
     emitter.instruction("str x22, [x20, #-8]");                                 // copy the persistent packed metadata into the clone
 

@@ -58,6 +58,7 @@ pub(super) fn emit_aarch64_runtime_builtin_dispatch(emitter: &mut Emitter) {
     emit_aarch64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObFlush, "ob_flush", "__elephc_eval_ob_flush", None);
     emit_aarch64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndClean, "ob_end_clean", "__elephc_eval_ob_end", Some(0));
     emit_aarch64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndFlush, "ob_end_flush", "__elephc_eval_ob_end", Some(1));
+    emit_aarch64_headers_sent_case(emitter);
 
     emitter.label("__elephc_runtime_builtin_v1_result");
     emitter.instruction("cbz x0, __elephc_runtime_builtin_v1_fatal");           // null helper results report runtime failure
@@ -126,6 +127,7 @@ pub(super) fn emit_x86_64_runtime_builtin_dispatch(emitter: &mut Emitter) {
     emit_x86_64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObFlush, "ob_flush", "__elephc_eval_ob_flush", None);
     emit_x86_64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndClean, "ob_end_clean", "__elephc_eval_ob_end", Some(0));
     emit_x86_64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndFlush, "ob_end_flush", "__elephc_eval_ob_end", Some(1));
+    emit_x86_64_headers_sent_case(emitter);
 
     emitter.label("__elephc_runtime_builtin_v1_result_x86");
     emitter.instruction("test rax, rax");                                       // null helper results report runtime failure
@@ -148,7 +150,7 @@ pub(super) fn emit_x86_64_runtime_builtin_dispatch(emitter: &mut Emitter) {
 }
 
 /// Returns stable branch labels for every version-one runtime builtin ID.
-fn runtime_dispatch_labels() -> [(RuntimeBuiltinId, &'static str); 21] {
+fn runtime_dispatch_labels() -> [(RuntimeBuiltinId, &'static str); 22] {
     let labels = [
         (RuntimeBuiltinId::Boolval, "__elephc_runtime_builtin_v1_boolval"),
         (RuntimeBuiltinId::Floatval, "__elephc_runtime_builtin_v1_floatval"),
@@ -171,6 +173,7 @@ fn runtime_dispatch_labels() -> [(RuntimeBuiltinId, &'static str); 21] {
         (RuntimeBuiltinId::ObFlush, "__elephc_runtime_builtin_v1_ob_flush"),
         (RuntimeBuiltinId::ObEndClean, "__elephc_runtime_builtin_v1_ob_end_clean"),
         (RuntimeBuiltinId::ObEndFlush, "__elephc_runtime_builtin_v1_ob_end_flush"),
+        (RuntimeBuiltinId::HeadersSent, "__elephc_runtime_builtin_v1_headers_sent"),
     ];
     for (runtime_id, _) in labels {
         let binding = crate::builtins::registry::lookup_runtime_builtin(runtime_id);
@@ -410,6 +413,30 @@ fn emit_x86_64_zero_arg_boxed_bool_case(
     }
     emitter.bl_c(symbol);
     emitter.instruction("mov rdi, rax");                                        // pass the raw result to the bool boxer
+    emitter.bl_c("__elephc_eval_value_bool");
+    emitter.instruction("jmp __elephc_runtime_builtin_v1_result_x86");          // transfer the boxed boolean result
+}
+
+/// Emits the AArch64 `headers_sent` dispatch arm.
+///
+/// `__rt_headers_sent` is an INTERNAL runtime label, not one of the `__elephc_eval_*` C-ABI
+/// wrappers the other zero-argument arms call, so it is reached with a plain branch-and-link.
+/// It answers the process flag in the integer result register, which the bool boxer then takes.
+fn emit_aarch64_headers_sent_case(emitter: &mut Emitter) {
+    emitter.label("__elephc_runtime_builtin_v1_headers_sent");
+    emitter.instruction("cbnz x21, __elephc_runtime_builtin_v1_unsupported");   // require zero PHP arguments
+    emitter.instruction("bl __rt_headers_sent");                                // read the generated-runtime headers-sent flag
+    emitter.bl_c("__elephc_eval_value_bool");
+    emitter.instruction("b __elephc_runtime_builtin_v1_result");                // transfer the boxed boolean result
+}
+
+/// Emits the x86_64 `headers_sent` dispatch arm.
+fn emit_x86_64_headers_sent_case(emitter: &mut Emitter) {
+    emitter.label("__elephc_runtime_builtin_v1_headers_sent_x86");
+    emitter.instruction("test r13, r13");                                       // require zero PHP arguments
+    emitter.instruction("jnz __elephc_runtime_builtin_v1_unsupported_x86");     // reject unsupported arity
+    emitter.instruction("call __rt_headers_sent");                              // read the generated-runtime headers-sent flag
+    emitter.instruction("mov rdi, rax");                                        // pass the raw flag to the bool boxer
     emitter.bl_c("__elephc_eval_value_bool");
     emitter.instruction("jmp __elephc_runtime_builtin_v1_result_x86");          // transfer the boxed boolean result
 }

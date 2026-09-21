@@ -156,6 +156,12 @@ pub(in crate::interpreter) fn eval_is_callable_value(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
+    // A compiled closure arrives as a callable DESCRIPTOR, which the normalization below cannot
+    // classify: it is neither an object cell nor an array nor a name, so it fell through to the
+    // string lookup and answered `false` for something PHP always calls callable.
+    if values.type_tag(value)? == super::super::super::runtime_ops::EVAL_TAG_CALLABLE {
+        return Ok(true);
+    }
     let callback = match lexical_scope {
         Some(scope) => eval_callable_from_scope(value, context, scope, values),
         None => eval_callable(value, context, values),

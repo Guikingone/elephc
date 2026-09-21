@@ -114,7 +114,59 @@ impl Checker {
         if disagreed || saw_unshaped {
             return None;                                    // no shape to prefer over the declared hint
         }
-        specific.or(empty_array)
+        match specific {
+            Some(ty) => Some(Self::generic_array_contract_payload(ty)),
+            None => empty_array,
+        }
+    }
+
+    /// Strips a CONTAINER payload from a resolved bare-`array` contract, keeping the storage kind.
+    ///
+    /// The contract exists to name the storage a caller will read -- packed slots or a hash -- and
+    /// that is ALL a bare `array` hint can promise. A container payload promises more: it says the
+    /// slots hold raw pointers, which only a writer of that same element type produces. Every
+    /// other writer boxes, and the two cannot be told apart at the call site.
+    ///
+    /// Both halves of the disagreement were live. `twig/twig`'s `Template::getBlocks(): array`
+    /// returns `$this->blocks`, whose base default is `[]` and whose subclasses assign a hash of
+    /// arrays: the contract said `array<string, array<mixed>>` over a value the lowering had as
+    /// `array<mixed>`, and the backend refused the conversion outright. Symfony's
+    /// `BufferingLogger::cleanLogs(): array` is the silent half -- `$this->logs[] = [$level,
+    /// $message, $context]` boxes each row into a `Mixed` slot, the contract said
+    /// `array<array<mixed>>`, and `$log[1]` / `$log[2]` then read a boxed cell as a raw array:
+    /// `php -S` prints the page, the compiled binary printed `Warning: Undefined array key 1` and
+    /// a row of `count() == 4`.
+    ///
+    /// A SCALAR payload keeps its precision: an `int` or `string` slot has one representation, so
+    /// the contract and the writer cannot drift apart, and widening it would cost every consumer
+    /// an unbox.
+    fn generic_array_contract_payload(ty: PhpType) -> PhpType {
+        fn payload_is_container(ty: &PhpType) -> bool {
+            // An OBJECT payload is deliberately absent: an object slot is a pointer whose class is
+            // read from the object itself, so every writer stores the same representation and the
+            // contract cannot drift from it. Widening it would also cost real behaviour --
+            // Symfony's `ArgumentMetadataFactory::createArgumentMetadata(): array` returns
+            // `ArgumentMetadata[]`, and `ArgumentResolver` reads `$metadata::IS_INSTANCEOF` off the
+            // loop variable: as `mixed` that class constant has no static receiver, so it went to
+            // the eval bridge as `dynamic::IS_INSTANCEOF` and every route with a controller
+            // argument died on it.
+            matches!(
+                ty.codegen_repr(),
+                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable
+            )
+        }
+        match ty {
+            PhpType::Array(elem) if payload_is_container(&elem) => {
+                PhpType::Array(Box::new(PhpType::Mixed))
+            }
+            PhpType::AssocArray { key, value } if payload_is_container(&value) => {
+                PhpType::AssocArray {
+                    key,
+                    value: Box::new(PhpType::Mixed),
+                }
+            }
+            other => other,
+        }
     }
 
     /// Recursively collects ReturnInfo from all return statements in `stmt` and its
@@ -485,7 +537,31 @@ impl Checker {
             return Ok(());
         }
 
+        // `?int` returned from a declared `int` is PHP's runtime TypeError, not a compile error,
+        // and `declared_int_return_boundary` already emits the check that raises it.
+        if Self::nullable_int_reaches_declared_int_return(expected, actual) {
+            return Ok(());
+        }
+
         self.require_compatible_arg_type(expected, actual, span, context)
+    }
+
+    /// Reports whether this is the nullable-int-into-declared-`int` return the backend verifies.
+    ///
+    /// Deliberately narrow: `ReturnBoundaryMixedToInt` is the only return boundary that TESTS the
+    /// value and raises PHP's message. A declared `float` or `string` return converts instead, so
+    /// admitting the same shape there would answer `0.0` or `""` where PHP throws.
+    fn nullable_int_reaches_declared_int_return(expected: &PhpType, actual: &PhpType) -> bool {
+        if !matches!(expected, PhpType::Int) {
+            return false;
+        }
+        let PhpType::Union(members) = actual else {
+            return false;
+        };
+        members.iter().any(|member| matches!(member, PhpType::Void))
+            && members
+                .iter()
+                .all(|member| matches!(member, PhpType::Int | PhpType::Void))
     }
 
     /// Returns true if `ty` can accept a null/void value — covers PhpType::Mixed,

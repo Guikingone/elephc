@@ -28,7 +28,10 @@ builtin! {
 /// pre-validated by the registry. Returns `Ok(PhpType::Bool)` on success.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+    // The same predicate `sort()` and the rest of the by-reference family use. `shuffle()` alone
+    // demanded a concrete shape, which refused `shuffle(self::toArray($item, false))` in twig's
+    // `CoreExtension::shuffle()` -- an untyped helper's result is gradual by construction.
+    if !crate::types::checker::builtins::arrays::array_arg_is_gradually_acceptable(&ty) {
         return Err(CompileError::new(cx.span, &format!("{}() argument must be array", cx.name)));
     }
     Ok(PhpType::Bool)

@@ -2183,6 +2183,156 @@ echo $count . ':' . count($matches) . ':' . implode(',', $matches[0]);
     assert_eq!(out, "3:1:1,22,333");
 }
 
+/// The `$matches` dumper every `preg_match_all()` shape test shares.
+///
+/// It prints keys as well as values, so a hash read back as a renumbered list — the exact way a
+/// wrong storage tag fails — changes the expected string instead of passing silently. Every
+/// expectation below is the measured `php -n` 8.5 output for the same fixture.
+const PREG_MATCHES_DUMPER: &str = r#"
+function dumpv($v) {
+    if (is_array($v)) {
+        $parts = [];
+        foreach ($v as $k => $item) {
+            $parts[] = $k . '=' . dumpv($item);
+        }
+        return '[' . implode(',', $parts) . ']';
+    }
+    return (string)$v;
+}
+"#;
+
+/// Verifies pattern-order `$matches` carries one column per compiled group, named or not.
+///
+/// PHP emits a column for EVERY capture group — including one that never participates, whose
+/// column is filled with empty strings — and writes a declared name immediately before the
+/// numeric key it doubles. The previous runtime built only column zero.
+#[test]
+fn test_preg_match_all_pattern_order_emits_every_capture_group() {
+    let out = compile_and_run(&format!(
+        r#"<?php{PREG_MATCHES_DUMPER}
+$n = preg_match_all('/(a)(b)?(?<z>c)?/', 'ab ac a', $m);
+echo $n, ':', dumpv($m);
+"#
+    ));
+    assert_eq!(
+        out,
+        "3:[0=[0=ab,1=ac,2=a],1=[0=a,1=a,2=a],2=[0=b,1=,2=],z=[0=,1=c,2=],3=[0=,1=c,2=]]"
+    );
+}
+
+/// Verifies `PREG_SET_ORDER` builds one row per match, trimmed after its last live group.
+#[test]
+fn test_preg_match_all_set_order_builds_one_trimmed_row_per_match() {
+    let out = compile_and_run(&format!(
+        r#"<?php{PREG_MATCHES_DUMPER}
+$n = preg_match_all('/(a)(b)?(?<z>c)?/', 'ab ac a', $m, PREG_SET_ORDER);
+echo $n, ':', dumpv($m);
+"#
+    ));
+    assert_eq!(out, "3:[0=[0=ab,1=a,2=b],1=[0=ac,1=a,2=,z=c,3=c],2=[0=a,1=a]]");
+}
+
+/// Verifies numbered groups reach both orders when the pattern declares no name at all.
+#[test]
+fn test_preg_match_all_numbered_groups_reach_both_orders() {
+    let pattern_order = compile_and_run(&format!(
+        r#"<?php{PREG_MATCHES_DUMPER}
+$n = preg_match_all('/([0-9]+)([a-z])/', 'a1b22c333d', $m);
+echo $n, ':', dumpv($m);
+"#
+    ));
+    assert_eq!(
+        pattern_order,
+        "3:[0=[0=1b,1=22c,2=333d],1=[0=1,1=22,2=333],2=[0=b,1=c,2=d]]"
+    );
+
+    let set_order = compile_and_run(&format!(
+        r#"<?php{PREG_MATCHES_DUMPER}
+$n = preg_match_all('/([0-9]+)([a-z])/', 'a1b22c333d', $m, PREG_SET_ORDER);
+echo $n, ':', dumpv($m);
+"#
+    ));
+    assert_eq!(
+        set_order,
+        "3:[0=[0=1b,1=1,2=b],1=[0=22c,1=22,2=c],2=[0=333d,1=333,2=d]]"
+    );
+}
+
+/// Verifies the no-match shapes: pattern order still emits every (empty) column, set order not.
+#[test]
+fn test_preg_match_all_no_match_shapes_differ_by_order() {
+    let pattern_order = compile_and_run(&format!(
+        r#"<?php{PREG_MATCHES_DUMPER}
+$n = preg_match_all('/(a)(b)?/', 'zzz', $m);
+echo $n, ':', dumpv($m);
+"#
+    ));
+    assert_eq!(pattern_order, "0:[0=[],1=[],2=[]]");
+
+    let set_order = compile_and_run(&format!(
+        r#"<?php{PREG_MATCHES_DUMPER}
+$n = preg_match_all('/(a)(b)?/', 'zzz', $m, PREG_SET_ORDER);
+echo $n, ':', dumpv($m);
+"#
+    ));
+    assert_eq!(set_order, "0:[]");
+}
+
+/// Verifies a zero-length match still advances the cursor and produces one row per position.
+///
+/// The position ONE PAST the last byte is a legal search start, and PHP reports a zero-length
+/// match there, so `/x*/` over `axb` matches four times, not three. Both the counting helper and
+/// the capture helper used to stop at the null terminator and lose that last match.
+#[test]
+fn test_preg_match_all_zero_length_matches_advance() {
+    let out = compile_and_run(&format!(
+        r#"<?php{PREG_MATCHES_DUMPER}
+$n = preg_match_all('/x*/', 'axb', $m, PREG_SET_ORDER);
+echo $n, ':', dumpv($m);
+"#
+    ));
+    assert_eq!(out, "4:[0=[0=],1=[0=x],2=[0=],3=[0=]]");
+
+    // The count-only helper takes a different path and had the same off-by-one.
+    let counted = compile_and_run(r#"<?php echo preg_match_all('/x*/', 'axb');"#);
+    assert_eq!(counted, "4");
+}
+
+/// Verifies Symfony's `HeaderUtils::split()` call, the shape that first exposed the gap.
+///
+/// It is the hard case in one fixture: a RUNTIME-BUILT pattern (so nothing static can classify
+/// it), the `/x` extended flag, a named group, and `PREG_SET_ORDER`. Reading only column zero
+/// collapsed all three parts into one row, which is how a `Cache-Control: no-cache, private`
+/// response header came back as `, private`.
+#[test]
+fn test_preg_match_all_set_order_splits_a_header_the_symfony_way() {
+    let out = compile_and_run(&format!(
+        r#"<?php{PREG_MATCHES_DUMPER}
+$separators = ',';
+$quotedSeparators = preg_quote($separators, '/');
+$n = preg_match_all('
+    /
+        (?!\s)
+            (?:
+                # quoted-string
+                "(?:[^"\\\\]|\\\\.)*(?:"|\\\\|$)
+            |
+                # token
+                [^"'.$quotedSeparators.']+
+            )+
+        (?<!\s)
+    |
+        # separator
+        \s*
+        (?<separator>['.$quotedSeparators.'])
+        \s*
+    /x', trim('no-cache, private'), $m, PREG_SET_ORDER);
+echo $n, ':', dumpv($m);
+"#
+    ));
+    assert_eq!(out, "3:[0=[0=no-cache],1=[0=, ,separator=,,1=,],2=[0=private]]");
+}
+
 /// Verifies `preg_match_all` returns 0 when the pattern has no matches in the subject.
 #[test]
 fn test_preg_match_all_no_matches() {
@@ -3839,4 +3989,83 @@ echo "|", filter_var("999.0.0.1", FILTER_VALIDATE_IP) === false ? "invalid" : "v
 "#,
     );
     assert_eq!(out, "TF|42|invalid|127.0.0.1|invalid");
+}
+
+/// Verifies `filter_var()` with a RUNTIME `$filter`, through both dynamic-helper routes.
+///
+/// A non-constant `$filter` cannot pick a per-filter builtin at compile time, so the lowering
+/// routes the call to a `__elephc_filter_var_dyn*` prelude helper. Both are named only by that
+/// lowering, never by PHP, so declaration pruning erased their bodies while the call survived and
+/// every such call died with `Call to undefined function __elephc_filter_var_dyn()`. The flags
+/// inside an array `$options` are honoured too: reading them through a `mixed` seam used to be
+/// refused with a loud warning, which Symfony logged three times per request.
+#[test]
+fn test_filter_var_runtime_filter_honours_array_options() {
+    let out = compile_and_run(
+        r#"<?php
+function optionsOf(bool $asArray): mixed
+{
+    return $asArray ? ['flags' => FILTER_NULL_ON_FAILURE] : FILTER_NULL_ON_FAILURE;
+}
+
+$filter = FILTER_VALIDATE_INT;
+$ip = FILTER_VALIDATE_IP;
+
+echo var_export(filter_var('abc', $filter, optionsOf(false)), true), '|';
+echo var_export(filter_var('abc', $filter, optionsOf(true)), true), '|';
+echo var_export(filter_var('12', $filter, ['flags' => FILTER_NULL_ON_FAILURE]), true), '|';
+echo var_export(filter_var('abc', $filter, []), true), '|';
+echo var_export(filter_var('10.0.0.1', $ip, ['flags' => FILTER_FLAG_IPV6]), true), '|';
+echo var_export(filter_var('10.0.0.1', $ip, ['flags' => FILTER_FLAG_IPV4]), true);
+"#,
+    );
+    assert_eq!(out, "NULL|NULL|12|false|false|'10.0.0.1'");
+}
+
+/// Verifies `set_time_limit()` answers the `true` php answers for every argument, including the
+/// `0` Symfony's runtime bootstrap passes, a positive limit, a negative one, and both integer
+/// extremes. `php` 8.5.10 CLI returns `bool(true)` for all of these; no argument was found that
+/// makes it return `false`.
+///
+/// The value is DISCARDED on purpose: elephc has no execution-time interrupt to arm, so a
+/// positive limit is a documented no-op (see `src/builtins/system/set_time_limit.rs`). What must
+/// not regress is the return value and the fact that the call compiles at all.
+#[test]
+fn test_set_time_limit_returns_true_for_every_argument() {
+    let out = compile_and_run(
+        r#"<?php
+function stl($s) { return set_time_limit($s); }
+echo var_export(set_time_limit(0), true), "|",
+     var_export(set_time_limit(30), true), "|",
+     var_export(stl(-1), true), "|",
+     var_export(stl(PHP_INT_MAX), true), "|",
+     var_export(stl(PHP_INT_MIN), true), "|",
+     var_export(stl(true), true), "|",
+     var_export(stl("5"), true);
+"#,
+    );
+    assert_eq!(out, "true|true|true|true|true|true|true");
+}
+
+/// Verifies `set_time_limit()` still EVALUATES its argument even though the value is discarded,
+/// that the result is a real `true` (not a truthy placeholder) under `===`, and that the name
+/// resolves case-insensitively, through the root namespace, and by named argument.
+/// `php` 8.5.10 prints `2|yes|true|true|true|true`.
+#[test]
+fn test_set_time_limit_evaluates_its_argument_and_yields_a_strict_true() {
+    let out = compile_and_run(
+        r#"<?php
+function bump(&$n) { $n++; return 0; }
+$hits = 0;
+set_time_limit(bump($hits));
+set_time_limit(bump($hits));
+echo $hits, "|",
+     (set_time_limit(0) ? "yes" : "no"), "|",
+     var_export(set_time_limit(0) === true, true), "|",
+     var_export(SET_TIME_LIMIT(0), true), "|",
+     var_export(\set_time_limit(0), true), "|",
+     var_export(set_time_limit(seconds: 0), true);
+"#,
+    );
+    assert_eq!(out, "2|yes|true|true|true|true");
 }

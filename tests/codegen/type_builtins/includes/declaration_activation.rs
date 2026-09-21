@@ -262,3 +262,25 @@ fn test_entered_source_does_not_activate_unexecuted_define() {
     ], "main.php");
     assert_eq!(out, "0");
 }
+
+/// Verifies `interface_exists()` sees an interface declared by the ENTRY program itself.
+///
+/// Only the resolver's include stripping and the autoload pass emitted the activation event the
+/// overlay cell needs, and the entry file's own declarations travel neither path: every interface
+/// written in the program being compiled answered FALSE, before and after its own declaration.
+/// PHP early-binds an interface that extends nothing, so all four answers here are `true` —
+/// value-checked against `php -n`.
+#[test]
+fn test_an_entry_program_interface_is_visible_to_interface_exists() {
+    let out = compile_and_run(
+        r#"<?php
+echo (int) interface_exists('EntryMarker'), ':';
+interface EntryMarker {}
+echo (int) interface_exists('EntryMarker'), ':';
+class EntryWidget implements EntryMarker {}
+echo (int) interface_exists('EntryMarker'), ':';
+echo (int) class_exists('EntryWidget');
+"#,
+    );
+    assert_eq!(out, "1:1:1:1");
+}

@@ -132,6 +132,7 @@ pub(crate) struct LoweringSnapshot {
     speculating: bool,
     closure_count: usize,
     bound_closure_this_class: Option<String>,
+    bound_closure_this_gradual: bool,
     pending_static_callable_result: Option<StaticCallableBinding>,
     closure_counter: usize,
     hidden_temp_counter: usize,
@@ -338,8 +339,15 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub web: bool,
     owner_name: String,
     closures: Vec<Function>,
+    /// Names this body writes through a non-integer array key, from `append_vivify`.
+    ///
+    /// Consulted only by [`Self::required_static_local_storage_type`], which must not widen an
+    /// empty-array `static` that is really a hash. Empty for a body with no such write, which is
+    /// the overwhelming majority.
+    non_integer_keyed_locals: HashSet<String>,
     /// Class of the object temporarily installed as `$this` while lowering a bound closure body.
     bound_closure_this_class: Option<String>,
+    bound_closure_this_gradual: bool,
     pending_static_callable_result: Option<StaticCallableBinding>,
     closure_counter: usize,
     hidden_temp_counter: usize,
@@ -471,7 +479,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             web,
             owner_name,
             closures: Vec::new(),
+            non_integer_keyed_locals: HashSet::new(),
             bound_closure_this_class: None,
+            bound_closure_this_gradual: false,
             pending_static_callable_result: None,
             closure_counter: 0,
             hidden_temp_counter: 0,
@@ -515,6 +525,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             speculating: self.speculating,
             closure_count: self.closures.len(),
             bound_closure_this_class: self.bound_closure_this_class.clone(),
+            bound_closure_this_gradual: self.bound_closure_this_gradual,
             pending_static_callable_result: self.pending_static_callable_result.clone(),
             closure_counter: self.closure_counter,
             hidden_temp_counter: self.hidden_temp_counter,
@@ -555,6 +566,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.speculating = snapshot.speculating;
         self.closures.truncate(snapshot.closure_count);
         self.bound_closure_this_class = snapshot.bound_closure_this_class;
+        self.bound_closure_this_gradual = snapshot.bound_closure_this_gradual;
         self.pending_static_callable_result = snapshot.pending_static_callable_result;
         self.closure_counter = snapshot.closure_counter;
         self.hidden_temp_counter = snapshot.hidden_temp_counter;
@@ -896,9 +908,28 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// whereas `php_type` describes only the declaration initializer. When those representations
     /// differ, or when the initializer is null, a concrete slot cannot represent every value the
     /// persistent variable may hold on later calls. A boxed Mixed slot preserves that evolution.
+    ///
+    /// An EMPTY ARRAY initializer is the same case one step in: `array<never>` is not a narrower
+    /// array type, it is the claim that the slot has no elements, and the initializer that made
+    /// that true ran on the first call only. Its element slots are ZERO WIDTH, and codegen acts
+    /// on that — `array_shift`/`array_pop` lower the removed payload to a literal zero — so a
+    /// static left at `array<never>` returned `NULL` for an element an earlier call pushed, and
+    /// the same compaction walked a buffer `__rt_array_push_str` had already re-stamped to
+    /// 16-byte string slots at a stride of 8. The decision lives HERE and not in the checker:
+    /// the checker's environment type drives acceptance and narrowing rules that are written
+    /// against the literal's own type, while this is the STORAGE the slot must have for the whole
+    /// program, which is exactly what `array<never>` cannot describe.
     fn required_static_local_storage_type(&self, name: &str, php_type: PhpType) -> PhpType {
         let initial_repr = php_type.codegen_repr();
         let checked_repr = self.local_types.get(name).map(PhpType::codegen_repr);
+        if php_type.is_empty_array_literal() && !self.non_integer_keyed_locals.contains(name) {
+            // An empty-array initializer widens its ELEMENTS, not the slot. A boxed slot would
+            // put a Mixed cell in the symbol, which a `mixed &$param` argument then destroys —
+            // see `PhpType::gradual_empty_array_storage`. And only for a static this body writes
+            // with integer keys: a string-keyed one is a hash whose slot type would go stale at
+            // the runtime promotion (`append_vivify::locals_written_with_non_integer_keys`).
+            return PhpType::gradual_empty_array_storage();
+        }
         if matches!(initial_repr, PhpType::Void | PhpType::Never)
             || checked_repr.is_some_and(|checked| checked != initial_repr)
         {
@@ -1368,6 +1399,30 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Takes any statically known callable result recorded by the last direct expression.
     pub(crate) fn take_pending_static_callable_result(&mut self) -> Option<StaticCallableBinding> {
         self.pending_static_callable_result.take()
+    }
+
+    /// Records the names this body writes through a non-integer array key.
+    ///
+    /// Called once, before the body's statements are lowered, because
+    /// [`Self::required_static_local_storage_type`] has to answer at the `static` DECLARATION —
+    /// the point where the slot's type is fixed for the whole program.
+    pub(crate) fn record_non_integer_keyed_locals(&mut self, body: &[crate::parser::ast::Stmt]) {
+        self.non_integer_keyed_locals =
+            crate::append_vivify::locals_written_with_non_integer_keys(body);
+    }
+
+    /// Records that a bound closure's `$this` is a receiver this build cannot name.
+    ///
+    /// The closure still captures the enclosing `$this` value — the runtime bind overwrites it —
+    /// but the capture is typed `Mixed` so the body dispatches members at run time, exactly as a
+    /// top-level closure's null `$this` capture already does.
+    pub(crate) fn set_bound_closure_this_gradual(&mut self) {
+        self.bound_closure_this_gradual = true;
+    }
+
+    /// Takes the gradual-`$this` flag recorded for the bound closure being lowered.
+    pub(crate) fn take_bound_closure_this_gradual(&mut self) -> bool {
+        std::mem::take(&mut self.bound_closure_this_gradual)
     }
 
     /// Records the class of the receiver that a bound closure will expose as `$this`.
@@ -3698,6 +3753,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Request superglobals (`$_SERVER`/`$_GET`/`$_POST`) route to the shared
     /// `_eir_global_*` symbol in EVERY scope — main and functions alike — so a
     /// function read targets the same storage the top-level `--web` prelude writes.
+    /// Returns whether an entry-block array seed would land on storage that is not this scope's
+    /// to create.
+    ///
+    /// Only the two families the checker's own seeding skips: a superglobal is pre-populated, and
+    /// a `$GLOBALS` alias names storage shared with every other scope. A plain top-level local
+    /// that some FUNCTION later declares `global` is still created here — main is where it is
+    /// first written, so the seed belongs in main's entry exactly as for any other local.
+    pub(crate) fn uses_global_storage_for_seeding(&self, name: &str) -> bool {
+        crate::superglobals::is_superglobal(name) || crate::globals_array::is_alias(name)
+    }
+
     fn uses_global_storage(&self, name: &str, kind: LocalKind) -> bool {
         kind == LocalKind::GlobalAlias
             || crate::superglobals::is_superglobal(name)

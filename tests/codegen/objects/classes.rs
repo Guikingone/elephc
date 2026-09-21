@@ -35,6 +35,33 @@ echo Widget::FN;
     assert_eq!(out, "3|7|9|11|5");
 }
 
+/// Verifies that the semi-reserved rule also holds when the `::` receiver is dynamic. The
+/// named-class form (`Widget::new()`, covered above) is parsed by the prefix parser, while
+/// `$cls::do()` goes through the postfix loop — which used to accept only a plain identifier
+/// and rejected every keyword with "Expected method name after '::'". Symfony's generated DI
+/// container dispatches every service factory through exactly that shape
+/// (`$class::do($this, $lazyLoad)` in `Container::load()`), so the two paths must agree.
+/// PHP outputs "do:1|list:2|print:3|for:4".
+#[test]
+fn test_keyword_named_static_members_via_dynamic_class() {
+    let out = compile_and_run(
+        r#"<?php
+class K {
+    public static function do($n) { return "do:$n"; }
+    public static function list($n) { return "list:$n"; }
+    public static function print($n) { return "print:$n"; }
+    public static function for($n) { return "for:$n"; }
+}
+$cls = 'K';
+echo $cls::do(1), "|";
+echo $cls::list(2), "|";
+echo $cls::print(3), "|";
+echo $cls::for(4);
+"#,
+    );
+    assert_eq!(out, "do:1|list:2|print:3|for:4");
+}
+
 /// Verifies that an empty class (no properties or methods) can be instantiated and
 /// emits the expected "ok" output, confirming object allocation works for minimal classes.
 #[test]

@@ -113,7 +113,7 @@ elephc also implements 1 symbol(s) that PHP added AFTER this baseline release, s
 
 The baseline PHP build does not expose these platform-dependent symbols, so they are excluded from its coverage percentages: `pcntl_getcpu()` (PHP build guard HAVE_SCHED_GETCPU), `pcntl_getqos_class()` (target-specific), `pcntl_setns()` (PHP build guard HAVE_PIDFD_OPEN), `pcntl_setqos_class()` (target-specific).
 
-elephc also provides 91 symbols from PECL extensions php-src does not bundle, which the baseline cannot measure: `cairo` (48 functions, 26 classes), `gmagick` (6 classes), `imagick` (10 classes), `pdo_ibm` (1 classes).
+elephc also provides 109 symbols from PECL extensions php-src does not bundle, which the baseline cannot measure: `apcu` (18 constants), `cairo` (48 functions, 26 classes), `gmagick` (6 classes), `imagick` (10 classes), `pdo_ibm` (1 classes).
 
 ## Language constructs
 

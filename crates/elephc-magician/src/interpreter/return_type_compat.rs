@@ -425,7 +425,15 @@ fn eval_return_variant_accepts_actual_variant(
         | (EvalParameterTypeVariant::Float, EvalParameterTypeVariant::Float)
         | (EvalParameterTypeVariant::Int, EvalParameterTypeVariant::Int)
         | (EvalParameterTypeVariant::Iterable, EvalParameterTypeVariant::Iterable)
-        | (EvalParameterTypeVariant::String, EvalParameterTypeVariant::String) => true,
+        | (EvalParameterTypeVariant::String, EvalParameterTypeVariant::String)
+        | (EvalParameterTypeVariant::False, EvalParameterTypeVariant::False)
+        | (EvalParameterTypeVariant::True, EvalParameterTypeVariant::True) => true,
+        // PHP's value types NARROW `bool`: an override may return `false` where the parent
+        // promised `bool`, never the other way round.
+        (
+            EvalParameterTypeVariant::Bool,
+            EvalParameterTypeVariant::False | EvalParameterTypeVariant::True,
+        ) => true,
         (EvalParameterTypeVariant::Object, EvalParameterTypeVariant::Class(_)) => true,
         (EvalParameterTypeVariant::Iterable, EvalParameterTypeVariant::Array) => true,
         (EvalParameterTypeVariant::Iterable, EvalParameterTypeVariant::Class(actual_name)) => {

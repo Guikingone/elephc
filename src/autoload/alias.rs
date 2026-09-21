@@ -233,19 +233,38 @@ fn extract_class_alias(stmt: &Stmt) -> Option<(String, String)> {
     {
         return None;
     }
-    if args.len() < 2 || args.len() > 3 {
+    if !class_alias_arity_is_supported(args) {
         return None;
-    }
-    if let Some(autoload_arg) = args.get(2) {
-        match &autoload_arg.kind {
-            ExprKind::BoolLiteral(true) => {}
-            ExprKind::IntLiteral(n) if *n != 0 => {}
-            _ => return None,
-        }
     }
     let orig = literal_string(args.first()?)?.to_string();
     let alias = literal_string(args.get(1)?)?.to_string();
     Some((orig, alias))
+}
+
+/// Checks the argument shape of a `class_alias()` call the compiler can resolve statically.
+///
+/// The third argument is PHP's `$autoload`: whether to AUTOLOAD the original class before
+/// aliasing it. It says nothing about whether the two names are statically known, so a literal
+/// `false` is just as resolvable as a literal `true` — in a closed world the original is either
+/// compiled in or the alias is rejected anyway, and autoloading never enters into it.
+///
+/// Refusing `false` is what kept Symfony's generated container out of the compiled world: it
+/// emits `\class_alias(\ContainerXXXX\App_KernelProdContainer::class, App_KernelProdContainer::class, false)`
+/// — both names `::class` constants — and the whole entry failed with
+/// "class_alias() requires statically resolvable class names".
+///
+/// A NON-literal flag is still refused: it is a value the compiler cannot see, and accepting it
+/// would mean guessing at a call it cannot model.
+fn class_alias_arity_is_supported(args: &[Expr]) -> bool {
+    if args.len() < 2 || args.len() > 3 {
+        return false;
+    }
+    match args.get(2).map(|arg| &arg.kind) {
+        None => true,
+        Some(ExprKind::BoolLiteral(_)) => true,
+        Some(ExprKind::IntLiteral(_)) => true,
+        Some(_) => false,
+    }
 }
 
 /// Extracts a class alias pair from a resolved statement call with static class strings.
@@ -268,15 +287,8 @@ fn extract_resolved_class_alias(stmt: &Stmt) -> Option<(String, String)> {
 
 /// Returns the statically known original and alias class names for supported call arguments.
 pub(crate) fn resolved_class_alias_args(args: &[Expr]) -> Option<(String, String)> {
-    if args.len() < 2 || args.len() > 3 {
+    if !class_alias_arity_is_supported(args) {
         return None;
-    }
-    if let Some(autoload_arg) = args.get(2) {
-        match &autoload_arg.kind {
-            ExprKind::BoolLiteral(true) => {}
-            ExprKind::IntLiteral(n) if *n != 0 => {}
-            _ => return None,
-        }
     }
     Some((
         resolved_class_name(args.first()?)?,

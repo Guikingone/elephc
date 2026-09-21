@@ -156,16 +156,6 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         "function.headers-sent"
     ),
     contract!(
-        "parse_str",
-        String,
-        Standard,
-        [param!("string", Str), param!(ref "result", Mixed)],
-        None,
-        Void,
-        "Parses a query string into an array of variables.",
-        "function.parse-str"
-    ),
-    contract!(
         "preg_grep",
         System,
         Pcre,

@@ -58,6 +58,12 @@ pub enum RuntimeBuiltinId {
     ObEndClean = 20,
     /// PHP `ob_end_flush`.
     ObEndFlush = 21,
+    /// PHP `headers_sent` with no arguments.
+    ///
+    /// The flag lives in generated-runtime storage, so an interpreted caller has to ask the
+    /// compiled side for it: an eval-local answer would report "not sent" for output the
+    /// compiled program had already flushed.
+    HeadersSent = 22,
 }
 
 /// Status returned by `__elephc_runtime_builtin_call_v1`.
@@ -89,7 +95,7 @@ impl RuntimeBuiltinStatus {
 
 impl RuntimeBuiltinId {
     /// Every version-one runtime builtin in stable ABI order.
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 22] = [
         Self::Boolval,
         Self::Floatval,
         Self::Intval,
@@ -111,6 +117,7 @@ impl RuntimeBuiltinId {
         Self::ObFlush,
         Self::ObEndClean,
         Self::ObEndFlush,
+        Self::HeadersSent,
     ];
 
     /// Returns the canonical shared-contract identity implemented by this ABI ID.
@@ -137,6 +144,7 @@ impl RuntimeBuiltinId {
             Self::ObFlush => "ob_flush",
             Self::ObEndClean => "ob_end_clean",
             Self::ObEndFlush => "ob_end_flush",
+            Self::HeadersSent => "headers_sent",
         };
         BuiltinId::from_canonical_name(name)
     }
@@ -170,6 +178,7 @@ impl RuntimeBuiltinId {
             19 => Some(Self::ObFlush),
             20 => Some(Self::ObEndClean),
             21 => Some(Self::ObEndFlush),
+            22 => Some(Self::HeadersSent),
             _ => None,
         }
     }
@@ -194,7 +203,8 @@ impl RuntimeBuiltinId {
             | Self::ObClean
             | Self::ObFlush
             | Self::ObEndClean
-            | Self::ObEndFlush => arg_count == 0,
+            | Self::ObEndFlush
+            | Self::HeadersSent => arg_count == 0,
         }
     }
 }
@@ -213,7 +223,7 @@ mod tests {
     /// Verifies every published runtime ID round-trips through its raw ABI value.
     #[test]
     fn runtime_builtin_ids_round_trip() {
-        for raw in 1..=21 {
+        for raw in 1..=22 {
             let id = RuntimeBuiltinId::from_u32(raw).expect("published runtime ID must decode");
             assert_eq!(id.as_u32(), raw);
             assert!(id.supports_arity(match id {
@@ -226,12 +236,13 @@ mod tests {
                 | RuntimeBuiltinId::ObClean
                 | RuntimeBuiltinId::ObFlush
                 | RuntimeBuiltinId::ObEndClean
-                | RuntimeBuiltinId::ObEndFlush => 0,
+                | RuntimeBuiltinId::ObEndFlush
+                | RuntimeBuiltinId::HeadersSent => 0,
                 _ => 1,
             }));
         }
         assert_eq!(RuntimeBuiltinId::from_u32(0), None);
-        assert_eq!(RuntimeBuiltinId::from_u32(22), None);
+        assert_eq!(RuntimeBuiltinId::from_u32(23), None);
         assert_eq!(
             RuntimeBuiltinStatus::from_i32(0),
             Some(RuntimeBuiltinStatus::Success)

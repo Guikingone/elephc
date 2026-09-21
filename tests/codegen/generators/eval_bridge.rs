@@ -89,3 +89,57 @@ echo $g instanceof Iterator ? "I" : "-";
     );
     assert_eq!(out, "yield_in_function:a\nGTI");
 }
+
+
+/// An interpreted GENERATOR keeps the arguments it was called with, literals included.
+///
+/// A generator body does not run during the call that creates it: PHP binds the arguments and
+/// hands back a `Generator` whose scope OUTLIVES that frame. `bind_method_scope_args` bound every
+/// by-value parameter `Borrowed` and the caller then ran `release_owned_bound_args` as soon as the
+/// generator object existed, so for an argument the CALLER OWNS — a literal, a concatenation, any
+/// temporary — that release was the last one and the generator later read a freed cell:
+///
+///     function gen($a, $b) { yield $a . '|' . $b; }
+///     gen('L1', 'L2');                 // yielded '|'
+///     $x = 'V1'; gen($x, 'L2');        // yielded 'V1|' — the VARIABLE survived
+///
+/// That asymmetry is why it only ever reproduced with literals, and why it never showed up in a
+/// compiled generator at all. `retain_generator_scope_args` now retains them into the generator's
+/// own scope, the same rule the `$this` binding at each generator site already followed.
+///
+/// Twig hits it on every render — `$this->unwrap()->yieldBlock('title', $context, $blocks)` sits
+/// in every compiled template — where the lost `$name` surfaced as
+/// `Block "" on template "base.html.twig" does not exist`.
+///
+/// The fixture runs through `eval()` so the generator is the INTERPRETER's, which is the only side
+/// that was wrong, and pins a plain method beside it so a shared regression cannot hide.
+///
+/// Oracle: `php -n` prints the asserted lines.
+#[test]
+fn test_an_interpreted_generator_keeps_its_literal_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+$code = <<<'PHPCODE'
+class G {
+    public function self_() { return $this; }
+    public function plain($a, $b, $c) { return $a . '|' . $b . '|' . $c; }
+    public function gen($a, $b, $c) { yield $a . '|' . $b . '|' . $c; }
+    public function chained(array $x) { yield from $this->self_()->gen('L1', $x[0], 'L3'); }
+}
+function free_gen($a, $b) { yield $a . '/' . $b; }
+$g = new G();
+$v = 'VAR';
+echo $g->plain('L1', 'L2', 'L3'), "\n";
+echo implode('', iterator_to_array($g->gen('L1', 'L2', 'L3'))), "\n";
+echo implode('', iterator_to_array($g->gen($v, 'L2', 3))), "\n";
+echo implode('', iterator_to_array($g->chained(['MID']))), "\n";
+echo implode('', iterator_to_array(free_gen('A', 'B'))), "\n";
+PHPCODE;
+eval($code);
+"#,
+    );
+    assert_eq!(
+        out,
+        "L1|L2|L3\nL1|L2|L3\nVAR|L2|3\nL1|MID|L3\nA/B\n"
+    );
+}

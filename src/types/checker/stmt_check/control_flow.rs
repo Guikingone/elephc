@@ -264,6 +264,9 @@ impl Checker {
                     self.record_ref_bound_alias_root(array);
                     self.ref_aliased_locals.insert(value_var.clone());
                     self.ref_bound_locals.insert(value_var.clone());
+                    // Same rule as `=&`: a by-reference foreach binds the element cell,
+                    // which is not the boxed capture cell the exemption is about.
+                    self.by_ref_capture_boxed_locals.remove(value_var);
                 }
                 let arr_ty = self.infer_type_with_assignment_effects(array, env)?;
                 if let PhpType::Array(elem_ty) = &arr_ty {
@@ -624,7 +627,8 @@ impl Checker {
                 match thrown_ty {
                     PhpType::Object(type_name)
                         if self.object_type_implements_throwable(&type_name)
-                            || self.unresolved_new_object_defers_to_runtime(expr, &type_name) =>
+                            || self.unresolved_new_object_defers_to_runtime(expr, &type_name)
+                            || self.absent_class_defers_to_runtime(&type_name) =>
                     {
                         Ok(())
                     }
@@ -632,6 +636,9 @@ impl Checker {
                         stmt.span,
                         "Type error: throw requires an object implementing Throwable",
                     )),
+                    // `Never` reaches here only from a guard the checker has just proven
+                    // cannot be taken, so the statement is unreachable rather than wrong.
+                    PhpType::Never => Ok(()),
                     ref ty
                         if crate::types::checker::type_compat::type_is_gradual_object_family(ty) =>
                     {
@@ -649,12 +656,63 @@ impl Checker {
                 finally_body,
             } => {
                 let mut errors = Vec::new();
+                // A `catch` runs because some statement in the try RAISED, so it must see what
+                // the variables held at a point where that could happen: the environment BEFORE
+                // each statement. Checking the catches against the environment the try body LEFT
+                // says every assignment completed — the one thing that cannot be true of the
+                // statement that threw.
+                //
+                // Symfony's `ClassStub::__construct` is the shape that exposed it:
+                //
+                //     if (\is_array($r)) {
+                //         try { $r = new \ReflectionMethod($r[0], $r[1]); }
+                //         catch (\ReflectionException) { $r = new \ReflectionClass($r[0]); }
+                //     }
+                //
+                // The catch indexes `$r`, which is still the array — the store never happened —
+                // but the checker had already retyped it to `ReflectionMethod` and refused with
+                // "Cannot index non-array".
+                //
+                // The env AFTER the last statement is deliberately NOT joined in: if every
+                // statement completed, nothing threw and no catch runs.
+                //
+                // Residual imprecision, in exchange: a statement that completes a nested
+                // assignment and only then raises (`foo($r = 1, throws())`) reaches its catch
+                // with the pre-statement type. The previous behaviour had the mirror-image
+                // problem for every ordinary assignment, which is the common shape.
+                let mut throw_point_envs = Vec::with_capacity(try_body.len().max(1));
                 for s in try_body {
+                    throw_point_envs.push(env.clone());
                     if let Err(error) = self.check_stmt(s, env) {
                         errors.extend(error.flatten());
                     }
                 }
+                let catch_env = join_fallthrough_type_envs(self, &throw_point_envs).map(
+                    |mut joined| {
+                        // A name the TRY INTRODUCED is not in any throw-point environment, but it
+                        // can still be live in the catch: PHP binds a BY-REFERENCE argument at the
+                        // call, before the callee body can raise. `HttpKernel::handle` does
+                        // exactly that with `$controllerMetadata`. Such a name can only have come
+                        // from the try, so it keeps the type the try left.
+                        for (name, ty) in env.iter() {
+                            if !joined.contains_key(name) {
+                                joined.insert(name.clone(), ty.clone());
+                            }
+                        }
+                        joined
+                    },
+                );
+                // Every way the statement can finish: the try body completing, or one of the
+                // catches completing. They are joined on the way out so a catch's bindings —
+                // including its own exception variable, which PHP leaves defined afterwards —
+                // survive the statement.
+                let mut exit_envs = vec![env.clone()];
                 for catch_clause in catches {
+                    let mut catch_scope = match &catch_env {
+                        Some(joined) => joined.clone(),
+                        None => env.clone(),
+                    };
+                    let env = &mut catch_scope;
                     let mut resolved_types = Vec::new();
                     for raw_exception_type in &catch_clause.exception_types {
                         let exception_type =
@@ -691,6 +749,12 @@ impl Checker {
                             errors.extend(error.flatten());
                         }
                     }
+                    if !self.body_cannot_fall_through(&catch_clause.body) {
+                        exit_envs.push(catch_scope);
+                    }
+                }
+                if let Some(joined) = join_fallthrough_type_envs(self, &exit_envs) {
+                    *env = joined;
                 }
                 if let Some(body) = finally_body {
                     self.finally_break_continue_bases

@@ -64,6 +64,13 @@ enum GuardTarget {
     AnyArray,
     /// Any object, regardless of its nominal class.
     AnyObject,
+    /// Any value `foreach` accepts: an array of either storage, or a `Traversable` object.
+    AnyIterable,
+    /// Any value `is_callable()` accepts. Unlike `Exact(Callable)` — which `instanceof Closure`
+    /// uses and which proves a closure object — this one also admits the plain function-name
+    /// string, so an unconstrained receiver narrows to the boxed `Callable|string` union instead
+    /// of the descriptor-shaped `Callable`.
+    AnyCallable,
     /// Any indexed/associative array or object implementing `Countable`.
     Countable,
     /// A value accepted by `is_numeric()`, including runtime-validated numeric strings.
@@ -77,6 +84,20 @@ impl GuardTarget {
             Self::Exact(ty) => ty.clone(),
             Self::AnyArray => PhpType::Array(Box::new(PhpType::Mixed)),
             Self::AnyObject => PhpType::Object(String::new()),
+            // `iterable` is `array|Traversable` and the guard proves exactly that pair. Keeping
+            // the two members apart is what lets a following `is_array()` guard subtract one and
+            // leave the other: `twig/twig`'s `CoreExtension::filter()` throws unless
+            // `is_iterable($array)`, returns early when `is_array($array)`, and then hands what is
+            // left to `new \IteratorIterator($array)` -- which needs a Traversable, not a Mixed.
+            Self::AnyIterable => PhpType::Union(vec![
+                PhpType::Array(Box::new(PhpType::Mixed)),
+                PhpType::Object("Traversable".to_string()),
+            ]),
+            // `is_callable($x)` on an unconstrained value proves a callable, not a closure: PHP
+            // accepts a function-name string there too, and Symfony's `ClassStub::wrapCallable`
+            // feeds exactly that value to a `string` parameter. The union keeps the boxed Mixed
+            // representation the storage already has, so the scalar funnel accepts it.
+            Self::AnyCallable => PhpType::Union(vec![PhpType::Callable, PhpType::Str]),
             Self::NonNull | Self::UnknownObject => PhpType::Mixed,
             Self::Numeric => PhpType::Mixed,
             Self::Countable => PhpType::Union(vec![
@@ -244,6 +265,11 @@ impl Checker {
                     self.normalize_union_type(kept)
                 }
             }
+            // A local known to hold ONLY null cannot be truthy, so the guarded branch is dead.
+            // Saying so is what lets `if ($e) { throw $e; }` compile after a `goto` cloned the
+            // live copy elsewhere -- twig's `CoreExtension::getAttribute()` leaves exactly that
+            // tail behind, with `$propertyNotAllowedError` still at its `= null` initialiser.
+            PhpType::Void | PhpType::False => PhpType::Never,
             _ => current.clone(),
         };
         if !overwrites && truthy == current {
@@ -333,6 +359,39 @@ impl Checker {
     /// the key construction; guard recognition and stability validation remain owned here.
     pub(crate) fn flow_guard_env_key(&self, receiver: &Expr) -> Option<String> {
         self.guard_env_key(receiver)
+    }
+
+    /// Records that this body TESTED whether a receiver has a method, so a call it guards is
+    /// admitted even when no class in the closed world declares that method.
+    ///
+    /// Only a literal method name counts: a computed one names no method to admit. The receiver
+    /// uses the same place key the type guards use, so `method_exists($a, 'm')` says nothing about
+    /// `$b->m()`.
+    pub(crate) fn record_method_exists_capability_guard(&mut self, name: &str, args: &[Expr]) {
+        if !name.eq_ignore_ascii_case("method_exists") || args.len() != 2 {
+            return;
+        }
+        let ExprKind::StringLiteral(method) = &args[1].kind else {
+            return;
+        };
+        let Some(receiver_key) = self.guard_env_key(&args[0]) else {
+            return;
+        };
+        let scope = self.current_loop_storage_scope.clone();
+        self.method_exists_guards
+            .insert((scope, receiver_key, php_symbol_key(method)));
+    }
+
+    /// Reports whether this body tested `receiver` for `method_key` with `method_exists()`.
+    pub(crate) fn method_exists_capability_guarded(&self, receiver: &Expr, method_key: &str) -> bool {
+        let Some(receiver_key) = self.guard_env_key(receiver) else {
+            return false;
+        };
+        self.method_exists_guards.contains(&(
+            self.current_loop_storage_scope.clone(),
+            receiver_key,
+            method_key.to_string(),
+        ))
     }
 
     /// Records the flow fact produced by a completed property or static-property write.
@@ -520,6 +579,25 @@ impl Checker {
                 matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. })
             }
             GuardTarget::AnyObject => matches!(member, PhpType::Object(_)),
+            GuardTarget::AnyIterable => match member {
+                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => true,
+                // An UNRESOLVED class name is not proof of anything, but it is not a
+                // counter-example either: keep it, exactly as the generic-object guard does.
+                PhpType::Object(class_name) => {
+                    class_name.is_empty()
+                        || class_name
+                            .trim_start_matches('\\')
+                            .eq_ignore_ascii_case("Traversable")
+                        || self.class_implements_interface(class_name, "Traversable")
+                        || self.class_implements_interface(class_name, "Iterator")
+                        || self.class_implements_interface(class_name, "IteratorAggregate")
+                }
+                _ => false,
+            },
+            // Deliberately the same member test as `Exact(Callable)`: `is_callable` is a value
+            // predicate for strings and arrays, so its false edge must not strip a `string`
+            // member — a non-callable string is still a string.
+            GuardTarget::AnyCallable => matches!(member, PhpType::Callable),
             GuardTarget::Countable => match member {
                 PhpType::Array(_) | PhpType::AssocArray { .. } => true,
                 PhpType::Object(class_name) => {
@@ -683,8 +761,11 @@ fn guard_receiver_and_target<'a>(
                 // null as Void, so the complement strips it (`if (is_null($x)) { throw; }` leaves
                 // ?int as int on the fall-through path).
                 "is_null" => GuardTarget::Exact(PhpType::Void),
-                "is_callable" => GuardTarget::Exact(PhpType::Callable),
+                "is_callable" => GuardTarget::AnyCallable,
                 "is_array" => GuardTarget::AnyArray,
+                // `is_iterable($x)` proves `array|Traversable`, which is what makes the
+                // `is_array()` guard that usually follows it able to leave a Traversable behind.
+                "is_iterable" => GuardTarget::AnyIterable,
                 "is_object" => GuardTarget::AnyObject,
                 // A true result proves exactly the two families accepted by `count()`. Keep
                 // unguarded `iterable` strict because it may be a non-Countable Traversable.

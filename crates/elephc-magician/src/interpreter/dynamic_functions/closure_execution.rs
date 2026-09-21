@@ -109,6 +109,13 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     // them, and hands back a Generator whose body starts only when it is first asked for a
     // value, so the bound scope becomes the generator's own and outlives this call.
     if eval_body_is_generator(function.body()) {
+        retain_generator_scope_args(
+            &mut function_scope,
+            function.params(),
+            &scope_parameter_is_by_ref,
+            &evaluated_args,
+            values,
+        )?;
         let generator = eval_generator_new(
             function.body(),
             std::mem::replace(&mut function_scope, ElephcEvalScope::new()),
@@ -194,7 +201,7 @@ pub(in crate::interpreter) fn eval_closure_with_evaluated_args(
             .unwrap_or(class_scope)
             .to_string(),
     });
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         eprintln!(
             "[elephc-eval-trace] phase=closure_invoke function={:?} lexical_class={:?} called_class={:?} binding={}",
             closure.function().name(),

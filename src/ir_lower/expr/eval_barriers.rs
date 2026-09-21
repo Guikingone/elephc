@@ -289,11 +289,15 @@ pub(super) fn eval_literal_static_function_supported_by_lowering(
     if args.len() > 6 {
         return false;
     }
-    let key = php_symbol_key(name.trim_start_matches('\\'));
+    // Two `php_symbol_key` results compare equal exactly when the sources do under
+    // `eq_ignore_ascii_case` — which does not allocate a key for every function in the module.
+    let wanted = name.trim_start_matches('\\');
     let Some(signature) = ctx
         .functions
         .iter()
-        .find(|(function_name, _)| php_symbol_key(function_name.trim_start_matches('\\')) == key)
+        .find(|(function_name, _)| {
+            function_name.trim_start_matches('\\').eq_ignore_ascii_case(wanted)
+        })
         .map(|(_, signature)| signature)
     else {
         return false;
@@ -419,8 +423,8 @@ pub(super) fn lower_eval_class_probe(
 
 /// Returns true when an AOT class already satisfies a native class_exists probe.
 pub(super) fn aot_class_exists_for_eval_probe(ctx: &LoweringContext<'_, '_>, class_name: &str) -> bool {
-    let key = php_symbol_key(class_name.trim_start_matches('\\'));
-    let is_match = |candidate: &str| php_symbol_key(candidate.trim_start_matches('\\')) == key;
+    let wanted = class_name.trim_start_matches('\\');
+    let is_match = |candidate: &str| candidate.trim_start_matches('\\').eq_ignore_ascii_case(wanted);
     ctx.classes.keys().any(|candidate| is_match(candidate))
         || crate::types::builtin_classes::intrinsic_class_names().any(is_match)
 }

@@ -297,6 +297,16 @@ impl Checker {
                 .direct_function_call_signature(name)
                 .map(|(signature, _)| signature)),
             ExprKind::Variable(var_name) => Ok(self.callable_sigs.get(var_name).cloned()),
+            // `(self::$callback)(…)`. `record_static_property_callable_sig` records the closure a
+            // static property holds precisely so this call site can read its by-reference
+            // parameters back, and the read side was missing — the map was written and never
+            // consulted. Symfony's `AbstractAdapter::commit()` is the case it was written for:
+            // `(self::$mergeByLifetime)($this->deferred, $this->namespace, $expiredIds, …)`
+            // DEFINES `$expiredIds`, and without the signature the later `if ($expiredIds)` read
+            // an undefined variable.
+            ExprKind::StaticPropertyAccess { receiver, property } => {
+                Ok(self.static_property_callable_sig(receiver, property))
+            }
             ExprKind::ArrayAccess { array, .. } => {
                 if let ExprKind::Variable(array_name) = &array.kind {
                     Ok(self.callable_sigs.get(array_name).cloned())
@@ -316,6 +326,43 @@ impl Checker {
             }
             _ => Ok(None),
         }
+    }
+
+    /// Looks up the closure signature recorded for `Receiver::$property`, if any.
+    ///
+    /// Keyed the same way `record_static_property_callable_sig` writes it — by the DECLARING
+    /// class, so a subclass receiver finds the signature the parent's property carries. Resolution
+    /// failures answer `None` rather than an error: this is an optional refinement of a call, and
+    /// every real diagnostic about the receiver is raised by the access itself.
+    fn static_property_callable_sig(
+        &self,
+        receiver: &StaticReceiver,
+        property: &str,
+    ) -> Option<FunctionSig> {
+        let class_name = match receiver {
+            StaticReceiver::Named(name) => {
+                let wanted = name.as_str().trim_start_matches('\\');
+                self.classes
+                    .keys()
+                    .find(|existing| existing.eq_ignore_ascii_case(wanted))
+                    .cloned()?
+            }
+            StaticReceiver::Self_ | StaticReceiver::Static => self.current_class.clone()?,
+            StaticReceiver::Parent => self
+                .classes
+                .get(self.current_class.as_ref()?)
+                .and_then(|class_info| class_info.parent.clone())?,
+        };
+        let declaring_class = self
+            .classes
+            .get(&class_name)
+            .and_then(|class_info| {
+                class_info.static_property_declaring_classes.get(property).cloned()
+            })
+            .unwrap_or(class_name);
+        self.static_property_callable_sigs
+            .get(&format!("{}::${}", declaring_class, property))
+            .cloned()
     }
 
     /// Extracts the element callable signature from an expression that yields an array of callables.
@@ -497,10 +544,10 @@ impl Checker {
 
     /// Resolves a class name case-insensitively for metadata lookups.
     fn resolve_class_name_for_metadata(&self, class_name: &str) -> Option<String> {
-        let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
+        let wanted = class_name.trim_start_matches('\\');
         self.classes
             .keys()
-            .find(|existing| php_symbol_key(existing) == class_key)
+            .find(|existing| existing.eq_ignore_ascii_case(wanted))
             .cloned()
     }
 

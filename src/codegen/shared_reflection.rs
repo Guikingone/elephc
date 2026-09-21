@@ -11,7 +11,7 @@
 //! - The append-only label cache exposes length checkpoints for subtree and body rollback.
 //! - Generator membership is frozen from the final immutable EIR module before emission.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::ir::Module;
 use crate::names::php_symbol_key;
@@ -96,15 +96,21 @@ pub(super) struct SharedReflectionState {
     generator_methods: HashSet<String>,
     materializers: HashMap<ReflectionMaterializerKey, String>,
     materializer_order: Vec<ReflectionMaterializerKey>,
+    /// Bumped by every materializer cache access, read or write, so `emit_module` can tell
+    /// whether a body could have been emitted without the module's shared state. A materializer
+    /// belongs to the module exactly once, so a body that reaches this cache cannot be emitted
+    /// on a worker with a cache of its own. A `Cell` because the lookup takes `&self`.
+    cache_touches: std::cell::Cell<usize>,
 }
 
 impl SharedReflectionState {
     /// Creates empty storage used while `SharedCodegenState` assembles its module indexes.
     pub(super) fn empty() -> Self {
         Self {
-            generator_methods: HashSet::new(),
-            materializers: HashMap::new(),
+            generator_methods: HashSet::default(),
+            materializers: HashMap::default(),
             materializer_order: Vec::new(),
+            cache_touches: std::cell::Cell::new(0),
         }
     }
 
@@ -118,8 +124,9 @@ impl SharedReflectionState {
             .collect();
         Self {
             generator_methods,
-            materializers: HashMap::new(),
+            materializers: HashMap::default(),
             materializer_order: Vec::new(),
+            cache_touches: std::cell::Cell::new(0),
         }
     }
 
@@ -129,12 +136,21 @@ impl SharedReflectionState {
     }
 
     /// Returns the label already reserved for an exactly matching materializer key.
+    /// Returns how many materializer-cache accesses have been made so far.
+    pub(super) fn cache_touches(&self) -> usize {
+        self.cache_touches.get()
+    }
+
     pub(super) fn materializer_label(&self, key: &ReflectionMaterializerKey) -> Option<String> {
+        self.cache_touches.set(self.cache_touches.get() + 1);
+        // Counted for the diagnostic, but a materializer is a data entry: two workers interning
+        // one each is duplication, not a clash, so it does not force the body serial.
         self.materializers.get(key).cloned()
     }
 
     /// Appends a materializer reservation before its body is emitted.
     pub(super) fn reserve_materializer(&mut self, key: ReflectionMaterializerKey, label: String) {
+        self.cache_touches.set(self.cache_touches.get() + 1);
         debug_assert!(self.materializer_label(&key).is_none());
         self.materializer_order.push(key.clone());
         self.materializers.insert(key, label);

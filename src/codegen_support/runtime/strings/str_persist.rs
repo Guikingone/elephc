@@ -50,6 +50,34 @@ pub fn emit_str_persist(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp x0, #{}", CONCAT_TEMP_HEAP_KIND));        // is the source an unowned heap-backed concat temporary?
     emitter.instruction("ldp x29, x30, [sp], #16");                             // restore the frame pointer and return address after the probe
     emitter.instruction("b.ne __rt_str_persist_duplicate");                     // every other source still gets a fresh owned duplicate
+
+    // -- the kind byte alone is not proof of a block on AArch64 --
+    //
+    // x86_64 headers carry `X86_64_HEAP_MAGIC_HI32`, so `__rt_heap_kind` there can tell a real
+    // header from arbitrary bytes. AArch64 headers carry no magic: the probe bounds-checks the
+    // pointer against the arena and then reads `[p-8] & 0xff`, which for ANY interior pointer is
+    // whatever happens to sit there. Kind 7 is not a rare byte either -- a hash header keeps its
+    // `value_type` eight bytes before its `head` slot, so a pointer landing there reads 7 and
+    // this arm would "take over" the middle of a live table: it writes 1 over the table's
+    // value_type and hands the interior pointer back as an owned string, which is later freed at
+    // `p-16` and puts a bogus node covering live memory on the free list. That is the Twig
+    // generator crash -- a hash whose header is intact while its entries are interleaved with
+    // other blocks.
+    //
+    // A payload start is 16-byte aligned within the arena, its block is big enough to hold the
+    // string, and a transient has at most the one reference `__rt_heap_alloc` gave it. Any
+    // candidate failing those is duplicated instead, which is only slower, never wrong.
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    emitter.instruction("sub x10, x1, x9");                                     // x10 = payload offset within the arena
+    emitter.instruction("and x10, x10, #15");                                   // every real payload starts on a 16-byte boundary
+    emitter.instruction("cbnz x10, __rt_str_persist_duplicate");                // an interior pointer is not a block to take over
+    emitter.instruction("ldr w10, [x1, #-12]");                                 // load the candidate block refcount
+    emitter.instruction("cmp w10, #1");                                         // is anyone beyond the allocation holding it?
+    emitter.instruction("b.hi __rt_str_persist_duplicate");                     // a shared block must be duplicated, not stolen
+    emitter.instruction("ldr w10, [x1, #-16]");                                 // load the candidate block payload size
+    emitter.instruction("cmp x10, x2");                                         // can the block actually hold this string?
+    emitter.instruction("b.lo __rt_str_persist_duplicate");                     // too small to be this string's own block
+
     emitter.instruction("mov x9, #1");                                          // heap kind 1 = persisted elephc string
     emitter.instruction("str x9, [x1, #-8]");                                   // retag the concat temporary as an owned string in place
     emitter.instruction("ret");                                                 // return the taken-over block with its length unchanged

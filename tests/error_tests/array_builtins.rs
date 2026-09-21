@@ -70,26 +70,31 @@ fn test_error_array_reverse_wrong_args() {
     );
 }
 
-/// Verifies `array_reverse()` rejects a non-literal `preserve_keys` flag in AOT mode.
+/// Verifies `array_reverse()` still refuses a run-time `preserve_keys` over a GRADUAL source.
 ///
-/// The flag decides the result's static shape (indexed array vs integer-keyed hash), so it
-/// cannot be resolved at run time the way `in_array()`'s `strict` flag can.
+/// A container whose shape is known statically now resolves the flag at run time: both arms are
+/// emitted and the branch picks one. An indexed array reverses to an array or an integer-keyed
+/// hash; a hash reverses to a hash either way, its `false` arm being the key-preserving reverse
+/// followed by `__rt_hash_reindex`. A value only known to be an array at run time has no two arms
+/// to emit, and answers with the gradual wording it already used for a literal `true`.
 #[test]
 fn test_error_array_reverse_non_literal_preserve_keys() {
     expect_error(
-        "<?php $t = $argc > 0; array_reverse([1, 2], $t);",
-        "array_reverse() preserve_keys argument must be a literal bool in AOT mode",
+        "<?php $t = $argc > 0; $a = json_decode('[1,2]', true); array_reverse($a, $t);",
+        "array_reverse() cannot preserve keys for a gradual array type in AOT mode",
     );
 }
 
-/// Verifies `array_chunk()` rejects a non-literal `preserve_keys` flag in AOT mode.
+/// Verifies `array_chunk()` still rejects a run-time `preserve_keys` over a non-array source.
 ///
-/// The flag decides whether each chunk is a renumbered indexed array or an integer-keyed hash,
-/// so it cannot be resolved at run time.
+/// Every ARRAY shape now resolves the flag: a dense source emits both arms and branches between
+/// them, and the others answer through `__elephc_array_chunk_gradual_flagged`. A first argument
+/// that is not an array has no arm at all, and reports the flag first because that is the argument
+/// the checker reads first.
 #[test]
 fn test_error_array_chunk_non_literal_preserve_keys() {
     expect_error(
-        "<?php $t = $argc > 0; array_chunk([1, 2], 1, $t);",
+        "<?php $t = $argc > 0; array_chunk('not an array', 1, $t);",
         "array_chunk() preserve_keys argument must be a literal bool in AOT mode",
     );
 }
@@ -120,14 +125,16 @@ fn test_error_array_slice_wrong_args() {
     );
 }
 
-/// Verifies `array_slice()` rejects a non-literal `preserve_keys` flag in AOT mode.
+/// Verifies `array_slice()` still rejects a non-literal `preserve_keys` flag over a GRADUAL source.
 ///
-/// The flag decides the result's static shape (renumbered indexed array vs integer-keyed hash),
-/// exactly like `array_reverse()`'s flag, so it cannot be resolved at run time.
+/// An indexed source now resolves the flag at run time: both arms are emitted and boxed, so the
+/// call answers with their union, exactly as `array_reverse()` does. A gradual source routes its
+/// key-preserving arm through the compatibility prelude rather than a native lowering, so the two
+/// arms are not both available at the branch.
 #[test]
 fn test_error_array_slice_non_literal_preserve_keys() {
     expect_error(
-        "<?php $t = $argc > 0; array_slice([1, 2], 0, 1, $t);",
+        "<?php $t = $argc > 0; $a = json_decode('[1,2]', true); array_slice($a, 0, 1, $t);",
         "array_slice() preserve_keys argument must be a literal bool in AOT mode",
     );
 }
@@ -218,12 +225,15 @@ fn test_error_array_fill_wrong_args() {
     );
 }
 
-/// Verifies that error array push wrong args.
+/// Verifies `array_push()` with no array still names its minimum, which PHP puts at one.
+///
+/// `array_push($a)` is legal — it appends nothing and answers `count($a)` — so the floor is the
+/// receiver, not a receiver plus a value.
 #[test]
 fn test_error_array_push_wrong_args() {
     expect_error(
         "<?php array_push();",
-        "array_push() takes exactly 2 arguments",
+        "array_push() takes at least 1 argument",
     );
 }
 
@@ -451,12 +461,15 @@ fn test_error_array_intersect_key_wrong_args() {
     );
 }
 
-/// Verifies that error array rand wrong args.
+/// Verifies `array_rand()` still reports its arity, now that `$num` is declared.
+///
+/// php-src's own wording is "expects at least 1 argument, 0 given"; the contract now carries the
+/// optional second parameter, so the range is what the message reports.
 #[test]
 fn test_error_array_rand_wrong_args() {
     expect_error(
         "<?php array_rand();",
-        "array_rand() takes exactly 1 argument",
+        "array_rand() takes 1 or 2 arguments",
     );
 }
 
@@ -508,7 +521,7 @@ fn test_error_natcasesort_wrong_args() {
 fn test_error_array_column_wrong_args() {
     expect_error(
         r#"<?php array_column([]);"#,
-        "array_column() takes exactly 2 arguments",
+        "array_column() takes 2 or 3 arguments",
     );
 }
 
@@ -969,6 +982,20 @@ fn test_error_array_pointer_literal_receiver() {
     expect_error(
         r#"<?php reset([1, 2, 3]);"#,
         "reset(): Argument #1 ($array) could not be passed by reference",
+    );
+}
+
+/// Verifies a builtin lowered through a dedicated EIR shape says so when handed a spread, instead
+/// of letting the mismatch surface as an internal operand-count error. `array_map()` needs its
+/// callback named at compile time, so the array it would unpack cannot stand in for it.
+#[test]
+fn test_error_array_map_rejects_spread_arguments() {
+    expect_error(
+        r#"<?php
+$spec = [static fn (int $n): int => $n * 2, [1, 2, 3]];
+var_dump(array_map(...$spec));
+"#,
+        "array_map() cannot take a spread argument",
     );
 }
 

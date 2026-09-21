@@ -200,6 +200,23 @@ pub(crate) fn canonical_compat_prelude_function_name(name: &str) -> Option<Strin
         "setproctitle",
         "str_getcsv",
         "error_reporting",
+        // `error_get_last` and `error_clear_last` join their family for the reason
+        // `ini_get_all` below documents: Symfony's `ErrorHandler` lives in
+        // `namespace Symfony\Component\ErrorHandler` and calls `error_get_last()` BARE from
+        // its shutdown handler. Without the global fallback that call stays
+        // `Symfony\Component\ErrorHandler\error_get_last` and dies at run time while
+        // `error_reporting()` in the same file resolves.
+        "error_get_last",
+        "error_clear_last",
+        // `trigger_error` was MISSING from this list, and had been since the family landed —
+        // found by `compat_prelude_gate_tests::an_autoloaded_shutdown_function_reads_the_last_error`,
+        // which died with `Call to undefined function App\trigger_error()`. It belongs here for
+        // exactly the same reason as its neighbours and is NOT covered by the ordinary builtin
+        // fallback: that one is driven by the compiler's registry-derived name set, and a
+        // `BuiltinKind::PreludeProvided` contract is deliberately absent from it. `error_log`
+        // is the one family member that does NOT need an entry, because its contract is an
+        // ordinary `BuiltinKind::Function` and the registry fallback already answers it.
+        "trigger_error",
         "set_error_handler",
         "get_error_handler",
         "restore_error_handler",
@@ -208,6 +225,11 @@ pub(crate) fn canonical_compat_prelude_function_name(name: &str) -> Option<Strin
         "restore_exception_handler",
         "ini_get",
         "ini_set",
+        // `ini_get_all` joins its two neighbours now that the CLI INI wrappers have a second,
+        // POST-AUTOLOAD injection site (`opcache_prelude::inject_cli_ini_if_used`). Without it
+        // a namespaced bare `ini_get_all()` in an autoloaded class stayed `Probe\ini_get_all`
+        // and died at run time while `ini_get()` one line above resolved — measured.
+        "ini_get_all",
         "get_cfg_var",
         "gc_enabled",
         "gc_enable",
@@ -216,10 +238,26 @@ pub(crate) fn canonical_compat_prelude_function_name(name: &str) -> Option<Strin
         "flush",
         "strnatcmp",
         "strnatcasecmp",
+        "parse_str",
         "hash_init",
         "hash_update",
         "hash_final",
         "hash_copy",
+        // `var_export` is not injected by the LATE prelude at all — `var_export_prelude` runs in
+        // its own phase before `autoload-run` — but it needs this entry for the same reason
+        // `ini_get_all` does, and the shape is measured rather than assumed: an entry that names
+        // `var_export` gets the prelude injected, and an AUTOLOADED class in `namespace App;`
+        // that calls the bare `var_export($v, true)` still died with `Call to undefined function
+        // App\var_export()`. Autoloaded files are name-resolved individually, and without a
+        // global fallback here `App\var_export` is simply an unknown function.
+        //
+        // The fallback is consulted only after the declared-function lookup in
+        // `symbols::canonical_function`, so a user's own `App\var_export()` still wins — which is
+        // the hijack `rewrite_var_export_return_flag`'s first guard exists to prevent, and it
+        // stays prevented. Once the name folds to the global one that rewrite also fires, so the
+        // autoloaded call is typed `string` rather than `string|null`, exactly as the entry
+        // file's call already was.
+        "var_export",
     ];
     let bare = name.trim_start_matches('\\');
     FUNCTIONS

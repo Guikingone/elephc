@@ -87,3 +87,318 @@ echo f(90.5, 2), "|", f(2, 90.5);
     );
     assert_eq!(out, "90.5,2|2,90.5");
 }
+
+
+/// A `?int` reaching a declared `int` return is PHP's RUNTIME TypeError, not a compile error.
+///
+/// The backend has answered this since `declared_int_return_boundary` landed: it boxes the compact
+/// nullable scalar and emits `ReturnBoundaryMixedToInt`, whose null arm raises PHP's own message.
+/// Only the checker still refused the shape, and it was the single error standing between
+/// Symfony's 165-file `--web` preload and a compiled binary — `KernelEvent` stores
+/// `private ?int $requestType` and returns it from `getRequestType(): int`, which reference PHP
+/// runs happily because the value is never actually null there.
+///
+/// Both halves matter: the non-null call must answer, and the null call must raise the SAME text
+/// `php -n` 8.5 prints, or accepting the shape would trade a loud refusal for a silent zero. A
+/// declared `float` or `string` return deliberately keeps refusing — those boundaries CONVERT
+/// rather than check, so the same admission there would answer `0.0` / `""` where PHP throws.
+///
+/// Oracle: `php -n` prints the asserted lines.
+#[test]
+fn test_nullable_int_return_raises_php_type_error_only_when_null() {
+    let out = compile_and_run(
+        r#"<?php
+class A {
+    public function __construct(private ?int $n) {}
+    public function get(): int { return $this->n; }
+}
+echo (new A(5))->get(), "\n";
+try {
+    echo (new A(null))->get(), "\n";
+} catch (TypeError $e) {
+    echo 'caught: ', $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "5\ncaught: A::get(): Return value must be of type int, null returned\n"
+    );
+}
+
+
+/// An overriding method's UNTYPED parameter stays gradual; it does not adopt the ancestor's type.
+///
+/// `adopt_ancestor_parameter_storage` exists so an override with an undeclared parameter uses the
+/// ancestor's parameter STORAGE — a caller reaches it through the ancestor's ABI, so a boxed
+/// gradual cell on one side and a raw slot on the other would not agree. It was applied to
+/// `__construct` as well, and a constructor is not an override: PHP exempts it from signature
+/// compatibility entirely, and nothing ever enters one through an ancestor's entry point —
+/// `new C(...)` calls C's, `parent::__construct(...)` calls the parent's.
+///
+/// The cost was seventeen refused calls in one Symfony build. `Twig\Node::__construct(array
+/// $nodes = [], array $attributes = [], int $lineno = 0)` stamped `array` onto
+/// `ConstantExpression::__construct($value, int $lineno)`, so every `new ConstantExpression('x',
+/// 1)` read as "parameter $value expects Array(Mixed), got Str" — about a parameter PHP reads as
+/// `mixed`.
+///
+/// The five values below are the five storage shapes the parameter has to carry, and they travel
+/// through the parent's declared `array $attributes` on the way, which is the half a
+/// type-check-only test would not reach.
+///
+/// Oracle: `php -n` prints the asserted lines.
+#[test]
+fn test_an_overriding_constructor_keeps_its_untyped_parameter_gradual() {
+    let out = compile_and_run(
+        r#"<?php
+class Node {
+    public array $attrs;
+    public function __construct(array $nodes = [], array $attributes = [], int $lineno = 0) {
+        $this->attrs = $attributes;
+    }
+    public function shown(): string { return var_export($this->attrs['value'] ?? null, true); }
+}
+class ConstantNode extends Node {
+    public function __construct($value, int $lineno) {
+        parent::__construct([], ['value' => $value], $lineno);
+    }
+}
+echo (new ConstantNode("x", 2))->shown(), "\n";
+echo (new ConstantNode(7, 3))->shown(), "\n";
+echo (new ConstantNode(true, 4))->shown(), "\n";
+echo (new ConstantNode(null, 5))->shown(), "\n";
+echo (new ConstantNode([1, 2], 6))->shown(), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "'x'\n",
+            "7\n",
+            "true\n",
+            "NULL\n",
+            "array (\n  0 => 1,\n  1 => 2,\n)\n",
+        )
+    );
+}
+
+
+/// A function nobody calls must not export a fabricated `int` into what it calls.
+///
+/// An undeclared parameter is seeded `PhpType::Int` as a gradual starting point that the FIRST
+/// call site discards and replaces with the real argument type. A function nothing calls never
+/// gets that call site, so the seed stops being a starting point and becomes the answer — and
+/// `int` is not what PHP reads an undeclared parameter as.
+///
+/// It did not stay contained: the uncalled body is still type-checked, and every call it makes
+/// hands the fabricated `int` to the callee, which adopts it as its own contract and locks it
+/// (the adoption is once-only, so no later caller can widen it back). Twig's deprecated
+/// `twig_array_filter(Environment $env, $array, $arrow)` is called by nothing and passes its two
+/// locals to `CoreExtension::filter()`; that froze `$array` and `$arrow` to `int` for the whole
+/// build, so `$arrow($v, $k)` read as "Cannot call $arrow — not a callable (got Int)" and
+/// `new \IteratorIterator($array)` as "expects Object(Traversable), got Int" — four refused calls
+/// across `filter`, `map`, `find` and `reduce`, on code PHP runs.
+///
+/// The methods equivalent was already right: `method_body_param_type` answers `mixed` for an
+/// undeclared parameter no call site has specialized.
+///
+/// The fixture reproduces the shape exactly: the only STATIC caller of each method is an uncalled
+/// wrapper, and the real calls arrive through a callable array, which is how Twig reaches them.
+/// Both symptoms are present — the callable one and the constructor one — because they are one
+/// defect, and asserting stdout rather than "it compiles" keeps the parameters honest at run time
+/// as well.
+///
+/// Oracle: `php -n` prints the asserted lines.
+#[test]
+fn test_an_uncalled_function_does_not_freeze_its_callees_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+class Ext {
+    public static function filter($array, $arrow)
+    {
+        $out = [];
+        foreach ($array as $k => $v) {
+            if ($arrow($v, $k)) {
+                $out[$k] = $v;
+            }
+        }
+        return $out;
+    }
+
+    public static function wrap($array)
+    {
+        return new ArrayIterator($array);
+    }
+
+    public static function entries(): array
+    {
+        return [[self::class, 'filter'], [self::class, 'wrap']];
+    }
+}
+
+function legacy_filter($array, $arrow)
+{
+    return Ext::filter($array, $arrow);
+}
+
+function legacy_wrap($array)
+{
+    return Ext::wrap($array);
+}
+
+$entries = Ext::entries();
+$filter = $entries[0];
+$wrap = $entries[1];
+echo implode(',', $filter([1, 2, 3, 4], fn ($v, $k) => $v % 2 === 0)), "\n";
+echo implode(',', iterator_to_array($wrap(['a', 'b']))), "\n";
+"#,
+    );
+    assert_eq!(out, "2,4\na,b\n");
+}
+
+
+/// A call may OMIT a by-reference parameter that has a default.
+///
+/// PHP allows `function f($a, ?array &$out = null)` and a caller that passes only `$a`: the callee
+/// writes through `&$out` and the write goes nowhere the caller can see. elephc had nowhere to put
+/// it — the default-argument path materializes a VALUE, which is not a cell — so the call reached
+/// the backend one operand short of the callee's ABI:
+///
+///     method call to ContainerBuilder::resolveEnvPlaceholders with 3 operands for 4 ABI params
+///
+/// The omitted position now gets a synthetic local seeded with the parameter's default, passed
+/// positionally, after which the ordinary by-reference machinery applies unchanged. It had to be
+/// wired into BOTH operand-assembly paths — `lower_method_call` and
+/// `lower_method_call_with_receiver` do not share one, and fixing only the second left the direct
+/// call still short.
+///
+/// The fixture calls the same method both ways — omitting the parameter and supplying it — so the
+/// synthetic place cannot be standing in for a real one.
+///
+/// Oracle: `php -n` prints the asserted lines.
+#[test]
+fn test_an_omitted_by_ref_parameter_gets_a_place() {
+    let out = compile_and_run(
+        r#"<?php
+class Resolver {
+    public function resolve(mixed $value, $format = null, ?array &$used = null): string
+    {
+        $used[] = 'seen';
+        return $value . ':' . var_export($format, true) . ':' . count($used);
+    }
+}
+$r = new Resolver();
+echo $r->resolve('a', true), "\n";
+$collected = [];
+echo $r->resolve('b', false, $collected), "\n";
+echo implode(',', $collected), "\n";
+"#,
+    );
+    assert_eq!(out, "a:true:1\nb:false:1\nseen\n");
+}
+
+
+/// A GRADUAL receiver may omit a by-reference parameter, and no caller-side padding can fix it.
+///
+/// `pad_omitted_by_ref_args` handles the nominal case by synthesising the missing argument in the
+/// IR — but that only works when the call has ONE signature to pad to. For a gradual receiver
+/// `lower_mixed_method_candidate` builds `param_types`/`ref_params` from EACH CANDIDATE's own
+/// signature at dispatch time, so one candidate's third parameter is another's second and the
+/// padding would be wrong for whichever one it was not written for. The backend refused:
+///
+///     receiver-register method call with missing non-value parameter
+///
+/// The omitted position now gets a DISCARDED CELL, the same thing an argument with no caller
+/// variable already got: planned by `plan_ref_arg_temp_cells` with no source operand, seeded to
+/// null, its address pushed, and released with the rest of the cell block after the call. The
+/// accounting that had to change with it is `arg_temp_bytes` — the fill loop used to push without
+/// advancing it because nothing read it afterwards, and a by-reference address is
+/// `arg_temp_bytes + cell_offset`.
+///
+/// The two classes deliberately put `&$seen` at DIFFERENT positions, which is what makes this
+/// unreachable by IR padding; verified by making the new helper refuse, which fails this fixture
+/// and not the single-candidate one above. Symfony reaches it at
+/// `HtmlErrorRenderer::getAndCleanOutputBuffer`, `$request->headers->get('X-Php-Ob-Level', -1)`
+/// over a gradual `headers`.
+///
+/// Oracle: `php -n` prints the asserted lines.
+#[test]
+fn test_a_gradual_receiver_may_omit_a_by_ref_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag {
+    public function get(string $key, $default = null, ?array &$seen = null): string
+    {
+        $seen[] = $key;
+        return 'bag:' . $key . '=' . var_export($default, true) . '#' . count($seen);
+    }
+}
+class Store {
+    public function get(string $key, ?array &$seen = null): string
+    {
+        $seen[] = $key;
+        return 'store:' . $key . '#' . count($seen);
+    }
+}
+function fetch(mixed $o): string { return $o->get('lvl'); }
+echo fetch(new Bag()), "\n";
+echo fetch(new Store()), "\n";
+$kept = [];
+echo (new Store())->get('kept', $kept), "\n";
+echo implode(',', $kept), "\n";
+"#,
+    );
+    assert_eq!(out, "bag:lvl=NULL#1\nstore:lvl#1\nstore:kept#1\nkept\n");
+}
+
+/// Verifies `is_iterable()` narrows a gradual value to `array|Traversable`, so a following
+/// `is_array()` guard can leave the Traversable behind.
+///
+/// Without the narrowing the fall-through kept whatever the parameter arrived as, and the first
+/// thing that needs a real object refused it: `twig/twig`'s `CoreExtension::filter()` throws unless
+/// `is_iterable($array)`, returns early when `is_array($array)`, and hands what is left to
+/// `new \IteratorIterator($array)` -- which the backend answered with
+/// `unsupported EIR backend feature: IteratorIterator source PHP type Mixed`.
+#[test]
+fn test_is_iterable_narrows_a_gradual_value_to_array_or_traversable() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(int $which)
+{
+    if (0 === $which) {
+        return [1, 2, 3, 4];
+    }
+
+    return (function () { yield 1; yield 2; yield 3; yield 4; })();
+}
+
+function myFilter($array, $arrow)
+{
+    if (!is_iterable($array)) {
+        throw new RuntimeException('expects a sequence');
+    }
+
+    if (\is_array($array)) {
+        return array_filter($array, $arrow);
+    }
+
+    return new \CallbackFilterIterator(new \IteratorIterator($array), $arrow);
+}
+
+$even = static fn ($v) => 0 === $v % 2;
+
+$out = [];
+foreach (myFilter(pick(0), $even) as $v) {
+    $out[] = $v;
+}
+echo implode(',', $out), ';';
+
+$out2 = [];
+foreach (myFilter(pick(1), $even) as $v) {
+    $out2[] = $v;
+}
+echo implode(',', $out2);
+"#,
+    );
+    assert_eq!(out, "2,4;2,4");
+}

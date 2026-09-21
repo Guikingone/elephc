@@ -96,11 +96,193 @@ pub(crate) fn lower_array_reduce(ctx: &mut FunctionContext<'_>, inst: &Instructi
 }
 
 /// Lowers `array_walk()` through the callback-driven runtime helper.
+/// A closure literal whose FIRST parameter is by-reference, resolved at the `array_walk` call site.
+///
+/// Everything needed to call it directly is here: `closure_new` carries the closure's name and its
+/// capture operands, and the compiled closure's parameter list is `[element, captures…]` with the
+/// captures appended by `lower_closure`.
+struct ByRefClosureWalkTarget {
+    symbol: String,
+    capture_types: Vec<PhpType>,
+    capture_values: Vec<ValueId>,
+    /// Whether each capture is a `use (&$x)` one, which is passed as the SLOT'S ADDRESS.
+    capture_by_ref: Vec<bool>,
+}
+
+/// Recognises `array_walk($a, function (&$v) { … })` at the point where the closure is still known.
+///
+/// `None` for every other callback shape — a string name, a first-class callable, a `callable`
+/// parameter — because those reach the closure through the descriptor invoker, which passes
+/// arguments by value and has no by-reference support (see the `!param.by_ref` filter in
+/// `codegen::lower_inst::callables`). Those keep the checker's refusal rather than silently
+/// dropping the callback's writes.
+fn by_ref_closure_walk_target(
+    ctx: &FunctionContext<'_>,
+    callback: ValueId,
+) -> Option<ByRefClosureWalkTarget> {
+    let value = ctx.function.value(callback)?;
+    let crate::ir::ValueDef::Instruction { inst, .. } = value.def else {
+        return None;
+    };
+    let inst = ctx.function.instruction(inst)?;
+    if inst.op != crate::ir::Op::ClosureNew {
+        return None;
+    }
+    let Some(crate::ir::Immediate::Data(data)) = inst.immediate else {
+        return None;
+    };
+    let name = ctx.module.data.strings.get(data.as_raw() as usize)?;
+    let closure = ctx
+        .module
+        .closures
+        .iter()
+        .find(|closure| closure.name == *name)?;
+    if !closure.params.first()?.by_ref {
+        return None;
+    }
+    // The captures are the TAIL of the closure's parameter list, one per `closure_new` operand,
+    // in the same order.
+    let capture_count = inst.operands.len();
+    if closure.params.len() != capture_count + 1 {
+        return None;
+    }
+    Some(ByRefClosureWalkTarget {
+        symbol: function_symbol(&closure.name),
+        capture_types: closure
+            .params
+            .iter()
+            .skip(1)
+            .map(|param| param.php_type.codegen_repr())
+            .collect(),
+        capture_values: inst.operands.clone(),
+        capture_by_ref: closure.params.iter().skip(1).map(|param| param.by_ref).collect(),
+    })
+}
+
+/// Lowers `array_walk()` for a by-reference closure, walking slot ADDRESSES.
+///
+/// Builds the direct-callback environment the non-descriptor wrapper expects — the closure entry
+/// in slot 0 and one capture per 16-byte slot after it — and hands `__rt_array_walk_ref` a wrapper
+/// that forwards its first argument, the element's address, straight to the closure's
+/// by-reference parameter.
+fn lower_array_walk_by_ref(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    elem_ty: PhpType,
+    target: ByRefClosureWalkTarget,
+) -> Result<()> {
+    // The visible argument is a raw cell address, and declaring it with the element's own type is
+    // what keeps the wrapper from converting it: `target_visible_arg_types: None` means the
+    // wrapper's source and target agree, so the address is moved rather than coerced.
+    let wrapper_label = ctx.next_global_label("array_walk_by_ref_callback_wrapper");
+    let done_label = ctx.next_label("array_walk_by_ref_after_wrapper");
+    let wrapper = DeferredCallbackWrapper {
+        label: wrapper_label.clone(),
+        visible_arg_types: vec![elem_ty],
+        target_visible_arg_types: None,
+        capture_types: target.capture_types.clone(),
+        descriptor_prefix_types: Vec::new(),
+        descriptor_return_type: None,
+    };
+    abi::emit_jump(ctx.emitter, &done_label);
+    crate::codegen::emit_callback_wrapper(ctx.emitter, &wrapper);
+    ctx.emitter.label(&done_label);
+
+    let env_bytes = 16 * (target.capture_values.len() + 1);
+    abi::emit_reserve_temporary_stack(ctx.emitter, env_bytes);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, result_reg, &target.symbol);
+    store_walk_env_slot(ctx, 0);
+    for (index, capture) in target.capture_values.iter().enumerate() {
+        // A `use (&$x)` capture is the slot's ADDRESS, not its value — the same thing
+        // `emit_runtime_closure_descriptor_with_captures` stores into the descriptor, and what the
+        // closure's `load_ref_cell` / `store_ref_cell` reach through. The slot was already
+        // promoted to a reference cell when `closure_new` ran, so only the address is needed here.
+        if target.capture_by_ref.get(index).copied().unwrap_or(false) {
+            crate::codegen::lower_inst::materialize_local_ref_arg_address(ctx, *capture)?;
+        } else {
+            ctx.load_value_to_result(*capture)?;
+        }
+        store_walk_env_slot(ctx, index + 1);
+    }
+
+    let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &wrapper_label);
+    ctx.load_value_to_reg(array, array_arg_reg)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("mov {}, sp", env_arg_reg)),
+        Arch::X86_64 => ctx.emitter.instruction(&format!("mov {}, rsp", env_arg_reg)),
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_walk_ref");
+    abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
+    store_void_builtin_result(ctx, inst)
+}
+
+/// Stores the current integer result into one 16-byte slot of the walk callback environment.
+fn store_walk_env_slot(ctx: &mut FunctionContext<'_>, index: usize) {
+    let offset = index * 16;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx
+            .emitter
+            .instruction(&format!("str x0, [sp, #{}]", offset)),   // env slot: closure entry, then one capture each
+        Arch::X86_64 => ctx
+            .emitter
+            .instruction(&format!("mov QWORD PTR [rsp + {}], rax", offset)), // env slot: closure entry, then one capture each
+    }
+}
+
+/// Returns the element type `array_walk()` can hand its callback, one 8-byte slot at a time.
+///
+/// Wider than the shared `eight_byte_callback_value_type`, which admits only `Int`/`Bool` and is
+/// also `array_reduce`'s gate — a gradual element there is an accumulator question, not this one.
+/// `__rt_array_walk` walks fixed 8-byte slots and hands each to the wrapper, so anything whose
+/// runtime payload IS one 8-byte word rides through: a boxed `Mixed` cell and an object handle,
+/// exactly the reasoning `indexed_sort_element_type` already applies to the permuting sorts.
+///
+/// A declared bare `array` parameter is `array<mixed>`, so without `Mixed` this refused the most
+/// ordinary spelling there is: `function f(array $rows) { array_walk($rows, fn ($v) => ...); }`.
+/// Symfony's `Yaml\Command\LintCommand::displayJson` is that shape.
+///
+/// `Str` stays out: a string element is a multi-word descriptor, not one slot, which is the same
+/// reason the slot-permuting sorts refuse it — and a clear unsupported-feature error beats a
+/// corrupt walk.
+fn array_walk_element_type(ty: PhpType) -> Result<PhpType> {
+    let PhpType::Array(elem) = ty.codegen_repr() else {
+        return Err(CodegenIrError::unsupported(format!(
+            "array_walk for PHP type {:?}",
+            ty.codegen_repr()
+        )));
+    };
+    let elem = elem.codegen_repr();
+    if matches!(
+        elem,
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Void
+            | PhpType::Never
+            | PhpType::Mixed
+            | PhpType::Object(_)
+    ) {
+        return Ok(elem);
+    }
+    Err(CodegenIrError::unsupported(format!(
+        "array_walk PHP type {:?}",
+        elem
+    )))
+}
+
 pub(crate) fn lower_array_walk(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "array_walk", 2)?;
     let array = expect_operand(inst, 0)?;
     let callback = expect_operand(inst, 1)?;
-    let elem_ty = eight_byte_callback_array_element_type(ctx.value_php_type(array)?, "array_walk")?;
+    let elem_ty = array_walk_element_type(ctx.value_php_type(array)?)?;
+    // A callback that takes its element BY REFERENCE needs the slot's ADDRESS, not its value.
+    if let Some(target) = by_ref_closure_walk_target(ctx, callback) {
+        return lower_array_walk_by_ref(ctx, inst, array, elem_ty, target);
+    }
     match ctx.value_php_type(callback)?.codegen_repr() {
         PhpType::Callable => {
             lower_descriptor_callback_runtime(
@@ -386,6 +568,9 @@ pub(crate) fn lower_array_intersect_key(
 pub(crate) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "array_slice", 2, 4)?;
     let array = expect_operand(inst, 0)?;
+    if let Some(flag) = slice_like_non_literal_preserve_keys(ctx, inst)? {
+        return lower_array_slice_dynamic_preserve_keys(ctx, inst, array, flag);
+    }
     if slice_like_preserve_keys(ctx, inst, "array_slice")? {
         return lower_array_slice_preserve_keys(ctx, inst, array);
     }
@@ -403,6 +588,52 @@ pub(crate) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instructio
     require_array_slice_result_type(&source_elem_ty, &result_elem_ty)?;
     lower_array_slice_call(ctx, array, offset, length, &source_elem_ty)?;
     normalize_indexed_array_result(ctx, "array_slice", &source_elem_ty, &result_elem_ty)?;
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `array_slice($array, $offset, $length, $flag)` when `$flag` is only known at run time.
+///
+/// The checker has already restricted this to an INDEXED source, whose two arms are a dense array
+/// and an integer-keyed hash. Both are emitted and boxed as Mixed, because they are different
+/// representations and the call's result type is their union — the same shape `array_reverse()`
+/// uses for its own runtime flag.
+fn lower_array_slice_dynamic_preserve_keys(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    flag: ValueId,
+) -> Result<()> {
+    let false_case = ctx.next_label("array_slice_preserve_false");
+    let done = ctx.next_label("array_slice_preserve_done");
+
+    let source_ty = ctx.value_php_type(array)?.codegen_repr();
+    let PhpType::Array(elem) = source_ty.clone() else {
+        return Err(CodegenIrError::unsupported(format!(
+            "array_slice with a runtime preserve_keys flag for PHP type {:?}",
+            source_ty
+        )));
+    };
+    let preserved_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Int),
+        value: elem,
+    };
+    let offset = expect_operand(inst, 1)?;
+    let length = slice_like_length_operand(inst)?;
+
+    crate::codegen::lower_inst::builtins::spl::emit_preserve_keys_truthiness(ctx, flag)?;
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &false_case);
+
+    lower_slice_like_args(ctx, array, offset, length, "array_slice")?;
+    abi::emit_call_label(ctx.emitter, "__rt_array_slice_to_hash");
+    crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &preserved_ty);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&false_case);
+    let source_elem_ty = array_slice_source_element_type(ctx.value_php_type(array)?)?;
+    lower_array_slice_call(ctx, array, offset, length, &source_elem_ty)?;
+    crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &source_ty);
+
+    ctx.emitter.label(&done);
     store_if_result(ctx, inst)
 }
 

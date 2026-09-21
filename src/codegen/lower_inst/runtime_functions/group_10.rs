@@ -195,6 +195,9 @@ pub(super) fn lower(
         RuntimeFnId::Substr => Some({
             crate::codegen::lower_inst::builtins::strings::lower_substr(ctx, inst)
         }),
+        RuntimeFnId::SubstrCompare => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_substr_compare(ctx, inst)
+        }),
         RuntimeFnId::SubstrCount => Some({
             crate::codegen::lower_inst::builtins::strings::lower_substr_count(ctx, inst)
         }),

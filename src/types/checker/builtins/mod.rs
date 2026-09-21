@@ -206,6 +206,10 @@ impl Checker {
             return Ok(None);
         }
         let is_lazy_construct = matches!(builtin_key.as_str(), "isset" | "unset");
+        // The written call, before `plan_builtin_call_args` materializes defaults and rewrites
+        // spreads. Only these arguments say how many values a spread of a written-out array
+        // actually supplies, which is what the arity check below needs.
+        let source_args = args;
         let normalized_args;
         let mut builtin_arg_plan = None;
         let args = if let Some(sig) =
@@ -243,7 +247,25 @@ impl Checker {
         // validation, and result typing. Only compiler-resident language
         // constructs continue below this branch.
         if let Some(def) = crate::builtins::registry::lookup(name) {
-            crate::builtins::registry::check_arity(name, args.len(), span)?;
+            // A spread stands for however many elements its array holds, so the WRITTEN argument
+            // count is not the call's arity. Counting `...$a` as one argument rejected perfectly
+            // valid PHP — `method_exists(...$controller)` in Symfony's `ControllerEvent`,
+            // `str_contains(...$args)` — with "takes exactly 2 arguments", even though the
+            // backend lowers such a call correctly.
+            //
+            // Internal functions DO reject a surplus (`tmpfile(...[1])` is an
+            // `ArgumentCountError`), unlike userland ones, so a spread whose array is WRITTEN OUT
+            // keeps every check it had: the count is knowable and `tmpfile`'s own hook reads the
+            // spread's shape directly. Only a spread of unknown length is unanswerable here, and
+            // PHP settles that one at the call too.
+            let has_spread_arg = args
+                .iter()
+                .any(|arg| matches!(arg.kind, ExprKind::Spread(_)));
+            let written_out_spread = has_spread_arg && spread_expanded_arg_count(source_args).is_some();
+            let unknown_length_spread = has_spread_arg && !written_out_spread;
+            if !unknown_length_spread {
+                crate::builtins::registry::check_arity(name, args.len(), span)?;
+            }
             // A builtin the registry knows but this target does not provide is a hard error,
             // not a fallthrough: the call cannot lower.
             if !catalog::builtin_is_available_for_target(name, self.target) {
@@ -278,6 +300,37 @@ impl Checker {
                     }
                     crate::builtins::semantics::BuiltinRequirement::RuntimeFeature(_) => {}
                 }
+            }
+            // Every per-builtin validator and result-type resolver below reads the arguments
+            // positionally — `array_map`'s reaches straight for `args[1]` — because `check_arity`
+            // guaranteed the shape. A spread removes that guarantee, so the only sound answer is
+            // the declared return type. The arguments are still inferred, so narrowing,
+            // undefined-variable diagnostics and the library requirements above all still fire.
+            //
+            // Builtins with a checker hook are the ones lowered through a dedicated EIR shape
+            // rather than the polymorphic runtime call, and that shape needs each operand named
+            // at compile time. They are refused here, with the actual reason, rather than left to
+            // surface as an operand-count mismatch from EIR validation.
+            if unknown_length_spread {
+                for arg in args {
+                    self.infer_type(arg, env)?;
+                }
+                if matches!(
+                    def.spec.semantics.validation,
+                    crate::builtins::semantics::BuiltinValidation::CheckerHook { .. }
+                ) && args.len() < crate::builtins::registry::enforced_arity_bounds(name)
+                    .map_or(0, |(min, _)| min)
+                {
+                    return Err(CompileError::new(
+                        span,
+                        &format!(
+                            "{name}() cannot take a spread argument: it is compiled through a \
+                             dedicated lowering that needs every argument written out. Unpack the \
+                             array into the call instead."
+                        ),
+                    ));
+                }
+                return Ok(Some(def.return_type.clone()));
             }
             if !matches!(
                 def.spec.semantics.validation,
@@ -361,4 +414,30 @@ impl Checker {
         }
         Ok(None)
     }
+}
+
+/// Returns the real argument count of a call whose every spread has a written-out length.
+///
+/// `tmpfile(...[1])` is one argument, not one spread, and PHP's internal functions reject the
+/// surplus with `ArgumentCountError` — so the arity check has to see the expanded count. A spread
+/// of anything else (`...$args`) has no count until run time and returns `None`.
+fn spread_expanded_arg_count(args: &[Expr]) -> Option<usize> {
+    let mut total = 0usize;
+    for arg in args {
+        match &arg.kind {
+            ExprKind::Spread(inner) => match &inner.kind {
+                ExprKind::ArrayLiteral(elements)
+                    if !elements
+                        .iter()
+                        .any(|element| matches!(element.kind, ExprKind::Spread(_))) =>
+                {
+                    total += elements.len();
+                }
+                _ => return None,
+            },
+            ExprKind::NamedArg { .. } => return None,
+            _ => total += 1,
+        }
+    }
+    Some(total)
 }

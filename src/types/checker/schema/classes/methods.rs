@@ -218,7 +218,7 @@ fn apply_instance_method(
     method: &ClassMethod,
 ) -> Result<(), CompileError> {
     let method_key = php_symbol_key(&method.name);
-    let sig = build_method_sig(checker, method, &class.name)?;
+    let mut sig = build_method_sig(checker, method, &class.name)?;
     if state.final_static_methods.contains(&method_key) {
         return Err(final_method_error(
             state
@@ -281,6 +281,19 @@ fn apply_instance_method(
                 class.name, method.name
             ),
         ));
+    }
+    // A constructor is not an override. PHP exempts `__construct` from signature
+    // compatibility entirely — `validate_override_signature` returns early for it above — and
+    // nothing ever enters a constructor through an ancestor's entry point: `new C(...)` calls
+    // C's, `parent::__construct(...)` calls the parent's. Adopting ancestor storage here would
+    // stamp the parent's parameter TYPES onto an untyped child parameter, which PHP reads as
+    // `mixed`: `Twig\Node::__construct(array $nodes = [], ...)` turned every
+    // `ConstantExpression::__construct($value, int $lineno)` call into "parameter $value
+    // expects Array(Mixed)".
+    if method_key != "__construct" {
+        if let Some(parent_sig) = state.method_sigs.get(&method_key) {
+            adopt_ancestor_parameter_storage(&mut sig, parent_sig);
+        }
     }
     state.method_sigs.insert(method_key.clone(), sig);
     if let Some(return_type) = method
@@ -411,4 +424,42 @@ fn missing_override_target(class: &FlattenedClass, method: &ClassMethod) -> Comp
             class.name, method.name
         ),
     )
+}
+
+/// Gives an override's UNDECLARED parameters the storage the ancestor declared for them.
+///
+/// A virtual call site is typed against the ancestor: `$container->load($file)` on a receiver
+/// typed `Container` materializes whatever `Container::load(string $file)` declares — a raw
+/// string. If the override writes `load($file)` with no type, its own frame expects a boxed
+/// `mixed`, and the raw string arrives where a cell pointer belongs. Symfony's generated DI
+/// container is exactly this pair, and the argument came back EMPTY: every service lookup asked
+/// the container to `require` a file whose name it had lost.
+///
+/// PHP's contravariance is what makes adopting the ancestor's type safe: an override may only
+/// WIDEN a parameter, so every value that can reach it already satisfies the ancestor's
+/// declaration. Only undeclared parameters are touched — an override that declares its own type
+/// has already been checked against the ancestor by `validate_override_signature`, and its
+/// declaration is the one its body was checked against.
+fn adopt_ancestor_parameter_storage(
+    sig: &mut crate::types::FunctionSig,
+    ancestor: &crate::types::FunctionSig,
+) {
+    for (index, (_, ancestor_ty)) in ancestor.params.iter().enumerate() {
+        if sig.declared_params.get(index).copied().unwrap_or(false) {
+            continue;
+        }
+        if !ancestor.declared_params.get(index).copied().unwrap_or(false) {
+            continue;
+        }
+        let Some((_, param_ty)) = sig.params.get_mut(index) else {
+            continue;
+        };
+        *param_ty = ancestor_ty.clone();
+        // Marked DECLARED as well: the storage is now the ancestor's contract, and an
+        // undeclared parameter is otherwise promoted to a boxed cell by the gradual-storage
+        // pass — which would put the mismatch straight back.
+        if let Some(declared) = sig.declared_params.get_mut(index) {
+            *declared = true;
+        }
+    }
 }

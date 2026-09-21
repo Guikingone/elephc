@@ -205,7 +205,30 @@ fn parse_expr_bp_inner(
                         *pos += 1;
                         member
                     }
-                    _ => {
+                    // PHP's semi-reserved rule applies after `::` exactly as it does after `->`:
+                    // `$cls::do(...)`, `$cls::print(...)`, `$cls::list(...)` are all legal. The
+                    // named-class path (`Foo::do()`, in the prefix parser) already accepted them;
+                    // only this dynamic-receiver path refused, which is what made Symfony's
+                    // generated DI container unparsable — `Container::load()` dispatches through
+                    // `$class::do($this, $lazyLoad)`.
+                    Some((token, name_span)) => {
+                        match crate::parser::keyword_name::bareword_name_from_token(
+                            &token,
+                            &tokens[*pos].1,
+                        ) {
+                            Some(name) => {
+                                *pos += 1;
+                                Expr::new(ExprKind::StringLiteral(name), name_span)
+                            }
+                            None => {
+                                return Err(CompileError::new(
+                                    span,
+                                    "Expected method name after '::'",
+                                ));
+                            }
+                        }
+                    }
+                    None => {
                         return Err(CompileError::new(span, "Expected method name after '::'"));
                     }
                 };
@@ -365,6 +388,24 @@ fn parse_expr_bp_inner(
                 ) {
                     let call_span = tokens[*pos].1.span;
                     *pos += 1;
+                    // `expr(...)` makes a Closure out of whatever `expr` produced, the same way
+                    // `$var(...)`, `$this(...)` and `(expr)(...)` already do — through the
+                    // callable's `__invoke`. Symfony's `ErrorListener` reaches this arm with
+                    // `$event->getController()(...)`, a first-class callable taken from a CALL
+                    // result; without it `parse_args` met the `...)` and reported a bare
+                    // "Unexpected token: RParen".
+                    if parse_first_class_callable_parens(tokens, pos)? {
+                        let call_span =
+                            crate::parser::expr::span_through_prev_token(tokens, *pos, call_span);
+                        lhs = Expr::new(
+                            ExprKind::FirstClassCallable(CallableTarget::Method {
+                                object: Box::new(lhs),
+                                method: "__invoke".to_string(),
+                            }),
+                            call_span,
+                        );
+                        continue;
+                    }
                     let args = parse_args(tokens, pos, call_span)?;
                     let call_span = crate::parser::expr::span_through_prev_token(tokens, *pos, call_span);
                     lhs = Expr::new(

@@ -234,6 +234,54 @@ static const pcre2_code *elephc_pcre2_v1_code(void *opaque_handle) {
     return (const pcre2_code *)handle->regex.re_pcre2_code;
 }
 
+
+/* Returns the name set by the last MARK verb (`(*:name)`) the most recent match passed.
+ *
+ * PHP exposes this as `$matches['MARK']`, and Symfony's dumped `CompiledUrlMatcher` is built on
+ * it: each alternative of the dynamic-route regexp ends in `(*:<offset>)` and the matcher reads
+ * the mark to choose `$this->dynamicRoutes[(int) $matches['MARK']]`. Without it that index is 0
+ * and every route with a placeholder fails.
+ *
+ * The caller only invokes this after a SUCCESSFUL match, which is the only case PHP reports a
+ * mark for -- pcre2_get_mark() can also report a mark passed before a FAILING match, and PHP
+ * does not surface that one.
+ */
+int32_t elephc_pcre2_v1_last_mark(
+    void *opaque_handle,
+    const char **mark_out,
+    uint64_t *mark_len_out
+) {
+    elephc_pcre2_v1_handle *handle = (elephc_pcre2_v1_handle *)opaque_handle;
+    pcre2_match_data *match_data;
+    PCRE2_SPTR mark;
+    size_t length;
+
+    if (mark_out != NULL) {
+        *mark_out = NULL;
+    }
+    if (mark_len_out != NULL) {
+        *mark_len_out = 0;
+    }
+    if (handle == NULL || mark_out == NULL || mark_len_out == NULL) {
+        return 1;
+    }
+    match_data = (pcre2_match_data *)handle->regex.re_match_data;
+    if (match_data == NULL) {
+        return 1;
+    }
+    mark = pcre2_get_mark(match_data);
+    if (mark == NULL) {
+        return 1;
+    }
+    /* pcre2 stores the name NUL-terminated in its own pattern storage, which outlives this call
+       for as long as the compiled pattern does -- the same lifetime the name table relies on. */
+    for (length = 0; mark[length] != '\0'; ++length) {
+    }
+    *mark_out = (const char *)mark;
+    *mark_len_out = (uint64_t)length;
+    return 0;
+}
+
 uint64_t elephc_pcre2_v1_name_count(void *opaque_handle) {
     const pcre2_code *code = elephc_pcre2_v1_code(opaque_handle);
     uint32_t count = 0;

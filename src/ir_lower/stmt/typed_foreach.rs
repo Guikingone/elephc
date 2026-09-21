@@ -452,7 +452,23 @@ pub(super) fn foreach_value_type(source_ty: &PhpType) -> PhpType {
 pub(super) fn foreach_ref_value_type(source_ty: &PhpType) -> PhpType {
     match source_ty.codegen_repr() {
         PhpType::Array(elem) => *elem,
-        PhpType::AssocArray { value, .. } => *value,
+        // A HASH SOURCE IS BOXED BY THE ITERATION ITSELF, so the declared value type is not
+        // what the loop variable aliases. `iterator_source_kind_from_type` routes every
+        // `AssocArray` to `IteratorSourceKind::DynamicIterable` — an associative checker shape
+        // can wear compact indexed storage at runtime — and the by-reference arm of that path
+        // calls `__rt_hash_to_mixed`, which REWRITES EVERY BUCKET to hold a boxed Mixed cell
+        // before the first iteration.
+        //
+        // Saying `*value` here made the frontend read the bucket as its declared element type,
+        // so `load_ref_cell` handed back the Mixed BOX POINTER as an `int`: `['a' => 1]` printed
+        // `a=4374092928`. Writing through the variable still worked (the store overwrites the
+        // slot), which is why the defect reads as "mutation works, reading does not".
+        //
+        // An indexed source with CONCRETE elements keeps `Indexed { elem }` above, takes
+        // `ensure_unique_static_iter_source`, and is never boxed — so its arm stays exact. An
+        // indexed source with Mixed/Union elements already answers Mixed through `*elem`, which
+        // is what its dynamic path produces too.
+        PhpType::AssocArray { .. } => PhpType::Mixed,
         _ => PhpType::Mixed,
     }
 }

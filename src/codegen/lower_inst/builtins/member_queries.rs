@@ -31,6 +31,9 @@ pub(crate) fn lower_class_like_exists(
     if let Some(symbol_name) = maybe_const_string_operand(ctx, value)? {
         let candidates = class_like_exists_candidates(ctx, name);
         let exists = contains_folded(candidates.iter(), &symbol_name);
+        if exists && emit_deferred_class_exists(ctx, inst, &symbol_name)? {
+            return store_if_result(ctx, inst);
+        }
         emit_static_bool(ctx, exists);
     } else {
         lower_dynamic_class_like_exists(ctx, name, value)?;
@@ -600,4 +603,63 @@ pub(in crate::codegen::lower_inst) fn static_method_string_is_callable(
         return false;
     }
     class_info.static_method_visibilities.get(&method_key) == Some(&Visibility::Public)
+}
+
+/// Answers a literal existence probe from the class's request-scoped LOAD flag, when it has one.
+///
+/// A class the autoload pass pulled in only so a probe could be answered is DECLARED from the
+/// first instruction but was never LOADED, which is the distinction `class_exists($n, false)`
+/// exists to report. Returns false when the name carries no flag, leaving the ordinary constant
+/// fold in place.
+///
+/// A probe whose autoload argument is not a literal also keeps the constant fold: deciding it
+/// needs a runtime branch, and every occurrence of this idiom spells the argument out.
+fn emit_deferred_class_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    symbol_name: &str,
+) -> Result<bool> {
+    let folded = symbol_name.trim_start_matches('\\').to_ascii_lowercase();
+    if !ctx.module.deferred_class_loads.contains(&folded) {
+        return Ok(false);
+    }
+    let autoloads = match inst.operands.get(1) {
+        None => true,
+        Some(operand) => match const_bool_operand(ctx, *operand)? {
+            Some(value) => value,
+            None => return Ok(false),
+        },
+    };
+    let flag = crate::codegen::source_units::deferred_class_symbol(&folded);
+    ctx.data.add_comm(flag.clone(), 8);
+    let result = abi::int_result_reg(ctx.emitter);
+    if autoloads {
+        abi::emit_load_int_immediate(ctx.emitter, result, 1);
+        abi::emit_store_reg_to_symbol(ctx.emitter, result, &flag, 0);
+    } else {
+        abi::emit_load_symbol_to_reg(ctx.emitter, result, &flag, 0);
+    }
+    Ok(true)
+}
+
+/// Reads a `const_bool` operand's compile-time value, or None when it is not one.
+fn const_bool_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<bool>> {
+    let value_ref = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    if inst_ref.op != Op::ConstBool {
+        return Ok(None);
+    }
+    match inst_ref.immediate {
+        Some(Immediate::Bool(value)) => Ok(Some(value)),
+        _ => Ok(None),
+    }
 }

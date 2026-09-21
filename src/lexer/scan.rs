@@ -42,6 +42,21 @@ pub fn scan_tokens(
                 cursor.advance();
             }
             tokens.push(spanned(Token::OpenTag, span));
+        } else if cursor.remaining().starts_with("<?=") {
+            for _ in 0..3 {
+                cursor.advance();
+            }
+            tokens.push(spanned(Token::OpenTag, span));
+            tokens.push(spanned(Token::Echo, span));
+        } else if source.contains("<?php") || source.contains("<?=") {
+            // Text before the first opening tag is output, exactly like the text after a closing
+            // tag. The scan restarts from byte 0 so that text is echoed verbatim, whitespace
+            // included — PHP prints those bytes too. A file whose leading bytes are ONLY
+            // whitespace never gets here (the skip above already found the tag), which keeps the
+            // indented-open-tag spelling behaving as it always has.
+            cursor = Cursor::new(source);
+            tokens.push(spanned(Token::OpenTag, cursor.span()));
+            scan_inline_html_text(&mut cursor, &mut tokens);
         } else {
             return Err(CompileError::new(span, "Expected '<?php' at start of file"));
         }
@@ -79,6 +94,8 @@ pub fn scan_tokens(
                 span,
                 "PHP opening and closing tags are not valid in .lfc source files",
             ));
+        } else if cursor.remaining().starts_with("?>") {
+            scan_inline_html(&mut cursor, &mut tokens);
         } else if cursor.peek() == Some('"') {
             // Double-quoted strings may contain interpolation ($var)
             let string_tokens = literals::scan_double_string_interpolated(&mut cursor)?;
@@ -112,6 +129,71 @@ pub fn scan_tokens(
     }
 
     Ok(tokens)
+}
+
+/// Consumes a PHP closing tag and the literal text that follows it.
+///
+/// `?>` leaves PHP mode: it terminates the statement it interrupts exactly as `;` does, swallows
+/// one immediately following newline, and turns everything up to the next opening tag into output.
+/// Emitting that output as `echo '<text>';` keeps the whole feature inside the lexer — the parser,
+/// the checker and every backend go on seeing ordinary PHP, and alternative syntax spanning tags
+/// (`<?php foreach (…): ?>…<?php endforeach; ?>`) falls out for free.
+fn scan_inline_html(cursor: &mut Cursor, tokens: &mut Vec<SpannedToken>) {
+    let close_span = cursor.span();
+    cursor.advance(); // '?'
+    cursor.advance(); // '>'
+    // The implicit semicolon is skipped where PHP would only be adding an empty statement: right
+    // after a `;`, a block boundary, or the `:` that opens an alternative-syntax body.
+    if !matches!(
+        tokens.last().map(|(token, _)| token),
+        None | Some(
+            Token::Semicolon | Token::LBrace | Token::RBrace | Token::Colon | Token::OpenTag
+        )
+    ) {
+        tokens.push(spanned(Token::Semicolon, close_span));
+    }
+    // PHP eats exactly one newline directly after the closing tag, so a template's line breaks
+    // around its tags do not each become a blank line in the output.
+    if cursor.remaining().starts_with("\r\n") {
+        cursor.advance();
+        cursor.advance();
+    } else if cursor.peek() == Some('\n') {
+        cursor.advance();
+    }
+    scan_inline_html_text(cursor, tokens);
+}
+
+/// Emits the literal text up to the next opening tag as an `echo`, then consumes that tag.
+///
+/// `<?=` is PHP's short echo tag, so re-entering through it leaves an `echo` for the expression
+/// that follows; the `?>` closing it supplies the terminating `;` through [`scan_inline_html`].
+fn scan_inline_html_text(cursor: &mut Cursor, tokens: &mut Vec<SpannedToken>) {
+    let text_span = cursor.span();
+    let mut text = String::new();
+    while !cursor.is_eof()
+        && !cursor.remaining().starts_with("<?php")
+        && !cursor.remaining().starts_with("<?=")
+    {
+        if let Some(ch) = cursor.advance() {
+            text.push(ch);
+        }
+    }
+    if !text.is_empty() {
+        tokens.push(spanned(Token::Echo, text_span));
+        tokens.push(spanned(Token::StringLiteral(text), text_span));
+        tokens.push(spanned(Token::Semicolon, text_span));
+    }
+    let reopen_span = cursor.span();
+    if cursor.remaining().starts_with("<?php") {
+        for _ in 0..5 {
+            cursor.advance();
+        }
+    } else if cursor.remaining().starts_with("<?=") {
+        for _ in 0..3 {
+            cursor.advance();
+        }
+        tokens.push(spanned(Token::Echo, reopen_span));
+    }
 }
 
 /// Retains a doc comment only where PHP can begin a declaration statement.
@@ -148,17 +230,13 @@ fn skip_whitespace_and_comments(cursor: &mut Cursor) {
         }
 
         if cursor.remaining().starts_with("//") {
-            while let Some(ch) = cursor.advance() {
-                if ch == '\n' { break; }
-            }
+            skip_line_comment(cursor);
             continue;
         }
 
         if cursor.remaining().starts_with('#') && !cursor.remaining().starts_with("#[") {
             // PHP line comment introduced by `#` (but `#[` opens an attribute group).
-            while let Some(ch) = cursor.advance() {
-                if ch == '\n' { break; }
-            }
+            skip_line_comment(cursor);
             continue;
         }
 
@@ -183,6 +261,21 @@ fn skip_whitespace_and_comments(cursor: &mut Cursor) {
         }
 
         break;
+    }
+}
+
+/// Consumes a `//` or `#` line comment up to the newline that ends it — or to a closing tag,
+/// whichever comes first. PHP stops a line comment at `?>` so that `<?php // note ?>` still
+/// leaves PHP mode; consuming the tag as comment text would swallow the rest of the template.
+fn skip_line_comment(cursor: &mut Cursor) {
+    while let Some(ch) = cursor.peek() {
+        if cursor.remaining().starts_with("?>") {
+            return;
+        }
+        cursor.advance();
+        if ch == '\n' {
+            return;
+        }
     }
 }
 

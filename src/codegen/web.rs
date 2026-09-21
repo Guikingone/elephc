@@ -7,7 +7,8 @@
 //! properties (their initializers re-run in the handler body and restore the
 //! defaults), releases and zeroes ordinary globals plus request superglobals
 //! ($_SERVER/$_GET/$_POST) that survive between requests, and resets the
-//! native and dynamic include-once bookkeeping, and the concat-buffer write offset.
+//! native and dynamic include-once bookkeeping, the concat-buffer write offset,
+//! and the fixed runtime's request-scoped flags (`REQUEST_SCOPED_RUNTIME_FLAGS`).
 //!
 //! Called from:
 //! - `crate::codegen::block_emit::emit_module()`, after every function and the
@@ -24,6 +25,9 @@
 //!   Static properties are NOT zeroed: the handler body re-runs their
 //!   initializers after the reset, which rewrites both value and sentinel.
 //! - The Magician include registry is reset only when the module links the eval bridge.
+//! - The fixed runtime's `.comm` flags are process storage that PHP scopes to a REQUEST.
+//!   They are zero at process start, so only a worker serving a second request can observe
+//!   one left set; `_headers_sent` is the reason this list exists.
 
 use crate::codegen::abi;
 use crate::codegen::data_section::{DataSection, StaticLocalRecord};
@@ -222,6 +226,7 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
         abi::emit_call_label(emitter, &symbol);
     }
     emit_native_include_resets(emitter, module, data);
+    emit_deferred_class_load_resets(emitter, module, data);
     emit_native_classlike_activation_resets(emitter, module, data);
 
     // Clear every lazy enum case slot so request N+1 re-materializes its cases on
@@ -232,6 +237,8 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     // hazard, because the per-request local cleanup can release a case that
     // reached a top-level local.
     super::enum_singletons::emit_enum_slot_resets(emitter, module);
+
+    emit_request_scoped_flag_resets(emitter);
 
     emit_concat_offset_reset(emitter);
 
@@ -306,6 +313,20 @@ fn emit_native_include_resets(emitter: &mut Emitter, module: &Module, data: &Dat
     }
 }
 
+/// Clears the LOAD flag of every class the closed world carries only to answer a probe.
+///
+/// `class_exists($n, false)` must report the same "not loaded yet" on request 2 as on request 1;
+/// a flag a previous request raised would otherwise make the next one skip the branch that the
+/// probe guards.
+fn emit_deferred_class_load_resets(emitter: &mut Emitter, module: &Module, data: &DataSection) {
+    for name in &module.deferred_class_loads {
+        let label = super::source_units::deferred_class_symbol(name);
+        if data.has_comm(&label) {
+            abi::emit_store_zero_to_symbol(emitter, &label, 0);
+        }
+    }
+}
+
 /// Resets the PHP heap arena to a pristine bump-only state: `_heap_off = 0`, an empty
 /// ordered free list, and empty small-bin caches. Emitted as the final step of the
 /// per-request `__rt_web_reset`, so the whole arena is reclaimed at once after every
@@ -313,8 +334,78 @@ fn emit_native_include_resets(emitter: &mut Emitter, module: &Module, data: &Dat
 /// `--web` full-reset semantics — nothing in the PHP arena legitimately survives a
 /// request; Rust-side state (the PDO persistent-connection pool, bridge result cells)
 /// lives outside `_heap_buf` and is unaffected.
+/// Fills the reclaimed arena with a pattern under `--heap-debug`, before the bump pointer moves.
+///
+/// A pointer that outlives the request boundary is not detectable on its own: the next request
+/// allocates over the same addresses and the stale value keeps reading plausible bytes, so the
+/// failure surfaces tens of requests later as a corrupted container with an intact header. That
+/// is how the Twig generator crash presents, and it took a register dump and a whole-table read
+/// to even classify. Poisoning what the boundary reclaims turns the first stale READ into the
+/// failure, which is a short walk from its holder.
+///
+/// Off unless `--heap-debug` asked for it: this writes every live byte of the arena.
+fn emit_heap_arena_poison(emitter: &mut Emitter) {
+    let skip_label = "__rt_web_reset_skip_arena_poison";
+    let result_reg = abi::int_result_reg(emitter);
+    emitter.comment("--heap-debug: poison the arena this boundary reclaims");
+    abi::emit_load_symbol_to_reg(emitter, result_reg, "_heap_debug_enabled", 0);
+    abi::emit_branch_if_int_result_zero(emitter, skip_label);
+    let length_reg = abi::int_arg_reg_name(emitter.target, 2);
+    abi::emit_load_symbol_to_reg(emitter, length_reg, "_heap_off", 0);
+    let fill_reg = abi::int_arg_reg_name(emitter.target, 1);
+    abi::emit_load_int_immediate(emitter, fill_reg, 0xde);
+    let base_reg = abi::int_arg_reg_name(emitter.target, 0);
+    abi::emit_symbol_address(emitter, base_reg, "_heap_buf");
+    let memset = emitter.target.extern_symbol("memset");
+    abi::emit_call_label(emitter, &memset);
+    emitter.label(skip_label);
+}
+
+/// Unbinds every heap granule from the object handle it carried, before the arena is recycled.
+///
+/// `_obj_handle_index` holds one u32 handle per 16-byte granule of the arena, and a granule is
+/// only unbound when its block is freed. The request boundary frees nothing -- it drops the whole
+/// arena -- so without this the next request inherits a table full of last request's bindings.
+/// `__rt_object_handle_release` runs for EVERY block freed, object or not, reads the granule's
+/// binding and pushes whatever it finds onto the released-handle stack. An ordinary string that
+/// lands on a stale granule therefore hands back a handle it never minted, the same handle can
+/// come back from several granules, and two live objects end up sharing one. Object identity is
+/// what the interpreter keys its per-object maps on, so that is enough to make it read one object
+/// where it expects another.
+///
+/// Only granules below the previous high-water mark can be bound, so this clears `heap_off / 4`
+/// bytes -- four per sixteen of arena actually used, a few hundred KB for a Symfony request, not
+/// the whole-heap wipe the old note priced it at.
+fn emit_object_handle_index_reset(emitter: &mut Emitter) {
+    let skip_label = "__rt_web_reset_skip_handle_index";
+    emitter.comment("unbind heap granules from the object handles they carried");
+    let used_reg = abi::int_result_reg(emitter);
+    abi::emit_load_symbol_to_reg(emitter, used_reg, "_heap_off", 0);
+    abi::emit_branch_if_int_result_zero(emitter, skip_label);
+    let length_reg = abi::int_arg_reg_name(emitter.target, 2);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter
+                .instruction(&format!("lsr {}, {}, #2", length_reg, used_reg));
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov {}, {}", length_reg, used_reg));
+            emitter.instruction(&format!("shr {}, 2", length_reg));
+        }
+    }
+    let fill_reg = abi::int_arg_reg_name(emitter.target, 1);
+    abi::emit_load_int_immediate(emitter, fill_reg, 0);
+    let base_reg = abi::int_arg_reg_name(emitter.target, 0);
+    abi::emit_symbol_address(emitter, base_reg, "_obj_handle_index");
+    let memset = emitter.target.extern_symbol("memset");
+    abi::emit_call_label(emitter, &memset);
+    emitter.label(skip_label);
+}
+
 fn emit_heap_arena_reset(emitter: &mut Emitter) {
     emitter.comment("reset the PHP heap arena to pure-bump allocation for the next request");
+    emit_heap_arena_poison(emitter);
+    emit_object_handle_index_reset(emitter);
     abi::emit_store_zero_to_symbol(emitter, "_heap_off", 0);
     abi::emit_store_zero_to_symbol(emitter, "_heap_free_list", 0);
     abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 0);
@@ -322,6 +413,95 @@ fn emit_heap_arena_reset(emitter: &mut Emitter) {
     abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 16);
     abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 24);
 }
+
+/// Clears the runtime flags whose PHP-visible lifetime is one REQUEST, not one process.
+///
+/// `.comm` storage starts at zero, so a CLI build never notices that nothing puts it back; a
+/// prefork worker does. `_headers_sent` is the one that showed: `__rt_stdout_write` raises it the
+/// first time bytes escape the buffering stack, so from request 2 onward `headers_sent()` answered
+/// true before the handler had emitted anything, Symfony's `Response::sendHeaders()` returned
+/// early, and every response after the first lost its `Content-Type` and `Cache-Control` while
+/// still carrying a byte-identical body -- a wrong response that no status code reports.
+///
+/// The rest are cleared for the same reason. A request that ends through a fatal or an uncaught
+/// throw leaves its depth counters, its capture-mode flags and its exception chain set, and the
+/// chain in particular points into the arena `emit_heap_arena_reset` is about to wipe.
+fn emit_request_scoped_flag_resets(emitter: &mut Emitter) {
+    emitter.comment("reset the runtime flags whose lifetime is one request");
+    for symbol in REQUEST_SCOPED_RUNTIME_FLAGS {
+        abi::emit_store_zero_to_symbol(emitter, symbol, 0);
+    }
+}
+
+/// The request-scoped runtime flags `__rt_web_reset` clears, grouped by owning subsystem.
+///
+/// Every entry is 8-byte `.comm` storage declared unconditionally by the fixed runtime data, so
+/// the symbol always resolves and zero is always its process-start value. Tables whose slots hold
+/// OS resources (stream, directory and process handles) are deliberately absent: those have to be
+/// CLOSED at the request boundary, not blanked, which is a separate change.
+///
+/// `_obj_handle_next` is absent for a sharper reason, and putting it back would be a bug.
+/// `_obj_handle_index` binds a handle to a heap GRANULE and is not cleared by the arena wipe, so
+/// a granule that held an object last request still reads back that object's handle. Today the
+/// cursor only climbs, so such a stale handle is always below it and re-minting it is harmless.
+/// Restart the cursor at 1 and it stops being harmless: the next block to land on that granule
+/// pushes the stale handle onto the free stack when it is freed, and a handle this request has
+/// already handed to a live object gets handed out a second time. Restarting the numbering means
+/// clearing `_obj_handle_index` too -- one `u32` per 16 heap bytes, so 128MB of stores for a
+/// 512MB heap, every request -- which is why `spl_object_id()` still climbs across requests here.
+const REQUEST_SCOPED_RUNTIME_FLAGS: &[&str] = &[
+    // Raised by `__rt_stdout_write` once bytes reach the response sink.
+    "_headers_sent",
+    // Output buffering: stack depth, both re-entry guards, and the implicit-flush setting.
+    "_ob_level",
+    "_ob_in_handler",
+    "_ob_flushing",
+    "_ob_implicit_flush",
+    // `print_r($value, true)` capture mode and its accumulated write offset.
+    "_print_r_mode",
+    "_print_r_off",
+    // var_dump indentation and its recursion guard depth.
+    "_vd_indent",
+    "_vd_seen_n",
+    // The handler chain and the pending throw, both of which point into the request arena.
+    "_exc_handler_top",
+    "_exc_call_frame_top",
+    "_exc_value",
+    // Fiber scheduling state and the saved main-fiber context.
+    "_fiber_current",
+    "_fiber_main_saved_sp",
+    "_fiber_main_saved_exc",
+    "_fiber_main_saved_call_frame",
+    // serialize()/unserialize() back-reference counters and policy fields.
+    "_ser_value_counter",
+    "_ser_obj_count",
+    "_unser_count",
+    "_unser_depth",
+    "_unser_active",
+    "_unser_context",
+    "_unser_allowed_mode",
+    // `json_last_error()` plus the encoder/decoder state its message is rendered from. Every
+    // json call site rewrites the active fields before use, so zero is a safe boundary value.
+    "_json_last_error",
+    "_json_active_flags",
+    "_json_active_depth",
+    "_json_indent_depth",
+    "_json_depth_limit",
+    "_json_validate_idx",
+    "_json_validate_ptr",
+    "_json_validate_len",
+    "_json_decode_assoc",
+    "_json_error_source_ptr",
+    "_json_error_location_active",
+    "_json_error_line",
+    "_json_error_column",
+    // The `@` suppression depth, which a fatal inside a suppressed call leaves raised.
+    "_rt_diag_suppression",
+    // The cycle collector's re-entry guard, safepoint counter and release suppression.
+    "_gc_collecting",
+    "_gc_safepoint_count",
+    "_gc_release_suppressed",
+];
 
 /// Resets one function static local: skips uninitialized slots, releases any
 /// owned refcounted value, then zeroes the 16-byte value and the init marker so
@@ -345,11 +525,19 @@ fn emit_static_local_reset(emitter: &mut Emitter, record: &StaticLocalRecord, la
     emitter.label(&skip_label);
 }
 
-/// Releases the previous value of one refcounted static class property without
-/// zeroing it: the handler body's re-run initializer overwrites both the value
-/// and the typed-property sentinel after this reset, so only the old owner needs
-/// releasing to avoid a per-request leak. Skips the uninitialized sentinel so a
-/// sentinel is never released as if it were a heap pointer.
+/// Releases the previous value of one refcounted static class property AND zeroes the slot.
+///
+/// Leaving the pointer behind looks safe -- the handler body's initializer overwrites it next
+/// request -- and it is not. That store releases whatever it finds in the slot first, and the
+/// arena is deterministic: the next request replays the same allocation sequence and the
+/// initializer gets back the SAME address this request used. The store then releases the block
+/// it is about to write, taking a brand-new value's refcount from 1 to 0, and the property is
+/// left pointing at freed storage for the rest of the request.
+///
+/// `Request::$trustedProxies = []` in the Symfony `--web` build is exactly that: allocated at
+/// arena offset 117104, read a moment later by `isFromTrustedProxy()` with `refcount=0, kind=0`
+/// -- the footprint `__rt_heap_free` leaves. Zero releases as a no-op, which is the same reason
+/// `emit_static_property_sentinel` clears the value word for properties without a default.
 fn emit_static_property_release(
     emitter: &mut Emitter,
     symbol: &str,
@@ -365,6 +553,7 @@ fn emit_static_property_release(
     abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), symbol, 8);
     emit_branch_if_equals_sentinel(emitter, &skip_label);
     emit_release_symbol_value(emitter, symbol, &ty);
+    abi::emit_store_zero_to_symbol(emitter, symbol, 0);
     emitter.label(&skip_label);
 }
 

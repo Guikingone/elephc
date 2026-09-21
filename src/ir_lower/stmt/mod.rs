@@ -42,7 +42,7 @@ use crate::types::{PhpType, ThrowAccessKind};
 
 mod statement_basics;
 mod local_assignments;
-mod conditionals;
+pub(in crate::ir_lower) mod conditionals;
 mod loops;
 mod array_write_core;
 mod nested_array_writes;
@@ -56,7 +56,7 @@ mod control_exit;
 mod declarations;
 mod instance_property_writes;
 mod static_property_writes;
-mod property_array_writes;
+pub(in crate::ir_lower) mod property_array_writes;
 mod metadata_control;
 mod nested_append;
 mod return_coercions;
@@ -83,7 +83,9 @@ use metadata_control::*;
 use return_coercions::*;
 use static_property_helpers::*;
 
-pub(crate) use control_exit::{lower_throw_access_error, lower_throw_access_error_expr};
+pub(crate) use control_exit::{
+    lower_throw_access_class_expr, lower_throw_access_error, lower_throw_access_error_expr,
+};
 pub(super) use array_write_core::{
     indexed_array_write_element_type, release_indexed_array_write_operand,
 };

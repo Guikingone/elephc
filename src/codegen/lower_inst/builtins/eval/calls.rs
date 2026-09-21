@@ -32,6 +32,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval(ctx: &mut FunctionCon
     ensure_eval_context(ctx)?;
     mark_eval_strict_php(ctx, inst);
     mark_eval_php_version(ctx);
+    mark_eval_web_sapi(ctx);
     set_eval_call_site(ctx, inst);
     ensure_eval_scope(ctx)?;
     ensure_eval_global_scope(ctx)?;
@@ -79,6 +80,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_dynamic_include(
     ensure_eval_context(ctx)?;
     mark_eval_strict_php_value(ctx, strict_php);
     mark_eval_php_version(ctx);
+    mark_eval_web_sapi(ctx);
     set_eval_call_site(ctx, inst);
     ensure_eval_scope(ctx)?;
     ensure_eval_global_scope(ctx)?;

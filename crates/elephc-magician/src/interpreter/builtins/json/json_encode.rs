@@ -308,8 +308,30 @@ fn eval_json_encode_append_assoc(
 ) -> Result<(), EvalStatus> {
     eval_json_encode_enter_array(value, depth_limit, depth, arrays_seen)?;
     let pretty = flags & EVAL_JSON_PRETTY_PRINT != 0;
-    output.push(b'{');
     let len = values.array_len(value)?;
+    // PHP DECIDES THE BRACKET FROM THE KEYS, NOT FROM THE STORAGE KIND. An array whose keys are
+    // exactly 0..len-1 is a JSON ARRAY, and the EMPTY array is the degenerate case of that:
+    //
+    //     $a = ['a' => 1]; unset($a['a']); json_encode($a);   // [] -- not {}
+    //     json_encode([0 => 'a', 1 => 'b']);                  // ["a","b"] -- not {"0":..}
+    //
+    // Hash storage reaches here for both, which is why they used to print an object. Symfony's
+    // `JsonResponse` exposes it on any endpoint returning an emptied bag: `"post":{}` where php
+    // sends `"post":[]`.
+    //
+    // A key is compared by its RENDERED form because php normalizes a numeric string key to an
+    // integer on insert, so a hash can never hold the string "0" alongside the int 0.
+    let mut is_list = true;
+    for position in 0..len {
+        let key = values.array_iter_key(value, position)?;
+        if values.type_tag(key)? != EVAL_TAG_INT
+            || values.string_bytes(key)? != position.to_string().into_bytes()
+        {
+            is_list = false;
+            break;
+        }
+    }
+    output.push(if is_list { b'[' } else { b'{' });
     if pretty && len > 0 {
         output.push(b'\n');
     }
@@ -324,14 +346,16 @@ fn eval_json_encode_append_assoc(
             eval_json_encode_pretty_indent(output, depth + 1);
         }
         let key = values.array_iter_key(value, position)?;
-        eval_json_encode_append_string(
-            &values.string_bytes(key)?,
-            flags & !EVAL_JSON_NUMERIC_CHECK,
-            EvalJsonStringPosition::Key,
-            error,
-            output,
-        )?;
-        eval_json_encode_append_colon(flags, output);
+        if !is_list {
+            eval_json_encode_append_string(
+                &values.string_bytes(key)?,
+                flags & !EVAL_JSON_NUMERIC_CHECK,
+                EvalJsonStringPosition::Key,
+                error,
+                output,
+            )?;
+            eval_json_encode_append_colon(flags, output);
+        }
         let element = values.array_get(value, key)?;
         eval_json_encode_append(
             element,
@@ -348,7 +372,7 @@ fn eval_json_encode_append_assoc(
         output.push(b'\n');
         eval_json_encode_pretty_indent(output, depth);
     }
-    output.push(b'}');
+    output.push(if is_list { b']' } else { b'}' });
     arrays_seen.pop();
     Ok(())
 }

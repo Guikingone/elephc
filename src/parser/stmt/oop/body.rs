@@ -979,6 +979,7 @@ fn parse_property_hooks(
         }
 
         // Hook body: `;` (abstract), `=> expr;` (short), or `{ ... }` (block).
+        let body_start = *pos;
         let body: Option<Vec<Stmt>> = match tokens.get(*pos).map(|(t, _)| t) {
             Some(Token::Semicolon) => {
                 *pos += 1;
@@ -1011,6 +1012,14 @@ fn parse_property_hooks(
                 ))
             }
         };
+        // PHP calls a hooked property BACKED when a hook touches `$this-><prop>`, and VIRTUAL when
+        // none does. Only a virtual one is unwritable — a backed one keeps its slot and the class
+        // writes it normally. The distinction is read off the hook's own tokens because it is a
+        // syntactic fact about the body, and the schema only ever sees the method signature.
+        // A `set` hook's short form always writes the store, so it is backed by construction.
+        if hooks_touch_backing_store(tokens, body_start, *pos, prop_name) {
+            hooks.backed = true;
+        }
 
         if is_get {
             if hooks.requires_get() {
@@ -1085,4 +1094,34 @@ fn parse_property_hooks(
         ));
     }
     Ok((hooks, accessors))
+}
+
+/// Returns whether the hook body between `start` and `end` reads or writes `$this-><prop>`.
+///
+/// PHP decides a hooked property's storage from exactly this: a hook that touches the property by
+/// name keeps the backing slot (the property is BACKED), and one that never does has no slot at
+/// all (VIRTUAL). Only a virtual property refuses a write. Symfony's `ViewEvent` declares
+/// `public private(set) ?ControllerArgumentsEvent $controllerArgumentsEvent { get { … } }` whose
+/// getter does `$this->controllerArgumentsEvent ??= …`, so the constructor may assign it.
+///
+/// Read off the TOKENS rather than the parsed body: it is a syntactic property of the hook, and
+/// the class schema keeps only method signatures by the time the question is asked. A `$this->p`
+/// inside a nested closure counts here and does not in PHP; that only makes elephc accept a write
+/// PHP answers with a runtime `Error` instead of a compile error, which is the safer direction.
+fn hooks_touch_backing_store(
+    tokens: &[SpannedToken],
+    start: usize,
+    end: usize,
+    prop_name: &str,
+) -> bool {
+    let end = end.min(tokens.len());
+    if start >= end {
+        return false;
+    }
+    tokens[start..end].windows(3).any(|window| {
+        matches!(window[0].0, Token::This)
+            && matches!(window[1].0, Token::Arrow)
+            && crate::parser::keyword_name::bareword_name_from_token(&window[2].0, &window[2].1)
+                .is_some_and(|name| name == prop_name)
+    })
 }

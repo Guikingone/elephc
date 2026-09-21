@@ -167,6 +167,15 @@ pub(super) fn persist_scratch_return_string(
 /// calls, so `return $static_local` must hand the caller an extra reference — the
 /// caller releases call results after consuming them, and without the retain that
 /// release frees the box the slot still points to.
+///
+/// Class static properties are included for the same reason, and their owner outlives the
+/// call even further: the property symbol holds the value for the whole process. Symfony's
+/// `Request::getTrustedProxies()` — `return self::$trustedProxies;` over an `array`-defaulted
+/// private static — is the case that found this. Its caller writes
+/// `if ($request::getTrustedProxies())`, releases the call result once the condition is
+/// consumed, and the property is left pointing at storage the arena immediately re-hands out.
+/// `scratchpad/staticret/index.php` reduces it; the dynamic-name and reflection reads are the
+/// same borrow reached through a different selector.
 pub(super) fn acquire_borrowed_return_value(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
@@ -190,6 +199,9 @@ pub(super) fn acquire_borrowed_return_value(
                 | Op::DynamicPropGet
                 | Op::NullsafePropGet
                 | Op::LoadStaticLocal
+                | Op::LoadStaticProperty
+                | Op::LoadDynamicStaticProperty
+                | Op::LoadReflectionStaticProperty
         )
     ) {
         return value;
@@ -281,9 +293,23 @@ pub(crate) fn lower_throw_access_error_expr(
     message: &str,
     span: Span,
 ) -> LoweredValue {
+    lower_throw_access_class_expr(ctx, "Error", message, span)
+}
+
+/// Lowers a statically-decided violation as a throw of `class_name`, in expression position.
+///
+/// The access violations raise `Error`; a proven argument-type mismatch raises `TypeError`, which
+/// is what php throws when the same call runs. Both are catchable, so the class has to be the one
+/// php uses or a `catch (TypeError $e)` around the call stops matching.
+pub(crate) fn lower_throw_access_class_expr(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    message: &str,
+    span: Span,
+) -> LoweredValue {
     let error_expr = Expr::new(
         ExprKind::NewObject {
-            class_name: crate::names::Name::unqualified("Error"),
+            class_name: crate::names::Name::unqualified(class_name),
             args: vec![Expr::new(ExprKind::StringLiteral(message.to_string()), span)],
         },
         span,

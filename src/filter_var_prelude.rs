@@ -34,12 +34,16 @@
 //!   and fail closed (`false`/`null`) rather than silently mis-validating — the literal path
 //!   rejects those ids too, so this is a documented, honest gap.
 
+use crate::optimize::reachability::PreludeInventory;
 use crate::parser::ast::Program;
 
 /// The bare symbol name of the int-flags dynamic-`$filter` helper. Kept as a constant so the
 /// prelude source and the `crate::ir_lower::expr::filter` call site cannot drift apart. The
 /// `__elephc_` prefix is reserved, so this never collides with user code.
 pub(crate) const DYN_FILTER_VAR_NAME: &str = "__elephc_filter_var_dyn";
+
+/// Reachability group both dynamic helpers are recorded under, so the pipeline can force them.
+pub const FILTER_VAR_GROUP: &str = "filter_var";
 
 /// The bare symbol name of the array-`$options` dynamic-`$filter` helper. Used when the routed
 /// options argument is statically array-typed, so the array is passed to an `array`-typed
@@ -53,17 +57,22 @@ pub(crate) const DYN_FILTER_VAR_ARR_NAME: &str = "__elephc_filter_var_dyn_arr";
 /// real work.
 pub const FILTER_VAR_DYN_PRELUDE_SRC: &str = r#"<?php
 function __elephc_filter_var_dyn_arr(mixed $value, int $filter, array $options): mixed {
+    if (isset($options['options'])) {
+        error_log("filter_var(): array \$options['options'] is not supported by elephc yet; per-filter options ignored");
+    }
     $flags = isset($options['flags']) ? (int) $options['flags'] : 0;
     return __elephc_filter_var_dyn($value, $filter, $flags);
 }
 function __elephc_filter_var_dyn(mixed $value, int $filter, mixed $flags = 0): mixed {
     if (is_array($flags)) {
-        // A `mixed`-typed `$options` that holds an array cannot be read here (pre-existing elephc
-        // Mixed-array-element-access gap: element access/iteration on a `mixed`-boxed array fatals).
-        // Fail LOUD rather than silently mis-handle the flags — a statically array-typed options
-        // argument is instead routed to `__elephc_filter_var_dyn_arr`, which reads it correctly.
-        error_log("filter_var(): array \$options passed through a mixed value is not supported by elephc yet; flags ignored");
-        $flags = 0;
+        // Reading the array out of a `mixed` seam WORKS: the element-access gap this used to warn
+        // about is gone, and warning anyway made Symfony log three false failures on every single
+        // request. Only the genuinely unsupported half stays loud — `$options['options']`, the
+        // per-filter settings (min_range, default, …) neither dynamic path applies.
+        if (isset($flags['options'])) {
+            error_log("filter_var(): array \$options['options'] is not supported by elephc yet; per-filter options ignored");
+        }
+        $flags = isset($flags['flags']) ? (int) $flags['flags'] : 0;
     } else {
         $flags = (int) $flags;
     }
@@ -116,13 +125,19 @@ function __elephc_filter_var_dyn(mixed $value, int $filter, mixed $flags = 0): m
 /// helper, so it is dead code; a program with a dynamic call has `filter_var` referenced and thus
 /// gets the helper it needs. The source is static and tested, so a tokenize/parse failure is a
 /// compiler bug and panics rather than degrading silently.
-pub fn inject_if_used(program: Program) -> Program {
+pub fn inject_if_used(program: Program, inventory: &mut PreludeInventory) -> Program {
     if !crate::ast_usage::collect(&program).references("filter_var") {
         return program;
     }
     let tokens = crate::lexer::tokenize(FILTER_VAR_DYN_PRELUDE_SRC)
         .expect("filter_var dynamic prelude must tokenize");
     let mut combined = crate::parser::parse(&tokens).expect("filter_var dynamic prelude must parse");
+    // Both helpers are named ONLY by the EIR lowering (`crate::ir_lower::expr::filter`), never by
+    // any PHP source, so declaration pruning walked the program, found no reference and erased
+    // their bodies while the call survived — `filter_var($v, $dynamicFilter, ...)` then died with
+    // `Call to undefined function __elephc_filter_var_dyn()`. Recording the group is the proof the
+    // injection happened, which is what keeps them alive; the pipeline forces the group too.
+    inventory.record_program(FILTER_VAR_GROUP, &combined);
     combined.extend(program);
     combined
 }
@@ -150,7 +165,7 @@ mod tests {
     #[test]
     fn no_injection_when_unused() {
         let program = parse(r#"<?php $a = [1, 2]; echo count($a);"#);
-        let injected = inject_if_used(program.clone());
+        let injected = inject_if_used(program.clone(), &mut PreludeInventory::default());
         assert_eq!(injected.len(), program.len());
     }
 
@@ -158,7 +173,7 @@ mod tests {
     #[test]
     fn injection_when_used() {
         let program = parse(r#"<?php $f = FILTER_VALIDATE_INT; $x = filter_var("5", $f);"#);
-        let injected = inject_if_used(program.clone());
+        let injected = inject_if_used(program.clone(), &mut PreludeInventory::default());
         assert!(injected.len() > program.len());
     }
 }

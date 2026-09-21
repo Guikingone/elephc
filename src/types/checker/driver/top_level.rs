@@ -46,6 +46,7 @@ impl Checker {
         // in one pass and not the other.
         let saved_ref_params = std::mem::take(&mut self.active_ref_params);
         let mut global_env = self.seed_global_env();
+        Self::seed_vivified_array_locals(&mut global_env, program);
         // The pre-scan has to decide before the first statement is checked: a marked local binds
         // boxed `Mixed` at its FIRST store. Top level has no parameters, so the by-reference and
         // declared-type exclusion sets the scan consults are empty — `enter_local_binding_scope`

@@ -432,6 +432,40 @@ pub(super) fn builtin_reflection_class_new_lazy_ghost_method() -> ClassMethod {
     }
 }
 
+/// Returns a public `ReflectionClass::isUninitializedLazyObject()` method that answers false.
+///
+/// `newLazyGhost()` and `newLazyProxy()` above are backed by EAGER initialization: the object is
+/// allocated and its initializer run before either returns, so the AOT object model never holds
+/// an object in the uninitialized lazy state this predicate asks about. False is therefore the
+/// exact answer here, not an approximation of one.
+///
+/// `Symfony\Component\DependencyInjection\ServicesResetter::isInitialized()` calls it on every
+/// service it considers resetting.
+pub(super) fn builtin_reflection_class_is_uninitialized_lazy_object_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "isUninitializedLazyObject".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("object".to_string(), Some(object_type()), None, false)],
+        param_attributes: vec![Vec::new()],
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Bool),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(ExprKind::BoolLiteral(false), dummy_span))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns a public `ReflectionClass::newLazyProxy()` method backed by eager initialization.
 ///
 /// The AOT object model has no deferred proxy boundary. Calling the supplied factory immediately

@@ -11,7 +11,8 @@
 //! - The main prologue initializes supported static-property storage before
 //!   user blocks run.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 use std::fmt::Write as _;
 
 use crate::codegen::abi;
@@ -50,6 +51,22 @@ use super::shared_state::SharedCodegenState;
 use super::{CodegenIrError, Result};
 
 
+/// Fails on a body that did not lower, or records it when surveying (see `ELEPHC_CODEGEN_SURVEY`).
+fn record_or_fail(
+    emitted: Result<()>,
+    survey: bool,
+    surveyed: &mut Vec<String>,
+) -> Result<()> {
+    match emitted {
+        Ok(()) => Ok(()),
+        Err(err) if survey => {
+            surveyed.push(err.to_string());
+            Ok(())
+        }
+        Err(err) => Err(err),
+    }
+}
+
 /// Emits all supported EIR functions and then the process-entry main function.
 ///
 /// `web` restructures the entry point: the top-level body is emitted as the
@@ -73,8 +90,22 @@ pub(super) fn emit_module(
     web_isolation: WebIsolation,
 ) -> Result<()> {
     let size_trace = std::env::var_os("ELEPHC_CODEGEN_SIZE_TRACE").is_some();
+    // `ELEPHC_CODEGEN_SURVEY=1` keeps emitting after a body fails and reports every backend error
+    // in one pass. Codegen is the LAST phase: a `--web` build of the Symfony app spends twelve
+    // minutes in the front end before the first instruction is lowered, so learning one blocker
+    // per run is the expensive way to learn five. Off by default -- a real build must still stop
+    // at the first error, because everything after it is emitted against half-registered state.
+    let survey = std::env::var_os("ELEPHC_CODEGEN_SURVEY").is_some();
+    // Diagnostic: how many bodies could have been emitted without the shared caches at all.
+    let count_shared_touches = std::env::var_os("ELEPHC_CODEGEN_SHARED_TOUCHES").is_some();
+    let mut bodies_touching_shared = 0usize;
+    let mut bodies_total = 0usize;
+    let mut surveyed: Vec<String> = Vec::new();
     let mut shared = SharedCodegenState::for_module(module);
     shared.counters = counters;
+    // Read before the move: the parallel pass below stays off while instrumentation is on,
+    // because the id a body is given depends on the order bodies are emitted in.
+    let instrumented = !matches!(instrument, crate::codegen::Instrumentation::Off);
     shared.instrument = instrument;
     if probe {
         let main_symbol = if web {
@@ -114,6 +145,13 @@ pub(super) fn emit_module(
         &mut shared,
         regalloc_linear,
     )?;
+    super::shared_static_throw::emit_shared_static_throw(
+        module,
+        emitter,
+        data,
+        &mut shared,
+        regalloc_linear,
+    )?;
     // In `--web` builds the reset routine references every request superglobal.
     // If a superglobal is never read or written by user/prelude code, the symbol
     // would otherwise be missing from the object, so reserve storage up front.
@@ -124,49 +162,119 @@ pub(super) fn emit_module(
             data.add_comm(crate::names::ir_global_symbol(name), sg_size);
         }
     }
-    let function_count = module
-        .functions
-        .iter()
-        .filter(|function| !is_main(function))
-        .count();
-    for (index, function) in module
-        .functions
-        .iter()
-        .filter(|function| !is_main(function))
-        .enumerate()
+    let bodies = module_bodies(module);
+    // A body that needs nothing from `shared` can be emitted on any thread; one that reaches a
+    // cache cannot, because the helper behind that cache belongs to the module exactly once.
+    // The split is discovered by emitting and rolling back, so no predicate has to be kept in
+    // step with the lowering. Every diagnostic mode below depends on emission ORDER, so each one
+    // keeps the single pass.
+    let jobs = codegen_jobs();
+    let mut serial_bodies: Vec<usize> = (0..bodies.len()).collect();
+    // Shared helpers already emitted, by key. The serial pass shares it with the workers: a
+    // helper a worker produced must not be produced again here, or the assembler sees the same
+    // symbol defined twice.
+    let mut seen_helpers: HashSet<String> = HashSet::new();
+    // The module-wide helpers emitted above the body loop (the shared Mixed string ladder, the
+    // shared callable dispatch, the count guard) can already hold a keyed helper. Seed the set
+    // from what is in the buffer, or a worker emits a second copy of it.
+    collect_helper_keys(emitter.text_from(0), &mut seen_helpers);
+    let mut parallel_ran = false;
+    if jobs > 1
+        && !survey
+        && !inventory.is_enabled()
+        && !counters
+        && !instrumented
     {
-        inventory.run_with_shared(emitter, &mut shared, &function.name, |emitter, shared| {
-            emit_user_function(module, function, emitter, data, shared, regalloc_linear)
-        })?;
-        trace_size_if_due(size_trace, "function", index + 1, function_count, emitter);
+        let worker_pass_started = Instant::now();
+        let workers = emit_bodies_in_parallel(module, &bodies, emitter, jobs, regalloc_linear)?;
+        let worker_pass = worker_pass_started.elapsed();
+        if count_shared_touches {
+            eprintln!(
+                "[elephc-codegen-shared] worker_pass={:.2}s",
+                worker_pass.as_secs_f64()
+            );
+        }
+        if count_shared_touches {
+            let kept: usize = workers.iter().map(|worker| worker.kept_bytes).sum();
+            let deferred: usize = workers.iter().map(|worker| worker.deferred_bytes).sum();
+            eprintln!(
+                "[elephc-codegen-shared] parallel_bytes={} deferred_bytes={} deferred_share={:.1}%",
+                kept,
+                deferred,
+                100.0 * deferred as f64 / (kept + deferred).max(1) as f64,
+            );
+        }
+        serial_bodies.clear();
+        for worker in &workers {
+            serial_bodies.extend(worker.deferred.iter().copied());
+        }
+        serial_bodies.sort_unstable();
+        // A helper reached by two workers was emitted twice, spelling the same symbols both
+        // times. Keep the first copy and drop the rest, or the assembler sees a duplicate
+        // definition; every reference resolves to the survivor either way.
+        parallel_ran = true;
+        for worker in workers {
+            for (_, text) in worker.emitted {
+                emitter.append_block(&drop_duplicate_helpers(&text, &mut seen_helpers));
+            }
+            data.merge(worker.data);
+        }
+        // The appended bodies carried their own section directives; put the emitter back on a
+        // known one before the serial pass continues after them.
+        emitter.reopen_text_section(None);
     }
-    trace_codegen_size(size_trace, "functions-complete", emitter);
-    for (index, method) in module.class_methods.iter().enumerate() {
-        inventory.run_with_shared(emitter, &mut shared, &method.name, |emitter, shared| {
-            emit_class_method(module, method, emitter, data, shared, regalloc_linear)
-        })?;
-        trace_size_if_due(
-            size_trace,
-            "class-method",
-            index + 1,
-            module.class_methods.len(),
+    let serial_started = Instant::now();
+    let serial_count = serial_bodies.len();
+    for index in serial_bodies {
+        let body = bodies[index];
+        let touches_before = shared.cache_touches();
+        let body_started = emitter.checkpoint();
+        let emitted = inventory.run_with_shared(
             emitter,
+            &mut shared,
+            &body.function.name,
+            |emitter, shared| {
+                emit_module_body(module, body, emitter, data, shared, regalloc_linear)
+            },
+        );
+        record_or_fail(emitted, survey, &mut surveyed)?;
+        if parallel_ran {
+            // This body's shared state is empty of whatever the workers emitted, so it may have
+            // produced a second copy of a helper they already hold.
+            let deduped = drop_duplicate_helpers(emitter.text_from(body_started), &mut seen_helpers);
+            emitter.rollback_to(body_started);
+            emitter.append_block(&deduped);
+        }
+        if count_shared_touches {
+            bodies_total += 1;
+            if shared.cache_touches() != touches_before {
+                bodies_touching_shared += 1;
+            }
+        }
+    }
+    if count_shared_touches {
+        eprintln!(
+            "[elephc-codegen-shared] serial_tail={:.2}s over {} bodies",
+            serial_started.elapsed().as_secs_f64(),
+            serial_count,
         );
     }
-    trace_codegen_size(size_trace, "class-methods-complete", emitter);
-    for (index, closure) in module.closures.iter().enumerate() {
-        inventory.run_with_shared(emitter, &mut shared, &closure.name, |emitter, shared| {
-            emit_user_function(module, closure, emitter, data, shared, regalloc_linear)
-        })?;
-        trace_size_if_due(
-            size_trace,
-            "closure",
-            index + 1,
-            module.closures.len(),
-            emitter,
+    trace_codegen_size(size_trace, "bodies-complete", emitter);
+    if count_shared_touches {
+        eprintln!(
+            "[elephc-codegen-shared] bodies={} touching_shared_caches={} independent={}",
+            bodies_total,
+            bodies_touching_shared,
+            bodies_total - bodies_touching_shared,
         );
     }
-    trace_codegen_size(size_trace, "closures-complete", emitter);
+    if !surveyed.is_empty() {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} function(s) did not lower:\n  {}",
+            surveyed.len(),
+            surveyed.join("\n  ")
+        )));
+    }
     inventory.finish()?;
     emit_eir_fiber_wrappers(module, emitter);
     // Enum case materializers are plain out-of-line functions that any user body,
@@ -210,6 +318,237 @@ pub(super) fn emit_module(
         emitter.raw(&format!("{PROBE_TEXT_END_LABEL}:"));
     }
     Ok(())
+}
+
+/// Records every shared-helper key already present in `text`.
+fn collect_helper_keys(text: &str, seen: &mut HashSet<String>) {
+    for line in text.lines() {
+        if let Some(position) = line.find(crate::codegen::context::HELPER_MARKER_OPEN) {
+            let key = line[position + crate::codegen::context::HELPER_MARKER_OPEN.len()..].trim();
+            seen.insert(key.to_string());
+        }
+    }
+}
+
+/// Removes shared-helper regions whose key has already been emitted.
+///
+/// Workers emit against caches of their own, so the same helper can be produced more than once.
+/// Its symbols come from its cache key, so the copies are interchangeable: the first one seen
+/// stays and the others are dropped. Regions nest (a helper may reach another), so the scan
+/// tracks depth and only decides at depth zero.
+fn drop_duplicate_helpers(text: &str, seen: &mut HashSet<String>) -> String {
+    if !text.contains(crate::codegen::context::HELPER_MARKER_OPEN) {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut depth = 0usize;
+    let mut dropping = false;
+    for line in text.split_inclusive('\n') {
+        if let Some(position) = line.find(crate::codegen::context::HELPER_MARKER_OPEN) {
+            let key = line[position + crate::codegen::context::HELPER_MARKER_OPEN.len()..]
+                .trim()
+                .to_string();
+            if depth == 0 {
+                dropping = !seen.insert(key);
+            }
+            depth += 1;
+            if dropping {
+                continue;
+            }
+        } else if line.contains(crate::codegen::context::HELPER_MARKER_CLOSE) {
+            depth = depth.saturating_sub(1);
+            if dropping {
+                if depth == 0 {
+                    dropping = false;
+                }
+                continue;
+            }
+        } else if dropping {
+            continue;
+        }
+        out.push_str(line);
+    }
+    out
+}
+
+/// How many workers may emit bodies at once. One by default; see below for why.
+///
+/// WHY THE DEFAULT IS SERIAL. A body that reaches a shared codegen cache cannot be emitted by a
+/// worker, and the bodies that reach one are exactly the EXPENSIVE ones: anything with a
+/// callable, a descriptor or a dispatch table. On the Symfony `--web` module, 7 396 of 8 786
+/// bodies are worker-eligible and they are all small. Measured back to back:
+///
+/// | | `jobs=8` | `jobs=1` |
+/// |---|---|---|
+/// | codegen | 214.41 s | **130.42 s** |
+/// | whole build, wall | 470 s | **315 s** |
+/// | whole build, user CPU | 512.29 s | **457.63 s** |
+/// | emitted assembly | 43 359 381 lines | **43 206 352 lines** |
+///
+/// The serial pass emits ALL 8 786 bodies in 93.48 s; the same pass under `jobs=8` takes 98.35 s
+/// for the 1 390 deferred ones ALONE. So the parallel pass spends its whole wall time, and eight
+/// threads of CPU, producing what costs the serial pass approximately nothing — and it emits
+/// 153 029 lines MORE, because two workers that reach the same host-scoped helper each keep a
+/// copy the merge cannot recognise.
+///
+/// The machinery stays, behind `ELEPHC_CODEGEN_JOBS`, because the shape that would make it pay
+/// is known: the caches would have to be populated before the workers start, so that no body
+/// defers. Until then, asking for workers costs more than it saves.
+fn codegen_jobs() -> usize {
+    if let Ok(value) = std::env::var("ELEPHC_CODEGEN_JOBS") {
+        return value.trim().parse::<usize>().unwrap_or(1).clamp(1, 64);
+    }
+    1
+}
+
+/// Which lowering one emittable body takes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BodyKind {
+    /// A plain function or a closure: both go through `emit_user_function`.
+    UserFunction,
+    /// A class method, which carries the legacy runtime metadata symbol shape.
+    ClassMethod,
+}
+
+/// One body the module owns, paired with the lowering it takes.
+#[derive(Clone, Copy)]
+struct ModuleBody<'a> {
+    kind: BodyKind,
+    function: &'a Function,
+}
+
+/// Lists every body `emit_module` lowers, in the order a serial build emits them.
+fn module_bodies(module: &Module) -> Vec<ModuleBody<'_>> {
+    module
+        .functions
+        .iter()
+        .filter(|function| !is_main(function))
+        .map(|function| ModuleBody { kind: BodyKind::UserFunction, function })
+        .chain(module.class_methods.iter().map(|function| ModuleBody {
+            kind: BodyKind::ClassMethod,
+            function,
+        }))
+        .chain(module.closures.iter().map(|function| ModuleBody {
+            kind: BodyKind::UserFunction,
+            function,
+        }))
+        .collect()
+}
+
+/// Emits one body through the lowering its kind names.
+fn emit_module_body(
+    module: &Module,
+    body: ModuleBody<'_>,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    shared: &mut SharedCodegenState,
+    regalloc_linear: bool,
+) -> Result<()> {
+    match body.kind {
+        BodyKind::UserFunction => {
+            emit_user_function(module, body.function, emitter, data, shared, regalloc_linear)
+        }
+        BodyKind::ClassMethod => {
+            emit_class_method(module, body.function, emitter, data, shared, regalloc_linear)
+        }
+    }
+}
+
+/// What one worker produced: the assembly of the bodies it could emit alone, and the indexes of
+/// the ones that reached a shared cache and must be re-emitted serially.
+struct WorkerOutput {
+    /// Assembly bytes the worker kept, and bytes it emitted for bodies it then deferred.
+    ///
+    /// Body COUNT is not work: if the deferred sixth of the bodies produces most of the text,
+    /// the serial tail dominates however many workers there are. These two numbers are what say
+    /// whether widening the parallel pass can help at all.
+    kept_bytes: usize,
+    deferred_bytes: usize,
+    /// `(body index, assembly)` for the bodies that needed nothing shared, in the order the
+    /// worker met them — which is module order within its chunk.
+    emitted: Vec<(usize, String)>,
+    /// Body indexes that reached a shared cache, in module order.
+    deferred: Vec<usize>,
+    /// The worker's data-section shard, merged into the module's in worker order.
+    data: DataSection,
+}
+
+/// Emits every body it can on `jobs` workers, returning their output in module order.
+///
+/// Each worker owns its emitter, its data shard and its own empty `SharedCodegenState`, so
+/// nothing is shared mutably and the borrow checker — not a convention — is what guarantees it.
+/// A body whose emission touches its worker's cache is rolled back and deferred, because the
+/// helper it would emit belongs to the module exactly once.
+fn emit_bodies_in_parallel<'a>(
+    module: &'a Module,
+    bodies: &[ModuleBody<'a>],
+    template: &Emitter,
+    jobs: usize,
+    regalloc_linear: bool,
+) -> Result<Vec<WorkerOutput>> {
+    let chunk = bodies.len().div_ceil(jobs.max(1));
+    let mut outputs: Vec<Result<WorkerOutput>> = Vec::new();
+    std::thread::scope(|scope| {
+        let mut handles = Vec::new();
+        for (worker, slice) in bodies.chunks(chunk.max(1)).enumerate() {
+            let base = worker * chunk.max(1);
+            handles.push(scope.spawn(move || {
+                let mut emitter = template.fresh();
+                let mut data = DataSection::for_shard(worker);
+                let mut shared = SharedCodegenState::for_module(module);
+                let mut emitted = Vec::new();
+                let mut deferred = Vec::new();
+                let mut kept_bytes = 0usize;
+                let mut deferred_bytes = 0usize;
+                for (offset, body) in slice.iter().enumerate() {
+                    let index = base + offset;
+                    let start = emitter.checkpoint();
+                    // Data is rolled back with the text: a callable descriptor is a data entry
+                    // that points at a text label this body defines, so keeping one without the
+                    // other hands the assembler a reference with no definition.
+                    let data_start = data.checkpoint();
+                    // The CACHE is deliberately not rolled back with them. Undoing a deferred
+                    // body's entries makes every following body re-emit the helpers it needs,
+                    // and the watch below does not bound that: one instruction's lowering can
+                    // emit thousands of descriptors, so the abort cannot land inside it.
+                    // Measured on the Symfony module, adding the rollback took the discarded
+                    // text from 2 101 439 143 bytes to 29 397 554 561 and the worker pass from
+                    // 40 s to 121 s.
+                    shared.arm_deferral_watch();
+                    let outcome = emit_module_body(
+                        module,
+                        *body,
+                        &mut emitter,
+                        &mut data,
+                        &mut shared,
+                        regalloc_linear,
+                    );
+                    shared.disarm_deferral_watch();
+                    match outcome {
+                        Ok(()) => {
+                            let text = emitter.text_from(start);
+                            kept_bytes += text.len();
+                            emitted.push((index, text.to_string()));
+                        }
+                        Err(error) if error.is_deferred_body() => {
+                            deferred_bytes += emitter.text_from(start).len();
+                            deferred.push(index);
+                            data.rollback_to(data_start);
+                        }
+                        Err(error) => return Err(error),
+                    }
+                    emitter.rollback_to(start);
+                }
+                Ok(WorkerOutput { kept_bytes, deferred_bytes, emitted, deferred, data })
+            }));
+        }
+        for handle in handles {
+            outputs.push(handle.join().unwrap_or_else(|_| {
+                Err(CodegenIrError::invalid_module("a codegen worker panicked"))
+            }));
+        }
+    });
+    outputs.into_iter().collect()
 }
 
 /// Emits sparse, opt-in progress records while a large module is lowered to assembly.
@@ -267,6 +606,14 @@ impl BackendInventory {
             std::env::var(BACKEND_INVENTORY_VAR).as_deref(),
             Ok("1")
         ))
+    }
+
+    /// Returns true when every body is scanned for its first refusal instead of stopping.
+    ///
+    /// The scan records one failure per body and rolls that body's assembly back, which depends
+    /// on emitting them one after another, so it keeps the single pass.
+    fn is_enabled(&self) -> bool {
+        self.enabled
     }
 
     /// Builds an inventory with an explicit switch for deterministic tests.
@@ -1234,18 +1581,27 @@ fn emit_static_property_initializers(ctx: &mut FunctionContext<'_>) -> Result<()
 }
 
 /// Marks one typed static property without a default as uninitialized.
+///
+/// The VALUE word goes back to zero with the marker, and it must. `__rt_web_reset` releases what
+/// the property held and leaves the pointer in place; this block then runs again for the next
+/// request and says "uninitialized" while the dead pointer is still sitting there. The first
+/// store to the property releases whatever it finds in that word before overwriting it, so the
+/// leftover made it free an address the heap had already handed to someone else. Symfony's
+/// `Container::$make` coalesce-assign is exactly that shape: on the second request it freed a
+/// live service-id string and the worker took a segmentation fault. Zero releases as a no-op.
 fn emit_static_property_sentinel(ctx: &mut FunctionContext<'_>, class_name: &str, property: &str) {
     ctx.emitter.comment(&format!(
         "mark static property {}::${} uninitialized",
         class_name, property
     ));
+    let symbol = static_property_symbol(class_name, property);
+    abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 0);
     let marker_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_int_immediate(
         ctx.emitter,
         marker_reg,
         UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
     );
-    let symbol = static_property_symbol(class_name, property);
     abi::emit_store_reg_to_symbol(ctx.emitter, marker_reg, &symbol, 8);
 }
 
@@ -1420,9 +1776,14 @@ fn emit_static_property_default_value(
 
 /// Emits every block in table order.
 fn emit_blocks(ctx: &mut FunctionContext<'_>) -> Result<()> {
-    let blocks = ctx.function.blocks.clone();
-    for block in blocks {
-        emit_block(ctx, &block)?;
+    // Borrowed for the same reason as the instruction in `lower_instruction`:
+    // `FunctionContext::function` is a `&'a Function` whose lifetime does not depend on the
+    // borrow of `ctx`, so copying the reference out lets the blocks outlive the `&mut ctx`
+    // below. The clone this replaces copied every block of every body -- its name, its
+    // instruction-id vector and its terminator -- to end a borrow that was never in the way.
+    let function = ctx.function;
+    for block in &function.blocks {
+        emit_block(ctx, block)?;
     }
     Ok(())
 }
@@ -1438,6 +1799,11 @@ fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
             let location = instruction_location(ctx, *inst_id);
             error.at(location)
         })?;
+        // A worker arms this watch around each body; nothing else does, so on every other path
+        // the check is one `Option` read. See `CodegenIrError::deferred_body`.
+        if ctx.shared.must_defer() {
+            return Err(CodegenIrError::deferred_body());
+        }
         if ctx.uses_pcntl_async_signals() {
             abi::emit_call_label(ctx.emitter, "__rt_pcntl_async_dispatch_preserving");
         }
@@ -1453,9 +1819,19 @@ fn instruction_location(ctx: &FunctionContext<'_>, inst_id: InstId) -> String {
     let Some(inst) = ctx.function.instruction(inst_id) else {
         return format!("op #{}", inst_id.as_raw());
     };
+    // The enclosing function is named for the same reason the checker records a declaration and
+    // the EIR validator names its own: an `Instruction` carries a `Span` with line and column but
+    // NO file, and after include/autoload expansion one `line:col` belongs to every spliced file
+    // at once. The function is what turns a backend gap into something a reader can go and open.
     match inst.span.filter(|span| span.line > 0) {
-        Some(span) => format!("line {}, op {}", span.line, inst.op.name()),
-        None => format!("op {}", inst.op.name()),
+        Some(span) => format!(
+            "{}:{}, op {}, in {}",
+            span.line,
+            span.col,
+            inst.op.name(),
+            ctx.function.name
+        ),
+        None => format!("op {}, in {}", inst.op.name(), ctx.function.name),
     }
 }
 

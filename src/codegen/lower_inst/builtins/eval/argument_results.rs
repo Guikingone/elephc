@@ -126,16 +126,17 @@ fn store_eval_native_method_argument(
         let ref_cell_reg = abi::secondary_scratch_reg(ctx.emitter);
         let marker_tag_reg = abi::tertiary_scratch_reg(ctx.emitter);
         let source_tag_reg = abi::symbol_scratch_reg(ctx.emitter);
+        crate::codegen::lower_inst::globals_constants::emit_marker_source_tag(
+            ctx,
+            slot,
+            &source_ty,
+            source_tag_reg,
+        )?;
         ctx.materialize_local_storage_address(slot, ref_cell_reg)?;
         abi::emit_load_int_immediate(
             ctx.emitter,
             marker_tag_reg,
             crate::codegen::callable_invoker_args::INVOKER_ARG_REF_CELL_TAG,
-        );
-        abi::emit_load_int_immediate(
-            ctx.emitter,
-            source_tag_reg,
-            crate::codegen::runtime_value_tag(&source_ty) as i64,
         );
         ctx.emitter.comment("eval_method_ref_arg");
         crate::codegen::emit_box_runtime_payload_as_mixed(

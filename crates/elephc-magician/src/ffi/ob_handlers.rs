@@ -63,6 +63,20 @@ pub(crate) fn register_ob_handler(
     Some(handlers.len() as u64 - 1)
 }
 
+/// Forgets every registered output handler at a generated web request boundary.
+///
+/// PHP empties the output-buffering stack at the end of a request, so no handler legitimately
+/// spans two. Both fields here are raw addresses into state the boundary invalidates -- the
+/// callable lives in the arena `__rt_web_reset` wipes, and the context is one whose tables are
+/// emptied beside it -- so a surviving entry is a callback into freed storage, reachable from
+/// the generated runtime the moment the next request calls `ob_start()`.
+#[cfg(not(test))]
+pub(crate) fn reset_ob_handlers() {
+    if let Ok(mut handlers) = ob_handlers().lock() {
+        handlers.clear();
+    }
+}
+
 /// Invalidates every handler registered by a soon-to-be-freed context so the
 /// runtime hook can never re-enter the interpreter through a dangling pointer.
 pub(crate) fn unregister_ob_handlers_for_context(context: *mut ElephcEvalContext) {

@@ -34,7 +34,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_callable_lookup_string_linear");
     emit_aarch64_normalize_selector(emitter, "__rt_callable_lookup_string_linear_ready");
     emitter.label("__rt_callable_lookup_string_linear_ready");
-    emitter.instruction("cbz x3, __rt_callable_lookup_string_miss");            // stop after scanning every canonical callable row
+    emitter.instruction("cbz x3, __rt_callable_lookup_string_linear_miss");     // stop after scanning every canonical callable row
     emitter.label("__rt_callable_lookup_string_linear_loop");
     emitter.instruction("ldr x4, [x2]");                                        // x4 = canonical candidate-name pointer
     emitter.instruction("ldr x5, [x2, #8]");                                    // x5 = canonical candidate-name length
@@ -56,11 +56,19 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x2, x2, #32");                                     // advance to the next four-word linear entry
     emitter.instruction("subs x3, x3, #1");                                     // consume one remaining linear entry
     emitter.instruction("b.ne __rt_callable_lookup_string_linear_loop");        // continue while untested entries remain
-    emitter.instruction("b __rt_callable_lookup_string_miss");                  // report a lookup miss after exhausting the table
+    emitter.instruction("b __rt_callable_lookup_string_linear_miss");           // report a lookup miss after exhausting the table
     emitter.label("__rt_callable_lookup_string_linear_match");
     emitter.instruction("ldr x0, [x2, #16]");                                   // return the matched descriptor pointer
     emitter.instruction("ldr x1, [x2, #24]");                                   // return the matched lookup flags
     emitter.instruction("ret");                                                 // return one resolved callable descriptor
+    // The hash helper below is a SEPARATE linker atom, and its miss epilogue is an internal
+    // label, so branching into it from here is a reference `-dead_strip` cannot follow: the
+    // atom is collectable and this branch lands wherever the linker put the next one. Three
+    // instructions are cheaper to duplicate than to share.
+    emitter.label("__rt_callable_lookup_string_linear_miss");
+    emitter.instruction("mov x0, #0");                                          // return a null descriptor for lookup miss
+    emitter.instruction("mov x1, #0");                                          // clear lookup flags on miss
+    emitter.instruction("ret");                                                 // return without allocation or diagnostics
 
     emitter.blank();
     emitter.label_global("__rt_callable_lookup_string_hash");
@@ -143,10 +151,10 @@ fn emit_aarch64_composite_lookup(emitter: &mut Emitter) {
     emit_aarch64_validate_composite(
         emitter,
         "__rt_callable_lookup_composite_linear",
-        "__rt_callable_lookup_composite_miss",
+        "__rt_callable_lookup_composite_linear_miss",
     );
     emitter.label("__rt_callable_lookup_composite_linear_loop");
-    emitter.instruction("cbz x14, __rt_callable_lookup_composite_miss");        // stop after scanning every composite row
+    emitter.instruction("cbz x14, __rt_callable_lookup_composite_linear_miss"); // stop after scanning every composite row
     emitter.instruction("cmp x8, #2");                                          // does this shape use a string class selector?
     emitter.instruction("b.eq __rt_callable_lookup_composite_linear_class_string"); // compare the static class-name component
     emitter.instruction("ldr x0, [x13]");                                       // load the numeric receiver class id
@@ -197,6 +205,11 @@ fn emit_aarch64_composite_lookup(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [x13, #32]");                                  // return the matched descriptor/template pointer
     emitter.instruction("ldr x1, [x13, #40]");                                  // return the matched capture flag
     emitter.instruction("ret");                                                 // return one composite callable result
+    // Own miss epilogue: the hash helper below is a separate atom (see the string pair above).
+    emitter.label("__rt_callable_lookup_composite_linear_miss");
+    emitter.instruction("mov x0, #0");                                          // return a null composite descriptor on miss
+    emitter.instruction("mov x1, #0");                                          // clear composite lookup flags on miss
+    emitter.instruction("ret");                                                 // return without allocation or diagnostics
 
     emitter.blank();
     emitter.label_global("__rt_callable_lookup_composite_hash");
@@ -410,7 +423,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, rcx");                                        // preserve the number of linear entries
     emitter.label("__rt_callable_lookup_string_linear_loop");
     emitter.instruction("test r11, r11");                                       // have all canonical callable rows been scanned?
-    emitter.instruction("je __rt_callable_lookup_string_miss");                 // return a miss after exhausting the linear table
+    emitter.instruction("je __rt_callable_lookup_string_linear_miss");          // return a miss after exhausting the linear table
     emitter.instruction("mov rdi, QWORD PTR [r10]");                            // rdi = canonical candidate-name pointer
     emitter.instruction("mov rax, QWORD PTR [r10 + 8]");                        // rax = canonical candidate-name length
     emitter.instruction("cmp r9, rax");                                         // reject candidates with a different normalized length
@@ -434,6 +447,12 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [r10 + 16]");                       // return the matched descriptor pointer
     emitter.instruction("mov rdx, QWORD PTR [r10 + 24]");                       // return the matched lookup flags
     emitter.instruction("ret");                                                 // return one resolved callable descriptor
+    // Own miss epilogue: `label_global` opens a fresh `.text.<name>` section here, so the hash
+    // helper's internal miss label is in a different `--gc-sections` unit.
+    emitter.label("__rt_callable_lookup_string_linear_miss");
+    emitter.instruction("xor eax, eax");                                        // return a null descriptor for lookup miss
+    emitter.instruction("xor edx, edx");                                        // clear lookup flags on miss
+    emitter.instruction("ret");                                                 // return without allocation or diagnostics
 
     emitter.blank();
     emitter.label_global("__rt_callable_lookup_string_hash");
@@ -514,11 +533,11 @@ fn emit_x86_64_composite_lookup(emitter: &mut Emitter) {
     emit_x86_64_validate_composite(
         emitter,
         "__rt_callable_lookup_composite_linear",
-        "__rt_callable_lookup_composite_miss",
+        "__rt_callable_lookup_composite_linear_miss",
     );
     emitter.label("__rt_callable_lookup_composite_linear_loop");
     emitter.instruction("test r15, r15");                                       // have all composite rows been scanned?
-    emitter.instruction("je __rt_callable_lookup_composite_miss");              // return a miss after exhausting the linear table
+    emitter.instruction("je __rt_callable_lookup_composite_linear_miss");       // return a miss after exhausting the linear table
     emitter.instruction("cmp rbx, 2");                                          // does this shape use a string class selector?
     emitter.instruction("je __rt_callable_lookup_composite_linear_class_string"); // compare the static class-name component
     emitter.instruction("cmp r10, QWORD PTR [r14]");                            // compare the runtime and table class ids
@@ -563,7 +582,19 @@ fn emit_x86_64_composite_lookup(emitter: &mut Emitter) {
     emitter.label("__rt_callable_lookup_composite_linear_match");
     emitter.instruction("mov rax, QWORD PTR [r14 + 32]");                       // return the matched descriptor/template pointer
     emitter.instruction("mov rdx, QWORD PTR [r14 + 40]");                       // return the matched capture flag
-    emitter.instruction("jmp __rt_callable_lookup_composite_return");           // restore preserved registers and return
+    emitter.instruction("jmp __rt_callable_lookup_composite_linear_return");    // restore preserved registers and return
+    // Own miss AND return epilogues: the hash helper below opens its own `.text.<name>` section,
+    // so both of its internal labels are in a different `--gc-sections` unit.
+    emitter.label("__rt_callable_lookup_composite_linear_miss");
+    emitter.instruction("xor eax, eax");                                        // return a null composite descriptor on miss
+    emitter.instruction("xor edx, edx");                                        // clear composite lookup flags on miss
+    emitter.label("__rt_callable_lookup_composite_linear_return");
+    emitter.instruction("pop r15");                                             // restore the fifth preserved lookup register
+    emitter.instruction("pop r14");                                             // restore the fourth preserved lookup register
+    emitter.instruction("pop r13");                                             // restore the third preserved lookup register
+    emitter.instruction("pop r12");                                             // restore the second preserved lookup register
+    emitter.instruction("pop rbx");                                             // restore the first preserved lookup register
+    emitter.instruction("ret");                                                 // return without allocation or diagnostics
 
     emitter.blank();
     emitter.label_global("__rt_callable_lookup_composite_hash");

@@ -66,6 +66,8 @@ mod builtins_strings_text;
 mod builtins_array_replace;
 mod builtins_error_log;
 mod builtins_extract;
+mod builtins_set_time_limit;
+mod builtins_substr_compare;
 mod builtins_substr_count;
 mod builtins_get_debug_type;
 mod builtins_parse_str;

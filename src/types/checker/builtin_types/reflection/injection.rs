@@ -108,6 +108,16 @@ pub(crate) fn inject_builtin_reflection(
                     Some(TypeExpr::Bool),
                     false_bool(),
                 ),
+                // Filled when the object is materialized, like every other reflection class's
+                // `__string`. BOTH materializers fill it: the compile-time emitter in
+                // `lower_inst::builtins::attributes`, and `__elephc_eval_reflection_attribute_new`
+                // for the eval bridge, which is the one a Symfony build actually uses.
+                builtin_property(
+                    "__string",
+                    Visibility::Private,
+                    Some(TypeExpr::Str),
+                    empty_string(),
+                ),
             ],
             methods: vec![
                 builtin_reflection_attribute_constructor_method(),
@@ -116,6 +126,7 @@ pub(crate) fn inject_builtin_reflection(
                 builtin_reflection_attribute_new_instance_method(),
                 builtin_reflection_class_int_method("getTarget", "__target"),
                 builtin_reflection_class_bool_method("isRepeated", "__is_repeated"),
+                builtin_reflection_class_string_method("__toString", "__string"),
             ],
             attributes: Vec::new(),
             constants: vec![builtin_class_const("IS_INSTANCEOF", 2)],

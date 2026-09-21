@@ -132,6 +132,7 @@ macro_rules! impl_collection_call_ops {
                 value.as_ptr(),
                 scope_ptr,
                 scope_len,
+                self.context.cast(),
             )
         };
         if ok == 0 {
@@ -276,7 +277,7 @@ macro_rules! impl_collection_call_ops {
                 self.context.cast(),
             )
         };
-        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() && !result.is_null() {
+        if crate::eval_trace::enabled() && !result.is_null() {
             let words = unsafe { std::slice::from_raw_parts(result.cast::<u64>(), 3) };
             eprintln!(
                 "[elephc-eval-trace] phase=native_method_bridge_raw method={method:?} result={result:p} arg_array={:p} result_words=[{:#x}, {:#x}, {:#x}]",
@@ -286,7 +287,7 @@ macro_rules! impl_collection_call_ops {
         unsafe {
             __elephc_eval_value_release(arg_array.as_ptr());
         }
-        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() && !result.is_null() {
+        if crate::eval_trace::enabled() && !result.is_null() {
             let words = unsafe { std::slice::from_raw_parts(result.cast::<u64>(), 3) };
             let tag = unsafe { __elephc_eval_value_type_tag(result) };
             eprintln!(

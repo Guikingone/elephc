@@ -180,6 +180,22 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
                 .and_then(materializable_array_element_type)
                 .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
         }
+        // A conditional's storage is what BOTH branches need, which is the same merge the checker
+        // performs for the literal as a whole. Falling through to the syntactic guess typed
+        // `isset($p['host']) ? 11211 : null` as `int` — the guess reads the first branch and the
+        // `Int` it answers for an unknown is indistinguishable from a real one — and the hash was
+        // then stamped `array<string, int>` over a `string`, an `int|null` and an `int`. Symfony's
+        // `MemcachedAdapter::createConnection` writes exactly that literal, and the mismatch
+        // surfaced as `unsupported EIR backend feature: hash_set value PHP type TaggedScalar`.
+        ExprKind::Ternary { then_expr, else_expr, .. } => merge_ir_assoc_value_type(
+            assoc_array_literal_value_type_for_ir(ctx, then_expr),
+            assoc_array_literal_value_type_for_ir(ctx, else_expr),
+        ),
+        ExprKind::ShortTernary { value: present, default }
+        | ExprKind::NullCoalesce { value: present, default } => merge_ir_assoc_value_type(
+            assoc_array_literal_value_type_for_ir(ctx, present),
+            assoc_array_literal_value_type_for_ir(ctx, default),
+        ),
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
             .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value))),
         ExprKind::PropertyAccess { object, property } => property_access_expr_type_for_ir(

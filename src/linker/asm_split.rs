@@ -757,12 +757,24 @@ fn render<'a>(
                 });
             }
         }
-        for line in analysis.lines[start..end].iter().copied() {
-            if !promoted.is_empty() && line.contains(local_prefix) {
-                push_renamed(&mut out, line, &promoted);
-            } else {
-                out.push_str(line);
+        // `lines` comes from `source.split_inclusive('\n')` and `offsets[i]` is line `i`'s byte
+        // position in `source`, so `source[offsets[a]..offsets[b]]` IS lines `a..b` joined --
+        // the same bytes the per-line loop pushed, in one copy. On this module that loop ran
+        // 42 million times per build to rebuild a string it already had.
+        let mut run = start;
+        for index in start..end {
+            let line = analysis.lines[index];
+            if promoted.is_empty() || !line.contains(local_prefix) {
+                continue;
             }
+            if index > run {
+                out.push_str(&source[analysis.offsets[run]..analysis.offsets[index]]);
+            }
+            push_renamed(&mut out, line, &promoted);
+            run = index + 1;
+        }
+        if end > run {
+            out.push_str(&source[analysis.offsets[run]..analysis.offsets[end]]);
         }
         append_visibility_footer(&mut out, analysis, &published[part], &promoted, part, &slice_of);
         slices.push(out);

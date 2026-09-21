@@ -63,6 +63,7 @@ impl Checker {
             callable_param_sigs: HashMap::new(),
             strict_types: false,
             param_specialization_seen: HashSet::new(),
+            unspecialized_seed_params: HashSet::new(),
             callable_return_sigs: HashMap::new(),
             callable_array_return_sigs: HashMap::new(),
             callable_captures: HashMap::new(),
@@ -107,6 +108,7 @@ impl Checker {
             // build a `Checker` directly: it keeps the compile-time diagnostic.
             program_defers_unknown_classes: false,
             flow_typed_returns: HashMap::new(),
+            method_exists_guards: std::collections::HashSet::new(),
             flow_typed_property_accesses: HashMap::new(),
             null_probe_scope_is_top_level: false,
             pending_null_probe_roots: Vec::new(),
@@ -131,6 +133,7 @@ impl Checker {
             local_binding_depth: HashMap::new(),
             ref_aliased_locals: HashSet::new(),
             ref_bound_locals: HashSet::new(),
+            by_ref_capture_boxed_locals: HashSet::new(),
             static_local_names: HashSet::new(),
             typed_local_names: HashSet::new(),
             local_bind_kill_sites: HashMap::new(),

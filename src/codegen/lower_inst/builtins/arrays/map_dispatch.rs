@@ -300,6 +300,12 @@ pub(super) fn emit_descriptor_callback_wrapper(
     visible_arg_types: Vec<PhpType>,
     return_ty: PhpType,
 ) -> String {
+    // NOT shared by ABI shape. 30 135 of these wrappers are emitted on the Symfony `--web`
+    // module, 1 717 989 lines, and collapsing them by `(visible_arg_types, return type, …)`
+    // looks sound because `emit_callback_wrapper` reads nothing else. It is not: it broke
+    // `preg_grep` (the callback's filtering was ignored) and SIGSEGV'd every
+    // `codegen::callables::*_preserves_by_ref_argument` test. Whatever else distinguishes two
+    // wrappers is not in the struct, so find it before trying this again.
     let wrapper_label = ctx.next_global_label("array_map_descriptor_callback_wrapper");
     let done_label = ctx.next_label("array_map_descriptor_callback_after_wrapper");
     let wrapper = DeferredCallbackWrapper {
@@ -419,7 +425,7 @@ where
         ctx.emitter.label(&next_case);
     }
 
-    emit_dynamic_string_callback_abort(ctx, owner);
+    emit_dynamic_string_callback_abort(ctx, owner, candidate_names.as_deref());
     ctx.emitter.label(&done_label);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     Ok(())
@@ -446,10 +452,22 @@ pub(super) fn reserve_descriptor_callback_env_from_reg(
 }
 
 /// Emits a fatal diagnostic for runtime callback names that do not resolve to descriptors.
-pub(super) fn emit_dynamic_string_callback_abort(ctx: &mut FunctionContext<'_>, owner: &str) {
+///
+/// The compiled CANDIDATES are named in the message. Without them the diagnostic says only which
+/// builtin died, which in a whole-program build is every `array_map` in the program at once; with
+/// them the failing call site is the one whose callback names those.
+pub(super) fn emit_dynamic_string_callback_abort(
+    ctx: &mut FunctionContext<'_>,
+    owner: &str,
+    candidate_names: Option<&[String]>,
+) {
+    let candidates = match candidate_names {
+        Some(names) if !names.is_empty() => names.join(", "),
+        _ => "none".to_string(),
+    };
     let message = format!(
-        "Fatal error: {} callback string does not name a supported callable\n",
-        owner
+        "Fatal error: {} callback string does not name a supported callable (compiled candidates: {})\n",
+        owner, candidates
     );
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {

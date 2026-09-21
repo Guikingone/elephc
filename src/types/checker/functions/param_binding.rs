@@ -75,6 +75,7 @@ impl Checker {
             || gradual_object_requires_runtime_nominal_guard(expected, actual)
             || nullable_int_requires_runtime_param_guard(expected, actual)
             || gradual_union_requires_runtime_param_guard(expected, actual)
+            || self.nominal_boundary_narrows_to_one_class(expected, actual)
         {
             return Ok(());
         }
@@ -237,5 +238,53 @@ impl Checker {
         if self.callable_param_sigs.get(&key) != Some(&sig) {
             self.callable_param_sigs.insert(key, sig);
         }
+    }
+
+    /// Returns whether a multi-class union boundary narrows to ONE class for this argument, so the
+    /// runtime nominal guard has a class to test and PHP decides the rest at the call.
+    ///
+    /// Gated on the same predicate the lowering uses to pick that class
+    /// (`nominal_object_boundary_target_for_source`), so the two cannot disagree about which calls
+    /// are accepted.
+    fn nominal_boundary_narrows_to_one_class(&self, expected: &PhpType, actual: &PhpType) -> bool {
+        if !matches!(
+            actual.codegen_repr(),
+            PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)
+        ) {
+            return false;
+        }
+        crate::types::param_binding::nominal_object_boundary_target_for_source(
+            expected,
+            actual,
+            &|candidate, source| self.nominal_boundary_classes_are_related(candidate, source),
+        )
+        .is_some()
+    }
+
+    /// Returns whether two class names name the same class or one descends from the other.
+    fn nominal_boundary_classes_are_related(&self, candidate: &str, source: &str) -> bool {
+        if candidate.eq_ignore_ascii_case(source) {
+            return true;
+        }
+        if !self.classes.contains_key(candidate) || !self.classes.contains_key(source) {
+            return true;
+        }
+        self.nominal_boundary_class_descends_from(candidate, source)
+            || self.nominal_boundary_class_descends_from(source, candidate)
+    }
+
+    /// Walks the parent chain of `class_name` looking for `ancestor`.
+    fn nominal_boundary_class_descends_from(&self, class_name: &str, ancestor: &str) -> bool {
+        let mut current = Some(class_name.to_string());
+        while let Some(name) = current {
+            if name.eq_ignore_ascii_case(ancestor) {
+                return true;
+            }
+            current = self
+                .classes
+                .get(name.as_str())
+                .and_then(|class_info| class_info.parent.clone());
+        }
+        false
     }
 }

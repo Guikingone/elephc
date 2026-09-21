@@ -61,7 +61,16 @@ pub(in crate::ir_lower) fn statically_known_instanceof_result(
     else {
         return None;
     };
-    if ctx.eval_executed() {
+    // `eval_executed()` alone is a FLOW fact inside ONE function: it is false in a function that
+    // contains no `eval()` of its own, even when the program runs one elsewhere. The proof this
+    // guard protects is a CLOSED-WORLD claim about the whole program, so it needs the
+    // program-level answer too — the same one dynamic function resolution already consults.
+    //
+    // Symfony is the case: `FlattenException::createFromThrowable()` is compiled and asks
+    // `$e instanceof HttpExceptionInterface`, while that interface is autoloaded at runtime. The
+    // fold answered a hardcoded `false`, so every `NotFoundHttpException` lost its status code and
+    // Symfony rendered 500 where php renders 404.
+    if ctx.eval_executed() || ctx.can_resolve_runtime_dynamic_functions() {
         return None;
     }
     let target = instanceof_target_name(ctx, name.as_str());
@@ -116,6 +125,26 @@ pub(in crate::ir_lower) fn instanceof_branch_local_type(
 fn positive_instanceof_local(condition: &Expr, branch_matches: bool) -> Option<(&str, &str)> {
     if let ExprKind::Not(inner) = &condition.kind {
         return positive_instanceof_local(inner, !branch_matches);
+    }
+    // `A && B` is true only when A is, so the TRUE branch of the whole condition carries every
+    // narrowing A proves. Without this, `if ($r instanceof StreamedResponse && $r->getCallback())`
+    // narrowed the right operand (see `lower_logical_binary`) but not the BODY, and the first call
+    // on the proven receiver inside the block was refused as an unknown method — Symfony's
+    // `HttpKernel::handle` calls `setCallback` there.
+    //
+    // Only the true side, and only for `&&`: a false `A && B` says nothing about A, and `||` on
+    // its true side says nothing either.
+    if let ExprKind::BinaryOp {
+        left,
+        op: crate::parser::ast::BinOp::And,
+        right,
+    } = &condition.kind
+    {
+        if branch_matches {
+            return positive_instanceof_local(left, true)
+                .or_else(|| positive_instanceof_local(right, true));
+        }
+        return None;
     }
     if !branch_matches {
         return None;

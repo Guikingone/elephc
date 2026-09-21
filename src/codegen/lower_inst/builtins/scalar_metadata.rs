@@ -217,6 +217,7 @@ fn emit_mixed_get_debug_type(
     let null_case = ctx.next_label("debugtype_mixed_null");
     let array_case = ctx.next_label("debugtype_mixed_array");
     let object_case = ctx.next_label("debugtype_mixed_object");
+    let closure_case = ctx.next_label("debugtype_mixed_closure");
     let resource_case = ctx.next_label("debugtype_mixed_resource");
     let done = ctx.next_label("debugtype_mixed_done");
     ctx.load_value_to_result(value)?;
@@ -228,6 +229,12 @@ fn emit_mixed_get_debug_type(
     emit_branch_on_gettype_mixed_tag(ctx, 4, &array_case);
     emit_branch_on_gettype_mixed_tag(ctx, 5, &array_case);
     emit_branch_on_gettype_mixed_tag(ctx, 6, &object_case);
+    // Tag 10 is a boxed callable descriptor. `gettype()` already routes it to its object arm and
+    // `instanceof \Closure` already answers true for it; only this dispatch left it out, so it
+    // fell through to the null arm and `get_debug_type(fn () => 1)` through a `mixed` parameter
+    // answered "null" where PHP answers "Closure". It gets its own arm rather than the object one
+    // because a descriptor carries no object header for the class-name read to load.
+    emit_branch_on_gettype_mixed_tag(ctx, 10, &closure_case);
     emit_branch_on_gettype_mixed_tag(ctx, 9, &resource_case);
     abi::emit_jump(ctx.emitter, &null_case);
 
@@ -237,6 +244,7 @@ fn emit_mixed_get_debug_type(
     emit_mixed_gettype_case(ctx, &boolean_case, b"bool", &done);
     emit_mixed_gettype_case(ctx, &null_case, b"null", &done);
     emit_mixed_gettype_case(ctx, &array_case, b"array", &done);
+    emit_mixed_gettype_case(ctx, &closure_case, b"Closure", &done);
     emit_mixed_resource_debug_type_case(ctx, &resource_case, &done);
 
     ctx.emitter.label(&object_case);

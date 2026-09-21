@@ -34,6 +34,8 @@ struct ReflectionAttributeLayout {
     target_hi: usize,
     repeated_lo: usize,
     repeated_hi: usize,
+    string_lo: usize,
+    string_hi: usize,
 }
 
 /// Emits eval reflection helpers when the runtime bridge can materialize metadata owners.
@@ -62,6 +64,7 @@ fn reflection_attribute_layout(module: &Module) -> Option<ReflectionAttributeLay
     let factory_lo = reflection_property_offset(info, "__factory")?;
     let target_lo = reflection_property_offset(info, "__target")?;
     let repeated_lo = reflection_property_offset(info, "__is_repeated")?;
+    let string_lo = reflection_property_offset(info, "__string")?;
     Some(ReflectionAttributeLayout {
         class_id: info.class_id,
         property_count: info.properties.len(),
@@ -75,6 +78,8 @@ fn reflection_attribute_layout(module: &Module) -> Option<ReflectionAttributeLay
         target_hi: target_lo + 8,
         repeated_lo,
         repeated_hi: repeated_lo + 8,
+        string_lo,
+        string_hi: string_lo + 8,
     })
 }
 
@@ -104,14 +109,16 @@ fn emit_reflection_attribute_new_aarch64(
 ) {
     let fail_label = "__elephc_eval_reflection_attribute_new_fail";
     let done_label = "__elephc_eval_reflection_attribute_new_done";
-    emitter.instruction("sub sp, sp, #80");                                     // reserve helper frame for inputs, object, and fp/lr
-    emitter.instruction("stp x29, x30, [sp, #64]");                             // preserve the Rust caller frame across runtime calls
-    emitter.instruction("add x29, sp, #64");                                    // establish a stable helper frame pointer
+    emitter.instruction("sub sp, sp, #96");                                     // reserve helper frame for inputs, object, rendering, and fp/lr
+    emitter.instruction("stp x29, x30, [sp, #80]");                             // preserve the Rust caller frame across runtime calls
+    emitter.instruction("add x29, sp, #80");                                    // establish a stable helper frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the attribute-name pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save the attribute-name length
     emitter.instruction("str x2, [sp, #16]");                                   // save the boxed eval argument array
     emitter.instruction("str x3, [sp, #40]");                                   // save the PHP attribute target bitmask
     emitter.instruction("str x4, [sp, #48]");                                   // save whether this attribute is repeated
+    emitter.instruction("str x5, [sp, #64]");                                   // save the rendered __toString pointer
+    emitter.instruction("str x6, [sp, #72]");                                   // save the rendered __toString length
     emit_alloc_reflection_attribute_object_aarch64(emitter, layout);
     emitter.instruction("str x0, [sp, #24]");                                   // save the unboxed ReflectionAttribute object pointer
     emit_set_name_property_aarch64(emitter, layout);
@@ -119,6 +126,7 @@ fn emit_reflection_attribute_new_aarch64(
     emit_set_factory_property_aarch64(emitter, layout);
     emit_set_target_property_aarch64(emitter, layout);
     emit_set_repeated_property_aarch64(emitter, layout);
+    emit_set_string_property_aarch64(emitter, layout);
     emitter.instruction("mov x0, #6");                                          // runtime tag 6 = object
     emitter.instruction("ldr x1, [sp, #24]");                                   // move the ReflectionAttribute object pointer into the Mixed payload
     emitter.instruction("mov x2, xzr");                                         // object payloads do not use a high word
@@ -127,8 +135,8 @@ fn emit_reflection_attribute_new_aarch64(
     emitter.label(fail_label);
     emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore the Rust caller frame
-    emitter.instruction("add sp, sp, #80");                                     // release the helper frame
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore the Rust caller frame
+    emitter.instruction("add sp, sp, #96");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the boxed reflection attribute to Rust
 }
 
@@ -138,12 +146,15 @@ fn emit_reflection_attribute_new_x86_64(emitter: &mut Emitter, layout: &Reflecti
     let done_label = "__elephc_eval_reflection_attribute_new_done_x";
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
-    emitter.instruction("sub rsp, 64");                                         // reserve slots for inputs, object, and unboxed args
+    emitter.instruction("sub rsp, 80");                                         // reserve slots for inputs, object, unboxed args, and the rendering
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the attribute-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the attribute-name length
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the boxed eval argument array
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the PHP attribute target bitmask
     emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // save whether this attribute is repeated
+    emitter.instruction("mov QWORD PTR [rbp - 64], r9");                        // save the rendered __toString pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp + 16]");                       // the seventh integer argument arrives on the stack
+    emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save the rendered __toString length
     emit_alloc_reflection_attribute_object_x86_64(emitter, layout);
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the unboxed ReflectionAttribute object pointer
     emit_set_name_property_x86_64(emitter, layout);
@@ -151,6 +162,7 @@ fn emit_reflection_attribute_new_x86_64(emitter: &mut Emitter, layout: &Reflecti
     emit_set_factory_property_x86_64(emitter, layout);
     emit_set_target_property_x86_64(emitter, layout);
     emit_set_repeated_property_x86_64(emitter, layout);
+    emit_set_string_property_x86_64(emitter, layout);
     emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // move the ReflectionAttribute object pointer into the Mixed payload
     emitter.instruction("xor esi, esi");                                        // object payloads do not use a high word
     emitter.instruction("mov eax, 6");                                          // runtime tag 6 = object
@@ -225,6 +237,30 @@ fn emit_set_name_property_x86_64(emitter: &mut Emitter, layout: &ReflectionAttri
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the ReflectionAttribute object pointer
     abi::emit_store_to_address(emitter, "rax", "r10", layout.name_lo);
     abi::emit_store_to_address(emitter, "rdx", "r10", layout.name_hi);
+}
+
+/// Stores the incoming ARM64 `__toString` rendering into the object private slot.
+///
+/// The interpreter renders it from its own attribute metadata (see
+/// `elephc_magician::eval_ir::attributes::render_reflection_attribute_string`) because only it
+/// knows the attribute a runtime-declared class carries.
+fn emit_set_string_property_aarch64(emitter: &mut Emitter, layout: &ReflectionAttributeLayout) {
+    emitter.instruction("ldr x1, [sp, #64]");                                   // reload the rendered __toString pointer for persistence
+    emitter.instruction("ldr x2, [sp, #72]");                                   // reload the rendered __toString length for persistence
+    emitter.instruction("bl __rt_str_persist");                                 // copy the eval-owned rendering for object ownership
+    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the ReflectionAttribute object pointer
+    abi::emit_store_to_address(emitter, "x1", "x9", layout.string_lo);
+    abi::emit_store_to_address(emitter, "x2", "x9", layout.string_hi);
+}
+
+/// Stores the incoming x86_64 `__toString` rendering into the object private slot.
+fn emit_set_string_property_x86_64(emitter: &mut Emitter, layout: &ReflectionAttributeLayout) {
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // reload the rendered __toString pointer for persistence
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 72]");                       // reload the rendered __toString length for persistence
+    emitter.instruction("call __rt_str_persist");                               // copy the eval-owned rendering for object ownership
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the ReflectionAttribute object pointer
+    abi::emit_store_to_address(emitter, "rax", "r10", layout.string_lo);
+    abi::emit_store_to_address(emitter, "rdx", "r10", layout.string_hi);
 }
 
 /// Stores a retained ARM64 argument-array payload into the object private slot.

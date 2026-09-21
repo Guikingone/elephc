@@ -82,6 +82,7 @@ pub(super) fn emit_x86_64_values_classes(emitter: &mut Emitter) {
     emit_x86_64_object_from_raw_wrapper(emitter);
     emit_x86_64_install_dynamic_object_destructor_hook(emitter);
     emit_x86_64_install_generator_protocol_hook(emitter);
+    emit_x86_64_eval_generator_drive(emitter);
     emit_x86_64_install_class_autoload_hook(emitter);
     emit_x86_64_install_unserialize_object_hook(emitter);
     emit_x86_64_install_object_relation_hook(emitter);

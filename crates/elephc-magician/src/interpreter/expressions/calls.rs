@@ -206,6 +206,15 @@ pub(in crate::interpreter) fn eval_call(
     if let Some(function) = context.native_function(name) {
         return eval_native_function(function, args, context, scope, values);
     }
+    // Last: a function declared by an include that ran inside ANOTHER eval context. Composer's
+    // `files` autoload requires its shims from inside a bound closure, and every compiled frame
+    // that includes gets its own context, so `trigger_deprecation()` lives in one this call has
+    // never seen. See `ElephcEvalContext::adopt_global_function`.
+    if context.adopt_global_function(name) {
+        if let Some(function) = context.function(name).cloned() {
+            return eval_dynamic_function(&function, args, context, scope, values);
+        }
+    }
     note_eval_runtime_failure(format!("call to undefined function {name}()"), context);
     Err(EvalStatus::UnsupportedConstruct)
 }
@@ -238,12 +247,12 @@ pub(in crate::interpreter) fn eval_dynamic_call(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let callback = eval_expr(callee, context, scope, values)?;
     let callback_tag = values.type_tag(callback)?;
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         eprintln!("[elephc-eval-trace] phase=dynamic_call callback_tag={callback_tag}");
     }
     if callback_tag == EVAL_TAG_CALLABLE {
         let descriptor = values.raw_value_word(callback)? as usize as *mut std::ffi::c_void;
-        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        if crate::eval_trace::enabled() {
             let word0 = (descriptor as usize >= 4096)
                 .then(|| unsafe { *(descriptor as *const u64) });
             eprintln!(
@@ -251,7 +260,7 @@ pub(in crate::interpreter) fn eval_dynamic_call(
             );
         }
         if let Some(decoded) = unsafe { decode_callable_descriptor(descriptor) } {
-            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            if crate::eval_trace::enabled() {
                 eprintln!("[elephc-eval-trace] phase=dynamic_call descriptor=direct");
             }
             return eval_native_function(decoded.function, args, context, scope, values);

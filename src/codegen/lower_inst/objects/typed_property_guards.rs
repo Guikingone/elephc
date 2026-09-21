@@ -89,12 +89,33 @@ pub(super) fn emit_uninitialized_typed_property_fatal(
     );
     let fatal_message = format!("Fatal error: {}\n", message);
     let (fatal_label, fatal_len) = ctx.data.add_string(fatal_message.as_bytes());
+    let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
+
+    // This is the codegen-raised throwable with four constants changed: always `Error`, never a
+    // creation line, and a report that goes to stderr and exits 1. Measured on the Symfony
+    // `--web` module it is 56 280 sites and 2 363 760 lines, so those constants move into the
+    // record and the site becomes its address plus a call.
+    if let Some(helper) = crate::codegen::shared_static_throw::shared_throw_label(ctx) {
+        let record = crate::codegen::shared_static_throw::throw_descriptor(
+            ctx.data,
+            "_spl_error_class_id",
+            &message_label,
+            message_len,
+            0,
+            &fatal_label,
+            fatal_len,
+            crate::codegen::shared_static_throw::REPORT_TYPED_PROPERTY,
+        );
+        abi::emit_symbol_address(ctx.emitter, abi::int_result_reg(ctx.emitter), &record);
+        abi::emit_call_label(ctx.emitter, helper);
+        return;
+    }
+
     emit_uninitialized_typed_property_uncaught_fatal_if_no_handler(
         ctx,
         &fatal_label,
         fatal_len,
     );
-    let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             crate::codegen_support::throwable_layout::emit_allocate(ctx.emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);

@@ -549,13 +549,26 @@ fn eval_method_parameter_variant_accepts_exact(
     match variant {
         EvalParameterTypeVariant::Array => Ok(matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)),
         EvalParameterTypeVariant::Bool => Ok(tag == EVAL_TAG_BOOL),
+        // `EVAL_TAG_CALLABLE` belongs here for the same reason the `Class("Closure")` arm below
+        // already accepts it: a closure built by COMPILED code crosses as a descriptor cell, and
+        // it is a callable in every sense PHP cares about. Leaving it out refused
+        // `HtmlErrorRenderer::__construct(bool|callable $debug, ...)` the closure Symfony's own
+        // container hands it, which is how a compiled prod container failed to build its error
+        // renderer.
         EvalParameterTypeVariant::Callable => Ok(matches!(
             tag,
-            EVAL_TAG_STRING | EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT
+            EVAL_TAG_STRING
+                | EVAL_TAG_ARRAY
+                | EVAL_TAG_ASSOC
+                | EVAL_TAG_OBJECT
+                | EVAL_TAG_CALLABLE
         )),
         EvalParameterTypeVariant::Class(class_name) => {
             eval_method_parameter_class_accepts(value, tag, class_name, context, values)
         }
+        // PHP 8.2 value types accept ONE boolean each, not either.
+        EvalParameterTypeVariant::False => Ok(tag == EVAL_TAG_BOOL && !values.truthy(value)?),
+        EvalParameterTypeVariant::True => Ok(tag == EVAL_TAG_BOOL && values.truthy(value)?),
         EvalParameterTypeVariant::Float => Ok(tag == EVAL_TAG_FLOAT),
         EvalParameterTypeVariant::Int => Ok(tag == EVAL_TAG_INT),
         EvalParameterTypeVariant::Iterable => {

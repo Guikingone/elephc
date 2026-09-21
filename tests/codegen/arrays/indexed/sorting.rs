@@ -117,7 +117,11 @@ echo implode(",", $r), "\n";
 }
 
 /// Verifies asort maintains key-value associations and sorts by values in ascending order.
-/// Fixture: [3, 1, 2] → sorted [1, 2, 3] → first element $a[0] should be 1.
+///
+/// Fixture: `[3, 1, 2]` sorts to values `1, 2, 3` under keys `1, 2, 0` — the key travels with the
+/// value, which is the whole difference from `sort()`. `$a[0]` therefore still reads `3`, the
+/// element index 0 held all along. This assertion used to read `1`, the value the renumbering left
+/// there, against a doc comment that already described the correct rule.
 #[test]
 fn test_asort() {
     let out = compile_and_run(
@@ -127,11 +131,13 @@ asort($a);
 echo $a[0];
 "#,
     );
-    assert_eq!(out, "1");
+    assert_eq!(out, "3");
 }
 
 /// Verifies arsort maintains key-value associations and sorts by values in descending order.
-/// Fixture: [1, 3, 2] → sorted descending [3, 2, 1] → first element $a[0] should be 3.
+///
+/// Fixture: `[1, 3, 2]` sorts to values `3, 2, 1` under keys `1, 2, 0`, so `$a[0]` still reads the
+/// `1` that index 0 held. See `test_asort` for why the previous expectation was the bug.
 #[test]
 fn test_arsort() {
     let out = compile_and_run(
@@ -141,7 +147,7 @@ arsort($a);
 echo $a[0];
 "#,
     );
-    assert_eq!(out, "3");
+    assert_eq!(out, "1");
 }
 
 /// Verifies ksort sorts by keys in ascending order, preserving values.

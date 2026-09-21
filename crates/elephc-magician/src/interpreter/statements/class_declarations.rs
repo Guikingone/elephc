@@ -7,11 +7,12 @@
 //! Key details:
 //! - Registration occurs only after trait expansion and declaration validation succeed.
 
+use std::sync::Arc;
 use super::*;
 
 /// Registers an eval-declared class in the dynamic class table.
 pub(in crate::interpreter) fn execute_class_decl_stmt(
-    class: &EvalClass,
+    class: &Arc<EvalClass>,
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
@@ -64,14 +65,28 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
         );
         return Err(EvalStatus::RuntimeFatal);
     }
-    let class = trace_class_decl_result(
-        class,
-        "expand_traits",
-        expand_eval_class_traits(class, context, values),
-    )?
-    .with_readonly_properties()
-    .with_strict_types(context.strict_types());
-    let class = &class;
+    // Nothing to expand, nothing to stamp: the parsed class IS the declared class, so it is
+    // shared rather than copied. `expand_eval_class_traits` answers `class.clone()` for a
+    // trait-free class and both stamps are no-ops in that case, which made every request deep-copy
+    // every method body of every class it declared -- and free them all again at the request
+    // boundary. The generated Symfony container alone is thousands of methods.
+    let prepared = if class.traits().is_empty()
+        && !class.is_readonly_class()
+        && !context.strict_types()
+    {
+        Arc::clone(class)
+    } else {
+        Arc::new(
+            trace_class_decl_result(
+                class,
+                "expand_traits",
+                expand_eval_class_traits(class, context, values),
+            )?
+            .with_readonly_properties()
+            .with_strict_types(context.strict_types()),
+        )
+    };
+    let class = &prepared;
     trace_class_decl_result(
         class,
         "validate_modifiers",
@@ -124,7 +139,7 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
         trace_class_decl_result(
             class,
             "validate_concrete_requirements",
-            validate_concrete_class_requirements(class, context),
+            validate_concrete_class_requirements(class, context, values),
         )?;
         trace_class_decl_result(
             class,
@@ -143,7 +158,7 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
         )?;
     }
     let declaration_file = eval_declaration_source_file(context);
-    if context.define_class(class.clone()) {
+    if context.define_class(Arc::clone(class)) {
         context.set_class_source_file(class.name(), declaration_file);
         if let Some(parent) = native_parent.as_deref() {
             if !context.define_native_class_parent(class.name(), parent) {
@@ -167,7 +182,7 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
             "initialize_static_properties",
             initialize_eval_static_properties(class, context, scope, values),
         );
-        if result.is_ok() && std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        if result.is_ok() && crate::eval_trace::enabled() {
             eprintln!(
                 "[elephc-eval-trace] phase=class_decl_ok class={:?}",
                 class.name(),
@@ -216,7 +231,7 @@ fn trace_class_decl_result<T>(
     result: Result<T, EvalStatus>,
 ) -> Result<T, EvalStatus> {
     if let Err(status) = result.as_ref() {
-        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        if crate::eval_trace::enabled() {
             eprintln!(
                 "[elephc-eval-trace] phase=class_decl_error class={:?} stage={stage} status={status:?}",
                 class.name(),
@@ -228,7 +243,7 @@ fn trace_class_decl_result<T>(
 
 /// Emits one opt-in class-declaration stage failure without changing control flow.
 fn trace_class_decl_stage(class: &EvalClass, stage: &str, status: EvalStatus) {
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_none() {
+    if !crate::eval_trace::enabled() {
         return;
     }
     eprintln!(
@@ -239,7 +254,7 @@ fn trace_class_decl_stage(class: &EvalClass, stage: &str, status: EvalStatus) {
 
 /// Traces which declaration registry already contains a class-like name.
 fn trace_class_decl_duplicate(class: &EvalClass, matches: [bool; 8]) {
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_none() {
+    if !crate::eval_trace::enabled() {
         return;
     }
     eprintln!(
@@ -308,7 +323,9 @@ pub(in crate::interpreter) fn ensure_eval_anonymous_class_decl(
             Err(EvalStatus::RuntimeFatal)
         };
     }
-    execute_class_decl_stmt(class, context, scope, values)
+    // An anonymous class comes from an expression node that owns its class, so there is nothing
+    // to share with; this one allocation per `new class` is what the declaration path expects.
+    execute_class_decl_stmt(&Arc::new(class.clone()), context, scope, values)
 }
 
 /// Returns the file php names as the declaring file for a class-like the interpreter declares.

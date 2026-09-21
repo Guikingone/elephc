@@ -278,3 +278,95 @@ echo count($first->getMethods()) + count($second->getMethods()) + count($third->
         repeated_asm.len()
     );
 }
+
+/// Verifies a SPREAD argument reaches the ordinary two-argument constructor instead of the
+/// deprecated one-argument `"Class::method"` form.
+///
+/// `args.len() == 1` counted a spread as one argument, so `new ReflectionMethod(...$pair)` was
+/// sent to the string-name validator and rejected with "first argument must be a string method
+/// name" — although the spread expands to `[$object, "method"]` at run time. Symfony's
+/// `ControllerEvent::getControllerReflector()` is written exactly this way, and it is one of the
+/// last three constructs standing between the generated DI container and an AOT compile.
+///
+/// The assertion is that the spread form and the written-out form agree; `getName()` is what both
+/// are asked for, because that is the part of the reflector Symfony reads.
+#[test]
+fn test_reflection_method_accepts_a_spread_argument_pair() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class SpreadReflectionOwner {
+    public function run(string $a): string { return "ran:" . $a; }
+}
+
+$object = new SpreadReflectionOwner();
+$pair = [$object, "run"];
+$names = ["SpreadReflectionOwner", "run"];
+
+echo (new ReflectionMethod(...$pair))->getName() . ":";
+echo (new ReflectionMethod(...$names))->getName() . ":";
+echo (new ReflectionMethod($object, "run"))->getName();
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "run:run:run");
+}
+
+
+/// `(string) $attribute` renders what PHP's `ReflectionAttribute::__toString()` renders.
+///
+/// There was no `__toString` at all, so the cast raised `Object of class ReflectionAttribute
+/// could not be converted to string`. Symfony's
+/// `Config/Resource/ReflectionClassResource::generateSignature()` writes `[$a->getName(),
+/// (string) $a]` for every attribute it tracks, inside `isFresh()` for `url_matching_routes.php`
+/// — BEFORE routing — so every route died the moment the app grew a controller with `#[Route]`.
+///
+/// The rendering is a precomputed `__string` slot, like every other reflection class's. It has to
+/// be filled on BOTH materialization paths: the compile-time emitter in
+/// `lower_inst::builtins::attributes`, and `__elephc_eval_reflection_attribute_new`, which is the
+/// one that actually runs whenever the eval bridge is on — a first fix that filled only the former
+/// left the slot empty and returned `""`.
+///
+/// Covers the shapes that differ: no arguments (one line, no block), a positional and a named
+/// argument, and the escaping, which is NOT `var_export`'s — the backslash is escaped, the single
+/// quote is not.
+///
+/// Oracle: `php -n` prints the asserted text.
+#[test]
+fn test_reflection_attribute_renders_php_tostring() {
+    let out = compile_and_run(
+        r#"<?php
+#[\Attribute(\Attribute::TARGET_ALL)]
+class Route {
+    public function __construct(public string $path = '/', public ?string $name = null) {}
+}
+#[Route('/hello', name: 'hello')]
+class WithArgs {}
+#[Route]
+class Bare {}
+#[Route("q'uote and \\ back")]
+class Escaped {}
+foreach ((new ReflectionClass('WithArgs'))->getAttributes() as $a) { echo (string) $a; }
+foreach ((new ReflectionClass('Bare'))->getAttributes() as $a) { echo (string) $a; }
+foreach ((new ReflectionClass('Escaped'))->getAttributes() as $a) { echo (string) $a; }
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "Attribute [ Route ] {\n",
+            "  - Arguments [2] {\n",
+            "    Argument #0 [ '/hello' ]\n",
+            "    Argument #1 [ name = 'hello' ]\n",
+            "  }\n}\n",
+            "Attribute [ Route ]\n",
+            "Attribute [ Route ] {\n",
+            "  - Arguments [1] {\n",
+            "    Argument #0 [ 'q'uote and \\\\ back' ]\n",
+            "  }\n}\n",
+        )
+    );
+}

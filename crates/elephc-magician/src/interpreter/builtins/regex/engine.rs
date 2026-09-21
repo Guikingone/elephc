@@ -123,6 +123,22 @@ impl Regex {
     /// Returns the declared name for one capture-group index, if PCRE2's
     /// name table has one, as raw bytes (PCRE2 group names are ASCII, but
     /// bytes avoid an unnecessary UTF-8 validation panic).
+    /// Returns the name set by the MARK verb this regex's most recent match passed.
+    ///
+    /// PHP exposes it as `$matches['MARK']`, and Symfony's dumped `CompiledUrlMatcher` indexes
+    /// `$this->dynamicRoutes` by it, so without it every route with a placeholder resolves to
+    /// entry 0 and fails.
+    pub(in crate::interpreter) fn last_mark(&self) -> Option<Vec<u8>> {
+        let mut mark_ptr: *const std::ffi::c_char = std::ptr::null();
+        let mut mark_len: u64 = 0;
+        let status = unsafe { (self.provider.last_mark)(self.handle, &mut mark_ptr, &mut mark_len) };
+        if status != 0 || mark_ptr.is_null() {
+            return None;
+        }
+        let len = usize::try_from(mark_len).ok()?;
+        Some(unsafe { std::slice::from_raw_parts(mark_ptr.cast::<u8>(), len) }.to_vec())
+    }
+
     pub(in crate::interpreter) fn group_name(&self, group: usize) -> Option<Vec<u8>> {
         let group = u64::try_from(group).ok()?;
         let mut name_ptr: *const c_char = std::ptr::null();

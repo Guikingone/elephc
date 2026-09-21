@@ -48,6 +48,27 @@ impl Drop for NativeFrameCalledClassOverrideGuard {
     }
 }
 
+/// Records the lexical class of a compiled frame that is about to call into the bridge.
+///
+/// Paired with [`pop_native_caller_class`] around exactly one bridge call, so the stack depth
+/// matches the native call depth even when a call nests.
+pub(crate) fn push_native_caller_class(class_name: &str) {
+    let class_name = class_name.trim_start_matches('\\').to_string();
+    NATIVE_CALLER_CLASSES.with(|classes| classes.borrow_mut().push(class_name));
+}
+
+/// Drops the innermost compiled-frame lexical class.
+pub(crate) fn pop_native_caller_class() {
+    NATIVE_CALLER_CLASSES.with(|classes| {
+        classes.borrow_mut().pop();
+    });
+}
+
+/// Returns the lexical class of the innermost compiled frame calling into the bridge.
+pub(crate) fn current_native_caller_class() -> Option<String> {
+    NATIVE_CALLER_CLASSES.with(|classes| classes.borrow().last().cloned())
+}
+
 /// Returns the active thread-local late-static override for one generated/AOT frame.
 pub(super) fn native_frame_called_class_override(
     frame_class: &str,
@@ -117,7 +138,10 @@ pub(crate) fn native_frame_called_class_override_context(
 #[cfg(not(test))]
 #[derive(Default)]
 pub(super) struct GlobalEvalClassRegistry {
-    pub(super) classes: HashMap<String, EvalClass>,
+    /// Bumped whenever the registry is emptied, so a context can tell "nothing new since I
+    /// last looked" from "everything I saw is gone and the indices mean something else now".
+    pub(super) generation: u64,
+    pub(super) classes: HashMap<String, Arc<EvalClass>>,
     pub(super) class_source_files: HashMap<String, String>,
     pub(super) declared_class_names: Vec<String>,
     pub(super) interfaces: HashMap<String, EvalInterface>,
@@ -175,9 +199,11 @@ pub(crate) fn publish_global_eval_aot_metadata(context: &ElephcEvalContext) {
     };
     *metadata = Some(Arc::new(GlobalEvalAotMetadata {
             native_global_sync: context.native_global_sync,
-            declared_class_names: Arc::clone(&context.declared_class_names),
-            declared_interface_names: Arc::clone(&context.declared_interface_names),
-            declared_trait_names: Arc::clone(&context.declared_trait_names),
+            // Flattened once, here: the snapshot is the prefix every later context adopts,
+            // so it must carry the registering context's own additions too.
+            declared_class_names: Arc::new(context.declared_class_names()),
+            declared_interface_names: Arc::new(context.declared_interface_names()),
+            declared_trait_names: Arc::new(context.declared_trait_names()),
             native_functions: Arc::clone(&context.native_functions),
             native_methods: Arc::clone(&context.native_methods),
             native_static_methods: Arc::clone(&context.native_static_methods),
@@ -209,9 +235,12 @@ pub(crate) fn sync_global_eval_aot_metadata(context: &mut ElephcEvalContext) -> 
         return false;
     };
     context.declared_class_names = Arc::clone(&metadata.declared_class_names);
+    context.own_declared_class_names.clear();
     context.native_global_sync = metadata.native_global_sync;
     context.declared_interface_names = Arc::clone(&metadata.declared_interface_names);
+    context.own_declared_interface_names.clear();
     context.declared_trait_names = Arc::clone(&metadata.declared_trait_names);
+    context.own_declared_trait_names.clear();
     context.native_functions = Arc::clone(&metadata.native_functions);
     context.native_methods = Arc::clone(&metadata.native_methods);
     context.native_static_methods = Arc::clone(&metadata.native_static_methods);
@@ -292,7 +321,11 @@ pub(crate) fn reset_global_eval_classes() {
     // These are declarations executed by the previous request, not immutable AOT
     // metadata. Retaining them would make an ordinary include in the next request
     // fail with a redeclaration error. The separate AOT snapshot remains reusable.
+    let generation = registry.generation.wrapping_add(1);
     *registry = GlobalEvalClassRegistry::default();
+    // The names a context already imported are gone, and index 7 of the new lists is a
+    // different class than index 7 of the old ones. Every sync mark must be invalidated.
+    registry.generation = generation;
 }
 
 /// Clears the process-local include registry at a generated web request boundary.
@@ -460,6 +493,23 @@ pub(crate) fn global_eval_function_owner_context(
         .map(|context| context as *mut ElephcEvalContext)
 }
 
+/// Clones one dynamically included PHP function out of the context that declared it.
+///
+/// The owner entry is removed when its context is destroyed
+/// (`unregister_global_eval_functions_for_context`), so a hit names a context that is still alive.
+#[cfg(not(test))]
+pub(crate) fn global_eval_function_declaration(
+    name: &str,
+) -> Option<crate::eval_ir::EvalFunction> {
+    let owner = global_eval_function_owner_context(name)?;
+    let owner = unsafe { owner.as_ref() }?;
+    let bare = name.rsplit_once('\\').map_or(name, |(_, bare)| bare);
+    owner
+        .function(name)
+        .or_else(|| owner.function(bare))
+        .cloned()
+}
+
 /// Removes every function-owner entry associated with a context being destroyed.
 #[cfg(not(test))]
 pub(crate) fn unregister_global_eval_functions_for_context(context: *mut ElephcEvalContext) {
@@ -496,13 +546,15 @@ fn normalize_global_function_name(name: &str) -> String {
 
 /// Records one eval-declared class so later eval contexts can see PHP-global metadata.
 #[cfg(not(test))]
-pub(super) fn register_global_eval_class(class: &EvalClass) {
+pub(super) fn register_global_eval_class(class: &Arc<EvalClass>) {
     let key = normalize_class_name(class.name());
     if let Ok(mut registry) = global_eval_classes().lock() {
         if !registry.classes.contains_key(&key) {
             registry.declared_class_names.push(class.name().to_string());
         }
-        registry.classes.insert(key, class.clone());
+        // Publishes the SAME allocation the declaring context keeps, so declaring a class costs
+        // one `Arc` bump rather than a second deep copy of every method body.
+        registry.classes.insert(key, Arc::clone(class));
     }
 }
 
@@ -567,4 +619,17 @@ pub(super) fn register_global_eval_alias(alias_name: &str, alias: &EvalClassAlia
     if let Ok(mut registry) = global_eval_classes().lock() {
         registry.aliases.insert(key, alias.clone());
     }
+}
+
+/// Returns whether a class-like name was declared at runtime by any eval context.
+///
+/// Used to tell a callable that names a DYNAMIC class (`['Svc', 'make']`, `'Svc::make'`) from one
+/// that names a compiled class or nothing at all: only the former needs the interpreter, and only
+/// the former may be routed to the process-wide context that mirrors this registry.
+#[cfg(not(test))]
+pub(crate) fn global_eval_class_is_declared(name: &str) -> bool {
+    let key = normalize_class_name(name);
+    global_eval_classes()
+        .lock()
+        .is_ok_and(|registry| registry.classes.contains_key(&key))
 }

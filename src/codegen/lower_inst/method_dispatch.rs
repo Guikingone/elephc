@@ -133,12 +133,21 @@ fn lower_native_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         );
     }
     let target = resolve_method_call_target(ctx, &class_name, &method_name, inst.operands.len())?;
-    let mut param_types = Vec::with_capacity(target.params.len() + 1);
+    let mut param_types = Vec::with_capacity(inst.operands.len());
     param_types.push(PhpType::Object(class_name));
     param_types.extend(target.params.iter().map(|param| param.codegen_repr()));
-    let mut ref_params = Vec::with_capacity(target.ref_params.len() + 1);
+    let mut ref_params = Vec::with_capacity(inst.operands.len());
     ref_params.push(false);
     ref_params.extend(target.ref_params.iter().copied());
+    // Operands past the resolved signature are arguments php would IGNORE here and an override
+    // further down the family declares. `resolve_method_call_target` has already limited them to
+    // the register-passed prefix; each keeps its own type so the argument register is written with
+    // the value the override reads, and the base's body simply never looks at it.
+    while param_types.len() < inst.operands.len() {
+        let surplus = inst.operands[param_types.len()];
+        param_types.push(ctx.value_php_type(surplus)?.codegen_repr());
+        ref_params.push(false);
+    }
     let call_args = materialize_direct_call_args_with_refs_and_options(
         ctx,
         &inst.operands,
@@ -505,6 +514,7 @@ pub(super) fn lower_mixed_method_candidate_call(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_method_call_result(ctx, inst, &candidate.target)?;
+    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args)
 }
 

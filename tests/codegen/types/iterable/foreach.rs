@@ -2016,3 +2016,67 @@ foreach (return_iterable() as $key => $value) { echo $key, $value; }
     );
     assert_eq!(out, "a4b5");
 }
+
+
+/// A by-reference `foreach` over a HASH yields the element's VALUE, not the box that holds it.
+///
+/// `iterator_source_kind_from_type` routes every `AssocArray` to `DynamicIterable` — an
+/// associative checker shape can wear compact indexed storage at run time — and the by-reference
+/// arm of that path calls `__rt_hash_to_mixed`, which REWRITES EVERY BUCKET to hold a boxed Mixed
+/// cell before the first iteration. `foreach_ref_value_type` kept answering the DECLARED element
+/// type, so `load_ref_cell` handed back the box POINTER:
+///
+///     $v = ['a' => 1, 'b' => 2];
+///     foreach ($v as $k => &$z) { echo "$k=$z;"; }    // a=4374092928;b=4374092976;
+///
+/// Writing through the variable still worked, because the store overwrites the slot — which is
+/// exactly why this reads as "mutation works, reading does not" and survived so long.
+///
+/// An INDEXED source with concrete elements keeps `Indexed { elem }`, takes
+/// `ensure_unique_static_iter_source` and is never boxed, so the fixture pins that side too: the
+/// asymmetry between them is the whole defect.
+///
+/// Symfony reaches it in `EventDispatcher::optimizeListeners`, whose listener table is keyed by
+/// PRIORITY — a hash — so every route 404ed while the single-listener error page looked perfect.
+///
+/// Oracle: `php -n` prints the asserted lines.
+#[test]
+fn test_a_by_ref_foreach_over_a_hash_reads_values_not_boxes() {
+    let out = compile_and_run(
+        r#"<?php
+$flat = ['a' => 1, 'b' => 2];
+$out = '';
+foreach ($flat as $k => &$z) { $out .= $k . '=' . $z . ';'; }
+unset($z);
+echo $out, "\n";
+echo json_encode($flat), "\n";
+
+$hash = [5 => [1, 2], 9 => [3, 4]];
+$seen = [];
+foreach ($hash as &$row) { foreach ($row as &$v) { $seen[] = $v; } }
+unset($row, $v);
+echo implode(',', $seen), "\n";
+
+$indexed = [[1, 2], [3, 4]];
+$seen = [];
+foreach ($indexed as &$r2) { foreach ($r2 as &$v2) { $seen[] = $v2; } }
+unset($r2, $v2);
+echo implode(',', $seen), "\n";
+
+$doubled = ['a' => 1, 'b' => 2];
+foreach ($doubled as &$d) { $d = $d * 2; }
+unset($d);
+echo json_encode($doubled), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "a=1;b=2;\n",
+            "{\"a\":1,\"b\":2}\n",
+            "1,2,3,4\n",
+            "1,2,3,4\n",
+            "{\"a\":2,\"b\":4}\n",
+        )
+    );
+}

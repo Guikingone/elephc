@@ -109,15 +109,19 @@ pub(super) fn coerce_gradual_value_to_boundary(
             Op::MixedUnbox.default_effects(),
             span,
         ),
+        // A LIST target keeps the source's container kind. Asking for the hash here made an
+        // indexed source associative, and the bare `array` return contract then restamped that
+        // hash as the declared indexed type without converting it — `in_array()`,
+        // `array_filter()`, `array_pop()` and `min()` segfaulted on the result while
+        // `count()`, `foreach` and `json_encode()` read it correctly, because only some
+        // consumers ask `__rt_heap_kind` first. An associative source still becomes a hash:
+        // it cannot become a list without discarding its keys.
         PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed => {
             ctx.emit_value(
                 Op::MixedToHash,
                 vec![value.value],
                 None,
-                PhpType::AssocArray {
-                    key: Box::new(PhpType::Mixed),
-                    value: Box::new(PhpType::Mixed),
-                },
+                PhpType::Array(Box::new(PhpType::Mixed)),
                 Op::MixedToHash.default_effects(),
                 span,
             )

@@ -452,8 +452,14 @@ mod tests {
                     .unwrap_or(name);
                 stem.strip_prefix(prefix)
                     .and_then(|rest| rest.strip_prefix('_'))
-                    .is_some_and(|digits| {
-                        !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+                    .is_some_and(|rest| {
+                        // A module-uniquing hex infix now sits between the prefix and the
+                        // counter (`..._args_<module>_<n>`) so two modules cannot give one
+                        // helper two meanings. The counter is the LAST component; matching
+                        // only `prefix_<digits>` stopped finding these labels even though the
+                        // stubs are still emitted and still branched to.
+                        let counter = rest.rsplit('_').next().unwrap_or("");
+                        !counter.is_empty() && counter.bytes().all(|byte| byte.is_ascii_digit())
                     })
             })
             .collect();

@@ -40,6 +40,9 @@ pub(in crate::interpreter) fn eval_putenv_result(
         let name = String::from_utf8_lossy(&assignment[..separator]);
         let value = String::from_utf8_lossy(&assignment[separator + 1..]);
         std::env::set_var(name.as_ref(), value.as_ref());
+        // The eval trace answers from a cached verdict, and this is the only way a running PHP
+        // program can change what the environment says.
+        crate::eval_trace::invalidate();
     } else {
         let name = String::from_utf8_lossy(&assignment);
         std::env::remove_var(name.as_ref());

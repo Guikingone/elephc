@@ -263,3 +263,295 @@ echo eval($source);
 
     assert_eq!(out, "bad in \"/tmp/x\":/tmp/x:is:is\n");
 }
+
+/// A STRING-KEYED array forwarded through a compiled method's declared `array` parameter keeps
+/// its keys when the callee is an eval-declared override.
+///
+/// The compiled caller passes such a parameter by reference marker: a frame address plus the tag
+/// its STATIC type spells, and `array` spells the packed tag whatever the slot actually holds.
+/// The interpreter rebuilt the value from that tag, so a hash arrived as a packed array -- every
+/// key gone, element 0 reading back as the raw slot word. The heap kind on the payload is the
+/// only honest source for the shape.
+///
+/// `php -n` 8.5.6 (`scratchpad/hasharg2.php`, this session) answers `[seed=G zero=no0 n=1
+/// keys=seed]` for all three rows.
+#[test]
+fn test_a_string_keyed_array_keeps_its_keys_through_a_declared_array_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class HashArgBase
+{
+    public function viaTyped(array $ctx): string { return $this->show($ctx); }
+    public function viaUntyped($ctx): string { return $this->show($ctx); }
+
+    abstract public function show(array $ctx): string;
+}
+
+eval('class HashArgImpl extends HashArgBase {
+    public function show(array $ctx): string {
+        return "[seed=" . ($ctx["seed"] ?? "MISSING")
+            . " zero=" . ($ctx[0] ?? "no0")
+            . " n=" . count($ctx)
+            . " keys=" . implode(",", array_keys($ctx)) . "]";
+    }
+}');
+
+$impl = new HashArgImpl();
+echo $impl->show(['seed' => 'G']), "\n";
+echo $impl->viaTyped(['seed' => 'G']), "\n";
+echo $impl->viaUntyped(['seed' => 'G']), "\n";
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "[seed=G zero=no0 n=1 keys=seed]\n\
+         [seed=G zero=no0 n=1 keys=seed]\n\
+         [seed=G zero=no0 n=1 keys=seed]\n"
+    );
+}
+
+/// An argument a COMPILED caller owns survives until an eval-declared GENERATOR method runs.
+///
+/// The generator's body does not execute during the call that creates it, so its scope must own
+/// its by-value parameters. `retain_generator_scope_args` retained only the arguments the
+/// INTERPRETER had marked owned, and a compiled caller marks every argument it packs unowned --
+/// it releases the boxed cells itself the moment the bridge returns. The generator then read a
+/// freed cell on its first resume, which came back as an empty array.
+///
+/// `php -n` 8.5.6 (`scratchpad/gencross8.php`, this session) answers `[./1]` for all three rows.
+#[test]
+fn test_a_compiled_argument_outlives_the_call_that_creates_an_eval_generator() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class GenArgBase
+{
+    public function literal(): string { return $this->drain($this->emit(['seed' => '.'])); }
+
+    public function merged(array $context): string
+    {
+        $context += ['seed' => '.'];
+
+        return $this->drain($this->emit($context));
+    }
+
+    public function mergedLocal(array $context): string
+    {
+        $merged = $context + ['seed' => '.'];
+
+        return $this->drain($this->emit($merged));
+    }
+
+    private function drain(iterable $it): string
+    {
+        $out = '';
+        $n = 0;
+        foreach ($it as $chunk) {
+            $out .= $chunk;
+            if (++$n >= 4) { $out .= '...CUT'; break; }
+        }
+
+        return $out;
+    }
+
+    abstract public function emit(array $context): iterable;
+}
+
+eval('class GenArgLeaf extends GenArgBase {
+    public function emit(array $context): iterable {
+        yield "[" . ($context["seed"] ?? "MISSING") . "/" . count($context) . "]";
+    }
+}');
+
+$leaf = new GenArgLeaf();
+echo $leaf->literal(), "\n";
+echo $leaf->merged([]), "\n";
+echo $leaf->mergedLocal([]), "\n";
+"#,
+    );
+
+    assert_eq!(out, "[./1]\n[./1]\n[./1]\n");
+}
+
+/// Verifies a Throwable from an eval-declared GENERATOR reaches the compiled `foreach` driving it.
+///
+/// A compiled loop drives such a generator through the `__rt_gen_*` helpers, which probe for an
+/// eval owner and land in the generator-protocol bridge. That bridge answered "handled, null" for
+/// every failed step on the assumption that a bridge frame above would report the Throwable it
+/// left on the eval context -- but the caller here is compiled code, and there is no such frame.
+/// The exception vanished and the loop spun forever on a generator that could neither advance nor
+/// say why. It now hands the Throwable back for native unwinding, as the dynamic-callable invoker
+/// already did.
+///
+/// `php -n` 8.5.6 (`scratchpad/throwcross.php`, this session) answers all four rows below.
+#[test]
+fn test_a_throw_from_an_eval_generator_reaches_the_compiled_foreach() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class ThrowGenBase
+{
+    public function drain(): string
+    {
+        $out = '';
+        foreach ($this->gen() as $chunk) {
+            $out .= $chunk;
+        }
+
+        return $out;
+    }
+
+    public function drainGuarded(): string
+    {
+        try {
+            return $this->drain();
+        } catch (Throwable $e) {
+            throw new RuntimeException('wrapped: ' . $e->getMessage(), 0, $e);
+        }
+    }
+
+    abstract public function gen(): iterable;
+}
+
+eval('class ThrowGenLeaf extends ThrowGenBase { public function gen(): iterable { yield "a"; throw new LogicException("late"); } }');
+
+$leaf = new ThrowGenLeaf();
+
+try {
+    echo 'gen     : ', $leaf->drain(), "\n";
+} catch (Throwable $e) {
+    echo 'gen     : caught ', get_class($e), ': ', $e->getMessage(), "\n";
+}
+
+try {
+    echo 'genwrap : ', $leaf->drainGuarded(), "\n";
+} catch (Throwable $e) {
+    echo 'genwrap : caught ', get_class($e), ': ', $e->getMessage(), "\n";
+}
+"#,
+    );
+
+    // The label is printed twice on purpose: `echo 'gen : ', $leaf->drain()` emits the first
+    // operand before `drain()` throws, and the catch prints its own. `php -n` does the same.
+    assert_eq!(
+        out,
+        "gen     : gen     : caught LogicException: late\n\
+         genwrap : genwrap : caught RuntimeException: wrapped: late\n"
+    );
+}
+
+/// Verifies a PROTECTED method declared by a compiled ancestor is reachable between SIBLINGS.
+///
+/// php checks a protected method against the topmost ancestor whose declaration the override
+/// replaces (`zend_get_function_root_class`), not against the class carrying the concrete body.
+/// elephc checked the concrete class, so one eval subclass calling the abstract protected method
+/// on ANOTHER eval subclass of the same compiled parent was refused with
+/// `Call to protected method BaseTpl::genDisplay() from scope ChildTpl`. Twig does exactly this:
+/// `Twig\Template::yield()` calls `$this->doDisplay()` on a template whose class is a sibling of
+/// the caller's, and every render died on it.
+///
+/// `php -n` 8.5.6 (`scratchpad/protscope2.php`, this session): `direct  : base-gen` /
+/// `nested  : child(base-gen)`.
+#[test]
+fn test_a_protected_method_of_a_compiled_parent_is_reachable_between_eval_siblings() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class SiblingBase
+{
+    public function driveGen(array $context): iterable
+    {
+        yield from $this->genDisplay($context);
+    }
+
+    public function drainGen(array $context): string
+    {
+        $out = '';
+        $n = 0;
+        foreach ($this->driveGen($context) as $chunk) {
+            $out .= $chunk;
+            if (++$n >= 8) { $out .= '...CUT'; break; }
+        }
+
+        return $out;
+    }
+
+    abstract protected function genDisplay(array $context): iterable;
+}
+
+eval('class SiblingLeaf extends SiblingBase {
+    protected function genDisplay(array $context): iterable { yield "base-gen"; yield from []; }
+}');
+
+eval('class SiblingOuter extends SiblingBase {
+    protected function genDisplay(array $context): iterable {
+        $parent = new SiblingLeaf();
+        yield "child(";
+        yield from $parent->driveGen($context);
+        yield ")";
+        yield from [];
+    }
+}');
+
+echo 'direct : ', (new SiblingLeaf())->drainGen([]), "\n";
+echo 'nested : ', (new SiblingOuter())->drainGen([]), "\n";
+"#,
+    );
+
+    assert_eq!(out, "direct : base-gen\nnested : child(base-gen)\n");
+}
+
+/// Verifies a STRING-KEYED array survives a compiled `array` parameter into a DYNAMIC-name call.
+///
+/// `$target->$method($ctx)` is lowered as a descriptor-invoker call, which passes each local as a
+/// by-reference marker carrying the tag its STATIC type spells. `array` spells the PACKED tag
+/// whatever the slot holds, so a hash arrived with no keys and its element 0 reading back as the
+/// raw slot word. `__rt_array_kind_tag` asks the payload instead. Twig's `yieldBlock` reaches
+/// every template block through exactly this call shape, so the render context arrived empty.
+///
+/// `php -n` 8.5.6 (`scratchpad/dyngen2.php`, this session) answers `[G/1/seed]` for every row.
+#[test]
+fn test_a_string_keyed_array_survives_a_dynamic_name_call_through_an_array_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+class DynCaller
+{
+    public function drive(object $target, string $method, array $ctx): string
+    {
+        return $target->$method($ctx);
+    }
+
+    public function driveGen(object $target, string $method, array $ctx): iterable
+    {
+        yield $target->$method($ctx);
+    }
+
+    public function drivePair(array $pair, array $ctx): string
+    {
+        $target = $pair[0];
+        $method = $pair[1];
+
+        return $target->$method($ctx);
+    }
+}
+
+eval('class DynLeaf {
+    public function show(array $ctx): string {
+        return "[" . ($ctx["seed"] ?? "MISSING") . "/" . count($ctx) . "/" . implode(",", array_keys($ctx)) . "]";
+    }
+}');
+
+$caller = new DynCaller();
+$leaf = new DynLeaf();
+
+echo 'plain : ', $caller->drive($leaf, 'show', ['seed' => 'G']), "\n";
+foreach ($caller->driveGen($leaf, 'show', ['seed' => 'G']) as $chunk) {
+    echo 'gen   : ', $chunk, "\n";
+}
+echo 'pair  : ', $caller->drivePair([$leaf, 'show'], ['seed' => 'G']), "\n";
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "plain : [G/1/seed]\ngen   : [G/1/seed]\npair  : [G/1/seed]\n"
+    );
+}

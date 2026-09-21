@@ -29,6 +29,9 @@ pub(crate) type RegexNameCountFn = unsafe extern "C" fn(*mut c_void) -> u64;
 /// Resolves a compiled regex's declared name for one capture group, if any.
 pub(crate) type RegexGroupNameFn =
     unsafe extern "C" fn(*mut c_void, u64, *mut *const c_char, *mut u64) -> i32;
+/// Returns the name set by the last MARK verb the most recent match passed, if any.
+pub(crate) type RegexLastMarkFn =
+    unsafe extern "C" fn(*mut c_void, *mut *const c_char, *mut u64) -> i32;
 
 /// Registered callback table for the managed regex implementation.
 #[derive(Clone, Copy)]
@@ -38,6 +41,7 @@ pub(crate) struct RegexProvider {
     pub(crate) free: RegexFreeFn,
     pub(crate) name_count: RegexNameCountFn,
     pub(crate) group_name: RegexGroupNameFn,
+    pub(crate) last_mark: RegexLastMarkFn,
 }
 
 /// Process-wide provider selected before the first dynamic eval executes.
@@ -54,6 +58,7 @@ pub extern "C" fn __elephc_eval_register_regex_provider(
     free: RegexFreeFn,
     name_count: RegexNameCountFn,
     group_name: RegexGroupNameFn,
+    last_mark: RegexLastMarkFn,
 ) -> i32 {
     let _ = REGEX_PROVIDER.set(RegexProvider {
         compile,
@@ -61,6 +66,7 @@ pub extern "C" fn __elephc_eval_register_regex_provider(
         free,
         name_count,
         group_name,
+        last_mark,
     });
     i32::from(regex_provider().is_some())
 }
@@ -234,6 +240,10 @@ mod test_provider {
         /// Returns the ovector of a match-data block filled by `pcre2_match`.
         #[link_name = "pcre2_get_ovector_pointer_8"]
         fn pcre2_get_ovector_pointer(match_data: *mut c_void) -> *mut size_t;
+
+        /// Returns the last MARK name the most recent match passed, or null.
+        #[link_name = "pcre2_get_mark_8"]
+        fn pcre2_get_mark(match_data: *mut c_void) -> *const c_char;
     }
 
     /// Returns the test-only provider callback table.
@@ -244,6 +254,7 @@ mod test_provider {
             free,
             name_count,
             group_name,
+            last_mark,
         }
     }
 
@@ -493,6 +504,40 @@ mod test_provider {
             return 0;
         }
         u64::from(count)
+    }
+
+    /// Returns the last MARK name this test regex's most recent match passed, mirroring
+    /// `elephc_pcre2_v1_last_mark` in the production shim.
+    unsafe extern "C" fn last_mark(
+        opaque_handle: *mut c_void,
+        mark_out: *mut *const c_char,
+        mark_len_out: *mut u64,
+    ) -> i32 {
+        if !mark_out.is_null() {
+            unsafe { *mark_out = std::ptr::null() };
+        }
+        if !mark_len_out.is_null() {
+            unsafe { *mark_len_out = 0 };
+        }
+        if opaque_handle.is_null() || mark_out.is_null() || mark_len_out.is_null() {
+            return 1;
+        }
+        let handle = unsafe { &*opaque_handle.cast::<TestRegexHandle>() };
+        let match_data = handle.regex.re_match_data;
+        if match_data.is_null() {
+            return 1;
+        }
+        let mark = unsafe { pcre2_get_mark(match_data) };
+        if mark.is_null() {
+            return 1;
+        }
+        let mut length = 0u64;
+        while unsafe { *mark.add(length as usize) } != 0 {
+            length += 1;
+        }
+        unsafe { *mark_out = mark };
+        unsafe { *mark_len_out = length };
+        0
     }
 
     /// Resolves the declared name for one capture group index, mirroring

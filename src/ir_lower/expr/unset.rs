@@ -50,6 +50,7 @@ pub(super) fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) 
             unset_array_access_has_object_receiver(ctx, array)
                 || unset_array_access_has_local_array_receiver(ctx, array)
                 || unset_array_access_has_property_array_receiver(ctx, array)
+                || unset_array_access_has_generic_object_property_receiver(ctx, array)
                 || unset_array_access_has_static_property_receiver(ctx, array)
                 || crate::ir_lower::stmt::nested_local_hash_unset_supported(ctx, arg)
                 || crate::ir_lower::stmt::nested_property_hash_unset_supported(ctx, arg)
@@ -116,6 +117,38 @@ fn unset_array_access_has_property_array_receiver(
             .map(|ty| ty.codegen_repr()),
         Some(PhpType::Array(_) | PhpType::AssocArray { .. })
     )
+}
+
+/// Returns true when the receiver is a property of a GENERIC object — one whose class the compiler
+/// cannot name, so there is no declared slot to walk, only a boxed cell to read and write back.
+///
+/// Symfony's generated container is written this way throughout: `getXService($container, …)`
+/// takes an UNTYPED parameter and mutates `$container->services[$id]`. The element WRITE already
+/// has this path (`lower_generic_object_mixed_property_array_write`); this is what lets the UNSET
+/// reach its counterpart instead of the fallback whose only job is to refuse.
+///
+/// Restricted to a plain variable receiver, which is the shape that occurs and the shape the
+/// lowering handles; anything else keeps its existing treatment.
+fn unset_array_access_has_generic_object_property_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    array: &Expr,
+) -> bool {
+    let ExprKind::PropertyAccess { object, property } = &array.kind else {
+        return false;
+    };
+    if matches!(
+        property_access_expr_type_for_ir(ctx, object, property)
+            .map(|ty| ty.codegen_repr()),
+        Some(PhpType::Mixed | PhpType::Union(_))
+    ) {
+        return true;
+    }
+    let ExprKind::Variable(name) = &object.kind else {
+        return false;
+    };
+    let ty = ctx.local_type(name);
+    matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        || matches!(&ty, PhpType::Object(class_name) if class_name.trim_start_matches('\\').is_empty())
 }
 
 /// Returns true when an array-access unset receiver is a plain array/hash local whose element the
@@ -323,14 +356,17 @@ fn lower_unset_property_array_element(
     expr: &Expr,
 ) -> bool {
     let object = lower_expr(ctx, object);
-    let Some(property_ty) = crate::ir_lower::stmt::object_property_type(ctx, object.value, property)
-    else {
-        return false;
+    let declared_array_property =
+        crate::ir_lower::stmt::object_property_type(ctx, object.value, property)
+            .map(|ty| ty.codegen_repr())
+            .filter(|ty| matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }));
+    let Some(property_ty) = declared_array_property else {
+        // No declared ARRAY slot to walk, but the property may still be one boxed cell — either
+        // because the receiver's class is unknown (Symfony's generated container) or because the
+        // property is declared without a type (Twig's `Node::$attributes`). Both read, modify and
+        // write that cell back; anything else keeps falling through to `offsetUnset()`.
+        return lower_unset_gradual_property_element(ctx, &object, property, index, expr);
     };
-    let property_ty = property_ty.codegen_repr();
-    if !matches!(property_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
-        return false;
-    }
     let data = ctx.intern_string(property);
     // PHP evaluates the dimension even when the property is uninitialized and the unset itself
     // becomes a no-op. Lower it before the initialization branch, then release it once at the
@@ -460,6 +496,129 @@ fn lower_unset_property_array_element(
         &hash_ty,
         hash,
         expr.span,
+    );
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    if ctx.value_is_owning_temporary(key) {
+        crate::ir_lower::ownership::release_if_owned(ctx, key, Some(expr.span));
+    } else {
+        crate::ir_lower::stmt::release_persisted_string_operand(ctx, key, expr.span);
+    }
+    true
+}
+
+/// Lowers `unset($obj->prop[$key])` when the receiver is a GENERIC object, not a known class.
+///
+/// The element WRITE through the same shape already exists
+/// (`lower_generic_object_mixed_property_array_write`) and exists because Symfony's generated
+/// container passes itself as an UNTYPED parameter — `getXService($container, …)` mutating
+/// `$container->services[$id]` — so the declared-property ladder has no class to walk. The unset
+/// in the container's own `catch` block is the same shape and used to be refused outright.
+///
+/// Read, modify, write back: the property is one boxed cell, `MixedToHash` makes an independently
+/// owned sparse hash of it (so removing a key cannot mutate an alias of the original boxed array,
+/// and PHP's non-renumbering `unset()` holds for an indexed source too), the key goes, and the
+/// result is boxed back into the same property.
+///
+/// `PropInitialized` guards the absent property: `unset($o->missing['k'])` is a silent no-op in
+/// PHP, while `MixedToHash` of a null raises the gradual array `TypeError`.
+///
+/// The new box is NOT released after the store: `property_store_keeps_independent_ref(Mixed,
+/// Mixed)` is false, so the `PropSet` takes the reference. That is the one place this differs from
+/// the typed path above, which stores back the very pointer it retained and therefore releases it.
+fn lower_unset_gradual_property_element(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &LoweredValue,
+    property: &str,
+    index: &Expr,
+    expr: &Expr,
+) -> bool {
+    // KNOWN LIMIT. A gradual property could hold an ArrayAccess OBJECT instead of an array, and
+    // PHP decides that at run time. The shape this replaces did not decide it either — it emitted
+    // `offsetUnset()` unconditionally, which faults on the array case that actually occurs
+    // (Symfony's container, Twig's `Node::$attributes`). Getting both right needs a runtime tag
+    // branch here; until then this takes the array reading, which is the one these frameworks use.
+    let receiver_is_generic =
+        crate::ir_lower::stmt::property_array_writes::is_generic_object_receiver(
+            ctx,
+            object.value,
+            property,
+        );
+    let property_is_gradual = matches!(
+        crate::ir_lower::stmt::object_property_type(ctx, object.value, property)
+            .map(|ty| ty.codegen_repr()),
+        Some(PhpType::Mixed | PhpType::Union(_))
+    );
+    if !receiver_is_generic && !property_is_gradual {
+        return false;
+    }
+    let data = ctx.intern_string(property);
+    // PHP evaluates the dimension even when the unset turns out to be a no-op.
+    let key = lower_expr(ctx, index);
+    let absent_block = ctx
+        .builder
+        .create_named_block("unset.generic_property_element.absent", Vec::new());
+    let delete_block = ctx
+        .builder
+        .create_named_block("unset.generic_property_element.delete", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("unset.generic_property_element.merge", Vec::new());
+    let initialized = ctx.emit_value(
+        Op::PropInitialized,
+        vec![object.value],
+        Some(Immediate::Data(data)),
+        PhpType::Bool,
+        Op::PropInitialized.default_effects(),
+        Some(expr.span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: initialized.value,
+        then_target: delete_block,
+        then_args: Vec::new(),
+        else_target: absent_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(absent_block);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(delete_block);
+    let property_value = ctx.emit_value(
+        Op::PropGet,
+        vec![object.value],
+        Some(Immediate::Data(data)),
+        PhpType::Mixed,
+        Op::PropGet.default_effects(),
+        Some(expr.span),
+    );
+    let assoc_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    };
+    let hash = ctx.emit_value(
+        Op::MixedToHash,
+        vec![property_value.value],
+        None,
+        assoc_ty,
+        Op::MixedToHash.default_effects(),
+        Some(expr.span),
+    );
+    ctx.emit_void(
+        Op::HashUnset,
+        vec![hash.value, key.value],
+        None,
+        Op::HashUnset.default_effects(),
+        Some(expr.span),
+    );
+    let boxed = ctx.box_value_as_mixed(hash, PhpType::Mixed, Some(expr.span));
+    ctx.emit_void(
+        Op::PropSet,
+        vec![object.value, boxed.value],
+        Some(Immediate::Data(data)),
+        Op::PropSet.default_effects(),
+        Some(expr.span),
     );
     branch_to(ctx, merge);
 

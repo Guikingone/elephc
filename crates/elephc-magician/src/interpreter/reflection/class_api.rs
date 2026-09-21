@@ -173,7 +173,7 @@ pub(in crate::interpreter) fn eval_reflection_class_is_subclass_of_result(
         values.release(reflected_class)?;
         result
     };
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         eprintln!(
             "[elephc-eval-trace] phase=reflection_is_subclass_of reflected={reflected_name:?} target={target_name:?} result={result}"
         );
@@ -318,7 +318,7 @@ pub(in crate::interpreter) fn eval_reflection_class_basic_metadata_result(
         }
         "getdoccomment" => {
             eval_reflection_bind_no_args(evaluated_args)?;
-            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            if crate::eval_trace::enabled() {
                 let preview = metadata.doc_comment.as_deref().map(|doc_comment| {
                     doc_comment.chars().take(160).collect::<String>()
                 });
@@ -617,7 +617,7 @@ pub(in crate::interpreter) fn eval_reflection_class_has_method_result(
         eval_reflection_aot_method_metadata_if_exists(&reflected_name, &requested_name, values)?
             .is_some()
     };
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         eprintln!(
             "[elephc-eval-trace] phase=reflection_has_method reflected={reflected_name:?} method={requested_name:?} result={exists}"
         );

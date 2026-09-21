@@ -171,6 +171,17 @@ pub(super) fn dynamic_new_candidate(
         // cannot supply the element type as-is drops the class from the ladder, which is a MISSING
         // constructor call — the behaviour this class had before the thunk existed — rather than a
         // fabricated integer.
+        // A candidate whose declared parameter cannot hold what this SITE passes can never be the
+        // runtime class: PHP would raise a `TypeError` before the body ran. Dropping it from the
+        // ladder is the same judgement `dynamic_new_uncastable_collector` makes just below, and
+        // without it one unrelated class in the program decided the whole construction site.
+        // Symfony's `Router::getMatcher` is the shape — `new $this->options['matcher_class'](
+        // $routes, $this->context)` passes a `RequestContext` object, and a class whose second
+        // constructor parameter is `?int` turned that into a hard
+        // "conversion from Object(...) to TaggedScalar" for a class that site never builds.
+        if dynamic_new_param_refuses_site_argument(ctx, inst, &param_types)? {
+            return Ok(None);
+        }
         if padding_thunk.is_some()
             && dynamic_new_uncastable_collector(constructor, materialized).is_some()
         {
@@ -480,4 +491,57 @@ pub(super) fn emit_fatal_message(ctx: &mut FunctionContext<'_>, message: &[u8]) 
         }
     }
     abi::emit_exit(ctx.emitter, 1);
+}
+
+/// Reports whether this construction SITE passes an argument no lowering can place in the
+/// candidate's declared parameter, which makes the candidate unreachable at run time.
+///
+/// Only the inline nullable-int shape is judged here, because it is the one declared parameter
+/// whose materialization is partial: `coerce_loaded_value_to_tagged_scalar` converts an int,
+/// bool, callable, string, null or boxed value and has nothing to do with an object, an array or
+/// a float. Every other parameter shape either accepts the argument or boxes it.
+///
+/// A `true` answer means PHP itself would raise a `TypeError` before entering the constructor, so
+/// removing the class from the ladder loses nothing: the site's own unmatched arm reports.
+fn dynamic_new_param_refuses_site_argument(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+    param_types: &[PhpType],
+) -> Result<bool> {
+    // Operand 0 is the runtime class name; the constructor's arguments follow it.
+    let Some(arguments) = inst.operands.get(1..) else {
+        return Ok(false);
+    };
+    for (index, param_ty) in param_types.iter().enumerate() {
+        if !matches!(param_ty, PhpType::TaggedScalar) {
+            continue;
+        }
+        let Some(argument) = arguments.get(index) else {
+            continue;
+        };
+        if !tagged_scalar_param_accepts(&ctx.value_php_type(*argument)?) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Mirrors the source representations `coerce_loaded_value_to_tagged_scalar` can convert.
+///
+/// Kept in lockstep with that function: admitting a representation it refuses turns this filter
+/// back into the hard backend error it exists to prevent, and refusing one it accepts silently
+/// drops a class the site really can build.
+fn tagged_scalar_param_accepts(source: &PhpType) -> bool {
+    matches!(
+        source.codegen_repr(),
+        PhpType::TaggedScalar
+            | PhpType::Int
+            | PhpType::Bool
+            | PhpType::Callable
+            | PhpType::Void
+            | PhpType::Never
+            | PhpType::Mixed
+            | PhpType::Union(_)
+            | PhpType::Str
+    )
 }

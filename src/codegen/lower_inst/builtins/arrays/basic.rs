@@ -60,21 +60,36 @@ pub(crate) fn lower_array_product(ctx: &mut FunctionContext<'_>, inst: &Instruct
 
 /// Lowers `array_push()` by appending one value and publishing the mutated array.
 pub(crate) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "array_push", 2)?;
+    if inst.operands.is_empty() {
+        return Err(CodegenIrError::invalid_module(
+            "array_push expected at least 1 arg, got 0".to_string(),
+        ));
+    }
     let array = expect_operand(inst, 0)?;
-    if matches!(
+    // PHP's `array_push($a, $x, $y, ...)` is N appends against the same array, in source order.
+    // The receiver shape is decided once: it cannot change between two appends in one call.
+    let boxed_receiver = matches!(
         ctx.value_php_type(array)?.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
-    ) {
-        super::super::super::arrays::lower_mixed_array_append(ctx, inst)?;
-    } else {
-        super::super::super::arrays::lower_array_push(ctx, inst)?;
-    }
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
     );
+    for index in 1..inst.operands.len() {
+        let value = expect_operand(inst, index)?;
+        if boxed_receiver {
+            super::super::super::arrays::lower_mixed_array_append_value(ctx, array, value)?;
+        } else {
+            super::super::super::arrays::lower_array_push_value(ctx, inst, array, value)?;
+        }
+    }
+    // PHP answers the array's NEW length. Read after the appends on purpose: growth can move the
+    // container, and the by-ref write-back has already published the current pointer, so reloading
+    // the operand sees it. `array_push($a)` appends nothing and lands here directly.
+    ctx.load_value_to_result(array)?;
+    if boxed_receiver {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
+    } else {
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_load_from_address(ctx.emitter, result_reg, result_reg, 0); // the length word both array headers start with
+    }
     store_if_result(ctx, inst)
 }
 
@@ -89,21 +104,43 @@ pub(crate) fn lower_array_chunk(ctx: &mut FunctionContext<'_>, inst: &Instructio
     ensure_arg_count_between(inst, "array_chunk", 2, 3)?;
     let array = expect_operand(inst, 0)?;
     let length = expect_operand(inst, 1)?;
-    let preserve_keys = match inst.operands.get(2).copied() {
-        None => false,
-        Some(flag) => const_bool_operand(ctx, flag)?.ok_or_else(|| {
-            CodegenIrError::unsupported(
-                "array_chunk preserve_keys argument that is not a compile-time literal".to_string(),
-            )
-        })?,
+    let flag = inst.operands.get(2).copied();
+    let preserve_keys = match flag {
+        None => Some(false),
+        Some(flag) => const_bool_operand(ctx, flag)?,
     };
-    let source_elem_ty = array_chunk_source_element_type(ctx.value_php_type(array)?)?;
+    let Some(preserve_keys) = preserve_keys else {
+        return lower_array_chunk_dynamic_preserve_keys(
+            ctx,
+            inst,
+            array,
+            length,
+            flag.expect("a non-literal flag came from an operand"),
+        );
+    };
     let result_elem_ty =
         result_array_element_type("array_chunk", &inst.result_php_type.codegen_repr())?;
+    emit_array_chunk_arm(ctx, array, length, preserve_keys, &result_elem_ty)?;
+    store_if_result(ctx, inst)
+}
+
+/// Emits one `array_chunk()` arm, leaving the stamped result in the result register.
+///
+/// `result_elem_ty` is the CHUNK type this arm produces, which is the result array's element type.
+/// Taking it as an argument rather than reading `inst.result_php_type` is what lets the runtime-flag
+/// path below emit both arms: there the instruction's own type is the union of the two.
+fn emit_array_chunk_arm(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    length: ValueId,
+    preserve_keys: bool,
+    result_elem_ty: &PhpType,
+) -> Result<()> {
+    let source_elem_ty = array_chunk_source_element_type(ctx.value_php_type(array)?)?;
     let result_inner_elem_ty = if preserve_keys {
-        array_chunk_result_inner_hash_value_type(&result_elem_ty)?
+        array_chunk_result_inner_hash_value_type(result_elem_ty)?
     } else {
-        array_chunk_result_inner_element_type(&result_elem_ty)?
+        array_chunk_result_inner_element_type(result_elem_ty)?
     };
     require_array_chunk_result_type(&source_elem_ty, &result_inner_elem_ty)?;
     let runtime_label = if preserve_keys {
@@ -115,8 +152,57 @@ pub(crate) fn lower_array_chunk(ctx: &mut FunctionContext<'_>, inst: &Instructio
     crate::codegen::emit_array_value_type_stamp(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
-        &result_elem_ty,
+        result_elem_ty,
     );
+    Ok(())
+}
+
+/// Lowers `array_chunk($array, $size, $flag)` when `$flag` is only known at run time.
+///
+/// The checker has already restricted this to an INDEXED source, whose chunks are dense arrays one
+/// way and integer-keyed hashes the other. Both are emitted and boxed as Mixed, because they are
+/// different representations and the call's result type is their union.
+fn lower_array_chunk_dynamic_preserve_keys(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    length: ValueId,
+    flag: ValueId,
+) -> Result<()> {
+    let false_case = ctx.next_label("array_chunk_preserve_false");
+    let done = ctx.next_label("array_chunk_preserve_done");
+
+    let source_ty = ctx.value_php_type(array)?.codegen_repr();
+    let PhpType::Array(elem) = source_ty else {
+        return Err(CodegenIrError::unsupported(format!(
+            "array_chunk with a runtime preserve_keys flag for PHP type {:?}",
+            ctx.value_php_type(array)?
+        )));
+    };
+    let preserved_elem_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Int),
+        value: elem.clone(),
+    };
+    let renumbered_elem_ty = PhpType::Array(elem);
+
+    crate::codegen::lower_inst::builtins::spl::emit_preserve_keys_truthiness(ctx, flag)?;
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &false_case);
+
+    emit_array_chunk_arm(ctx, array, length, true, &preserved_elem_ty)?;
+    crate::codegen::emit_box_current_owned_value_as_mixed(
+        ctx.emitter,
+        &PhpType::Array(Box::new(preserved_elem_ty.clone())),
+    );
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&false_case);
+    emit_array_chunk_arm(ctx, array, length, false, &renumbered_elem_ty)?;
+    crate::codegen::emit_box_current_owned_value_as_mixed(
+        ctx.emitter,
+        &PhpType::Array(Box::new(renumbered_elem_ty.clone())),
+    );
+
+    ctx.emitter.label(&done);
     store_if_result(ctx, inst)
 }
 
@@ -412,17 +498,43 @@ pub(super) fn hash_flip_result_value_type(result_ty: &PhpType) -> Result<PhpType
 pub(crate) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "array_reverse", 1, 2)?;
     let array = expect_operand(inst, 0)?;
-    let preserve_keys = match inst.operands.get(1).copied() {
-        None => false,
-        Some(flag) => const_bool_operand(ctx, flag)?.ok_or_else(|| {
-            CodegenIrError::unsupported(
-                "array_reverse preserve_keys argument that is not a compile-time literal"
-                    .to_string(),
-            )
-        })?,
+    let flag = inst.operands.get(1).copied();
+    let preserve_keys = match flag {
+        None => Some(false),
+        Some(flag) => const_bool_operand(ctx, flag)?,
     };
-    if preserve_keys {
-        return lower_array_reverse_preserve_keys(ctx, inst, array);
+    match preserve_keys {
+        Some(true) => lower_array_reverse_preserve_keys(ctx, inst, array),
+        Some(false) => {
+            emit_array_reverse_reindexed(ctx, array)?;
+            store_if_result(ctx, inst)
+        }
+        None => lower_array_reverse_dynamic_preserve_keys(
+            ctx,
+            inst,
+            array,
+            flag.expect("a non-literal flag came from an operand"),
+        ),
+    }
+}
+
+/// Emits the `preserve_keys = false` arm: the reversed value keeps the source's own shape.
+///
+/// A HASH takes the key-preserving reverse and then `__rt_hash_reindex`, which is php's rule for
+/// the flag: integer keys are renumbered from zero in the NEW order, string keys are left alone.
+/// Composing the two is what gives a hash a `false` arm at all — before it, `array_reverse($h,
+/// false)` refused with `unsupported EIR backend feature: array_reverse for PHP type AssocArray`.
+fn emit_array_reverse_reindexed(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
+    if matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::AssocArray { .. }
+    ) {
+        emit_array_reverse_preserve_keys_value(ctx, array)?;
+        if ctx.emitter.target.arch == Arch::X86_64 {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the reversed hash to the renumbering helper
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_hash_reindex");
+        return Ok(());
     }
     let elem_ty =
         eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_reverse")?;
@@ -431,7 +543,168 @@ pub(crate) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruct
         ctx.emitter.instruction("mov rdi, rax");                                // pass the source indexed-array pointer as the reverse helper argument
     }
     abi::emit_call_label(ctx.emitter, array_reverse_runtime_helper(&elem_ty));
+    Ok(())
+}
+
+/// Lowers `array_reverse($value, $flag)` when `$flag` is only known at run time.
+///
+/// The two arms produce DIFFERENT representations -- a dense array and a hash -- so neither can be
+/// the single result. Each arm is boxed as Mixed, which is what the checker's union return type
+/// already says the call yields, and is the same shape `iterator_to_array()` uses for its own
+/// runtime flag. Twig's `CoreExtension::reverse()` forwards an untyped parameter here, so
+/// refusing a non-literal flag refused the whole file.
+fn lower_array_reverse_dynamic_preserve_keys(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    flag: ValueId,
+) -> Result<()> {
+    let false_case = ctx.next_label("array_reverse_preserve_false");
+    let done = ctx.next_label("array_reverse_preserve_done");
+
+    let source_ty = ctx.value_php_type(array)?.codegen_repr();
+    if matches!(
+        source_ty,
+        PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable
+    ) {
+        return lower_array_reverse_gradual_dynamic(ctx, inst, array, flag);
+    }
+    let preserved_ty = match &source_ty {
+        PhpType::Array(elem) => PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value: elem.clone(),
+        },
+        other => other.clone(),
+    };
+
+    // Box ONLY when the two arms really do differ. A hash reverses to a hash either way, so the
+    // checker answers one concrete type for it, and boxing would hand the caller a cell where its
+    // own declared type says container pointer -- `count()` on the result segfaulted.
+    let arms_differ = matches!(
+        inst.result_php_type.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    );
+
+    crate::codegen::lower_inst::builtins::spl::emit_preserve_keys_truthiness(ctx, flag)?;
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &false_case);
+
+    emit_array_reverse_preserve_keys_value(ctx, array)?;
+    if arms_differ {
+        crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &preserved_ty);
+    }
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&false_case);
+    emit_array_reverse_reindexed(ctx, array)?;
+    if arms_differ {
+        crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &source_ty);
+    }
+
+    ctx.emitter.label(&done);
     store_if_result(ctx, inst)
+}
+
+/// Lowers `array_reverse($value, $flag)` when NEITHER the flag nor the source storage is static.
+///
+/// The checker reaches this shape through its own narrowing: `twig/twig`'s `CoreExtension::reverse`
+/// calls `array_reverse($item, $preserveKeys)` inside `if (\is_array($item))`, so the checker has an
+/// `array` while the lowering still holds the boxed Mixed the untyped parameter arrives in. Both
+/// arms answer a HASH -- the source's own storage is not known, and a hash represents either one --
+/// which is exactly what `preserve_keys` already produces on the true arm and what
+/// `__rt_hash_reindex` turns into php's `false` arm: integer keys renumbered from zero in the new
+/// order, string keys left alone. Each arm is boxed, because the checker's union return type says
+/// the call answers one of two shapes; a concrete result type means the caller expects one storage
+/// and is refused rather than handed the other.
+fn lower_array_reverse_gradual_dynamic(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    flag: ValueId,
+) -> Result<()> {
+    if !matches!(
+        inst.result_php_type.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return Err(CodegenIrError::unsupported(format!(
+            "array_reverse over a gradual source for result PHP type {:?}",
+            inst.result_php_type
+        )));
+    }
+    let hash_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    };
+    let false_case = ctx.next_label("array_reverse_gradual_false");
+    let done = ctx.next_label("array_reverse_gradual_done");
+
+    crate::codegen::lower_inst::builtins::spl::emit_preserve_keys_truthiness(ctx, flag)?;
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &false_case);
+
+    emit_array_reverse_gradual_to_hash(ctx, array)?;
+    crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &hash_ty);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&false_case);
+    emit_array_reverse_gradual_to_hash(ctx, array)?;
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the reversed hash to the renumbering helper
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_hash_reindex");
+    crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &hash_ty);
+
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
+/// Reverses a source whose container is only known at run time into an owned key-preserving hash.
+///
+/// Unboxing is what makes this possible at all: the two reverse helpers take a raw container, and
+/// each reads its own layout from the header -- the indexed one its value_type and stride, the hash
+/// one its entry chain -- so neither needs a static element type. A payload that is not a container
+/// takes the same TypeError php raises for `array_reverse('x')`.
+fn emit_array_reverse_gradual_to_hash(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+) -> Result<()> {
+    let hash_case = ctx.next_label("array_reverse_gradual_hash");
+    let invalid = ctx.next_label("array_reverse_gradual_wrong_type");
+    let done = ctx.next_label("array_reverse_gradual_unboxed");
+    ctx.load_value_to_result(array)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #5");                              // runtime tag 5 = associative array
+            ctx.emitter.instruction(&format!("b.eq {hash_case}"));
+            ctx.emitter.instruction("cmp x0, #4");                              // runtime tag 4 = indexed array
+            ctx.emitter.instruction(&format!("b.ne {invalid}"));
+            ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed indexed array pointer
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_hash_reverse");
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&hash_case);
+            ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed hash pointer
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_hash_reverse");
+            abi::emit_jump(ctx.emitter, &done);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 5");                              // runtime tag 5 = associative array
+            ctx.emitter.instruction(&format!("je {hash_case}"));
+            ctx.emitter.instruction("cmp rax, 4");                              // runtime tag 4 = indexed array
+            ctx.emitter.instruction(&format!("jne {invalid}"));
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_hash_reverse");    // the unboxed payload is already the first argument
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&hash_case);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_hash_reverse");     // the unboxed payload is already the first argument
+            abi::emit_jump(ctx.emitter, &done);
+        }
+    }
+    union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(ctx, &invalid, &|given| {
+        format!(
+            "array_reverse(): Argument #1 ($array) must be of type array, {} given",
+            given
+        )
+    });
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Lowers `array_unique()` for indexed arrays with 8-byte payload slots.
@@ -529,6 +802,15 @@ fn lower_array_reverse_preserve_keys(
             inst.result_php_type
         )));
     };
+    emit_array_reverse_preserve_keys_value(ctx, array)?;
+    store_if_result(ctx, inst)
+}
+
+/// Emits the `preserve_keys = true` arm, leaving the reversed hash in the result registers.
+fn emit_array_reverse_preserve_keys_value(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+) -> Result<()> {
     // A source that is ALREADY a hash takes its own helper, for the reason `array_unique` does:
     // `__rt_array_to_hash_reverse` walks fixed-size payload slots and a hash has none. PHP accepts
     // `array_reverse($assoc, true)` as ordinary code, and it became reachable everywhere the bare
@@ -555,7 +837,7 @@ fn lower_array_reverse_preserve_keys(
             "__rt_array_to_hash_reverse"
         },
     );
-    store_if_result(ctx, inst)
+    Ok(())
 }
 
 /// Reads a literal boolean operand produced by a constant instruction, or `None` when non-literal.

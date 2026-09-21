@@ -188,7 +188,7 @@ pub(in crate::interpreter) fn execute_foreach_stmt(
         (eval_expr(array, context, scope, values)?, None)
     };
     let array_tag = values.type_tag(array)?;
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         eprintln!(
             "[elephc-eval-trace] phase=foreach_subject value={value_name:?} by_ref={value_by_ref} tag={array_tag:?} raw={:?}",
             values.raw_value_word(array).ok(),
@@ -280,7 +280,7 @@ pub(super) fn execute_foreach_array_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
-    let trace = std::env::var_os("ELEPHC_EVAL_TRACE").is_some();
+    let trace = crate::eval_trace::enabled();
     let len = values.array_len(array).map_err(|status| {
         if trace {
             eprintln!("[elephc-eval-trace] phase=foreach_error stage=array_len status={status:?}");

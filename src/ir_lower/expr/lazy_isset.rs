@@ -141,12 +141,22 @@ pub(super) fn lower_lazy_isset_operand(
     arg: &Expr,
 ) -> Option<LoweredValue> {
     match &arg.kind {
+        // No syntactic gate on the receiver. A pre-lowering guess types every user call `int`
+        // (`infer_expr_type_syntactic`), so `isset(f()['k'])` used to be refused here and fall
+        // through to the read-then-test path in `lower_lazy_isset`. That path RELEASES the
+        // call's temporary array as soon as the element is read, and the backend's `isset`
+        // lowering then re-probes the read's producer (`source_instruction`), calling
+        // `__rt_hash_get` on storage already freed — a present key answered `false`. Symfony's
+        // `isset(static::getProvidedTypes()[$prefix])` is exactly that shape, and it took down
+        // every env-var placeholder in the prod container.
+        //
+        // `lower_native_isset_offset_probe` dispatches on the receiver's REAL lowered IR type
+        // instead of on the shape of its expression, and its final arm is the same
+        // read-then-test for receivers no native probe fits — with the receiver evaluated once
+        // and kept, so nothing re-reads it after the release.
         ExprKind::ArrayAccess { array, index } => {
             if array_access_expr_satisfies_array_access(ctx, array) {
                 return Some(lower_array_access_offset_exists(ctx, array, index, arg));
-            }
-            if !array_access_expr_supports_native_isset_probe(ctx, array) {
-                return None;
             }
             Some(lower_native_isset_offset_probe(ctx, array, index, arg))
         }

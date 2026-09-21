@@ -15,6 +15,14 @@ use crate::types::{traits::FlattenedClass, FunctionSig, PhpType, TypeEnv};
 
 use super::Checker;
 
+/// How many previously produced class tables the method-pass fixpoint remembers.
+///
+/// Long enough to catch the oscillations that actually occur (the one measured on Symfony has
+/// period two), short enough that the memory is a handful of tables rather than a transcript of
+/// the whole run. An oscillation longer than this still terminates on the pass budget, exactly as
+/// it did before.
+const PASS_CYCLE_WINDOW: usize = 4;
+
 impl Checker {
     /// Runs method-body validation in passes until class type information stabilizes.
     ///
@@ -36,10 +44,30 @@ impl Checker {
         flattened_classes: &[FlattenedClass],
         errors: &mut Vec<CompileError>,
     ) -> Result<(), CompileError> {
+        // This loop is 32.61s of the 33.30s type-checking phase, and it is three things per
+        // pass: a deep CLONE of the whole class table, the body checking, and up to five deep
+        // COMPARISONS of that table (one for stability, four against the cycle window).
+        // `ELEPHC_TYPECHECK_TIMES=1` says which, and how many passes it takes to get there.
+        let trace = std::env::var("ELEPHC_TYPECHECK_TIMES").is_ok();
+        let mut passes = 0usize;
+        let (mut clone_secs, mut bodies_secs, mut compare_secs) = (0f64, 0f64, 0f64);
         let mut method_passes_remaining = (flattened_classes.len().max(1) * 2) + 1;
+        // Tables this loop has already produced, newest last. A pass that repeats one has added
+        // nothing and never will — the next table is a function of this one alone, so the
+        // sequence is periodic from here. See `PASS_CYCLE_WINDOW`.
+        let mut recent_tables = std::collections::VecDeque::with_capacity(PASS_CYCLE_WINDOW);
         loop {
+            passes += 1;
+            let mut mark = std::time::Instant::now();
             let classes_before_pass = self.classes.clone();
+            if trace {
+                clone_secs += mark.elapsed().as_secs_f64();
+                mark = std::time::Instant::now();
+            }
             let mut pass_errors = Vec::new();
+            // Only the LAST round's answer counts: a seed that looked unrefined on an early round
+            // can be specialized by a call site the same round walks later.
+            self.unspecialized_seed_params.clear();
 
             for class in flattened_classes {
                 for method in &class.methods {
@@ -79,7 +107,22 @@ impl Checker {
                                 .and_then(|p| p.get(i))
                                 .map(|(_, t)| t.clone())
                                 .unwrap_or(PhpType::Int);
-                            self.method_body_param_type(class, method, i, inferred)
+                            let was_seed = inferred == PhpType::Int;
+                            let body_ty = self.method_body_param_type(class, method, i, inferred);
+                            // The body is checked with `mixed` for a seed no call site refined,
+                            // and the SIGNATURE has to say so too or the backend lowers the
+                            // parameter as the raw `int` the seed left behind. Recorded here and
+                            // published once the pass loop settles -- on any earlier round the
+                            // call site that refines it may simply not have been walked yet.
+                            if was_seed && body_ty == PhpType::Mixed {
+                                self.unspecialized_seed_params.insert((
+                                    class.name.clone(),
+                                    method_key.clone(),
+                                    method.is_static,
+                                    i,
+                                ));
+                            }
+                            body_ty
                         };
                         // PHP's __unserialize($data) always receives the associative
                         // array produced by __serialize(); a bare `array` hint resolves
@@ -123,6 +166,18 @@ impl Checker {
                     if method_key == "__construct" {
                         self.patch_constructor_method_env(class, method, &mut method_env);
                     }
+                    // A local a body CREATES by writing an array element into it —
+                    // `$keys[] = $k` against a name nothing has assigned — exists from that
+                    // write onwards, because PHP auto-vivifies the array. Every other scope
+                    // seeds those names at entry (`resolve_function_signature` for a function,
+                    // `infer_closure_type_with_param_hints` for a closure,
+                    // `check_top_level_program` for file scope) and the method pass did not, so
+                    // a read after the loop that fills the array was "Undefined variable" here
+                    // and lowered fine in the backend, which runs the same scan for every body.
+                    // Seeded last: the scan treats everything already in the environment as
+                    // bound, so the parameters, the variadic and the promoted constructor
+                    // properties must be in place first.
+                    Self::seed_vivified_array_locals(&mut method_env, &method.body);
 
                     self.current_class = Some(class.name.clone());
                     self.current_method = Some(method_key.clone());
@@ -176,7 +231,24 @@ impl Checker {
                                 method_env.get(name).map(|ty| (name.clone(), ty.clone()))
                             })
                             .collect();
-                    self.with_local_storage_context(
+                    // A parameter DECLARED `callable` carries no signature anyone can check
+                    // against: its real one arrives with the argument. `resolve_function_signature`
+                    // records such parameters so a spread call on one is not refused for the
+                    // by-reference parameters of whatever signature inference happened to guess —
+                    // and it only ever did it for plain FUNCTIONS, so the same parameter in a
+                    // METHOD lost the allowance. Symfony's
+                    // `PhpFileLoader::callConfigurator(callable $callback, ...)` is exactly that
+                    // shape: `$callback(...$arguments)` was refused inside the method and accepted
+                    // outside one.
+                    let saved_callable_param_names = self.callable_param_names.clone();
+                    for (pname, type_ann, _, _) in &method.params {
+                        if type_ann.is_some()
+                            && method_env.get(pname) == Some(&PhpType::Callable)
+                        {
+                            self.callable_param_names.insert(pname.clone());
+                        }
+                    }
+                    let body_result = self.with_local_storage_context(
                         method_ref_params,
                         method_param_names,
                         method_typed_params,
@@ -185,12 +257,23 @@ impl Checker {
                         |checker| {
                             for s in &method.body {
                                 if let Err(error) = checker.check_stmt(s, &mut method_env) {
-                                    method_errors.extend(error.flatten());
+                                    // Naming the enclosing CLASS is what lets `pipeline` recover
+                                    // the FILE: after autoload expansion every spliced file
+                                    // shares one line-number space, so `line:col` alone
+                                    // identifies nothing. `resolve_function_signature` already
+                                    // does this for a plain function; a method body reached the
+                                    // reporter untagged, which is why a Symfony preload error
+                                    // printed as a bare `error[213:13]`.
+                                    method_errors.extend(
+                                        error.within_declaration(class.name.as_str()).flatten(),
+                                    );
                                 }
                             }
                             Ok(())
                         },
-                    )?;
+                    );
+                    self.callable_param_names = saved_callable_param_names;
+                    body_result?;
                     if std::env::var("ELEPHC_BACKEND_INVENTORY").as_deref() == Ok("1") {
                         for error in &mut method_errors {
                             error.message = format!(
@@ -213,13 +296,91 @@ impl Checker {
                 }
             }
 
+            if trace {
+                bodies_secs += mark.elapsed().as_secs_f64();
+                mark = std::time::Instant::now();
+            }
             let stabilized = self.classes == classes_before_pass;
+            if trace && !stabilized {
+                // Which signatures actually moved this pass. The loop exits on CYCLE detection,
+                // not convergence, so the last passes are re-checking 1000+ classes to chase
+                // whatever this names -- and that is the thing worth fixing, not the loop.
+                let mut moved: Vec<String> = Vec::new();
+                for (class_name, after) in &self.classes {
+                    let Some(before) = classes_before_pass.get(class_name) else {
+                        moved.push(format!("{class_name}(new)"));
+                        continue;
+                    };
+                    for (method, signature) in &after.methods {
+                        if before.methods.get(method) != Some(signature) {
+                            moved.push(format!("{class_name}::{method}"));
+                        }
+                    }
+                    for (method, signature) in &after.static_methods {
+                        if before.static_methods.get(method) != Some(signature) {
+                            moved.push(format!("{class_name}::{method}(static)"));
+                        }
+                    }
+                    if before.callable_method_return_sigs != after.callable_method_return_sigs {
+                        moved.push(format!("{class_name}(callable_return_sigs)"));
+                    }
+                    if before != after && moved.last().map(|last| !last.starts_with(class_name.as_str())).unwrap_or(true) {
+                        // A field OUTSIDE the three a pass writes here has moved, which means
+                        // something deeper in the checker mutates `ClassInfo` too. Name it by
+                        // diffing the debug renderings rather than enumerating forty fields:
+                        // this runs only for the handful of classes that are still moving.
+                        let (before_text, after_text) =
+                            (format!("{before:?}"), format!("{after:?}"));
+                        let at = before_text
+                            .bytes()
+                            .zip(after_text.bytes())
+                            .position(|(left, right)| left != right)
+                            .unwrap_or(before_text.len().min(after_text.len()));
+                        let from = at.saturating_sub(70);
+                        moved.push(format!(
+                            "{class_name}(other @{at}: {:?} -> {:?})",
+                            &before_text[from..before_text.len().min(at + 40)],
+                            &after_text[from..after_text.len().min(at + 40)],
+                        ));
+                    }
+                }
+                moved.sort();
+                eprintln!(
+                    "[elephc-methodpass] pass={passes} moved={} first={:?}",
+                    moved.len(),
+                    &moved[..moved.len().min(12)]
+                );
+            }
+            // A REPEAT is not progress. Symfony's 246-file preload is quiet for every class but
+            // one after three passes and then oscillates forever on a single property, which used
+            // to burn the whole budget — 1630 passes at ~2s each — to land on a table pass three
+            // had already produced. Stopping here ends on a state the loop reached by itself.
+            let cycling = !stabilized
+                && recent_tables
+                    .iter()
+                    .any(|table| table == &self.classes);
             let out_of_passes = method_passes_remaining == 0;
-            if stabilized || out_of_passes {
+            if trace {
+                compare_secs += mark.elapsed().as_secs_f64();
+            }
+            if stabilized || cycling || out_of_passes {
                 errors.extend(pass_errors);
+                if trace {
+                    eprintln!(
+                        "[elephc-methodpass] passes={passes} clone={clone_secs:.2}s \
+                         bodies={bodies_secs:.2}s compare={compare_secs:.2}s \
+                         classes={} stabilized={stabilized} cycling={cycling}",
+                        self.classes.len()
+                    );
+                }
                 break;
             }
 
+            while recent_tables.len() >= PASS_CYCLE_WINDOW {
+                recent_tables.pop_front();
+            }
+            // The clone the stabilization check already made, reused rather than repeated.
+            recent_tables.push_back(classes_before_pass);
             method_passes_remaining -= 1;
         }
         Ok(())
@@ -251,6 +412,44 @@ impl Checker {
             inferred
         } else {
             PhpType::Mixed
+        }
+    }
+
+
+    /// Publishes `mixed` for every undeclared parameter whose `int` inference seed no call site
+    /// refined, so the signature says what the body was checked with.
+    ///
+    /// `method_body_param_type` already answers `mixed` for such a parameter -- PHP reads an
+    /// undeclared parameter as `mixed` -- but it only moved the ENVIRONMENT. The signature kept
+    /// the seed, and the signature is what EIR lowers the parameter as, so the body reasoned about
+    /// a boxed value while the backend read a raw integer register. `twig/twig`'s
+    /// `CoreExtension::filter($env, $isSandboxed, $array, $arrow)` has no compiled caller: its
+    /// `$array` reached `new \IteratorIterator($array)` as `Int` and its `$arrow` reached
+    /// `new \CallbackFilterIterator(..., $arrow)` as `Int` against a `callable` property, on code
+    /// php runs. The free-function half of this rule is
+    /// `widen_unrefined_params_of_an_uncalled_function`.
+    pub(super) fn publish_unspecialized_method_param_seeds(&mut self) {
+        let slots: Vec<(String, String, bool, usize)> =
+            self.unspecialized_seed_params.iter().cloned().collect();
+        for (class_name, method_key, is_static, index) in slots {
+            let Some(class_info) = self.classes.get_mut(&class_name) else {
+                continue;
+            };
+            let table = if is_static {
+                &mut class_info.static_methods
+            } else {
+                &mut class_info.methods
+            };
+            let Some(sig) = table.get_mut(&method_key) else {
+                continue;
+            };
+            let Some(param) = sig.params.get_mut(index) else {
+                continue;
+            };
+            // Only the seed itself: a later round may have refined it after all.
+            if param.1 == PhpType::Int {
+                param.1 = PhpType::Mixed;
+            }
         }
     }
 

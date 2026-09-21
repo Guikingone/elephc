@@ -527,6 +527,13 @@ impl Checker {
         for capture in capture_refs {
             self.ref_aliased_locals.insert(capture.clone());
             self.ref_bound_locals.insert(capture.clone());
+            // …and separately, the subset whose cell `expr::closures` has ALREADY widened to
+            // `Mixed`, because a PHP reference has no type and the cell must hold whatever the
+            // closure stores through it. The same predicate on the same body and name, so the two
+            // cannot drift. A capture the body only READS keeps its exact type and is not in it.
+            if crate::ir_lower::body_writes_local(body, capture) {
+                self.by_ref_capture_boxed_locals.insert(capture.clone());
+            }
         }
         // Every closure parameter is bound unconditionally on entry, so all of them are
         // recorded at binding depth 0. A `use ($x)` CAPTURE is deliberately absent: it is
@@ -556,6 +563,26 @@ impl Checker {
         // class method: the closure may be bound to an object later. Track the
         // nesting so `infer_this_type` can allow it (as a runtime-dispatched
         // receiver) rather than rejecting it.
+        // A closure's own `callable` parameters are callable PARAMETERS, exactly as a function's
+        // or a method's are, and both of those register them here for the length of the body.
+        // Without it a call through one took the strict-arity path: `symfony/cache`'s
+        // `ContractsTrait::setCallbackWrapper` wraps its callback in
+        // `static fn (callable $callback, …) => $callback($item, $save)`, and the two-argument
+        // call was refused against a one-argument signature inferred from some other site.
+        // php binds a userland callable's declared parameters and ignores the surplus, which is
+        // what the advisory-arity path already knows.
+        let declared_callable_params: Vec<String> = params
+            .iter()
+            .zip(closure_sig.params.iter())
+            .filter(|((_, type_ann, _, _), (_, param_ty))| {
+                type_ann.is_some() && param_ty == &PhpType::Callable
+            })
+            .map(|((name, _, _, _), _)| name.clone())
+            .collect();
+        let saved_callable_param_names = self.callable_param_names.clone();
+        for name in &declared_callable_params {
+            self.callable_param_names.insert(name.clone());
+        }
         self.closure_depth += 1;
         let prev_by_ref_return = self.current_by_ref_return;
         self.current_by_ref_return =
@@ -580,6 +607,7 @@ impl Checker {
             .chain(params.iter().map(|(name, _, _, _)| name))
             .filter_map(|name| env.get(name).map(|ty| (name.clone(), ty.clone())))
             .collect();
+        Self::seed_vivified_array_locals(&mut closure_sig.env, body);
         let body_result = self.with_local_storage_context(
             closure_ref_params,
             closure_param_names,
@@ -596,6 +624,7 @@ impl Checker {
         self.current_loop_storage_scope = previous_loop_storage_scope;
         self.current_by_ref_return = prev_by_ref_return;
         self.closure_depth -= 1;
+        self.callable_param_names = saved_callable_param_names;
         body_result?;
         self.resolve_closure_return_type(body, return_type, expr.span, &closure_sig.env)?;
         Ok(PhpType::Callable)
@@ -708,7 +737,7 @@ impl Checker {
                     &format!("callable ${}", var),
                 );
             }
-            return self.check_known_callable_call(
+            return self.check_callable_value_call(
                 &specialized_sig,
                 args,
                 expr.span,
@@ -960,6 +989,14 @@ impl Checker {
             PhpType::Array(elem_ty) => Ok(*elem_ty),
             PhpType::AssocArray { value, .. } => Ok(*value),
             PhpType::Iterable | PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
+            // `callable` is a PREDICATE, not a storage shape: a value that satisfies it may be
+            // the two-element `[$object, 'method']` array PHP unpacks happily. The slot holds a
+            // descriptor rather than that array, so the element type is gradual — EIR lowering
+            // rebuilds each element from the descriptor.
+            //
+            // Refusing it here is what stopped Symfony's `ControllerEvent::setController`, whose
+            // `method_exists(...$controller)` is exactly this shape.
+            PhpType::Callable => Ok(PhpType::Mixed),
             PhpType::Object(name) if self.object_type_implements_iterable(&name) => {
                 Ok(PhpType::Mixed)
             }

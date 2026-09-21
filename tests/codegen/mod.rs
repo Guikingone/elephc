@@ -19,6 +19,7 @@ mod strict_php;
 mod lfc;
 mod benchmarks;
 mod echo_vars;
+mod inline_html;
 mod eval;
 mod symbol_catalog;
 mod eval_builtin_parity;
@@ -70,6 +71,7 @@ mod pdo_informix;
 mod pdo_ibm;
 #[cfg(feature = "pdo-sqlsrv")]
 mod pdo_sqlsrv;
+mod parse_str;
 #[cfg(feature = "pdo-oci")]
 mod pdo_oci;
 #[cfg(feature = "pdo-cubrid")]

@@ -29,7 +29,7 @@ pub(super) fn lower_property_array_push(
             span,
         );
     }
-    let generic_receiver = is_generic_object_receiver(ctx, object.value);
+    let generic_receiver = is_generic_object_receiver(ctx, object.value, property);
     if let Some(property_ty) =
         generic_object_array_property_type(ctx, object.value, property).filter(is_indexed_array_type)
     {
@@ -257,7 +257,7 @@ pub(super) fn lower_property_array_assign(
             span,
         );
     }
-    let generic_receiver = is_generic_object_receiver(ctx, object.value);
+    let generic_receiver = is_generic_object_receiver(ctx, object.value, property);
     if let Some(property_ty) =
         generic_object_array_property_type(ctx, object.value, property).filter(is_indexed_array_type)
     {
@@ -692,15 +692,57 @@ fn auto_initialized_container_type(property_ty: &PhpType) -> Option<PhpType> {
     }
 }
 
-/// Returns whether an EIR receiver carries PHP's bare `object` pseudo-type.
-fn is_generic_object_receiver(
+/// Returns whether an EIR receiver needs the read/modify/write-back element write.
+///
+/// PHP's bare `object` pseudo-type is the original case, and a BOXED GRADUAL receiver — an
+/// untyped parameter holding an object — needs exactly the same treatment: the compiler cannot
+/// name the class, so it cannot address the property's slot and mutate the array in place.
+///
+/// Falling through instead reached the final `RuntimeCall` fallback, whose
+/// `__rt_mixed_property_get` only understands stdClass and answers null for every other class.
+/// `__rt_mixed_array_set` then wrote into that null and the element was SILENTLY DISCARDED, while
+/// a scalar write to the same property through the same receiver worked — that one already went
+/// through the declared-property class-id ladder. Symfony's generated container is written
+/// entirely against this shape (`getXService($container, $lazyLoad = true)` storing into
+/// `$container->services[$id]`), so every service it built was rebuilt on the next `get()`.
+pub(in crate::ir_lower) fn is_generic_object_receiver(
     ctx: &LoweringContext<'_, '_>,
     object: crate::ir::ValueId,
+    property: &str,
 ) -> bool {
-    matches!(
-        ctx.builder.value_php_type(object),
-        PhpType::Object(class_name) if class_name.trim_start_matches('\\').is_empty()
-    )
+    match ctx.builder.value_php_type(object) {
+        PhpType::Object(class_name) if class_name.trim_start_matches('\\').is_empty() => {
+            return true
+        }
+        PhpType::Mixed | PhpType::Union(_) => return true,
+        _ => {}
+    }
+    receiver_stores_property_dynamically(ctx, object, property)
+}
+
+/// Returns whether this receiver keeps `property` in its dynamic side table rather than a slot.
+///
+/// A stdClass has no declared properties at all — `(object) ['vars' => []]` gives one whose keys
+/// the compiler never sees — and a `#[\AllowDynamicProperties]` class keeps anything it did not
+/// declare the same way. Both read and write that storage exactly as PHP's bare `object` type
+/// does, so an element write through one takes the same Mixed read/modify/write the generic
+/// receiver takes. Without this the lowering fell through to a `RuntimeCall` the backend has no
+/// arm for, and `$state->vars[] = $m[1]` in Symfony's `CompiledUrlMatcherDumper` reached it.
+fn receiver_stores_property_dynamically(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+) -> bool {
+    let PhpType::Object(class_name) = ctx.builder.value_php_type(object) else {
+        return false;
+    };
+    let class_name = class_name.trim_start_matches('\\');
+    if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
+        return true;
+    }
+    ctx.classes.get(class_name).is_some_and(|class_info| {
+        class_info.allow_dynamic_properties && class_info.visible_property(property).is_none()
+    })
 }
 
 /// Returns whether the receiver names one concrete class with native property slots.

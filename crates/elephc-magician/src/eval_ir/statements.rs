@@ -8,6 +8,7 @@
 //! - Statements encode explicit mutation and structured control flow without runtime ownership.
 
 use super::*;
+use std::sync::Arc;
 
 /// Dynamic eval statements that operate on a materialized activation scope.
 #[derive(Debug, Clone, PartialEq)]
@@ -55,7 +56,11 @@ pub enum EvalStmt {
         update: Vec<EvalStmt>,
         body: Vec<EvalStmt>,
     },
-    ClassDecl(EvalClass),
+    /// Shared, not owned: declaring the class hands this same allocation to the context, so a
+    /// request that re-runs the file pays a reference-count bump instead of a deep copy of every
+    /// method body. On a Symfony request that copy, and freeing it again at the request boundary,
+    /// was 13% of the interpreter's work.
+    ClassDecl(Arc<EvalClass>),
     EnumDecl(EvalEnum),
     InterfaceDecl(EvalInterface),
     Label(String),
@@ -333,6 +338,13 @@ pub enum EvalStmt {
         body: Vec<EvalStmt>,
     },
     Expr(EvalExpr),
+}
+
+impl EvalStmt {
+    /// Builds a class declaration statement, sharing the class with everything that declares it.
+    pub fn class_decl(class: EvalClass) -> Self {
+        Self::ClassDecl(Arc::new(class))
+    }
 }
 
 /// One `catch` block attached to an eval `try` statement.

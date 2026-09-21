@@ -16,7 +16,7 @@ use crate::types::{PhpType, TypeEnv};
 mod assignments;
 mod basic;
 mod class_refs;
-mod effects;
+pub(in crate::types::checker) mod effects;
 mod calls_objects;
 mod static_closure;
 use super::super::Checker;

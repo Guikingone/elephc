@@ -9,6 +9,7 @@
 
 pub(crate) mod abi;
 pub(crate) mod arrays;
+pub(crate) mod attribute_string;
 pub(crate) mod bcmath;
 pub(crate) mod callable_descriptor;
 pub(crate) mod callable_dispatch;

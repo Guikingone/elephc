@@ -729,7 +729,7 @@ fn trace_dynamic_new_error(
     status: EvalStatus,
     context: &ElephcEvalContext,
 ) -> EvalStatus {
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         let call_site = context.call_site();
         eprintln!(
             "[elephc-eval-trace] phase=dynamic_new_error stage={stage} class={class_name:?} status={status:?} file={:?} line={}",

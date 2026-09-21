@@ -12,13 +12,15 @@ use super::*;
 /// Lowers a global storage load into the result register and SSA destination slot.
 pub(super) fn lower_load_global(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let data = expect_global_name(inst)?;
-    let name = ctx.global_name_data(data)?;
-    let symbol = ir_global_symbol(name);
+    // Owned, because the shared-ref-cell question needs `ctx.shared` mutably to answer it once
+    // per module instead of walking every instruction per name.
+    let name = ctx.global_name_data(data)?.to_string();
+    let symbol = ir_global_symbol(&name);
     let result = inst
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("load_global missing result value"))?;
     let ty = ctx.value_php_type(result)?;
-    if crate::superglobals::uses_shared_ref_cell(ctx.module, name) {
+    if ctx.shared.uses_shared_ref_cell(ctx.module, &name) {
         load_shared_global_to_result(ctx, &symbol);
         return store_if_result(ctx, inst);
     }
@@ -48,7 +50,7 @@ pub(super) fn lower_store_global(ctx: &mut FunctionContext<'_>, inst: &Instructi
         }
         PhpType::Mixed
     };
-    if crate::superglobals::uses_shared_ref_cell(ctx.module, &name) {
+    if ctx.shared.uses_shared_ref_cell(ctx.module, &name) {
         return lower_store_shared_global(ctx, &symbol, &store_ty);
     }
     ctx.data
@@ -70,7 +72,7 @@ pub(in crate::codegen) fn unset_global_name(ctx: &mut FunctionContext<'_>, name:
     ctx.data.add_comm(symbol.clone(), 8);
     abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), &symbol, 0);
     abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 0);
-    let release = if crate::superglobals::uses_shared_ref_cell(ctx.module, name) {
+    let release = if ctx.shared.uses_shared_ref_cell(ctx.module, name) {
         "__rt_global_ref_cell_decref"
     } else {
         "__rt_decref_mixed"
@@ -371,16 +373,12 @@ pub(super) fn lower_invoker_ref_arg(ctx: &mut FunctionContext<'_>, inst: &Instru
     let ref_cell_reg = abi::secondary_scratch_reg(ctx.emitter);
     let marker_tag_reg = abi::tertiary_scratch_reg(ctx.emitter);
     let source_tag_reg = abi::symbol_scratch_reg(ctx.emitter);
+    emit_marker_source_tag(ctx, slot, &source_ty, source_tag_reg)?;
     ctx.materialize_local_storage_address(slot, ref_cell_reg)?;
     abi::emit_load_int_immediate(
         ctx.emitter,
         marker_tag_reg,
         callable_invoker_args::INVOKER_ARG_REF_CELL_TAG,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        source_tag_reg,
-        crate::codegen::runtime_value_tag(&source_ty) as i64,
     );
     ctx.emitter.comment("cufa_invoker_ref_cell");
     emit_box_runtime_payload_as_mixed(ctx.emitter, marker_tag_reg, ref_cell_reg, source_tag_reg);
@@ -422,13 +420,38 @@ fn lower_global_array_ref_marker(
     inst: &Instruction,
     data: crate::ir::DataId,
 ) -> Result<()> {
-    let name = ctx.global_name_data(data)?;
-    if !ctx.module.web || !crate::superglobals::is_superglobal(name) {
+    let name = ctx.global_name_data(data)?.to_string();
+    // `ELEPHC_BROKEN_CLI_SUPERGLOBAL_REF=1` compiles this anyway, and the alias DOES NOT WORK:
+    // `['query' => &$_GET]` then `$box['query']['hit'] = 'x'` leaves `$_GET` untouched where php
+    // writes through. It exists only so the rest of a CLI entry point can be reached and its
+    // other defects found, and it says so on every build that uses it. Do not ship with it.
+    let broken_override =
+        !ctx.module.web && std::env::var_os("ELEPHC_BROKEN_CLI_SUPERGLOBAL_REF").is_some();
+    if broken_override {
+        eprintln!(
+            "warning: ELEPHC_BROKEN_CLI_SUPERGLOBAL_REF: compiling `&${name}` outside --web, \
+             where the reference does not alias the superglobal; writes through it are lost"
+        );
+    }
+    if !(ctx.module.web || broken_override) || !crate::superglobals::is_superglobal(&name) {
+        // DO NOT lift the `web` half of this guard by creating the cell lazily here, the way
+        // `lower_global_ref_cell` does for a plain global. That was tried: it compiles, and the
+        // alias then does not work. `['query' => &$_GET]` followed by
+        // `$box['query']['hit'] = 'x'` leaves `$_GET` untouched, in a function body and at the
+        // top level alike, while php writes through in both. Plain superglobal reads and writes
+        // are fine outside `--web` -- only the reference is not wired -- so the failure is
+        // silent, which is worse than this refusal.
+        //
+        // What is missing is the consuming side: the `ARRAY_GLOBAL_REF_CELL_TAG` marker this
+        // function boxes is only honoured by the request-scoped superglobal storage `--web`
+        // installs. Wiring that for the CLI SAPI is the actual work, and it is what blocks
+        // compiling a console entry point that hands superglobals on by reference
+        // (`GenericRuntime::getArgument` does exactly this with `'session' => &$_SESSION`).
         return Err(CodegenIrError::unsupported(format!(
             "array reference to non-web global ${name}"
         )));
     }
-    let symbol = ir_global_symbol(name);
+    let symbol = ir_global_symbol(&name);
     ctx.data.add_comm(symbol.clone(), 8);
     abi::emit_load_symbol_to_reg(
         ctx.emitter,
@@ -458,4 +481,56 @@ fn lower_global_array_ref_marker(
         source_tag_reg,
     );
     store_if_result(ctx, inst)
+}
+
+/// Loads the runtime value tag a by-reference marker should advertise for one local.
+///
+/// Every tag but the array ones is exactly what the static type spells. `array` is not: it is the
+/// PACKED tag whatever the slot ends up holding, and a marker that promises packed for a
+/// string-keyed hash hands the reader an array with no keys and a raw slot word at element 0.
+/// The heap-kind byte in front of the payload is the only thing that knows which it is.
+///
+/// Read INLINE rather than through a helper call: this lowering sits in the middle of an
+/// argument-marshalling sequence that never called anything, and introducing a call there
+/// clobbers the caller-saved registers the surrounding pack is still holding.
+pub(super) fn emit_marker_source_tag(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+    source_ty: &PhpType,
+    source_tag_reg: &str,
+) -> Result<()> {
+    if !matches!(source_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            source_tag_reg,
+            crate::codegen::runtime_value_tag(source_ty) as i64,
+        );
+        return Ok(());
+    }
+    let pointer = abi::int_result_reg(ctx.emitter);
+    let kind = abi::temp_int_reg(ctx.emitter.target);
+    let done = ctx.next_label("marker_array_tag_done");
+    ctx.materialize_local_storage_address(slot, pointer)?;
+    abi::emit_load_from_address(ctx.emitter, pointer, pointer, 0);
+    abi::emit_load_int_immediate(ctx.emitter, source_tag_reg, 4);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz {pointer}, {done}")); // an empty slot has no heap kind to read
+            ctx.emitter.instruction(&format!("ldur {kind}, [{pointer}, #-8]")); // uniform heap header word
+            ctx.emitter.instruction(&format!("and {kind}, {kind}, #0xff")); // isolate the low-byte heap kind
+            ctx.emitter.instruction(&format!("cmp {kind}, #3")); // heap kind 3 stores associative hashes
+            ctx.emitter.instruction(&format!("b.ne {done}")); // anything else keeps the packed tag
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {pointer}, {pointer}")); // an empty slot has no heap kind to read
+            ctx.emitter.instruction(&format!("jz {done}"));
+            ctx.emitter.instruction(&format!("mov {kind}, QWORD PTR [{pointer} - 8]")); // uniform heap header word
+            ctx.emitter.instruction(&format!("and {kind}, 0xff")); // isolate the low-byte heap kind
+            ctx.emitter.instruction(&format!("cmp {kind}, 3")); // heap kind 3 stores associative hashes
+            ctx.emitter.instruction(&format!("jne {done}")); // anything else keeps the packed tag
+        }
+    }
+    abi::emit_load_int_immediate(ctx.emitter, source_tag_reg, 5);
+    ctx.emitter.label(&done);
+    Ok(())
 }

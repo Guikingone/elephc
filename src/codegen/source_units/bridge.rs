@@ -7,6 +7,12 @@ use crate::ir::Module;
 
 const LOOKUP: &str = "__rt_source_include_lookup";
 const RESET: &str = "__rt_source_include_reset";
+const PRIME: &str = "__rt_source_include_prime";
+/// C-ABI name: Magician calls this one by symbol, so it carries the platform prefix.
+const CLASS_LOOKUP: &str = "__elephc_eval_class_deferred_lookup";
+const CLASS_RESET: &str = "__rt_class_deferred_reset";
+/// Bytes per table record: path pointer, path length, guard cell, compiler-included flag.
+const RECORD: usize = 32;
 const FRAME: usize = 64;
 const PATH: usize = 8;
 const LENGTH: usize = 16;
@@ -126,13 +132,55 @@ pub(in crate::codegen) fn emit_state_helpers(module: &Module, emitter: &mut Emit
         for (_, source) in catalog.iter() {
             let (path, length) = data.add_string(source.canonical_path.as_os_str().as_encoded_bytes());
             let cell = data.add_comm(include_guard_symbol(&source.canonical_path), 8);
-            words.extend([DataWord::Symbol(path), DataWord::U64(length as u64), DataWord::Symbol(cell)]);
+            let preincluded = u64::from(module.preincluded_sources.contains(&source.canonical_path));
+            words.extend([
+                DataWord::Symbol(path),
+                DataWord::U64(length as u64),
+                DataWord::Symbol(cell),
+                DataWord::U64(preincluded),
+            ]);
         }
     }
-    let count = words.len() / 3;
+    let count = words.len() / 4;
     let table = data.add_words(words);
-    emit_lookup(emitter, &table, count);
-    emit_reset(emitter, &table, count);
+    emit_lookup(emitter, LOOKUP, "source_lookup", &table, count);
+    emit_reset(emitter, RESET, "source_reset", &table, count);
+    emit_prime(emitter, &table, count);
+    emit_deferred_class_helpers(module, emitter, data);
+}
+
+/// Emits the load-state table for classes the closed world carries only to answer a probe.
+///
+/// Same shape as the source table: one record of {name pointer, name length, flag cell,
+/// placeholder} so both share the compact lookup and reset loops. Names are LOWERCASE, because
+/// php class names are case-insensitive and the caller lowercases before asking.
+fn emit_deferred_class_helpers(module: &Module, emitter: &mut Emitter, data: &mut DataSection) {
+    let mut words = Vec::new();
+    for name in &module.deferred_class_loads {
+        let (label, length) = data.add_string(name.as_bytes());
+        let cell = data.add_comm(deferred_class_symbol(name), 8);
+        words.extend([
+            DataWord::Symbol(label),
+            DataWord::U64(length as u64),
+            DataWord::Symbol(cell),
+            DataWord::U64(0),
+        ]);
+    }
+    let count = words.len() / 4;
+    let table = data.add_words(words);
+    let lookup_symbol = emitter.target.extern_symbol(CLASS_LOOKUP);
+    emit_lookup(emitter, &lookup_symbol, "class_lookup", &table, count);
+    emit_reset(emitter, CLASS_RESET, "class_reset", &table, count);
+}
+
+/// Encodes one lowercase class name into an assembly-safe, collision-free flag symbol.
+pub(in crate::codegen) fn deferred_class_symbol(name: &str) -> String {
+    use std::fmt::Write;
+    let mut symbol = String::from("_class_deferred_");
+    for byte in name.as_bytes() {
+        let _ = write!(symbol, "{byte:02x}");
+    }
+    symbol
 }
 
 /// Installs the program's state access before PHP execution; also safe to repeat at eval entry.
@@ -150,21 +198,25 @@ pub(in crate::codegen) fn emit_state_install(ctx: &mut FunctionContext<'_>) {
     abi::emit_branch_if_int_result_zero(ctx.emitter, &ready);
     abi::emit_exit(ctx.emitter, 1);
     ctx.emitter.label(&ready);
+    // Re-assert the inclusions the COMPILER performed. This runs at CLI entry, at every `--web`
+    // request (after `__rt_web_reset` cleared the table) and at eval entry, and only ever raises
+    // a flag the request reset lowered, so repeating it is exactly a no-op.
+    abi::emit_call_label(ctx.emitter, PRIME);
 }
 
-fn emit_lookup(emitter: &mut Emitter, table: &str, count: usize) {
+fn emit_lookup(emitter: &mut Emitter, symbol: &str, tag: &str, table: &str, count: usize) {
     let prefix = emitter.target.platform.local_label_prefix();
-    let again = format!("{prefix}source_lookup_again");
-    let next = format!("{prefix}source_lookup_next");
-    let missing = format!("{prefix}source_lookup_missing");
-    let done = format!("{prefix}source_lookup_done");
+    let again = format!("{prefix}{tag}_again");
+    let next = format!("{prefix}{tag}_next");
+    let missing = format!("{prefix}{tag}_missing");
+    let done = format!("{prefix}{tag}_done");
     let result = abi::int_result_reg(emitter);
     let a0 = abi::int_arg_reg_name(emitter.target, 0);
     let a1 = abi::int_arg_reg_name(emitter.target, 1);
     let a2 = abi::int_arg_reg_name(emitter.target, 2);
     let scratch = abi::temp_int_reg(emitter.target);
     if emitter.target.arch == Arch::AArch64 { emitter.raw(".align 2"); }
-    emitter.label_global(LOOKUP);
+    emitter.label_global(symbol);
     abi::emit_frame_prologue(emitter, FRAME);
     abi::store_at_offset(emitter, a0, PATH);
     abi::store_at_offset(emitter, a1, LENGTH);
@@ -205,8 +257,8 @@ fn emit_lookup(emitter: &mut Emitter, table: &str, count: usize) {
     emitter.label(&next);
     abi::load_at_offset(emitter, result, CURSOR);
     match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction(&format!("add {result}, {result}, #24")), // advance one three-word source record
-        Arch::X86_64 => emitter.instruction(&format!("add {result}, 24")),      // advance one three-word source record
+        Arch::AArch64 => emitter.instruction(&format!("add {result}, {result}, #{RECORD}")), // advance one source record
+        Arch::X86_64 => emitter.instruction(&format!("add {result}, {RECORD}")), // advance one source record
     }
     abi::store_at_offset(emitter, result, CURSOR);
     abi::load_at_offset(emitter, result, REMAINING);
@@ -223,15 +275,15 @@ fn emit_lookup(emitter: &mut Emitter, table: &str, count: usize) {
     abi::emit_return(emitter);
 }
 
-fn emit_reset(emitter: &mut Emitter, table: &str, count: usize) {
+fn emit_reset(emitter: &mut Emitter, symbol: &str, tag: &str, table: &str, count: usize) {
     let prefix = emitter.target.platform.local_label_prefix();
-    let again = format!("{prefix}source_reset_again");
-    let done = format!("{prefix}source_reset_done");
+    let again = format!("{prefix}{tag}_again");
+    let done = format!("{prefix}{tag}_done");
     let cursor = abi::int_result_reg(emitter);
     let remaining = abi::int_arg_reg_name(emitter.target, 1);
     let cell = abi::temp_int_reg(emitter.target);
     if emitter.target.arch == Arch::AArch64 { emitter.raw(".align 2"); }
-    emitter.label_global(RESET);
+    emitter.label_global(symbol);
     abi::emit_frame_prologue(emitter, 16);
     abi::emit_symbol_address(emitter, cursor, table);
     abi::emit_load_int_immediate(emitter, remaining, count as i64);
@@ -241,7 +293,7 @@ fn emit_reset(emitter: &mut Emitter, table: &str, count: usize) {
             emitter.instruction(&format!("cbz {remaining}, {done}"));           // stop after every native source cell was reset
             emitter.instruction(&format!("ldr {cell}, [{cursor}, #16]"));       // load the current record's guard address
             emitter.instruction(&format!("str xzr, [{cell}]"));                 // clear actual native inclusion state
-            emitter.instruction(&format!("add {cursor}, {cursor}, #24"));       // advance one source record
+            emitter.instruction(&format!("add {cursor}, {cursor}, #{RECORD}")); // advance one source record
             emitter.instruction(&format!("sub {remaining}, {remaining}, #1"));  // consume one source record
         }
         Arch::X86_64 => {
@@ -249,7 +301,63 @@ fn emit_reset(emitter: &mut Emitter, table: &str, count: usize) {
             emitter.instruction(&format!("jz {done}"));                         // stop after every native source cell was reset
             emitter.instruction(&format!("mov {cell}, QWORD PTR [{cursor} + 16]")); // load the current record's guard address
             emitter.instruction(&format!("mov QWORD PTR [{cell}], 0"));         // clear actual native inclusion state
-            emitter.instruction(&format!("add {cursor}, 24"));                  // advance one source record
+            emitter.instruction(&format!("add {cursor}, {RECORD}"));            // advance one source record
+            emitter.instruction(&format!("sub {remaining}, 1"));                // consume one source record
+        }
+    }
+    abi::emit_jump(emitter, &again);
+    emitter.label(&done);
+    abi::emit_frame_restore(emitter, 16);
+    abi::emit_return(emitter);
+}
+
+/// Emits `__rt_source_include_prime`, which raises the guard of every source the COMPILER
+/// already included.
+///
+/// The autoload pass opened those files at compile time and spliced their declarations into the
+/// program, which is the same observable outcome PHP reaches by running the autoloader: the
+/// symbols exist and the file counts as included. Without this, an interpreted `include_once`
+/// of such a path found its guard clear, re-ran the file, and died redeclaring a class the
+/// binary already carries.
+///
+/// Only raises flags — never clears one — so it is safe to repeat at every entry that installs
+/// the include state.
+fn emit_prime(emitter: &mut Emitter, table: &str, count: usize) {
+    let prefix = emitter.target.platform.local_label_prefix();
+    let again = format!("{prefix}source_prime_again");
+    let next = format!("{prefix}source_prime_next");
+    let done = format!("{prefix}source_prime_done");
+    let cursor = abi::int_result_reg(emitter);
+    let remaining = abi::int_arg_reg_name(emitter.target, 1);
+    let cell = abi::temp_int_reg(emitter.target);
+    let flag = abi::int_arg_reg_name(emitter.target, 2);
+    if emitter.target.arch == Arch::AArch64 { emitter.raw(".align 2"); }
+    emitter.label_global(PRIME);
+    abi::emit_frame_prologue(emitter, 16);
+    abi::emit_symbol_address(emitter, cursor, table);
+    abi::emit_load_int_immediate(emitter, remaining, count as i64);
+    emitter.label(&again);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cbz {remaining}, {done}"));           // stop after every source record was inspected
+            emitter.instruction(&format!("ldr {flag}, [{cursor}, #24]"));       // load the compiler-included flag
+            emitter.instruction(&format!("cbz {flag}, {next}"));                // leave a runtime-only source untouched
+            emitter.instruction(&format!("ldr {cell}, [{cursor}, #16]"));       // load the current record's guard address
+            emitter.instruction(&format!("str {flag}, [{cell}]"));              // record the compile-time inclusion
+            emitter.label(&next);
+            emitter.instruction(&format!("add {cursor}, {cursor}, #{RECORD}")); // advance one source record
+            emitter.instruction(&format!("sub {remaining}, {remaining}, #1"));  // consume one source record
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("test {remaining}, {remaining}"));     // test whether any source records remain
+            emitter.instruction(&format!("jz {done}"));                         // stop after every source record was inspected
+            emitter.instruction(&format!("mov {flag}, QWORD PTR [{cursor} + 24]")); // load the compiler-included flag
+            emitter.instruction(&format!("test {flag}, {flag}"));               // test the compiler-included flag
+            emitter.instruction(&format!("jz {next}"));                         // leave a runtime-only source untouched
+            emitter.instruction(&format!("mov {cell}, QWORD PTR [{cursor} + 16]")); // load the current record's guard address
+            emitter.instruction(&format!("mov QWORD PTR [{cell}], {flag}"));    // record the compile-time inclusion
+            emitter.label(&next);
+            emitter.instruction(&format!("add {cursor}, {RECORD}"));            // advance one source record
             emitter.instruction(&format!("sub {remaining}, 1"));                // consume one source record
         }
     }

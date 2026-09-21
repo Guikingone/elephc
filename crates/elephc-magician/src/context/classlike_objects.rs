@@ -21,7 +21,7 @@ impl ElephcEvalContext {
         {
             return false;
         }
-        Arc::make_mut(&mut self.declared_interface_names)
+        self.own_declared_interface_names
             .push(interface.name().to_string());
         #[cfg(not(test))]
         register_global_eval_interface(&interface);
@@ -52,13 +52,21 @@ impl ElephcEvalContext {
     }
 
     /// Returns interface names declared through eval or registered from generated metadata.
-    pub fn declared_interface_names(&self) -> &[String] {
-        &self.declared_interface_names
+    pub fn declared_interface_names(&self) -> Vec<String> {
+        self.declared_interface_names
+            .iter()
+            .chain(self.own_declared_interface_names.iter())
+            .cloned()
+            .collect()
     }
 
     /// Registers a runtime-visible interface declaration name for `get_declared_interfaces()`.
     pub fn define_external_declared_interface_name(&mut self, name: &str) -> bool {
-        push_external_declared_name(Arc::make_mut(&mut self.declared_interface_names), name)
+        push_external_declared_name(
+            &self.declared_interface_names,
+            &mut self.own_declared_interface_names,
+            name,
+        )
     }
 
     /// Defines an eval-declared trait, failing if this context already has the name.
@@ -72,7 +80,7 @@ impl ElephcEvalContext {
         {
             return false;
         }
-        Arc::make_mut(&mut self.declared_trait_names)
+        self.own_declared_trait_names
             .push(trait_decl.name().to_string());
         #[cfg(not(test))]
         register_global_eval_trait(&trait_decl);
@@ -103,13 +111,21 @@ impl ElephcEvalContext {
     }
 
     /// Returns trait names declared through eval or registered from generated metadata.
-    pub fn declared_trait_names(&self) -> &[String] {
-        &self.declared_trait_names
+    pub fn declared_trait_names(&self) -> Vec<String> {
+        self.declared_trait_names
+            .iter()
+            .chain(self.own_declared_trait_names.iter())
+            .cloned()
+            .collect()
     }
 
     /// Registers a runtime-visible trait declaration name for `get_declared_traits()`.
     pub fn define_external_declared_trait_name(&mut self, name: &str) -> bool {
-        push_external_declared_name(Arc::make_mut(&mut self.declared_trait_names), name)
+        push_external_declared_name(
+            &self.declared_trait_names,
+            &mut self.own_declared_trait_names,
+            name,
+        )
     }
 
     /// Defines an eval-declared enum plus class-shaped metadata for dispatch.
@@ -125,12 +141,12 @@ impl ElephcEvalContext {
         }
         self.declared_enum_names
             .push(enum_decl.name().trim_start_matches('\\').to_string());
-        Arc::make_mut(&mut self.declared_class_names)
+        self.own_declared_class_names
             .push(enum_decl.name().trim_start_matches('\\').to_string());
         #[cfg(not(test))]
         register_global_eval_enum(&enum_decl);
         self.classes
-            .insert(key.clone(), enum_decl.as_class_metadata());
+            .insert(key.clone(), Arc::new(enum_decl.as_class_metadata()));
         self.enums.insert(key, enum_decl);
         true
     }
@@ -439,7 +455,7 @@ impl ElephcEvalContext {
     /// Returns the dynamic eval class metadata associated with one object identity.
     pub fn dynamic_object_class(&self, identity: u64) -> Option<&EvalClass> {
         if let Some(class_key) = self.dynamic_objects.get(&identity) {
-            return self.classes.get(class_key);
+            return self.classes.get(class_key).map(Arc::as_ref);
         }
         #[cfg(not(test))]
         {
@@ -449,7 +465,7 @@ impl ElephcEvalContext {
                 return None;
             }
             let class_key = owner.dynamic_objects.get(&identity)?;
-            self.classes.get(class_key)
+            self.classes.get(class_key).map(Arc::as_ref)
         }
         #[cfg(test)]
         {
@@ -481,7 +497,7 @@ impl ElephcEvalContext {
                 return None;
             }
             let class_key = owner.dynamic_objects.get(&identity)?;
-            owner.classes.get(class_key).map(|class| (owner, class))
+            owner.classes.get(class_key).map(|class| (owner, Arc::as_ref(class)))
         }
         #[cfg(test)]
         {

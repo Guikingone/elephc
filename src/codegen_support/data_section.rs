@@ -91,12 +91,26 @@ pub struct StaticLocalRecord {
 /// - `comm_entries`: common symbols as `(label, size)` pairs
 /// - `counter`: monotonically increasing integer for generating unique labels
 /// - `dedup`/`float_dedup`/`comm_dedup`: deduplication maps to avoid emitting duplicate constants
+/// The size of every collection in a `DataSection` at one moment, for `rollback_to`.
+#[derive(Clone, Copy)]
+pub struct DataSectionCheckpoint {
+    entries: usize,
+    float_entries: usize,
+    word_entries: usize,
+    comm_entries: usize,
+    static_locals: usize,
+    counter: usize,
+}
+
 pub struct DataSection {
     entries: Vec<(String, Vec<u8>)>,
     float_entries: Vec<(String, u64)>,
     word_entries: Vec<(String, Vec<DataWord>)>,
     comm_entries: Vec<(String, usize)>,
     counter: usize,
+    /// Distinguishes the generated labels of one shard from another's, so two sections built
+    /// independently can be merged without renaming anything. Empty for a whole-module section.
+    label_shard: String,
     dedup: HashMap<Vec<u8>, String>,
     float_dedup: HashMap<u64, String>,
     word_dedup: HashMap<Vec<DataWord>, String>,
@@ -114,12 +128,108 @@ impl DataSection {
             word_entries: Vec::new(),
             comm_entries: Vec::new(),
             counter: 0,
+            label_shard: String::new(),
             dedup: HashMap::new(),
             float_dedup: HashMap::new(),
             word_dedup: HashMap::new(),
             comm_dedup: HashMap::new(),
             static_locals: Vec::new(),
             static_local_dedup: HashMap::new(),
+        }
+    }
+
+    /// Creates a section whose generated labels carry `shard`, for a body emitted independently.
+    ///
+    /// The prefix is what makes two sections mergeable without renaming: `_str_s3_17` belongs to
+    /// shard 3 and cannot be `_str_s4_17`. Caller-named entries (`.comm`, named symbols, static
+    /// locals) are untouched — they are already unique by name, and `merge` dedups them.
+    pub fn for_shard(shard: usize) -> Self {
+        Self {
+            label_shard: format!("s{}_", shard),
+            ..Self::new()
+        }
+    }
+
+    /// Records the current size of every collection, for a possible rollback.
+    pub fn checkpoint(&self) -> DataSectionCheckpoint {
+        DataSectionCheckpoint {
+            entries: self.entries.len(),
+            float_entries: self.float_entries.len(),
+            word_entries: self.word_entries.len(),
+            comm_entries: self.comm_entries.len(),
+            static_locals: self.static_locals.len(),
+            counter: self.counter,
+        }
+    }
+
+    /// Discards everything recorded after `checkpoint`.
+    ///
+    /// Needed because a data entry can REFERENCE a text label — a callable descriptor points at
+    /// the body that implements it — so text and data have to be discarded together or the
+    /// assembler is handed a reference with no definition.
+    ///
+    /// Each dedup map is unwound from the entries being removed rather than by scanning what
+    /// survives: every map is keyed by something the removed entry still carries.
+    pub fn rollback_to(&mut self, checkpoint: DataSectionCheckpoint) {
+        for (label, bytes) in self.entries.drain(checkpoint.entries.min(self.entries.len())..) {
+            // A named symbol was never interned by bytes, so this is a no-op for those.
+            if self.dedup.get(&bytes).is_some_and(|existing| existing == &label) {
+                self.dedup.remove(&bytes);
+            }
+        }
+        for (_, bits) in self
+            .float_entries
+            .drain(checkpoint.float_entries.min(self.float_entries.len())..)
+        {
+            self.float_dedup.remove(&bits);
+        }
+        for (_, words) in self
+            .word_entries
+            .drain(checkpoint.word_entries.min(self.word_entries.len())..)
+        {
+            self.word_dedup.remove(&words);
+        }
+        for (label, _) in self
+            .comm_entries
+            .drain(checkpoint.comm_entries.min(self.comm_entries.len())..)
+        {
+            self.comm_dedup.remove(&label);
+        }
+        for record in self
+            .static_locals
+            .drain(checkpoint.static_locals.min(self.static_locals.len())..)
+        {
+            self.static_local_dedup.remove(&record.symbol);
+        }
+        self.counter = checkpoint.counter;
+    }
+
+    /// Folds `other` into this section, keeping this section's entries first.
+    ///
+    /// Generated labels cannot collide when the two sections came from different shards, so
+    /// those entries are appended as they are — including duplicate blobs, because each shard's
+    /// labels are already baked into the assembly it emitted and repointing them would mean
+    /// rewriting that text. Everything keyed by a caller-chosen name is deduplicated instead:
+    /// two shards declaring the same `.comm`, the same named symbol or the same function static
+    /// is a duplicate DEFINITION, and the first one wins.
+    pub fn merge(&mut self, other: Self) {
+        for (label, bytes) in other.entries {
+            if self.entries.iter().any(|(existing, _)| existing == &label) {
+                continue;
+            }
+            self.entries.push((label, bytes));
+        }
+        self.float_entries.extend(other.float_entries);
+        self.word_entries.extend(other.word_entries);
+        for (label, size) in other.comm_entries {
+            if self.comm_dedup.contains_key(&label) {
+                continue;
+            }
+            self.comm_dedup.insert(label.clone(), label.clone());
+            self.comm_entries.push((label, size));
+        }
+        for record in other.static_locals {
+            self.record_static_local(record);
         }
     }
 
@@ -149,7 +259,7 @@ impl DataSection {
         if let Some(label) = self.float_dedup.get(&bits) {
             return label.clone();
         }
-        let label = format!("_float_{}", self.counter);
+        let label = format!("_float_{}{}", self.label_shard, self.counter);
         self.counter += 1;
         self.float_dedup.insert(bits, label.clone());
         self.float_entries.push((label.clone(), bits));
@@ -163,7 +273,7 @@ impl DataSection {
             return (label.clone(), bytes.len());
         }
 
-        let label = format!("_str_{}", self.counter);
+        let label = format!("_str_{}{}", self.label_shard, self.counter);
         self.counter += 1;
         let owned = bytes.to_vec();
         self.dedup.insert(owned.clone(), label.clone());
@@ -203,7 +313,7 @@ impl DataSection {
         if let Some(label) = self.word_dedup.get(&words) {
             return label.clone();
         }
-        let label = format!("_data_{}", self.counter);
+        let label = format!("_data_{}{}", self.label_shard, self.counter);
         self.counter += 1;
         self.word_dedup.insert(words.clone(), label.clone());
         self.word_entries.push((label.clone(), words));
@@ -267,7 +377,7 @@ impl DataSection {
 
 #[cfg(test)]
 mod tests {
-    use super::{comm_directive_aligned, DataSection};
+    use super::{comm_directive_aligned, DataSection, DataWord};
     use crate::codegen_support::platform::{Arch, Platform, Target};
 
     /// A Mach-O target, whose assembler reads `.comm`'s alignment operand as `log2(bytes)`.
@@ -352,5 +462,50 @@ mod tests {
             .contains(".comm _heap_buf, 1024, 16\n"));
         assert!(comm_directive_aligned("_heap_buf", 1024, linux(Arch::X86_64), 16)
             .contains(".comm _heap_buf, 1024, 16\n"));
+    }
+
+    /// Verifies two shards generate labels that cannot collide, so their sections can be merged
+    /// without repointing the assembly each already emitted.
+    #[test]
+    fn test_shards_generate_labels_that_cannot_collide() {
+        let mut first = DataSection::for_shard(0);
+        let mut second = DataSection::for_shard(1);
+        let (first_label, _) = first.add_string(b"same bytes");
+        let (second_label, _) = second.add_string(b"same bytes");
+        assert_ne!(first_label, second_label);
+        assert_eq!(first_label, "_str_s0_0");
+        assert_eq!(second_label, "_str_s1_0");
+        assert_eq!(first.add_float(1.5), "_float_s0_1");
+        assert_eq!(second.add_words(vec![DataWord::U64(7)]), "_data_s1_1");
+    }
+
+    /// Verifies a whole-module section still emits the labels it emits today: the shard prefix
+    /// is empty unless a caller asks for one.
+    #[test]
+    fn test_an_unsharded_section_keeps_its_plain_labels() {
+        let mut data = DataSection::new();
+        assert_eq!(data.add_string(b"x").0, "_str_0");
+        assert_eq!(data.add_float(2.5), "_float_1");
+    }
+
+    /// Verifies merge keeps both shards' generated entries — including two copies of the same
+    /// blob, which is the deliberate cost of not rewriting emitted assembly — while collapsing
+    /// everything named by the caller.
+    #[test]
+    fn test_merge_keeps_generated_entries_and_collapses_named_ones() {
+        let mut first = DataSection::for_shard(0);
+        let mut second = DataSection::for_shard(1);
+        first.add_string(b"shared blob");
+        second.add_string(b"shared blob");
+        first.add_comm("_request_slot".to_string(), 8);
+        second.add_comm("_request_slot".to_string(), 8);
+        second.add_comm("_second_only".to_string(), 16);
+
+        first.merge(second);
+        let emitted = first.emit(macos());
+        assert_eq!(emitted.matches("shared blob").count(), 2);
+        assert_eq!(emitted.matches(".comm _request_slot").count(), 1);
+        assert!(emitted.contains(".comm _second_only"));
+        assert!(first.has_comm("_second_only"));
     }
 }

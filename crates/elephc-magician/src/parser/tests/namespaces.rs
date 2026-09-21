@@ -86,7 +86,7 @@ return Box;"#,
     assert_eq!(
         program.statements(),
         &[
-            EvalStmt::ClassDecl(EvalClass::new("Eval\\Block\\Box", Vec::new(), Vec::new())),
+            EvalStmt::class_decl(EvalClass::new("Eval\\Block\\Box", Vec::new(), Vec::new())),
             EvalStmt::Return(Some(EvalExpr::NewObject {
                 class_name: "Eval\\Block\\Box".to_string(),
                 args: Vec::new(),
@@ -132,7 +132,7 @@ class Child extends BaseAlias implements Iface, \Shared\Root {}"#,
     .expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ClassDecl(EvalClass::with_relations(
+        &[EvalStmt::class_decl(EvalClass::with_relations(
             "Eval\\UseNs\\Child",
             Some("Lib\\Base".to_string()),
             vec![

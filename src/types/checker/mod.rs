@@ -26,7 +26,7 @@ mod driver;
 mod extern_decl;
 mod functions;
 mod inference;
-mod loop_storage;
+pub(crate) mod loop_storage;
 mod method_pass;
 mod mixed_storage_scan;
 mod ref_param_widening;
@@ -114,6 +114,9 @@ pub(crate) struct Checker {
     /// widen the parameter to `Mixed` (so e.g. a parameter called with both an int
     /// and a string is `Mixed`, not collapsed to one type).
     pub param_specialization_seen: HashSet<(String, usize)>,
+    /// `(class, method key, is_static, parameter index)` for every undeclared parameter the LAST
+    /// method pass bound as `mixed` because no call site refined its `int` inference seed.
+    pub unspecialized_seed_params: HashSet<(String, String, bool, usize)>,
     /// Tracks callable signatures inferred for user-function callable returns.
     pub callable_return_sigs: HashMap<String, FunctionSig>,
     /// Tracks callable element signatures inferred for user-function array returns.
@@ -289,6 +292,13 @@ pub(crate) struct Checker {
     pub finally_break_continue_bases: Vec<usize>,
     /// Stable function-like scope key used to disambiguate identical loop spans.
     pub current_loop_storage_scope: String,
+    /// `(scope, receiver key, method key)` triples a `method_exists()` call has tested in a body.
+    ///
+    /// A body that asks whether a method is there has declared that it does not know, so a call
+    /// the closed world cannot resolve is admitted and left to fault at run time the way PHP does
+    /// — see `infer_lenient_subtype_method_call`. Keyed by scope so one body's uncertainty never
+    /// admits another's typo.
+    pub method_exists_guards: std::collections::HashSet<(String, String, String)>,
     /// Explicit local type declarations keyed by function-like scope and variable name.
     /// Ordinary PHP locals may change type after any assignment; only this extension syntax
     /// keeps a declaration contract across later writes.
@@ -390,6 +400,18 @@ pub(crate) struct Checker {
     /// The KILL keeps consulting the full set: abandoning a slot strands a reference that
     /// escaped through the callee, which a lend cannot be proven not to do.
     pub ref_bound_locals: HashSet<String>,
+    /// Names ref-bound by a `use (&$x)` capture whose closure body WRITES them.
+    ///
+    /// A subset of [`Checker::ref_bound_locals`], tracked separately because lowering treats it
+    /// differently: `expr::closures` sets such a capture's cell to `Mixed` on the spot, since a
+    /// PHP reference has no type and the cell must hold whatever the closure stores through it.
+    /// The slot is therefore already boxed, and a straight-line retype of the name has nothing
+    /// left to break — which is why [`Checker::local_binding_is_widenable`] admits it.
+    ///
+    /// Names this does NOT contain: the recursive self-binding `$f = function () use (&$f) {…}`,
+    /// whose capture lowering gives the backing cell's own representation instead of `Mixed`, and
+    /// any name a `=&` or a by-reference `foreach` also binds — those sites remove it.
+    pub by_ref_capture_boxed_locals: HashSet<String>,
     /// Names declared `static` in the current body. Their storage outlives the call, so the
     /// binding is never killable.
     pub static_local_names: HashSet<String>,
@@ -528,6 +550,7 @@ pub(crate) struct SavedLocalBindingScope {
     binding_depth: HashMap<String, u32>,
     ref_aliased: HashSet<String>,
     ref_bound: HashSet<String>,
+    by_ref_capture_boxed: HashSet<String>,
     statics: HashSet<String>,
     typed: HashSet<String>,
     mixed_storage: HashSet<String>,
@@ -677,7 +700,8 @@ impl Checker {
         !self.name_is_seeded_program_storage(name)
             && !self.top_level_binding_is_program_global(name)
             && !self.active_ref_params.contains(name)
-            && !self.ref_bound_locals.contains(name)
+            && (!self.ref_bound_locals.contains(name)
+                || self.by_ref_capture_boxed_locals.contains(name))
             && !self.active_globals.contains(name)
             && !self.static_local_names.contains(name)
     }
@@ -755,6 +779,7 @@ impl Checker {
             binding_depth: std::mem::take(&mut self.local_binding_depth),
             ref_aliased: std::mem::take(&mut self.ref_aliased_locals),
             ref_bound: std::mem::take(&mut self.ref_bound_locals),
+            by_ref_capture_boxed: std::mem::take(&mut self.by_ref_capture_boxed_locals),
             statics: std::mem::take(&mut self.static_local_names),
             typed: std::mem::take(&mut self.typed_local_names),
             // The mixed-storage marking describes ONE frame: a name boxed in the caller says
@@ -785,6 +810,7 @@ impl Checker {
         self.local_binding_depth = saved.binding_depth;
         self.ref_aliased_locals = saved.ref_aliased;
         self.ref_bound_locals = saved.ref_bound;
+        self.by_ref_capture_boxed_locals = saved.by_ref_capture_boxed;
         self.static_local_names = saved.statics;
         self.typed_local_names = saved.typed;
         self.mixed_storage_locals = saved.mixed_storage;
@@ -1279,5 +1305,42 @@ mod throw_access_site_tests {
             readonly_violation(Span::dummy()),
         );
         assert!(sites.is_empty());
+    }
+}
+
+/// The type PHP's `$matches` destination receives, for `preg_match` and `preg_match_all`.
+///
+/// ONE authority for the shape, read by the checker (to type the destination in the environment)
+/// and by EIR lowering (to WIDEN the destination local's frame storage). Deciding it twice is how
+/// an indexed destination ends up holding a hash, which reads back renumbered.
+pub(crate) fn regex_matches_destination_type(
+    builtin_name: &str,
+    args: &[crate::parser::ast::Expr],
+) -> PhpType {
+    // `preg_match_all` fills its outer container with BOXED cells -- one per column in pattern
+    // order, one per row in set order -- so the element type is Mixed whatever the pattern looks
+    // like. Typing the no-flags form as `array<array<string>>` described a nesting the runtime
+    // never builds.
+    let capture_type = PhpType::Mixed;
+    let assoc = PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    };
+    if !crate::types::checker::inference::expr::effects::pattern_declares_named_capture_group(
+        args.first(),
+    ) {
+        return PhpType::Array(Box::new(capture_type));
+    }
+    if builtin_name.eq_ignore_ascii_case("preg_match") {
+        return assoc;
+    }
+    match crate::types::checker::inference::expr::effects::preg_match_all_uses_pattern_order(
+        args.get(3),
+    ) {
+        Some(true) => assoc,
+        Some(false) => PhpType::Array(Box::new(capture_type)),
+        // Either storage can arrive, and stamping a hash into an indexed destination reads it
+        // back as a renumbered list, so stay gradual and let `store_matches_array` classify it.
+        None => PhpType::Mixed,
     }
 }

@@ -36,7 +36,14 @@ pub(super) fn lower_nullsafe_method_call(
     if value_is_definitely_null(ctx, object.value) {
         return lower_boxed_null(ctx, expr);
     }
-    let Some((_, true)) = singular_object_class(&object_ty) else {
+    // `$f?->__invoke()` over a `?\Closure` is the same null guard around the same closure call,
+    // and a callable is not an object class, so `singular_object_class` cannot see it. Symfony's
+    // `TraceableAdapter` writes `$this->disabled?->__invoke()` on every operation it traces.
+    let invokes_a_nullable_callable = php_symbol_key(method) == "__invoke"
+        && callable_receiver_nullability(&object_ty) == Some(true);
+    let guards_null = invokes_a_nullable_callable
+        || matches!(singular_object_class(&object_ty), Some((_, true)));
+    if !guards_null {
         return lower_method_call_with_receiver(
             ctx,
             object,
@@ -45,14 +52,14 @@ pub(super) fn lower_nullsafe_method_call(
             Op::NullsafeMethodCall,
             expr,
         );
+    }
+    let result_type = if invokes_a_nullable_callable {
+        // The closure's own return type is not recoverable from the receiver's `callable`, and
+        // the guard adds null on the other arm, so the merge temp holds a boxed value.
+        PhpType::Mixed
+    } else {
+        method_call_result_type(ctx, object.value, method, Op::NullsafeMethodCall, expr)
     };
-    let result_type = method_call_result_type(
-        ctx,
-        object.value,
-        method,
-        Op::NullsafeMethodCall,
-        expr,
-    );
     let temp_name = ctx.declare_hidden_temp(result_type.clone());
     let null_block = ctx.builder.create_named_block("nullsafe.method.null", Vec::new());
     let call_block = ctx.builder.create_named_block("nullsafe.method.call", Vec::new());
@@ -84,19 +91,93 @@ pub(super) fn lower_nullsafe_method_call(
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(call_block);
-    let call = lower_method_call_with_receiver(
-        ctx,
-        object,
-        method,
-        args,
-        Op::NullsafeMethodCall,
-        expr,
-    );
+    let call = if invokes_a_nullable_callable {
+        lower_expr_call_from_value(ctx, object, args, expr)
+    } else {
+        lower_method_call_with_receiver(ctx, object, method, args, Op::NullsafeMethodCall, expr)
+    };
     store_value_into_temp(ctx, &temp_name, result_type.clone(), call, expr.span);
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
     ctx.load_local(&temp_name, Some(expr.span))
+}
+
+/// Fills in omitted trailing parameters when one of them is BY REFERENCE.
+///
+/// PHP allows `function f($a, array &$out = null)` and a caller that passes only `$a`: the callee
+/// writes through `&$out` and the write goes nowhere the caller can see. elephc needs somewhere
+/// for it to go — a by-reference parameter is a cell address, and the default-argument path
+/// materializes a VALUE, which left the call one operand short of the callee's ABI.
+///
+/// Each missing position gets a synthetic local seeded with that parameter's default, passed
+/// positionally, so the ordinary by-reference machinery (`prepare_ref_place_args` and the
+/// write-back after it) applies with no special case. `None` when nothing needs padding, which is
+/// every call that supplies all its by-reference arguments.
+///
+/// Symfony's `ResolveEnvPlaceholdersPass::processValue` calls
+/// `ContainerBuilder::resolveEnvPlaceholders($value, true)` past `array &$usedEnvs = null`.
+pub(super) fn pad_omitted_by_ref_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    args: &[Expr],
+) -> Option<Vec<Expr>> {
+    if crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg) {
+        return None;
+    }
+    let fill_through = sig
+        .ref_params
+        .iter()
+        .enumerate()
+        .filter(|(index, by_ref)| **by_ref && *index >= args.len())
+        .map(|(index, _)| index)
+        .next_back()?;
+    // Only a parameter this call could legally omit is filled: anything else is an arity error the
+    // checker already reports, and inventing a place for it would hide that.
+    let mut padded = args.to_vec();
+    for index in args.len()..=fill_through {
+        let (_, param_ty) = sig.params.get(index)?;
+        let default = sig.defaults.get(index)?.clone();
+        if !sig.ref_params.get(index).copied().unwrap_or(false) {
+            padded.push(default?);
+            continue;
+        }
+        let value_type = normalize_value_php_type(param_ty.codegen_repr());
+        let temp = ctx.declare_synthetic_php_local(value_type.clone());
+        let span = args.last().map(|arg| arg.span).unwrap_or_else(Span::dummy);
+        let seed = match default {
+            Some(default) => lower_expr(ctx, &default),
+            None => lower_null(ctx, &Expr::new(ExprKind::Null, span)),
+        };
+        ctx.store_local(&temp, seed, value_type, Some(span));
+        padded.push(Expr::new(ExprKind::Variable(temp), span));
+    }
+    Some(padded)
+}
+
+/// Returns whether a receiver is a callable, and whether null is among its values.
+///
+/// `$f->__invoke(...)` and `$f?->__invoke(...)` are the closure call written the long way, and a
+/// callable is not a class — `singular_object_class` necessarily says `None` here, which left
+/// every such call without a lowering at all. `?\Closure` is the shape Symfony's
+/// `TraceableAdapter` uses on each traced operation.
+pub(super) fn callable_receiver_nullability(php_type: &PhpType) -> Option<bool> {
+    match php_type {
+        PhpType::Callable => Some(false),
+        PhpType::Union(members) => {
+            let mut callable = false;
+            let mut nullable = false;
+            for member in members {
+                match member {
+                    PhpType::Callable => callable = true,
+                    PhpType::Void => nullable = true,
+                    _ => return None,
+                }
+            }
+            callable.then_some(nullable)
+        }
+        _ => None,
+    }
 }
 
 /// Lowers a method call using an already evaluated receiver value.
@@ -135,7 +216,19 @@ pub(super) fn lower_method_call_with_receiver(
         };
     let result_type = method_call_result_type(ctx, object.value, dispatch_method, op, expr);
     let mut operands = vec![object.value];
-    let sig = method_signature(ctx, object.value, dispatch_method);
+    let sig = method_signature_for_call(ctx, object.value, dispatch_method, args.len());
+    // An omitted BY-REFERENCE parameter still needs a cell to be written through.
+    let padded_args;
+    let args = match sig
+        .as_ref()
+        .and_then(|signature| pad_omitted_by_ref_args(ctx, signature, args))
+    {
+        Some(padded) => {
+            padded_args = padded;
+            padded_args.as_slice()
+        }
+        None => args,
+    };
     promote_eval_bridge_method_argument_locals(ctx, object.value, sig.as_ref(), args);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
     let prepared = sig

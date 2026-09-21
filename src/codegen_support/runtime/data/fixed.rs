@@ -38,6 +38,14 @@ use crate::types::checker::builtins::{
     all_supported_builtin_function_names, supported_builtin_function_names_for_profile,
 };
 
+/// Bytes of `_rt_diag_buf`, the accumulator for one engine diagnostic.
+///
+/// Sized for the longest diagnostic the runtime renders — the `fopen()`/`file_get_contents()`
+/// failure lines carry no path today, and the undefined-key warning carries a key — with room
+/// to spare; a longer one is TRUNCATED at the boundary rather than overrunning, and the
+/// truncated bytes are what both the handler and the fallback write see.
+pub(crate) const RT_DIAG_BUF_BYTES: usize = 4096;
+
 /// Emit the fixed runtime `.data` section as assembly text.
 /// Cached across compilations because it contains only target-independent
 /// runtime data: heap globals, concat buffers, exception/fiber state,
@@ -398,6 +406,31 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // request on demand instead of every request or none.
     out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_request_fn"), 8, target));
     out.push_str(&comm_directive("_rt_diag_suppression", 8, target));
+    // One engine diagnostic, accumulated as rendered bytes so it can be offered WHOLE to a
+    // `set_error_handler()` callback. Raise sites deliver a diagnostic in fragments — the
+    // undefined-array-key warning is prefix, key, newline, three `__rt_diag_warning` calls —
+    // and a handler is owed the message, not a fragment of it. `__rt_diag_warning` appends here
+    // and flushes on the terminating newline; every diagnostic the runtime renders ends in one.
+    // Only reached when `RuntimeFeatures.diag_user_handler` is set, so a program without the
+    // dispatch prelude never allocates the buffer and never leaves the original write(2) path.
+    out.push_str(&comm_directive("_rt_diag_buf", RT_DIAG_BUF_BYTES, target));
+    out.push_str(&comm_directive("_rt_diag_buf_len", 8, target));
+    // Non-zero while the PHP dispatch function is running. A diagnostic raised INSIDE it (the
+    // handler, or the string work around it) must not re-enter buffering and rewrite the message
+    // being flushed; it takes the original write(2) path instead, which is also what php does
+    // for a diagnostic raised inside an error handler.
+    out.push_str(&comm_directive("_rt_diag_dispatching", 8, target));
+    // Set by `__rt_diag_message` for a caller that delivers a WHOLE diagnostic in one call and
+    // does not terminate it with a newline — the interpreter's warnings, which render
+    // "Undefined variable $x" with neither severity word nor newline. Without it the newline
+    // rule would hold such a message in the accumulator forever.
+    out.push_str(&comm_directive("_rt_diag_complete", 8, target));
+    // The raise site's source location, consumed AND cleared by the next flush. Set only by the
+    // lowered sites that know it, so a diagnostic raised from inside a runtime helper reports no
+    // location rather than the last one some other site happened to leave behind.
+    out.push_str(&comm_directive("_rt_diag_file_ptr", 8, target));
+    out.push_str(&comm_directive("_rt_diag_file_len", 8, target));
+    out.push_str(&comm_directive("_rt_diag_line", 8, target));
     // elephc_web_capture: per-request output-capture mode flag read by
     // __rt_stdout_write. Zero (the default) routes echo output to the plain
     // write(1, …) syscall; non-zero (set only by the --web bridge) routes it to
@@ -473,6 +506,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         target,
     ));
     out.push_str(&comm_directive("_gc_collecting", 8, target));
+    out.push_str(&comm_directive("_gc_safepoint_count", 8, target));
     out.push_str(&comm_directive("_gc_release_suppressed", 8, target));
     out.push_str(&comm_directive("_json_last_error", 8, target));
     out.push_str(&comm_directive("_json_active_flags", 8, target));
@@ -515,6 +549,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _heap_stats_nl\n_heap_stats_nl:\n    .ascii \"\\n\"\n");
     out.push_str(".globl _heap_dbg_bad_refcount_msg\n_heap_dbg_bad_refcount_msg:\n    .ascii \"Fatal error: heap debug detected bad refcount\\n\"\n");
     out.push_str(".globl _heap_dbg_double_free_msg\n_heap_dbg_double_free_msg:\n    .ascii \"Fatal error: heap debug detected double free\\n\"\n");
+    out.push_str(".globl _heap_dbg_live_free_msg\n_heap_dbg_live_free_msg:\n    .ascii \"Fatal error: heap debug detected free of a still-referenced block\\n\"\n");
+    out.push_str(".globl _heap_dbg_chain_msg\n_heap_dbg_chain_msg:\n    .ascii \"Fatal error: heap debug detected a hash whose insertion order left the table\\n\"\n");
+    out.push_str(".globl _heap_dbg_overlap_msg\n_heap_dbg_overlap_msg:\n    .ascii \"Fatal error: heap debug detected a hash clone overlapping its source\\n\"\n");
     out.push_str(".globl _heap_dbg_free_list_msg\n_heap_dbg_free_list_msg:\n    .ascii \"Fatal error: heap debug detected free-list corruption\\n\"\n");
     out.push_str(&format!(
         ".globl _stack_err_msg\n_stack_err_msg:\n    .ascii {:?}\n",

@@ -39,11 +39,27 @@ pub fn prune_unreachable_declarations(
     check_result: &mut CheckResult,
     options: PruneOptions<'_>,
 ) -> Program {
+    // This pass is 14.3% of a Symfony `--web` build (45.10 s of 314.57 s), which is as much as
+    // type checking, and it is SIX steps. `ELEPHC_DECL_REACH_TIMES=1` says which one.
+    let trace = std::env::var("ELEPHC_DECL_REACH_TIMES").is_ok();
+    let mut mark = std::time::Instant::now();
+    let mut step = |label: &str, mark: &mut std::time::Instant| {
+        if trace {
+            eprintln!("[elephc-decl-reach] {label}={:.2}s", mark.elapsed().as_secs_f64());
+        }
+        *mark = std::time::Instant::now();
+    };
+
     let original_builtin_libraries = usage::scan_program(&program).required_libraries;
+    step("scan_before", &mut mark);
     let reachability = graph::compute(&program, check_result, &options);
+    step("graph_compute", &mut mark);
     let declaration_index = graph::DeclarationIndex::build(&program, check_result);
+    step("declaration_index", &mut mark);
     let program = prune::program(program, &reachability);
+    step("prune", &mut mark);
     let remaining_builtin_libraries = usage::scan_program(&program).required_libraries;
+    step("scan_after", &mut mark);
     reconcile::check_result(
         check_result,
         &reachability,
@@ -51,6 +67,7 @@ pub fn prune_unreachable_declarations(
         &original_builtin_libraries,
         &remaining_builtin_libraries,
     );
+    step("reconcile", &mut mark);
     program
 }
 

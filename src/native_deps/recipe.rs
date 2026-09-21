@@ -54,7 +54,7 @@ enum BuiltInRecipe {
 /// Resolves a package and immutable recipe revision to its built-in executor.
 fn built_in_recipe(package: &str, revision: u32) -> Option<BuiltInRecipe> {
     match (package, revision) {
-        ("pcre2", 6) => Some(BuiltInRecipe::Pcre2),
+        ("pcre2", 7) => Some(BuiltInRecipe::Pcre2),
         ("zlib", 1) => Some(BuiltInRecipe::Zlib),
         ("openssl", 1) => Some(BuiltInRecipe::Openssl),
         ("nghttp2", 2) => Some(BuiltInRecipe::Nghttp2),
@@ -118,13 +118,15 @@ mod tests {
     /// cache key is `(package, version, recipe_revision, source_sha256, target)`, which does NOT
     /// hash the embedded shim source, so reusing an older revision's identity after editing
     /// `pcre2_shim.c` silently links the STALE object: no error, just a shim that still lacks
-    /// whatever the edit added.
+    /// whatever the edit added. Revision 7 added `elephc_pcre2_v1_last_mark`, which is what
+    /// `$matches['MARK']` is built from and what Symfony's dumped dynamic-route matcher reads.
     #[test]
     fn previous_pcre2_recipe_revisions_are_not_dispatched() {
         assert!(built_in_recipe("pcre2", 2).is_none());
         assert!(built_in_recipe("pcre2", 3).is_none());
         assert!(built_in_recipe("pcre2", 4).is_none());
         assert!(built_in_recipe("pcre2", 5).is_none());
+        assert!(built_in_recipe("pcre2", 6).is_none());
     }
 
     /// Verifies the dispatcher recognizes curl and every library it links by exact catalog

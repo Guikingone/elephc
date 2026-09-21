@@ -111,6 +111,24 @@ pub extern "C" fn __elephc_eval_include_request_reset() {
         crate::context::reset_global_eval_autoload_contexts();
         #[cfg(not(test))]
         crate::context::reset_global_eval_classes();
+        // The null-handle context lives for the PROCESS, not the request, so its declarations
+        // survive a boundary that just emptied the global registry. Clearing them is what lets
+        // the next request re-declare and re-publish; see `forget_declared_class_likes`.
+        #[cfg(not(test))]
+        crate::ffi::context::forget_shared_null_handle_declarations();
+        // Both registries are keyed by an address the arena wipe invalidates: an object identity
+        // for the first, a context and a retained callable for the second. An entry that survives
+        // the boundary is reachable from the generated runtime on the next request and answers
+        // for storage that no longer belongs to it.
+        #[cfg(not(test))]
+        crate::ffi::dynamic_destructors::reset_dynamic_object_contexts();
+        #[cfg(not(test))]
+        crate::ffi::ob_handlers::reset_ob_handlers();
+        // Last, because the two owner registries above finalize contexts of their own and this
+        // frees whatever they left: a context the live-object counters refuse to release inside a
+        // request has nothing left to protect once the arena is gone.
+        #[cfg(not(test))]
+        crate::ffi::context::reset_retained_eval_contexts();
         // Context cleanup may execute PHP destructors, which must still observe
         // the current request's inclusion state until cleanup has completed.
         crate::context::reset_global_eval_included_files();
@@ -136,7 +154,7 @@ pub unsafe extern "C" fn __elephc_eval_include(
         execute_include_inner(ctx, scope, path, required != 0, once != 0, out)
     })
     .unwrap_or_else(|_| {
-        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        if crate::eval_trace::enabled() {
             eprintln!("[elephc-eval-trace] phase=include_panic status=RuntimeFatal");
         }
         EvalStatus::RuntimeFatal.code()
@@ -227,7 +245,7 @@ unsafe fn execute_materialized_include(
     context.pop_call_frame();
     match outcome {
         Ok(outcome) => {
-            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            if crate::eval_trace::enabled() {
                 let call_site = context.call_site();
                 eprintln!(
                     "[elephc-eval-trace] phase=include_ok file={:?} line={}",
@@ -237,7 +255,7 @@ unsafe fn execute_materialized_include(
             write_outcome(outcome, out).code()
         }
         Err(status) => {
-            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            if crate::eval_trace::enabled() {
                 let call_site = context.call_site();
                 eprintln!(
                     "[elephc-eval-trace] phase=include_error status={status:?} file={:?} line={}",

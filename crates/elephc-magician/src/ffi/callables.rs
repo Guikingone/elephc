@@ -90,7 +90,7 @@ pub unsafe extern "C" fn __elephc_eval_register_spl_autoload(
         if context.abi_version() != ABI_VERSION || callback.is_null() {
             return 0;
         }
-        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        if crate::eval_trace::enabled() {
             eprintln!("[elephc-eval-trace] phase=aot_autoload_register stage=entered callback={callback:p} prepend={prepend}");
         }
         let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
@@ -100,7 +100,7 @@ pub unsafe extern "C" fn __elephc_eval_register_spl_autoload(
             context,
             &mut values,
         );
-        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        if crate::eval_trace::enabled() {
             eprintln!("[elephc-eval-trace] phase=aot_autoload_register stage=registered success={}", result.is_ok());
         }
         if created_context {
@@ -173,20 +173,22 @@ unsafe fn eval_callable_owner_context_inner(
         return std::ptr::null_mut();
     }
     let callback = RuntimeCellHandle::from_raw(callback);
-    let mut values = ElephcRuntimeOps::with_context(std::ptr::null());
-    let Ok(identity) = values.object_identity(callback) else {
-        return std::ptr::null_mut();
-    };
-    let Some(context) = crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)
-    else {
+    // Every eval-owned callable SHAPE, not just a Closure object. `[$object, 'method']` is a
+    // callable in PHP exactly as much as a Closure is, and when the object's class was declared
+    // at runtime the generated candidate tables cannot name it — the native lookup misses and
+    // this is the only resolver left. Refusing an array here turned Symfony's
+    // `EventDispatcher::optimizeListeners`, which builds `$listener(...)` out of
+    // `[$service, 'onKernelRequest']`, into a process-killing "mixed value is not callable".
+    //
+    // Both callers re-validate what comes back with `__elephc_eval_is_callable`, so widening the
+    // lookup cannot accept a value the interpreter would refuse to call.
+    let Some(context) = eval_callable_owner_context(callback) else {
         return std::ptr::null_mut();
     };
     let Some(context_ref) = (unsafe { context.as_ref() }) else {
         return std::ptr::null_mut();
     };
-    if context_ref.abi_version() != ABI_VERSION
-        || context_ref.closure_object_target(identity).is_none()
-    {
+    if context_ref.abi_version() != ABI_VERSION {
         return std::ptr::null_mut();
     }
     context
@@ -318,10 +320,66 @@ fn eval_callable_owner_context(
 ) -> Option<*mut ElephcEvalContext> {
     let mut values = ElephcRuntimeOps::with_context(std::ptr::null());
     if let Ok(identity) = values.object_identity(callback) {
-        return crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity);
+        if let Some(context) =
+            crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)
+        {
+            return Some(context);
+        }
+        // Falls through ON PURPOSE. `object_identity` answers for a value that is not an object
+        // too, and returning here on the strength of that answer skipped the array probe below
+        // for every `[$object, 'method']` callable — the one shape this resolver exists for.
     }
-    let key = values.array_iter_key(callback, 0).ok()?;
-    let receiver = values.array_get(callback, key).ok()?;
-    let identity = values.object_identity(receiver).ok()?;
-    crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)
+    // Gated on the value ACTUALLY being an array. Reading an element of an object raises PHP's
+    // `Cannot use object of type X as array`, so probing unconditionally turned an invokable
+    // object handed to an AOT `callable` parameter into a fatal. `is_array_like` is the wrong
+    // gate here: it answers for anything eval can index, objects included.
+    const EVAL_TAG_ARRAY: u64 = 4;
+    const EVAL_TAG_ASSOC: u64 = 5;
+    if !matches!(
+        values.type_tag(callback),
+        Ok(EVAL_TAG_ARRAY) | Ok(EVAL_TAG_ASSOC)
+    ) {
+        return eval_declared_callable_name_context(callback, &mut values);
+    }
+    if let Ok(key) = values.array_iter_key(callback, 0) {
+        if let Ok(receiver) = values.array_get(callback, key) {
+            if let Ok(identity) = values.object_identity(receiver) {
+                if let Some(context) =
+                    crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)
+                {
+                    return Some(context);
+                }
+            }
+            if let Some(context) = eval_declared_callable_name_context(receiver, &mut values) {
+                return Some(context);
+            }
+        }
+    }
+    eval_declared_callable_name_context(callback, &mut values)
+}
+
+/// Resolves a callable named by a STRING — `'Svc::make'`, `'Svc'` in `['Svc', 'make']`, or a
+/// dynamically declared function name — to the context that can dispatch it.
+///
+/// A runtime-declared class has no single owning context the way an object does: every eval
+/// context mirrors the process-wide class registry. The shared process-lifetime context is that
+/// mirror, so it is the right dispatcher, and it outlives any request-scoped one.
+///
+/// A name that belongs to no runtime declaration answers `None` on purpose, which leaves compiled
+/// callables on their existing native path instead of routing them through the interpreter.
+#[cfg(not(test))]
+fn eval_declared_callable_name_context(
+    value: RuntimeCellHandle,
+    values: &mut ElephcRuntimeOps,
+) -> Option<*mut ElephcEvalContext> {
+    const EVAL_TAG_STRING: u64 = 1;
+    if values.type_tag(value).ok()? != EVAL_TAG_STRING {
+        return None;
+    }
+    let name = String::from_utf8(values.string_bytes(value).ok()?).ok()?;
+    let class_like = name.split_once("::").map_or(name.as_str(), |(class, _)| class);
+    if crate::context::global_eval_class_is_declared(class_like) {
+        return Some(crate::ffi::context::shared_null_handle_context() as *mut ElephcEvalContext);
+    }
+    crate::context::global_eval_function_owner_context(&name)
 }

@@ -15,7 +15,8 @@
 //!   EIR symbols and non-literal default property expressions until their runtime
 //!   paths land.
 
-use std::collections::HashSet;
+// Matches `SharedCodegenState`'s emitted-method sets, which this module borrows; see there.
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::codegen::platform::Arch;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;

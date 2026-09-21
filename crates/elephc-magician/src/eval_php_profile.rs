@@ -209,6 +209,32 @@ const EVAL_TOKEN_IDS: &[(&str, [i64; 7])] = &[
 thread_local! {
     /// The profile the binary embedding this bridge was compiled for.
     static EVAL_PHP_VERSION_ID: Cell<u32> = const { Cell::new(DEFAULT_EVAL_PHP_VERSION_ID) };
+
+    /// Whether the embedding binary was compiled `--web`, which decides `PHP_SAPI`.
+    static EVAL_WEB_SAPI: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Selects the SAPI eval reports on the current thread, mirroring the compile mode.
+///
+/// Generated code forwards `--web` through this exactly as it forwards the version profile.
+/// Without it a `--web` binary reported `cli-server` natively and `cli` from inside `eval()`,
+/// and Symfony's DUMPED container -- which is interpreted -- decides web-versus-console mode
+/// with `in_array(PHP_SAPI, ['cli', 'phpdbg', 'embed'], true)`. Reading `cli` there put a web
+/// request on the console path: the container wired `CliErrorRenderer`, whose `render()` writes
+/// through a stream it then failed to open, so every request after the first answered 500.
+pub(crate) fn set_eval_web_sapi(web: bool) {
+    EVAL_WEB_SAPI.with(|cell| cell.set(web));
+}
+
+/// Returns `PHP_SAPI` for the compile mode active on the current thread.
+///
+/// KEEP IN SYNC with `crate::web_prelude::sapi_name()` in the compiler.
+pub(crate) fn eval_php_sapi() -> &'static str {
+    if EVAL_WEB_SAPI.with(Cell::get) {
+        "cli-server"
+    } else {
+        "cli"
+    }
 }
 
 /// Selects the PHP profile eval reports on the current thread.

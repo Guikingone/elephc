@@ -49,7 +49,7 @@ impl Parser {
         let body = self.parse_class_body_members(is_readonly_class)?;
         let source_location = EvalSourceLocation::new(source_start_line, body.source_end_line);
         self.consume_semicolon();
-        Ok(vec![EvalStmt::ClassDecl(
+        Ok(vec![EvalStmt::class_decl(
             EvalClass::with_class_modifiers_traits_adaptations_and_constants(
                 name,
                 is_abstract,

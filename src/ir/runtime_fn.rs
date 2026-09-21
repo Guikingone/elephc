@@ -127,6 +127,12 @@ pub enum RuntimeFnId {
     ArraySearch,
     ArrayShift,
     ArraySlice,
+    /// INTERNAL, not a PHP builtin: materializes the source of a `...` spread.
+    ///
+    /// Passes an indexed array straight through and rebuilds the two elements of a
+    /// CALLABLE DESCRIPTOR (`[$object, 'method']` written as a `callable`), which the
+    /// plain unbox would read as array metadata.
+    MixedSpreadArray,
     ArraySplice,
     ArraySum,
     ArrayUdiff,
@@ -620,6 +626,7 @@ pub enum RuntimeFnId {
     Strstr,
     Strrchr,
     Substr,
+    SubstrCompare,
     SubstrCount,
     SubstrReplace,
     Trim,
@@ -731,6 +738,8 @@ impl RuntimeFnId {
     const fn lowering_owned_arity_bounds(self) -> Option<(usize, Option<usize>)> {
         match self {
             RuntimeFnId::ArrayPtrSeek => Some((3, Some(3))),
+            // Lowering-owned: injected by the spread narrowing, never written in PHP.
+            RuntimeFnId::MixedSpreadArray => Some((1, Some(1))),
             RuntimeFnId::ArrayPtrKey | RuntimeFnId::ArrayPtrValue => Some((2, Some(2))),
             _ => None,
         }
@@ -1137,6 +1146,7 @@ impl RuntimeFnId {
             // `range()` zero/negative/oversized `$step`, `round()` unknown rounding mode,
             // `strncmp()`/`strncasecmp()` negative compare length,
             // `strpos()`/`strrpos()`/`stripos()`/`strripos()` `$offset` outside the haystack,
+            // `substr_compare()` `$offset` past the haystack end or a negative `$length`,
             // `substr_count()` empty needle or out-of-subject offset/length,
             // `wordwrap()` empty break or zero cutting width, `min()`/`max()` over an
             // empty array, `parse_url()` unknown `$component` identifier), so they must not
@@ -1165,6 +1175,7 @@ impl RuntimeFnId {
             | RuntimeFnId::Strripos
             | RuntimeFnId::Strrpos
             | RuntimeFnId::Strpbrk
+            | RuntimeFnId::SubstrCompare
             | RuntimeFnId::SubstrCount
             | RuntimeFnId::BaseConvert
             | RuntimeFnId::ChunkSplit
@@ -1671,7 +1682,12 @@ impl RuntimeFnId {
             | RuntimeFnId::Unlink
             | RuntimeFnId::Strcspn
             | RuntimeFnId::Strspn => source.is_none(),
-            RuntimeFnId::Trim => source.is_none_or(|ty| matches!(ty, PhpType::Str)),
+            // A GRADUAL element is admitted for the same reason the string builtins admit one:
+            // `coerce_gradual_wrapper_operands` casts it to the declared parameter type before the
+            // lowering sees it, which is what php does at the call.
+            RuntimeFnId::Trim => source.is_none_or(|ty| {
+                matches!(ty, PhpType::Str | PhpType::Mixed | PhpType::Union(_))
+            }),
             _ => false,
         }
     }
@@ -2167,6 +2183,7 @@ impl RuntimeFnId {
             RuntimeFnId::ArraySearch => "array_search",
             RuntimeFnId::ArrayShift => "array_shift",
             RuntimeFnId::ArraySlice => "array_slice",
+            RuntimeFnId::MixedSpreadArray => "mixed_spread_array",
             RuntimeFnId::ArraySplice => "array_splice",
             RuntimeFnId::ArraySum => "array_sum",
             RuntimeFnId::ArrayUdiff => "array_udiff",
@@ -2608,6 +2625,7 @@ impl RuntimeFnId {
             RuntimeFnId::Strstr => "strstr",
             RuntimeFnId::Strrchr => "strrchr",
             RuntimeFnId::Substr => "substr",
+            RuntimeFnId::SubstrCompare => "substr_compare",
             RuntimeFnId::SubstrCount => "substr_count",
             RuntimeFnId::SubstrReplace => "substr_replace",
             RuntimeFnId::Trim => "trim",

@@ -100,6 +100,13 @@ fn compile_lfc_eval_project_and_run(
         // neither kind-specific destructor arm.
         popen_resource: false,
         directory_resource: false,
+        // The fixture names no error function, so the error-handling prelude is never injected
+        // and `__elephc_diag_render` is not among the surviving functions — which is exactly the
+        // condition `runtime_features::diag_user_handler` is derived from. `false` is also the
+        // only safe direction to guess here: the runtime emitted for `true` REFERS to that
+        // compiled symbol by name, so a runtime built ahead of a program that does not declare it
+        // fails to link, while the reverse merely leaves a declaration unused.
+        diag_user_handler: false,
     };
     let runtime_asm =
         elephc::codegen::generate_runtime_with_features(8_388_608, target(), runtime_features);

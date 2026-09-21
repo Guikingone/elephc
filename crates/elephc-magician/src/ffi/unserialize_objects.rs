@@ -85,7 +85,7 @@ unsafe fn unserialize_object_inner(
     };
     // Read BEFORE hydration and release: these two numbers separate "the interpreter built an
     // empty object" from "the decoder handed over a hash this side could not read".
-    let traced = std::env::var_os("ELEPHC_EVAL_TRACE").is_some().then(|| {
+    let traced = crate::eval_trace::enabled().then(|| {
         payload.map_or((u64::MAX, usize::MAX), |payload| {
             (
                 values.type_tag(payload).unwrap_or(u64::MAX),

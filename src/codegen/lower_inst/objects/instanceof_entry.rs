@@ -46,6 +46,26 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext
         emit_false(ctx);
         return store_if_result(ctx, inst);
     }
+    // A receiver whose STATIC class already satisfies the target answers from the declared type
+    // alone, with no metadata lookup and no bridge crossing. `PhpType::Object(name)` is an upper
+    // bound -- the value is `name` or a subclass -- and PHP's hierarchy only grows downward, so
+    // every value that can arrive satisfies the target too.
+    //
+    // This is what the eval bridge cannot improve on: an object an eval context created carries
+    // the generic wrapper as its native header, so the ordinary matcher would see `stdClass`, but
+    // the DECLARED type is still true of it. Deciding from the declaration is therefore both
+    // cheaper and more accurate than asking the bridge.
+    //
+    // The answer is `receiver != null`, not a constant `true`: PHP's `null instanceof X` is false,
+    // and a declared object type still reads null from an uninitialized slot.
+    //
+    // Measured on Symfony's `--web` request: `object_is_a` was 229 of 387 eval-bridge entries,
+    // the single largest remaining category, against targets like `Request`, `RequestStack` and
+    // `ContainerInterface` that the receiver's own declaration already answers.
+    if static_type_satisfies_instanceof(ctx, &value_ty, &class_name) {
+        emit_receiver_is_non_null(ctx, value)?;
+        return store_if_result(ctx, inst);
+    }
     if builtins::has_eval_context(ctx) {
         return builtins::lower_eval_object_is_a(ctx, inst, value, &class_name, false);
     }
@@ -74,24 +94,34 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext
     } else {
         None
     };
+    emit_native_instanceof(ctx, value, &value_ty, &class_name)?;
+    if let Some(done) = &eval_fallback_done {
+        abi::emit_jump(ctx.emitter, done);
+        ctx.emitter.label(done);
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Emits the ordinary class-id answer for `instanceof`, leaving it in the result register.
+///
+/// Lifted out of `lower_instanceof` so the eval-context path can reach it too: that path used to
+/// `return` straight into the bridge, which meant a function holding an eval context crossed the
+/// FFI boundary for EVERY `instanceof`, including ones over an ordinary compiled object.
+fn emit_native_instanceof(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    value_ty: &PhpType,
+    class_name: &str,
+) -> Result<()> {
     if class_name
         .trim_start_matches('\\')
         .eq_ignore_ascii_case("Closure")
     {
-        emit_closure_instanceof(ctx, value, &value_ty)?;
-        if let Some(done) = &eval_fallback_done {
-            abi::emit_jump(ctx.emitter, done);
-            ctx.emitter.label(done);
-        }
-        return store_if_result(ctx, inst);
+        return emit_closure_instanceof(ctx, value, value_ty);
     }
-    let Some((target_id, target_kind)) = classify_named_target(ctx, &class_name) else {
+    let Some((target_id, target_kind)) = classify_named_target(ctx, class_name) else {
         emit_false(ctx);
-        if let Some(done) = &eval_fallback_done {
-            abi::emit_jump(ctx.emitter, done);
-            ctx.emitter.label(done);
-        }
-        return store_if_result(ctx, inst);
+        return Ok(());
     };
     match value_ty {
         PhpType::Callable => {
@@ -117,11 +147,7 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext
         }
         _ => emit_false(ctx),
     }
-    if let Some(done) = &eval_fallback_done {
-        abi::emit_jump(ctx.emitter, done);
-        ctx.emitter.label(done);
-    }
-    store_if_result(ctx, inst)
+    Ok(())
 }
 
 /// Tests callable storage against PHP's built-in `Closure` class identity.
@@ -178,4 +204,59 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof_dynamic(
     emit_false(ctx);
     ctx.emitter.label(&done);
     store_if_result(ctx, inst)
+}
+
+/// Whether a receiver's statically known class already satisfies an `instanceof` target.
+///
+/// Answers only for an exact `PhpType::Object(name)` with a name the module knows. A bare
+/// `object`, a gradual value, or a class the closed world has never seen cannot prove anything,
+/// and the caller falls through to the runtime paths.
+fn static_type_satisfies_instanceof(
+    ctx: &FunctionContext<'_>,
+    value_ty: &PhpType,
+    target: &str,
+) -> bool {
+    let PhpType::Object(class_name) = value_ty else {
+        return false;
+    };
+    let class_name = class_name.trim_start_matches('\\');
+    let target = target.trim_start_matches('\\');
+    if class_name.is_empty() || target.is_empty() {
+        return false;
+    }
+    let target_key = php_symbol_key(target);
+    let mut current = Some(class_name);
+    while let Some(candidate) = current {
+        if php_symbol_key(candidate) == target_key {
+            return true;
+        }
+        let Some(info) = ctx.module.class_infos.get(candidate) else {
+            break;
+        };
+        current = info.parent.as_deref().map(|parent| parent.trim_start_matches('\\'));
+    }
+    crate::codegen::lower_inst::array_access_runtime::class_implements_interface(
+        ctx, class_name, target,
+    )
+}
+
+/// Materializes `receiver != null` as the `instanceof` result.
+///
+/// The receiver is a raw object pointer at this point, so the whole answer is one compare: PHP
+/// says false for null and, given the caller already proved the declared class satisfies the
+/// target, true for every other value that can arrive.
+fn emit_receiver_is_non_null(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    ctx.load_value_to_result(value)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #0");                               // is the receiver a live object pointer?
+            ctx.emitter.instruction("cset x0, ne");                              // null answers false, anything else true
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                            // is the receiver a live object pointer?
+            ctx.emitter.instruction("setne al");                                 // null answers false, anything else true
+            ctx.emitter.instruction("movzx rax, al");                            // widen the boolean byte into the result register
+        }
+    }
+    Ok(())
 }

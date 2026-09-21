@@ -17,6 +17,24 @@ pub(super) fn lower_static_method_call(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
+    // An argument the checker PROVED cannot bind. php decides this when the call runs, so the
+    // build stands and the call site throws php's own `TypeError` -- see
+    // `ThrowAccessKind::ArgumentType`.
+    if let Some(message) = ctx
+        .throw_access_sites
+        .get(&(ctx.loop_storage_scope.clone(), expr.span))
+        .and_then(|info| match &info.kind {
+            crate::types::ThrowAccessKind::ArgumentType { message } => Some(message.clone()),
+            _ => None,
+        })
+    {
+        return crate::ir_lower::stmt::lower_throw_access_class_expr(
+            ctx,
+            "TypeError",
+            &message,
+            expr.span,
+        );
+    }
     if matches!(receiver, StaticReceiver::Named(name) if name.trim_start_matches('\\') == "ReflectionReference")
         && php_symbol_key(method) == "fromarrayelement"
     {
@@ -41,7 +59,20 @@ pub(super) fn lower_static_method_call(
             if let Some(scope) = closure_bind_scope_class(ctx, args) {
                 ctx.current_class = Some(scope);
             }
+            // The bound `$this` is the TARGET's, never the enclosing class's. Set before the
+            // literal is lowered, because the capture's type is decided there; the matching
+            // checker rule is `closure_bind_property_receiver_type`, which answers the same two
+            // ways from the same two arguments.
+            match bound_this_capture(ctx, args) {
+                Some(BoundThis::Class(class_name)) => {
+                    ctx.set_bound_closure_this_class(class_name);
+                }
+                Some(BoundThis::Gradual) => ctx.set_bound_closure_this_gradual(),
+                None => {}
+            }
             let closure = lower_expr(ctx, &args[0]);
+            ctx.take_bound_closure_this_class();
+            ctx.take_bound_closure_this_gradual();
             ctx.current_class = saved_class;
             ctx.take_pending_static_callable_result();
             let new_this = match args.get(1) {
@@ -179,6 +210,40 @@ fn closure_bind_scope_class(
         },
         _ => instance_callable_object_class(ctx, scope),
     }
+}
+
+/// How a `Closure::bind` target types the closure's `$this` capture.
+pub(super) enum BoundThis {
+    /// The target's class is known, so the capture is that precise object type.
+    Class(String),
+    /// The target names no class this build has, so members dispatch at run time.
+    Gradual,
+}
+
+/// Returns how `Closure::bind`'s new `$this` types the bound closure's capture, if at all.
+///
+/// Only a closure LITERAL qualifies — a bind of an already-built closure value cannot retype a
+/// body that was compiled elsewhere. A literal `null` target unbinds `$this` rather than typing
+/// it. Everything else is the TARGET's type, precise when `instance_callable_object_class`
+/// resolves a class and gradual otherwise: a property of an absent extension class, a `clone` of
+/// one, a `mixed` return.
+///
+/// Kept in step with `closure_bind_property_receiver_type` in the checker, which asks the same
+/// question of the same two arguments. The two answering differently is the defect this pair
+/// exists to prevent: the checker would type `$this->p` against one class and the backend emit it
+/// against another — which is what happened while only one side knew, in both directions.
+fn bound_this_capture(ctx: &LoweringContext<'_, '_>, args: &[Expr]) -> Option<BoundThis> {
+    if !matches!(args.first().map(|arg| &arg.kind), Some(ExprKind::Closure { .. })) {
+        return None;
+    }
+    let new_this = args.get(1)?;
+    if matches!(new_this.kind, ExprKind::Null) {
+        return None;
+    }
+    Some(match instance_callable_object_class(ctx, new_this) {
+        Some(class_name) => BoundThis::Class(class_name),
+        None => BoundThis::Gradual,
+    })
 }
 
 /// Returns preserved late-static return syntax for EIR static dispatch.

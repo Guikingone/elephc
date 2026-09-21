@@ -163,7 +163,7 @@ fn lower_if_chain(
 }
 
 /// Applies the positive nominal fact implied by a static `instanceof` branch to one local.
-fn apply_instanceof_branch_narrowing(
+pub(in crate::ir_lower) fn apply_instanceof_branch_narrowing(
     ctx: &mut LoweringContext<'_, '_>,
     condition: &Expr,
     branch_matches: bool,

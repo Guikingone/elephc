@@ -893,7 +893,7 @@ fn static_preserve_keys_operand(
 }
 
 /// Materializes PHP truthiness for a dynamic preserve-keys operand.
-fn emit_preserve_keys_truthiness(
+pub(in crate::codegen::lower_inst) fn emit_preserve_keys_truthiness(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
 ) -> Result<()> {

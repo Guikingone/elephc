@@ -68,6 +68,24 @@ pub struct Module {
     pub source_path: Option<String>,
     /// Immutable inputs for compiled source entries, not runtime inclusion state.
     source_catalog: Option<std::sync::Arc<super::SourceCatalog>>,
+    /// Catalog sources the COMPILER already included, so the runtime must not include them again.
+    ///
+    /// The autoload pass performs, at compile time, the inclusions PHP's autoloader would have
+    /// performed at runtime: it opens the class file and splices its declarations into the
+    /// program. Those declarations exist from process start, so a later `include_once` of the
+    /// same path has nothing left to do -- and everything to break, because re-running the file
+    /// redeclares a symbol that is already there. This is the file set that answers "already
+    /// included" at runtime; a statically-resolved `include` is deliberately NOT in it, because
+    /// its body is emitted inline and its guard is set when that code actually runs.
+    pub preincluded_sources: std::collections::BTreeSet<std::path::PathBuf>,
+    /// LOWERCASE names of compiled classes that must still answer `class_exists($n, false)` false.
+    ///
+    /// A closed-world build declares everything it compiled from the first instruction. For a
+    /// class the autoload pass pulled in ONLY so an existence probe could be answered, that is
+    /// not what php does: php loads a class when something uses it, and `$autoload = false` asks
+    /// precisely whether that has happened yet. Each name here gets a request-scoped flag that
+    /// starts clear and is raised by the first probe that allows autoloading.
+    pub deferred_class_loads: std::collections::BTreeSet<String>,
     /// Public function names whose implementation is selected during execution.
     pub(crate) runtime_bound_functions: std::sync::Arc<std::collections::HashSet<String>>,
     /// `--probe` build key, embedded as `_elephc_probe_key` so the probe endpoint
@@ -130,6 +148,8 @@ impl Module {
     pub fn new(target: Target) -> Self {
         Self {
             source_catalog: None,
+            preincluded_sources: Default::default(),
+            deferred_class_loads: Default::default(),
             runtime_bound_functions: Default::default(),
             target,
             source_path: None,

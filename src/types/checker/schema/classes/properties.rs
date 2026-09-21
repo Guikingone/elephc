@@ -295,6 +295,11 @@ fn apply_instance_property(
     if class.is_readonly_class || prop.readonly {
         state.readonly_properties.insert(prop.name.clone());
     }
+    // A hooked property whose hooks touch `$this-><prop>` keeps its backing slot; PHP only
+    // refuses a write to a VIRTUAL one, whose hooks never name it.
+    if prop.hooks.backed {
+        state.backed_hooked_properties.insert(prop.name.clone());
+    }
     if prop.by_ref {
         state.reference_properties.insert(prop.name.clone());
     }
@@ -397,6 +402,11 @@ fn apply_instance_property_redeclaration(
     if class.is_readonly_class || prop.readonly {
         state.readonly_properties.insert(prop.name.clone());
     }
+    // A hooked property whose hooks touch `$this-><prop>` keeps its backing slot; PHP only
+    // refuses a write to a VIRTUAL one, whose hooks never name it.
+    if prop.hooks.backed {
+        state.backed_hooked_properties.insert(prop.name.clone());
+    }
     if prop.is_abstract {
         state.abstract_properties.insert(prop.name.clone());
         let mut contract = build_property_contract(checker, &class.name, prop)?;
@@ -496,6 +506,11 @@ fn replace_active_property_flags(
     }
     if class.is_readonly_class || prop.readonly {
         state.readonly_properties.insert(prop.name.clone());
+    }
+    // A hooked property whose hooks touch `$this-><prop>` keeps its backing slot; PHP only
+    // refuses a write to a VIRTUAL one, whose hooks never name it.
+    if prop.hooks.backed {
+        state.backed_hooked_properties.insert(prop.name.clone());
     } else {
         state.readonly_properties.remove(&prop.name);
     }

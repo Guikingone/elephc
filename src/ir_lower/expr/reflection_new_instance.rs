@@ -230,10 +230,12 @@ pub(super) fn reflection_object_constructor_object_arg(
 
 /// Resolves a PHP class name case-insensitively against known class metadata.
 pub(super) fn resolve_known_class_name(ctx: &LoweringContext<'_, '_>, class_name: &str) -> Option<String> {
-    let key = php_symbol_key(class_name.trim_start_matches('\\'));
+    // An equality between two `php_symbol_key` results is `eq_ignore_ascii_case`, which is
+    // the same predicate without a lowercased `String` allocated for every class in the module.
+    let wanted = class_name.trim_start_matches('\\');
     ctx.classes
         .keys()
-        .find(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == key)
+        .find(|candidate| candidate.trim_start_matches('\\').eq_ignore_ascii_case(wanted))
         .cloned()
 }
 
@@ -242,10 +244,10 @@ pub(super) fn resolve_known_function_name(
     ctx: &LoweringContext<'_, '_>,
     function_name: &str,
 ) -> Option<String> {
-    let key = php_symbol_key(function_name.trim_start_matches('\\'));
+    let wanted = function_name.trim_start_matches('\\');
     ctx.functions
         .keys()
-        .find(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == key)
+        .find(|candidate| candidate.trim_start_matches('\\').eq_ignore_ascii_case(wanted))
         .cloned()
 }
 
@@ -256,12 +258,11 @@ pub(super) fn resolve_known_class_method_name(
     method: &str,
 ) -> Option<String> {
     let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
-    let key = php_symbol_key(method);
     class_info
         .methods
         .keys()
         .chain(class_info.static_methods.keys())
-        .find(|candidate| php_symbol_key(candidate) == key)
+        .find(|candidate| candidate.eq_ignore_ascii_case(method))
         .cloned()
 }
 

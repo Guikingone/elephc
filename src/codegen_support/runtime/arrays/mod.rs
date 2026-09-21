@@ -84,6 +84,7 @@ mod array_search;
 mod array_shift;
 mod array_slice;
 mod array_slice_refcounted;
+mod array_slice_str;
 mod array_slice_to_hash;
 mod array_splice;
 mod array_splice_insert;
@@ -95,6 +96,7 @@ mod array_sum_mixed;
 mod array_to_hash;
 mod array_to_hash_reverse;
 mod array_to_hash_unique;
+mod hash_reindex;
 mod hash_to_hash_reverse;
 mod hash_to_hash_unique;
 mod array_to_mixed;
@@ -116,6 +118,7 @@ mod mixed_pop_shift;
 mod mixed_from_array_kind;
 mod mixed_to_owned_hash;
 mod gc_collect_cycles;
+mod gc_safepoint;
 mod gc_collect_cycles_x86_64;
 mod gc_mark_reachable;
 mod gc_note_child_ref;
@@ -123,6 +126,7 @@ mod global_ref_cell;
 mod hash_count;
 mod hash_append;
 mod hash_clone_shallow;
+mod hash_debug_chain;
 mod hash_fnv1a;
 mod hash_free_deep;
 mod hash_get;
@@ -355,6 +359,7 @@ pub use array_shift::emit_array_shift;
 pub use array_slice::emit_array_slice;
 /// Emit array slice extraction helper.
 pub use array_slice_refcounted::emit_array_slice_refcounted;
+pub use array_slice_str::emit_array_slice_str;
 /// Emit refcounted array slice helper.
 pub use array_slice_to_hash::emit_array_slice_to_hash;
 /// Emit key-preserving array slice helper (array_slice preserve_keys).
@@ -378,6 +383,7 @@ pub use array_to_hash::emit_array_to_hash;
 pub use array_to_hash_reverse::emit_array_to_hash_reverse;
 /// Emit key-preserving reversed indexed-array-to-hash converter helper (array_reverse preserve_keys).
 pub use array_to_hash_unique::emit_array_to_hash_unique;
+pub use hash_reindex::emit_hash_reindex;
 pub use hash_to_hash_reverse::emit_hash_to_hash_reverse;
 pub use hash_to_hash_unique::emit_hash_to_hash_unique;
 /// Emit key-preserving deduplicating indexed-array-to-hash converter helper (array_unique).
@@ -393,7 +399,7 @@ pub use array_union_gradual::emit_array_union_gradual;
 /// Emit refcounted array unique helper.
 pub use array_unshift::emit_array_unshift;
 /// Emit array unshift (prepend) helper.
-pub use array_walk::emit_array_walk;
+pub use array_walk::{emit_array_walk, emit_array_walk_ref};
 /// Emit array walk helper.
 pub use array_walk_recursive::emit_array_walk_recursive;
 /// Emit recursive array walk helper.
@@ -418,8 +424,10 @@ pub use hash_count::emit_hash_count;
 pub use hash_append::emit_hash_append;
 /// Emit hash append helper.
 pub use hash_clone_shallow::emit_hash_clone_shallow;
+pub use hash_debug_chain::emit_hash_debug_validate_chain;
 /// Emit shallow hash clone helper.
 pub use gc_collect_cycles::emit_gc_collect_cycles;
+pub use gc_safepoint::emit_gc_safepoint;
 /// Emit garbage collection cycle collector.
 pub use gc_mark_reachable::emit_gc_mark_reachable;
 /// Emit GC mark reachable helper.

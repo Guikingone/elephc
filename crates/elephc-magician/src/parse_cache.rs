@@ -44,9 +44,6 @@ pub(crate) fn parse_fragment_cached(code: &[u8]) -> CachedParseResult {
 /// own `<?php` tags — so the two share the cache only through distinct keys: a file is keyed by its
 /// bytes with a marker no fragment can produce, since the same bytes could legally be both.
 pub(crate) fn parse_source_file_cached(code: &[u8]) -> CachedParseResult {
-    if !is_cacheable_fragment(code) {
-        return parser::parse_source_file(code).map(Arc::new);
-    }
     let key = source_file_cache_key(code);
     if let Some(result) = lock_eval_parse_cache().lookup(&key) {
         return result;
@@ -54,6 +51,47 @@ pub(crate) fn parse_source_file_cached(code: &[u8]) -> CachedParseResult {
     let result = parser::parse_source_file(code).map(Arc::new);
     lock_eval_parse_cache().insert(key, result.clone());
     result
+}
+
+/// Parses a PHP source FILE identified by its path, reusing a cached program without reading it.
+///
+/// Keyed by path plus the file's modification time and length, so a repeat include costs one
+/// `stat` instead of a full read, a key copy of the whole file, and — for anything past
+/// `MAX_CACHEABLE_FRAGMENT_BYTES` — a complete re-parse. A long-lived web worker includes the same
+/// vendor tree on every request: Symfony re-read and re-hashed 76 files per request, and the
+/// generated DI container is far past the fragment cap, so it was re-parsed every single time.
+///
+/// Identity is (path, mtime, len). That is what php's own opcache validates by default, and it
+/// catches every edit an ordinary deploy makes. A file rewritten in place within the same
+/// mtime granularity AND to the identical length would be missed, which is why the caller keeps
+/// the read-and-parse path for anything it cannot stat.
+pub(crate) fn parse_source_file_at_path(path: &std::path::Path) -> Option<CachedParseResult> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let key = source_path_cache_key(path, &metadata)?;
+    if let Some(result) = lock_eval_parse_cache().lookup(&key) {
+        return Some(result);
+    }
+    let code = std::fs::read(path).ok()?;
+    let result = parser::parse_source_file(&code).map(Arc::new);
+    lock_eval_parse_cache().insert(key, result.clone());
+    Some(result)
+}
+
+/// Builds the identity key for one source file on disk.
+///
+/// The marker byte keeps these keys disjoint from both fragment keys (raw bytes) and whole-file
+/// content keys (leading `0`), so three different lookups can share one cache.
+fn source_path_cache_key(path: &std::path::Path, metadata: &std::fs::Metadata) -> Option<Vec<u8>> {
+    use std::time::UNIX_EPOCH;
+
+    let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+    let mut key = Vec::with_capacity(path.as_os_str().len() + 32);
+    key.push(1);
+    key.extend_from_slice(&metadata.len().to_le_bytes());
+    key.extend_from_slice(&modified.as_secs().to_le_bytes());
+    key.extend_from_slice(&modified.subsec_nanos().to_le_bytes());
+    key.extend_from_slice(path.to_string_lossy().as_bytes());
+    Some(key)
 }
 
 /// Builds the cache key that separates a whole source file from an eval fragment.

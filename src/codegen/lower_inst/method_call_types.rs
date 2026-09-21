@@ -93,7 +93,9 @@ pub(super) enum RefArgCellLifetime {
 /// caller never supplied.
 pub(super) struct RefArgTempCell {
     pub(super) param_index: usize,
-    pub(super) source_value: ValueId,
+    /// `None` for an OMITTED optional by-reference argument: there is no operand to load,
+    /// so the cell is seeded with PHP null and only its ADDRESS matters to the callee.
+    pub(super) source_value: Option<ValueId>,
     /// The cell's storage representation: the callee writes through the pointer with the
     /// PARAMETER's type, so the cell must be that type and not the argument's.
     pub(super) cell_ty: PhpType,

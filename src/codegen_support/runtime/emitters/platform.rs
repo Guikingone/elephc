@@ -181,6 +181,9 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_ob_gated_ops(emitter);
     io::emit_ob_get_pop_ops(emitter);
     io::emit_ob_flush_all(emitter);
+    // The shared flush-and-exit tail every process-exit site branches to; it calls
+    // __rt_ob_flush_all, so it is emitted right after it.
+    crate::codegen_support::abi::emit_exit_code_helper(emitter);
     io::emit_ob_apply_handler(emitter);
     io::emit_ob_result_to_bytes(emitter);
     io::emit_ob_invoke_descriptor(emitter);

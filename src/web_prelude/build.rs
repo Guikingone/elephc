@@ -29,12 +29,12 @@ use crate::parser::ast::{BinOp, CType, CastType, Expr, ExprKind, MagicConstant, 
     TypeExpr};
 use crate::span::Span;
 use crate::synthetic_class::{class, e_array, e_array_assoc, e_binop, e_bool, e_call, e_cast,
-    e_closure_call, e_const, e_index, e_instance_of, e_int, e_method_call, e_neg, e_new, e_not,
+    e_const, e_index, e_instance_of, e_int, e_method_call, e_new, e_not,
     e_null, e_post_inc, e_static_prop, e_str, e_ternary, e_this, e_this_prop, e_var, extern_fn,
-    function, interface, internal_declarations, method, s_array_assign, s_array_push, s_assign,
+    function, interface, internal_declarations, method, s_array_assign, s_assign,
     s_continue, s_do_while, s_expr, s_for, s_foreach, s_if, s_prop_assign, s_return,
-    s_return_void, s_static, s_static_prop_assign, s_throw, s_while, t_array, t_class, t_mixed,
-    t_nullable, t_ptr, t_union
+    s_return_void, s_static_prop_assign, s_throw, t_array, t_class,
+    t_mixed, t_nullable, t_ptr, t_union
 };
 use crate::web_prelude::PhpVersion;
 
@@ -53,15 +53,9 @@ fn e_magic_dir() -> Expr {
     Expr::new(ExprKind::MagicConstant(MagicConstant::Dir), Span::dummy())
 }
 
-/// `__LINE__`, which is an INT LITERAL and not a `MagicConstant`.
-///
-/// There is no `MagicConstant::Line`: the parser lowers the token to `IntLiteral(span.line)` at
-/// parse time (`parser/expr/prefix.rs`), so a built node has to carry the value directly. A
-/// synthetic declaration is built on `Span::dummy()`, whose line is 0, so 0 is what the parser
-/// would have produced for this node — the prelude has no source line of its own to report.
-fn e_magic_line() -> Expr {
-    e_int(0)
-}
+// `__LINE__` had a helper here too; its only caller was `trigger_error()`, which moved to
+// `crate::error_handling_prelude` along with the rest of the error surface and took its copy
+// with it.
 
 /// `elephc_web_method` — transcribed from the PHP form.
 fn decl_extern_elephc_web_method() -> Stmt {
@@ -1831,393 +1825,20 @@ fn decl_class_elephccallablesessionhandler() -> Stmt {
         .build()
 }
 
-/// `error_log` — transcribed from the PHP form.
-fn decl_fn_error_log() -> Stmt {
-    function("error_log")
-        .param("message", TypeExpr::Str)
-        .param_default("message_type", TypeExpr::Int, e_int(0))
-        .param_default("destination", t_nullable(TypeExpr::Str), e_null())
-        .param_default("additional_headers", t_nullable(TypeExpr::Str), e_null())
-        .returns(TypeExpr::Bool)
-        .body(vec![
-            s_if(
-                e_binop(e_var("message_type"), BinOp::StrictEq, e_int(3)),
-                vec![
-                    s_if(
-                        e_binop(e_var("destination"), BinOp::StrictEq, e_null()),
-                        vec![
-                            s_return(e_bool(false)),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_assign("__elephc_el_fh", e_call("fopen", vec![e_cast(CastType::String, e_var("destination")), e_str("a")])),
-                    s_if(
-                        e_binop(e_var("__elephc_el_fh"), BinOp::StrictEq, e_bool(false)),
-                        vec![
-                            s_return(e_bool(false)),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_expr(e_call("fwrite", vec![e_var("__elephc_el_fh"), e_var("message")])),
-                    s_expr(e_call("fclose", vec![e_var("__elephc_el_fh")])),
-                    s_return(e_bool(true)),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_binop(e_var("message_type"), BinOp::StrictEq, e_int(0)),
-                vec![
-                    s_assign("__elephc_el_m", e_var("message")),
-                    s_if(
-                        e_binop(e_binop(e_var("__elephc_el_m"), BinOp::StrictEq, e_str("")), BinOp::Or, e_binop(e_call("substr", vec![e_var("__elephc_el_m"), e_neg(e_int(1))]), BinOp::StrictNotEq, e_str("\n"))),
-                        vec![
-                            s_assign("__elephc_el_m", e_binop(e_var("__elephc_el_m"), BinOp::Concat, e_str("\n"))),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_expr(e_call("fwrite", vec![e_const("STDERR"), e_var("__elephc_el_m")])),
-                    s_return(e_bool(true)),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_binop(e_var("message_type"), BinOp::StrictEq, e_int(1)),
-                vec![
-                    s_expr(e_call("fwrite", vec![e_const("STDERR"), e_binop(e_binop(e_binop(e_binop(e_binop(e_str("error_log(): mail delivery (type 1) is not supported under --web"), BinOp::Concat, e_str(" [to=")), BinOp::Concat, e_cast(CastType::String, e_var("destination"))), BinOp::Concat, e_str(", headers=")), BinOp::Concat, e_cast(CastType::String, e_var("additional_headers"))), BinOp::Concat, e_str("]\n"))])),
-                ],
-                vec![],
-                None,
-            ),
-            s_return(e_bool(false)),
-        ])
-        .build()
-}
+// `error_log()` used to sit here. It is NOT a `--web` surface: PHP declares it in every
+// SAPI, and off `--web` elephc answered it with the registry builtin
+// (`src/builtins/system/error_log.rs`), which writes to stderr and IGNORES `$message_type`
+// — so `error_log($m, 3, $file)` silently logged to the console instead of the file. The
+// body moved to `crate::error_handling_prelude` with the rest of PHP's error surface, which
+// `declarations()` splices in below and the non-`--web` path injects pay-for-use.
 
-/// `__elephc_error_reporting_state` — transcribed from the PHP form.
-///
-/// The request-local error mask `error_reporting()` and `trigger_error()` share. The value lives
-/// in a STATIC function local, which is what makes it survive across calls within one request —
-/// and, because a worker is reused, across requests too. Nothing resets it per request today:
-/// unlike the shutdown and exception registries below, PHP itself keeps the mask a process-wide
-/// setting, so the transcription keeps it one as well.
-fn decl_fn_elephc_error_reporting_state() -> Stmt {
-    function("__elephc_error_reporting_state")
-        .param_default("next", t_nullable(TypeExpr::Int), e_null())
-        .param_default("replace", TypeExpr::Bool, e_bool(false))
-        .returns(TypeExpr::Int)
-        .body(vec![
-            s_static("current", e_const("E_ALL")),
-            s_assign("previous", e_var("current")),
-            s_if(
-                e_var("replace"),
-                vec![
-                    s_assign("current", e_cast(CastType::Int, e_var("next"))),
-                ],
-                vec![],
-                None,
-            ),
-            s_return(e_var("previous")),
-        ])
-        .build()
-}
-
-/// `error_reporting` — transcribed from the PHP form.
-fn decl_fn_error_reporting() -> Stmt {
-    function("error_reporting")
-        .param_default("error_level", t_nullable(TypeExpr::Int), e_null())
-        .returns(TypeExpr::Int)
-        .body(vec![
-            s_if(
-                e_binop(e_var("error_level"), BinOp::StrictEq, e_null()),
-                vec![
-                    s_return(e_call("__elephc_error_reporting_state", vec![])),
-                ],
-                vec![],
-                None,
-            ),
-            s_return(e_call("__elephc_error_reporting_state", vec![e_var("error_level"), e_bool(true)])),
-        ])
-        .build()
-}
-
-/// `__elephc_error_handler_state` — transcribed from the PHP form.
-///
-/// One entry point for the whole user-error-handler stack, dispatched on `$operation`: 0 reads
-/// the top handler, 1 pushes one and returns the previous, 2 reads the top handler's MASK, 3
-/// pops. The two parallel STATIC arrays are the stack; `restore_error_handler()` popping both
-/// together is what keeps a handler and its mask at the same depth.
-fn decl_fn_elephc_error_handler_state() -> Stmt {
-    function("__elephc_error_handler_state")
-        .param_default("next", t_mixed(), e_null())
-        .param_default("levels", TypeExpr::Int, e_const("E_ALL"))
-        .param_default("operation", TypeExpr::Int, e_int(0))
-        .returns(t_mixed())
-        .body(vec![
-            s_static("handlers", e_array(vec![])),
-            s_static("masks", e_array(vec![])),
-            s_assign("count", e_call("count", vec![e_var("handlers")])),
-            s_if(
-                e_binop(e_var("operation"), BinOp::StrictEq, e_int(0)),
-                vec![
-                    s_return(e_ternary(e_binop(e_var("count"), BinOp::StrictEq, e_int(0)), e_null(), e_index(e_var("handlers"), e_binop(e_var("count"), BinOp::Sub, e_int(1))))),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_binop(e_var("operation"), BinOp::StrictEq, e_int(2)),
-                vec![
-                    s_return(e_ternary(e_binop(e_var("count"), BinOp::StrictEq, e_int(0)), e_const("E_ALL"), e_index(e_var("masks"), e_binop(e_var("count"), BinOp::Sub, e_int(1))))),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_binop(e_var("operation"), BinOp::StrictEq, e_int(3)),
-                vec![
-                    s_if(
-                        e_binop(e_var("count"), BinOp::StrictNotEq, e_int(0)),
-                        vec![
-                            s_expr(e_call("array_pop", vec![e_var("handlers")])),
-                            s_expr(e_call("array_pop", vec![e_var("masks")])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_return(e_bool(true)),
-                ],
-                vec![],
-                None,
-            ),
-            s_assign("previous", e_ternary(e_binop(e_var("count"), BinOp::StrictEq, e_int(0)), e_null(), e_index(e_var("handlers"), e_binop(e_var("count"), BinOp::Sub, e_int(1))))),
-            s_array_push("handlers", e_var("next")),
-            s_array_push("masks", e_var("levels")),
-            s_return(e_var("previous")),
-        ])
-        .build()
-}
-
-/// `set_error_handler` — transcribed from the PHP form.
-fn decl_fn_set_error_handler() -> Stmt {
-    function("set_error_handler")
-        .param("callback", t_mixed())
-        .param_default("error_levels", TypeExpr::Int, e_const("E_ALL"))
-        .returns(t_mixed())
-        .body(vec![
-            s_return(e_call("__elephc_error_handler_state", vec![e_var("callback"), e_var("error_levels"), e_int(1)])),
-        ])
-        .build()
-}
-
-/// `get_error_handler` — transcribed from the PHP form.
-fn decl_fn_get_error_handler() -> Stmt {
-    function("get_error_handler")
-        .returns(t_mixed())
-        .body(vec![
-            s_return(e_call("__elephc_error_handler_state", vec![])),
-        ])
-        .build()
-}
-
-/// `restore_error_handler` — transcribed from the PHP form.
-fn decl_fn_restore_error_handler() -> Stmt {
-    function("restore_error_handler")
-        .returns(TypeExpr::Bool)
-        .body(vec![
-            s_return(e_cast(CastType::Bool, e_call("__elephc_error_handler_state", vec![e_null(), e_const("E_ALL"), e_int(3)]))),
-        ])
-        .build()
-}
-
-/// `__elephc_shutdown_function_state` — transcribed from the PHP form.
-///
-/// The request-local shutdown callback registry, dispatched on `$operation`: 1 registers, 2
-/// drains (the catch-all wrapper's `finally` calls this), 3 clears. The reset is not optional
-/// housekeeping — the registry is a STATIC function local, so without `bootstrap 43a` a reused
-/// worker would run the previous request's callbacks again.
-fn decl_fn_elephc_shutdown_function_state() -> Stmt {
-    function("__elephc_shutdown_function_state")
-        .param_default("callback", t_mixed(), e_null())
-        .param_default("args", t_mixed(), e_array(vec![]))
-        .param_default("operation", TypeExpr::Int, e_int(0))
-        .returns(t_mixed())
-        .body(vec![
-            s_static("callbacks", e_array(vec![])),
-            s_if(
-                e_binop(e_var("operation"), BinOp::StrictEq, e_int(1)),
-                vec![
-                    s_array_push("callbacks", e_array(vec![e_var("callback"), e_var("args")])),
-                    s_return(e_null()),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_binop(e_var("operation"), BinOp::StrictEq, e_int(2)),
-                vec![
-                    s_while(e_binop(e_call("count", vec![e_var("callbacks")]), BinOp::Gt, e_int(0)), vec![
-                        s_assign("__elephc_shutdown_entry", e_cast(CastType::Array, e_call("array_shift", vec![e_var("callbacks")]))),
-                        s_expr(e_call("call_user_func_array", vec![e_index(e_var("__elephc_shutdown_entry"), e_int(0)), e_index(e_var("__elephc_shutdown_entry"), e_int(1))])),
-                    ]),
-                    s_return(e_null()),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_binop(e_var("operation"), BinOp::StrictEq, e_int(3)),
-                vec![
-                    s_assign("callbacks", e_array(vec![])),
-                ],
-                vec![],
-                None,
-            ),
-            s_return(e_null()),
-        ])
-        .build()
-}
-
-/// `register_shutdown_function` — transcribed from the PHP form.
-fn decl_fn_register_shutdown_function() -> Stmt {
-    function("register_shutdown_function")
-        .param("callback", t_class("callable"))
-        .variadic("args", Some(t_mixed()))
-        .returns(TypeExpr::Void)
-        .body(vec![
-            s_expr(e_call("__elephc_shutdown_function_state", vec![e_var("callback"), e_var("args"), e_int(1)])),
-        ])
-        .build()
-}
-
-/// `__elephc_exception_handler_state` — transcribed from the PHP form.
-///
-/// The exception-handler stack behind `set_exception_handler()` / `restore_exception_handler()`,
-/// dispatched on `$operation`: 0 reads the top, 1 pushes, 2 pops, 3 clears for the next request
-/// (see `bootstrap 43b`).
-fn decl_fn_elephc_exception_handler_state() -> Stmt {
-    function("__elephc_exception_handler_state")
-        .param_default("next", t_mixed(), e_null())
-        .param_default("operation", TypeExpr::Int, e_int(0))
-        .returns(t_mixed())
-        .body(vec![
-            s_static("handlers", e_array(vec![])),
-            s_assign("count", e_call("count", vec![e_var("handlers")])),
-            s_if(
-                e_binop(e_var("operation"), BinOp::StrictEq, e_int(0)),
-                vec![
-                    s_return(e_ternary(e_binop(e_var("count"), BinOp::StrictEq, e_int(0)), e_null(), e_index(e_var("handlers"), e_binop(e_var("count"), BinOp::Sub, e_int(1))))),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_binop(e_var("operation"), BinOp::StrictEq, e_int(2)),
-                vec![
-                    s_if(
-                        e_binop(e_var("count"), BinOp::StrictNotEq, e_int(0)),
-                        vec![
-                            s_expr(e_call("array_pop", vec![e_var("handlers")])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_return(e_bool(true)),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_binop(e_var("operation"), BinOp::StrictEq, e_int(3)),
-                vec![
-                    s_assign("handlers", e_array(vec![])),
-                    s_return(e_null()),
-                ],
-                vec![],
-                None,
-            ),
-            s_assign("previous", e_ternary(e_binop(e_var("count"), BinOp::StrictEq, e_int(0)), e_null(), e_index(e_var("handlers"), e_binop(e_var("count"), BinOp::Sub, e_int(1))))),
-            s_array_push("handlers", e_var("next")),
-            s_return(e_var("previous")),
-        ])
-        .build()
-}
-
-/// `set_exception_handler` — transcribed from the PHP form.
-fn decl_fn_set_exception_handler() -> Stmt {
-    function("set_exception_handler")
-        .param("callback", t_mixed())
-        .returns(t_mixed())
-        .body(vec![
-            s_return(e_call("__elephc_exception_handler_state", vec![e_var("callback"), e_int(1)])),
-        ])
-        .build()
-}
-
-/// `restore_exception_handler` — transcribed from the PHP form.
-fn decl_fn_restore_exception_handler() -> Stmt {
-    function("restore_exception_handler")
-        .returns(TypeExpr::Bool)
-        .body(vec![
-            s_return(e_cast(CastType::Bool, e_call("__elephc_exception_handler_state", vec![e_null(), e_int(2)]))),
-        ])
-        .build()
-}
-
-/// `trigger_error` — transcribed from the PHP form.
-///
-/// Web-SAPI user-error dispatch: it honours the current reporting mask, hands the error to a
-/// registered user handler when one accepts this level, and only then renders to STDERR. The
-/// mask gate comes FIRST, so a level the mask excludes reaches no handler at all — which is what
-/// `error_reporting(0)` has to mean.
-fn decl_fn_trigger_error() -> Stmt {
-    function("trigger_error")
-        .param("message", TypeExpr::Str)
-        .param_default("error_level", TypeExpr::Int, e_const("E_USER_NOTICE"))
-        .returns(TypeExpr::Bool)
-        .body(vec![
-            s_if(
-                e_binop(e_binop(e_var("error_level"), BinOp::BitAnd, e_call("error_reporting", vec![])), BinOp::StrictEq, e_int(0)),
-                vec![
-                    s_return(e_bool(true)),
-                ],
-                vec![],
-                None,
-            ),
-            s_assign("__elephc_te_handler", e_call("__elephc_error_handler_state", vec![])),
-            s_if(
-                e_binop(e_binop(e_var("__elephc_te_handler"), BinOp::StrictNotEq, e_null()), BinOp::And, e_binop(e_binop(e_var("error_level"), BinOp::BitAnd, e_cast(CastType::Int, e_call("__elephc_error_handler_state", vec![e_null(), e_const("E_ALL"), e_int(2)]))), BinOp::StrictNotEq, e_int(0))),
-                vec![
-                    s_return(e_cast(CastType::Bool, e_closure_call("__elephc_te_handler", vec![e_var("error_level"), e_var("message"), e_magic_file(), e_magic_line()]))),
-                ],
-                vec![],
-                None,
-            ),
-            s_assign("__elephc_te_prefix", e_str("Notice")),
-            s_if(
-                e_binop(e_var("error_level"), BinOp::StrictEq, e_const("E_USER_ERROR")),
-                vec![
-                    s_assign("__elephc_te_prefix", e_str("Fatal error")),
-                ],
-                vec![
-                (e_binop(e_binop(e_var("error_level"), BinOp::StrictEq, e_const("E_USER_WARNING")), BinOp::Or, e_binop(e_var("error_level"), BinOp::StrictEq, e_const("E_WARNING"))), vec![
-                    s_assign("__elephc_te_prefix", e_str("Warning")),
-                ]),
-                (e_binop(e_binop(e_var("error_level"), BinOp::StrictEq, e_const("E_USER_DEPRECATED")), BinOp::Or, e_binop(e_var("error_level"), BinOp::StrictEq, e_const("E_DEPRECATED"))), vec![
-                    s_assign("__elephc_te_prefix", e_str("Deprecated")),
-                ]),
-            ],
-                None,
-            ),
-            s_expr(e_call("fwrite", vec![e_const("STDERR"), e_binop(e_binop(e_binop(e_var("__elephc_te_prefix"), BinOp::Concat, e_str(": ")), BinOp::Concat, e_var("message")), BinOp::Concat, e_str("\n"))])),
-            s_return(e_bool(true)),
-        ])
-        .build()
-}
+// `__elephc_shutdown_function_state()` and `register_shutdown_function()` used to sit here.
+// They are NOT a `--web` surface either: php declares `register_shutdown_function()` in every
+// SAPI, and a plain CLI build had none of it (`Call to undefined function
+// register_shutdown_function()`). The bodies moved to `crate::error_handling_prelude`, which
+// `declarations()` splices in below and the non-`--web` path injects pay-for-use, together
+// with the zero-argument `__elephc_shutdown_run()` entry that codegen calls by symbol at every
+// process-exit site.
 
 /// `__elephc_session_start_option_known` — transcribed from the PHP form.
 fn decl_fn_elephc_session_start_option_known() -> Stmt {
@@ -5470,6 +5091,44 @@ fn decl_stmt_bootstrap_43b() -> Stmt {
     s_expr(e_call("__elephc_exception_handler_state", vec![e_null(), e_int(3)]))
 }
 
+/// `bootstrap 43c` — `__elephc_last_error_state(0, '', '', 0, 2);`, transcribed from the PHP
+/// form. The same per-request reset, for `error_get_last()`'s record.
+///
+/// php starts every request with no last error: a fresh php-fpm or `php -S` request answers
+/// `error_get_last()` with `null` however many diagnostics the PREVIOUS request raised.
+///
+/// DEFENSIVE, NOT LOAD-BEARING TODAY, and the measurement is worth recording because the
+/// obvious reasoning says otherwise. The record lives in STATIC function locals, and the
+/// natural conclusion is that a reused worker carries them across the boundary. It does not:
+/// every request is served by a FORKED HANDLER CHILD (`elephc-web/src/isolated_worker.rs` —
+/// the broker is "the sole process allowed to own and fork handler children"), so a static
+/// local starts fresh each time. Measured with a `static $n` counter in a user function,
+/// served five sequential requests, on all THREE isolation modes:
+///
+/// ```text
+/// --web-isolation worker (default) → count=1 count=1 count=1 count=1 count=1
+/// --web-isolation pool             → count=1 count=1 count=1 count=1 count=1
+/// --web-isolation request          → count=1 count=1 count=1 count=1 count=1
+/// ```
+///
+/// A 400-request soak over `error_get_last()` therefore passes WITH OR WITHOUT this line, so
+/// it is not evidence that this line works. It is kept for the same reason `43a` and `43b`
+/// are, and it costs one call per request: the storage class makes the record request-scoped
+/// state whatever the isolation mode happens to be today, and leaving `error_get_last()` as
+/// the one member of this family with no reset would be a trap for whoever changes isolation
+/// next. What DOES cross a boundary is process storage and the Rust-side registries — see
+/// `REQUEST_SCOPED_RUNTIME_FLAGS` and `__elephc_eval_include_request_reset`.
+///
+/// Clearing rather than reconstructing is deliberate: operation 2 drops the presence flag, so
+/// the reader returns `null` exactly as a first-ever call does, with no array allocated per
+/// request for a record nothing has written yet.
+fn decl_stmt_bootstrap_43c() -> Stmt {
+    s_expr(e_call(
+        "__elephc_last_error_state",
+        vec![e_int(0), e_str(""), e_str(""), e_int(0), e_int(2)],
+    ))
+}
+
 /// `bootstrap 44` — transcribed from the PHP form.
 fn decl_stmt_bootstrap_44() -> Stmt {
     s_if(
@@ -5653,19 +5312,11 @@ pub(crate) fn web_declarations(
             decl_class_sessionhandler(),
             decl_class_elephcsessionstate(),
             decl_class_elephccallablesessionhandler(),
-            decl_fn_error_log(),
-            decl_fn_elephc_error_reporting_state(),
-            decl_fn_error_reporting(),
-            decl_fn_elephc_error_handler_state(),
-            decl_fn_set_error_handler(),
-            decl_fn_get_error_handler(),
-            decl_fn_restore_error_handler(),
-            decl_fn_elephc_shutdown_function_state(),
-            decl_fn_register_shutdown_function(),
-            decl_fn_elephc_exception_handler_state(),
-            decl_fn_set_exception_handler(),
-            decl_fn_restore_exception_handler(),
-            decl_fn_trigger_error(),
+            // `decl_fn_error_log()` stood here, and `decl_fn_elephc_shutdown_function_state()` /
+            // `decl_fn_register_shutdown_function()` right after it; all three are now among the
+            // declarations `error_handling_prelude::declarations()` contributes further down.
+            // Function declarations are hoisted, so moving them past the session helpers is a
+            // change of reading order only.
             decl_fn_elephc_session_start_option_known(),
             decl_fn_session_start(),
             decl_fn_elephc_session_start_core(),
@@ -5699,6 +5350,19 @@ pub(crate) fn web_declarations(
             decl_fn_elephc_is_session_ini(),
             decl_fn_elephc_ini_get_raw(),
         ];
+
+        // PHP's error/exception-handling surface — `error_reporting()`, the two handler
+        // stacks, `trigger_error()` and the engine-diagnostic dispatch pair. It used to be
+        // spelled out inline right after `error_log()` above, but it is not a `--web` surface:
+        // every SAPI has it, and a plain CLI build had NONE of it (`Call to undefined function
+        // error_reporting()`). The bodies moved to `crate::error_handling_prelude`, which the
+        // non-`--web` path injects pay-for-use, and `--web` takes the SAME declarations from
+        // there. Two copies of PHP's error rule would diverge; one hands out both surfaces.
+        //
+        // The order moved with it (from between `error_log` and the shutdown registry to here).
+        // These twelve are all FUNCTION DECLARATIONS, which are hoisted — unlike the executable
+        // `bootstrap N` statements interleaved further down, whose position IS semantics.
+        declarations.extend(crate::error_handling_prelude::declarations());
 
         // The shared `opcache.*` INI helpers (`__elephc_opcache_ini_string` / `_access` / `_keys`
         // / `_all_details` / `_all_plain`), baked for the compile target so `ini_get`/`ini_set`/
@@ -5747,6 +5411,7 @@ pub(crate) fn web_declarations(
             decl_stmt_bootstrap_43(),
             decl_stmt_bootstrap_43a(),
             decl_stmt_bootstrap_43b(),
+            decl_stmt_bootstrap_43c(),
             decl_stmt_bootstrap_44(),
         ]);
 

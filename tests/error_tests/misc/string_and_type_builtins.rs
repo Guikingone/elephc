@@ -325,11 +325,13 @@ expect_builtin_arity_error!(
     "is_iterable() takes exactly 1 argument"
 );
 
-// Tests is_callable() arity error when called with no arguments.
+// Tests is_callable() arity error when called with no arguments. php's signature is
+// `is_callable(mixed $value, bool $syntax_only = false, string &$callable_name = null)`, so the
+// accepted range is 1 to 3 -- `symfony/http-kernel` calls the two-argument form.
 expect_builtin_arity_error!(
     test_error_is_callable_wrong_args,
     "<?php is_callable();",
-    "is_callable() takes exactly 1 argument"
+    "is_callable() takes 1 to 3 arguments"
 );
 
 // Tests preg_quote() arity error when called with no arguments (accepts 1 to 2).

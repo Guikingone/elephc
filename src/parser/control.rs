@@ -307,6 +307,44 @@ pub fn parse_foreach(
         body = prepend_stmt(key_bind, body);
     }
 
+    // `foreach ($v as $k => &$v)` — the by-REFERENCE target NAMES its own source. PHP iterates the
+    // array the foreach itself holds, so rebinding `$v` to element after element leaves the walk
+    // untouched; elephc read the source back out of the slot each iteration and followed an
+    // element reference as if it were the array, which segfaults on the second one.
+    //
+    // Binding a hidden local to the source gives the walk a name the body cannot rebind, which is
+    // what PHP's own arrangement amounts to here. The bind is by VALUE, not by reference: a
+    // reference-aliased source is itself miscompiled by the by-reference element walk (it yields
+    // the cell pointers instead of the values), and the copy is not observable for THIS shape —
+    // the first iteration rebinds the only name the original array had, so nothing can read it
+    // again. `Symfony\Component\VarDumper\Caster\ReflectionCaster::castFunctionAbstract` is the
+    // shape (`foreach ($v as $k => &$v)` over `getStaticVariables()`).
+    if value_by_ref {
+        if let ExprKind::Variable(source) = &array.kind {
+            if source == &value_var || key_var.as_deref() == Some(source.as_str()) {
+                let alias = format!("__elephc_foreach_src_{}_{}", span.line, span.col);
+                let bind = Stmt::new(
+                    StmtKind::Assign {
+                        name: alias.clone(),
+                        value: array.clone(),
+                    },
+                    span,
+                );
+                let loop_stmt = Stmt::new(
+                    StmtKind::Foreach {
+                        array: Expr::new(ExprKind::Variable(alias), span),
+                        key_var,
+                        value_var,
+                        value_by_ref,
+                        body,
+                    },
+                    span,
+                );
+                return Ok(Stmt::new(StmtKind::Synthetic(vec![bind, loop_stmt]), span));
+            }
+        }
+    }
+
     Ok(Stmt::new(
         StmtKind::Foreach {
             array,

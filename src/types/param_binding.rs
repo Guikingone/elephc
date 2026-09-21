@@ -31,6 +31,72 @@ use crate::names::Name;
 use crate::numeric_string::{scan_numeric_prefix, NumericScan};
 use crate::types::PhpType;
 
+/// Extracts the one named object class a value of type `actual` could still be at this boundary.
+///
+/// A union naming SEVERAL object classes has no single class for the runtime guard to test, so
+/// [`nominal_object_boundary_target`] turns it away. The value crossing the boundary narrows it,
+/// though: a class unrelated to the argument's own static class can never be what arrives, and
+/// PHP's single inheritance makes "unrelated" decidable. Symfony's
+/// `ViewEvent::__construct(ControllerArgumentsMetadata|ControllerArgumentsEvent|null)` is called
+/// with a `?ControllerMetadata`, and only `ControllerArgumentsMetadata` descends from it — so the
+/// existing one-class guard is exactly the check PHP performs there.
+///
+/// `related` answers whether two class names are the same or one descends from the other. Returns
+/// `None` unless exactly one member survives, leaving every genuinely ambiguous union refused.
+pub(crate) fn nominal_object_boundary_target_for_source(
+    expected: &PhpType,
+    actual: &PhpType,
+    related: &dyn Fn(&str, &str) -> bool,
+) -> Option<String> {
+    let actual_class = single_named_object_class(actual)?;
+    let PhpType::Union(members) = expected else {
+        return None;
+    };
+    let mut surviving = None;
+    for member in members {
+        match member {
+            PhpType::Void | PhpType::Never => {}
+            PhpType::Object(name) if !name.trim_start_matches('\\').is_empty() => {
+                if !related(name.trim_start_matches('\\'), &actual_class) {
+                    continue;
+                }
+                if surviving.is_some() {
+                    return None;
+                }
+                surviving = Some(name.clone());
+            }
+            _ => return None,
+        }
+    }
+    surviving
+}
+
+/// Returns the one named object class a type describes, seeing through a nullable union.
+fn single_named_object_class(ty: &PhpType) -> Option<String> {
+    match ty {
+        PhpType::Object(name) if !name.trim_start_matches('\\').is_empty() => {
+            Some(name.trim_start_matches('\\').to_string())
+        }
+        PhpType::Union(members) => {
+            let mut found = None;
+            for member in members {
+                match member {
+                    PhpType::Void | PhpType::Never => {}
+                    PhpType::Object(name) if !name.trim_start_matches('\\').is_empty() => {
+                        if found.is_some() {
+                            return None;
+                        }
+                        found = Some(name.trim_start_matches('\\').to_string());
+                    }
+                    _ => return None,
+                }
+            }
+            found
+        }
+        _ => None,
+    }
+}
+
 /// Extracts the sole named object accepted by a nominal object boundary.
 ///
 /// Nullable object unions are supported because PHP preserves null while checking every object

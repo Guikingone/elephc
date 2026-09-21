@@ -263,6 +263,14 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("b __rt_heap_alloc_count");                             // count alloc/live/peak stats and return
 
     // -- fatal error: heap memory exhausted --
+    // `__rt_cstr`/`__rt_cstr2` are SEPARATE atoms and have to reach this block by name. Under
+    // macOS dead stripping an ordinary `label()` is renamed to an `L`-local, which is not a
+    // symbol at all, so that cross-atom branch is not a relocation the linker can follow: the
+    // atom is collectable and the branch lands wherever the linker put the next one. The
+    // `.alt_entry` alias keeps the block inside `__rt_heap_alloc`'s atom while giving the
+    // cross-atom callers a real symbol; the `L`-local name stays for the intra-atom CONDITIONAL
+    // branches, which older assemblers refuse to point at an `.alt_entry` label.
+    emitter.label_shared("__rt_heap_exhausted_entry");
     emitter.label("__rt_heap_exhausted");
     if emitter.cdylib_boundary {
         crate::codegen_support::abi::emit_symbol_address(
@@ -517,6 +525,14 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_heap_alloc_count");                           // reuse the shared allocation-accounting path for bumped blocks
 
     // -- fatal error: heap memory exhausted --
+    // `__rt_cstr`/`__rt_cstr2` are SEPARATE atoms and have to reach this block by name. Under
+    // macOS dead stripping an ordinary `label()` is renamed to an `L`-local, which is not a
+    // symbol at all, so that cross-atom branch is not a relocation the linker can follow: the
+    // atom is collectable and the branch lands wherever the linker put the next one. The
+    // `.alt_entry` alias keeps the block inside `__rt_heap_alloc`'s atom while giving the
+    // cross-atom callers a real symbol; the `L`-local name stays for the intra-atom CONDITIONAL
+    // branches, which older assemblers refuse to point at an `.alt_entry` label.
+    emitter.label_shared("__rt_heap_exhausted_entry");
     emitter.label("__rt_heap_exhausted");
     if emitter.cdylib_boundary {
         crate::codegen_support::abi::emit_symbol_address(

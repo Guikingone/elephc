@@ -1,0 +1,13 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Hello{% endblock %}
+
+{% block body %}
+    <h1>{{ greeting }}</h1>
+    <p>Rendered by {{ engine }}.</p>
+    <ul>
+        {% for word in words %}
+            <li>{{ loop.index }}. {{ word|upper }}</li>
+        {% endfor %}
+    </ul>
+{% endblock %}

@@ -750,6 +750,256 @@ fn emit_substr_count_length_guard(ctx: &mut FunctionContext<'_>, has_length: boo
     ctx.emitter.label(&ok_label);
 }
 
+/// Lowers `substr_compare(haystack, needle, offset, length?, case_insensitive?)`.
+///
+/// `$offset` and `$length` are normalized here rather than inside `__rt_substr_compare`
+/// because both out-of-range values are catchable `ValueError`s in reference PHP, and only
+/// the backend can emit a throw the surrounding `try` will see. The helper therefore receives
+/// a window that is already known to sit inside the haystack, plus the resolved comparison
+/// length.
+///
+/// php-src's validation order is OBSERVABLE and reproduced exactly: `$length` first (a
+/// negative one is refused outright, unlike `substr_count()`, which measures it back from the
+/// subject end), then `$offset`. `substr_compare("abc", "a", 100, -1)` reports the `$length`
+/// error, not the `$offset` one (php 8.5.10, measured).
+pub(crate) fn lower_substr_compare(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() < 3 || inst.operands.len() > 5 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "substr_compare expected 3 to 5 args, got {}",
+            inst.operands.len()
+        )));
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_substr_compare_aarch64(ctx, inst)?,
+        Arch::X86_64 => lower_substr_compare_x86_64(ctx, inst)?,
+    }
+    emit_substr_compare_argument_guards(ctx);
+    abi::emit_call_label(ctx.emitter, "__rt_substr_compare");
+    store_if_result(ctx, inst)
+}
+
+/// Materializes the raw `$length` and its presence flag onto the temporary stack, value first.
+///
+/// PHP's default is `null`, meaning "compare to the end of the longer operand", and an
+/// explicitly written `null` behaves identically -- but so does a `?int` variable that merely
+/// HOLDS null at run time, which `substr_count()`'s static-only test gets wrong. The presence
+/// flag is therefore a real run-time value: a statically-null operand folds to the `0`
+/// immediate, and anything that could be null at run time is tested with `is_null()`'s own
+/// lowering before the integer coercion that would otherwise turn `null` into `0`.
+fn materialize_substr_compare_length(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let Some(length) = inst.operands.get(3).copied() else {
+        abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+        abi::emit_push_reg(ctx.emitter, result_reg);                            // an omitted length parks a zero the guards never read
+        abi::emit_push_reg(ctx.emitter, result_reg);                            // ... behind a cleared presence flag
+        return Ok(());
+    };
+    if matches!(
+        ctx.value_php_type(length)?.codegen_repr(),
+        PhpType::Void | PhpType::Never
+    ) {
+        abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+        abi::emit_push_reg(ctx.emitter, result_reg);                            // a literal `null` length parks a zero the guards never read
+        abi::emit_push_reg(ctx.emitter, result_reg);                            // ... behind a cleared presence flag
+        return Ok(());
+    }
+    let absent_label = ctx.next_label("substr_compare_length_absent");
+    let done_label = ctx.next_label("substr_compare_length_done");
+    predicates::emit_is_null_result(ctx, length)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz x0, {}", absent_label));     // a run-time null length means "to the end", exactly like an omitted one
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // did `is_null()` answer true for the length argument?
+            ctx.emitter.instruction(&format!("jnz {}", absent_label));          // a run-time null length means "to the end", exactly like an omitted one
+        }
+    }
+    load_as_int(ctx, length, "substr_compare length")?;
+    abi::emit_push_reg(ctx.emitter, result_reg);                                // park the coerced length
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 1);
+    abi::emit_push_reg(ctx.emitter, result_reg);                                // ... behind a raised presence flag
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&absent_label);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+    abi::emit_push_reg(ctx.emitter, result_reg);                                // the null arm parks the same zero pair as an omitted argument
+    abi::emit_push_reg(ctx.emitter, result_reg);                                // ... so both arms leave the stack at one depth
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Materializes AArch64 `substr_compare()` arguments into the comparer's ABI registers.
+///
+/// Leaves `x1`/`x2` = haystack, `x3`/`x4` = needle, `x5` = raw `$offset`, `x6` = raw
+/// `$length`, `x7` = the `$length` presence flag, and `x10` = the `$case_insensitive` flag.
+/// Every operand is parked on the temporary stack while the next one is materialized, because
+/// coercing a non-string or non-integer argument can call runtime helpers that clobber the
+/// very registers the earlier operands occupy.
+fn lower_substr_compare_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let haystack = expect_operand(inst, 0)?;
+    let needle = expect_operand(inst, 1)?;
+    let offset = expect_operand(inst, 2)?;
+    materialize_truthy_flag(ctx, inst, 4, "substr_compare")?;
+    abi::emit_push_reg(ctx.emitter, "x0");                                      // park the case-insensitivity flag before any string coercion runs
+    load_value_as_string_to_regs(ctx, haystack, "substr_compare", "x1", "x2")?;
+    ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the haystack string while materializing the remaining arguments
+    load_value_as_string_to_regs(ctx, needle, "substr_compare", "x1", "x2")?;
+    ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the needle string while materializing the window bounds
+    load_as_int(ctx, offset, "substr_compare offset")?;
+    abi::emit_push_reg(ctx.emitter, "x0");
+    materialize_substr_compare_length(ctx, inst)?;
+    abi::emit_pop_reg(ctx.emitter, "x7");                                       // restore the length presence flag
+    abi::emit_pop_reg(ctx.emitter, "x6");                                       // restore the raw window length
+    abi::emit_pop_reg(ctx.emitter, "x5");                                       // restore the raw offset
+    ctx.emitter.instruction("ldp x3, x4, [sp], #16");                           // restore the needle into the secondary runtime string argument
+    ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the haystack into the primary runtime string argument
+    abi::emit_pop_reg(ctx.emitter, "x10");                                      // restore the case-insensitivity flag
+    Ok(())
+}
+
+/// Materializes x86_64 `substr_compare()` arguments into the comparer's ABI registers.
+///
+/// Leaves `rdi`/`rsi` = haystack, `rdx`/`rcx` = needle, `r8` = raw `$offset`, `r9` = raw
+/// `$length`, `r10` = the `$length` presence flag, and `r11` = the `$case_insensitive` flag,
+/// mirroring the AArch64 emitter's register roles.
+fn lower_substr_compare_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let haystack = expect_operand(inst, 0)?;
+    let needle = expect_operand(inst, 1)?;
+    let offset = expect_operand(inst, 2)?;
+    materialize_truthy_flag(ctx, inst, 4, "substr_compare")?;
+    abi::emit_push_reg(ctx.emitter, "rax");                                     // park the case-insensitivity flag before any string coercion runs
+    load_value_as_string_to_regs(ctx, haystack, "substr_compare", "rax", "rdx")?;
+    abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+    load_value_as_string_to_regs(ctx, needle, "substr_compare", "rax", "rdx")?;
+    abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+    load_as_int(ctx, offset, "substr_compare offset")?;
+    abi::emit_push_reg(ctx.emitter, "rax");
+    materialize_substr_compare_length(ctx, inst)?;
+    abi::emit_pop_reg(ctx.emitter, "r10");                                      // restore the length presence flag
+    abi::emit_pop_reg(ctx.emitter, "r9");                                       // restore the raw window length
+    abi::emit_pop_reg(ctx.emitter, "r8");                                       // restore the raw offset
+    abi::emit_pop_reg_pair(ctx.emitter, "rdx", "rcx");                          // restore the needle into the secondary runtime string argument
+    abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");                          // restore the haystack into the primary runtime string argument
+    abi::emit_pop_reg(ctx.emitter, "r11");                                      // restore the case-insensitivity flag
+    Ok(())
+}
+
+/// Validates and normalizes the `substr_compare()` window, raising PHP's `ValueError`s.
+///
+/// php-src checks `$length` first (it must be non-negative when given at all), then `$offset`
+/// (a negative one counts back from the haystack end and CLAMPS to zero when it underflows --
+/// `substr_compare("abcdef", "def", -100)` is `-3` in php, not an error -- while a positive one
+/// may reach the end but not pass it). Afterwards the haystack registers hold the compared
+/// window and the comparison length is resolved.
+fn emit_substr_compare_argument_guards(ctx: &mut FunctionContext<'_>) {
+    emit_substr_compare_length_guard(ctx);
+    emit_substr_compare_offset_guard(ctx);
+    emit_substr_compare_window(ctx);
+}
+
+/// Rejects the negative `substr_compare()` `$length` reference PHP refuses outright.
+///
+/// The check is skipped entirely when no `$length` was supplied, because the parked zero that
+/// stands in for an omitted argument is not a value php ever validates.
+fn emit_substr_compare_length_guard(ctx: &mut FunctionContext<'_>) {
+    let ok_label = ctx.next_label("substr_compare_length_ok");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x7, {}", ok_label));          // an omitted or null length is never range-checked
+            ctx.emitter.instruction("cmp x6, #0");                              // is the supplied length negative?
+            ctx.emitter.instruction(&format!("b.ge {}", ok_label));             // a non-negative length is accepted
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test r10, r10");                           // was a length supplied at all?
+            ctx.emitter.instruction(&format!("jz {}", ok_label));               // an omitted or null length is never range-checked
+            ctx.emitter.instruction("cmp r9, 0");                               // is the supplied length negative?
+            ctx.emitter.instruction(&format!("jge {}", ok_label));              // a non-negative length is accepted
+        }
+    }
+    super::super::exceptions::emit_value_error(ctx, SUBSTR_COMPARE_NEGATIVE_LENGTH_MESSAGE);
+    ctx.emitter.label(&ok_label);
+}
+
+/// Normalizes `substr_compare()`'s `$offset` and rejects one that passes the haystack end.
+///
+/// A negative offset counts back from the end and CLAMPS to zero when its magnitude exceeds
+/// the haystack -- php raises nothing there, unlike `substr_count()`. Only a positive offset
+/// strictly greater than `strlen($haystack)` is a `ValueError`; `$offset === strlen($haystack)`
+/// is legal and compares an empty window.
+fn emit_substr_compare_offset_guard(ctx: &mut FunctionContext<'_>) {
+    let non_negative_label = ctx.next_label("substr_compare_offset_non_negative");
+    let ok_label = ctx.next_label("substr_compare_offset_ok");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x5, #0");                              // is the requested offset measured from the haystack end?
+            ctx.emitter.instruction(&format!("b.ge {}", non_negative_label));   // a non-negative offset is already absolute
+            ctx.emitter.instruction("add x5, x5, x2");                          // resolve a negative offset against the haystack length
+            ctx.emitter.instruction("cmp x5, #0");                              // did the negative offset reach past the haystack start?
+            ctx.emitter.instruction("csel x5, xzr, x5, lt");                    // php CLAMPS an underflowing negative offset to zero instead of raising
+            ctx.emitter.instruction(&format!("b {}", ok_label));                // the negative-offset window is ready for the runtime helper
+            ctx.emitter.label(&non_negative_label);
+            ctx.emitter.instruction("cmp x5, x2");                              // compare the absolute offset against the haystack length
+            ctx.emitter.instruction(&format!("b.le {}", ok_label));             // an offset at or before the haystack end is usable
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp r8, 0");                               // is the requested offset measured from the haystack end?
+            ctx.emitter.instruction(&format!("jge {}", non_negative_label));    // a non-negative offset is already absolute
+            ctx.emitter.instruction("add r8, rsi");                             // resolve a negative offset against the haystack length
+            ctx.emitter.instruction("xor eax, eax");                            // materialize the zero clamp without disturbing the comparison
+            ctx.emitter.instruction("cmp r8, 0");                               // did the negative offset reach past the haystack start?
+            ctx.emitter.instruction("cmovl r8, rax");                           // php CLAMPS an underflowing negative offset to zero instead of raising
+            ctx.emitter.instruction(&format!("jmp {}", ok_label));              // the negative-offset window is ready for the runtime helper
+            ctx.emitter.label(&non_negative_label);
+            ctx.emitter.instruction("cmp r8, rsi");                             // compare the absolute offset against the haystack length
+            ctx.emitter.instruction(&format!("jle {}", ok_label));              // an offset at or before the haystack end is usable
+        }
+    }
+    super::super::exceptions::emit_value_error(ctx, SUBSTR_COMPARE_OFFSET_OUT_OF_RANGE_MESSAGE);
+    ctx.emitter.label(&ok_label);
+}
+
+/// Slides the haystack registers onto the compared window and resolves the comparison length.
+///
+/// With no explicit `$length`, php compares `MAX(strlen($needle), strlen($haystack) - $offset)`
+/// bytes -- the LONGER of the two operands, which is what makes a prefix answer `-1`/`1`
+/// instead of `0`. An explicit `$length` replaces that default outright, even when it reaches
+/// past both operands.
+fn emit_substr_compare_window(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub x9, x2, x5");                          // compute the bytes remaining after the resolved offset
+            ctx.emitter.instruction("add x1, x1, x5");                          // slide the haystack pointer to the start of the compared window
+            ctx.emitter.instruction("mov x2, x9");                              // pass the window length as the first operand's length
+            ctx.emitter.instruction("cmp x4, x9");                              // is the needle longer than what remains of the haystack?
+            ctx.emitter.instruction("csel x11, x4, x9, gt");                    // the default comparison length is the LONGER of the two operands
+            ctx.emitter.instruction("cmp x7, #0");                              // was an explicit length supplied?
+            ctx.emitter.instruction("csel x5, x6, x11, ne");                    // an explicit length replaces the default outright
+            ctx.emitter.instruction("mov x6, x10");                             // pass the case-insensitivity flag to the comparer
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, rsi");                            // copy the haystack length before deriving the remaining bytes
+            ctx.emitter.instruction("sub rax, r8");                             // compute the bytes remaining after the resolved offset
+            ctx.emitter.instruction("add rdi, r8");                             // slide the haystack pointer to the start of the compared window
+            ctx.emitter.instruction("mov rsi, rax");                            // pass the window length as the first operand's length
+            ctx.emitter.instruction("mov r8, rcx");                             // seed the default comparison length from the needle length
+            ctx.emitter.instruction("cmp r8, rax");                             // is the needle longer than what remains of the haystack?
+            ctx.emitter.instruction("cmovl r8, rax");                           // the default comparison length is the LONGER of the two operands
+            ctx.emitter.instruction("test r10, r10");                           // was an explicit length supplied?
+            ctx.emitter.instruction("cmovne r8, r9");                           // an explicit length replaces the default outright
+            ctx.emitter.instruction("mov r9, r11");                             // pass the case-insensitivity flag to the comparer
+        }
+    }
+}
+
 /// Lowers `str_repeat(string, times)` through the shared runtime helper.
 pub(crate) fn lower_str_repeat(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() != 2 {

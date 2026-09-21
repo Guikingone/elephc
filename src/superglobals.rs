@@ -50,6 +50,26 @@ pub fn compiling_for_web() -> bool {
     COMPILING_FOR_WEB.with(std::cell::Cell::get)
 }
 
+thread_local! {
+    /// The entry source this compile was asked to build, for the `$_SERVER` path keys.
+    ///
+    /// A thread-local for the same reason as the flag above: the fact lives exactly as long as
+    /// this compile. It cannot be a parameter -- the seeding rides on `optimize::fold_constants`,
+    /// which thirteen hand-rolled pipelines call, and threading a path through all of them to
+    /// reach one statement is worse than saying where the fact lives.
+    static ENTRY_SCRIPT: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
+
+/// Records the entry source path for the compile in progress.
+pub fn set_entry_script(path: &str) {
+    ENTRY_SCRIPT.with(|cell| *cell.borrow_mut() = path.to_string());
+}
+
+/// Returns the entry source path, or an empty string when none was recorded.
+fn entry_script() -> String {
+    ENTRY_SCRIPT.with(|cell| cell.borrow().clone())
+}
+
 /// PHP request superglobals visible in every scope under `--web`.
 pub const SUPERGLOBALS: &[&str] =
     &["_SERVER", "_GET", "_POST", "_COOKIE", "_REQUEST", "_ENV", "_FILES", "_SESSION"];
@@ -90,6 +110,40 @@ pub fn superglobal_type() -> PhpType {
         key: Box::new(PhpType::Str),
         value: Box::new(PhpType::Mixed),
     }
+}
+
+/// Returns every global that needs shared reference-cell storage, in ONE walk of the module.
+///
+/// `uses_shared_ref_cell` answers for one name and walks every instruction of every body to do
+/// it, and codegen asks it per scope entry at every `eval` site. A sample of the codegen phase
+/// caught that chain — `lower_dynamic_include` -> `reload_eval_global_scope` ->
+/// `store_missing_scope_entry_to_global` -> here — holding the single heaviest iterator in the
+/// phase. Callers that hold a `SharedCodegenState` ask it instead, and it computes this set once.
+pub(crate) fn shared_ref_cell_globals(module: &Module) -> crate::fast_hash::FastSet<String> {
+    let mut names = crate::fast_hash::FastSet::default();
+    for function in module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+    {
+        for inst in &function.instructions {
+            if !matches!(inst.op, Op::InvokerRefArg | Op::GlobalRefCell) {
+                continue;
+            }
+            let Some(Immediate::GlobalName(data)) = inst.immediate else {
+                continue;
+            };
+            if let Some(candidate) = module.data.global_names.get(data.as_raw() as usize) {
+                names.insert(candidate.clone());
+            }
+        }
+    }
+    names
 }
 
 /// Returns true when any EIR body requires shared reference-cell storage for this global.
@@ -205,9 +259,21 @@ fn seed_for(name: &str) -> Vec<crate::parser::ast::Stmt> {
             // matters only if a variable is literally named `argv`, in which case
             // PHP's key wins, as it does here.
             let mut out = vec![s_assign("_SERVER", e_call("getenv", Vec::new()))];
-            let invoked = || e_index(e_var("argv"), e_int(0));
+            // The SCRIPT, not the executable. php reports the file it was asked to run, and a
+            // compiled program HAS that file -- it is the entry these statements are prepended
+            // to, so `__FILE__` names it. `$argv[0]` was the closest true answer only if you
+            // grant that a compiled program has no script, and PHP that re-reads its own entry
+            // shows why that does not hold: `vendor/autoload_runtime.php` does
+            // `$app = require $_SERVER['SCRIPT_FILENAME']` to collect the closure the entry
+            // returns, and pointed at the executable it tries to PARSE 108 MB of Mach-O.
+            // `--web` already answers `__FILE__` here (`web_prelude::build`, bootstrap 6a),
+            // which is why the same entry works there and not in the CLI SAPI.
+            // A LITERAL, not `__FILE__`: this seeding is prepended at `fold_constants`, and
+            // magic constants are lowered before that, so one reaching the optimizer panics.
+            let entry = entry_script();
+            let script = || e_str(&entry);
             for key in ["PHP_SELF", "SCRIPT_NAME", "SCRIPT_FILENAME", "PATH_TRANSLATED"] {
-                out.push(s_array_assign("_SERVER", e_str(key), invoked()));
+                out.push(s_array_assign("_SERVER", e_str(key), script()));
             }
             out.push(s_array_assign("_SERVER", e_str("DOCUMENT_ROOT"), e_str("")));
             out.push(s_array_assign("_SERVER", e_str("REQUEST_TIME"), e_call("time", Vec::new())));

@@ -87,6 +87,34 @@ impl Checker {
         Ok(true)
     }
 
+    /// Binds every local this scope CREATES with an array element write to the empty indexed
+    /// shape, before the body is checked.
+    ///
+    /// `$keys[] = $k` against a name nothing has assigned yet is how PHP makes the array, and
+    /// `crate::append_vivify` decides which names those are. Doing it at scope ENTRY rather than
+    /// at the write is what makes a growing array inside a loop work: the loop-storage fixed point
+    /// (`stabilize_loop_storage`) only records a contract for names its entry environment already
+    /// holds, and without that contract EIR lowering reads the slot at the representation it had
+    /// before the body widened it. EIR lowering seeds the same names, from the same scan, in the
+    /// function's entry block.
+    ///
+    /// Names already in `env` — parameters, superglobals, and for a closure the enclosing scope's
+    /// locals — are not candidates, so passing the environment's own keys as the bound set is what
+    /// keeps this in step with the storage EIR lowering will find.
+    pub(crate) fn seed_vivified_array_locals(env: &mut TypeEnv, body: &[Stmt]) {
+        let bound: Vec<String> = env.keys().cloned().collect();
+        let vivified = crate::append_vivify::vivified_array_locals(
+            body,
+            bound.iter().map(String::as_str),
+        );
+        for name in vivified {
+            if crate::globals_array::is_alias(&name) {
+                continue;
+            }
+            env.insert(name, PhpType::Array(Box::new(PhpType::Never)));
+        }
+    }
+
     /// Returns true when `name` is bound as a `foreach` loop key in the current
     /// scope. A foreach key is a boxed `Mixed` cell at runtime even when the
     /// checker types it as `Int`/`Str` from the source array, so an array write

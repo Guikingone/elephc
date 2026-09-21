@@ -14,6 +14,10 @@
 use std::collections::BTreeMap;
 
 use crate::codegen::data_section::DataSection;
+use crate::codegen::eval_callable_helpers::{
+    emit_aarch64_cast_eval_callable_arg, emit_x86_64_cast_eval_callable_arg,
+    EvalCallableDescriptorSupport,
+};
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::codegen::runtime_value_tag;
@@ -23,6 +27,15 @@ use crate::ir::Module;
 use crate::names::join_php_symbol;
 use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
+
+/// Where the property-SET helper keeps the boxed value, as `[x29 + N]` for the callable cast.
+const AARCH64_SET_VALUE_FROM_FP_OFFSET: i64 = -56;
+/// Where the property-SET helper keeps the active eval context, as `[x29 + N]`.
+const AARCH64_SET_CONTEXT_FROM_FP_OFFSET: i64 = -24;
+/// The x86_64 twin of the boxed value, as a `[rbp - N]` displacement.
+const X86_64_SET_VALUE_FRAME_OFFSET: usize = 32;
+/// The x86_64 twin of the eval context, as a `[rbp - N]` displacement.
+const X86_64_SET_CONTEXT_FRAME_OFFSET: usize = 64;
 
 /// Property slot metadata needed by eval property bridge dispatch.
 #[derive(Clone)]
@@ -44,14 +57,142 @@ pub(super) fn emit_eval_property_helpers(
     module: &Module,
     emitter: &mut Emitter,
     data: &mut DataSection,
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     if !module.required_runtime_features.eval_bridge {
         return;
     }
     let slots = collect_eval_property_slots(module);
-    emit_property_get_helper(module, emitter, data, &slots);
-    emit_property_is_initialized_helper(module, emitter, data, &slots);
-    emit_property_set_helper(module, emitter, data, &slots);
+    let scope_sets = index_scope_sets(&slots);
+    emit_property_get_helper(module, emitter, data, &slots, &scope_sets);
+    emit_property_is_initialized_helper(module, emitter, data, &slots, &scope_sets);
+    emit_property_set_helper(module, emitter, data, &slots, callable_support, &scope_sets);
+    emit_scope_subroutines(emitter, data, &scope_sets);
+}
+
+/// Numbers the distinct visibility scope lists, so each one gets exactly one emitted check.
+///
+/// WHY. The bridge used to test the active eval scope against every allowed class name INLINE at
+/// each slot, and a class's slots all share one list. Measured on the Symfony `--web` module,
+/// that was **522 123 `__rt_strcasecmp` call sites of the 608 413 in the whole program** -- about
+/// seven lines each, and the dominant cost of the three property helpers. The comparisons are
+/// unchanged and run in the same order; they now live in one subroutine per list, which each
+/// site reaches in five instructions whatever the length of the list.
+///
+/// The numbering is by the sorted list, so it is a function of the module rather than of the
+/// order the slots happen to be visited in.
+fn index_scope_sets(slots: &[EvalPropertySlot]) -> BTreeMap<Vec<String>, usize> {
+    let mut distinct: Vec<Vec<String>> = slots
+        .iter()
+        .filter(|slot| !matches!(slot.visibility, Visibility::Public))
+        .map(|slot| slot.allowed_scopes.clone())
+        .collect();
+    distinct.sort();
+    distinct.dedup();
+    distinct
+        .into_iter()
+        .enumerate()
+        .map(|(index, names)| (names, index))
+        .collect()
+}
+
+/// Returns the label of the subroutine answering "is the active eval scope in this list".
+fn scope_subroutine_label(index: usize, arch: Arch) -> String {
+    match arch {
+        Arch::AArch64 => format!("__elephc_eval_scope_ok_{}", index),
+        Arch::X86_64 => format!("__elephc_eval_scope_ok_{}_x", index),
+    }
+}
+
+/// Emits one subroutine per distinct scope list: scope pointer/length in, 1 or 0 out.
+fn emit_scope_subroutines(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    scope_sets: &BTreeMap<Vec<String>, usize>,
+) {
+    for (names, index) in scope_sets {
+        match emitter.target.arch {
+            Arch::AArch64 => emit_aarch64_scope_subroutine(emitter, data, names, *index),
+            Arch::X86_64 => emit_x86_64_scope_subroutine(emitter, data, names, *index),
+        }
+    }
+}
+
+/// Emits the ARM64 scope subroutine: `x1` scope pointer, `x2` scope length, `x0` = 1 when allowed.
+fn emit_aarch64_scope_subroutine(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    names: &[String],
+    index: usize,
+) {
+    let label = scope_subroutine_label(index, Arch::AArch64);
+    let allowed = format!("{}_allowed", label);
+    let denied = format!("{}_denied", label);
+    let ret = format!("{}_ret", label);
+    emitter.blank();
+    emitter.label(&label);
+    emitter.instruction("stp x29, x30, [sp, #-32]!");                           // preserve the caller frame across the comparisons
+    emitter.instruction("str x1, [sp, #16]");                                   // keep the active eval class-scope pointer
+    emitter.instruction("str x2, [sp, #24]");                                   // keep the active eval class-scope length
+    emitter.instruction(&format!("cbz x1, {}", denied));                        // reject scoped access outside a class scope
+    for scope_name in names {
+        let (string_label, len) = data.add_string(scope_name.as_bytes());
+        emitter.instruction("ldr x1, [sp, #16]");                               // reload the active eval class-scope pointer
+        emitter.instruction("ldr x2, [sp, #24]");                               // reload the active eval class-scope length
+        abi::emit_symbol_address(emitter, "x3", &string_label);
+        abi::emit_load_int_immediate(emitter, "x4", len as i64);
+        emitter.instruction("bl __rt_strcasecmp");                              // compare current eval scope with an allowed class
+        emitter.instruction(&format!("cbz x0, {}", allowed));                   // accept access when the current scope is allowed
+    }
+    emitter.label(&denied);
+    emitter.instruction("mov x0, xzr");                                         // report that the active scope is not allowed
+    emitter.instruction(&format!("b {}", ret));                                 // join the single exit
+    emitter.label(&allowed);
+    emitter.instruction("mov x0, #1");                                          // report that the active scope is allowed
+    emitter.label(&ret);
+    emitter.instruction("ldp x29, x30, [sp], #32");                             // restore the caller frame
+    emitter.instruction("ret");                                                 // return the visibility answer
+}
+
+/// Emits the x86_64 twin: `rdi` scope pointer, `rsi` scope length, `rax` = 1 when allowed.
+fn emit_x86_64_scope_subroutine(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    names: &[String],
+    index: usize,
+) {
+    let label = scope_subroutine_label(index, Arch::X86_64);
+    let allowed = format!("{}_allowed", label);
+    let denied = format!("{}_denied", label);
+    let ret = format!("{}_ret", label);
+    emitter.blank();
+    emitter.label(&label);
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the subroutine frame
+    emitter.instruction("sub rsp, 16");                                         // keep the nested call 16-byte aligned
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // keep the active eval class-scope pointer
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // keep the active eval class-scope length
+    emitter.instruction("test rdi, rdi");                                       // check whether eval is executing inside a class scope
+    emitter.instruction(&format!("jz {}", denied));                             // reject scoped access outside a class scope
+    for scope_name in names {
+        let (string_label, len) = data.add_string(scope_name.as_bytes());
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // reload the active eval class-scope pointer
+        emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                   // reload the active eval class-scope length
+        abi::emit_symbol_address(emitter, "rdx", &string_label);
+        abi::emit_load_int_immediate(emitter, "rcx", len as i64);
+        emitter.instruction("call __rt_strcasecmp");                            // compare current eval scope with an allowed class
+        emitter.instruction("test rax, rax");                                   // check whether the current scope matched
+        emitter.instruction(&format!("je {}", allowed));                        // accept access when the current scope is allowed
+    }
+    emitter.label(&denied);
+    emitter.instruction("xor eax, eax");                                        // report that the active scope is not allowed
+    emitter.instruction(&format!("jmp {}", ret));                               // join the single exit
+    emitter.label(&allowed);
+    emitter.instruction("mov eax, 1");                                          // report that the active scope is allowed
+    emitter.label(&ret);
+    emitter.instruction("mov rsp, rbp");                                        // discard the subroutine frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the visibility answer
 }
 
 /// Collects declared properties with storage layouts and visibility rules the bridge can access.
@@ -195,6 +336,7 @@ fn property_type_supported(ty: &PhpType) -> bool {
             | PhpType::Mixed
             | PhpType::Union(_)
             | PhpType::Object(_)
+            | PhpType::Callable
             | PhpType::Array(_)
             | PhpType::AssocArray { .. }
             | PhpType::Void
@@ -207,13 +349,14 @@ fn emit_property_get_helper(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slots: &[EvalPropertySlot],
+    scope_sets: &BTreeMap<Vec<String>, usize>,
 ) {
     emitter.blank();
     emitter.comment("--- eval bridge: user property get ---");
     label_c_global(module, emitter, "__elephc_eval_value_property_get");
     match module.target.arch {
-        Arch::AArch64 => emit_property_get_aarch64(module, emitter, data, slots),
-        Arch::X86_64 => emit_property_get_x86_64(module, emitter, data, slots),
+        Arch::AArch64 => emit_property_get_aarch64(module, emitter, data, slots, scope_sets),
+        Arch::X86_64 => emit_property_get_x86_64(module, emitter, data, slots, scope_sets),
     }
 }
 
@@ -223,6 +366,7 @@ fn emit_property_is_initialized_helper(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slots: &[EvalPropertySlot],
+    scope_sets: &BTreeMap<Vec<String>, usize>,
 ) {
     emitter.blank();
     emitter.comment("--- eval bridge: user property initialization probe ---");
@@ -232,8 +376,12 @@ fn emit_property_is_initialized_helper(
         "__elephc_eval_value_property_is_initialized",
     );
     match module.target.arch {
-        Arch::AArch64 => emit_property_is_initialized_aarch64(module, emitter, data, slots),
-        Arch::X86_64 => emit_property_is_initialized_x86_64(module, emitter, data, slots),
+        Arch::AArch64 => {
+            emit_property_is_initialized_aarch64(module, emitter, data, slots, scope_sets)
+        }
+        Arch::X86_64 => {
+            emit_property_is_initialized_x86_64(module, emitter, data, slots, scope_sets)
+        }
     }
 }
 
@@ -243,13 +391,17 @@ fn emit_property_set_helper(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slots: &[EvalPropertySlot],
+    callable_support: &EvalCallableDescriptorSupport,
+    scope_sets: &BTreeMap<Vec<String>, usize>,
 ) {
     emitter.blank();
     emitter.comment("--- eval bridge: user property set ---");
     label_c_global(module, emitter, "__elephc_eval_value_property_set");
     match module.target.arch {
-        Arch::AArch64 => emit_property_set_aarch64(module, emitter, data, slots),
-        Arch::X86_64 => emit_property_set_x86_64(module, emitter, data, slots),
+        Arch::AArch64 => {
+            emit_property_set_aarch64(module, emitter, data, slots, callable_support, scope_sets)
+        }
+        Arch::X86_64 => emit_property_set_x86_64(module, emitter, data, slots, callable_support, scope_sets),
     }
 }
 
@@ -259,6 +411,7 @@ fn emit_property_get_aarch64(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slots: &[EvalPropertySlot],
+    scope_sets: &BTreeMap<Vec<String>, usize>,
 ) {
     let null_label = "__elephc_eval_value_property_get_null";
     let fail_label = "__elephc_eval_value_property_get_fail";
@@ -277,7 +430,7 @@ fn emit_property_get_aarch64(
     emitter.instruction(&format!("b.ne {}", null_label));                       // non-object receivers read as PHP null
     emitter.instruction("str x1, [sp, #16]");                                   // save the unboxed object pointer for property loads
     emitter.instruction("ldr x9, [x1]");                                        // load the object's runtime class id
-    emit_aarch64_property_dispatch(module, emitter, data, slots, "get", fail_label);
+    emit_aarch64_property_dispatch(module, emitter, data, slots, scope_sets, "get", fail_label);
     emit_aarch64_stdclass_property_get_fallback(emitter);
     emitter.instruction(&format!("b {}", done_label));                          // return after stdClass fallback get or null result
     emit_aarch64_get_slot_bodies(module, emitter, slots, done_label);
@@ -299,6 +452,7 @@ fn emit_property_get_x86_64(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slots: &[EvalPropertySlot],
+    scope_sets: &BTreeMap<Vec<String>, usize>,
 ) {
     let null_label = "__elephc_eval_value_property_get_null_x";
     let fail_label = "__elephc_eval_value_property_get_fail_x";
@@ -319,7 +473,7 @@ fn emit_property_get_x86_64(
     emitter.instruction(&format!("jne {}", null_label));                        // non-object receivers read as PHP null
     emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // save the unboxed object pointer for property loads
     emitter.instruction("mov r11, QWORD PTR [rdi]");                            // load the object's runtime class id
-    emit_x86_64_property_dispatch(module, emitter, data, slots, "get", fail_label);
+    emit_x86_64_property_dispatch(module, emitter, data, slots, scope_sets, "get", fail_label);
     emit_x86_64_stdclass_property_get_fallback(emitter);
     emitter.instruction(&format!("jmp {}", done_label));                        // return after stdClass fallback get or null result
     emit_x86_64_get_slot_bodies(module, emitter, slots, done_label);
@@ -341,6 +495,7 @@ fn emit_property_is_initialized_aarch64(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slots: &[EvalPropertySlot],
+    scope_sets: &BTreeMap<Vec<String>, usize>,
 ) {
     let fail_label = "__elephc_eval_value_property_is_initialized_fail";
     let done_label = "__elephc_eval_value_property_is_initialized_done";
@@ -357,7 +512,7 @@ fn emit_property_is_initialized_aarch64(
     emitter.instruction(&format!("b.ne {}", fail_label));                       // non-object receivers cannot have initialized declared properties
     emitter.instruction("str x1, [sp, #16]");                                   // save the unboxed object pointer for marker loads
     emitter.instruction("ldr x9, [x1]");                                        // load the object's runtime class id
-    emit_aarch64_property_dispatch(module, emitter, data, slots, "is_initialized", fail_label);
+    emit_aarch64_property_dispatch(module, emitter, data, slots, scope_sets, "is_initialized", fail_label);
     emitter.instruction(&format!("b {}", fail_label));                          // no supported declared property matched the request
     emit_aarch64_initialized_slot_bodies(module, emitter, slots, done_label);
     emitter.label(fail_label);
@@ -375,6 +530,7 @@ fn emit_property_is_initialized_x86_64(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slots: &[EvalPropertySlot],
+    scope_sets: &BTreeMap<Vec<String>, usize>,
 ) {
     let fail_label = "__elephc_eval_value_property_is_initialized_fail_x";
     let done_label = "__elephc_eval_value_property_is_initialized_done_x";
@@ -393,7 +549,7 @@ fn emit_property_is_initialized_x86_64(
     emitter.instruction(&format!("jne {}", fail_label));                        // non-object receivers cannot have initialized declared properties
     emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // save the unboxed object pointer for marker loads
     emitter.instruction("mov r11, QWORD PTR [rdi]");                            // load the object's runtime class id
-    emit_x86_64_property_dispatch(module, emitter, data, slots, "is_initialized", fail_label);
+    emit_x86_64_property_dispatch(module, emitter, data, slots, scope_sets, "is_initialized", fail_label);
     emitter.instruction(&format!("jmp {}", fail_label));                        // no supported declared property matched the request
     emit_x86_64_initialized_slot_bodies(module, emitter, slots, done_label);
     emitter.label(fail_label);
@@ -411,6 +567,8 @@ fn emit_property_set_aarch64(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slots: &[EvalPropertySlot],
+    callable_support: &EvalCallableDescriptorSupport,
+    scope_sets: &BTreeMap<Vec<String>, usize>,
 ) {
     let fail_label = "__elephc_eval_value_property_set_fail";
     let done_label = "__elephc_eval_value_property_set_done";
@@ -423,15 +581,24 @@ fn emit_property_set_aarch64(
     emitter.instruction("str x0, [sp, #32]");                                   // save the boxed receiver for stdClass fallback writes
     emitter.instruction("str x4, [sp, #40]");                                   // save the active eval class-scope pointer
     emitter.instruction("str x5, [sp, #48]");                                   // save the active eval class-scope length
+    emitter.instruction("str x6, [sp, #56]");                                   // save the active eval context for callable conversion
     emitter.instruction(&format!("cbz x0, {}", fail_label));                    // null Mixed receiver cannot accept a property write
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose receiver tag and object payload
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the Mixed receiver is an object
     emitter.instruction(&format!("b.ne {}", fail_label));                       // non-object receivers reject the property write
     emitter.instruction("str x1, [sp, #16]");                                   // save the unboxed object pointer for property stores
     emitter.instruction("ldr x9, [x1]");                                        // load the object's runtime class id
-    emit_aarch64_property_dispatch(module, emitter, data, slots, "set", fail_label);
+    emit_aarch64_property_dispatch(module, emitter, data, slots, scope_sets, "set", fail_label);
     emit_aarch64_stdclass_property_set_fallback(module, emitter, fail_label, done_label);
-    emit_aarch64_set_slot_bodies(module, emitter, data, slots, done_label, fail_label);
+    emit_aarch64_set_slot_bodies(
+        module,
+        emitter,
+        data,
+        slots,
+        done_label,
+        fail_label,
+        callable_support,
+    );
     emitter.label(fail_label);
     emitter.instruction("mov x0, #0");                                          // report a failed eval property write to Rust
     emitter.instruction(&format!("b {}", done_label));                          // join the helper epilogue after failure
@@ -447,18 +614,22 @@ fn emit_property_set_x86_64(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slots: &[EvalPropertySlot],
+    callable_support: &EvalCallableDescriptorSupport,
+    scope_sets: &BTreeMap<Vec<String>, usize>,
 ) {
     let fail_label = "__elephc_eval_value_property_set_fail_x";
     let done_label = "__elephc_eval_value_property_set_done_x";
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
-    emitter.instruction("sub rsp, 64");                                         // reserve aligned slots for name, length, object, value, and scope
+    emitter.instruction("sub rsp, 80");                                         // reserve aligned slots for name, length, object, value, scope, and context
     emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the requested property-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the requested property-name length
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the boxed value being assigned
     emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // save the boxed receiver for stdClass fallback writes
     emitter.instruction("mov QWORD PTR [rbp - 48], r8");                        // save the active eval class-scope pointer
     emitter.instruction("mov QWORD PTR [rbp - 56], r9");                        // save the active eval class-scope length
+    emitter.instruction("mov rax, QWORD PTR [rbp + 16]");                       // the seventh integer argument arrives on the stack
+    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the active eval context for callable conversion
     emitter.instruction("test rdi, rdi");                                       // check whether the boxed receiver pointer is null
     emitter.instruction(&format!("jz {}", fail_label));                         // null Mixed receiver cannot accept a property write
     emitter.instruction("mov rax, rdi");                                        // move the receiver into the mixed-unbox input register
@@ -467,9 +638,17 @@ fn emit_property_set_x86_64(
     emitter.instruction(&format!("jne {}", fail_label));                        // non-object receivers reject the property write
     emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // save the unboxed object pointer for property stores
     emitter.instruction("mov r11, QWORD PTR [rdi]");                            // load the object's runtime class id
-    emit_x86_64_property_dispatch(module, emitter, data, slots, "set", fail_label);
+    emit_x86_64_property_dispatch(module, emitter, data, slots, scope_sets, "set", fail_label);
     emit_x86_64_stdclass_property_set_fallback(module, emitter, fail_label, done_label);
-    emit_x86_64_set_slot_bodies(module, emitter, data, slots, done_label, fail_label);
+    emit_x86_64_set_slot_bodies(
+        module,
+        emitter,
+        data,
+        slots,
+        done_label,
+        fail_label,
+        callable_support,
+    );
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // report a failed eval property write to Rust
     emitter.instruction(&format!("jmp {}", done_label));                        // join the helper epilogue after failure
@@ -560,6 +739,7 @@ fn emit_aarch64_property_dispatch(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slots: &[EvalPropertySlot],
+    scope_sets: &BTreeMap<Vec<String>, usize>,
     mode: &str,
     fail_label: &str,
 ) {
@@ -570,7 +750,9 @@ fn emit_aarch64_property_dispatch(
         emitter.instruction("cmp x9, x10");                                     // compare receiver class id against this eval bridge class
         emitter.instruction(&format!("b.ne {}", next_label));                   // try the next class when ids differ
         for slot in class_slots {
-            emit_aarch64_property_name_compare(module, emitter, data, slot, mode, fail_label);
+            emit_aarch64_property_name_compare(
+                module, emitter, data, slot, scope_sets, mode, fail_label,
+            );
         }
         emitter.label(&class_label);
         emitter.instruction(&format!("b {}", next_label));                      // fall through to the next class after a name miss
@@ -584,6 +766,7 @@ fn emit_x86_64_property_dispatch(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slots: &[EvalPropertySlot],
+    scope_sets: &BTreeMap<Vec<String>, usize>,
     mode: &str,
     fail_label: &str,
 ) {
@@ -594,7 +777,9 @@ fn emit_x86_64_property_dispatch(
         emitter.instruction("cmp r11, r10");                                    // compare receiver class id against this eval bridge class
         emitter.instruction(&format!("jne {}", next_label));                    // try the next class when ids differ
         for slot in class_slots {
-            emit_x86_64_property_name_compare(module, emitter, data, slot, mode, fail_label);
+            emit_x86_64_property_name_compare(
+                module, emitter, data, slot, scope_sets, mode, fail_label,
+            );
         }
         emitter.label(&class_label);
         emitter.instruction(&format!("jmp {}", next_label));                    // fall through to the next class after a name miss
@@ -608,6 +793,7 @@ fn emit_aarch64_property_name_compare(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slot: &EvalPropertySlot,
+    scope_sets: &BTreeMap<Vec<String>, usize>,
     mode: &str,
     fail_label: &str,
 ) {
@@ -630,7 +816,9 @@ fn emit_aarch64_property_name_compare(
     } else {
         fail_label
     };
-    emit_aarch64_property_scope_check(emitter, data, slot, mode, &scope_ok_label, scope_fail_label);
+    emit_aarch64_property_scope_check(
+        emitter, slot, scope_sets, mode, &scope_ok_label, scope_fail_label,
+    );
     emitter.label(&scope_ok_label);
     emitter.instruction(&format!("b {}", target_label));                        // dispatch after scoped visibility is satisfied
     emitter.label(&miss_label);
@@ -642,6 +830,7 @@ fn emit_x86_64_property_name_compare(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slot: &EvalPropertySlot,
+    scope_sets: &BTreeMap<Vec<String>, usize>,
     mode: &str,
     fail_label: &str,
 ) {
@@ -665,69 +854,61 @@ fn emit_x86_64_property_name_compare(
     } else {
         fail_label
     };
-    emit_x86_64_property_scope_check(emitter, data, slot, mode, &scope_ok_label, scope_fail_label);
+    emit_x86_64_property_scope_check(
+        emitter, slot, scope_sets, mode, &scope_ok_label, scope_fail_label,
+    );
     emitter.label(&scope_ok_label);
     emitter.instruction(&format!("jmp {}", target_label));                      // dispatch after scoped visibility is satisfied
     emitter.label(&miss_label);
 }
 
-/// Emits ARM64 visibility checks for a protected/private property bridge hit.
+/// Emits the ARM64 visibility check for a protected/private property bridge hit.
+///
+/// The comparisons themselves live in one subroutine per distinct scope list; see
+/// `index_scope_sets` for what that is worth.
 fn emit_aarch64_property_scope_check(
     emitter: &mut Emitter,
-    data: &mut DataSection,
     slot: &EvalPropertySlot,
+    scope_sets: &BTreeMap<Vec<String>, usize>,
     mode: &str,
     success_label: &str,
     fail_label: &str,
 ) {
     let (scope_ptr_offset, scope_len_offset) = aarch64_scope_offsets(mode);
-    emitter.instruction(&format!("ldr x1, [sp, #{}]", scope_ptr_offset));       // reload the active eval class-scope pointer
-    emitter.instruction(&format!("ldr x2, [sp, #{}]", scope_len_offset));       // reload the active eval class-scope length
-    emitter.instruction(&format!("cbz x1, {}", fail_label));                    // reject scoped property access outside a class scope
-    for scope_name in &slot.allowed_scopes {
-        let (label, len) = data.add_string(scope_name.as_bytes());
-        emitter.instruction(&format!("ldr x1, [sp, #{}]", scope_ptr_offset));   // reload the active eval class-scope pointer
-        emitter.instruction(&format!("ldr x2, [sp, #{}]", scope_len_offset));   // reload the active eval class-scope length
-        abi::emit_symbol_address(emitter, "x3", &label);
-        abi::emit_load_int_immediate(emitter, "x4", len as i64);
-        emitter.instruction("bl __rt_strcasecmp");                              // compare current eval scope with an allowed class
-        emitter.instruction(&format!("cbz x0, {}", success_label));             // accept access when the current scope is allowed
-    }
+    let index = scope_sets
+        .get(&slot.allowed_scopes)
+        .copied()
+        .expect("every non-public slot's scope list is indexed");
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", scope_ptr_offset));       // pass the active eval class-scope pointer
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", scope_len_offset));       // pass the active eval class-scope length
+    abi::emit_call_label(emitter, &scope_subroutine_label(index, Arch::AArch64));
+    emitter.instruction(&format!("cbnz x0, {}", success_label));                // accept access when the current scope is allowed
     emitter.instruction(&format!("b {}", fail_label));                          // reject scoped property access from unrelated classes
 }
 
-/// Emits x86_64 visibility checks for a protected/private property bridge hit.
+/// Emits the x86_64 visibility check for a protected/private property bridge hit.
 fn emit_x86_64_property_scope_check(
     emitter: &mut Emitter,
-    data: &mut DataSection,
     slot: &EvalPropertySlot,
+    scope_sets: &BTreeMap<Vec<String>, usize>,
     mode: &str,
     success_label: &str,
     fail_label: &str,
 ) {
     let (scope_ptr_offset, scope_len_offset) = x86_64_scope_offsets(mode);
+    let index = scope_sets
+        .get(&slot.allowed_scopes)
+        .copied()
+        .expect("every non-public slot's scope list is indexed");
     emitter.instruction(
         &format!("mov rdi, QWORD PTR [rbp - {}]", scope_ptr_offset)
     );                                                                          // reload the active eval class-scope pointer
     emitter.instruction(
         &format!("mov rsi, QWORD PTR [rbp - {}]", scope_len_offset)
     );                                                                          // reload the active eval class-scope length
-    emitter.instruction("test rdi, rdi");                                       // check whether eval is executing inside a class scope
-    emitter.instruction(&format!("jz {}", fail_label));                         // reject scoped property access outside a class scope
-    for scope_name in &slot.allowed_scopes {
-        let (label, len) = data.add_string(scope_name.as_bytes());
-        emitter.instruction(
-            &format!("mov rdi, QWORD PTR [rbp - {}]", scope_ptr_offset)
-        );                                                                      // reload the active eval class-scope pointer
-        emitter.instruction(
-            &format!("mov rsi, QWORD PTR [rbp - {}]", scope_len_offset)
-        );                                                                      // reload the active eval class-scope length
-        abi::emit_symbol_address(emitter, "rdx", &label);
-        abi::emit_load_int_immediate(emitter, "rcx", len as i64);
-        emitter.instruction("call __rt_strcasecmp");                            // compare current eval scope with an allowed class
-        emitter.instruction("test rax, rax");                                   // check whether the current scope matched
-        emitter.instruction(&format!("je {}", success_label));                  // accept access when the current scope is allowed
-    }
+    abi::emit_call_label(emitter, &scope_subroutine_label(index, Arch::X86_64));
+    emitter.instruction("test rax, rax");                                       // check whether the active scope is allowed
+    emitter.instruction(&format!("jne {}", success_label));                     // accept access when the current scope is allowed
     emitter.instruction(&format!("jmp {}", fail_label));                        // reject scoped property access from unrelated classes
 }
 
@@ -815,10 +996,18 @@ fn emit_aarch64_set_slot_bodies(
     slots: &[EvalPropertySlot],
     done_label: &str,
     fail_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     for slot in slots {
         emitter.label(&slot_body_label(module, slot, "set"));
-        emit_aarch64_store_property_slot(module, emitter, data, slot, fail_label);
+        emit_aarch64_store_property_slot(
+            module,
+            emitter,
+            data,
+            slot,
+            fail_label,
+            callable_support,
+        );
         emitter.instruction("mov x0, #1");                                      // report a successful eval property write to Rust
         emitter.instruction(&format!("b {}", done_label));                      // return after storing the declared property value
     }
@@ -832,10 +1021,18 @@ fn emit_x86_64_set_slot_bodies(
     slots: &[EvalPropertySlot],
     done_label: &str,
     fail_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     for slot in slots {
         emitter.label(&slot_body_label(module, slot, "set"));
-        emit_x86_64_store_property_slot(module, emitter, data, slot, fail_label);
+        emit_x86_64_store_property_slot(
+            module,
+            emitter,
+            data,
+            slot,
+            fail_label,
+            callable_support,
+        );
         emitter.instruction("mov rax, 1");                                      // report a successful eval property write to Rust
         emitter.instruction(&format!("jmp {}", done_label));                    // return after storing the declared property value
     }
@@ -932,6 +1129,16 @@ fn emit_aarch64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot
             abi::emit_load_int_immediate(emitter, "x0", runtime_value_tag(&slot.ty) as i64);
             emitter.instruction("bl __rt_mixed_from_value");                    // box the property payload as a Mixed cell
         }
+        // A `\Closure`-typed property holds a callable DESCRIPTOR. The tag has to come from the
+        // REPRESENTATION, not from `slot.ty`: the declared type is `Object("Closure")`, whose
+        // `runtime_value_tag` is 6, and boxing a descriptor as an object hands the interpreter a
+        // pointer it would read as an instance.
+        PhpType::Callable => {
+            emitter.instruction(&format!("ldr x1, [x9, #{}]", slot.offset));    // load the callable descriptor pointer
+            emitter.instruction("mov x2, xzr");                                 // descriptor payloads do not use a high word
+            emitter.instruction("mov x0, #10");                                 // runtime tag 10 = callable descriptor
+            emitter.instruction("bl __rt_mixed_from_value");                    // box the descriptor as a Mixed cell
+        }
         PhpType::Float => {
             emitter.instruction(&format!("ldr d0, [x9, #{}]", slot.offset));    // load the floating property payload
             emitter.instruction("fmov x1, d0");                                 // move float bits into the Mixed low payload word
@@ -991,6 +1198,15 @@ fn emit_x86_64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot)
             abi::emit_load_int_immediate(emitter, "rax", runtime_value_tag(&slot.ty) as i64);
             emitter.instruction("call __rt_mixed_from_value");                  // box the property payload as a Mixed cell
         }
+        // See the ARM64 twin: the tag is the REPRESENTATION's, not the declared type's.
+        PhpType::Callable => {
+            emitter.instruction(
+                &format!("mov rdi, QWORD PTR [r11 + {}]", slot.offset)
+            );                                                                  // load the callable descriptor pointer
+            emitter.instruction("xor esi, esi");                                // descriptor payloads do not use a high word
+            emitter.instruction("mov rax, 10");                                 // runtime tag 10 = callable descriptor
+            emitter.instruction("call __rt_mixed_from_value");                  // box the descriptor as a Mixed cell
+        }
         PhpType::Float => {
             emitter.instruction(
                 &format!("movsd xmm0, QWORD PTR [r11 + {}]", slot.offset)
@@ -1048,6 +1264,7 @@ fn emit_aarch64_store_property_slot(
     data: &mut DataSection,
     slot: &EvalPropertySlot,
     fail_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     match slot.ty.codegen_repr() {
         PhpType::Int => emit_aarch64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "x0"),
@@ -1079,6 +1296,23 @@ fn emit_aarch64_store_property_slot(
         PhpType::Array(_) => emit_aarch64_store_heap_property_slot(emitter, slot, 4, fail_label),
         PhpType::AssocArray { .. } => {
             emit_aarch64_store_heap_property_slot(emitter, slot, 5, fail_label);
+        }
+        // The interpreter hands over a BOXED callback; the slot holds a DESCRIPTOR. This is the
+        // same conversion a `callable` parameter gets, pointed at this helper's own frame.
+        PhpType::Callable => {
+            emit_aarch64_cast_eval_callable_arg(
+                module,
+                emitter,
+                data,
+                callable_support,
+                &slot_body_label_raw(slot, "set"),
+                fail_label,
+                AARCH64_SET_CONTEXT_FROM_FP_OFFSET,
+                AARCH64_SET_VALUE_FROM_FP_OFFSET,
+            );
+            emitter.instruction("ldr x9, [sp, #16]");                           // reload the unboxed object pointer for the store
+            emitter.instruction(&format!("str x0, [x9, #{}]", slot.offset));    // publish the converted descriptor
+            emitter.instruction(&format!("str xzr, [x9, #{}]", slot.offset + 8)); // clear the typed-property initialization marker
         }
         PhpType::Object(class_name) => {
             emit_aarch64_store_object_property_slot(
@@ -1116,6 +1350,7 @@ fn emit_x86_64_store_property_slot(
     data: &mut DataSection,
     slot: &EvalPropertySlot,
     fail_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     match slot.ty.codegen_repr() {
         PhpType::Int => emit_x86_64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "rax"),
@@ -1153,6 +1388,26 @@ fn emit_x86_64_store_property_slot(
         PhpType::Array(_) => emit_x86_64_store_heap_property_slot(emitter, slot, 4, fail_label),
         PhpType::AssocArray { .. } => {
             emit_x86_64_store_heap_property_slot(emitter, slot, 5, fail_label);
+        }
+        // See the ARM64 twin.
+        PhpType::Callable => {
+            emit_x86_64_cast_eval_callable_arg(
+                module,
+                emitter,
+                data,
+                callable_support,
+                &slot_body_label_raw(slot, "set"),
+                fail_label,
+                X86_64_SET_CONTEXT_FRAME_OFFSET,
+                X86_64_SET_VALUE_FRAME_OFFSET,
+            );
+            emitter.instruction("mov r11, QWORD PTR [rbp - 24]");               // reload the unboxed object pointer for the store
+            emitter.instruction(
+                &format!("mov QWORD PTR [r11 + {}], rax", slot.offset)
+            );                                                                  // publish the converted descriptor
+            emitter.instruction(
+                &format!("mov QWORD PTR [r11 + {}], 0", slot.offset + 8)
+            );                                                                  // clear the typed-property initialization marker
         }
         PhpType::Object(class_name) => {
             emit_x86_64_store_object_property_slot(

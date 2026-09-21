@@ -57,18 +57,20 @@ impl Checker {
     /// Checks whether a class name is already registered in `classes`, `extern_classes`, or
     /// `packed_classes`, using PHP-symbol key comparison for case-insensitive matching.
     pub(super) fn has_class_decl_folded(&self, name: &str) -> bool {
-        let key = php_symbol_key(name);
+        // Three whole-table scans, asked per declaration: the folded form allocated a
+        // lowercased `String` for every registered class each time. `eq_ignore_ascii_case`
+        // is the same predicate.
         self.classes
             .keys()
-            .any(|existing| php_symbol_key(existing) == key)
+            .any(|existing| existing.eq_ignore_ascii_case(name))
             || self
                 .extern_classes
                 .keys()
-                .any(|existing| php_symbol_key(existing) == key)
+                .any(|existing| existing.eq_ignore_ascii_case(name))
             || self
                 .packed_classes
                 .keys()
-                .any(|existing| php_symbol_key(existing) == key)
+                .any(|existing| existing.eq_ignore_ascii_case(name))
     }
 
     /// Validates and registers an extern function declaration if no prior declaration exists.

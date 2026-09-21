@@ -49,6 +49,13 @@ pub enum ValidationError {
         inst: InstId,
         expected: &'static str,
         actual: usize,
+        /// The instruction's opcode and source position, so a backend gap names the PHP line it
+        /// came from instead of only an `InstId` the reader cannot look up.
+        ///
+        /// `LoweringError` renders this enum with `{:?}`, so anything a reader needs has to be
+        /// IN the value. Finding the construct behind one of these used to mean re-running the
+        /// compiler under a temporary `eprintln!`.
+        at: Option<String>,
     },
     OperandTypeMismatch {
         inst: InstId,
@@ -724,6 +731,7 @@ fn validate_typed_runtime_call(
                     inst: inst_id,
                     expected: "typed runtime signature",
                     actual: inst.operands.len(),
+                    at: runtime_call_location(function, inst, target),
                 });
             }
             for (index, expected) in parameters.iter().copied().enumerate() {
@@ -752,6 +760,7 @@ fn validate_typed_runtime_call(
                     inst: inst_id,
                     expected: "registry runtime signature",
                     actual,
+                    at: runtime_call_location(function, inst, target),
                 });
             }
         }
@@ -841,6 +850,7 @@ fn check_count(
             inst: inst_id,
             expected: expected_label,
             actual: inst.operands.len(),
+            at: instruction_location(inst),
         })
     }
 }
@@ -859,6 +869,7 @@ fn check_count_at_least(
             inst: inst_id,
             expected: expected_label,
             actual: inst.operands.len(),
+            at: instruction_location(inst),
         })
     }
 }
@@ -877,6 +888,7 @@ fn check_count_at_most(
             inst: inst_id,
             expected: expected_label,
             actual: inst.operands.len(),
+            at: instruction_location(inst),
         })
     }
 }
@@ -983,6 +995,7 @@ fn check_first_heap(
             inst: inst_id,
             expected: "at least 1",
             actual: 0,
+            at: instruction_location(inst),
         });
     };
     let actual = function
@@ -1505,6 +1518,32 @@ fn ownership_compatible(ir_type: IrType, php_type: &PhpType, ownership: Ownershi
     } else {
         matches!(ownership, Ownership::NonHeap)
     }
+}
+
+/// Describes an instruction for a diagnostic: its opcode plus the source position it came from.
+///
+/// `LoweringError` renders `ValidationError` with `{:?}`, so a validation failure shows only what
+/// the value itself carries. An `InstId` alone identifies nothing a reader can act on; the opcode
+/// and the PHP `line:col` are what turn a backend gap into a construct they can go and look at.
+fn instruction_location(inst: &Instruction) -> Option<String> {
+    let span = inst.span?;
+    Some(format!("{} at {}:{}", inst.op.name(), span.line, span.col))
+}
+
+/// Like [`instruction_location`], and also names the runtime call's target.
+///
+/// `runtime_call` says nothing about WHICH runtime function disagreed about its operand count,
+/// and that is the whole question when one of them fails.
+fn runtime_call_location(
+    function: &Function,
+    inst: &Instruction,
+    target: crate::ir::RuntimeCallTarget,
+) -> Option<String> {
+    let base = instruction_location(inst).unwrap_or_else(|| inst.op.name().to_string());
+    // The enclosing function is named for the same reason the checker records a declaration: an
+    // `Instruction` carries a `Span` with no file, and after include/autoload expansion a bare
+    // `line:col` is shared by every spliced file. The function name is what a reader can find.
+    Some(format!("{base} -> {target:?} in {}", function.name))
 }
 
 #[cfg(test)]

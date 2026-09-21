@@ -301,10 +301,18 @@ pub(in crate::interpreter) fn dynamic_object_is_a(
     if eval_class_string_is_a(class.name(), target_class, exclude_self, declaring, values)? {
         return Ok(Some(true));
     }
-    if declaring.class_native_parent_name(class.name()).is_some() {
-        return values
-            .object_is_a(object, target_class, exclude_self)
-            .map(Some);
-    }
-    Ok(Some(false))
+    // A "no" from the eval tables is not proof. They hold what THIS request declared, and a
+    // compiled ancestor or a compiled interface can be absent from them entirely -- the AOT
+    // metadata is the other half of the world, and it is what a compiled class id resolves
+    // through. Asking it before answering no is what stops a true `instanceof` from reading as
+    // false: `Twig\Environment::addExtension(ExtensionInterface $extension)` threw a TypeError on
+    // a `TranslationExtension` whose only declared ancestry left the eval table at
+    // `AbstractExtension`, and the Symfony container swallowed it into a null `twig` service.
+    //
+    // The two can only disagree in one direction: a subclass inherits every interface its
+    // ancestors declare, so the bridge answering true over an eval "no" is the correct answer,
+    // never a looser one.
+    values
+        .object_is_a(object, target_class, exclude_self)
+        .map(Some)
 }

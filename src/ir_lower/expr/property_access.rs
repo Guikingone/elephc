@@ -509,7 +509,12 @@ pub(super) fn property_can_be_uninitialized(
 ) -> bool {
     let object_ty = ctx.builder.value_php_type(object);
     let Some((class_name, nullable)) = singular_object_class(&object_ty) else {
-        return false;
+        // No single receiver class to name a slot in — an untyped parameter, a `mixed` local, a
+        // union of two classes. `Op::PropInitialized` dispatches on the runtime class instead and
+        // answers "initialized" for every shape it cannot settle, so the ordinary read still
+        // happens wherever it used to. Turning this away sent `$untyped->typedProp ?? "d"` to the
+        // plain read, which fatals where PHP answers the default.
+        return !matches!(object_ty.codegen_repr(), PhpType::Object(_));
     };
     // `Op::PropInitialized` reads a slot, so it needs an object pointer. A concrete `C`
     // receiver already is one; a `?C` one represents as a boxed `Mixed` and the backend

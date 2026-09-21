@@ -439,6 +439,65 @@ pub(super) fn eval_array_set_var_stmt(
 }
 
 /// Executes the non-object `$var[index] = value` path with the existing array semantics.
+
+/// Executes `$s[$i] = $c` where `$s` is a STRING, returning the new string cell.
+///
+/// PHP does NOT turn a string into an array here — it writes one byte in place — and the
+/// interpreter used to, because `eval_non_object_array_set_var_stmt` discarded every
+/// non-array-like existing value and started a fresh array. `$s = "abc"; $s[0] = "X";` gave
+/// `["X"]` instead of `"Xbc"`.
+///
+/// symfony/polyfill-mbstring's `mb_convert_case()` is written on this exact operation
+/// (`$s[--$nlen] = $uchr[--$ulen];`), so `mb_strtoupper()` returned an ARRAY and Twig's `|upper`
+/// filter died with `Return value must be of type string, array returned`.
+///
+/// Every rule below was measured with `php -n` 8.5:
+///
+/// - only the FIRST BYTE of the value is assigned, and a longer one warns;
+/// - an EMPTY value is an `Error`, not a warning;
+/// - a NEGATIVE offset counts from the end, and one that lands before the start warns and
+///   assigns NOTHING;
+/// - an offset past the end pads with SPACES (`$v = "ab"; $v[5] = "x";` is `"ab   x"`);
+/// - an EMPTY STRING is still a string (`$a = ""; $a[0] = "X";` is `"X"`), which is why this runs
+///   for any string tag and not only a non-empty one. `null` and an undefined name keep PHP's
+///   array vivification and never reach here.
+fn eval_string_offset_assign(
+    subject: RuntimeCellHandle,
+    index: RuntimeCellHandle,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut bytes = values.string_bytes(subject)?;
+    let offset = eval_require_int_arg(index, "string offset", 1, "offset", context, values)?;
+    let replacement = values.string_bytes(value)?;
+    if replacement.is_empty() {
+        return eval_throw_error(
+            "Cannot assign an empty string to a string offset",
+            context,
+            values,
+        );
+    }
+    if replacement.len() > 1 {
+        values.warning("Only the first byte will be assigned to the string offset")?;
+    }
+    let resolved = if offset < 0 {
+        offset + bytes.len() as i64
+    } else {
+        offset
+    };
+    if resolved < 0 {
+        values.warning(&format!("Illegal string offset {offset}"))?;
+        return values.string_bytes_value(&bytes);
+    }
+    let resolved = resolved as usize;
+    if resolved >= bytes.len() {
+        bytes.resize(resolved + 1, b' ');
+    }
+    bytes[resolved] = replacement[0];
+    values.string_bytes_value(&bytes)
+}
+
 pub(super) fn eval_non_object_array_set_var_stmt(
     name: &str,
     index: &EvalExpr,
@@ -449,6 +508,21 @@ pub(super) fn eval_non_object_array_set_var_stmt(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let mut ownership = ScopeCellOwnership::Owned;
+    // A STRING subject is written in place, byte by byte — it does not become an array. Only a
+    // value with no offsets at all (null, an undefined name, false) vivifies one.
+    if let Some((cell, flags_ownership)) = existing {
+        if values.type_tag(cell)? == EVAL_TAG_STRING {
+            let index = eval_array_set_index(index, context, scope, values)?;
+            let value = eval_expr(value, context, scope, values)?;
+            let updated = eval_string_offset_assign(cell, index, value, context, values)?;
+            for replaced in
+                set_scope_cell(context, scope, name.to_string(), updated, flags_ownership)?
+            {
+                values.release(replaced)?;
+            }
+            return Ok(());
+        }
+    }
     let array = if let Some((cell, flags_ownership)) = existing {
         if values.is_array_like(cell)? {
             ownership = flags_ownership;

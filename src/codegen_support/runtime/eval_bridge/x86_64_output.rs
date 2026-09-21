@@ -273,7 +273,7 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return zero to Rust
 
     label_c_global(emitter, "__elephc_eval_warning");
-    emitter.instruction("jmp __rt_diag_warning");                               // emit or suppress one eval runtime warning
+    emitter.instruction("jmp __rt_diag_message");                               // one WHOLE interpreted diagnostic: it carries no trailing newline
 
     label_c_global(emitter, "__elephc_eval_fatal");
     emitter.instruction("mov rdx, rsi");                                        // move fatal length into the stderr write-length register

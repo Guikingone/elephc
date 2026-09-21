@@ -141,7 +141,7 @@ pub(super) fn validate_eval_enum_decl(
     validate_declared_class_aot_interface_members(&enum_class, context, values)?;
     validate_concrete_class_builtin_interface_requirements(&enum_class, context)?;
     validate_concrete_class_aot_interface_requirements(&enum_class, context, values)?;
-    validate_concrete_class_requirements(&enum_class, context)
+    validate_concrete_class_requirements(&enum_class, context, values)
 }
 
 /// Validates PHP's special enum interface rules for one eval enum declaration.
@@ -463,7 +463,7 @@ pub(super) fn initialize_eval_static_properties(
         } else {
             None
         };
-        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        if crate::eval_trace::enabled() {
             eprintln!(
                 "[elephc-eval-trace] phase=static_property_seed class={:?} property={:?} has_default={} seeded={}",
                 class.name(),

@@ -135,7 +135,7 @@ fn trace_call_arg_error(
     status: EvalStatus,
     context: &ElephcEvalContext,
 ) -> EvalStatus {
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         let call_site = context.call_site();
         eprintln!(
             "[elephc-eval-trace] phase=call_arg_error index={index} status={status:?} file={:?} line={} expr={expr:?}",
@@ -464,7 +464,7 @@ fn eval_invoker_ref_slot_value(
         }
         EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE => {
             let word = unsafe { *(slot as *const u64) };
-            values.raw_word_value(source_tag, word)
+            raw_slot_word_value(source_tag, word, values)
         }
         EVAL_TAG_MIXED => {
             let value = unsafe { *(slot as *const RuntimeCellHandle) };

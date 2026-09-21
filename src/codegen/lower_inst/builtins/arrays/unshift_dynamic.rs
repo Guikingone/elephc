@@ -28,7 +28,15 @@ pub(super) fn lower_array_unshift_dynamic(
     unshift::require_array_unshift_result_type(&inst.result_php_type.codegen_repr())?;
     let write_through_cell = source_is_by_ref_mixed_cell(ctx, array)?;
     let source_local = super::source_load_local_slot(ctx, array)?;
-    if !write_through_cell && source_local.is_none() && inst.operands.len() > 1 {
+    // A function `static` is writable storage too — its cell lives in a `.comm` symbol rather
+    // than a frame slot, which is the only reason `source_load_local_slot` cannot name it. Before
+    // this arm existed `array_unshift($q)` on any `static` array was refused outright.
+    let source_static = ctx.static_local_source_slot(array)?;
+    if !write_through_cell
+        && source_local.is_none()
+        && source_static.is_none()
+        && inst.operands.len() > 1
+    {
         return Err(CodegenIrError::unsupported(
             "array_unshift for a gradual by-reference receiver without writable storage"
                 .to_string(),
@@ -300,6 +308,9 @@ fn replace_gradual_local_cell(
     if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, array)?;
     }
+    // The static-local twin of that store. `__rt_decref_mixed` above already released the cell
+    // the symbol held, so this publishes the replacement without further refcount traffic.
+    ctx.writeback_static_local_array_source(array)?;
     Ok(())
 }
 

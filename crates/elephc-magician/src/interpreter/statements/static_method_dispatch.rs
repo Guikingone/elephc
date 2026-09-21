@@ -92,7 +92,7 @@ pub(super) fn eval_static_method_call_result_resolved(
     )?;
     // Every step below can refuse, and until this trace existed a refusal anywhere in the chain
     // surfaced as one anonymous fatal with no way to tell which step it was.
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         eprintln!(
             "[elephc-eval-trace] phase=static_method_dispatch class={class_name:?} method={method_name:?} context_owns={} args={}",
             context.has_class(&class_name),
@@ -243,7 +243,7 @@ pub(super) fn eval_static_method_call_result_resolved(
         context,
         values,
     );
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         eprintln!(
             "[elephc-eval-trace] phase=static_method_native class={class_name:?} method={method_name:?} outcome={}",
             match &native {
@@ -287,7 +287,7 @@ pub(super) fn eval_static_method_call_result_resolved(
     let result =
         eval_native_static_method_with_evaluated_args(&class_name, method_name, evaluated_args, context, values);
     if let Err(status) = &result {
-        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        if crate::eval_trace::enabled() {
             let call_site = context.call_site();
             eprintln!(
                 "[elephc-eval-trace] phase=static_method_unresolved class={class_name:?} method={method_name:?} status={status:?} context_owns={} file={:?} line={}",

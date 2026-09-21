@@ -9,6 +9,53 @@
 
 use super::*;
 
+/// Verifies a method call on a union of two INTERFACES resolves through the classes that implement
+/// them, even when neither interface declares the method. A union of interfaces describes a
+/// runtime object that may carry members none of them names, and codegen already dispatches such a
+/// receiver on the runtime class id — but the checker refused the call outright with "Nullsafe
+/// method call requires a single nullable object type". Symfony's `Router` declares
+/// `protected UrlMatcherInterface|RequestMatcherInterface $matcher;` and calls
+/// `addExpressionLanguageProvider()` on it behind a `method_exists()` guard.
+/// PHP outputs "add:x;u:/p;ok".
+#[test]
+fn test_method_call_on_a_union_of_two_interfaces() {
+    let out = compile_and_run(
+        r#"<?php
+interface UrlMatcher { public function match(string $path): string; }
+interface RequestMatcher { public function matchRequest(string $path): string; }
+
+class Compiled implements UrlMatcher, RequestMatcher {
+    public function match(string $path): string { return "u:$path"; }
+    public function matchRequest(string $path): string { return "r:$path"; }
+    public function addProvider(string $p): void { echo "add:$p;"; }
+}
+
+class Router {
+    protected UrlMatcher|RequestMatcher $matcher;
+
+    public function getMatcher(): UrlMatcher|RequestMatcher {
+        if (isset($this->matcher)) {
+            return $this->matcher;
+        }
+
+        $this->matcher = new Compiled();
+        if (method_exists($this->matcher, 'addProvider')) {
+            $this->matcher->addProvider('x');
+        }
+
+        return $this->matcher;
+    }
+}
+
+$router = new Router();
+$matcher = $router->getMatcher();
+echo $matcher->match('/p'), '|';
+echo $matcher instanceof UrlMatcher ? 'ok' : 'bad';
+"#,
+    );
+    assert_eq!(out, "add:x;u:/p|ok");
+}
+
 /// Verifies that gettype() reflects the narrowest runtime type of a union-typed local,
 /// and that reassignment to an alternate union member updates the reported type.
 /// Fixture: `int|string $value = 1` → gettype returns "integer", then `$value = "two"` → gettype returns "string".

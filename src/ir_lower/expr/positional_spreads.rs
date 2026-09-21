@@ -37,8 +37,24 @@ pub(super) fn lower_positional_spread_args_with_signature(
         operands.push(lower_arg_with_signature(ctx, sig, index, arg));
     }
 
-    indexed_spread_source_type(ctx, inner)?;
+    let source_ty = indexed_spread_source_type(ctx, inner)?;
+    // A `callable` source is a DESCRIPTOR, not an array. Boxing it hands the element reads to the
+    // gradual path, which rebuilds slot 0 (the bound receiver) and slot 1 (the bare method name)
+    // from the descriptor. The two steps an array source needs are skipped deliberately:
+    // `narrow_gradual_indexed_spread_source` would unbox it as runtime tag 4 and read a
+    // descriptor as an array, and the min-length guard would call `ArrayLen` on it — a
+    // callable array is exactly two elements by construction, so there is nothing to check.
+    let callable_source = matches!(source_ty, PhpType::Callable);
     let spread = lower_expr(ctx, inner);
+    // Box a `callable` source so the narrowing below sees a gradual value, then let that
+    // narrowing MATERIALIZE it: `__rt_mixed_spread_array` turns a callable descriptor into a real
+    // two-element array. Handing the boxed descriptor downstream instead left the hidden variadic
+    // tail slicing a descriptor, and the callee's own `count()` then received null.
+    let spread = if callable_source {
+        ctx.box_value_as_mixed(spread, PhpType::Mixed, Some(args[spread_idx].span))
+    } else {
+        spread
+    };
     let spread = narrow_gradual_indexed_spread_source(ctx, spread, args[spread_idx].span);
     let spread_type = ctx.builder.value_php_type(spread.value);
     let temp_name = ctx.declare_hidden_temp(spread_type.clone());
@@ -164,6 +180,15 @@ pub(super) fn indexed_spread_source_type(
     let ty = match &expr.kind {
         ExprKind::Variable(name) => ctx.local_type(name),
         ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, expr),
+        // A property read is GRADUAL for this decision. The syntactic fallback below cannot see a
+        // declared property type, so `...$this->controller` used to leave the spread path
+        // entirely and lower as a single operand -- a hard `OperandCountMismatch` at compile
+        // time. Treating it as gradual routes it through `__rt_mixed_spread_array`, which passes
+        // a real array through, rebuilds a callable descriptor's two elements, and answers null
+        // for anything else so the length guard raises PHP's own unpack error.
+        ExprKind::PropertyAccess { .. }
+        | ExprKind::NullsafePropertyAccess { .. }
+        | ExprKind::DynamicPropertyAccess { .. } => PhpType::Mixed,
         _ => ctx
             .builtin_call_types
             .get(&(ctx.loop_storage_scope.clone(), expr.span))
@@ -171,7 +196,14 @@ pub(super) fn indexed_spread_source_type(
             .unwrap_or_else(|| infer_expr_type_syntactic(expr)),
     }
     .codegen_repr();
-    if matches!(ty, PhpType::Array(_) | PhpType::Mixed | PhpType::Union(_)) {
+    // `Callable` joins the gradual shapes: its slot holds a descriptor, and a descriptor built
+    // from PHP's `[$object, 'method']` syntax rebuilds both elements on demand (see
+    // `lower_mixed_callable_slot_or_array_get`). The caller boxes it so those reads take the
+    // gradual path.
+    if matches!(
+        ty,
+        PhpType::Array(_) | PhpType::Mixed | PhpType::Union(_) | PhpType::Callable
+    ) {
         Some(ty)
     } else {
         None
@@ -198,6 +230,17 @@ pub(super) fn emit_positional_spread_min_len_guard(
     span: crate::span::Span,
 ) {
     if min_len == 0 {
+        return;
+    }
+    // `ArrayLen` reads an INDEXED array header. A gradual spread source can be hash storage —
+    // `...$this->someAssoc` reaches here now that a property read counts as a spread source — and
+    // handing that to `ArrayLen` fails EIR validation outright (`expected Heap(Array), actual
+    // Heap(Hash)`) rather than producing a wrong count. The guard is an extra diagnostic, not a
+    // correctness requirement, so a shape it cannot measure simply goes unguarded.
+    if !matches!(
+        ctx.builder.value_type(spread),
+        crate::ir::IrType::Heap(crate::ir::IrHeapKind::Array)
+    ) {
         return;
     }
     let len = ctx.emit_value(

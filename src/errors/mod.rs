@@ -17,6 +17,14 @@ use crate::span::Span;
 pub struct CompileError {
     pub span: Span,
     pub file: Option<String>,
+    /// The class-like or function this error was raised inside, when a pass knew it.
+    ///
+    /// A `Span` carries only line and column — deliberately, so it stays 16 bytes in every token
+    /// and AST node. That is enough while one file is being parsed, and not enough afterwards:
+    /// the autoload pass splices hundreds of files into one program, and their line numbers
+    /// collide. Naming the enclosing declaration is what lets `pipeline` recover the file, which
+    /// it already maps per declaration for `Reflection*::getFileName()`.
+    pub declaration: Option<String>,
     pub message: String,
     pub related: Vec<CompileError>,
 }
@@ -34,6 +42,7 @@ impl CompileError {
         Self {
             span,
             file: None,
+            declaration: None,
             message: message.to_string(),
             related: Vec::new(),
         }
@@ -44,6 +53,62 @@ impl CompileError {
         self.file = Some(file.into());
         self
     }
+
+    /// Records the class-like or function this error was raised inside, keeping any name already
+    /// set: the innermost pass to know wins, and an outer one must not overwrite it.
+    pub fn within_declaration(mut self, declaration: impl Into<String>) -> Self {
+        if self.declaration.is_none() {
+            self.declaration = Some(declaration.into());
+        }
+        for related in &mut self.related {
+            if related.declaration.is_none() {
+                related.declaration = self.declaration.clone();
+            }
+        }
+        self
+    }
+
+    /// Fills in `file` from a declaration-name-to-path map, for this error and its related ones.
+    ///
+    /// The map is the one `autoload` already builds for reflection. An error whose declaration is
+    /// unknown, or whose declaration has no recorded path, is left alone — the caller's own
+    /// fallback (the entry file) still applies.
+    pub fn resolve_declaration_files(
+        mut self,
+        paths: &std::collections::HashMap<String, String>,
+    ) -> Self {
+        if self.file.is_none() {
+            if let Some(path) = self
+                .declaration
+                .as_deref()
+                .and_then(|name| lookup_declaration_path(paths, name))
+            {
+                self.file = Some(path);
+            }
+        }
+        self.related = self
+            .related
+            .into_iter()
+            .map(|related| related.resolve_declaration_files(paths))
+            .collect();
+        self
+    }
+}
+
+/// Looks a declaration name up in the source-path map.
+///
+/// The map is keyed the way every other symbol table in the compiler is: leading backslash
+/// stripped and lowercased, because PHP matches class and function names case-insensitively.
+/// A pass that recorded `App\Kernel` must still find the entry written as `app\kernel`.
+fn lookup_declaration_path(
+    paths: &std::collections::HashMap<String, String>,
+    name: &str,
+) -> Option<String> {
+    let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+    paths.get(&key).or_else(|| paths.get(name)).cloned()
+}
+
+impl CompileError {
 
     /// Combines a vector of errors into a single error, treating the first as primary and the rest as related.
     ///

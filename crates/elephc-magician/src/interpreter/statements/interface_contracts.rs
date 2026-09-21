@@ -153,10 +153,10 @@ pub(super) fn eval_aot_method_names(
     class_like: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<String>, EvalStatus> {
-    let method_names = values.reflection_method_names(class_like)?;
-    let names = eval_runtime_string_array_to_vec(method_names, values)?;
-    values.release(method_names)?;
-    Ok(names)
+    values.aot_member_names(
+        crate::interpreter::AotMemberNameKind::Method,
+        class_like,
+    )
 }
 
 /// Builds one generated/AOT abstract parent method requirement from metadata.
@@ -261,40 +261,17 @@ pub(super) fn eval_native_signature_interface_method(
     .with_return_type(signature.return_type().cloned())
 }
 
-/// Copies a runtime string array into Rust-owned strings for declaration validation.
-pub(super) fn eval_runtime_string_array_to_vec(
-    array: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
-) -> Result<Vec<String>, EvalStatus> {
-    let len = values.array_len(array)?;
-    let mut result = Vec::with_capacity(len);
-    for position in 0..len {
-        let key = values.int(position as i64)?;
-        let value = values.array_get(array, key)?;
-        result.push(eval_runtime_string_value(value, values)?);
-    }
-    Ok(result)
-}
-
-/// Reads one runtime string cell as UTF-8 metadata.
-pub(super) fn eval_runtime_string_value(
-    value: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
-) -> Result<String, EvalStatus> {
-    let bytes = values.string_bytes(value)?;
-    String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)
-}
-
 /// Validates that one eval class provides methods required by one eval interface.
 pub(super) fn validate_class_implements_eval_interface(
     class: &EvalClass,
     interface_name: &str,
     context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     for (requirement_owner, requirement) in
         context.interface_method_requirements_with_owners(interface_name)
     {
-        if !class_has_interface_method(class, &requirement_owner, &requirement, context) {
+        if !class_has_interface_method(class, &requirement_owner, &requirement, context, values)? {
             return Err(EvalStatus::RuntimeFatal);
         }
     }
@@ -372,9 +349,10 @@ pub(super) fn class_has_interface_method(
     requirement_owner: &str,
     requirement: &EvalInterfaceMethod,
     context: &ElephcEvalContext,
-) -> bool {
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
     if let Some(method) = class.method(requirement.name()) {
-        return method.visibility() == EvalVisibility::Public
+        return Ok(method.visibility() == EvalVisibility::Public
             && method.is_static() == requirement.is_static()
             && !method.is_abstract()
             && class_method_satisfies_interface_signature(
@@ -384,9 +362,9 @@ pub(super) fn class_has_interface_method(
                 requirement_owner,
                 Some(class),
                 context,
-            );
+            ));
     }
-    class
+    let inherited = class
         .parent()
         .and_then(|parent| context.class_method(parent, requirement.name()))
         .is_some_and(|(declaring_class, method)| {
@@ -401,8 +379,75 @@ pub(super) fn class_has_interface_method(
                     Some(class),
                     context,
                 )
-        })
+        });
+    if inherited {
+        return Ok(true);
+    }
+    aot_ancestor_provides_interface_method(class, requirement, context, values)
 }
+
+/// Returns whether a generated/AOT ancestor concretely provides one interface method.
+///
+/// PHP satisfies an interface contract with any method the class INHERITS, and an eval-declared
+/// class is free to extend an AOT-compiled parent. The walk above only sees eval-declared
+/// ancestors, so a contract met further up a NATIVE chain looked unimplemented and the whole
+/// declaration was refused: Symfony's `ContainerBag implements ContainerBagInterface` inherits
+/// `resolveValue()`/`escapeValue()`/`unescapeValue()` from the compiled `ParameterBag`, and
+/// booting a compiled prod container died on `class ... ContainerBag could not be declared`.
+///
+/// Reflection reports inherited methods, so one query at the point where the eval chain ends
+/// covers the rest of the native chain. The signature is deliberately NOT re-checked here: the
+/// AOT ancestor's own declaration was validated when it was compiled, and the eval side holds no
+/// full type metadata for a native method — refusing a valid class is the worse failure of the
+/// two.
+fn aot_ancestor_provides_interface_method(
+    class: &EvalClass,
+    requirement: &EvalInterfaceMethod,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let Some(ancestor) = eval_ancestry_native_root(class, context) else {
+        return Ok(false);
+    };
+    let Some(flags) = values.reflection_method_flags(&ancestor, requirement.name())? else {
+        return Ok(false);
+    };
+    Ok(flags & EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT == 0
+        && flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE == 0
+        && flags & EVAL_REFLECTION_MEMBER_FLAG_PROTECTED == 0
+        && (flags & EVAL_REFLECTION_MEMBER_FLAG_STATIC != 0) == requirement.is_static())
+}
+
+/// Returns the first ancestor of `class` that is not an eval-declared class.
+///
+/// That name is where the interpreter's own class registry stops and generated/AOT metadata takes
+/// over, so it is the one class to ask reflection about. `None` means the chain ends at a root
+/// eval class and no native ancestry exists.
+fn eval_ancestry_native_root(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+) -> Option<String> {
+    let mut name = resolved_class_name(class.parent()?, context);
+    // Bounded rather than trusting the registry to be acyclic: a cycle is already rejected at
+    // declaration, and a walk that cannot terminate is not worth risking here.
+    for _ in 0..MAX_CLASS_ANCESTRY_WALK {
+        let Some(parent_class) = context.class(&name) else {
+            return Some(name);
+        };
+        name = resolved_class_name(parent_class.parent()?, context);
+    }
+    None
+}
+
+/// Resolves a declared parent name through aliases, falling back to the written name.
+fn resolved_class_name(name: &str, context: &ElephcEvalContext) -> String {
+    context
+        .resolve_class_name(name)
+        .unwrap_or_else(|| name.trim_start_matches('\\').to_string())
+}
+
+/// Ancestry depth past which the native-root walk gives up.
+const MAX_CLASS_ANCESTRY_WALK: usize = 256;
 
 /// Returns whether one method satisfies a generated/AOT interface requirement.
 pub(super) fn class_method_satisfies_aot_interface_requirement(

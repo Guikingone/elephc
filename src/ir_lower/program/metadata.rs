@@ -78,10 +78,21 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
 /// Closed-world checking can infer a precise indexed or associative shape from the first writes
 /// to an untyped property. PHP does not make that shape a contract: later assignments, casts,
 /// merges, or nested keyed writes can change both storage kind and element representation. EIR
-/// therefore uses `array<mixed>` so all loads, stores, and cleanup agree. An untyped property with
-/// no statically attributable write remains `Void` in the checker, but still needs a boxed `Mixed`
-/// cell because a bare `object` receiver can initialize it at runtime. Declared PHP properties and
-/// static properties retain their explicit or specialized contracts.
+/// therefore picks ONE representation so all loads, stores, and cleanup agree.
+///
+/// That one has to be the HASH. `array<mixed>` is not a runtime-dispatched "either": consumers
+/// read the STATIC type, so a hash parked in a packed slot is read as packed storage. `twig/twig`'s
+/// `StagingExtension` is what that costs -- `private $functions = []` normalized to `array<mixed>`
+/// while `$this->functions[$name] = $fn` had promoted the real property to a hash, so
+/// `getFunctions(): array` asked the backend to convert a packed vector into the hash of objects
+/// its contract had become, and five Twig accessors refused to lower. A hash represents every php
+/// array; a packed vector cannot. Parking a list in a hash costs nothing observable: measured
+/// against php 8.5.10, a hash holding sequential integer keys encodes as `["a","b"]` and
+/// serializes as `a:2:{i:0;s:1:"a";i:1;s:1:"b";}`.
+///
+/// An untyped property with no statically attributable write remains `Void` in the checker, but
+/// still needs a boxed `Mixed` cell because a bare `object` receiver can initialize it at runtime.
+/// Declared PHP properties and static properties retain their explicit or specialized contracts.
 fn normalize_untyped_instance_storage_for_eir(
     classes: &mut crate::fast_hash::FastMap<String, ClassInfo>,
 ) {
@@ -93,7 +104,10 @@ fn normalize_untyped_instance_storage_for_eir(
             }
             match class_info.properties[index].1.codegen_repr() {
                 PhpType::Array(_) | PhpType::AssocArray { .. } => {
-                    class_info.properties[index].1 = PhpType::Array(Box::new(PhpType::Mixed));
+                    class_info.properties[index].1 = PhpType::AssocArray {
+                        key: Box::new(PhpType::Mixed),
+                        value: Box::new(PhpType::Mixed),
+                    };
                 }
                 PhpType::Void | PhpType::Never => {
                     class_info.properties[index].1 = PhpType::Mixed;

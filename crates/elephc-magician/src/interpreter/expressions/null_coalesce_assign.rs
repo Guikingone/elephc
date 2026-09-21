@@ -146,7 +146,7 @@ pub(in crate::interpreter) fn eval_assign(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let trace = std::env::var_os("ELEPHC_EVAL_TRACE").is_some();
+    let trace = crate::eval_trace::enabled();
     let location = evaluate_plain_assignment_location(target, context, scope, values).map_err(|status| {
         if trace {
             eprintln!("[elephc-eval-trace] phase=assign_error stage=location target={target:?} status={status:?}");
@@ -188,7 +188,7 @@ pub(in crate::interpreter) fn eval_var_reference_bind(
 ) -> Result<(), EvalStatus> {
     let (source_target, source_value) = eval_reference_source(source, context, scope, values)
         .map_err(|status| {
-            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            if crate::eval_trace::enabled() {
                 eprintln!(
                     "[elephc-eval-trace] phase=reference_bind_error target={name:?} source={source:?} status={status:?}"
                 );
@@ -883,7 +883,7 @@ fn write_reference_location(
     let updated = values.array_set(container, index, source_value)?;
     let key = eval_array_reference_key(index, values)?.ok_or(EvalStatus::RuntimeFatal)?;
     let updated_identity = values.raw_value_word(updated)?;
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         eprintln!(
             "[elephc-eval-trace] phase=array_reference_bind identity={updated_identity:#x} key={key:?}",
         );

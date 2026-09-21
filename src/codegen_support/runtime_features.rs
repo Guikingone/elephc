@@ -106,6 +106,15 @@ pub struct RuntimeFeatures {
     /// `globfree` and `close`. Those three plus `pclose` were every libc import a trivial program
     /// had apart from the `getrlimit` stack probe.
     pub directory_resource: bool,
+    /// True when the program compiles the PHP function `__elephc_diag_render`, the entry
+    /// `__rt_diag_warning` uses to offer an engine-raised diagnostic to a `set_error_handler`
+    /// callback before displaying it.
+    ///
+    /// Gated because the call is a HARD REFERENCE from the runtime object to a symbol only the
+    /// program object defines: a binary compiled without the dispatch prelude (every non-`--web`
+    /// build today) would fail to link. When false, `__rt_diag_warning` keeps its original
+    /// shape — suppression depth, then `write(2)` — and no diagnostic buffer is emitted.
+    pub diag_user_handler: bool,
 }
 
 /// Every `RuntimeFeatures` field is a `bool`, so the struct is exactly one byte per feature and
@@ -157,13 +166,14 @@ impl RuntimeFeatures {
             | ((self.class_introspection as u64) << 13)
             | ((self.class_relation_introspection as u64) << 14)
             | ((self.class_methods_introspection as u64) << 15)
+            | ((self.diag_user_handler as u64) << 16)
     }
 
     /// Number of feature bits `cache_key_bits` packs, which is also the number of fields.
     ///
     /// `runtime_cache::identity` puts the relocation and library-boundary modes in bits 62/63,
     /// so appending features here stays free until bit 62.
-    pub const CACHE_KEY_BIT_COUNT: u32 = 16;
+    pub const CACHE_KEY_BIT_COUNT: u32 = 17;
 
     /// Returns one variant per field, each with exactly that field set and every other clear.
     ///
@@ -197,6 +207,7 @@ impl RuntimeFeatures {
                 "class_methods_introspection",
                 Self { class_methods_introspection: true, ..Self::none() },
             ),
+            ("diag_user_handler", Self { diag_user_handler: true, ..Self::none() }),
         ]
     }
 
@@ -219,6 +230,7 @@ impl RuntimeFeatures {
             generator: false,
             popen_resource: false,
             directory_resource: false,
+            diag_user_handler: false,
         }
     }
 
@@ -242,6 +254,7 @@ impl RuntimeFeatures {
             generator: true,
             popen_resource: true,
             directory_resource: true,
+            diag_user_handler: true,
         }
     }
 }
@@ -281,6 +294,23 @@ pub fn link_requirements_for_runtime_features(features: RuntimeFeatures) -> Vec<
         // Magician staticlib already carries its crypto dependency, and adding the
         // standalone archive beside it produces duplicate C exports on macOS.
         requirements.push(LinkRequirement::Bridge("elephc_crypto"));
+    }
+    if features.descriptor_invoker && !features.phar_archive {
+        // The same dispatcher also wraps the stream builtins, and `fopen`/`file_put_contents`
+        // publish the PHAR bridge entry points so a `phar://` URL resolves at run time. Their
+        // libraries were only requested when the program NAMED one of those builtins, so a
+        // program that merely reaches them through a descriptor — `$container->getService(...)`
+        // stored in a `\Closure` property and invoked, which is how Symfony's generated container
+        // works — emitted the references and then failed to link with undefined
+        // `_elephc_phar_*`, `_inflate*` and `_BZ2_*`. `phar_archive` covers the named case and
+        // pushes the identical set, so this arm only fills the gap it leaves.
+        if !features.eval_bridge {
+            // Magician already embeds the PHAR implementation; a standalone archive beside it
+            // duplicates the exported C ABI symbols on macOS.
+            requirements.push(LinkRequirement::Bridge("elephc_phar"));
+        }
+        requirements.push(LinkRequirement::SystemLibrary("z".to_string()));
+        requirements.push(LinkRequirement::SystemLibrary("bz2".to_string()));
     }
     if features.eval_bridge {
         // The interpreter remains an ordinary table-driven Elephc bridge. Its BCMath

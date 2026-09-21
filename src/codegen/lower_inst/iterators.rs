@@ -253,8 +253,13 @@ pub(super) fn lower_iter_current_value(
                 Arch::AArch64 => load_current_array_value_aarch64(ctx, offset, &elem)?,
                 Arch::X86_64 => load_current_array_value_x86_64(ctx, offset, &elem)?,
             }
-            retain_current_indexed_value_if_unboxed(&mut ctx.emitter, &elem, &result_ty);
-            box_current_indexed_value_if_needed(ctx, &elem, &result_ty)?;
+            if indexed_iter_value_needs_detached_cell(&elem, &result_ty) {
+                let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+                super::arrays::emit_mixed_array_get_deref_invoker_ref_cell(ctx, &result_reg);
+            } else {
+                retain_current_indexed_value_if_unboxed(&mut ctx.emitter, &elem, &result_ty);
+                box_current_indexed_value_if_needed(ctx, &elem, &result_ty)?;
+            }
         }
         IteratorSourceKind::Hash => match ctx.emitter.target.arch {
             Arch::AArch64 => load_current_hash_value_as_mixed_aarch64(ctx, offset),
@@ -298,6 +303,25 @@ fn retain_current_indexed_value_if_unboxed(
     if elem.codegen_repr() == result_ty.codegen_repr() {
         abi::emit_incref_if_refcounted(emitter, &elem.codegen_repr());
     }
+}
+
+/// Returns whether a by-value binding over this element must receive a DETACHED cell.
+///
+/// A `Mixed` element slot stores a boxed cell, and handing that same cell to the loop body makes
+/// the binding an alias of the array's own slot: `foreach ($x as $row) { $row[0] = ...; }` then
+/// wrote straight into `$x`, which `php -n` does not. The indexed read `$row = $x[0]` already
+/// detaches through `emit_mixed_array_get_deref_invoker_ref_cell` — unbox and re-box into a fresh
+/// cell whose payload is retained, which raises the container's refcount so the element write
+/// separates it — and a by-value `foreach` owes exactly the same copy.
+///
+/// Every other element type is already a value the loader materializes rather than a shared cell,
+/// so only the `Mixed` slot needs this.
+fn indexed_iter_value_needs_detached_cell(elem: &PhpType, result_ty: &PhpType) -> bool {
+    elem.codegen_repr() == PhpType::Mixed
+        && matches!(
+            result_ty.codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        )
 }
 
 /// Boxes an indexed iterator element only when the EIR result expects `Mixed`.
@@ -1740,7 +1764,7 @@ fn load_current_dynamic_indexed_value_as_mixed_aarch64(
     ctx.emitter.instruction(&format!("b.ne {}", box_value));                    // concrete slots need ordinary boxing
     ctx.emitter.instruction("ldr x9, [x3]");                                    // inspect a boxed value for an array-reference marker
     emit_branch_if_invoker_ref_cell_tag(ctx, "x9", &ref_marker);
-    abi::emit_jump(ctx.emitter, &reuse_box);                                     // retain ordinary boxed Mixed values
+    abi::emit_jump(ctx.emitter, &reuse_box);                                     // detach ordinary boxed Mixed values into the binding's own cell
 
     ctx.emitter.label(&box_value);
     emit_box_runtime_payload_as_mixed(ctx.emitter, "x5", "x3", "x4");
@@ -1751,8 +1775,9 @@ fn load_current_dynamic_indexed_value_as_mixed_aarch64(
     ctx.emitter.instruction(&format!("b {}", done));                            // expose the referenced PHP value, not its internal marker
 
     ctx.emitter.label(&reuse_box);
-    ctx.emitter.instruction("mov x0, x3");                                      // pass the existing Mixed box to the retain helper
-    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    ctx.emitter.instruction("mov x0, x3");                                      // pass the array's own boxed cell to the detaching pair
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");                      // expose the tag and payload words the re-box consumes
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");                 // a by-value binding gets its OWN cell, never the array's
     ctx.emitter.label(&done);
 }
 
@@ -1791,7 +1816,7 @@ fn load_current_dynamic_indexed_value_as_mixed_x86_64(
     ctx.emitter.instruction(&format!("jne {}", box_value));                     // concrete slots need ordinary boxing
     ctx.emitter.instruction("mov r11, QWORD PTR [rcx]");                        // inspect a boxed value for an array-reference marker
     emit_branch_if_invoker_ref_cell_tag(ctx, "r11", &ref_marker);
-    abi::emit_jump(ctx.emitter, &reuse_box);                                     // retain ordinary boxed Mixed values
+    abi::emit_jump(ctx.emitter, &reuse_box);                                     // detach ordinary boxed Mixed values into the binding's own cell
 
     ctx.emitter.label(&box_value);
     emit_box_runtime_payload_as_mixed(ctx.emitter, "r9", "rcx", "r8");
@@ -1802,8 +1827,10 @@ fn load_current_dynamic_indexed_value_as_mixed_x86_64(
     ctx.emitter.instruction(&format!("jmp {}", done));                          // expose the referenced PHP value, not its internal marker
 
     ctx.emitter.label(&reuse_box);
-    ctx.emitter.instruction("mov rax, rcx");                                    // pass the existing Mixed box to the retain helper
-    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    ctx.emitter.instruction("mov rax, rcx");                                    // pass the array's own boxed cell to the detaching pair
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");                      // expose the tag and payload words the re-box consumes
+    ctx.emitter.instruction("mov rsi, rdx");                                    // adapt the unboxed high payload word to the boxing helper ABI
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");                 // a by-value binding gets its OWN cell, never the array's
     ctx.emitter.label(&done);
 }
 

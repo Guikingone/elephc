@@ -27,6 +27,25 @@ fn assert_clean(out: crate::support::ProgramOutput, expected: &str) {
     );
 }
 
+/// Asserts the program printed `expected` and left exactly `blocks` live, all of them owned by a
+/// static property.
+///
+/// A write-back into a static property hands the property a reference it keeps, and nothing
+/// releases static storage when the process ends, so these fixtures cannot end clean. Asserting
+/// that they did was how a write-back that left the property pointing at freed storage passed
+/// for so long: the double release is silent in a process that is exiting anyway, and fatal
+/// under `--web`, where the request boundary releases the same pointer again.
+fn assert_static_live(out: crate::support::ProgramOutput, expected: &str, blocks: usize) {
+    assert_eq!(out.stdout, expected, "stderr: {}", out.stderr);
+    let summary = format!("HEAP DEBUG: leak summary: live_blocks={}", blocks);
+    assert!(
+        out.stderr.contains(&summary),
+        "expected only the static property's value ({} blocks) to remain live, got: {}",
+        blocks,
+        out.stderr
+    );
+}
+
 /// Mutating an instance property leaves no live heap blocks: each separated copy is written
 /// back into the property, the property's previous occupant is released exactly once, and the
 /// synthetic local that carried the array is released at scope exit.
@@ -68,8 +87,9 @@ echo implode(",", $b->items), "|", implode(",", $copy);
 
 /// A static-property load is a borrowed pointer, so the synthetic local has to retain it
 /// before the sort separates a copy; otherwise the write-back frees the aliased original.
+/// The sorted array then stays live in the property for the rest of the process.
 #[test]
-fn test_sort_on_aliased_static_property_leaves_clean_heap() {
+fn test_sort_on_aliased_static_property_keeps_the_sorted_array_live() {
     let out = compile_and_run_with_heap_debug(
         r#"<?php
 class B { public static $items = [3,1,2]; }
@@ -78,7 +98,7 @@ sort(B::$items);
 echo implode(",", B::$items), "|", implode(",", $copy);
 "#,
     );
-    assert_clean(out, "1,2,3|3,1,2");
+    assert_static_live(out, "1,2,3|3,1,2", 1);
 }
 
 /// A nested container element receiver, where the write-back goes through `hash_set` rather
@@ -147,7 +167,7 @@ echo "|", implode(",", Box::$shared), "|", implode(",", $sharedCopy);
 echo "|", implode(",", $map["slot"]);
 "#,
     );
-    assert_clean(out, "K|1,2,3|1|4,5|4|7,8");
+    assert_static_live(out, "K|1,2,3|1|4,5|4|7,8", 3);
 }
 
 /// Declared reference parameters adapt gradual caller storage in both directions: a boxed value

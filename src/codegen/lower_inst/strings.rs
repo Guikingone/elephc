@@ -439,6 +439,18 @@ pub(super) fn lower_int_like_to_string(
             abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
             store_if_result(ctx, inst)
         }
+        // A callable reaches a string conversion as a descriptor; its PHP name is the string the
+        // callable was built from. Same conversion the builtin string-argument path performs, and
+        // the same refusal for shapes PHP cannot stringify either. Symfony's
+        // `LazyString::getPrettyName(callable $callback)` returns `$callback` directly when it is
+        // a string, which is this op.
+        PhpType::Callable => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+            super::builtins::strings::common::load_callable_as_borrowed_string_to_regs(
+                ctx, value, ptr_reg, len_reg,
+            )?;
+            store_if_result(ctx, inst)
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",
             inst.op.name(),

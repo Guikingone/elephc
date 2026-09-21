@@ -42,7 +42,16 @@ pub(super) fn resolve_method_call_target(
         ))
     })?;
     let expected_args = callee_sig.params.len() + 1;
-    if operand_count != expected_args {
+    // php IGNORES arguments a userland function does not declare, and an override further down the
+    // family may declare them. Each implementation is emitted with its own frame, so a surplus
+    // operand simply occupies an argument register the base's body never reads and the override's
+    // body does. Only a surplus that still fits the register-passed prefix is accepted; beyond that
+    // the physical ABI spills, and a callee reading a slot the caller did not write is not the same
+    // thing as ignoring an argument.
+    const REGISTER_PASSED_ARGS: usize = 8;
+    if operand_count < expected_args
+        || (operand_count > expected_args && operand_count > REGISTER_PASSED_ARGS)
+    {
         return Err(CodegenIrError::unsupported(format!(
             "method call to {}::{} with {} operands for {} ABI params",
             normalized, method_name, operand_count, expected_args

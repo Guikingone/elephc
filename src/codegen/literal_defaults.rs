@@ -376,6 +376,38 @@ pub(crate) fn literal_default_value(
                 elements,
             })
         }
+        // A KEYED literal in a slot whose static type says indexed. The two disagree, and the
+        // literal is the one that knows: a `['kernel.secret' => false, …]` default is a hash at
+        // run time whatever the inferred storage says, and every read of it goes through the
+        // runtime heap kind. Building the hash is what PHP does; refusing to build it made
+        // Symfony's generated container uncompilable over `$loadedDynamicParameters`.
+        //
+        // Restricted to a `mixed` element, which is the only case where the reads are already
+        // dynamic. A precise element type would mean the storage really is indexed and the
+        // disagreement is somewhere else, where a silent hash would be the wrong answer.
+        (PhpType::Array(elem_type), ExprKind::ArrayLiteralAssoc(items))
+            if elem_type.codegen_repr() == PhpType::Mixed =>
+        {
+            let value_type = PhpType::Mixed;
+            let entries = items
+                .iter()
+                .map(|(key, value_expr)| {
+                    Ok(LiteralAssocEntry {
+                        key: literal_array_key(context, &key.kind, op_name)?,
+                        value: literal_array_element(
+                            context,
+                            &value_type,
+                            &value_expr.kind,
+                            op_name,
+                        )?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(LiteralDefaultValue::AssocArray {
+                value_type,
+                entries,
+            })
+        }
         _ => Err(unsupported_literal_default(context, php_type, op_name)),
     }
 }

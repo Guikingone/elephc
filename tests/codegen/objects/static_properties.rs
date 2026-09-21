@@ -671,6 +671,86 @@ echo $r->formatted('cd'), "\n";
     assert_eq!(out, "made:x\nmade:y\nAB\nCD\n");
 }
 
+/// Verifies an accessor that returns a static property hands the caller an owned reference.
+///
+/// Symfony's `Request::getTrustedProxies()` is `return self::$trustedProxies;` over an
+/// `array`-defaulted private static, and `ValidateRequestListener::onKernelRequest` calls it as
+/// `if ($request::getTrustedProxies())`. The caller releases a call result once it has consumed
+/// it, so a returned borrow left the property pointing at reclaimed storage and the arena handed
+/// the same address to the next allocation. Reading it inside the class (`(bool) self::$p`)
+/// never reproduces it: nothing escapes, so nothing releases.
+#[test]
+fn test_returning_a_static_property_hands_the_caller_its_own_reference() {
+    let out = compile_and_run(
+        r#"<?php
+final class Request {
+    private static array $trustedProxies = [];
+
+    public static function setTrustedProxies(array $proxies): void {
+        self::$trustedProxies = $proxies;
+    }
+
+    public static function getTrustedProxies(): array {
+        return self::$trustedProxies;
+    }
+}
+
+final class ValidateRequestListener {
+    public function onKernelRequest(Request $request): string {
+        if ($request::getTrustedProxies()) {
+            return 'trusted';
+        }
+
+        return 'none';
+    }
+}
+
+$request = new Request();
+$listener = new ValidateRequestListener();
+echo $listener->onKernelRequest($request);
+echo '|', count(Request::getTrustedProxies());
+Request::setTrustedProxies(['10.0.0.1', '10.0.0.2']);
+echo '|', $listener->onKernelRequest($request);
+echo '|', count(Request::getTrustedProxies());
+echo '|', implode(',', Request::getTrustedProxies());
+echo '|', $listener->onKernelRequest($request);
+"#,
+    );
+    assert_eq!(out, "none|0|trusted|2|10.0.0.1,10.0.0.2|trusted");
+}
+
+/// Verifies a static property keeps its own reference to a stored by-value array parameter.
+///
+/// The parameter is borrowed from the caller and rebinds to a copy-on-write shadow local, which
+/// stays an owner and is released by the frame epilogue. Moving that reference into the property
+/// instead of retaining left both believing they owned the one reference the shadow held, so the
+/// epilogue took it back and the caller's own release then freed the array under the property.
+#[test]
+fn test_storing_a_borrowed_array_parameter_into_a_static_property_keeps_it_alive() {
+    let out = compile_and_run(
+        r#"<?php
+final class R {
+    private static array $p = [];
+
+    public static function set(array $x): void {
+        self::$p = $x;
+    }
+
+    public static function dump(): string {
+        return implode(',', self::$p) . '#' . count(self::$p);
+    }
+}
+
+echo R::dump();
+R::set(['a', 'b']);
+echo '|', R::dump();
+R::set(['c']);
+echo '|', R::dump();
+"#,
+    );
+    assert_eq!(out, "#0|a,b#2|c#1");
+}
+
 /// Verifies a boxed NON-callable assigned to a `\Closure`-typed static property is a catchable
 /// `TypeError`, exactly as in PHP — not a silently stored null.
 #[test]

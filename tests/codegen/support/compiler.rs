@@ -293,7 +293,16 @@ fn try_compile_source_to_asm_with_defines_repr(
     let resolved = elephc::curl_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::xml_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
-    let (resolved, _, declaration_source_files) =
+    // Mirrors `pipeline::compile`: the entry file's own interface declarations travel
+    // neither the resolver's include stripping nor the autoload pass, so this is the only
+    // place that gives them the activation event `interface_exists()` reads.
+    let resolved = elephc::autoload::activate_entry_interface_declarations(
+        resolved,
+        &synthetic_main
+            .canonicalize()
+            .unwrap_or_else(|_| synthetic_main.clone()),
+    );
+    let (resolved, autoloaded_files, declaration_source_files) =
         elephc::autoload::run_collecting_included_with_defines_and_sources(
             resolved,
             dir,
@@ -304,6 +313,10 @@ fn try_compile_source_to_asm_with_defines_repr(
     let resolved = elephc::assert_prelude::inject_if_used(resolved);
     let resolved = elephc::array_merge_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::array_reduce_prelude::inject_if_used(resolved);
+    // Mirrors `pipeline::compile`, which injects this between `array_reduce` and the backend
+    // gap prelude. Omitting it here left the harness unable to compile any `filter_var()`
+    // call with a runtime `$filter`, so that whole path had no test coverage at all.
+    let resolved = elephc::filter_var_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::backend_gap_prelude::inject_if_used(resolved, &mut prelude_inventory);
     // Mirrors `pipeline::compile`: `func_num_args`/`func_get_args`/`func_get_arg` are
     // desugared into a hidden variadic parameter plus plain PHP after autoloading and
@@ -341,6 +354,12 @@ fn try_compile_source_to_asm_with_defines_repr(
     {
         forced_groups.insert(elephc::backend_gap_prelude::BACKEND_GAP_GROUP.to_string());
     }
+    if prelude_inventory
+        .groups
+        .contains_key(elephc::filter_var_prelude::FILTER_VAR_GROUP)
+    {
+        forced_groups.insert(elephc::filter_var_prelude::FILTER_VAR_GROUP.to_string());
+    }
     let optimized = elephc::optimize::prune_unreachable_declarations(
         optimized,
         &mut check_result,
@@ -369,9 +388,21 @@ fn try_compile_source_to_asm_with_defines_repr(
     ir_module.declared_function_source_files = declaration_source_files.functions;
     ir_module.declared_class_source_files.extend(included_sources.class_likes);
     ir_module.declared_function_source_files.extend(included_sources.functions);
+    // Mirror `pipeline`: the autoload pass already performed these inclusions, and the runtime
+    // has to be told so -- otherwise an `include_once` of an autoloaded file redeclares it here
+    // while the CLI answers "already included", and the two disagree on the same program.
+    elephc::autoload::record_compile_time_inclusions(&mut ir_module, &optimized, &autoloaded_files);
     if with_regex {
         ir_module.required_runtime_features.regex = true;
     }
+    // Mirror `pipeline`: a user-declared interface is activated at run time through a
+    // `_classlike_active_interface_*` cell, and `finalize_user_asm` only DEFINES those cells
+    // under `class_introspection`. Without this the fixture emits the reference and the link
+    // fails with an undefined symbol for a program the CLI compiles.
+    ir_module.required_runtime_features.class_introspection |= ir_module
+        .interface_infos
+        .values()
+        .any(|info| info.declaration_span != elephc::span::Span::dummy());
     // Mirror `pipeline::backend`: report the bridges this fixture actually links to
     // `extension_loaded()` / `get_loaded_extensions()`. Extension folding happens during
     // instruction lowering, so the seed has to land before `generate_user_asm_*`.

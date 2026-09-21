@@ -81,7 +81,7 @@ unsafe fn serialize_object_inner(object: *mut c_void) -> *mut RuntimeCell {
     // `object_from_raw` retained the borrowed object for the call; give that back whichever way
     // the rendering went.
     let _ = values.release(object_cell);
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         eprintln!(
             "[elephc-eval-trace] phase=serialize_eval_object identity={identity} rendered={}",
             fragment.is_ok(),

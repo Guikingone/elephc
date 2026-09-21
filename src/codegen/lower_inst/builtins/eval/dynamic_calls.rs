@@ -629,6 +629,28 @@ pub(in crate::codegen::lower_inst) fn lower_eval_owned_method_call(
     let stack_bytes = eval_method_call_stack_bytes(arg_count);
     let miss_stack_label = ctx.next_label("eval_owned_method_miss");
     abi::emit_reserve_temporary_stack(ctx.emitter, stack_bytes);
+    // The owner context decides DISPATCH; this frame still decides SCOPE. Handing the bridge a
+    // null caller context left `current_class_scope()` empty, so a protected method reached from
+    // a compiled body -- `Twig\Template::yield()` calling `$this->doDisplay()` -- was refused
+    // with "from global scope". `__elephc_eval_method_call` forwards a non-null caller's scopes
+    // into the owner context, which is exactly what this path was missing.
+    //
+    // A body with no class of its own and no eval context local -- an injected prelude function,
+    // say -- has no scope to forward and keeps the null caller it always passed.
+    let forwards_scope = current_eval_method_class(ctx).is_some() && has_eval_context(ctx);
+    let pushed_class_scope = if forwards_scope {
+        ensure_eval_context(ctx)?;
+        push_eval_context_class_scope(ctx)?
+    } else {
+        false
+    };
+    // No context to forward from, but this frame still has a lexical class, and that class is
+    // the calling scope. Publish it directly.
+    let pushed_caller_class = if forwards_scope {
+        false
+    } else {
+        push_native_caller_class(ctx)
+    };
     let object_ty = ctx.load_value_to_result(object)?.codegen_repr();
     let mut boxed = EvalBoxedOperands::new();
     if !matches!(object_ty, PhpType::Mixed | PhpType::Union(_)) {
@@ -638,11 +660,15 @@ pub(in crate::codegen::lower_inst) fn lower_eval_owned_method_call(
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
     boxed.extend(store_eval_method_call_arg_pack(ctx, inst, args_offset)?);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
-        0,
-    );
+    if forwards_scope {
+        load_eval_context_to_arg(ctx, 0);
+    } else {
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            0,
+        );
+    }
     let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_arg, EVAL_TEMP_CELL_OFFSET);
     let (method_label, method_len) = ctx.data.add_string(method_name.as_bytes());
@@ -662,6 +688,8 @@ pub(in crate::codegen::lower_inst) fn lower_eval_owned_method_call(
         .target
         .extern_symbol("__elephc_eval_method_call");
     abi::emit_call_label(ctx.emitter, &symbol);
+    pop_eval_context_class_scope(ctx, pushed_class_scope);
+    pop_native_caller_class(ctx, pushed_caller_class);
     emit_branch_if_eval_c_int_negative(ctx, &miss_stack_label);
     emit_eval_status_check(ctx);
     emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);

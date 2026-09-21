@@ -100,7 +100,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let qualified_method_name =
         format!("{}::{}", class_name.trim_start_matches('\\'), method.name());
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         let call_site = context.call_site();
         eprintln!(
             "[elephc-eval-trace] phase=dynamic_method_start method={qualified_method_name:?} called_class={called_class_name:?} object_identity={:?} file={:?} line={}",
@@ -120,7 +120,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     let frame_arg_count = frame_args.len();
     // Captured BEFORE binding so a refusal can name what actually arrived: a bare parameter
     // list says which type was wanted and never which one was offered.
-    let traced_arg_tags: Vec<String> = if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    let traced_arg_tags: Vec<String> = if crate::eval_trace::enabled() {
         frame_args
             .iter()
             .map(|value| {
@@ -176,11 +176,24 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
             // the last thing the log shows is `dynamic_method_start`, and the caller's frame
             // then reports a bare "unsupported <caller expression>". Naming the parameter list
             // here is what separates a binding refusal from a body refusal in one pass.
-            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            if crate::eval_trace::enabled() {
+                // The THROWABLE is what says why: an ArgumentCountError means a parameter default
+                // did not materialize, a TypeError means an argument did not match. Peeked and put
+                // back, so the caller still unwinds with it.
+                let thrown = context.take_pending_throw();
+                let thrown_class = thrown
+                    .map(|value| {
+                        let name = crate::interpreter::runtime_object_class_name(value, values)
+                            .unwrap_or_else(|_| "<unnamed>".to_string());
+                        context.set_pending_throw(value);
+                        name
+                    })
+                    .unwrap_or_else(|| "<none>".to_string());
                 eprintln!(
-                    "[elephc-eval-trace] phase=dynamic_method_bind_error method={qualified_method_name:?} status={status:?} arg_count={frame_arg_count} arg_tags={traced_arg_tags:?} params={:?} types={:?}",
+                    "[elephc-eval-trace] phase=dynamic_method_bind_error method={qualified_method_name:?} status={status:?} thrown={thrown_class} arg_count={frame_arg_count} arg_tags={traced_arg_tags:?} params={:?} types={:?} defaults={:?}",
                     method.params(),
                     method.parameter_types(),
+                    method.parameter_defaults().len(),
                 );
             }
             context.pop_call_frame();
@@ -213,6 +226,13 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     // activation travels with it: the class scope a later `next()` runs under is this method's,
     // not the resumer's.
     if eval_body_is_generator(method.body()) {
+        retain_generator_scope_args(
+            &mut method_scope,
+            method.params(),
+            &scope_parameter_is_by_ref,
+            &evaluated_args,
+            values,
+        )?;
         let generator = eval_generator_new(
             method.body(),
             std::mem::replace(&mut method_scope, ElephcEvalScope::new()),
@@ -292,7 +312,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     context.pop_class_scope();
     context.pop_call_frame();
     context.pop_function();
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         let call_site = context.call_site();
         eprintln!(
             "[elephc-eval-trace] phase=dynamic_method_end method={qualified_method_name:?} success={} file={:?} line={}",
@@ -402,6 +422,13 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     // activation travels with it: the class scope a later `next()` runs under is this method's,
     // not the resumer's.
     if eval_body_is_generator(method.body()) {
+        retain_generator_scope_args(
+            &mut method_scope,
+            method.params(),
+            &scope_parameter_is_by_ref,
+            &evaluated_args,
+            values,
+        )?;
         let generator = eval_generator_new(
             method.body(),
             std::mem::replace(&mut method_scope, ElephcEvalScope::new()),

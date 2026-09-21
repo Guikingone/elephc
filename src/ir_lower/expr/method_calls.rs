@@ -127,6 +127,11 @@ pub(super) fn lower_method_call(
         ctx.builder.value_php_type(object.value).codegen_repr(),
         PhpType::Callable
     ) {
+        // `$f->__invoke($x)` is `$f($x)`. There is no instance dispatch for a callable receiver,
+        // so it goes through the call path the short spelling uses.
+        if php_symbol_key(method) == "__invoke" {
+            return lower_expr_call_from_value(ctx, object, args, expr);
+        }
         if let Some(result) = lower_closure_bind_method(ctx, &object, method, args, expr) {
             return result;
         }
@@ -161,6 +166,20 @@ pub(super) fn lower_method_call(
         return call;
     }
     let mut operands = vec![object.value];
+    // An omitted BY-REFERENCE parameter still needs a cell to be written through; see
+    // `pad_omitted_by_ref_args`. Done before the ref-place rewrite so the padded place goes
+    // through the same machinery a supplied one does.
+    let padded_args;
+    let args = match sig
+        .as_ref()
+        .and_then(|signature| pad_omitted_by_ref_args(ctx, signature, args))
+    {
+        Some(padded) => {
+            padded_args = padded;
+            padded_args.as_slice()
+        }
+        None => args,
+    };
     promote_eval_bridge_method_argument_locals(ctx, object.value, sig.as_ref(), args);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
     let prepared = sig

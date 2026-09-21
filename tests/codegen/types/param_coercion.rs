@@ -16,6 +16,89 @@
 
 use crate::support::*;
 
+/// Verifies a parameter union naming TWO object classes still admits an argument whose own class
+/// relates to exactly one of them, and rejects at run time the way PHP does. A multi-class union
+/// gives the runtime nominal guard no single class to test, so the boundary was refused outright —
+/// but the argument narrows it: PHP's single inheritance means a class unrelated to the argument's
+/// own can never be what arrives. Symfony's
+/// `ViewEvent::__construct(ControllerArgumentsMetadata|ControllerArgumentsEvent|null)` is called
+/// with a `?ControllerMetadata`, and only the first descends from it.
+/// PHP outputs "t|none|TypeError".
+#[test]
+fn test_two_class_union_parameter_narrows_to_one_runtime_guard() {
+    let out = compile_and_run(
+        r#"<?php
+class Meta { public function __construct(public string $tag) {} }
+class ArgsMeta extends Meta {
+    public function __construct(string $tag, public int $count) { parent::__construct($tag); }
+}
+class ArgsEvent { public function __construct(public string $name) {} }
+
+class ViewEvent {
+    public function __construct(public ArgsMeta|ArgsEvent|null $controllerMetadata = null) {}
+}
+
+function build(?Meta $meta): string {
+    $event = new ViewEvent($meta);
+    $stored = $event->controllerMetadata;
+
+    return $stored instanceof Meta ? $stored->tag : 'none';
+}
+
+echo build(new ArgsMeta('t', 2)), '|', build(null), '|';
+try {
+    echo build(new Meta('plain'));
+} catch (\TypeError $e) {
+    echo 'TypeError';
+}
+"#,
+    );
+    assert_eq!(out, "t|none|TypeError");
+}
+
+/// Verifies a gradual union argument reaching a declared `?string` parameter through an
+/// INTERFACE-dispatched call. PHP checks such a value at the call, not at compile time, and the
+/// coercive path already deferred it; the interface path consulted only two of the four runtime
+/// guards and refused it. Symfony's `Kernel::initializeContainer()` passes
+/// `$this->container->getParameter('kernel.build_dir')` — declared
+/// `array|bool|string|int|float|UnitEnum|null` — into `WarmableInterface::warmUp()`'s
+/// `?string $buildDir`. PHP outputs "/cache//build".
+#[test]
+fn test_gradual_union_argument_binds_a_nullable_string_through_an_interface() {
+    let out = compile_and_run(
+        r#"<?php
+interface Warmable {
+    public function warmUp(string $cacheDir, ?string $buildDir = null): string;
+}
+
+class Params {
+    public function __construct(private array $values) {}
+
+    public function getParameter(string $name): array|bool|string|int|float|null {
+        return $this->values[$name] ?? null;
+    }
+}
+
+class Kernel implements Warmable {
+    public function warmUp(string $cacheDir, ?string $buildDir = null): string {
+        return $cacheDir . '/' . ($buildDir ?? 'none');
+    }
+}
+
+function boot(Warmable $warmer, Params $container): string {
+    $buildDir = $container->getParameter('kernel.build_dir');
+    $cacheDir = $container->getParameter('kernel.cache_dir');
+
+    return $warmer->warmUp($cacheDir, $buildDir);
+}
+
+$container = new Params(['kernel.cache_dir' => '/cache', 'kernel.build_dir' => '/build']);
+echo boot(new Kernel(), $container);
+"#,
+    );
+    assert_eq!(out, "/cache//build");
+}
+
 /// Verifies the parameter-typing audit repro: a float and a numeric string binding to `int`,
 /// and an int binding to `string`.
 #[test]

@@ -9,7 +9,7 @@
 //! - Symbolic source distance is a conservative proxy for instruction distance;
 //!   nearby branches remain compact, while far branches use an inverse-condition island.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap as HashMap;
 use std::fmt::Write;
 
 use crate::codegen::platform::{Arch, Platform, Target};
@@ -32,7 +32,10 @@ pub(super) fn relax_conditional_branches(assembly: String, target: Target) -> St
         return assembly;
     }
 
-    let mut labels = HashMap::new();
+    // The house hasher, not SipHash: this map takes one insert per label in a 1.4 GB listing
+    // and is only ever probed by `get`, never iterated, so nothing depends on its order. A
+    // sample of the late codegen window caught `sip::Hasher::write` here.
+    let mut labels = HashMap::default();
     let mut source_offset = 0usize;
     for line in assembly.split_inclusive('\n') {
         let trimmed = line.trim();
@@ -45,29 +48,50 @@ pub(super) fn relax_conditional_branches(assembly: String, target: Target) -> St
     }
 
     let mut relaxed = None::<String>;
+    // Start of the stretch of `assembly` not yet copied into `relaxed`. Once one branch has been
+    // relaxed the old loop pushed every REMAINING line one at a time -- tens of millions of
+    // `push_str` calls to rebuild text it already had. Only the relaxed branches differ, so the
+    // stretches between them are copied whole.
+    let mut verbatim_from = 0usize;
     source_offset = 0;
     for line in assembly.split_inclusive('\n') {
-        let expansion = parse_conditional_branch(line).and_then(|branch| {
-            let target_offset = labels.get(branch.target).copied()?;
-            let distance = source_offset.abs_diff(target_offset);
-            (distance > branch.source_limit).then_some((branch, distance))
-        });
+        let expansion = maybe_conditional_branch(line)
+            .then(|| parse_conditional_branch(line))
+            .flatten()
+            .and_then(|branch| {
+                let target_offset = labels.get(branch.target).copied()?;
+                let distance = source_offset.abs_diff(target_offset);
+                (distance > branch.source_limit).then_some((branch, distance))
+            });
 
         if let Some((branch, distance)) = expansion {
-            let output = relaxed.get_or_insert_with(|| {
-                let mut output = String::with_capacity(assembly.len() + 4096);
-                output.push_str(&assembly[..source_offset]);
-                output
-            });
+            let output = relaxed
+                .get_or_insert_with(|| String::with_capacity(assembly.len() + 4096));
+            output.push_str(&assembly[verbatim_from..source_offset]);
             emit_relaxed_branch(output, &branch, target, source_offset, distance);
-        } else if let Some(output) = relaxed.as_mut() {
-            output.push_str(line);
+            verbatim_from = source_offset + line.len();
         }
         source_offset += line.len();
+    }
+    if let Some(output) = relaxed.as_mut() {
+        output.push_str(&assembly[verbatim_from..]);
     }
 
     drop(labels);
     relaxed.unwrap_or(assembly)
+}
+
+/// Returns whether a line could possibly be one of the branches the parser accepts.
+///
+/// Every mnemonic `parse_conditional_branch` handles -- `b.<cond>`, `cbz`, `cbnz`, `tbz`,
+/// `tbnz` -- starts with one of three letters, so anything else cannot parse and does not need
+/// the trim, the whitespace split and the mnemonic match the parser would spend on it. That
+/// work ran once per line of a 42-million-line listing.
+fn maybe_conditional_branch(line: &str) -> bool {
+    matches!(
+        line.as_bytes().iter().find(|byte| !byte.is_ascii_whitespace()),
+        Some(b'b' | b'c' | b't')
+    )
 }
 
 /// Parses the condition, preserved operands, and symbolic target from one assembly line.

@@ -170,6 +170,38 @@ fn try_parse_reference_append_source(
         span.line, span.col, source_start
     );
     let temp_expr = Expr::new(ExprKind::Variable(temp.clone()), span);
+    // EVERY EXECUTION MUST GET A FRESH REFERENCE, NOT A FRESH NAME. The temp is named after its
+    // SOURCE POSITION, so a `$x = &$arr[];` inside a loop reuses one local — and `$temp = null`
+    // on an already-reference-bound local writes THROUGH the existing cell instead of rebinding.
+    // Every element appended by that loop then aliased ONE cell, so the array ended up holding
+    // the last iteration's value in every slot:
+    //
+    //     foreach ([1, 2, 3] as $i) { $c = &$opt[]; $c = $i; }   // [3, 3, 3], not [1, 2, 3]
+    //
+    // `unset()` is what breaks a reference binding in PHP and in this compiler alike: the IR's
+    // `UnsetLocal` drops the slot from the ref-cell dataflow state, so the NEXT execution's
+    // promotion allocates a new cell.
+    //
+    // IT HAS TO COME LAST, after the bind, not first. Lowering walks this block ONCE, and
+    // `unset_local` only emits `Op::UnsetLocal` for a name that is ref-bound AT LOWERING TIME —
+    // before the append, the temp is not bound yet, so a leading `unset` lowered to nothing and
+    // the loop still shared one cell. After the bind it is bound, the op is emitted, and the
+    // target keeps the cell because the alias took its own reference on it.
+    //
+    // Symfony's `EventDispatcher::optimizeListeners` is why this matters: it builds
+    // `$closure = &$this->optimized[$eventName][]` once per listener, so a shared cell left every
+    // event dispatching its LAST listener over and over — which 404s every route in a Symfony app,
+    // because `RouterListener` is never the last one.
+    let unbind = Stmt::new(
+        StmtKind::ExprStmt(Expr::new(
+            ExprKind::FunctionCall {
+                name: crate::names::Name::unqualified("unset"),
+                args: vec![temp_expr.clone()],
+            },
+            span,
+        )),
+        span,
+    );
     let init = Stmt::new(
         StmtKind::Assign {
             name: temp.clone(),
@@ -191,7 +223,7 @@ fn try_parse_reference_append_source(
     );
     *pos = semicolon + 1;
     Ok(Some(Stmt::new(
-        StmtKind::Synthetic(vec![init, append, bind]),
+        StmtKind::Synthetic(vec![init, append, bind, unbind]),
         span,
     )))
 }

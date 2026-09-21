@@ -1547,6 +1547,67 @@ echo get_error_handler() === null ? 'N' : 'n';
     assert!(resp.ends_with("NNAAAN"), "unexpected handler stack: {resp:?}");
 }
 
+/// Verifies a diagnostic raised by COMPILED code reaches the installed `set_error_handler()`
+/// callback, that returning true from it suppresses the default display, and that once the
+/// handler is gone the same diagnostic is displayed in php's full ` in FILE on line N` form.
+///
+/// This is the assertion the error-handler coverage was missing. `get_error_handler_tracks_…`
+/// above exercises the REGISTRY — what set/get/restore return — and never invokes a handler, so
+/// two defects lived underneath it: `__rt_diag_warning` wrote to fd 2 without ever consulting
+/// the handler, and the one path that did consult it (`trigger_error`) aborted the worker with
+/// "mixed value is not callable" the moment it tried to call one.
+///
+/// Both channels are asserted, because either one alone passes for the wrong reason: a handler
+/// that runs but does not suppress leaves the body right and stderr wrong, and a diagnostic
+/// that is merely swallowed leaves stderr right and the body wrong.
+#[test]
+fn set_error_handler_receives_a_warning_raised_by_compiled_code() {
+    let dir = make_test_dir("errhandler_invoked");
+    let src = r#"<?php
+set_error_handler(function (int $severity, string $message, string $file, int $line): bool {
+    echo "HANDLER[$severity]:$message|";
+    return true;
+});
+$a = ['k' => 'v'];
+$first = $a['absent-one'];
+restore_error_handler();
+$second = $a['absent-two'];
+echo 'body-after';
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let stderr_file = dir.join("server.stderr");
+    let mut child = spawn_server_stderr_to_file(&bin, &addr, "1", &stderr_file);
+    let resp = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(
+        resp.contains(r#"HANDLER[2]:Undefined array key "absent-one"|"#),
+        "the handler must receive the engine-raised warning, with E_WARNING and php's message: {resp:?}"
+    );
+    assert!(
+        resp.ends_with("body-after"),
+        "the handler must not disturb the response body: {resp:?}"
+    );
+    assert!(
+        !resp.contains("absent-two"),
+        "a diagnostic raised after restore_error_handler() must not reach the handler: {resp:?}"
+    );
+
+    let logged = fs::read_to_string(&stderr_file).unwrap_or_default();
+    assert!(
+        !logged.contains("absent-one"),
+        "a handler returning true suppresses the default display entirely: {logged:?}"
+    );
+    assert!(
+        logged.contains(r#"Warning: Undefined array key "absent-two" in "#)
+            && logged.contains("on line 9"),
+        "once the handler is restored the diagnostic is displayed with php's file and line: {logged:?}"
+    );
+}
+
 /// Verifies a session-misuse warning reaches the worker's stderr: calling
 /// `session_start()` twice emits the real PHP "already active" notice to stderr
 /// while the HTTP body still renders. Uses stderr-to-file redirection so the

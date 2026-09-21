@@ -118,6 +118,7 @@ pub mod preg_replace;
 pub mod preg_split;
 pub mod putenv;
 pub mod serialize;
+pub mod set_time_limit;
 pub mod setlocale;
 pub mod shell_exec;
 pub mod sleep;

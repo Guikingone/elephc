@@ -115,12 +115,24 @@ fn declared_int_return_boundary(
     if !ctx.return_type_is_declared || ctx.return_php_type != PhpType::Int {
         return None;
     }
+    let source_repr = ctx.builder.value_php_type(value.value).codegen_repr();
     if !matches!(
-        ctx.builder.value_php_type(value.value).codegen_repr(),
-        PhpType::Mixed | PhpType::Float
+        source_repr,
+        PhpType::Mixed | PhpType::Float | PhpType::TaggedScalar
     ) {
         return None;
     }
+    // A compact nullable scalar (`?int`) is not a boxed Mixed, and the boundary op unboxes what
+    // it is given. Boxing first hands it the representation it reads, and null then reaches the
+    // null arm and throws the same TypeError PHP does. Symfony's `KernelEvent` stores
+    // `private ?int $requestType` and returns it from `getRequestType(): int`, which reference
+    // PHP accepts and raises on only when the value really is null.
+    let value = if matches!(source_repr, PhpType::TaggedScalar) {
+        let source_php_type = ctx.builder.value_php_type(value.value).clone();
+        ctx.box_value_as_mixed(value, source_php_type, span)
+    } else {
+        value
+    };
     let prefix = format!("{}(): Return value must be of type int, ", ctx.owner_name());
     let data = ctx.intern_string(&prefix);
     let verified = ctx.emit_value(

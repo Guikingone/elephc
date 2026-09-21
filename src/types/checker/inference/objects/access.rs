@@ -248,6 +248,19 @@ impl Checker {
             {
                 return Ok(property_ty);
             }
+            // The interface itself declares nothing, but an IMPLEMENTATION may — and a receiver
+            // typed as the interface holds one of those at run time. Same treatment the class
+            // branch gives a base whose descendant declares the property: the union of what they
+            // declare, made nullable for the implementation that does not.
+            //
+            // `ReflectionCaster` reads `$m->name` off a value narrowed to `\Reflector`, which every
+            // concrete Reflection class carries.
+            let implementor_types = self.descendant_declared_property_types(class_name, property);
+            if !implementor_types.is_empty() {
+                let mut members = implementor_types;
+                members.push(PhpType::Void);
+                return Ok(self.normalize_union_type(members));
+            }
             if self.null_probe_depth > 0 {
                 return Ok(PhpType::Mixed);
             }
@@ -304,6 +317,21 @@ impl Checker {
                 // reads are dispatched to the side-table hashtable; the
                 // value is statically `Mixed` because we cannot infer it.
                 return Ok(PhpType::Mixed);
+            }
+            // A class that does not declare the property, where a DESCENDANT does. The runtime
+            // receiver may be any of them, so the read's type is what they declare, made nullable
+            // for the case where it really is the base (PHP's undefined-property warning answers
+            // null there). Returning a bare `null` folded the whole access away and handed back
+            // null for an object that held a value — silently.
+            //
+            // `$event->controllerMetadata?->getAttributes('*')` over Symfony's `KernelEvent`
+            // hierarchy is the shape: only `ControllerArgumentsEvent` declares the property, and
+            // every caller passes one.
+            let descendant_types = self.descendant_declared_property_types(class_name, property);
+            if !descendant_types.is_empty() {
+                let mut members = descendant_types;
+                members.push(PhpType::Void);
+                return Ok(self.normalize_union_type(members));
             }
             if self.null_probe_depth > 0 {
                 return Ok(PhpType::Void);
@@ -669,5 +697,132 @@ impl Checker {
                 )
             })?;
         Ok(PhpType::Pointer(Some(normalized)))
+    }
+}
+
+impl Checker {
+    /// Collects the declared types of `property` on every class descending from `ancestor`.
+    ///
+    /// Used when the ancestor itself declares no such property: the receiver can only be one of
+    /// these descendants, so their declarations are the answer, rather than the `null` an
+    /// undeclared read would otherwise produce.
+    ///
+    /// Duplicates are dropped so a property declared identically down a long hierarchy does not
+    /// turn into a union of one type repeated.
+    pub(crate) fn descendant_declared_property_types(
+        &self,
+        ancestor: &str,
+        property: &str,
+    ) -> Vec<PhpType> {
+        let mut types: Vec<PhpType> = Vec::new();
+        // Sorted, because the class table is a hash map and this function BUILDS A UNION from
+        // what it finds: an unordered walk would order the union's members differently from one
+        // compilation to the next, and the union's spelling reaches the emitted assembly.
+        // `compiler_determinism_tests` exists to catch exactly that.
+        let mut class_names: Vec<&String> = self.classes.keys().collect();
+        class_names.sort();
+        for name in class_names {
+            let Some(info) = self.classes.get(name) else {
+                continue;
+            };
+            if name.as_str() == ancestor {
+                continue;
+            }
+            if !self.class_descends_from(name, ancestor) {
+                continue;
+            }
+            let Some((_, (_, ty))) = info.visible_property(property) else {
+                continue;
+            };
+            if !types.contains(ty) {
+                types.push(ty.clone());
+            }
+        }
+        // A hierarchy usually REDECLARES the property with a narrower class — Symfony's
+        // `ControllerArgumentsMetadata extends ControllerMetadata` is the shape — and listing
+        // both would build a union of two object classes where one already describes the other.
+        // Keeping only the most general leaves a single object class, which is what a nullsafe
+        // call and a method dispatch can each resolve.
+        let general: Vec<PhpType> = types
+            .iter()
+            .filter(|candidate| {
+                let Some(candidate_class) = Self::single_object_class_name(candidate) else {
+                    return true;
+                };
+                !types.iter().any(|other| {
+                    Self::single_object_class_name(other).is_some_and(|other_class| {
+                        other_class != candidate_class
+                            && self.class_descends_from(candidate_class, other_class)
+                    })
+                })
+            })
+            .cloned()
+            .collect();
+        general
+    }
+
+    /// Names the one object class a declared property type describes, if it describes exactly one.
+    ///
+    /// A nullable declaration (`?Foo`) still describes one class; a union of two unrelated classes
+    /// describes none, and is left alone by the caller's collapse.
+    fn single_object_class_name(ty: &PhpType) -> Option<&str> {
+        match ty {
+            PhpType::Object(name) if !name.is_empty() => Some(name.as_str()),
+            PhpType::Union(members) => {
+                let mut found = None;
+                for member in members {
+                    match member {
+                        PhpType::Object(name) if !name.is_empty() => {
+                            if found.is_some() {
+                                return None;
+                            }
+                            found = Some(name.as_str());
+                        }
+                        PhpType::Void => {}
+                        _ => return None,
+                    }
+                }
+                found
+            }
+            _ => None,
+        }
+    }
+
+    /// Walks a class's parent chain looking for `ancestor`.
+    fn class_descends_from(&self, class_name: &str, ancestor: &str) -> bool {
+        let mut current = Some(class_name);
+        while let Some(name) = current {
+            let Some(info) = self.classes.get(name) else {
+                return false;
+            };
+            if name != class_name && name == ancestor {
+                return true;
+            }
+            // Implementing an interface is descending from it for this purpose: the property the
+            // caller reads is declared by the IMPLEMENTATION, which is exactly the class a
+            // receiver typed as the interface can hold at run time.
+            if info
+                .interfaces
+                .iter()
+                .any(|implemented| self.interface_satisfies(implemented, ancestor))
+            {
+                return true;
+            }
+            current = info.parent.as_deref();
+        }
+        false
+    }
+
+    /// Whether an interface IS the named one, or extends it.
+    fn interface_satisfies(&self, interface_name: &str, ancestor: &str) -> bool {
+        if interface_name == ancestor {
+            return true;
+        }
+        let Some(info) = self.interfaces.get(interface_name) else {
+            return false;
+        };
+        info.parents
+            .iter()
+            .any(|parent| self.interface_satisfies(parent, ancestor))
     }
 }

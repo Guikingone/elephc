@@ -35,6 +35,15 @@ use crate::parser::ast::Visibility;
 use crate::types::{callable_wrapper_sig, FunctionSig, PhpType};
 
 const EVAL_RECEIVER_CAPTURE_PARAM: &str = "__elephc_eval_callable_receiver";
+/// Frame slot the eval ARGUMENT bridges stage a boxed value in before a cast reads it.
+///
+/// Another bridge with another frame passes its own offset instead; the casts themselves no longer
+/// assume one.
+pub(super) const EVAL_ARG_BOXED_VALUE_AARCH64_OFFSET: i64 = -16;
+/// The x86_64 twin of [`EVAL_ARG_BOXED_VALUE_AARCH64_OFFSET`], as a `[rbp - N]` displacement.
+pub(super) const EVAL_ARG_BOXED_VALUE_X86_64_OFFSET: usize = 40;
+/// Frame slot the eval ARGUMENT bridges hold the active eval context in, as `[x29 + N]`.
+pub(super) const EVAL_ARG_CONTEXT_AARCH64_OFFSET: i64 = AARCH64_EVAL_CONTEXT_FROM_FP_OFFSET;
 const MIXED_METHOD_TAG_OFFSET: usize = 0;
 const MIXED_METHOD_PAYLOAD_OFFSET: usize = 16;
 const MIXED_RECEIVER_TAG_OFFSET: usize = 32;
@@ -221,14 +230,27 @@ pub(super) fn emit_eval_callable_descriptor_support(
     emitter: &mut Emitter,
     data: &mut DataSection,
     needed: bool,
+    eval_bridge: bool,
 ) -> EvalCallableDescriptorSupport {
     if !needed {
+        // The per-class CASE TABLES below are what `needed` gates: they are large and only a
+        // module that hands AOT callables to the interpreter reads them. The single DYNAMIC
+        // descriptor is a different matter — every eval-escape arm of a runtime callable invoker
+        // references it, and those arms are emitted on `eval_bridge` alone. Leaving it out when
+        // the two conditions disagreed produced an undefined
+        // `__elephc_eval_dynamic_callable_entry` at link time for a program that compiles
+        // cleanly, so the descriptor follows the condition its REFERENCES follow.
+        let dynamic_descriptor_label = eval_bridge.then(|| {
+            let label = eval_dynamic_callable_descriptor(data);
+            emit_eval_dynamic_callable_invoker(module, emitter, data);
+            label
+        });
         return EvalCallableDescriptorSupport {
             string_cases: Vec::new(),
             instance_array_cases: Vec::new(),
             static_array_cases: Vec::new(),
             object_cases: Vec::new(),
-            dynamic_descriptor_label: None,
+            dynamic_descriptor_label,
             string_lookup_label: None,
             array_lookup_label: None,
             object_lookup_label: None,
@@ -1505,6 +1527,8 @@ pub(super) fn emit_aarch64_cast_eval_callable_arg(
     support: &EvalCallableDescriptorSupport,
     label_prefix: &str,
     fail_label: &str,
+    context_offset: i64,
+    source_offset: i64,
 ) {
     let string_label = format!("{}_callable_string", label_prefix);
     let array_label = format!("{}_callable_array", label_prefix);
@@ -1516,7 +1540,7 @@ pub(super) fn emit_aarch64_cast_eval_callable_arg(
     } else {
         fail_label
     };
-    emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for callable validation
+    emitter.instruction(&format!("ldr x0, [x29, #{}]", source_offset));         // reload the boxed eval value for callable validation
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the eval callable tag and payload words
     emitter.instruction("cmp x0, #1");                                          // runtime tag 1 means a string callable name
     emitter.instruction(&format!("b.eq {}", string_label));                     // resolve string callables through descriptor metadata
@@ -1576,6 +1600,8 @@ pub(super) fn emit_aarch64_cast_eval_callable_arg(
             support,
             fail_label,
             "x0",
+            context_offset,
+            source_offset,
         );
         abi::emit_jump(emitter, &format!("{}_callable_cast_done", label_prefix));
     }
@@ -1591,6 +1617,7 @@ pub(super) fn emit_x86_64_cast_eval_callable_arg(
     label_prefix: &str,
     fail_label: &str,
     context_frame_offset: usize,
+    source_offset: usize,
 ) {
     let string_label = format!("{}_callable_string", label_prefix);
     let array_label = format!("{}_callable_array", label_prefix);
@@ -1602,7 +1629,7 @@ pub(super) fn emit_x86_64_cast_eval_callable_arg(
     } else {
         fail_label
     };
-    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed eval argument for callable validation
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {}]", source_offset)); // reload the boxed eval value for callable validation
     emitter.instruction("call __rt_mixed_unbox");                               // expose the eval callable tag and payload words
     emitter.instruction("cmp rax, 1");                                          // runtime tag 1 means a string callable name
     emitter.instruction(&format!("je {}", string_label));                       // resolve string callables through descriptor metadata
@@ -1663,6 +1690,7 @@ pub(super) fn emit_x86_64_cast_eval_callable_arg(
             fail_label,
             "rax",
             context_frame_offset,
+            source_offset,
         );
         abi::emit_jump(emitter, &format!("{}_callable_cast_done", label_prefix));
     }
@@ -1676,22 +1704,21 @@ fn emit_aarch64_eval_dynamic_callable_descriptor(
     support: &EvalCallableDescriptorSupport,
     fail_label: &str,
     result_reg: &str,
+    context_offset: i64,
+    source_offset: i64,
 ) {
     let descriptor_label = support
         .dynamic_descriptor_label
         .as_deref()
         .expect("dynamic eval callable descriptor must exist");
     let is_callable_symbol = module.target.extern_symbol("__elephc_eval_is_callable");
-    emitter.instruction(&format!(
-        "ldr x0, [x29, #{}]",
-        AARCH64_EVAL_CONTEXT_FROM_FP_OFFSET
-    ));                                                                         // load the active eval context for dynamic callable validation
+    emitter.instruction(&format!("ldr x0, [x29, #{}]", context_offset));        // load the active eval context for dynamic callable validation
     emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject dynamic eval callables when no context is active
-    emitter.instruction("ldr x1, [x29, #-16]");                                 // pass the original boxed eval callback value
+    emitter.instruction(&format!("ldr x1, [x29, #{}]", source_offset));         // pass the original boxed eval callback value
     abi::emit_call_label(emitter, &is_callable_symbol);
     emitter.instruction("cmp w0, #0");                                          // check whether magician accepts the callback value
     emitter.instruction(&format!("b.eq {}", fail_label));                       // reject non-callable eval values
-    emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed callback value to retain it
+    emitter.instruction(&format!("ldr x0, [x29, #{}]", source_offset));         // reload the boxed callback value to retain it
     emitter.instruction("bl __rt_incref");                                      // retain the callback for descriptor capture ownership
     abi::emit_push_reg(emitter, "x0");
     abi::emit_load_int_immediate(
@@ -1702,10 +1729,7 @@ fn emit_aarch64_eval_dynamic_callable_descriptor(
     );
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate runtime descriptor storage with eval captures
     callable_descriptor::emit_copy_static_descriptor_to_runtime(emitter, "x0", descriptor_label);
-    emitter.instruction(&format!(
-        "ldr x10, [x29, #{}]",
-        AARCH64_EVAL_CONTEXT_FROM_FP_OFFSET
-    ));                                                                         // reload the active eval context for descriptor capture 0
+    emitter.instruction(&format!("ldr x10, [x29, #{}]", context_offset));                                                                         // reload the active eval context for descriptor capture 0
     abi::emit_store_to_address(
         emitter,
         "x10",
@@ -1733,6 +1757,7 @@ fn emit_x86_64_eval_dynamic_callable_descriptor(
     fail_label: &str,
     result_reg: &str,
     context_frame_offset: usize,
+    source_offset: usize,
 ) {
     let descriptor_label = support
         .dynamic_descriptor_label
@@ -1745,11 +1770,11 @@ fn emit_x86_64_eval_dynamic_callable_descriptor(
     ));                                                                         // load the active eval context for dynamic callable validation
     emitter.instruction("test rdi, rdi");                                       // check whether a context was passed by magician
     emitter.instruction(&format!("jz {}", fail_label));                         // reject dynamic eval callables when no context is active
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // pass the original boxed eval callback value
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rbp - {}]", source_offset)); // pass the original boxed eval callback value
     abi::emit_call_label(emitter, &is_callable_symbol);
     emitter.instruction("test eax, eax");                                       // check whether magician accepts the callback value
     emitter.instruction(&format!("jz {}", fail_label));                         // reject non-callable eval values
-    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed callback value to retain it
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {}]", source_offset)); // reload the boxed callback value to retain it
     emitter.instruction("call __rt_incref");                                    // retain the callback for descriptor capture ownership
     abi::emit_push_reg(emitter, "rax");
     abi::emit_load_int_immediate(

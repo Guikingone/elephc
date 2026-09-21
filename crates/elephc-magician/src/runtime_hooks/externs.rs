@@ -71,6 +71,9 @@ unsafe extern "C" {
         value: *mut RuntimeCell,
         scope_ptr: *const u8,
         scope_len: u64,
+        // A `\Closure`-typed property slot holds a descriptor, and converting a boxed eval
+        // callback into one needs the active eval context for the dynamic fallback.
+        context: *const c_void,
     ) -> u64;
     pub(super) fn __elephc_eval_value_static_property_get(
         class_ptr: *const u8,
@@ -143,6 +146,10 @@ unsafe extern "C" {
         args: *mut RuntimeCell,
         target: u64,
         repeated: u64,
+        // PHP's `ReflectionAttribute::__toString()` rendering: only the interpreter knows the
+        // literal arguments a runtime-declared class carries, so it renders and hands it over.
+        string_ptr: *const u8,
+        string_len: u64,
     ) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_reflection_owner_new(
         owner_kind: u64,
@@ -278,6 +285,15 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_trait_exists(name_ptr: *const u8, name_len: u64) -> u64;
     /// Returns whether generated enum metadata contains the requested PHP name.
     pub(super) fn __elephc_eval_enum_exists(name_ptr: *const u8, name_len: u64) -> u64;
+    /// Returns the request-scoped load flag of a class the closed world carries only so an
+    /// existence probe can be answered, or null when the name is not one of those.
+    ///
+    /// The name must be LOWERCASE: php class names are case-insensitive and the generated table
+    /// stores them folded.
+    pub(super) fn __elephc_eval_class_deferred_lookup(
+        name_ptr: *const u8,
+        name_len: u64,
+    ) -> *mut u64;
     pub(super) fn __elephc_eval_value_array_len(array: *mut RuntimeCell) -> u64;
     pub(super) fn __elephc_eval_value_is_array_like(value: *mut RuntimeCell) -> u64;
     pub(super) fn __elephc_eval_value_is_null(value: *mut RuntimeCell) -> u64;
@@ -460,6 +476,23 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_install_object_relation_hook(callback: usize);
     /// Installs the optional eval serialize-object callback.
     pub(super) fn __elephc_eval_install_serialize_object_hook(callback: usize);
+    /// Reports whether one COMPILED generator can still produce a value.
+    ///
+    /// These four are the other half of `__elephc_eval_install_generator_protocol_hook`: that one
+    /// lets compiled code drive an interpreted generator, and these let the interpreter drive a
+    /// compiled one. Both directions are needed the moment a compiled class and an eval-declared
+    /// subclass each own one end of a `yield from`. `generators::emit_generator_runtime` is
+    /// emitted unconditionally, so the symbols are always there to link against. Each probes for
+    /// an eval owner first, so calling one on an interpreter-owned generator is still correct.
+    pub(super) fn __elephc_eval_gen_valid(generator: *mut RuntimeCell) -> i64;
+    /// Returns an owned copy of one COMPILED generator's current value.
+    pub(super) fn __elephc_eval_gen_current(generator: *mut RuntimeCell) -> *mut RuntimeCell;
+    /// Returns an owned copy of one COMPILED generator's current key.
+    pub(super) fn __elephc_eval_gen_key(generator: *mut RuntimeCell) -> *mut RuntimeCell;
+    /// Advances one COMPILED generator to its next yield.
+    pub(super) fn __elephc_eval_gen_next(generator: *mut RuntimeCell);
+    /// Returns an owned copy of one COMPILED generator's `getReturn()` value.
+    pub(super) fn __elephc_eval_gen_get_return(generator: *mut RuntimeCell) -> *mut RuntimeCell;
 }
 
 /// Forwards one installed eval ob-handler callback address to the generated runtime.

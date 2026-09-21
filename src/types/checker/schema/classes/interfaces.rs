@@ -18,6 +18,7 @@ use crate::types::traits::FlattenedClass;
 use crate::types::{PhpType, PropertyHookContract};
 
 use super::super::super::Checker;
+use super::super::super::builtin_interfaces::interface_return_type_is_tentative;
 use super::super::validation::{
     declared_return_type_compatible, is_pdo_exception_get_code_contract,
     late_static_return_compatible,
@@ -301,7 +302,13 @@ fn validate_static_interface_method(
         .methods
         .iter()
         .find(|m| m.is_static && php_symbol_key(&m.name) == method_name);
-    if required_sig.declared_return && !actual_sig.declared_return {
+    if required_sig.declared_return
+        && !actual_sig.declared_return
+        && !interface_return_type_is_tentative(
+            declaring_interface(&interface_info, interface_name, method_name),
+            method_name,
+        )
+    {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)
@@ -445,6 +452,45 @@ pub(super) fn ensure_concrete_class_implements_abstracts(
     Ok(())
 }
 
+/// Names the interface that actually DECLARED `method_name`, not the one the class named.
+///
+/// A class may reach `Countable::count` through `interface Nodes extends Countable`; the tentative
+/// return-type rule is a property of the declaring interface, so resolving through
+/// `method_declaring_interfaces` is what keeps it from depending on how the contract was reached.
+/// The fallback is the interface the class named, which is the declaring one for a direct clause.
+fn declaring_interface<'a>(
+    interface_info: &'a crate::types::InterfaceInfo,
+    interface_name: &'a str,
+    method_name: &str,
+) -> &'a str {
+    interface_info
+        .method_declaring_interfaces
+        .get(method_name)
+        .map(String::as_str)
+        .unwrap_or(interface_name)
+}
+
+/// Reports whether the implementing method carries `#[\\ReturnTypeWillChange]`.
+///
+/// The attribute silences PHP's tentative-return deprecation and nothing else — it does not make an
+/// undeclared return legal against a USERLAND parent, which is why acceptance is decided by the
+/// declaring interface and only the NOTICE is decided here. A leading `\\` and the case of the name
+/// are both insignificant in PHP, so neither is compared.
+fn method_suppresses_tentative_return_notice(
+    method: Option<&crate::parser::ast::ClassMethod>,
+) -> bool {
+    method.is_some_and(|method| {
+        method.attributes.iter().any(|group| {
+            group.attributes.iter().any(|attribute| {
+                attribute
+                    .name
+                    .trim_start_matches('\\')
+                    .eq_ignore_ascii_case("ReturnTypeWillChange")
+            })
+        })
+    })
+}
+
 /// Validates that `class` implements the interface method `method_name` from `interface_name`.
 ///
 /// Checks signature compatibility, return type declarations, visibility (must be public), and
@@ -529,15 +575,31 @@ fn validate_interface_method(
         .iter()
         .find(|m| php_symbol_key(&m.name) == method_name);
     if required_sig.declared_return && !actual_sig.declared_return {
-        return Err(CompileError::new(
-            actual_method
-                .map(|m| m.span)
-                .unwrap_or_else(crate::span::Span::dummy),
-            &format!(
-                "Cannot implement interface method {}::{} without declaring a compatible return type (interface returns {})",
-                class.name, method_name, required_sig.return_type
-            ),
-        ));
+        let declaring = declaring_interface(&interface_info, interface_name, method_name);
+        if !interface_return_type_is_tentative(declaring, method_name) {
+            return Err(CompileError::new(
+                actual_method
+                    .map(|m| m.span)
+                    .unwrap_or_else(crate::span::Span::dummy),
+                &format!(
+                    "Cannot implement interface method {}::{} without declaring a compatible return type (interface returns {})",
+                    class.name, method_name, required_sig.return_type
+                ),
+            ));
+        }
+        // Accepted, but not silently: PHP reports the missing declaration as a deprecation and the
+        // attribute is what suppresses it.
+        if !method_suppresses_tentative_return_notice(actual_method) {
+            checker.warnings.push(crate::errors::CompileWarning::new(
+                actual_method
+                    .map(|m| m.span)
+                    .unwrap_or_else(crate::span::Span::dummy),
+                &format!(
+                    "Return type of {}::{}() should either be compatible with {}::{}(): {}, or the #[\\ReturnTypeWillChange] attribute should be used to temporarily suppress the notice",
+                    class.name, method_name, declaring, method_name, required_sig.return_type
+                ),
+            ));
+        }
     }
     if let PhpType::Object(actual_name) = &actual_sig.return_type {
         if actual_name != &class.name

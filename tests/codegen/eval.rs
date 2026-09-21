@@ -32823,6 +32823,323 @@ echo ($root->getPrevious() === null) ? "noprev" : "prev";');
     assert_eq!(out, "AotChainEx|3|0||root|noprev");
 }
 
+/// Declares an eval class that extends an AOT parent and meets its interface through inheritance.
+///
+/// PHP satisfies an interface contract with any method the class INHERITS. The interpreter's
+/// contract check only walked EVAL-declared ancestors, so a method living on the compiled parent
+/// looked unimplemented and the whole declaration was refused with `class ... could not be
+/// declared`. Symfony's `ContainerBag extends FrozenParameterBag implements ContainerBagInterface`
+/// is this exact shape — it inherits `resolveValue()` and `escapeValue()` from the compiled
+/// `ParameterBag` — and it stopped a compiled prod container from booting at all.
+#[test]
+fn test_eval_class_meets_interface_through_an_aot_parent_it_only_inherits_from() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class AotBaseBag
+{
+    public function resolveValue(mixed $value): mixed
+    {
+        return "resolved:" . $value;
+    }
+
+    public static function describe(): string
+    {
+        return "base";
+    }
+}
+
+class AotFrozenBag extends AotBaseBag
+{
+    public function escapeValue(mixed $value): mixed
+    {
+        return "escaped:" . $value;
+    }
+}
+
+$warm = new AotFrozenBag();
+echo $warm->resolveValue("warm"), "|";
+
+eval('interface EvalBagInterface {
+    public function all(): array;
+    public function resolveValue(mixed $value): mixed;
+    public function escapeValue(mixed $value): mixed;
+    public static function describe(): string;
+}');
+eval('class EvalBag extends AotFrozenBag implements EvalBagInterface {
+    public function all(): array { return ["k" => "v"]; }
+}');
+
+$bag = new EvalBag();
+echo ($bag instanceof EvalBagInterface) ? "impl" : "no-impl", "|";
+echo implode(",", array_keys($bag->all())), "|";
+echo $bag->resolveValue("deep"), "|", $bag->escapeValue("near"), "|", EvalBag::describe();
+"#,
+    );
+    assert_eq!(out, "resolved:warm|impl|k|resolved:deep|escaped:near|base");
+}
+
+/// Keeps refusing an eval class whose interface method NO ancestor provides.
+///
+/// The AOT-ancestor fallback above must not turn the contract check into a rubber stamp: a
+/// genuinely missing method is still a refused declaration, exactly as in PHP.
+#[test]
+fn test_eval_class_missing_an_interface_method_is_still_refused() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class AotPlainBag
+{
+    public function known(): string
+    {
+        return "known";
+    }
+}
+
+echo (new AotPlainBag())->known(), "|";
+eval('interface EvalStrictInterface { public function absent(): string; }');
+eval('class EvalStrictBag extends AotPlainBag implements EvalStrictInterface {}');
+echo "unreachable";
+"#,
+    );
+    assert!(
+        out.stderr.contains("EvalStrictBag"),
+        "expected the refused declaration to name the class: {}",
+        out.stderr
+    );
+    assert!(
+        !out.stdout.contains("unreachable"),
+        "declaration must not be accepted: {}",
+        out.stdout
+    );
+    assert_no_rust_panic_leaked(&out.stderr);
+}
+
+/// Builds a first-class callable out of every shape that can name a runtime-declared target.
+///
+/// `$callable(...)` normalizes through the generated candidate tables, which only describe
+/// AOT-compiled classes. A receiver declared at runtime always misses them — and a miss aborted
+/// the process ("callable array did not resolve to an invokable target", "mixed value is not
+/// callable") instead of handing the value to the interpreter that owns it. Symfony's
+/// `EventDispatcher::optimizeListeners` does exactly this with `[$service, 'onKernelRequest']`
+/// for every listener it wires, so no compiled prod container could dispatch a single event.
+#[test]
+fn test_first_class_callable_over_runtime_declared_targets() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class FccSvc {
+    public function greet(string $n): string { return "hi $n"; }
+    public static function shout(string $n): string { return "HI $n"; }
+    public function __invoke(string $n): string { return "call $n"; }
+}');
+
+$obj = new FccSvc();
+$listener = [$obj, 'greet'];
+$fn = $listener(...);
+echo $fn('a'), '|';
+
+$staticListener = ['FccSvc', 'shout'];
+$sfn = $staticListener(...);
+echo $sfn('b'), '|';
+
+$ifn = $obj(...);
+echo $ifn('c'), '|';
+
+$byRef = [$obj, 'greet'];
+$make = static function () use (&$byRef) {
+    return $byRef(...);
+};
+echo ($make())('d'), '|';
+
+echo is_callable([$obj, 'greet']) ? 'y' : 'n';
+echo is_callable([$obj, 'absent']) ? 'y' : 'n';
+echo is_callable(['FccSvc', 'shout']) ? 'y' : 'n';
+"#,
+    );
+    assert_eq!(out, "hi a|HI b|call c|hi d|yny");
+}
+
+/// Keeps a first-class callable over a COMPILED target on its native path.
+///
+/// The eval fallback is a miss handler, not a replacement: an AOT class still resolves through the
+/// generated descriptor tables, and a value that is callable nowhere still aborts.
+#[test]
+fn test_first_class_callable_over_compiled_targets_is_unchanged() {
+    let out = compile_and_run(
+        r#"<?php
+class AotFcc
+{
+    public function greet(string $n): string
+    {
+        return "aot $n";
+    }
+
+    public static function shout(string $n): string
+    {
+        return "AOT $n";
+    }
+}
+
+$obj = new AotFcc();
+$listener = [$obj, 'greet'];
+echo ($listener(...))('a'), '|';
+$staticListener = ['AotFcc', 'shout'];
+echo ($staticListener(...))('b'), '|';
+echo is_callable([$obj, 'greet']) ? 'y' : 'n';
+echo is_callable([$obj, 'absent']) ? 'y' : 'n';
+echo is_callable(['AotFcc', 'nope']) ? 'y' : 'n';
+"#,
+    );
+    assert_eq!(out, "aot a|AOT b|ynn");
+}
+
+/// Hands a COMPILED closure back to interpreted code from every callable-returning shape.
+///
+/// A compiled closure is a callable descriptor, not an object cell. Four separate layers assumed
+/// otherwise: the bridge boxed it with the OBJECT tag because `: \Closure` is an object type, the
+/// return-type check refused a descriptor for a declared `\Closure`, `gettype()` answered `NULL`
+/// and `is_callable()` answered false. Underneath all of that, `closure_new` held the descriptor
+/// in x19/r12 — CALLEE-SAVED registers an ordinary function's prologue never preserves — so
+/// returning one through the eval bridge destroyed a register its Rust caller was still using.
+/// Symfony's `HtmlErrorRenderer::isDebug(): \Closure` is this exact shape.
+#[test]
+fn test_compiled_closure_returned_into_eval_behaves_like_a_php_closure() {
+    let out = compile_and_run(
+        r#"<?php
+class ClosureSrc
+{
+    public static function typed(): \Closure
+    {
+        return static fn (): string => 'typed';
+    }
+
+    public static function untyped()
+    {
+        return static fn (): string => 'untyped';
+    }
+
+    public static function capturing(string $tag): \Closure
+    {
+        return static function () use ($tag): string {
+            return 'capturing:' . $tag;
+        };
+    }
+
+    public function instanceTyped(): \Closure
+    {
+        return static fn (): string => 'instance';
+    }
+}
+
+function closureSrcFree(): \Closure
+{
+    return static fn (): string => 'free';
+}
+
+eval('$src = new ClosureSrc();
+$typed = ClosureSrc::typed();
+echo $typed(), "|", get_debug_type($typed), "|", gettype($typed), "|";
+echo ($typed instanceof Closure) ? "y" : "n", "|", is_callable($typed) ? "y" : "n", "|";
+echo (ClosureSrc::untyped())(), "|";
+echo (ClosureSrc::capturing("x"))(), "|";
+echo ($src->instanceTyped())(), "|";
+echo (closureSrcFree())();');
+"#,
+    );
+    assert_eq!(
+        out,
+        "typed|Closure|object|y|y|untyped|capturing:x|instance|free"
+    );
+}
+
+/// Answers `instanceof` from COMPILED code about a class declared at runtime.
+///
+/// The closed-world fold that erases an `instanceof` whose target has no compiled metadata was
+/// guarded by a FLOW fact — "this function has lowered an `eval()`" — which is false in a compiled
+/// function that contains no `eval()` of its own, however much the program runs one elsewhere. So
+/// the fold hardcoded `false` for a class the runtime does declare. Symfony's compiled
+/// `FlattenException::createFromThrowable()` asks `$e instanceof HttpExceptionInterface` about an
+/// autoloaded interface: the false answer cost every `NotFoundHttpException` its status code and
+/// turned php's 404 into a 500.
+#[test]
+fn test_compiled_instanceof_sees_runtime_declared_classes() {
+    let out = compile_and_run(
+        r#"<?php
+class Flattener
+{
+    public static function statusOf(\Throwable $e): int
+    {
+        return ($e instanceof StatusCarrier) ? $e->getStatusCode() : 500;
+    }
+
+    public static function describe(mixed $value): string
+    {
+        return ($value instanceof StatusCarrier) ? 'carrier' : 'plain';
+    }
+
+    public static function isMissing(mixed $value): string
+    {
+        return ($value instanceof NeverDeclared) ? 'yes' : 'no';
+    }
+}
+
+eval('interface StatusCarrier { public function getStatusCode(): int; }');
+eval('class HttpError extends \RuntimeException implements StatusCarrier {
+    public function getStatusCode(): int { return 404; }
+}');
+eval('class NotFound extends HttpError {}');
+
+$e = new NotFound('nope');
+echo ($e instanceof StatusCarrier) ? 'carrier' : 'plain', '|';
+echo Flattener::describe($e), '|';
+echo Flattener::statusOf($e), '|';
+echo Flattener::describe(new \RuntimeException('plain')), '|';
+echo Flattener::isMissing($e);
+"#,
+    );
+    assert_eq!(out, "carrier|carrier|404|plain|no");
+}
+
+/// Accepts PHP 8.2's standalone `false` and `true` types, alone and inside a union.
+///
+/// Both used to parse as a CLASS named "false"/"true", which no boolean can satisfy: Symfony's
+/// `ControllerResolver::getController(): callable|false` threw a TypeError on its ordinary
+/// "no controller" path — the 404 route — instead of returning.
+#[test]
+fn test_eval_false_and_true_value_types() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class Resolver {
+    public function controller(bool $found): callable|false
+    {
+        return $found ? static fn (): string => "c" : false;
+    }
+
+    public function always(): true
+    {
+        return true;
+    }
+
+    public function never(): false
+    {
+        return false;
+    }
+
+    public function takesFalse(false $flag): string
+    {
+        return "took:" . var_export($flag, true);
+    }
+}');
+
+$r = new Resolver();
+echo var_export($r->controller(false), true), '|';
+echo is_callable($r->controller(true)) ? 'callable' : 'not', '|';
+echo var_export($r->always(), true), '|';
+echo var_export($r->never(), true), '|';
+echo $r->takesFalse(false);
+"#,
+    );
+    assert_eq!(out, "false|callable|true|false|took:false");
+}
+
 /// Decodes NUL escapes and warns only for observable undefined-variable reads in eval.
 #[test]
 fn test_eval_nul_escapes_and_undefined_variable_warning() {
@@ -32843,4 +33160,74 @@ return ":" . ($quiet ?? "fallback");');
         out.stderr
     );
     assert!(!out.stderr.contains("$quiet"), "{}", out.stderr);
+}
+
+
+/// `$s[$i] = $c` on a STRING writes one byte in place; it does not replace `$s` with an array.
+///
+/// The interpreter's variable index-assignment discarded every non-array-like existing value and
+/// started a fresh array, so `$s = "abc"; $s[0] = "X";` produced `["X"]` instead of `"Xbc"` — and
+/// every later read of `$s` warned `Array to string conversion`.
+///
+/// symfony/polyfill-mbstring's `mb_convert_case()` is written on exactly this operation
+/// (`$s[--$nlen] = $uchr[--$ulen];`), so `mb_strtoupper()` RETURNED AN ARRAY and Twig's `|upper`
+/// filter died with `Return value must be of type string, array returned`.
+///
+/// The fixture pins the rules that are easy to get wrong, each measured with `php -n` 8.5:
+/// only the first byte is taken, a negative offset counts from the end, an offset past the end
+/// pads with SPACES, an empty subject is still a string, and `null` still vivifies an ARRAY —
+/// that last row is what keeps the fix from swallowing PHP's real array behaviour.
+#[test]
+fn test_an_interpreted_string_offset_assignment_writes_into_the_string() {
+    let out = compile_and_run(
+        r#"<?php
+eval('
+$s = "abc"; $s[0] = "X";
+$t = "hello"; $t[1] = "E"; $t[4] = "O";
+$u = "abc"; $i = 2; $u[--$i] = "Z";
+$v = "ab"; $v[5] = "x";
+$w = ""; $w[0] = "X";
+$n = "abc"; $n[-1] = "Q";
+$d = null; $d[0] = "N";
+$a = ["p" => 1]; $a["q"] = 2;
+echo $s, ";", $t, ";", $u, ";", $v, "(", strlen($v), ");", $w, ";", $n, ";";
+echo gettype($d), json_encode($d), ";", json_encode($a), "\n";
+');
+"#,
+    );
+    assert_eq!(
+        out,
+        "Xbc;hEllO;aZc;ab   x(6);X;abQ;array[\"N\"];{\"p\":1,\"q\":2}\n"
+    );
+}
+
+
+/// The interpreter picks a JSON bracket from the KEYS, not from the storage kind.
+///
+/// php encodes an array as a JSON ARRAY when its keys are exactly `0..len-1`, and the EMPTY array
+/// is the degenerate case of that. Hash storage reaches the interpreter's encoder for both, and it
+/// unconditionally wrote `{`, so an emptied bag printed `{}` where php prints `[]`.
+///
+/// Symfony's `JsonResponse` shows it on any endpoint returning an emptied parameter bag:
+/// `/echo` answered `"post":{}` against php's `"post":[]`.
+///
+/// The fixture keeps the cases that must STAY objects beside it, because the fix is a key scan and
+/// a scan that is too eager would turn `{"5":..}` into an array.
+///
+/// Oracle: `php -n` prints the asserted line.
+#[test]
+fn test_interpreted_json_encode_picks_its_bracket_from_the_keys() {
+    let out = compile_and_run(
+        r#"<?php
+eval('
+$emptied = ["a" => 1]; unset($emptied["a"]);
+$seq = [0 => "a", 1 => "b"];
+$gap = [5 => "a", 6 => "b"];
+$str = ["k" => 1];
+echo json_encode($emptied), ";", json_encode([]), ";", json_encode($seq), ";",
+     json_encode($gap), ";", json_encode($str), "\n";
+');
+"#,
+    );
+    assert_eq!(out, "[];[];[\"a\",\"b\"];{\"5\":\"a\",\"6\":\"b\"};{\"k\":1}\n");
 }

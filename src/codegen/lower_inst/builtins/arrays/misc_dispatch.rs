@@ -24,7 +24,9 @@ pub(crate) fn lower_array_keys(ctx: &mut FunctionContext<'_>, inst: &Instruction
 
 /// Lowers `array_rand()` for indexed arrays.
 pub(crate) fn lower_array_rand(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "array_rand", 1)?;
+    // The checker has already refused every `$num` but the literal 1, and one key is exactly what
+    // the single-argument form returns, so the second operand carries no work for the backend.
+    super::super::ensure_arg_count_between(inst, "array_rand", 1, 2)?;
     let array = expect_operand(inst, 0)?;
     require_indexed_array_builtin(ctx.value_php_type(array)?, "array_rand")?;
     ctx.load_value_to_result(array)?;
@@ -244,7 +246,13 @@ pub(crate) fn lower_natcasesort(ctx: &mut FunctionContext<'_>, inst: &Instructio
 /// Lowers `shuffle()` for indexed arrays with 8-byte slots by mutating the source array in place.
 pub(crate) fn lower_shuffle(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let array = expect_operand(inst, 0)?;
-    if matches!(ctx.value_php_type(array)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+    // `Iterable` belongs with the gradual shapes here: it is the representation a local takes
+    // when it can hold either array shape, and the indexed lowering below walks fixed-size slots
+    // that a hash does not have -- it segfaults rather than refusing.
+    if matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable
+    ) {
         return pop_shift_dynamic::lower_shuffle_dynamic(ctx, inst, array);
     }
     lower_indexed_array_shuffle(ctx, inst)

@@ -456,9 +456,42 @@ fn parameter_name_is_resolved_at_runtime() {
     );
 }
 
-/// Verifies a non-string argument is still rejected, with a source-located compiler diagnostic
-/// rather than a backend-internal "unsupported EIR backend feature" message: the lowering has no
-/// runtime string conversion, so accepting an int would be a silent miscompile.
+/// Verifies a BOXED argument — `mixed`, the shape real code actually holds — reaches the runtime
+/// lookup instead of being refused.
+///
+/// Symfony's `ControllerResolver::getController()` ends in `\function_exists($controller)` on a
+/// value typed `mixed`, after guards that have already returned for the array and object cases.
+/// The `string` parameter boundary converts a boxed source, so the lookup gets a real string; the
+/// concrete non-string representations it cannot convert stay rejected (see the test below).
+///
+/// Reference PHP 8.5.6 prints `fn;no;array;object;no` for this program.
+#[test]
+fn boxed_gradual_argument_is_resolved_at_runtime() {
+    let dir = make_test_dir("fnexists_gradual");
+    let src = "<?php \
+        function probe(mixed $c): string { \
+            if (is_array($c)) { return 'array'; } \
+            if (is_object($c)) { return 'object'; } \
+            if (function_exists($c)) { return 'fn'; } \
+            return 'no'; \
+        } \
+        echo probe('strlen'), ';', probe('nope_nope'), ';', probe([1]), ';', \
+             probe(new stdClass()), ';', probe(5);";
+    let bin = compile(&dir, src, "app");
+    assert_eq!(
+        run_binary(&bin),
+        "fn;no;array;object;no",
+        "a boxed name must be converted at the string parameter boundary and looked up at runtime"
+    );
+}
+
+/// Verifies a CONCRETE non-string argument is still rejected, with a source-located compiler
+/// diagnostic rather than a backend-internal "unsupported EIR backend feature" message.
+///
+/// The string parameter boundary converts a boxed source only (see
+/// `boxed_gradual_argument_is_resolved_at_runtime`); a value whose static representation is a raw
+/// `int` reaches the lookup unconverted, so the checker refuses it rather than letting codegen
+/// fail. PHP would answer `false` here, which is the remaining gap this diagnostic marks.
 #[test]
 fn non_string_argument_is_rejected_with_a_clean_diagnostic() {
     let dir = make_test_dir("fnexists_nonstring");

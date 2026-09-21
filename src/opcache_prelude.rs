@@ -154,4 +154,5 @@ pub use preload::{
 };
 pub use state_restriction::canonical_entry_path;
 pub(crate) use cli_ini::ini_module_known_declaration;
+pub use cli_ini::inject_cli_ini_if_used;
 pub(crate) use env_ini::{env_override_declarations, ini_helper_declarations};

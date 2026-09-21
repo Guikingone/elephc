@@ -152,11 +152,22 @@ pub fn resolve_collecting_includes_with_defines_and_sources(
         &discovery.function_variants,
     )?;
 
-    let sources = IncludedDeclarationSources {
+    let mut sources = IncludedDeclarationSources {
         class_likes: std::mem::take(&mut state.declared_class_files),
         functions: std::mem::take(&mut state.declared_function_files),
         source_units: state.source_units.snapshot(),
     };
+    // A function declared inside an include is renamed to a variant symbol
+    // (`__elephc_include_variant_<hash>_<name>`), and that renamed symbol is the only name later
+    // passes ever see. Recording it here — the registry key already carries the canonical path —
+    // is what lets a diagnostic or `ReflectionFunction::getFileName()` on such a function still
+    // name the file it was written in; the public name recorded above stays alongside it.
+    for (key, info) in &discovery.function_variants {
+        sources.functions.insert(
+            crate::names::php_symbol_key(info.variant_name.trim_start_matches('\\')),
+            key.canonical().display().to_string(),
+        );
+    }
 
     let mut included_files: Vec<PathBuf> = declared_once.into_iter().collect();
     included_files.sort();

@@ -276,6 +276,13 @@ pub(in crate::codegen) fn seed_runtime_stdclass_name(module: &Module, names: &mu
 
 /// Adds builtin reflection classes whose objects can be materialized by metadata helpers.
 pub(in crate::codegen) fn seed_builtin_reflection_class_names(module: &Module, names: &mut HashSet<String>) {
+    // One walk, not one per name: this used to scan every class method for EACH of the
+    // fourteen names below, allocating a lowercased owner AND a lowercased name per method.
+    let native_owners: crate::fast_hash::FastSet<String> = module
+        .class_methods
+        .iter()
+        .filter_map(|function| current_function_class(function).map(php_symbol_key))
+        .collect();
     for class_name in [
         "ReflectionAttribute",
         "ReflectionClass",
@@ -292,10 +299,7 @@ pub(in crate::codegen) fn seed_builtin_reflection_class_names(module: &Module, n
         "ReflectionUnionType",
         "ReflectionIntersectionType",
     ] {
-        let emitted_natively = module.class_methods.iter().any(|function| {
-            current_function_class(function)
-                .is_some_and(|owner| php_symbol_key(owner) == php_symbol_key(class_name))
-        });
+        let emitted_natively = native_owners.contains(&php_symbol_key(class_name));
         if module.class_infos.contains_key(class_name)
             && (module.required_runtime_features.eval_bridge || emitted_natively)
         {

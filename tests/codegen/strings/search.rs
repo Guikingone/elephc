@@ -548,6 +548,158 @@ strncasecmp(): Argument #3 ($length) must be greater than or equal to 0\n"
     );
 }
 
+/// Verifies `substr_compare()` returns php's own two-part answer: `memcmp()`'s RAW unsigned-byte
+/// difference at the first mismatch, and `ZEND_THREEWAY_COMPARE`'s `-1`/`0`/`1` when one operand
+/// is a prefix of the other. A normalized sign everywhere would break `< 0` callers; a length
+/// DIFFERENCE in the tiebreak would break nothing here but does break `"ab"` vs `"abcdef"`, which
+/// the prefix cases below pin.
+/// `php` 8.5.10 prints `0`, `-1`, `-25`, `25`, `-32`, `-1`, `1`, `3` for these calls.
+#[test]
+fn test_substr_compare_byte_difference_and_threeway_tiebreak() {
+    let out = compile_and_run(
+        r#"<?php
+echo substr_compare("abcde", "abcde", 0), "|",
+     substr_compare("abcde", "abcdf", 0), "|",
+     substr_compare("a", "z", 0), "|",
+     substr_compare("z", "a", 0), "|",
+     substr_compare("A", "a", 0), "|",
+     substr_compare("abc", "abcdef", 0), "|",
+     substr_compare("abcdef", "abc", 0), "|",
+     substr_compare("abcdef", "abc", 3, 3);
+"#,
+    );
+    assert_eq!(out, "0|-1|-25|25|-32|-1|1|3");
+}
+
+/// Verifies a negative `$offset` counts back from the haystack end and CLAMPS to zero when its
+/// magnitude overruns the haystack, instead of raising the way `substr_count()` does for the same
+/// input. `substr_compare("abcdef","def",-100)` is `-3` ('a' minus 'd'), which only holds if the
+/// comparison really restarted at offset zero.
+/// `php` 8.5.10 prints `0`, `0`, `0`, `0`, `-3`, `1`.
+#[test]
+fn test_substr_compare_negative_offset_clamps_instead_of_throwing() {
+    let out = compile_and_run(
+        r#"<?php
+echo substr_compare("abcdef", "def", -3), "|",
+     substr_compare("abcdef", "ef", -2), "|",
+     substr_compare("abcdef", "abcdef", -6), "|",
+     substr_compare("abcdef", "abcdef", -7), "|",
+     substr_compare("abcdef", "def", -100), "|",
+     substr_compare("abc", "a", PHP_INT_MIN);
+"#,
+    );
+    assert_eq!(out, "0|0|0|0|-3|1");
+}
+
+/// Verifies a `null` `$length` compares the LONGER of the two operands (php's
+/// `MAX(strlen($needle), strlen($haystack) - $offset)`), so a prefix answers `-1`/`1` where an
+/// explicit `$length` covering only the prefix answers `0`. The final call proves a run-time
+/// `null` reaching the argument is read as "no length" and not coerced to `0`, which would make
+/// every call compare zero bytes and answer `0`.
+/// `php` 8.5.10 prints `-1`, `0`, `-1`, `0`, `1`, `0`, `1`.
+#[test]
+fn test_substr_compare_length_null_explicit_and_runtime_null() {
+    let out = compile_and_run(
+        r#"<?php
+function f(?int $l) { return substr_compare("abcdef", "abc", 0, $l); }
+$n = null;
+echo substr_compare("abcde", "abcdef", 0, null), "|",
+     substr_compare("abcde", "abcdef", 0, 5), "|",
+     substr_compare("abcde", "abcdef", 0, 100), "|",
+     substr_compare("abcdef", "abc", 0, 3), "|",
+     substr_compare("abcdef", "abc", 0), "|",
+     substr_compare("abcdef", "abc", 0, 0), "|",
+     f($n);
+"#,
+    );
+    assert_eq!(out, "-1|0|-1|0|1|0|1");
+}
+
+/// Verifies `$case_insensitive` folds ASCII letters only. `[`/`{` and `_`/`?` differ by the same
+/// `0x20` bit an ASCII letter pair does, so a fold that tested the bit rather than the `A`-`Z`
+/// range would wrongly answer `0` for them. The UTF-8 pair shows multi-byte input is compared
+/// byte for byte: the lead byte cancels and the continuation byte decides.
+/// `php` 8.5.10 prints `0`, `0`, `-32`, `-32`, `32`, `-32`.
+#[test]
+fn test_substr_compare_case_insensitive_folds_ascii_only() {
+    let out = compile_and_run(
+        r#"<?php
+echo substr_compare("Hello", "hello", 0, 5, true), "|",
+     substr_compare("Hello", "hello", 0, null, true), "|",
+     substr_compare("HELLO", "hello", 0, 5, false), "|",
+     substr_compare("[", "{", 0, 1, true), "|",
+     substr_compare("_", "?", 0, 1, true), "|",
+     substr_compare("\xC3\x89", "\xC3\xA9", 0, 2, true);
+"#,
+    );
+    assert_eq!(out, "0|0|-32|-32|32|-32");
+}
+
+/// Verifies bytes above `0x7F` are compared as UNSIGNED values the way `memcmp` does, and that
+/// every empty-operand pairing is decided by the truncated-length tiebreak. Reading the bytes as
+/// signed `char` would sort `"\xFF"` below `"\x01"` and flip the sign of every non-ASCII compare.
+/// `php` 8.5.10 prints `94`, `-94`, `254`, `-254`, `-1`, `1`, `1`, `0`.
+#[test]
+fn test_substr_compare_unsigned_high_bytes_and_empty_operands() {
+    let out = compile_and_run(
+        r#"<?php
+echo substr_compare("\xC3\xA9", "e", 0, 1), "|",
+     substr_compare("e", "\xC3\xA9", 0, 1), "|",
+     substr_compare("\xFF", "\x01", 0, 1), "|",
+     substr_compare("\x01", "\xFF", 0, 1), "|",
+     substr_compare("", "abc", 0), "|",
+     substr_compare("abc", "", 0), "|",
+     substr_compare("abc", "", 1), "|",
+     substr_compare("", "", 0);
+"#,
+    );
+    assert_eq!(out, "94|-94|254|-254|-1|1|1|0");
+}
+
+/// Verifies `substr_compare()` raises php-src's catchable `ValueError`s, in php's own order:
+/// `$length` is refused first (a negative one is never measured back from the end, unlike
+/// `substr_count()`'s), and only a call whose `$length` is valid reaches the `$offset` bound.
+/// `$offset === strlen($haystack)` stays legal.
+/// Messages are verbatim `php` 8.5.10 output.
+#[test]
+fn test_substr_compare_value_errors() {
+    let out = compile_and_run(
+        r#"<?php
+foreach ([["abcdef", "abc", 0, -1], ["abc", "a", 100, -1], ["abc", "a", 100, 1], ["abc", "a", 3, 1]] as $t) {
+    try {
+        echo substr_compare($t[0], $t[1], $t[2], $t[3]), "\n";
+    } catch (ValueError $e) {
+        echo $e->getMessage(), "\n";
+    }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "substr_compare(): Argument #4 ($length) must be greater than or equal to 0\n\
+substr_compare(): Argument #4 ($length) must be greater than or equal to 0\n\
+substr_compare(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\n\
+-1\n"
+    );
+}
+
+/// Verifies `substr_compare()` resolves case-insensitively, through a root-namespace qualified
+/// call, by named argument, and with a named argument that skips `$length` and leaves it at its
+/// `null` default.
+/// `php` 8.5.10 prints `0` for all four.
+#[test]
+fn test_substr_compare_case_insensitive_namespaced_and_named_args() {
+    let out = compile_and_run(
+        r#"<?php
+echo SUBSTR_COMPARE("abcdef", "def", -3), "|",
+     \substr_compare("abcdef", "def", -3), "|",
+     substr_compare(haystack: "Hello", needle: "hello", offset: 0, length: 5, case_insensitive: true), "|",
+     substr_compare("Hello", "hello", 0, case_insensitive: true);
+"#,
+    );
+    assert_eq!(out, "0|0|0|0");
+}
+
 /// Verifies `join()`, `substr_count()`, `strncmp()`, and `strncasecmp()` keep their PHP
 /// types inside an array literal, whose element typing uses the checker's syntactic
 /// inference table rather than the per-call checked type.

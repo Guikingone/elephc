@@ -18,6 +18,7 @@ use crate::eval_ir::EvalBinOp;
 use crate::interpreter::RuntimeValueOps;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 
+mod aot_memo;
 mod collection_calls;
 mod construction_raw;
 mod lifecycle_scalars;

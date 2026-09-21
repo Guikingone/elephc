@@ -459,6 +459,11 @@ enum PregReplaceCallbackEnv {
     None,
     Descriptor(ValueId),
     RuntimeString(ValueId),
+    /// A BOXED callback whose shape is only known at run time — a closure read out of an untyped
+    /// property, the commonest way real code passes one. The tag dispatch that turns it into a
+    /// descriptor is the same one `__elephc_normalize_callable` performs at a `callable`
+    /// parameter boundary.
+    RuntimeMixed(ValueId),
     CallableArray {
         callable: ValueId,
         instance_only: bool,
@@ -473,6 +478,9 @@ impl PregReplaceCallbackEnv {
             Self::Descriptor(callback) => reserve_descriptor_callback_env(ctx, *callback),
             Self::RuntimeString(callback) => {
                 reserve_runtime_string_descriptor_callback_env(ctx, *callback, strict_php)
+            }
+            Self::RuntimeMixed(callback) => {
+                reserve_runtime_mixed_descriptor_callback_env(ctx, *callback, strict_php)
             }
             Self::CallableArray {
                 callable,
@@ -496,7 +504,10 @@ impl PregReplaceCallbackEnv {
 
     /// Returns true when the environment owns a descriptor pointer that must be released.
     fn releases_descriptor(&self) -> bool {
-        matches!(self, Self::RuntimeString(_) | Self::CallableArray { .. })
+        matches!(
+            self,
+            Self::RuntimeString(_) | Self::RuntimeMixed(_) | Self::CallableArray { .. }
+        )
     }
 }
 
@@ -524,6 +535,17 @@ fn preg_replace_callback_target(
             return Ok(PregReplaceCallbackTarget {
                 entry_label: emit_descriptor_callback_wrapper(ctx),
                 env: PregReplaceCallbackEnv::Descriptor(callback),
+            });
+        }
+        // A boxed callback: its runtime tag decides whether it is a closure, a function name, or
+        // a `[$object, 'method']` array, and the same dispatch a `callable` parameter boundary
+        // uses answers that here. Symfony's `CompiledUrlMatcherDumper::compileDynamicRoutes`
+        // passes `$state->getVars` — a closure held in an untyped property — and refusing it made
+        // the whole route dumper uncompilable.
+        PhpType::Mixed | PhpType::Union(_) => {
+            return Ok(PregReplaceCallbackTarget {
+                entry_label: emit_descriptor_callback_wrapper(ctx),
+                env: PregReplaceCallbackEnv::RuntimeMixed(callback),
             });
         }
         PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => {
@@ -581,6 +603,7 @@ fn static_string_callback_entry(
 
 /// Emits a descriptor callback wrapper that adapts regex matches to callable descriptors.
 fn emit_descriptor_callback_wrapper(ctx: &mut FunctionContext<'_>) -> String {
+    // Not shared by ABI shape; see the array_map twin for the two ways that broke.
     let wrapper_label = ctx.next_global_label("preg_replace_descriptor_callback_wrapper");
     let done_label = ctx.next_label("preg_replace_descriptor_callback_after_wrapper");
     let wrapper = DeferredCallbackWrapper {
@@ -645,6 +668,42 @@ fn reserve_runtime_string_descriptor_callback_env(
             ctx.emitter
                 .instruction(&format!("mov QWORD PTR [rsp], {descriptor_reg}"));
             // store the runtime string descriptor for the regex callback wrapper
+        }
+    }
+    Ok(16)
+}
+
+/// Reserves a one-slot callback environment containing a descriptor built from a BOXED callback.
+///
+/// The mirror of [`reserve_runtime_string_descriptor_callback_env`] for a callback whose static
+/// type says only `mixed`: the descriptor emitter dispatches on the value's runtime tag, so a
+/// closure, a function-name string and a `[$object, 'method']` array all land on the same
+/// descriptor the wrapper already knows how to invoke.
+fn reserve_runtime_mixed_descriptor_callback_env(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+    strict_php: bool,
+) -> Result<usize> {
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    // `retain_existing_descriptor` keeps a boxed value that ALREADY holds a descriptor alive for
+    // this environment, which owns its slot and releases it (see `releases_descriptor`).
+    callables::emit_runtime_mixed_callable_descriptor_value(
+        ctx,
+        callable,
+        "preg_replace_callback",
+        true,
+        strict_php,
+    )?;
+    let descriptor_reg = abi::int_result_reg(ctx.emitter).to_string();
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("str {descriptor_reg}, [sp]")); // store the boxed-callback descriptor for the regex callback wrapper
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("mov QWORD PTR [rsp], {descriptor_reg}"));
+            // store the boxed-callback descriptor for the regex callback wrapper
         }
     }
     Ok(16)

@@ -40,10 +40,74 @@ impl Checker {
         class_names.sort();
 
         for class_name in class_names {
+            if class_name != base_class
+                && self.late_bound_target_cannot_bind(&class_name, args, env)?
+            {
+                continue;
+            }
             self.infer_new_object_type(&class_name, args, expr, env)?;
         }
 
         Ok(())
+    }
+
+    /// Returns whether this late-bound descendant is not a construction candidate for these
+    /// arguments, and so has nothing to say about whether the program is well typed.
+    ///
+    /// `new static` binds to the class the call was made ON, so a descendant is a SEPARATE call
+    /// site that PHP decides at run time. Two shapes matter, and Symfony's
+    /// `HttpException::fromStatusCode()` — which ends in
+    /// `new static($statusCode, $message, $previous, $headers, $code)` — hits both:
+    ///
+    /// - SURPLUS: `AccessDeniedHttpException` declares four parameters. PHP discards the surplus
+    ///   and runs, so this is not an error at all; the lowering reproduces it by dropping the
+    ///   extra arguments (`static_new_droppable_surplus_args`).
+    /// - STORAGE CONFLICT: `MethodNotAllowedHttpException` takes `array $allow` where the factory
+    ///   passes an int. PHP raises a TypeError, but only for a program that actually calls
+    ///   `MethodNotAllowedHttpException::fromStatusCode()`; the lowering drops the class from its
+    ///   candidate set (`static_new_args_match_param_storage`) and the branch raises if reached.
+    ///
+    /// Too FEW arguments is deliberately NOT here: that is an `ArgumentCountError` every time the
+    /// branch runs, so reporting it at compile time still describes the program truthfully.
+    fn late_bound_target_cannot_bind(
+        &mut self,
+        class_name: &str,
+        args: &[Expr],
+        env: &TypeEnv,
+    ) -> Result<bool, CompileError> {
+        let Some(sig) = self
+            .classes
+            .get(class_name)
+            .and_then(|class_info| class_info.methods.get("__construct"))
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        if args.iter().any(|arg| {
+            matches!(
+                arg.kind,
+                crate::parser::ast::ExprKind::Spread(_)
+                    | crate::parser::ast::ExprKind::NamedArg { .. }
+            )
+        }) {
+            return Ok(false);
+        }
+        if !crate::func_args::sig_collects_surplus_args(&sig) && args.len() > sig.params.len() {
+            return Ok(true);
+        }
+        for (index, arg) in args.iter().enumerate() {
+            let Some((_, param_ty)) = sig.params.get(index) else {
+                break;
+            };
+            let arg_ty = self.infer_type(arg, env)?;
+            if late_bound_param_storage_conflicts(
+                &param_ty.codegen_repr(),
+                &arg_ty.codegen_repr(),
+            ) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Checks whether `class_name` is either `base_class` itself or a descendant of it
@@ -285,4 +349,19 @@ impl Checker {
             }
         }
     }
+}
+
+/// Returns whether two concrete representations can never hold one another's values.
+///
+/// Mirrors `crate::ir_lower::expr::static_new_param_storage_conflicts`, so the checker and the
+/// lowering agree on which late-bound descendants are construction candidates.
+fn late_bound_param_storage_conflicts(param: &PhpType, arg: &PhpType) -> bool {
+    let array_like = |ty: &PhpType| matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. });
+    let scalar_like = |ty: &PhpType| {
+        matches!(
+            ty,
+            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str
+        )
+    };
+    (array_like(param) && scalar_like(arg)) || (scalar_like(param) && array_like(arg))
 }

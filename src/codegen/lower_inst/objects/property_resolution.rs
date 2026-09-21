@@ -129,15 +129,60 @@ pub(super) fn property_abstract_receiver(
     let Some(class_info) = ctx.module.class_infos.get(normalized) else {
         return Ok(None);
     };
-    if !class_info.is_abstract {
-        return Ok(None);
-    }
     let backing = crate::types::checker::reflection_virtual_property_backing(normalized, property)
         .unwrap_or(property);
     if class_info.visible_property(backing).is_some() {
         return Ok(None);
     }
-    Ok(Some(normalized.to_string()))
+    // An ABSTRACT receiver never has an instance of its own, so the slot always belongs to a
+    // descendant. A CONCRETE base is the same question whenever a descendant declares the
+    // property: the runtime class decides, and only the polymorphic read can ask it.
+    //
+    // This is the backend half of the checker's matching rule in `infer_property_on_class_type`;
+    // the two must agree, because the checker now types such a read as the descendants' declared
+    // type rather than `null`, and a `null` type is what used to fold the access away.
+    if class_info.is_abstract || module_descendant_declares_property(ctx, normalized, backing) {
+        return Ok(Some(normalized.to_string()));
+    }
+    Ok(None)
+}
+
+/// Returns whether any class in the module descending from `ancestor` declares `property`.
+fn module_descendant_declares_property(
+    ctx: &FunctionContext<'_>,
+    ancestor: &str,
+    property: &str,
+) -> bool {
+    ctx.module.class_infos.iter().any(|(name, info)| {
+        name.trim_start_matches('\\') != ancestor
+            && info.visible_property(property).is_some()
+            && class_descends_from_module_class(ctx, name, ancestor)
+    })
+}
+
+/// Walks a module class's parent chain looking for `ancestor`.
+fn class_descends_from_module_class(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    ancestor: &str,
+) -> bool {
+    let mut current = ctx
+        .module
+        .class_infos
+        .get(class_name.trim_start_matches('\\'))
+        .and_then(|info| info.parent.as_deref());
+    while let Some(parent) = current {
+        let normalized = parent.trim_start_matches('\\');
+        if normalized == ancestor {
+            return true;
+        }
+        current = ctx
+            .module
+            .class_infos
+            .get(normalized)
+            .and_then(|info| info.parent.as_deref());
+    }
+    false
 }
 
 /// Resolves a property slot for a known class name.

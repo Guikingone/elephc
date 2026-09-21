@@ -85,6 +85,14 @@ pub(crate) fn compile(config: CliConfig) {
     // `codegen_support::prescan::collect_constants` and in the `phpversion()` const-fold.
     codegen::set_compile_profile(php_version, web);
     crate::superglobals::set_compiling_for_web(web);
+    // php's `$_SERVER` path keys name the SCRIPT, and a compiled program's script is the entry
+    // it was built from. Absolute, because code that re-reads it (`autoload_runtime.php` does
+    // `require $_SERVER['SCRIPT_FILENAME']`) may run from any working directory.
+    crate::superglobals::set_entry_script(
+        &std::fs::canonicalize(filename)
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|_| filename.to_string()),
+    );
     crate::strict_php::set_enabled(strict_php);
     let parent = Path::new(filename).parent().unwrap_or(Path::new("."));
     let source_mode = SourceMode::from_path(Path::new(filename));
@@ -109,6 +117,24 @@ pub(crate) fn compile(config: CliConfig) {
         }
     }
     let output_paths = output_paths(filename, target, emit, output_dir.as_deref());
+    // An input with no extension makes its own stem: `bin/console` compiles to `bin/console`,
+    // and the link step would write the executable over the PHP file it was built from. Refuse
+    // before anything is read, and name the flag that resolves it -- a destroyed source is not
+    // something a later error can undo.
+    for (label, produced) in [
+        ("executable", &output_paths.bin),
+        ("assembly", &output_paths.asm),
+        ("object", &output_paths.obj),
+    ] {
+        if same_file(produced, Path::new(filename)) {
+            eprintln!(
+                "error: the {label} output would overwrite the input {}; \
+                 give the build its own directory with --output-dir DIR",
+                produced.display()
+            );
+            process::exit(1);
+        }
+    }
     let mut timings = CompileTimings::new(emit_timings);
 
     let (parsed, entry_source_unit) = frontend::read_and_parse(filename, source_mode, &defines, &mut timings);
@@ -139,6 +165,7 @@ pub(crate) fn compile(config: CliConfig) {
     };
     let ast = autoload::collect_aliases(ast);
     timings.record_since("resolve", phase_started);
+
 
     // Report how the PHP profile is observable in THIS program, while `ast` is still the
     // user's own code: after include resolution, but before any compiler prelude is injected.
@@ -438,7 +465,38 @@ pub(crate) fn compile(config: CliConfig) {
             process::exit(1);
         }
     };
+    // The entry file's own interfaces are the last declarations with no activation event: neither
+    // the resolver's include stripping nor the autoload pass has seen them.
+    let ast =
+        autoload::activate_entry_interface_declarations(ast, &entry_source_unit.canonical_path);
     timings.record_since("name-resolve", phase_started);
+
+    // php preloads at STARTUP, before any request, and what survives is the symbol table it built.
+    // A compiled binary has no startup, so the AOT equivalent is to take the preloaded files'
+    // DECLARATIONS into the closed world and to run none of the preload graph's own statements.
+    // They go in ahead of the entry's, and any name the entry declares for itself is dropped from
+    // them first: both halves reach `vendor/autoload.php`, and php declares each class once.
+    // Placed after NAME RESOLUTION, because that is what makes the two halves comparable: before
+    // it the entry still spells a declaration `ClassLoader` while the preload half, resolved on
+    // its own pass, already spells it `Composer\\Autoload\\ClassLoader`.
+    crate::progress::phase("opcache-preload");
+    let phase_started = Instant::now();
+    let ast = match preloaded_declarations(&ini_overrides, parent, &defines) {
+        Ok(Some(preloaded)) => {
+            let declared = crate::opcache_preload_sources::declared_names(&ast);
+            let mut combined =
+                crate::opcache_preload_sources::without_redeclarations(preloaded, &declared);
+            combined.extend(ast);
+            combined
+        }
+        Ok(None) => ast,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    timings.record_since("opcache-preload", phase_started);
 
     crate::progress::phase("autoload-run");
     let phase_started = Instant::now();
@@ -467,13 +525,72 @@ pub(crate) fn compile(config: CliConfig) {
     // present before checking even when the triggering call came from an autoloaded class.
     crate::progress::phase("compat-preludes");
     let phase_started = Instant::now();
+    // PHP's error/exception-handling surface exists in EVERY SAPI, and without this a build
+    // off `--web` has none of it: `error_reporting()` is an undefined function, which alone
+    // stops a console entry point. The declarations are the ones the `--web` prelude injects,
+    // so this is a no-op under `--web`; off it, the injection is pay-for-use on what the
+    // program names.
+    //
+    // It belongs HERE and not in the web-prelude phase, for the reason this phase exists: the
+    // program that names the surface is usually not the entry file. Symfony's console calls
+    // `error_reporting()` from `Runtime\Internal\BasicErrorHandler`, a class the autoload pass
+    // splices in at `autoload-run` — which is AFTER the web-prelude phase, so the gate saw a
+    // 21-line entry that mentions nothing and injected nothing, and the binary died at run
+    // time on the undefined function. A `require`d file was visible and an autoloaded class
+    // was not, which is exactly the distinction this phase's existing comment draws.
+    let ast = crate::error_handling_prelude::inject_if_used(
+        ast,
+        web,
+        Path::new(filename),
+        &mut prelude_inventory,
+    );
+    // The engine-diagnostic dispatch pair is reached from the generated runtime, never from
+    // PHP, so declaration reachability would delete it. Forcing its group is what keeps
+    // `set_error_handler()` able to see a warning raised by compiled code.
+    if prelude_inventory
+        .groups
+        .contains_key(web_prelude::DIAG_DISPATCH_GROUP)
+    {
+        forced_groups.insert(web_prelude::DIAG_DISPATCH_GROUP.to_string());
+    }
+    // `__elephc_shutdown_run` is likewise reached from EMITTED CODE and never from PHP off
+    // `--web`: `lower_exit` and `emit_main_epilogue` call it by symbol. Forcing its group is
+    // what keeps `register_shutdown_function()`'s queue drained at `exit()` and at the normal
+    // end of the script. The group only exists when the program spelled the registration
+    // function, so this stays pay-for-use.
+    if prelude_inventory
+        .groups
+        .contains_key(crate::error_handling_prelude::SHUTDOWN_RUN_GROUP)
+    {
+        forced_groups.insert(crate::error_handling_prelude::SHUTDOWN_RUN_GROUP.to_string());
+    }
+    // PHP's `ini_get()` / `ini_set()` / `ini_get_all()` exist in every SAPI. Off `--web` elephc
+    // has had them all along (the `opcache.*`-backed wrappers in `opcache_prelude`), but their
+    // only gate ran in the `opcache-prelude` phase — before autoload expansion — so a program
+    // that names them from an AUTOLOADED class got nothing and died at run time with `Call to
+    // undefined function ini_set()`. Measured on `examples/symfony-app/bin/console`. This second
+    // gate reads the COMPLETE program and injects only what the first one could not see; it is
+    // a no-op under `--web` and a no-op whenever the early site already fired.
+    let ast = opcache_prelude::inject_cli_ini_if_used(
+        ast,
+        php_version,
+        &ini_overrides,
+        web,
+        &mut prelude_inventory,
+    );
     let ast = crate::assert_prelude::inject_if_used(ast);
     let ast = crate::array_merge_prelude::inject_if_used(ast, &mut prelude_inventory);
     if prelude_inventory.groups.contains_key("array_merge") {
         forced_groups.insert("array_merge".to_string());
     }
     let ast = crate::array_reduce_prelude::inject_if_used(ast);
-    let ast = crate::filter_var_prelude::inject_if_used(ast);
+    let ast = crate::filter_var_prelude::inject_if_used(ast, &mut prelude_inventory);
+    if prelude_inventory
+        .groups
+        .contains_key(crate::filter_var_prelude::FILTER_VAR_GROUP)
+    {
+        forced_groups.insert(crate::filter_var_prelude::FILTER_VAR_GROUP.to_string());
+    }
     let ast = crate::backend_gap_prelude::inject_if_used(ast, &mut prelude_inventory);
     if prelude_inventory
         .groups
@@ -562,7 +679,16 @@ pub(crate) fn compile(config: CliConfig) {
         Ok(result) => result,
         Err(e) => {
             crate::progress::clear();
-            errors::report(&e);
+            // Name the file each error was written in. The autoload pass spliced every discovered
+            // file into one program, so the `line:col` the checker reports lives in a coordinate
+            // space shared by hundreds of files and identifies nothing on its own. The checker
+            // recorded the enclosing declaration; `declaration_source_files` is the map from that
+            // name to its path — the same one `Reflection*::getFileName()` reads.
+            let declaration_paths = declaration_source_file_paths(
+                &declaration_source_files,
+                &entry_included_sources,
+            );
+            errors::report(&e.resolve_declaration_files(&declaration_paths));
             process::exit(1);
         }
     };
@@ -770,16 +896,15 @@ pub(crate) fn compile(config: CliConfig) {
     };
     ir_module.declared_class_source_files = declaration_source_files.class_likes;
     ir_module.declared_function_source_files = declaration_source_files.functions;
-    // Declarations the ENTRY program pulled in with `require` are attributed to the file that
-    // wrote them; the autoload pass could not see those, and without this they fall through to
-    // `Reflection*::getFileName()`'s entry-file fallback, which silently reports a real but wrong
-    // path. Per-file attribution wins over the post-splice walk.
-    ir_module
-        .declared_class_source_files
-        .extend(entry_included_sources.class_likes);
-    ir_module
-        .declared_function_source_files
-        .extend(entry_included_sources.functions);
+    // The autoload pass PERFORMED these inclusions: it opened each file and spliced its
+    // declarations into the program. At runtime they are already-included files, and an
+    // `include_once` reaching one through a computed path must answer "already included"
+    // instead of re-running it into a redeclaration fatal.
+    crate::autoload::record_compile_time_inclusions(
+        &mut ir_module,
+        &ast,
+        &opcache_autoloaded_files,
+    );
     ir_module.required_runtime_features.class_introspection |= ir_module
         .interface_infos
         .values()
@@ -849,6 +974,19 @@ pub(crate) fn compile(config: CliConfig) {
         emit_asm,
         timings: &mut timings,
     });
+}
+
+
+/// Returns whether two paths name the same file on disk, or the same text when either is absent.
+///
+/// `canonicalize` resolves `.`, `..` and symlinks, which a textual comparison misses --
+/// `./bin/console` and `bin/console` are the same file. It fails on a path that does not exist
+/// yet, which is the normal case for an output, so the textual comparison stays as the fallback.
+fn same_file(left: &Path, right: &Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
 }
 
 /// Returns every physical source path named by a retained typed source marker.
@@ -959,5 +1097,63 @@ fn classlike_activation_source_paths(
 
     let mut paths = std::collections::BTreeSet::new();
     collect(program, &mut paths);
+    paths
+}
+
+/// Returns the declarations `opcache.preload` supplies, or `None` when the directive is unset.
+///
+/// The directive is the only input: a program that does not set it compiles exactly as before, and
+/// one that does gets the same world a preloaded php-fpm serves. Nothing here knows what framework
+/// wrote the file.
+fn preloaded_declarations(
+    ini_overrides: &[(String, String)],
+    base_dir: &Path,
+    defines: &std::collections::HashSet<String>,
+) -> Result<Option<crate::parser::ast::Program>, errors::CompileError> {
+    let Some((_, directive)) = ini_overrides
+        .iter()
+        .rev()
+        .find(|(key, _)| key.eq_ignore_ascii_case("opcache.preload"))
+    else {
+        return Ok(None);
+    };
+    let Some(path) = crate::opcache_preload_sources::resolve_preload_path(directive, base_dir)
+    else {
+        return Ok(None);
+    };
+    if !path.exists() {
+        // php treats an unreadable preload file as a startup FATAL, and the AOT equivalent of
+        // "not there" is a compile error -- the same verdict `opcache_prelude::preload_verdict`
+        // already reaches for the directive's own reporting.
+        return Err(errors::CompileError::new(
+            crate::span::Span::dummy(),
+            &format!("opcache.preload: '{}' does not exist", path.display()),
+        ));
+    }
+    crate::opcache_preload_sources::preload_declarations(&path, base_dir, defines).map(Some)
+}
+
+/// Merges the autoloaded and entry-file declaration maps into one name-to-path lookup.
+///
+/// Both halves are needed: the entry file's own declarations never pass through the autoload
+/// registry, and the autoloaded ones are the bulk of a real application. A name declared in both
+/// resolves to the autoloaded path, which is the one the program actually runs.
+fn declaration_source_file_paths(
+    autoloaded: &autoload::DeclarationSourceFiles,
+    entry: &crate::resolver::IncludedDeclarationSources,
+) -> std::collections::HashMap<String, String> {
+    let mut paths = std::collections::HashMap::new();
+    let halves = [
+        (&entry.class_likes, &entry.functions),
+        (&autoloaded.class_likes, &autoloaded.functions),
+    ];
+    for (class_likes, functions) in halves {
+        paths.extend(
+            class_likes
+                .iter()
+                .chain(functions.iter())
+                .map(|(name, path)| (name.clone(), path.clone())),
+        );
+    }
     paths
 }

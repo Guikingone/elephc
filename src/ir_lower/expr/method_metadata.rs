@@ -139,6 +139,15 @@ pub(super) fn method_return_arg_alias(
             return class_method_return_arg_alias(ctx, base_class, &method_key)
                 .unwrap_or(ReturnArgAlias::Unknown);
         }
+        // The fold below scans the whole class table, and its answer depends only on the
+        // base class, the method name and metadata `LoweringContext` borrows as `&'m`.
+        let fold_key = crate::types::DispatchFoldKey {
+            base_class: Some(base_class.to_string()),
+            method_key: method_key.clone(),
+        };
+        if let Some(cached) = ctx.return_alias_summaries.cached_dispatch_fold(&fold_key) {
+            return cached;
+        }
         for candidate in ctx.classes.keys() {
             if !is_same_or_descendant_class(ctx, candidate, base_class) {
                 continue;
@@ -151,11 +160,23 @@ pub(super) fn method_return_arg_alias(
                 None => alias,
             });
         }
-        return summary.unwrap_or(ReturnArgAlias::Unknown);
+        let folded = summary.unwrap_or(ReturnArgAlias::Unknown);
+        ctx.return_alias_summaries
+            .store_dispatch_fold(fold_key, folded.clone());
+        return folded;
     }
     if dynamic_method_receiver_needs_mixed_fallback(&object_ty) {
         if ctx.has_eval_barrier() {
             return ReturnArgAlias::Unknown;
+        }
+        // The `mixed` fallback has no receiver to narrow by, so it folds over EVERY class —
+        // and the answer therefore depends on nothing but the method name.
+        let fold_key = crate::types::DispatchFoldKey {
+            base_class: None,
+            method_key: method_key.clone(),
+        };
+        if let Some(cached) = ctx.return_alias_summaries.cached_dispatch_fold(&fold_key) {
+            return cached;
         }
         for candidate in ctx.classes.keys() {
             let Some(alias) = class_method_return_arg_alias(ctx, candidate, &method_key) else {
@@ -166,6 +187,10 @@ pub(super) fn method_return_arg_alias(
                 None => alias,
             });
         }
+        let folded = summary.unwrap_or(ReturnArgAlias::Unknown);
+        ctx.return_alias_summaries
+            .store_dispatch_fold(fold_key, folded.clone());
+        return folded;
     }
     summary.unwrap_or(ReturnArgAlias::Unknown)
 }
@@ -228,6 +253,19 @@ pub(super) fn method_call_result_type(
         .map(|(_, nullable)| nullable)
         .unwrap_or(false);
     let Some(return_ty) = method_signature(ctx, object, method)
+        .filter(|signature| {
+            // For a GRADUAL receiver the common signature is one class's, chosen only because it
+            // shares the method's name. It may normalize arguments, but it decides the result only
+            // if it could actually be CALLED this way — the same arity test the checker applies in
+            // `mixed_receiver_method_return_type`. Symfony's `PdoAdapter::doFetch` is why:
+            // `$stmt->execute()` matched `Console\Command\Command::execute($input, $output): int`,
+            // two required parameters and an unrelated class, so `$result` became `int` and
+            // `$result->iterateNumeric()` reached the backend as `method call receiver for PHP
+            // type Int`.
+            !dynamic_method_receiver_needs_mixed_fallback(&object_ty)
+                || method_call_argument_count(expr)
+                    .is_none_or(|count| signature_accepts_argument_count(signature, count))
+        })
         .map(|signature| normalize_value_php_type(signature.return_type))
     else {
         if let Some(return_ty) = narrowed_runtime_method_return_type(ctx, &object_ty, method) {
@@ -242,12 +280,15 @@ pub(super) fn method_call_result_type(
         }
         return fallback_expr_type(expr);
     };
-    // A common same-named signature can normalize arguments for a gradual receiver, but a
-    // nominal object return does not prove the receiver belongs to that unrelated class. Match
-    // the checker's Mixed result so chained calls retain runtime dispatch.
-    let return_ty = if dynamic_method_receiver_needs_mixed_fallback(&object_ty)
-        && type_mentions_nominal_object(&return_ty)
-    {
+    // A common same-named signature can normalize arguments for a gradual receiver, but it does
+    // not prove the receiver belongs to that class, so it decides no result AT ALL -- not a
+    // nominal object and not a scalar either. The scalar half is not theoretical: `twig/twig`'s
+    // `AbstractTokenParser::$parser` is declared with a docblock and no type, and the only
+    // `getEnvironment()` this world compiles is `AppVariable`'s `: string`, so
+    // `$this->parser->getEnvironment()->getExpressionParsers()` reached the backend as
+    // `method call receiver for PHP type Str`. Codegen boxes a Mixed and dispatches it at
+    // runtime, which is what PHP does with a receiver whose class is only known then.
+    let return_ty = if dynamic_method_receiver_needs_mixed_fallback(&object_ty) {
         PhpType::Mixed
     } else {
         return_ty
@@ -297,15 +338,6 @@ fn narrowed_runtime_method_return_type(
     normalize_union_members(candidates)
 }
 
-/// Returns whether a type contains a nominal object member whose runtime class is not proven.
-fn type_mentions_nominal_object(php_type: &PhpType) -> bool {
-    match php_type {
-        PhpType::Object(_) => true,
-        PhpType::Union(members) => members.iter().any(type_mentions_nominal_object),
-        _ => false,
-    }
-}
-
 /// Returns preserved late-static return syntax for EIR instance dispatch.
 pub(super) fn instance_method_late_static_return_for_ir(
     ctx: &LoweringContext<'_, '_>,
@@ -339,18 +371,75 @@ pub(super) fn common_dynamic_method_signature(
     ctx: &LoweringContext<'_, '_>,
     method_key: &str,
 ) -> Option<FunctionSig> {
-    let mut common = None;
+    // Comparing borrowed signatures and cloning only the winner: the previous form cloned a
+    // whole `FunctionSig` for every class in the module on every call, to throw all but one away.
+    let mut common: Option<&FunctionSig> = None;
     for class_name in ctx.classes.keys() {
-        let Some(signature) = class_method_signature(ctx, class_name, method_key).cloned() else {
+        let Some(signature) = class_method_signature(ctx, class_name, method_key) else {
             continue;
         };
-        match common.as_ref() {
-            Some(existing) if existing != &signature => return None,
+        match common {
+            Some(existing) if existing != signature => return None,
             Some(_) => {}
             None => common = Some(signature),
         }
     }
-    common
+    common.cloned()
+}
+
+/// Returns the callee signature for a call that passes `arg_count` arguments.
+///
+/// Identical to [`method_signature`] for a receiver with a single compile-time class. For a
+/// GRADUAL one the answer is a common same-named signature chosen across every class that declares
+/// the method, and one that could not be CALLED this way is not the callee — so it is dropped
+/// rather than used to materialize arguments. Symfony's `HtmlErrorRenderer` reached
+/// `$request->headers->get('X-Php-Ob-Level', -1)` through a gradual `headers`, matched a `get`
+/// with a by-reference parameter beyond the two supplied, and the backend refused with
+/// `receiver-register method call with missing non-value parameter`.
+pub(super) fn method_signature_for_call(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    method: &str,
+    arg_count: usize,
+) -> Option<FunctionSig> {
+    let signature = method_signature(ctx, object, method)?;
+    if !dynamic_method_receiver_needs_mixed_fallback(&ctx.builder.value_php_type(object)) {
+        return Some(signature);
+    }
+    if !signature_accepts_argument_count(&signature, arg_count) {
+        return None;
+    }
+    // An omitted by-reference parameter is NOT a reason to drop the signature: `pad_omitted_by_ref_args`
+    // gives it a real place, and dropping it here instead left the call lowering its arguments
+    // without a signature while codegen still resolved the callee nominally — two operands for a
+    // three-parameter ABI.
+    Some(signature)
+}
+
+/// Returns the number of arguments a method-call expression passes, when it is one.
+fn method_call_argument_count(expr: &Expr) -> Option<usize> {
+    match &expr.kind {
+        ExprKind::MethodCall { args, .. } | ExprKind::NullsafeMethodCall { args, .. } => {
+            Some(args.len())
+        }
+        _ => None,
+    }
+}
+
+/// Returns whether a signature can be CALLED with `arg_count` arguments.
+///
+/// Mirrors `Checker::signature_accepts_argument_count`: `defaults` gives the first optional
+/// position, and a variadic tail takes any number beyond the fixed parameters.
+fn signature_accepts_argument_count(signature: &FunctionSig, arg_count: usize) -> bool {
+    let required = signature
+        .defaults
+        .iter()
+        .position(|default| default.is_some())
+        .unwrap_or(signature.params.len());
+    if arg_count < required {
+        return false;
+    }
+    signature.variadic.is_some() || arg_count <= signature.params.len()
 }
 
 /// Returns true when an instance-method receiver has no single compile-time class.

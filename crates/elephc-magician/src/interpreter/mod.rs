@@ -76,7 +76,7 @@ use libc_shims::*;
 use reflection::*;
 use return_type_compat::*;
 use return_values::*;
-pub use runtime_ops::RuntimeValueOps;
+pub use runtime_ops::{aot_member_names_uncached, AotMemberNameKind, RuntimeValueOps};
 pub(crate) use builtins::eval_spl_autoload_class as eval_spl_autoload_class_bridge;
 pub(crate) use builtins::eval_spl_autoload_classlike_definition;
 use runtime_ops::*;
@@ -415,7 +415,7 @@ pub fn execute_context_try_new_object_outcome(
                 .ok_or(EvalStatus::UncaughtThrowable);
         }
         Err(status) => {
-            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            if crate::eval_trace::enabled() {
                 eprintln!(
                     "[elephc-eval-trace] phase=try_new_object_error stage=reflection class={name:?} status={status:?}",
                 );
@@ -440,7 +440,7 @@ pub fn execute_context_try_new_object_outcome(
                 .map(Some)
                 .ok_or(EvalStatus::UncaughtThrowable),
             Err(status) => {
-                if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                if crate::eval_trace::enabled() {
                     eprintln!(
                         "[elephc-eval-trace] phase=try_new_object_error stage=aot_class class={class_name:?} status={status:?}",
                     );
@@ -451,7 +451,7 @@ pub fn execute_context_try_new_object_outcome(
     }
     if !context.has_class(class_name) {
         if let Err(status) = eval_spl_autoload_classlike_definition(class_name, context, values) {
-            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            if crate::eval_trace::enabled() {
                 eprintln!(
                     "[elephc-eval-trace] phase=try_new_object_error stage=autoload class={class_name:?} status={status:?}",
                 );
@@ -471,7 +471,7 @@ pub fn execute_context_try_new_object_outcome(
             .map(Some)
             .ok_or(EvalStatus::UncaughtThrowable),
         Err(status) => {
-            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            if crate::eval_trace::enabled() {
                 eprintln!(
                     "[elephc-eval-trace] phase=try_new_object_error stage=dynamic_class class={class_name:?} status={status:?}",
                 );

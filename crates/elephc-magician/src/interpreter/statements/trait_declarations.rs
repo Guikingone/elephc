@@ -908,7 +908,7 @@ pub(super) fn validate_eval_class_modifiers(
         Ok(())
     })();
     if let Err(status) = result.as_ref() {
-        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        if crate::eval_trace::enabled() {
             eprintln!(
                 "[elephc-eval-trace] phase=class_modifier_error class={:?} member={member:?} stage={stage} status={status:?}",
                 class.name(),

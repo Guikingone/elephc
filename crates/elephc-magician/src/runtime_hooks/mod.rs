@@ -197,3 +197,111 @@ pub(crate) unsafe fn install_ob_handler_hook(callback: usize) {
         externs::install_ob_handler_hook_raw(callback);
     }
 }
+
+/// Reports whether a compiled class has been LOADED, in php's `class_exists($n, false)` sense.
+///
+/// A closed-world build declares everything it compiled from the first instruction, but a class
+/// the compiler pulled in ONLY so an existence probe could be answered is one php would never
+/// have loaded. Those classes carry a request-scoped flag; every other compiled class -- and
+/// every name the generated table does not list -- is loaded outright.
+#[cfg(not(test))]
+pub(crate) fn compiled_class_is_loaded(name: &str) -> bool {
+    match deferred_class_flag(name) {
+        Some(cell) => unsafe { cell.read() != 0 },
+        None => true,
+    }
+}
+
+/// Records that a probe which ALLOWS autoloading has now loaded this class.
+#[cfg(not(test))]
+pub(crate) fn mark_compiled_class_loaded(name: &str) {
+    if let Some(cell) = deferred_class_flag(name) {
+        unsafe { cell.write(1) };
+    }
+}
+
+/// Returns the generated load flag for one class name, folded to php's case-insensitive form.
+#[cfg(not(test))]
+fn deferred_class_flag(name: &str) -> Option<*mut u64> {
+    let folded = name.trim_start_matches('\\').to_ascii_lowercase();
+    let cell = unsafe {
+        externs::__elephc_eval_class_deferred_lookup(folded.as_ptr(), folded.len() as u64)
+    };
+    (!cell.is_null()).then_some(cell)
+}
+
+/// Test builds link no generated table, so every compiled class counts as loaded.
+#[cfg(test)]
+pub(crate) fn compiled_class_is_loaded(_name: &str) -> bool {
+    true
+}
+
+#[cfg(test)]
+pub(crate) fn mark_compiled_class_loaded(_name: &str) {}
+
+/// Drives one COMPILED generator through the generated runtime's own helpers.
+///
+/// The interpreter cannot reach a compiled `Generator` through ordinary method dispatch: its
+/// methods are runtime helpers, not registered native methods, so `valid()` on one fails. These
+/// wrappers are the supported route, and they are what `yield from` uses when its delegate is a
+/// generator the interpreter does not own.
+///
+/// Under `cfg(test)` there is no generated runtime to call, so each one answers the shape an
+/// exhausted generator has. A unit test that reaches these has no compiled generator to drive.
+#[cfg(not(test))]
+pub(crate) fn native_generator_valid(generator: u64) -> bool {
+    unsafe { externs::__elephc_eval_gen_valid(generator as *mut RuntimeCell) != 0 }
+}
+
+/// Returns an owned copy of a compiled generator's current value.
+#[cfg(not(test))]
+pub(crate) fn native_generator_current(generator: u64) -> Option<RuntimeCellHandle> {
+    let value = unsafe { externs::__elephc_eval_gen_current(generator as *mut RuntimeCell) };
+    (!value.is_null()).then(|| RuntimeCellHandle::from_raw(value))
+}
+
+/// Returns an owned copy of a compiled generator's current key.
+#[cfg(not(test))]
+pub(crate) fn native_generator_key(generator: u64) -> Option<RuntimeCellHandle> {
+    let value = unsafe { externs::__elephc_eval_gen_key(generator as *mut RuntimeCell) };
+    (!value.is_null()).then(|| RuntimeCellHandle::from_raw(value))
+}
+
+/// Advances a compiled generator to its next yield.
+#[cfg(not(test))]
+pub(crate) fn native_generator_next(generator: u64) {
+    unsafe { externs::__elephc_eval_gen_next(generator as *mut RuntimeCell) };
+}
+
+/// Returns an owned copy of a compiled generator's `getReturn()` value.
+#[cfg(not(test))]
+pub(crate) fn native_generator_return(generator: u64) -> Option<RuntimeCellHandle> {
+    let value = unsafe { externs::__elephc_eval_gen_get_return(generator as *mut RuntimeCell) };
+    (!value.is_null()).then(|| RuntimeCellHandle::from_raw(value))
+}
+
+#[cfg(test)]
+use crate::value::RuntimeCellHandle;
+
+#[cfg(test)]
+pub(crate) fn native_generator_valid(_generator: u64) -> bool {
+    false
+}
+
+#[cfg(test)]
+pub(crate) fn native_generator_current(_generator: u64) -> Option<RuntimeCellHandle> {
+    None
+}
+
+#[cfg(test)]
+pub(crate) fn native_generator_key(_generator: u64) -> Option<RuntimeCellHandle> {
+    None
+}
+
+#[cfg(test)]
+pub(crate) fn native_generator_next(_generator: u64) {}
+
+#[cfg(test)]
+pub(crate) fn native_generator_return(_generator: u64) -> Option<RuntimeCellHandle> {
+    None
+}

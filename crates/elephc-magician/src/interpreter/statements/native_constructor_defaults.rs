@@ -70,7 +70,7 @@ pub(super) fn eval_native_constructor_with_evaluated_args_and_ref_mode(
         .map(|(declaring_class, _, _, _)| declaring_class.clone())
         .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
     let constructor_target_is_known = constructor_metadata.is_some();
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         eprintln!(
             "[elephc-eval-trace] phase=native_constructor stage=resolved requested={class_name:?} declaring={constructor_class:?} args={}",
             evaluated_args.len(),
@@ -89,7 +89,7 @@ pub(super) fn eval_native_constructor_with_evaluated_args_and_ref_mode(
         crate::context::sync_global_eval_aot_metadata(context);
         signature = context.native_constructor_signature(&constructor_class);
     }
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         let signature_details = signature.as_ref().map(|signature| {
             (
                 signature.param_count(),
@@ -110,7 +110,7 @@ pub(super) fn eval_native_constructor_with_evaluated_args_and_ref_mode(
         values,
     )
     .map_err(|status| trace_native_constructor_error("bind", &constructor_class, status))?;
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         eprintln!(
             "[elephc-eval-trace] phase=native_constructor stage=bound class={constructor_class:?} args={}",
             bound_args.len(),
@@ -173,7 +173,7 @@ fn trace_native_constructor_error(
     constructor_class: &str,
     status: EvalStatus,
 ) -> EvalStatus {
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         eprintln!(
             "[elephc-eval-trace] phase=native_constructor_error stage={stage} class={constructor_class:?} status={status:?}",
         );

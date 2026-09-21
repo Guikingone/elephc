@@ -8,7 +8,11 @@
 //! Key details:
 //! - Instruction comments are emitted by callers; this module preserves target syntax and output ordering.
 
-use std::collections::HashSet;
+// The house hasher: `internal_labels` takes one insert per emitted internal label and is then
+// probed by `localize_internal_labels` for EVERY identifier token in the finished listing --
+// 1.4 GB of it on the Symfony build, where a sample caught `sip::Hasher::write`. It is only
+// inserted into, taken and probed, never iterated, so the hasher cannot change any output.
+use crate::fast_hash::FastSet as HashSet;
 use std::fmt::Write;
 
 use super::platform::{Arch, Platform, Target};
@@ -59,7 +63,7 @@ impl Emitter {
             pic_data_refs: false,
             cdylib_boundary: false,
             dead_strip: false,
-            internal_labels: HashSet::new(),
+            internal_labels: HashSet::default(),
             current_text_section: None,
         }
     }
@@ -226,6 +230,38 @@ impl Emitter {
         self.raw(".text");
     }
 
+    /// Returns an EMPTY emitter carrying this one's target and ABI flags.
+    ///
+    /// A body emitted on a worker has to be lowered against the same contract as one emitted
+    /// here — PIC data references, the cdylib boundary and dead-strip labelling all change what
+    /// the ABI helpers emit — so the flags travel and only the buffer starts over.
+    pub fn fresh(&self) -> Self {
+        Self {
+            buf: String::with_capacity(4096),
+            target: self.target,
+            platform: self.platform,
+            pic_data_refs: self.pic_data_refs,
+            cdylib_boundary: self.cdylib_boundary,
+            dead_strip: self.dead_strip,
+            internal_labels: HashSet::default(),
+            current_text_section: None,
+        }
+    }
+
+    /// Returns the output emitted since `checkpoint`.
+    pub fn text_from(&self, checkpoint: usize) -> &str {
+        &self.buf[checkpoint.min(self.buf.len())..]
+    }
+
+    /// Appends a block of already-emitted assembly verbatim.
+    ///
+    /// Unlike `raw`, this does not track a section change: the block carries its own directives
+    /// and the caller reopens a known section after the last one. Scanning a multi-line block to
+    /// re-derive that would cost a second pass over every body's text.
+    pub fn append_block(&mut self, text: &str) {
+        self.buf.push_str(text);
+    }
+
     /// Returns the accumulated assembly output as a String.
     pub fn output(self) -> String {
         self.buf
@@ -377,11 +413,15 @@ pub fn localize_internal_labels(asm: &str, internal: &HashSet<String>) -> String
     }
     let bytes = asm.as_bytes();
     let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'$';
-    let mut out = String::with_capacity(asm.len());
+    let mut out = String::with_capacity(asm.len() + internal.len());
+    // The output differs from the input ONLY where an `L` is inserted, so everything between
+    // two insertions is copied in one go. Pushing each quoted run, each token and each run of
+    // punctuation separately meant tens of millions of `push_str` calls to rebuild 1.4 GB of
+    // text that was already in memory.
+    let mut verbatim_from = 0usize;
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'"' {
-            let start = i;
             i += 1;
             let mut escaped = false;
             while i < bytes.len() {
@@ -397,25 +437,25 @@ pub fn localize_internal_labels(asm: &str, internal: &HashSet<String>) -> String
                     break;
                 }
             }
-            out.push_str(&asm[start..i]);
         } else if is_ident(bytes[i]) {
             let start = i;
             while i < bytes.len() && is_ident(bytes[i]) {
                 i += 1;
             }
-            let token = &asm[start..i];
-            if internal.contains(token) {
+            if internal.contains(&asm[start..i]) {
+                // Flush everything before the token, insert the prefix, and leave the token
+                // itself at the head of the next verbatim stretch.
+                out.push_str(&asm[verbatim_from..start]);
                 out.push('L');
+                verbatim_from = start;
             }
-            out.push_str(token);
         } else {
-            let start = i;
             while i < bytes.len() && !is_ident(bytes[i]) && bytes[i] != b'"' {
                 i += 1;
             }
-            out.push_str(&asm[start..i]);
         }
     }
+    out.push_str(&asm[verbatim_from..]);
     out
 }
 
@@ -454,7 +494,7 @@ mod tests {
     /// Verifies internal symbol references are localized without rewriting quoted user bytes.
     #[test]
     fn test_localize_internal_labels_preserves_assembly_strings() {
-        let internal = HashSet::from(["_eir_branch_1".to_string()]);
+        let internal: HashSet<String> = ["_eir_branch_1".to_string()].into_iter().collect();
         let asm = "    b _eir_branch_1\n_eir_branch_1:\n    .ascii \"_eir_branch_1\"\n";
         assert_eq!(
             localize_internal_labels(asm, &internal),
@@ -465,7 +505,7 @@ mod tests {
     /// Verifies an unmatched quote in one assembly line cannot hide labels on later lines.
     #[test]
     fn test_localize_internal_labels_bounds_unmatched_quotes_to_one_line() {
-        let internal = HashSet::from(["_eir_branch_1".to_string()]);
+        let internal: HashSet<String> = ["_eir_branch_1".to_string()].into_iter().collect();
         let asm = "    ; unmatched \" in comment\n    b _eir_branch_1\n_eir_branch_1:\n";
         assert_eq!(
             localize_internal_labels(asm, &internal),

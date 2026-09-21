@@ -574,6 +574,25 @@ fn test_error_join_too_many_args() {
     expect_error("<?php join(\"a\", [\"b\"], \"c\");", "join() takes 1 or 2 arguments");
 }
 
+/// Verifies that `substr_compare()` with two arguments produces the correct arity error.
+/// `$offset` is REQUIRED in php, so the floor is three, not two.
+#[test]
+fn test_error_substr_compare_wrong_args() {
+    expect_error(
+        "<?php substr_compare(\"abc\", \"a\");",
+        "substr_compare() takes 3 to 5 arguments",
+    );
+}
+
+/// Verifies that `substr_compare()` with six arguments produces the correct arity error.
+#[test]
+fn test_error_substr_compare_too_many_args() {
+    expect_error(
+        "<?php substr_compare(\"abc\", \"a\", 0, 1, true, 9);",
+        "substr_compare() takes 3 to 5 arguments",
+    );
+}
+
 /// Verifies that `substr_count()` with a single argument produces the correct arity error.
 #[test]
 fn test_error_substr_count_wrong_args() {

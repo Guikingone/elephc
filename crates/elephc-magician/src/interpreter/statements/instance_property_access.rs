@@ -195,6 +195,7 @@ fn eval_property_type_name(declared: &EvalParameterType) -> String {
             EvalParameterTypeVariant::Bool => "bool".to_string(),
             EvalParameterTypeVariant::Callable => "callable".to_string(),
             EvalParameterTypeVariant::Class(name) => name.trim_start_matches('\\').to_string(),
+            EvalParameterTypeVariant::False => "false".to_string(),
             EvalParameterTypeVariant::Float => "float".to_string(),
             EvalParameterTypeVariant::Int => "int".to_string(),
             EvalParameterTypeVariant::Iterable => "iterable".to_string(),
@@ -202,6 +203,7 @@ fn eval_property_type_name(declared: &EvalParameterType) -> String {
             EvalParameterTypeVariant::Never => "never".to_string(),
             EvalParameterTypeVariant::Object => "object".to_string(),
             EvalParameterTypeVariant::String => "string".to_string(),
+            EvalParameterTypeVariant::True => "true".to_string(),
             EvalParameterTypeVariant::Void => "void".to_string(),
         })
         .collect::<Vec<_>>()
@@ -273,15 +275,40 @@ pub(in crate::interpreter) fn eval_property_get_result(
         if let Some((declaring_class, visibility, _, is_static)) =
             eval_reflection_aot_property_access_metadata(&class_name, property_name, values)?
         {
-            if !is_static && validate_eval_member_access(&declaring_class, visibility, context).is_err() {
-                return eval_throw_property_access_error(
-                    &declaring_class,
-                    property_name,
-                    visibility,
-                    context,
-                    values,
-                );
+            if !is_static {
+                if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
+                    return eval_throw_property_access_error(
+                        &declaring_class,
+                        property_name,
+                        visibility,
+                        context,
+                        values,
+                    );
+                }
+                if visibility != EvalVisibility::Public {
+                    return eval_reflection_with_declaring_class_scope(
+                        &declaring_class,
+                        context,
+                        |context| {
+                            if let Some(null) = eval_quiet_uninitialized_property_null(
+                                object,
+                                property_name,
+                                context,
+                                values,
+                            )? {
+                                return Ok(null);
+                            }
+                            values.property_get(object, property_name)
+                        },
+                    );
+                }
             }
+        }
+        // A DYNAMIC property on a compiled object lives in the interpreter's overlay, not in the
+        // object's frozen layout, so it has to be consulted before the bridge is asked for a slot
+        // the class never declared.
+        if let Some(value) = context.dynamic_property_value(identity, property_name) {
+            return values.retain(value);
         }
         // A purely AOT class has no eval record at all, so this is where the Symfony stop landed:
         // `CheckCircularReferencesPass::$checkedLazyNodes`, declared `private array` and never
@@ -291,7 +318,15 @@ pub(in crate::interpreter) fn eval_property_get_result(
         {
             return Ok(null);
         }
-        return values.property_get(object, property_name);
+        // The bridge only knows the slots the class DECLARED. A name it refuses is an undeclared
+        // property, which PHP reads as null; failing here turned
+        // `$container->getService ??= …` in a generated Symfony container fragment into
+        // `unsupported NullCoalesceAssign expression`, and with the routing loader dead every
+        // route 404ed while the error page stayed byte-perfect.
+        return match values.property_get(object, property_name) {
+            Ok(value) => Ok(value),
+            Err(_) => values.null(),
+        };
     };
     let object_class_name = class.name().to_string();
     let mut storage_property_name = property_name.to_string();
@@ -426,7 +461,7 @@ pub(in crate::interpreter) fn eval_property_get_result(
         return eval_reference_target_value(&target, context, values);
     }
     let overlay_value = context.dynamic_property_value(identity, &storage_property_name);
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         let call_site = context.call_site();
         eprintln!(
             "[elephc-eval-trace] phase=dynamic_property_lookup class={object_class_name:?} identity={identity} property={storage_property_name:?} declared={declared_property_found} overlay_found={} file={:?} line={}",
@@ -436,7 +471,7 @@ pub(in crate::interpreter) fn eval_property_get_result(
         );
     }
     if let Some(value) = overlay_value {
-        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        if crate::eval_trace::enabled() {
             let call_site = context.call_site();
             eprintln!(
                 "[elephc-eval-trace] phase=dynamic_property_get class={object_class_name:?} property={storage_property_name:?} value_tag={:?} file={:?} line={}",
@@ -531,19 +566,34 @@ pub(in crate::interpreter) fn eval_property_set_result(
         if let Some((declaring_class, _, write_visibility, is_static)) =
             eval_reflection_aot_property_access_metadata(&class_name, property_name, values)?
         {
-            if !is_static
-                && validate_eval_member_access(&declaring_class, write_visibility, context).is_err()
-            {
-                return eval_throw_property_access_error(
-                    &declaring_class,
-                    property_name,
-                    write_visibility,
-                    context,
-                    values,
-                );
+            if !is_static {
+                if validate_eval_member_access(&declaring_class, write_visibility, context).is_err()
+                {
+                    return eval_throw_property_access_error(
+                        &declaring_class,
+                        property_name,
+                        write_visibility,
+                        context,
+                        values,
+                    );
+                }
+                if write_visibility != EvalVisibility::Public {
+                    return eval_reflection_with_declaring_class_scope(
+                        &declaring_class,
+                        context,
+                        |_| values.property_set(object, property_name, value),
+                    );
+                }
             }
         }
-        return values.property_set(object, property_name, value);
+        // A name the compiled object has no slot for is a DYNAMIC property: PHP creates it (with a
+        // deprecation notice since 8.2) rather than failing, and the interpreter's overlay is where
+        // it lives. Only reached when the bridge refuses, so a declared slot still takes the
+        // ordinary path.
+        return match values.property_set(object, property_name, value) {
+            Ok(()) => Ok(()),
+            Err(_) => eval_store_dynamic_property_value(identity, property_name, value, context, values),
+        };
     };
     let object_class_name = class.name().to_string();
     if context.has_enum(&object_class_name) {
@@ -790,7 +840,7 @@ pub(in crate::interpreter) fn eval_property_set_result(
     // freed it, so the whole property read back empty. `replaced` stays for the trace line only.
     let replaced = context.dynamic_property_value(identity, &storage_property_name);
     eval_store_dynamic_property_value(identity, &storage_property_name, value, context, values)?;
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         let call_site = context.call_site();
         eprintln!(
             "[elephc-eval-trace] phase=dynamic_property_set class={object_class_name:?} property={storage_property_name:?} value_tag={:?} replaced={} file={:?} line={}",
@@ -843,7 +893,7 @@ fn trace_instance_property_error(
     status: EvalStatus,
     context: &ElephcEvalContext,
 ) -> EvalStatus {
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         let call_site = context.call_site();
         eprintln!(
             "[elephc-eval-trace] phase=instance_property_error stage={stage} class={class_name:?} property={property_name:?} status={status:?} file={:?} line={}",

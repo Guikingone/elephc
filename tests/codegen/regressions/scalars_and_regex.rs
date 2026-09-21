@@ -391,3 +391,138 @@ echo preg_match(" \n\t\r#ab#", 'zaby');
     );
     assert_eq!(out, "1|1|ZZZ|1|1");
 }
+
+
+/// A `$matches` destination opened as `[]` must still be able to hold the match array.
+///
+/// `$m = []` types the local `array<never>` -- an element type no written value satisfies -- and
+/// the by-reference write never widened the frame storage, so the backend refused the destination
+/// outright with `preg_match matches destination PHP type Array(Never)` rather than miscompiling.
+/// Symfony's `UrlMatcher::matchCollection` opens `$hostMatches = []` exactly like that, which kept
+/// the whole routing component out of the compiled world.
+///
+/// Oracle: `php -n` prints the asserted line.
+#[test]
+fn test_preg_match_destination_opened_as_an_empty_array_literal() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+function matchIt(string $subject): array {
+    $m = [];
+    if (!preg_match('/^(\w+)-(\d+)$/', $subject, $m)) {
+        return [];
+    }
+    return $m;
+}
+echo implode(',', matchIt('abc-42')), '|', count(matchIt('nope'));
+"#,
+    );
+    assert_eq!(out, "abc-42,abc,42|0");
+}
+
+/// A named-capture pattern keeps its HASH destination even when the local opened as `[]`.
+///
+/// The widening above must reuse the checker's own shape decision rather than make a second one:
+/// stamping an indexed type onto a destination the runtime fills with a hash reads it back as a
+/// renumbered list.
+///
+/// Oracle: `php -n` prints the asserted line.
+#[test]
+fn test_preg_match_named_captures_into_an_empty_array_literal_destination() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+$m = [];
+preg_match('/(?<w>[a-z]+)(?<n>[0-9]+)/', 'a1', $m);
+echo $m['w'], '|', $m['n'], '|', $m[1], '|', $m[2];
+"#,
+    );
+    assert_eq!(out, "a|1|a|1");
+}
+
+
+/// `is_callable()` on an unconstrained value proves a callable, which in PHP may be a string.
+///
+/// The guard narrowed to the descriptor-shaped `Callable`, whose representation is not the boxed
+/// cell the storage actually holds, so handing the value to a `string` parameter was refused:
+/// "parameter $identifier expects Str, got Callable". The narrowed type is now the boxed
+/// `callable|string` union, which the scalar funnel accepts and which keeps the storage it has.
+///
+/// `Symfony\Component\VarDumper\Caster\ClassStub::wrapCallable` is the shape.
+///
+/// Oracle: `php -n` prints the asserted line.
+#[test]
+fn test_is_callable_narrowing_still_reaches_a_string_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+class Stub {
+    public string $value;
+    public function __construct(string $identifier, callable|array|string|null $callable = null) {
+        $this->value = $identifier;
+    }
+}
+function wrap(mixed $callable): string {
+    if (\is_object($callable) || !\is_callable($callable)) {
+        return 'skip';
+    }
+    if (!\is_array($callable)) {
+        $stub = new Stub($callable, $callable);
+        return 'string:'.$stub->value;
+    }
+    return 'array';
+}
+echo wrap('strlen'), '/', wrap(42), '/', wrap(static fn (): int => 1);
+"#,
+    );
+    assert_eq!(out, "string:strlen/skip/skip");
+}
+
+
+/// PCRE's MARK verb reaches `$matches['MARK']`, compiled and interpreted alike.
+///
+/// Symfony's dumped `CompiledUrlMatcher` marks each alternative of its dynamic-route regexp with
+/// `(*:<offset>)` and selects the branch with `$this->dynamicRoutes[(int) $matches['MARK']]`.
+/// elephc produced no such key, so the index was `(int) null` = 0, `$dynamicRoutes[0]` was null,
+/// and `foreach (null as ...)` fatalled — every route with a placeholder, `/greet/{name}` included.
+///
+/// Four places had to move together and any one of them left the key silently absent:
+/// `elephc_pcre2_v1_last_mark` in the pcre2 shim (with a RECIPE REVISION BUMP, because the catalog
+/// cache key does not hash the shim source), `__rt_preg_match_capture` for `preg_match()`,
+/// `__rt_preg_match_row` for `preg_match_all()`, and the eval bridge's own provider table — the
+/// matcher runs interpreted, so the compiled half alone changes nothing visible.
+///
+/// A mark forces the HASH row for the same reason a declared group name does: `MARK` is a string
+/// key. The fixture therefore also pins the shapes that must NOT become hashes.
+///
+/// Oracle: `php -n` prints the asserted lines.
+#[test]
+fn test_pcre_mark_verb_reaches_the_matches_array() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+$re = '{^(?|/greet/([^/]++)(*:22)|/other/([^/]++)(*:44))/?$}sDu';
+preg_match($re, '/greet/Bob', $a);
+preg_match($re, '/other/Ann', $b);
+preg_match('{^/plain$}', '/plain', $c);
+preg_match('{^/(?<who>\w+)$}', '/Bob', $d);
+preg_match_all('{(a)(*:A)|(b)(*:B)}', 'ab', $e, PREG_SET_ORDER);
+echo json_encode($a), "\n", json_encode($b), "\n", json_encode($c), "\n", json_encode($d), "\n", json_encode($e), "\n";
+eval('
+preg_match($re, "/greet/Bob", $a2);
+preg_match($re, "/greet/Bob", $b2, PREG_OFFSET_CAPTURE);
+preg_match("{^/plain$}", "/plain", $c2);
+echo json_encode($a2), "\n", json_encode($b2), "\n", json_encode($c2), "\n";
+');
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "{\"0\":\"\\/greet\\/Bob\",\"1\":\"Bob\",\"MARK\":\"22\"}\n",
+            "{\"0\":\"\\/other\\/Ann\",\"1\":\"Ann\",\"MARK\":\"44\"}\n",
+            "[\"\\/plain\"]\n",
+            "{\"0\":\"\\/Bob\",\"who\":\"Bob\",\"1\":\"Bob\"}\n",
+            "[{\"0\":\"a\",\"1\":\"a\",\"MARK\":\"A\"},{\"0\":\"b\",\"1\":\"\",\"2\":\"b\",\"MARK\":\"B\"}]\n",
+            "{\"0\":\"\\/greet\\/Bob\",\"1\":\"Bob\",\"MARK\":\"22\"}\n",
+            "{\"0\":[\"\\/greet\\/Bob\",0],\"1\":[\"Bob\",7],\"MARK\":\"22\"}\n",
+            "[\"\\/plain\"]\n",
+        )
+    );
+}

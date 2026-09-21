@@ -322,3 +322,124 @@ fn test_macos_dead_strip_no_cross_atom_internal_refs() {
         violations.join("\n")
     );
 }
+
+/// Guards the third dead-strip atom invariant: a `.globl` label must never be reached by
+/// FALLING THROUGH from the instruction above it.
+///
+/// `label_global` starts a new linker atom on macOS (`.subsections_via_symbols`) and a new
+/// `.text.<name>` section on Linux, so the code above a global label and the code at it are
+/// separately collectable units the linker may drop or reorder. Fall-through between them is
+/// only ever correct by accident of layout: `-dead_strip` collects the second unit whenever
+/// nothing branches to it by name, and the first then runs straight into whatever the linker
+/// placed next. That is exactly how `__rt_object_to_foreach_array` — two argument-setting
+/// stubs falling into a shared body — turned `foreach ($this as ...)` into a null argument
+/// plus a stray byte on stdout, in the shipped compiler and not only in the test harness,
+/// whose linker call omits `-dead_strip`.
+///
+/// Every global label must therefore be preceded by an unconditional transfer. Assembler
+/// directives end the check: data payloads and section switches are not fall-through paths.
+#[test]
+fn test_runtime_global_labels_are_never_reached_by_fallthrough() {
+    // An exit syscall never returns, so it terminates a helper as surely as `ret`; every
+    // other syscall (`write`, `read`, …) does return and must not be mistaken for one.
+    for (platform, arch, terminators, syscall, exit_selectors) in [
+        // macOS x86_64 has no runtime emission yet (see `Emitter::bl_c`), so the second
+        // target exercises the x86 emitters through the Linux backend instead.
+        (
+            Platform::MacOS,
+            Arch::AArch64,
+            &["b", "br", "ret", "brk", "hlt"][..],
+            "svc",
+            &["mov x16, #1"][..],
+        ),
+        (
+            Platform::Linux,
+            Arch::X86_64,
+            &["jmp", "ret", "ud2", "hlt"][..],
+            "syscall",
+            &["mov eax, 60", "mov eax, 231", "mov rax, 60", "mov rax, 231"][..],
+        ),
+    ] {
+        let asm = crate::codegen_support::generate_runtime_with_features_pic(
+            8 * 1024 * 1024,
+            Target::new(platform, arch),
+            RuntimeFeatures::all(),
+            false,
+        );
+
+        // `.globl NAME` always immediately precedes `NAME:`; `.alt_entry NAME` marks a label
+        // that deliberately stays inside the current atom, so falling into it is correct.
+        let mut declared_global: Option<&str> = None;
+        let mut alt_entry: Option<&str> = None;
+        let mut terminated = true;
+        let mut exit_pending = false;
+        let mut last_code = "<start of file>";
+        let mut violations: Vec<String> = Vec::new();
+
+        for raw in asm.lines() {
+            let line = raw.trim();
+            // Comment syntax is per-assembler: `;` on Darwin, `#` on GNU as.
+            if line.is_empty()
+                || line.starts_with("//")
+                || line.starts_with(';')
+                || line.starts_with('#')
+            {
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix(".globl ") {
+                declared_global = Some(rest.trim());
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix(".alt_entry ") {
+                alt_entry = Some(rest.trim());
+                continue;
+            }
+            // `label_global` itself emits the Linux `.section .text.<name>` / `.type` pair, and
+            // alignment padding is still fall-through, so none of these ends a run of code.
+            if line.starts_with(".type ")
+                || line.starts_with(".section .text.")
+                || line.starts_with(".p2align")
+                || line.starts_with(".balign")
+                || line.starts_with(".align")
+            {
+                continue;
+            }
+            if let Some(name) = line
+                .strip_suffix(':')
+                .filter(|name| !name.contains(char::is_whitespace))
+            {
+                if declared_global == Some(name) && alt_entry != Some(name) && !terminated {
+                    violations.push(format!("{name}   <- falls in from `{last_code}`"));
+                }
+                declared_global = None;
+                alt_entry = None;
+                terminated = true;
+                continue;
+            }
+            declared_global = None;
+            alt_entry = None;
+            if line.starts_with('.') {
+                terminated = true;
+                continue;
+            }
+            // An instruction's mnemonic is everything before its first operand; the emitter
+            // appends `;` comments after the operands, never before them.
+            let body = line.split(';').next().unwrap_or_default().trim();
+            let mnemonic = body.split([' ', '\t']).next().unwrap_or_default();
+            terminated = terminators.contains(&mnemonic)
+                || (mnemonic == syscall && exit_pending);
+            exit_pending = exit_selectors.contains(&body);
+            last_code = body;
+        }
+
+        violations.sort();
+        violations.dedup();
+        assert!(
+            violations.is_empty(),
+            "{arch:?}: these global labels are entered by fall-through, so `-dead_strip` \
+             (macOS) or `--gc-sections` (Linux) can collect them out from under their \
+             predecessor — branch to them explicitly, or use label_shared/.alt_entry:\n{}",
+            violations.join("\n")
+        );
+    }
+}

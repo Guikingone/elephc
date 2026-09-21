@@ -356,6 +356,37 @@ impl Checker {
                 PhpType::Object(_) | PhpType::Callable,
                 actual @ (PhpType::Mixed | PhpType::Union(_)),
             ) if actual.codegen_repr() == PhpType::Mixed => true,
+            // A parameter declared as a UNION of heap shapes -- classes, `callable`, or both --
+            // accepts a boxed value for the same reason the single-shape arm above does: the
+            // representation is the identical boxed cell and the class is narrowed with a
+            // runtime check before the payload is exposed. Without this, the union destination
+            // was stricter than either of its members would have been alone.
+            //
+            // `$container->get($id)` is declared `?object` by PSR-11, so every eager service
+            // fetch handed to a `callable|SomeClass` parameter arrives as `Object("")|Void`.
+            // php compiles that and raises its TypeError at run time if the object turns out
+            // not to match; refusing it at compile time rejects a program php accepts.
+            (
+                PhpType::Union(expected_members),
+                actual @ (PhpType::Mixed | PhpType::Union(_)),
+            ) if actual.codegen_repr() == PhpType::Mixed
+                && expected_members
+                    .iter()
+                    .all(|member| matches!(member, PhpType::Object(_) | PhpType::Callable)) =>
+            {
+                true
+            }
+            // The same destination fed an object whose CLASS is statically unknown. A single
+            // class destination already accepts one; a union of them refusing it would make the
+            // union stricter than any of its members, which is not what a union means.
+            (PhpType::Union(expected_members), PhpType::Object(actual_name))
+                if actual_name.is_empty()
+                    && expected_members
+                        .iter()
+                        .all(|member| matches!(member, PhpType::Object(_) | PhpType::Callable)) =>
+            {
+                true
+            }
             (PhpType::Iterable, actual @ (PhpType::Mixed | PhpType::Union(_)))
                 if actual.codegen_repr() == PhpType::Mixed => true,
             (PhpType::Array(element), actual @ (PhpType::Mixed | PhpType::Union(_)))
@@ -369,6 +400,12 @@ impl Checker {
                     && value.codegen_repr() == PhpType::Mixed
                     && actual.codegen_repr() == PhpType::Mixed => true,
             (PhpType::Iterable, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable) => true,
+            // The other direction, which php also accepts once the value really is an array: the
+            // argument lowering materialises the iterable first, exactly as `iterator_to_array()`
+            // would, so the callee never sees a Traversable. `twig/twig`'s
+            // `SandboxExtension::ensureSpreadAllowed(iterable $obj)` converts its Traversable half
+            // and then hands the result to a parameter declared `array`.
+            (PhpType::Array(_) | PhpType::AssocArray { .. }, PhpType::Iterable) => true,
             (PhpType::Union(expected_members), PhpType::Union(actual_members)) => actual_members
                 .iter()
                 .all(|actual_member| {
@@ -442,6 +479,7 @@ impl Checker {
             callee_desc,
             false,
             false,
+        false,
         )
     }
 
@@ -471,6 +509,7 @@ impl Checker {
             callee_desc,
             false,
             true,
+        false,
         )
     }
 
@@ -500,6 +539,38 @@ impl Checker {
             callee_desc,
             false,
             coercive,
+            false,
+        )
+    }
+
+    /// `check_user_declared_call` for a receiver whose SUBCLASSES declare more parameters than the
+    /// signature in hand.
+    ///
+    /// PHP dispatches on the runtime class and ignores arguments a userland function does not
+    /// declare, so a call that looks over-supplied for the type in hand is exactly right for an
+    /// override. `twig/twig`'s `IncludeNode` is the shape: it declares
+    /// `addGetTemplate(Compiler $compiler/* , string $template = '' */)` with the second parameter
+    /// COMMENTED OUT for backwards compatibility, `EmbedNode` overrides it with two, and
+    /// `IncludeNode` itself calls it with two.
+    pub(crate) fn check_user_declared_call_with_advisory_arity(
+        &mut self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        caller_env: &TypeEnv,
+        callee_desc: &str,
+        owner_class: &str,
+    ) -> Result<PhpType, CompileError> {
+        let coercive = self.class_supports_coercive_param_binding(owner_class);
+        self.check_known_callable_call_with_options(
+            sig,
+            args,
+            span,
+            caller_env,
+            callee_desc,
+            false,
+            coercive,
+            true,
         )
     }
 
@@ -523,6 +594,7 @@ impl Checker {
             callee_desc,
             true,
             coercive,
+            false,
         )
     }
 
@@ -564,6 +636,32 @@ impl Checker {
             callee_desc,
             true,
             false,
+            true,
+        )
+    }
+
+    /// Validates a call made THROUGH a callable value, whose arity is advisory.
+    ///
+    /// The signature is inferred from the callables elephc has seen flow into the slot, not
+    /// declared by the callee, and PHP binds a user function's declared parameters while ignoring
+    /// the surplus. Only a shortfall below the required count is a defect in every shape.
+    pub(crate) fn check_callable_value_call(
+        &mut self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        caller_env: &TypeEnv,
+        callee_desc: &str,
+    ) -> Result<PhpType, CompileError> {
+        self.check_known_callable_call_with_options(
+            sig,
+            args,
+            span,
+            caller_env,
+            callee_desc,
+            false,
+            false,
+            true,
         )
     }
 
@@ -580,6 +678,7 @@ impl Checker {
         callee_desc: &str,
         allow_by_ref_spread: bool,
         coercive_param_binding: bool,
+        callee_arity_is_advisory: bool,
     ) -> Result<PhpType, CompileError> {
         let omitted_default_slots =
             planned_omitted_default_slots(sig, args, span, callee_desc, caller_env)?;
@@ -590,6 +689,7 @@ impl Checker {
             .filter(|a| !matches!(a.kind, ExprKind::Spread(_)))
             .count();
         let has_spread = args.iter().any(|a| matches!(a.kind, ExprKind::Spread(_)));
+
         let regular_param_count = if sig.variadic.is_some() {
             sig.params.len().saturating_sub(1)
         } else {
@@ -625,14 +725,16 @@ impl Checker {
                         ),
                     ));
                 }
-            } else if effective_arg_count < required || effective_arg_count > sig.params.len() {
+            } else if effective_arg_count < required
+                || (effective_arg_count > sig.params.len() && !callee_arity_is_advisory)
+            {
                 return Err(CompileError::new(
                     span,
                     &format!(
                         "{} expects {} arguments, got {}",
                         callee_desc,
                         Self::format_fixed_or_range_arity(required, sig.params.len()),
-                        effective_arg_count
+                        effective_arg_count,
                     ),
                 ));
             }
@@ -722,10 +824,23 @@ impl Checker {
                             .copied()
                             .unwrap_or(false)
                             && !sig.ref_params.get(param_idx).copied().unwrap_or(false);
+                        // The same four guards `require_bound_param_arg_type` consults on the
+                        // coercive path. The gradual pair was missing here, so a value PHP checks
+                        // at the call — `$container->getParameter()`, declared
+                        // `array|bool|string|int|float|UnitEnum|null`, reaching `?string $buildDir`
+                        // in Symfony's `WarmableInterface::warmUp()` — was refused statically on an
+                        // INTERFACE-dispatched call while the identical call on the concrete class
+                        // was accepted.
                         let has_runtime_guard = crate::types::param_binding::object_requires_runtime_nominal_guard(
                             expected_ty,
                             &actual_ty,
+                        ) || crate::types::param_binding::gradual_object_requires_runtime_nominal_guard(
+                            expected_ty,
+                            &actual_ty,
                         ) || crate::types::param_binding::nullable_int_requires_runtime_param_guard(
+                            expected_ty,
+                            &actual_ty,
+                        ) || crate::types::param_binding::gradual_union_requires_runtime_param_guard(
                             expected_ty,
                             &actual_ty,
                         );

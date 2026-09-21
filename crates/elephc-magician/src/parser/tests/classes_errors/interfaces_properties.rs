@@ -110,7 +110,7 @@ fn parse_fragment_accepts_public_class_members() {
         .expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ClassDecl(EvalClass::new(
+        &[EvalStmt::class_decl(EvalClass::new(
             "DynEvalSupported",
             vec![
                 EvalClassProperty::new("x", Some(EvalExpr::Const(EvalConst::Int(1)))).with_type(
@@ -143,7 +143,7 @@ fn parse_fragment_accepts_constructor_promoted_properties() {
     .expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ClassDecl(EvalClass::new(
+        &[EvalStmt::class_decl(EvalClass::new(
             "DynEvalPromoted",
             vec![
                 EvalClassProperty::with_visibility_static_final_and_readonly(
@@ -273,7 +273,7 @@ fn parse_fragment_accepts_by_reference_constructor_promoted_properties() {
     .expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ClassDecl(EvalClass::new(
+        &[EvalStmt::class_decl(EvalClass::new(
             "DynEvalPromotedRef",
             vec![
                 EvalClassProperty::with_visibility_static_final_and_readonly(

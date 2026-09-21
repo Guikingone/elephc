@@ -1137,6 +1137,146 @@ echo isset($map["missing"]);
     assert_eq!(out, "111");
 }
 
+/// Verifies `isset()` on a subscript of a CALL RESULT, for every call spelling.
+///
+/// The receiver's type is invisible before lowering — a user call is typed `int` syntactically —
+/// so this shape used to be refused by the native probe and lowered as read-then-test. That read
+/// releases the call's temporary array before the backend re-probes the read's producer, so the
+/// probe called `__rt_hash_get` on freed storage and answered "missing" for keys that were
+/// present. Symfony's `isset(static::getProvidedTypes()[$prefix])` is exactly this shape: it made
+/// every `%env(bool:...)%` placeholder in a compiled prod container fail with
+/// `Unsupported env var prefix "bool"`.
+#[test]
+fn test_isset_on_call_result_subscript() {
+    let out = compile_and_run(
+        r#"<?php
+function makeArray(): array
+{
+    return ['bool' => 'yes', 'nul' => null];
+}
+
+class Holder
+{
+    public static function stat(): array
+    {
+        return makeArray();
+    }
+
+    public function inst(): array
+    {
+        return makeArray();
+    }
+
+    public function late(string $prefix): bool
+    {
+        return isset(static::stat()[$prefix]);
+    }
+}
+
+$h = new Holder();
+$key = 'bool';
+$fn = 'makeArray';
+echo isset(makeArray()['bool']) ? 'y' : 'n';
+echo isset(makeArray()[$key]) ? 'y' : 'n';
+echo isset(Holder::stat()[$key]) ? 'y' : 'n';
+echo isset($h->inst()[$key]) ? 'y' : 'n';
+echo isset($fn()[$key]) ? 'y' : 'n';
+echo $h->late($key) ? 'y' : 'n';
+echo isset(makeArray()['missing']) ? 'y' : 'n';
+echo isset(makeArray()['nul']) ? 'y' : 'n';
+"#,
+    );
+    assert_eq!(out, "yyyyyynn");
+}
+
+/// Verifies a list, a string and a `mixed` receiver behave the same way through a call result.
+///
+/// Each lowers to a different producer (`ArrayGet`, `StrCharAt`, a runtime read), and every one
+/// of them is re-probed by the backend, so the call-result release has to be safe for all three.
+#[test]
+fn test_isset_on_call_result_subscript_non_hash_receivers() {
+    let out = compile_and_run(
+        r#"<?php
+function makeList(): array
+{
+    return ['a', 'b', 'c'];
+}
+
+function makeStr(): string
+{
+    return 'abc';
+}
+
+function makeMixed(): mixed
+{
+    return ['k' => 'v', 'nul' => null];
+}
+
+$i = 1;
+echo isset(makeList()[1]) ? 'y' : 'n';
+echo isset(makeList()[$i]) ? 'y' : 'n';
+echo isset(makeList()[9]) ? 'y' : 'n';
+echo isset(makeStr()[2]) ? 'y' : 'n';
+echo isset(makeStr()[9]) ? 'y' : 'n';
+echo isset(makeStr()[-1]) ? 'y' : 'n';
+echo isset(makeMixed()['k']) ? 'y' : 'n';
+echo isset(makeMixed()['zz']) ? 'y' : 'n';
+echo isset(makeMixed()['nul']) ? 'y' : 'n';
+echo isset(makeMixed()['k'][0]) ? 'y' : 'n';
+"#,
+    );
+    assert_eq!(out, "yynynyynny");
+}
+
+/// Verifies `isset()` on an `ArrayAccess` object returned by a call asks `offsetExists()`.
+///
+/// PHP never answers `isset($obj[$k])` with `offsetGet()`, and an implementation is free to make
+/// the two observably different — here `offsetExists()` echoes. The receiver is a call, so the
+/// class cannot be named from the expression shape and the dispatch has to be decided from the
+/// lowered value instead.
+#[test]
+fn test_isset_on_call_result_array_access_object_calls_offset_exists() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag implements ArrayAccess
+{
+    private array $items = ['k' => 'v'];
+
+    public function offsetExists(mixed $offset): bool
+    {
+        echo "[exists $offset]";
+        return isset($this->items[$offset]);
+    }
+
+    public function offsetGet(mixed $offset): mixed
+    {
+        echo "[get $offset]";
+        return $this->items[$offset] ?? null;
+    }
+
+    public function offsetSet(mixed $offset, mixed $value): void
+    {
+        $this->items[$offset] = $value;
+    }
+
+    public function offsetUnset(mixed $offset): void
+    {
+        unset($this->items[$offset]);
+    }
+}
+
+function makeBag(): Bag
+{
+    return new Bag();
+}
+
+echo isset(makeBag()['k']) ? 'y' : 'n';
+echo isset(makeBag()['zz']) ? 'y' : 'n';
+"#,
+    );
+    assert_eq!(out, "[exists k]y[exists zz]n");
+}
+
 /// Verifies unset multiple variables.
 #[test]
 fn test_unset_multiple_variables() {

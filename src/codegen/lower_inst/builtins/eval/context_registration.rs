@@ -144,6 +144,7 @@ pub(super) fn register_eval_regex_provider(ctx: &mut FunctionContext<'_>) {
         "elephc_pcre2_v1_free",
         "elephc_pcre2_v1_name_count",
         "elephc_pcre2_v1_group_name",
+        "elephc_pcre2_v1_last_mark",
     ]
     .into_iter()
     .enumerate()
@@ -198,6 +199,24 @@ pub(super) fn mark_eval_php_version(ctx: &mut FunctionContext<'_>) {
         .emitter
         .target
         .extern_symbol("__elephc_eval_set_php_version_id");
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
+/// Writes the compilation's SAPI mode before every runtime dispatch.
+///
+/// Without this, `PHP_SAPI` forks at the eval boundary: a `--web` binary reports `cli-server`
+/// natively and `cli` from inside `eval()`. Interpreted library code branches on exactly that
+/// constant — Symfony's DUMPED container picks web-versus-console mode with
+/// `in_array(PHP_SAPI, ['cli', 'phpdbg', 'embed'], true)` — so the fork put an HTTP request on
+/// the console path and wired a CLI error renderer that cannot write an HTTP response.
+pub(super) fn mark_eval_web_sapi(ctx: &mut FunctionContext<'_>) {
+    let web = crate::codegen_support::compile_is_web_sapi();
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_load_int_immediate(ctx.emitter, arg_reg, i64::from(web));
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_set_web_sapi");
     abi::emit_call_label(ctx.emitter, &symbol);
 }
 

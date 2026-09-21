@@ -106,7 +106,7 @@ pub(super) fn eval_throw_property_access_error<T>(
     // The refusal compares `current_class_scope()` against the declaring class, so the scope
     // that was actually active is the only thing that explains it. Naming it here turns
     // "Cannot access private property X::$y" from a verdict into a diagnosis.
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         eprintln!(
             "[elephc-eval-trace] phase=property_access_error declaring={:?} property={:?} visibility={:?} current_class_scope={:?} current_function={:?} class_stack=[{}]",
             declaring_class,

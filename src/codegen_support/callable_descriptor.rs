@@ -38,6 +38,10 @@ pub(crate) const CALLABLE_DESC_KIND_INSTANCE_METHOD: u64 =
     CallableDescriptorShape::InstanceMethod as u64;
 
 pub(crate) const CALLABLE_DESC_ENTRY_OFFSET: usize = 8;
+/// Pointer to the descriptor's PHP name (`"strlen"`, `"Foo::bar"`), or 0 when it has none.
+pub(crate) const CALLABLE_DESC_NAME_OFFSET: usize = 16;
+/// Byte length of the name at [`CALLABLE_DESC_NAME_OFFSET`].
+pub(crate) const CALLABLE_DESC_NAME_LEN_OFFSET: usize = 24;
 #[allow(dead_code)]
 pub(crate) const CALLABLE_DESC_SIGNATURE_OFFSET: usize = 32;
 #[allow(dead_code)]

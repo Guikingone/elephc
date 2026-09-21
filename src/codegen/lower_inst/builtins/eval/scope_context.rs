@@ -194,6 +194,58 @@ pub(super) fn pop_eval_context_class_scope(ctx: &mut FunctionContext<'_>, pushed
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_STATUS_SAVE_OFFSET);
 }
 
+/// Publishes this compiled frame's lexical class for one bridge call that carries no context.
+///
+/// The owned-receiver path hands the bridge a NULL caller context on purpose -- the owner
+/// context decides dispatch -- and a body with no eval context local of its own cannot forward
+/// scopes at all. The interpreter then read no calling scope and refused a protected override
+/// "from global scope", which is how `Twig\Template::yield()` calling `$this->doDisplay()`
+/// died. Publishing the lexical class costs two calls and needs neither a context nor a wider
+/// method-call ABI.
+///
+/// Returns whether anything was pushed, for [`pop_native_caller_class`].
+pub(super) fn push_native_caller_class(ctx: &mut FunctionContext<'_>) -> bool {
+    let Some(class_name) = current_eval_method_class(ctx).map(str::to_string) else {
+        return false;
+    };
+    let (class_label, class_len) = ctx.data.add_string(class_name.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        &class_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        class_len as i64,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_push_native_caller_class");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    true
+}
+
+/// Drops the published lexical class, preserving the status the bridge call just returned.
+///
+/// The status is parked in `EVAL_STATUS_SAVE_OFFSET` for the same reason
+/// [`pop_eval_context_class_scope`] parks it there: the generic temp cell may still hold a box
+/// this frame owes a release.
+pub(super) fn pop_native_caller_class(ctx: &mut FunctionContext<'_>, pushed: bool) {
+    if !pushed {
+        return;
+    }
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_STATUS_SAVE_OFFSET);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_pop_native_caller_class");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_STATUS_SAVE_OFFSET);
+}
+
 /// Returns the lexical class encoded in the current EIR callable name.
 pub(super) fn current_eval_method_class<'a>(ctx: &'a FunctionContext<'_>) -> Option<&'a str> {
     current_eval_function_class(ctx.function)

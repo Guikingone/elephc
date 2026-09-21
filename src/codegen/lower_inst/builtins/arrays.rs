@@ -720,6 +720,16 @@ fn slice_like_length_operand(inst: &Instruction) -> Result<Option<ValueId>> {
 ///
 /// The checker rejects a non-literal flag because it decides the result's static shape, so a
 /// non-literal operand here can only mean the checker and the backend disagree about this call.
+fn slice_like_non_literal_preserve_keys(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<Option<ValueId>> {
+    let Some(flag) = inst.operands.get(3).copied() else {
+        return Ok(None);
+    };
+    Ok(const_bool_operand(ctx, flag)?.is_none().then_some(flag))
+}
+
 fn slice_like_preserve_keys(
     ctx: &FunctionContext<'_>,
     inst: &Instruction,

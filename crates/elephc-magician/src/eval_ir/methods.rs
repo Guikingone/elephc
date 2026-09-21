@@ -8,6 +8,7 @@
 //! - Parameters, statics, visibility, hook bodies, return types, and source metadata remain aligned.
 
 use super::*;
+use std::sync::Arc;
 
 /// Public method metadata for a runtime eval class.
 #[derive(Debug, Clone)]
@@ -40,7 +41,11 @@ pub struct EvalClassMethod {
     /// declarations of the same shape are the same declaration whatever file mode they were read
     /// under, and every parser-shape expectation compares shapes.
     strict_types: bool,
-    body: Vec<EvalStmt>,
+    /// SHARED, not owned. `class_method()` hands callers an `EvalClassMethod` BY VALUE on
+    /// every interpreted dispatch, and deep-copying a method body — the whole statement and
+    /// expression tree — on each call was the single largest cost in a Symfony request.
+    /// Behind an `Arc` the copy is a refcount bump; `body()` still hands out `&[EvalStmt]`.
+    body: Arc<Vec<EvalStmt>>,
 }
 
 impl PartialEq for EvalClassMethod {
@@ -139,7 +144,7 @@ impl EvalClassMethod {
             returns_by_ref: false,
             strict_types: false,
             return_type: None,
-            body,
+            body: Arc::new(body),
         }
     }
 

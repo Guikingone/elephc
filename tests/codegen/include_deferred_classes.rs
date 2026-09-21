@@ -118,3 +118,93 @@ fn test_a_class_that_exists_nowhere_still_raises_phps_runtime_error() {
 // divergence means either keeping consumed registrations live at run time for whatever the
 // compiled rules cannot resolve, or only consuming registrations provably reducible to
 // classmap/PSR-4 — and the fixture belongs with that change, next to a harness that models it.
+
+/// Verifies `include_once` of an AUTOLOADED file answers "already included" instead of re-running it.
+///
+/// The autoload pass performs, at compile time, the inclusion PHP's autoloader performs at run
+/// time: it opens the class file and splices its declarations into the program. The runtime
+/// inclusion guard for that file stayed clear all the same, so an `include_once` reaching it
+/// through a COMPUTED path re-ran the file and died redeclaring a class the binary already
+/// carries. Symfony's compiled container does exactly this
+/// (`include_once dirname(__DIR__, 4).'/vendor/.../ParameterBagInterface.php'`), and the whole
+/// request died on it.
+///
+/// `php -n` 8.5.6 on the Composer-shaped equivalent (`scratchpad/preinc/ref.php`, this session,
+/// a `spl_autoload_register` that `require`s the same file) prints
+/// `first=thing` / `again=true` / `second=thing`.
+#[test]
+fn test_include_once_of_an_autoloaded_file_reports_it_as_already_included() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "project.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
+            ),
+            (
+                "src/Thing.php",
+                "<?php\nnamespace App;\ninterface ThingContract { public function tag(): string; }\n\
+                 class Thing implements ThingContract { public function tag(): string { return 'thing'; } }\n",
+            ),
+            (
+                "main.php",
+                "<?php\n$thing = new \\App\\Thing();\necho 'first=', $thing->tag(), \"\\n\";\n\
+                 $path = __DIR__ . '/src/' . 'Thing' . '.php';\n$again = include_once $path;\n\
+                 echo 'again=', var_export($again, true), \"\\n\";\n\
+                 echo 'second=', (new \\App\\Thing())->tag(), \"\\n\";\n",
+            ),
+        ],
+        "main.php",
+    );
+
+    assert_eq!(out, "first=thing\nagain=true\nsecond=thing\n");
+}
+
+/// Verifies `class_exists($name, false)` reports a probe-only autoloaded class as NOT LOADED.
+///
+/// A closed-world build declares everything it compiled from the first instruction, so a class
+/// the autoload pass pulled in solely to answer `class_exists(X::class)` answered "loaded" where
+/// php answers "not loaded". `symfony/runtime` reads exactly that difference to decide whether
+/// `symfony/dotenv` is installed:
+///
+/// ```php
+/// class_exists(MissingDotenv::class, false) || class_exists(Dotenv::class) || class_exists(MissingDotenv::class);
+/// // ...
+/// if (... && !class_exists(MissingDotenv::class, false)) { $dotenv->bootEnv(...); }
+/// ```
+///
+/// php never loads `MissingDotenv` when dotenv IS installed, so `.env` is read. elephc answered
+/// `true`, skipped `bootEnv()`, and every `%env(...)%` parameter then failed to resolve --
+/// `EnvNotFoundException: Environment variable not found: "DEFAULT_URI"` on the first request.
+///
+/// A class the program actually USES stays loaded: php would have loaded it too.
+///
+/// `php -n` 8.5.6 on the Composer-shaped equivalent (`scratchpad/probeonly/ref.php`, this
+/// session) prints `before=false` / `probe=true` / `after=true` / `used=optional/true`.
+#[test]
+fn test_class_exists_without_autoload_reports_a_probe_only_class_as_unloaded() {
+    let out = compile_and_run_files(
+        &[
+            ("project.json", r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#),
+            ("src/Fallback.php", "<?php\nnamespace App;\nclass Fallback {}\n"),
+            (
+                "src/Optional.php",
+                "<?php\nnamespace App;\nclass Optional { public function tag(): string { return 'optional'; } }\n",
+            ),
+            (
+                "main.php",
+                "<?php\n\
+                 echo 'before=', (class_exists(\\App\\Fallback::class, false) ? 'true' : 'false'), \"\\n\";\n\
+                 echo 'probe=', (class_exists(\\App\\Fallback::class) ? 'true' : 'false'), \"\\n\";\n\
+                 echo 'after=', (class_exists(\\App\\Fallback::class, false) ? 'true' : 'false'), \"\\n\";\n\
+                 $optional = new \\App\\Optional();\n\
+                 echo 'used=', $optional->tag(), '/', (class_exists(\\App\\Optional::class, false) ? 'true' : 'false'), \"\\n\";\n",
+            ),
+        ],
+        "main.php",
+    );
+
+    assert_eq!(
+        out,
+        "before=false\nprobe=true\nafter=true\nused=optional/true\n"
+    );
+}

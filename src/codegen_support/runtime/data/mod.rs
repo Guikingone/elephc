@@ -12,7 +12,7 @@ mod class_methods_registry;
 mod class_relation_registry;
 mod const_registry;
 mod member_exists_registry;
-mod fixed;
+pub(crate) mod fixed;
 /// Also home of `escaped_bytes()`, the crate's single assembler-string escaper:
 /// reachable outside this module so non-runtime emitters (`crate::debug_info`)
 /// escape quoted directive operands the same way.

@@ -91,6 +91,25 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #24]");                                   // save the low payload word across helper calls
     emitter.instruction("str x2, [sp, #32]");                                   // save the high payload word across helper calls
 
+    // -- an array tag says which storage the COMPILER expected, not which one exists --
+    // A declared `array $p` property carries the indexed tag in its descriptor row forever, but
+    // the array it holds becomes hash storage the moment a string key is written. Reading a hash
+    // through the indexed reader emitted `a:1:{i:0;i:5;}` for `['kernel.debug' => true]` — the
+    // header word read as a count and the storage kind read as the first element. Classify the
+    // pointer instead, here, so every caller of this helper is corrected at once.
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the value tag
+    emitter.instruction("cmp x0, #4");                                          // only the two array tags need classifying
+    emitter.instruction("b.lt __rt_serialize_value_tag_ready");                 // scalars keep their tag
+    emitter.instruction("cmp x0, #5");                                          // objects and boxes dispatch on their own tag
+    emitter.instruction("b.gt __rt_serialize_value_tag_ready");                 // leave every other tag alone
+    emitter.instruction("ldr x0, [sp, #24]");                                   // the container pointer is the low payload word
+    emitter.instruction("bl __rt_heap_kind");                                   // 2 = indexed array, 3 = hash, 0 = not a heap pointer
+    emitter.instruction("cmp x0, #3");                                          // is the live storage hash-backed?
+    emitter.instruction("b.ne __rt_serialize_value_tag_ready");                 // anything else keeps the descriptor's tag
+    emitter.instruction("mov x0, #5");                                          // runtime value tag 5 = hash-backed array
+    emitter.instruction("str x0, [sp, #16]");                                   // dispatch on the storage that actually exists
+    emitter.label("__rt_serialize_value_tag_ready");
+
     // -- compute the current concat_buf write position --
     emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [x9]");                                       // load the current concat-buffer offset
@@ -1004,6 +1023,21 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // save the value tag across helper calls
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save the low payload word across helper calls
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // save the high payload word across helper calls
+
+    // -- an array tag says which storage the COMPILER expected, not which one exists --
+    // See the AArch64 sibling: a declared `array $p` keeps the indexed tag in its descriptor row
+    // even after a string key promotes the array to hash storage.
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the value tag
+    emitter.instruction("cmp rdi, 4");                                          // only the two array tags need classifying
+    emitter.instruction("jl __rt_serialize_value_tag_ready_linux_x86_64");      // scalars keep their tag
+    emitter.instruction("cmp rdi, 5");                                          // objects and boxes dispatch on their own tag
+    emitter.instruction("jg __rt_serialize_value_tag_ready_linux_x86_64");      // leave every other tag alone
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // the container pointer is the low payload word
+    emitter.instruction("call __rt_heap_kind");                                 // 2 = indexed array, 3 = hash, 0 = not a heap pointer
+    emitter.instruction("cmp rax, 3");                                          // is the live storage hash-backed?
+    emitter.instruction("jne __rt_serialize_value_tag_ready_linux_x86_64");     // anything else keeps the descriptor's tag
+    emitter.instruction("mov QWORD PTR [rbp - 24], 5");                         // runtime value tag 5 = hash-backed array
+    emitter.label("__rt_serialize_value_tag_ready_linux_x86_64");
 
     // -- compute the current concat_buf write position --
     emit_symbol_address(emitter, "r10", "_concat_off");

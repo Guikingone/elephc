@@ -83,9 +83,20 @@ fn free_port() -> u16 {
     l.local_addr().unwrap().port()
 }
 
-/// Blocks until `addr` accepts a TCP connection (server ready), or panics after 10s.
+/// Blocks until `addr` accepts a TCP connection (server ready), or panics at the deadline.
+///
+/// The deadline costs nothing when the server starts promptly — the loop returns on the first
+/// successful connect — so it is sized for the worst case rather than the common one. Ten
+/// seconds was not: a loaded machine (a parallel `--web` compile, or the security scanners
+/// walking a 250 MB binary) pushed startup past it and failed 76 of 83 tests at once, every one
+/// of them with this same panic and none of them a real defect. `ELEPHC_WEB_TEST_READY_SECS`
+/// overrides it.
 fn wait_until_ready(addr: &str) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let seconds = std::env::var("ELEPHC_WEB_TEST_READY_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(60);
+    let deadline = Instant::now() + Duration::from_secs(seconds);
     while Instant::now() < deadline {
         if TcpStream::connect(addr).is_ok() {
             return;
@@ -805,6 +816,49 @@ fn web_reset_clears_static_property() {
     let _ = child.wait();
     assert!(r1.ends_with("1"), "first response body: {:?}", r1);
     assert!(r2.ends_with("1"), "second response body: {:?}", r2);
+}
+
+/// Verifies a defaultless static property survives being assigned again on a later request.
+///
+/// `__rt_web_reset` releases what the property holds and leaves the pointer in the slot, and the
+/// next request's prologue marks the property uninitialized again. A store releases whatever the
+/// value word holds before overwriting it, so that leftover pointer used to be freed a second
+/// time -- by then the arena had handed the same address to this request's own strings, and the
+/// store quietly freed one of them. Symfony's `Container::get` is this exact shape and its
+/// worker died with a segmentation fault on the second request.
+#[test]
+fn web_reset_leaves_no_stale_pointer_behind_an_uninitialized_static_property() {
+    let dir = make_test_dir("web_reset_uninit_prop");
+    let src = concat!(
+        "<?php class Box { private static $make;",
+        " public static function make(string $id): string { return \"made:\" . $id; }",
+        " public static function get(string $id): string {",
+        "  return (self::$make ??= self::make(...))($id); } }",
+        " $pad = [];",
+        " for ($i = 0; $i < 8; $i++) { $pad[] = \"padding-\" . $i; }",
+        " echo Box::get($pad[3]), \"|\", implode(\",\", $pad);",
+    );
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let responses = [
+        http_get(&addr, "/"),
+        http_get(&addr, "/"),
+        http_get(&addr, "/"),
+    ];
+    let _ = child.kill();
+    let _ = child.wait();
+    let expected =
+        "made:padding-3|padding-0,padding-1,padding-2,padding-3,padding-4,padding-5,padding-6,padding-7";
+    for (index, response) in responses.iter().enumerate() {
+        assert!(
+            response.ends_with(expected),
+            "request {} body: {:?}",
+            index + 1,
+            response
+        );
+    }
 }
 
 /// Verifies that "Hello World" is served as the response body.
@@ -1812,6 +1866,81 @@ fn web_get_does_not_leak_across_requests() {
     let _ = child.wait();
     assert!(r1.ends_with("first"), "r1: {:?}", r1);
     assert!(r2.ends_with("none"), "r2 leaked stale $_GET: {:?}", r2);
+}
+
+/// Verifies `headers_sent()` is false again for the SECOND request a worker serves.
+///
+/// `_headers_sent` is process storage that PHP scopes to a request: `__rt_stdout_write` raises it
+/// the first time bytes escape the output-buffering stack, and nothing used to put it back. A CLI
+/// build cannot see that (one process, one request), but a prefork worker can, and Symfony is the
+/// program that reads it -- `Response::sendHeaders()` returns early when `headers_sent()` is true,
+/// so from request 2 onward every response kept its body and silently lost its `Content-Type` and
+/// `Cache-Control`. The guard below is that check, written out.
+#[test]
+fn web_headers_sent_resets_between_requests() {
+    let dir = make_test_dir("web_headers_sent_reset");
+    let src = "<?php if (headers_sent()) { echo 'stale'; } else { header('X-Elephc-Probe: fresh'); echo 'fresh'; }";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_request(&addr, "GET", "/", &[], "");
+    let r2 = http_request(&addr, "GET", "/", &[], "");
+    let r3 = http_request(&addr, "GET", "/", &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(r1.ends_with("fresh"), "r1: {:?}", r1);
+    assert!(r2.ends_with("fresh"), "r2 saw request 1's headers_sent(): {:?}", r2);
+    assert!(r3.ends_with("fresh"), "r3 saw an earlier request's headers_sent(): {:?}", r3);
+    for (n, resp) in [(2, &r2), (3, &r3)] {
+        assert!(
+            resp.to_ascii_lowercase().contains("x-elephc-probe: fresh"),
+            "r{n} lost the header it set: {:?}",
+            resp
+        );
+    }
+}
+
+/// Verifies eval-declared state does not cross a worker's request boundary.
+///
+/// The interpreter keeps its per-request tables in a context, and one context is deliberately
+/// leaked for the whole process so that a null-handle bridge call has somewhere to put hash
+/// resources. Everything in it is a raw pointer into the PHP arena, and `__rt_web_reset` hands
+/// that arena back to pure-bump allocation between requests, so a table that survives the
+/// boundary answers request N+1 with storage that now belongs to something else. What that looks
+/// like from outside is a static that reads back as a different type, a property that comes back
+/// null, and -- when the stale handle is RELEASED -- a live block on the free chain that faults
+/// the next allocator walk. The contract is simply that request 2 sees what request 1 saw.
+#[test]
+fn web_eval_declared_state_does_not_cross_requests() {
+    let dir = make_test_dir("web_eval_state_reset");
+    // Only a static property and a dynamic one: a COMPILED write to a DECLARED property of an
+    // eval-declared class is dropped today (the eval bridge exports a property get and no set),
+    // which is a separate defect and would mask what this test is about.
+    let src = concat!(
+        "<?php ",
+        "eval('class Counter { public static $n = 0; }'); ",
+        "Counter::$n++; ",
+        "$c = new Counter(); ",
+        "$c->extra = 'dynamic'; ",
+        "echo Counter::$n, ':', $c->extra;",
+    );
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let responses: Vec<String> = (0..5)
+        .map(|_| http_request(&addr, "GET", "/", &[], ""))
+        .collect();
+    let _ = child.kill();
+    let _ = child.wait();
+    for (index, response) in responses.iter().enumerate() {
+        assert!(
+            response.ends_with("1:dynamic"),
+            "request {index} saw another request's eval state: {:?}",
+            response
+        );
+    }
 }
 
 /// Verifies file_get_contents('php://input') returns the raw request body under --web.

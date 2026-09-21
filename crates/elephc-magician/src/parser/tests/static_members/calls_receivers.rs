@@ -22,7 +22,7 @@ fn parse_fragment_accepts_static_class_members() {
     .expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ClassDecl(EvalClass::new(
+        &[EvalStmt::class_decl(EvalClass::new(
             "EvalStaticBox",
             vec![EvalClassProperty::with_visibility_and_static(
                 "count",

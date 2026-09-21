@@ -146,7 +146,7 @@ fn trace_declared_eval_interface_method_mismatch(
     declaring_class: &str,
     method: &EvalClassMethod,
 ) {
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_none() {
+    if !crate::eval_trace::enabled() {
         return;
     }
     eprintln!(

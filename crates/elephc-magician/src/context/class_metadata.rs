@@ -35,7 +35,7 @@ impl ElephcEvalContext {
         if let Some(parent) = class.parent() {
             self.collect_class_chain(parent, chain, seen);
         }
-        chain.push(class.clone());
+        chain.push(EvalClass::clone(class));
     }
 
     /// Finds a method in an eval-declared class or its eval-declared parents.

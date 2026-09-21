@@ -54,8 +54,14 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Chr,
     /// Dispatches `chunk_split(...)`.
     ChunkSplit,
+    /// Dispatches `substr_compare(...)`.
+    SubstrCompare,
     /// Dispatches `substr_count(...)`.
     SubstrCount,
+    /// Dispatches `strncmp(...)`.
+    StringCompareN,
+    /// Dispatches `strncasecmp(...)`.
+    StringCompareNCase,
     /// Dispatches `get_debug_type(...)`.
     GetDebugType,
     /// Dispatches `parse_str(...)`.
@@ -376,7 +382,10 @@ impl EvalDirectHook {
             Self::Bin2Hex => eval_builtin_bin2hex(args, context, scope, values),
             Self::Chr => eval_builtin_chr(args, context, scope, values),
             Self::ChunkSplit => eval_builtin_chunk_split(args, context, scope, values),
+            Self::SubstrCompare => eval_builtin_substr_compare(args, context, scope, values),
             Self::SubstrCount => eval_builtin_substr_count(args, context, scope, values),
+            Self::StringCompareN => eval_builtin_strncmp(args, context, scope, values),
+            Self::StringCompareNCase => eval_builtin_strncasecmp(args, context, scope, values),
             Self::GetDebugType => eval_builtin_get_debug_type(args, context, scope, values),
             Self::ParseStr => eval_builtin_parse_str_direct(args, context, scope, values),
             Self::Levenshtein => eval_builtin_levenshtein(args, context, scope, values),

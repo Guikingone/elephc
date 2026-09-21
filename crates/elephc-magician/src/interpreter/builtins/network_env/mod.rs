@@ -37,6 +37,7 @@ mod passthru;
 mod php_uname;
 mod phpversion;
 mod putenv;
+mod set_time_limit;
 mod shell_exec;
 mod system;
 
@@ -65,6 +66,7 @@ pub(in crate::interpreter) use passthru::*;
 pub(in crate::interpreter) use php_uname::*;
 pub(in crate::interpreter) use phpversion::*;
 pub(in crate::interpreter) use putenv::*;
+pub(in crate::interpreter) use set_time_limit::*;
 pub(in crate::interpreter) use shell_exec::*;
 pub(in crate::interpreter) use system::*;
 
@@ -104,6 +106,7 @@ pub(in crate::interpreter) fn eval_builtin_network_env_call(
         "php_uname" => eval_builtin_php_uname(args, context, scope, values),
         "phpversion" => eval_builtin_phpversion(args, context, scope, values),
         "putenv" => eval_builtin_putenv(args, context, scope, values),
+        "set_time_limit" => eval_builtin_set_time_limit(args, context, scope, values),
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
@@ -134,6 +137,7 @@ pub(in crate::interpreter) fn eval_network_env_values_result(
             };
             eval_get_cfg_var_result(*option, values)
         }
+        "set_time_limit" => eval_set_time_limit_values(evaluated_args, context, values),
         "php_uname" => match evaluated_args {
             [] => eval_php_uname_result(None, values),
             [mode] => eval_php_uname_result(Some(*mode), values),

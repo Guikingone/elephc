@@ -19,17 +19,23 @@ impl FakeOps {
         args: RuntimeCellHandle,
         target: u64,
         repeated: bool,
+        rendered: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let name = self.string(name)?;
         let factory = self.int(0)?;
         let target = self.int(target as i64)?;
         let repeated = self.bool_value(repeated)?;
+        // `__string` is the slot the emitted materializer fills (see
+        // `codegen::eval_reflection_helpers`), and it holds
+        // `ReflectionAttribute::__toString()`'s text.
+        let rendered = self.string(rendered)?;
         let object = self.alloc(FakeValue::Object(vec![
             ("__name".to_string(), name),
             ("__args".to_string(), args),
             ("__factory".to_string(), factory),
             ("__target".to_string(), target),
             ("__is_repeated".to_string(), repeated),
+            ("__string".to_string(), rendered),
         ]));
         self.object_classes
             .insert(object.as_ptr() as usize, "ReflectionAttribute".to_string());

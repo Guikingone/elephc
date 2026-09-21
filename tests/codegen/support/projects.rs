@@ -25,6 +25,8 @@ struct ProjectSourceInputs<'a> {
     source: &'a str,
     included: elephc::resolver::IncludedDeclarationSources,
     autoload: elephc::autoload::DeclarationSourceFiles,
+    /// Canonical path of every file the autoload pass loaded, as `pipeline::compile` keeps it.
+    autoloaded_files: Vec<std::path::PathBuf>,
 }
 
 /// Generates user and runtime assembly for project fixtures through the canonical EIR backend.
@@ -52,6 +54,14 @@ fn generate_project_asm(
     ir_module.declared_function_source_files = sources.autoload.functions;
     ir_module.declared_class_source_files.extend(sources.included.class_likes);
     ir_module.declared_function_source_files.extend(sources.included.functions);
+    // Mirrors `pipeline::compile`: the autoload pass already performed these inclusions, and
+    // the generated program has to know, or an `include_once` of an autoloaded file redeclares
+    // it here while the CLI answers "already included".
+    elephc::autoload::record_compile_time_inclusions(
+        &mut ir_module,
+        program,
+        &sources.autoloaded_files,
+    );
     let exported_functions = HashMap::new();
     let regalloc_linear = !matches!(std::env::var("ELEPHC_REGALLOC").as_deref(), Ok("stack"));
     let user_asm = elephc::codegen::generate_user_asm_from_ir_with_options(
@@ -444,7 +454,7 @@ pub(crate) fn compile_and_run_files_expect_failure(
         false,
         false,
         requires_elephc_tls,
-        ProjectSourceInputs { source: &source, included: included_sources, autoload: Default::default() },
+        ProjectSourceInputs { source: &source, included: included_sources, autoload: Default::default(), autoloaded_files: Vec::new() },
     );
     let required_libraries =
         link_requirements_for_runtime_features(&check_result, runtime_features);
@@ -500,7 +510,7 @@ pub(crate) fn compile_and_run_files_with_defines(
     ).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
-    let (resolved, _, autoload_sources) =
+    let (resolved, autoloaded_files, autoload_sources) =
         elephc::autoload::run_collecting_included_with_defines_and_sources(
             resolved, base_dir, &autoload_registry, &define_set,
         ).expect("autoload failed");
@@ -547,7 +557,12 @@ pub(crate) fn compile_and_run_files_with_defines(
         false,
         false,
         requires_elephc_tls,
-        ProjectSourceInputs { source: &source, included: included_sources, autoload: autoload_sources },
+        ProjectSourceInputs {
+            source: &source,
+            included: included_sources,
+            autoload: autoload_sources,
+            autoloaded_files,
+        },
     );
     let required_libraries =
         link_requirements_for_runtime_features(&check_result, runtime_features);
@@ -776,7 +791,7 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
         false,
         false,
         requires_elephc_tls,
-        ProjectSourceInputs { source, included: included_sources, autoload: Default::default() },
+        ProjectSourceInputs { source, included: included_sources, autoload: Default::default(), autoloaded_files: Vec::new() },
     );
     let required_libraries =
         link_requirements_for_runtime_features(&check_result, runtime_features);

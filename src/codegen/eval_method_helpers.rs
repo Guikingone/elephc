@@ -32,6 +32,8 @@ use super::eval_ref_arg_helpers::{
     eval_normalized_ref_params, eval_ref_arg_slots, eval_signature_ref_params_supported,
     emit_aarch64_write_back_ref_args, emit_x86_64_write_back_ref_args,
 };
+use super::eval_callable_helpers::{EVAL_ARG_BOXED_VALUE_AARCH64_OFFSET, EVAL_ARG_BOXED_VALUE_X86_64_OFFSET,
+    EVAL_ARG_CONTEXT_AARCH64_OFFSET};
 use super::eval_callable_helpers::EvalCallableDescriptorSupport;
 
 /// Method metadata needed by eval method-call bridge dispatch.
@@ -2273,6 +2275,8 @@ fn emit_aarch64_cast_eval_arg(
                 callable_support,
                 label_prefix,
                 fail_label,
+                EVAL_ARG_CONTEXT_AARCH64_OFFSET,
+                EVAL_ARG_BOXED_VALUE_AARCH64_OFFSET,
             );
         }
         PhpType::TaggedScalar => {
@@ -2458,6 +2462,7 @@ fn emit_x86_64_cast_eval_arg(
                 label_prefix,
                 fail_label,
                 context_frame_offset,
+                EVAL_ARG_BOXED_VALUE_X86_64_OFFSET,
             );
         }
         PhpType::TaggedScalar => {
@@ -2606,15 +2611,23 @@ fn emit_x86_64_validate_iterable_object(
 }
 
 /// Boxes the current native method result as the Mixed cell expected by eval.
+///
+/// The boxer is handed the CODEGEN REPRESENTATION, not the declared type. The two differ for
+/// exactly one shape that matters here: a method declared `: \Closure` is `PhpType::Object` but
+/// its value in the result register is a callable DESCRIPTOR, not an object pointer. Boxing that
+/// with the declared type stamped runtime tag 6 on a descriptor, and the interpreter then unboxed
+/// it as an object — Symfony's `HtmlErrorRenderer::isDebug(): \Closure` segfaulted the worker the
+/// first time interpreted code asked the returned value for its type.
 fn emit_box_method_result(module: &Module, emitter: &mut Emitter, return_ty: &PhpType) {
-    if return_ty.codegen_repr() == PhpType::Void {
+    let repr = return_ty.codegen_repr();
+    if repr == PhpType::Void {
         let null_symbol = module.target.extern_symbol("__elephc_eval_value_null");
         abi::emit_call_label(emitter, &null_symbol);
     } else {
         if method_result_is_object_only(return_ty) {
             emit_box_owned_object_method_result(emitter);
         } else {
-            emit_box_current_value_as_mixed(emitter, return_ty);
+            emit_box_current_value_as_mixed(emitter, &repr);
         }
     }
 }

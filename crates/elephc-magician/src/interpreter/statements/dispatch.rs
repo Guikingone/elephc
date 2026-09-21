@@ -64,7 +64,7 @@ fn trace_failed_statement(
     status: EvalStatus,
     context: &ElephcEvalContext,
 ) {
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_none() {
+    if !crate::eval_trace::enabled() {
         return;
     }
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -327,7 +327,7 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::StoreVar { name, value } => {
-            let trace = std::env::var_os("ELEPHC_EVAL_TRACE").is_some();
+            let trace = crate::eval_trace::enabled();
             // Mirrors `eval_assign`'s copy rule for the expression form of the same assignment:
             // any RHS that aliases persistent storage -- a variable read, but also a class
             // constant or static property fetch -- needs an independent copy before the scope

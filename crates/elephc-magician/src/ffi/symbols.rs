@@ -25,7 +25,7 @@ use crate::interpreter::RuntimeValueOps;
 #[cfg(not(test))]
 use crate::interpreter::eval_spl_autoload_class_bridge;
 #[cfg(not(test))]
-use crate::runtime_hooks::ElephcRuntimeOps;
+use crate::runtime_hooks::{self, ElephcRuntimeOps};
 
 /// Identifies the PHP class-like symbol table queried through the eval bridge.
 #[derive(Clone, Copy)]
@@ -336,6 +336,13 @@ unsafe fn eval_dynamic_class_like_exists_inner(
     }
     let mut values = ElephcRuntimeOps::with_context(context as *const _);
     if eval_runtime_has_class_like(&mut values, &name, kind) {
+        // A class the compiler pulled in ONLY so a probe could be answered is DECLARED but not
+        // LOADED, which is exactly the difference `$autoload = false` asks about. A probe that
+        // allows autoloading is what loads it, here as in php.
+        if autoload == 0 && !runtime_hooks::compiled_class_is_loaded(&name) {
+            return 0;
+        }
+        runtime_hooks::mark_compiled_class_loaded(&name);
         return 1;
     }
     if autoload == 0 {

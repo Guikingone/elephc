@@ -331,6 +331,14 @@ pub(super) fn builtin_reflection_owner_class(
         methods.push(builtin_reflection_constant_empty_array_method(
             "getClosureUsedVariables",
         ));
+        // Same closure-introspection simplification as `getClosureUsedVariables` above: elephc
+        // resolves a closure's bindings at compile time into a descriptor, so there is no runtime
+        // name-to-value table to hand back. Declaring it keeps programs that merely MENTION the
+        // method compilable — Symfony's `LazyString::resolve()` calls it only while building the
+        // message for a `TypeError` it has already caught.
+        methods.push(builtin_reflection_constant_empty_array_method(
+            "getStaticVariables",
+        ));
         methods.push(builtin_reflection_constant_false_bool_method(
             "isDisabled",
         ));

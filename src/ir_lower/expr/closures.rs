@@ -151,8 +151,15 @@ pub(super) fn lower_closure_with_context(
                 Some(PhpType::Mixed)
             } else if capture == "this" {
                 let rebound_class = ctx.take_bound_closure_this_class();
-                rebound_this_capture = rebound_class.is_some();
-                rebound_class.map(PhpType::Object)
+                // A bind target this build cannot name: keep capturing the enclosing value (the
+                // runtime bind overwrites it) and type it `Mixed`, so members dispatch at run time
+                // against whatever the bind actually put there — the same answer the top-level
+                // arm above gives a closure that has no enclosing `$this` at all.
+                let rebound_gradual = ctx.take_bound_closure_this_gradual();
+                rebound_this_capture = rebound_class.is_some() || rebound_gradual;
+                rebound_class
+                    .map(PhpType::Object)
+                    .or(rebound_gradual.then_some(PhpType::Mixed))
             } else {
                 None
             };
@@ -274,7 +281,7 @@ pub(super) fn lower_closure_with_context(
 /// than a silent "not written". That polarity is the whole point: a missed write leaves the cell
 /// narrowly typed and silently reinterprets whatever is stored through it — the exact defect
 /// this gate exists to prevent — while a spurious true only widens a cell that did not need it.
-pub(super) fn body_writes_local(body: &[Stmt], name: &str) -> bool {
+pub(crate) fn body_writes_local(body: &[Stmt], name: &str) -> bool {
     body.iter().any(|stmt| stmt_writes_local(stmt, name))
 }
 

@@ -183,7 +183,7 @@ fn trace_dynamic_function_call_failure(
     name: &str,
     status: EvalStatus,
 ) -> EvalStatus {
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         let fallback = name.rsplit_once('\\').map(|(_, bare)| bare);
         eprintln!(
             "[elephc-eval-trace] phase=dynamic_function_call name={name:?} status={status:?} namespaced_exists={} global_fallback={fallback:?} global_exists={}",

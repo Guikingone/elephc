@@ -387,6 +387,7 @@ pub(super) fn builtin_reflection_class() -> FlattenedClass {
             builtin_reflection_class_new_instance_without_constructor_method(),
             builtin_reflection_class_new_lazy_ghost_method(),
             builtin_reflection_class_new_lazy_proxy_method(),
+            builtin_reflection_class_is_uninitialized_lazy_object_method(),
             builtin_reflection_owner_get_attributes_method(),
         ],
         attributes: Vec::new(),

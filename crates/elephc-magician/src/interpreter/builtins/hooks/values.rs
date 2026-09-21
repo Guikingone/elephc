@@ -57,8 +57,14 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Chr,
     /// Dispatches `chunk_split(...)`.
     ChunkSplit,
+    /// Dispatches `substr_compare(...)`.
+    SubstrCompare,
     /// Dispatches `substr_count(...)`.
     SubstrCount,
+    /// Dispatches `strncmp(...)`.
+    StringCompareN,
+    /// Dispatches `strncasecmp(...)`.
+    StringCompareNCase,
     /// Dispatches `get_debug_type(...)`.
     GetDebugType,
     /// Dispatches `levenshtein(...)`.
@@ -395,7 +401,14 @@ impl EvalValuesHook {
                 }
                 _ => Err(EvalStatus::RuntimeFatal),
             },
+            Self::SubstrCompare => eval_substr_compare_values(evaluated_args, context, values),
             Self::SubstrCount => eval_substr_count_values(evaluated_args, context, values),
+            Self::StringCompareN => {
+                eval_string_compare_n_named_result("strncmp", evaluated_args, context, values)
+            }
+            Self::StringCompareNCase => {
+                eval_string_compare_n_named_result("strncasecmp", evaluated_args, context, values)
+            }
             Self::GetDebugType => eval_get_debug_type_values(evaluated_args, context, values),
             Self::Levenshtein => eval_levenshtein_values(evaluated_args, context, values),
             Self::Clamp => three_args(evaluated_args, values, eval_clamp_result),

@@ -150,16 +150,17 @@ mod tests {
         // The PHP-visible `curl_*` surface is published only with the `curl`
         // feature; see `crate::catalog_curl`'s module doc.
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
-        // This branch's catalog carries 30 contracts main's does not: `extract`, `filter_var`,
+        // This branch's catalog carries 32 contracts main's does not: `extract`, `filter_var`,
         // `flush`, the four `gc_*` functions, `get_cfg_var`, `get_debug_type`, `header_remove`,
         // `headers_sent`, `levenshtein`, `parse_str`, `preg_grep`, `preg_quote`, `setlocale`,
         // `strcspn`, `strpbrk`, `strrchr`, `strspn`, `unpack`, the two tick registrars, and the
-        // seven `--web` prelude declarations this branch contracted (`error_reporting`,
-        // `get_error_handler`, `register_shutdown_function`, `restore_error_handler`,
-        // `restore_exception_handler`, `set_error_handler`, `set_exception_handler`). It also
-        // re-applies its own semantics to entries both catalogs share, so the per-backend
-        // splits below differ from main's by more than those 30 names alone.
-        assert_eq!(contracts().len(), 1069 + curl_surface);
+        // nine `--web` prelude declarations this branch contracted (`error_clear_last`,
+        // `error_get_last`, `error_reporting`, `get_error_handler`,
+        // `register_shutdown_function`, `restore_error_handler`, `restore_exception_handler`,
+        // `set_error_handler`, `set_exception_handler`). It also re-applies its own semantics
+        // to entries both catalogs share, so the per-backend splits below differ from main's
+        // by more than those 32 names alone.
+        assert_eq!(contracts().len(), 1071 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

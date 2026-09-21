@@ -56,6 +56,14 @@ pub(crate) fn build_method_sig(
                     &format!("Method parameter ${}", n),
                 )?,
                 None if *is_ref => PhpType::Mixed,
+                // An UNTYPED parameter on a method with no body — an interface declaration or an
+                // abstract method — is `mixed` and nothing else. The `Int` default below is a
+                // gradual starting point that a concrete body refines from its own call sites;
+                // a bodyless declaration has no body to refine from, so the default froze there
+                // and became a contract. PSR-3 declares `log($level, ...)` with no type, and a
+                // program that logged an int first then rejected
+                // `$logger->log('critical', …)` with "parameter $level expects Int, got Str".
+                None if !method.has_body => PhpType::Mixed,
                 None => PhpType::Int,
             };
             Ok((n.clone(), ty))

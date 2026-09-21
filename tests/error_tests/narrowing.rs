@@ -181,3 +181,28 @@ fn test_this_instanceof_rejects_method_absent_from_interface() {
         "Undefined method: Kid::notOnKid",
     );
 }
+
+
+/// Verifies an undefined method with no `method_exists()` test in the body is still refused.
+///
+/// The capability guard exists for code that says out loud it does not know whether a method is
+/// there. A plain misspelling says nothing, so it keeps the diagnostic.
+#[test]
+fn test_undefined_method_without_a_guard_is_still_refused() {
+    expect_error(
+        "<?php interface ParserInterface { public function getName(): string; } class Plain implements ParserInterface { public function getName(): string { return 'plain'; } } function tokensFor(ParserInterface $parser): array { return [$parser->getNmae()]; }",
+        "Undefined method: ParserInterface::getNmae",
+    );
+}
+
+/// Verifies a `method_exists()` guard admits only the receiver it actually tested.
+///
+/// The fact is keyed by the same place key the type guards use, so testing `$a` says nothing about
+/// `$b` — otherwise one guard anywhere in a body would admit every undefined call in it.
+#[test]
+fn test_method_exists_guard_does_not_admit_a_different_receiver() {
+    expect_error(
+        "<?php interface ParserInterface { public function getName(): string; } class Plain implements ParserInterface { public function getName(): string { return 'plain'; } } function tokensFor(ParserInterface $a, ParserInterface $b): array { if (method_exists($a, 'getOperatorTokens')) { return $b->getOperatorTokens(); } return [$a->getName()]; }",
+        "Undefined method: ParserInterface::getOperatorTokens",
+    );
+}

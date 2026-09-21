@@ -209,7 +209,7 @@ pub(crate) use callable_tracking::{
 };
 #[allow(unused_imports)]
 pub(crate) use callable_tracking::LoweredCallableArrayAssignment;
-pub(crate) use closures::{body_contains_eval_call, lower_closure_for_assignment};
+pub(crate) use closures::{body_contains_eval_call, body_writes_local, lower_closure_for_assignment};
 pub(crate) use indexed_array_literals::{
     array_literal_type_for_ir, lower_array_literal_with_expected_type,
 };
@@ -1053,7 +1053,16 @@ fn lower_new_dynamic_planned_dispatch(
 
         ctx.builder.position_at_end(match_block);
         let class = Name::unqualified(class_name.clone());
-        let object = lower_new_object(ctx, &class, args, expr);
+        // A descendant that narrows the constructor binds only its own parameters; PHP evaluates
+        // the surplus and discards it, and `static_new_droppable_surplus_args` already refused
+        // any surplus whose evaluation could be observed.
+        let branch_args = ctx
+            .classes
+            .get(class_name.as_str())
+            .and_then(|class_info| class_info.methods.get(&php_symbol_key("__construct")))
+            .and_then(|sig| static_new_droppable_surplus_args(sig, args))
+            .map_or(args, |keep| &args[..keep]);
+        let object = lower_new_object(ctx, &class, branch_args, expr);
         store_value_into_temp(ctx, &result_temp, result_type.clone(), object, expr.span);
         branch_to(ctx, merge);
 
@@ -1225,7 +1234,118 @@ fn static_new_class_is_planning_candidate(
     let Some(sig) = class_info.methods.get(&constructor_key) else {
         return args.is_empty();
     };
+    if !static_new_args_match_param_storage(ctx, sig, args) {
+        return false;
+    }
     dynamic_new_args_lower_to_exact_arity(ctx, sig, args)
+        || static_new_droppable_surplus_args(sig, args).is_some()
+}
+
+/// Returns whether every argument can physically reach the parameter it would bind.
+///
+/// A descendant may declare a constructor whose parameters are nothing like the ones the inherited
+/// `new static` factory passes — Symfony's `MethodNotAllowedHttpException` takes `array $allow`
+/// where `HttpException::fromStatusCode()` passes `$statusCode`. PHP raises a `TypeError` there,
+/// and only for a program that actually calls `MethodNotAllowedHttpException::fromStatusCode()`.
+/// Such a class is therefore not a construction candidate: its branch would have to coerce an int
+/// into an array slot. Only STORAGE-class disagreement is checked; nominal object mismatches keep
+/// their existing runtime guard.
+fn static_new_args_match_param_storage(
+    ctx: &LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    args: &[Expr],
+) -> bool {
+    args.iter().enumerate().all(|(index, arg)| {
+        let Some((_, param_ty)) = sig.params.get(index) else {
+            return true;
+        };
+        let Some(arg_repr) = static_new_argument_storage(ctx, arg) else {
+            return true;
+        };
+        !static_new_param_storage_conflicts(&param_ty.codegen_repr(), &arg_repr)
+    })
+}
+
+/// Returns an argument's representation when it is known well enough to rule a parameter out.
+///
+/// Only a local whose slot type the lowering already holds, or a literal, answers: the syntactic
+/// guess types every unknown expression `Int`, which would rule out the very classes this factory
+/// is written for.
+fn static_new_argument_storage(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> Option<PhpType> {
+    match &arg.kind {
+        ExprKind::Variable(name) => match ctx.local_type(name) {
+            PhpType::Mixed | PhpType::Union(_) => None,
+            known => Some(known.codegen_repr()),
+        },
+        ExprKind::IntLiteral(_) => Some(PhpType::Int),
+        ExprKind::FloatLiteral(_) => Some(PhpType::Float),
+        ExprKind::BoolLiteral(_) => Some(PhpType::Bool),
+        ExprKind::StringLiteral(_) => Some(PhpType::Str),
+        ExprKind::ArrayLiteral(_) => Some(PhpType::Array(Box::new(PhpType::Mixed))),
+        ExprKind::ArrayLiteralAssoc(_) => Some(PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        }),
+        _ => None,
+    }
+}
+
+/// Returns whether two concrete representations can never hold one another's values.
+fn static_new_param_storage_conflicts(param: &PhpType, arg: &PhpType) -> bool {
+    let array_like = |ty: &PhpType| matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. });
+    let scalar_like = |ty: &PhpType| {
+        matches!(
+            ty,
+            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str
+        )
+    };
+    (array_like(param) && scalar_like(arg)) || (scalar_like(param) && array_like(arg))
+}
+
+/// Returns how many leading arguments a narrowing descendant's constructor binds, when the
+/// surplus beyond them can simply be dropped.
+///
+/// PHP raises `ArgumentCountError` only for too FEW arguments; surplus positional arguments to a
+/// userland function are evaluated and then ignored. A class that INHERITS a `new static` factory
+/// while narrowing its own constructor relies on exactly that: Symfony's `HttpException`
+/// ends `fromStatusCode()` with `new static($statusCode, $message, $previous, $headers, $code)`,
+/// and `AccessDeniedHttpException` declares four parameters. Without this the descendant was not a
+/// planning candidate at all and its branch fell through to the late-static fatal.
+///
+/// The surplus arguments still have to be EVALUATED in source order, which this branch cannot do
+/// once it stops passing them — so only side-effect-free surplus is droppable. Anything else keeps
+/// the old behavior rather than silently skipping an evaluation PHP performs.
+fn static_new_droppable_surplus_args(sig: &FunctionSig, args: &[Expr]) -> Option<usize> {
+    let keep = sig.params.len();
+    if crate::func_args::sig_collects_surplus_args(sig) || args.len() <= keep {
+        return None;
+    }
+    if args.iter().any(|arg| {
+        matches!(
+            arg.kind,
+            ExprKind::Spread(_) | ExprKind::NamedArg { .. }
+        )
+    }) {
+        return None;
+    }
+    if !args[keep..].iter().all(expr_is_side_effect_free_argument) {
+        return None;
+    }
+    Some(keep)
+}
+
+/// Returns whether evaluating this argument can be skipped without changing what the program does.
+fn expr_is_side_effect_free_argument(expr: &Expr) -> bool {
+    matches!(
+        expr.kind,
+        ExprKind::Variable(_)
+            | ExprKind::This
+            | ExprKind::IntLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::StringLiteral(_)
+            | ExprKind::BoolLiteral(_)
+            | ExprKind::Null
+    )
 }
 
 /// Returns true when a dynamic `new` should construct `class_name` through a fixed-class

@@ -107,14 +107,29 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("je __rt_obj_store_prop_tagged");                       // rebuild both the payload and the slot's own runtime tag
     emitter.instruction("mov rax, QWORD PTR [rcx + 8]");                        // typed scalar/object/hash: unbox the low word
     emitter.instruction("mov QWORD PTR [r10], rax");                            // store it inline in the slot
+    // A single-payload typed slot keeps its initialization marker in the HIGH word; see the
+    // AArch64 sibling for the Symfony failure this leaves behind when it is not cleared.
+    emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // an unserialized property is initialized
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
+    // See the AArch64 sibling: only a real list may be flattened into an indexed array, or every
+    // string key is renumbered away.
     emitter.label("__rt_obj_store_prop_arr");
     emitter.instruction("mov QWORD PTR [rbp - 64], r8");                        // save the property byte offset across the call
     emitter.instruction("mov rdi, QWORD PTR [rcx + 8]");                        // parsed hash pointer (box low word)
-    emitter.instruction("call __rt_hash_to_indexed_array");                     // materialize a native indexed array
+    emitter.instruction("mov QWORD PTR [rbp - 80], rdi");                       // keep the parsed hash across the classification
+    emitter.instruction("call __rt_array_is_list");                             // are its keys exactly 0..n-1 in order?
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                       // restore the parsed hash pointer
+    emitter.instruction("test rax, rax");                                       // a keyed array stays hash-backed
+    emitter.instruction("jz __rt_obj_store_prop_arr_keep_hash");                // store the parsed hash exactly as decoded
+    emitter.instruction("call __rt_hash_to_indexed_array");                     // a list is flattened for indexed property access
+    emitter.instruction("jmp __rt_obj_store_prop_arr_store");                   // store whichever container was chosen
+    emitter.label("__rt_obj_store_prop_arr_keep_hash");
+    emitter.instruction("mov rax, rdi");                                        // the parsed hash is the stored container
+    emitter.label("__rt_obj_store_prop_arr_store");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // object pointer
     emitter.instruction("add r10, QWORD PTR [rbp - 64]");                       // slot = object + byte offset
-    emitter.instruction("mov QWORD PTR [r10], rax");                            // store the indexed-array pointer
+    emitter.instruction("mov QWORD PTR [r10], rax");                            // store the array pointer
+    emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // an unserialized property is initialized
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
     emitter.label("__rt_obj_store_prop_str");
     emitter.instruction("mov rax, QWORD PTR [rcx + 8]");                        // string pointer from the box

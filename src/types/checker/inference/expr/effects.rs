@@ -534,14 +534,13 @@ impl Checker {
                 {
                     if let Some(arg) = expanded_args.get(2) {
                         if let Some(name) = output_variable(arg) {
-                            let capture_type = if builtin_name
-                                .eq_ignore_ascii_case("preg_match_all")
-                                && expanded_args.get(3).is_none()
-                            {
-                                PhpType::Array(Box::new(PhpType::Str))
-                            } else {
-                                PhpType::Mixed
-                            };
+                            // `preg_match_all` fills its outer container with BOXED cells -- one
+                            // per column in pattern order, one per row in set order -- so the
+                            // element type is Mixed whatever the pattern looks like. Typing the
+                            // no-flags form as `array<array<string>>` described a nesting the
+                            // runtime never builds, and `store_matches_array` refused the
+                            // destination outright rather than storing the wrong layout.
+                            let capture_type = PhpType::Mixed;
                             // A pattern that declares a named capture group makes PHP's
                             // `$matches` an ordered HASH rather than a list, and the runtime
                             // builds exactly that (`__rt_preg_match_capture_named`). Widening only
@@ -553,19 +552,16 @@ impl Checker {
                             // the destination as the hash it really receives. A non-literal pattern
                             // is left alone here; `store_matches_array` classifies at runtime for
                             // the gradual destinations that reach it.
-                            // `preg_match` ONLY: the AOT `preg_match_all` runtime materializes
-                            // capture group zero and nothing else, so it never builds the hash
-                            // and typing its destination as one hands it the wrong layout.
-                            let matches_ty = if builtin_name.eq_ignore_ascii_case("preg_match")
-                                && pattern_declares_named_capture_group(expanded_args.first())
-                            {
-                                PhpType::AssocArray {
-                                    key: Box::new(PhpType::Mixed),
-                                    value: Box::new(PhpType::Mixed),
-                                }
-                            } else {
-                                PhpType::Array(Box::new(capture_type))
-                            };
+                            // `preg_match_all` builds that hash only in PATTERN ORDER, where the
+                            // outer container carries one column per group and the declared names
+                            // alias them. Under `PREG_SET_ORDER` the outer container is a plain
+                            // list of rows and only the ROWS are hashes, so the destination stays
+                            // the list its `Mixed` element type already describes.
+                            let _ = capture_type;
+                            let matches_ty = crate::types::checker::regex_matches_destination_type(
+                                builtin_name,
+                                &expanded_args,
+                            );
                             env.insert(name.clone(), matches_ty);
                         }
                     }
@@ -812,16 +808,28 @@ impl Checker {
                     object: object.clone(),
                     method: method.clone(),
                 };
-                let signature = self
-                    .resolve_first_class_callable_sig(&target, expr.span, env)
-                    .ok()
-                    .or_else(|| self.instance_call_effect_signature(&object_type, method));
+                // The class schema is the authority here. Only when it cannot answer at all does
+                // the callable resolver get a say, and its gradual arm returns a placeholder that
+                // describes a DESCRIPTOR invocation rather than the callee, so the `ref_params` it
+                // carries are not evidence about this call.
+                let schema_signature = self.instance_call_effect_signature(&object_type, method);
+                let by_ref_shape_is_unknown = schema_signature.is_none()
+                    && matches!(object_type.codegen_repr(), PhpType::Mixed);
+                let signature = schema_signature
+                    .or_else(|| self.resolve_first_class_callable_sig(&target, expr.span, env).ok());
                 if let Some(signature) = signature {
-                    let callee_scope = match object_type.codegen_repr() {
-                        PhpType::Object(class_name) => {
-                            self.method_body_scope(&class_name, method)
-                        }
-                        _ => None,
+                    // Same rule as `instance_call_effect_signature`, and asked of the declared
+                    // type for the same reason: `codegen_repr()` turns a union into `Mixed`.
+                    let callee_scope = match &object_type {
+                        PhpType::Union(_) => self
+                            .union_single_object_class(&object_type)
+                            .and_then(|class_name| self.method_body_scope(&class_name, method)),
+                        other => match other.codegen_repr() {
+                            PhpType::Object(class_name) => {
+                                self.method_body_scope(&class_name, method)
+                            }
+                            _ => None,
+                        },
                     };
                     self.prepare_by_ref_variable_storage(
                         &signature,
@@ -831,6 +839,9 @@ impl Checker {
                         false,
                         callee_scope.as_deref(),
                     )?;
+                }
+                if by_ref_shape_is_unknown {
+                    self.define_unknown_callee_by_ref_arguments(args, env);
                 }
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
                 for arg in &expanded_args {
@@ -883,6 +894,9 @@ impl Checker {
             PhpType::Array(elem_ty) => Ok(*elem_ty),
             PhpType::AssocArray { value, .. } => Ok(*value),
             PhpType::Iterable | PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
+            // `callable` is a PREDICATE, not a storage shape -- see the sibling arms in
+            // `infer_call_argument_type` and `calls_objects`.
+            PhpType::Callable => Ok(PhpType::Mixed),
             PhpType::Object(name) if self.object_type_implements_iterable(&name) => {
                 Ok(PhpType::Mixed)
             }
@@ -1037,9 +1051,21 @@ impl Checker {
         object_type: &PhpType,
         method: &str,
     ) -> Option<crate::types::FunctionSig> {
-        let class_name = match object_type.codegen_repr() {
-            PhpType::Object(class_name) => class_name,
-            _ => return None,
+        // Asked of the DECLARED type, not `codegen_repr()`: that collapses every union to `Mixed`,
+        // so a union arm placed after it can never match. `X|false` still dispatches on the one
+        // object it names — `prepare()` answers `PDOStatement|false` and `$stmt->bindParam(1, $id)`
+        // defines `$id` in PHP. Refusing to resolve the signature left the variable undefined.
+        let class_name = match object_type {
+            PhpType::Union(_) => match self.union_single_object_class(object_type) {
+                Some(class_name) => class_name,
+                // A union naming no single class is as gradual as `Mixed` is.
+                None => return self.mixed_receiver_by_ref_signature(method),
+            },
+            other => match other.codegen_repr() {
+                PhpType::Object(class_name) => class_name,
+                PhpType::Mixed => return self.mixed_receiver_by_ref_signature(method),
+                _ => return None,
+            },
         };
         let key = php_symbol_key(method);
         self.classes
@@ -1047,6 +1073,66 @@ impl Checker {
             .methods
             .get(&key)
             .cloned()
+    }
+
+    /// Binds bare-variable arguments of a call whose by-reference shape cannot be known.
+    ///
+    /// PHP decides this at run time: a by-reference parameter creates the variable silently, and a
+    /// by-value one warns and passes null. Both run. Reporting `Undefined variable` at compile time
+    /// is the one answer PHP never gives, and it was reached from
+    /// `dynamic_first_class_callable_sig()` — a descriptor placeholder whose `ref_params: [false]`
+    /// describes no callee at all.
+    ///
+    /// Only reached when the receiver is gradual AND no class in the program declares the method,
+    /// so a typo passed to a method a known class declares by value keeps its diagnostic. An
+    /// argument the caller already bound keeps its type; only an unbound name is created, as
+    /// `mixed`, which is what a by-reference binding would leave there.
+    fn define_unknown_callee_by_ref_arguments(&mut self, args: &[Expr], env: &mut TypeEnv) {
+        for argument in args {
+            let ExprKind::Variable(name) = &argument.kind else {
+                continue;
+            };
+            if env.get(name).is_none() {
+                env.insert(name.clone(), PhpType::Mixed);
+            }
+        }
+    }
+
+    /// Resolves the by-reference shape of a method on a GRADUAL receiver, from its candidates.
+    ///
+    /// A `Mixed` receiver dispatches on the runtime class id over exactly the classes that declare
+    /// the method — `mixed_receiver_method_return_type` types the RESULT that way. Which arguments
+    /// bind by reference is the same question about the same candidates.
+    ///
+    /// Symfony's `PdoAdapter::doSave` needs it: `$conn = $this->getConnection()` is declared `\PDO`,
+    /// `PDO` is absent from that build's closed world, so `$stmt` degrades to `Mixed` and
+    /// `$stmt->bindParam(1, $id)` no longer named a class to ask. Without an answer the lookup fell
+    /// through to the callable resolver, which reported a one-parameter non-ref signature and left
+    /// `$id` undefined.
+    ///
+    /// Candidates must AGREE. Disagreement is not a fact about this call — it is methods that share
+    /// a name — and with no candidate at all this answers `None`, so a genuine typo passed to a
+    /// method nothing declares keeps its diagnostic.
+    fn mixed_receiver_by_ref_signature(
+        &self,
+        method: &str,
+    ) -> Option<crate::types::FunctionSig> {
+        let key = php_symbol_key(method);
+        let mut found: Option<&crate::types::FunctionSig> = None;
+        for class_info in self.classes.values() {
+            let Some(sig) = class_info.methods.get(&key) else {
+                continue;
+            };
+            if !sig.ref_params.iter().any(|by_ref| *by_ref) {
+                continue;
+            }
+            match found {
+                Some(previous) if previous.ref_params != sig.ref_params => return None,
+                Some(_) => {}
+                None => found = Some(sig),
+            }
+        }
+        found.cloned()
     }
 
     /// Resolves the class a `Foo::m()` / `self::m()` / `parent::m()` receiver names.
@@ -1468,7 +1554,7 @@ fn by_ref_output_variable(arg: &Expr) -> Option<&String> {
 ///
 /// Only a literal is inspected: a pattern built at runtime cannot be classified here, and the
 /// destination keeps the type it had.
-fn pattern_declares_named_capture_group(pattern: Option<&Expr>) -> bool {
+pub(crate) fn pattern_declares_named_capture_group(pattern: Option<&Expr>) -> bool {
     let Some(Expr {
         kind: ExprKind::StringLiteral(pattern),
         ..
@@ -1500,6 +1586,35 @@ fn pattern_declares_named_capture_group(pattern: Option<&Expr>) -> bool {
         index += 2;
     }
     false
+}
+
+/// Reports which `$matches` shape a `preg_match_all()` call selects, when that is knowable.
+///
+/// `Some(true)` is PATTERN ORDER — one column per capture group, and the OUTER container becomes
+/// a hash when the pattern declares a group name. `Some(false)` is `PREG_SET_ORDER`, where the
+/// outer container is a plain list of rows and only the ROWS are hashes. `None` means the flags
+/// expression is not readable here and either shape could arrive, so the destination has to stay
+/// gradual rather than be typed as one of them.
+pub(crate) fn preg_match_all_uses_pattern_order(flags: Option<&Expr>) -> Option<bool> {
+    const PREG_SET_ORDER: i64 = 2;
+    let Some(flags) = flags else {
+        return Some(true);                                              // PHP defaults to PREG_PATTERN_ORDER
+    };
+    let flags = match &flags.kind {
+        ExprKind::NamedArg { value, .. } => value.as_ref(),
+        _ => flags,
+    };
+    match &flags.kind {
+        ExprKind::IntLiteral(value) => Some(value & PREG_SET_ORDER == 0),
+        // The two order constants are the overwhelmingly common spelling, and they name their
+        // own shape; any other constant or computed expression stays unknown.
+        ExprKind::ConstRef(name) => match name.to_string().trim_start_matches('\\') {
+            "PREG_PATTERN_ORDER" => Some(true),
+            "PREG_SET_ORDER" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Returns the variable name used by a builtin output argument.

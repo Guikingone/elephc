@@ -24,7 +24,7 @@ use crate::codegen_support::RuntimeFeatures;
 /// Each category is emitted before any code that depends on it, ensuring labels
 /// are available when branches are assembled.
 pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
-    diagnostics::emit_diagnostics(emitter);
+    diagnostics::emit_diagnostics(emitter, features);
 
     // Shared numeric coercions. Emitted first because string, array, and cast helpers all
     // branch into `__rt_php_float_to_int` for PHP's float→int rules.
@@ -87,6 +87,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_str_ireplace(emitter);
     strings::emit_substr_replace(emitter);
     strings::emit_substr_count(emitter);
+    strings::emit_substr_compare(emitter);
     strings::emit_str_pad(emitter);
     strings::emit_str_split(emitter);
     strings::emit_addslashes(emitter);
@@ -152,6 +153,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     callables::emit_is_callable_runtime(emitter);
     callables::emit_function_exists_lookup(emitter);
     callables::emit_callable_descriptor_release(emitter);
+    callables::emit_callable_descriptor_method_name(emitter);
+    callables::emit_mixed_spread_array(emitter);
     callables::emit_callable_lookup(emitter);
     callables::emit_closure_bind(emitter);
 

@@ -42,12 +42,83 @@ use std::ptr;
 ///
 /// The context is leaked on purpose: its address is handed to generated code and to the
 /// process-global owner registries, which outlive any single call.
+/// Address of the leaked null-handle context, once one has been created.
+#[cfg(not(test))]
+static SHARED_NULL_HANDLE_CONTEXT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+
+/// Every context `__elephc_eval_context_new` handed out and nothing has freed yet.
+///
+/// Addresses, not pointers, so the mutex stays `Sync`. The null-handle context is not in here:
+/// it is built directly and leaked for the process, and the request boundary resets it in place.
+#[cfg(not(test))]
+static LIVE_EVAL_CONTEXTS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<usize>>> =
+    std::sync::OnceLock::new();
+
+/// Returns the process-local set of contexts that have been allocated and not yet freed.
+#[cfg(not(test))]
+fn live_eval_contexts() -> &'static std::sync::Mutex<std::collections::HashSet<usize>> {
+    LIVE_EVAL_CONTEXTS.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+/// Records one freshly allocated context so the request boundary can find it again.
+#[cfg(not(test))]
+fn register_live_eval_context(context: *mut ElephcEvalContext) {
+    if let Ok(mut contexts) = live_eval_contexts().lock() {
+        contexts.insert(context as usize);
+    }
+}
+
+/// Forgets one context that is being freed, so the boundary never frees it twice.
+#[cfg(not(test))]
+fn unregister_live_eval_context(context: *mut ElephcEvalContext) {
+    if let Ok(mut contexts) = live_eval_contexts().lock() {
+        contexts.remove(&(context as usize));
+    }
+}
+
+/// Frees every context still alive at a generated web request boundary.
+///
+/// `__elephc_eval_context_free` refuses to free a context while it still owns a live closure, a
+/// live dynamic object or a declared global function -- correct inside a request, and wrong at
+/// the end of one, because those objects live in the arena `__rt_web_reset` is about to wipe and
+/// the counters have no way to learn that. The contexts therefore accumulated: a Symfony request
+/// left about a dozen behind, each pinning the `EvalClass` bodies it had parsed, and the worker
+/// grew 2.6MB per request until the page latency followed it.
+///
+/// Nothing can still reference them here. The previous request's AOT frames have returned, the
+/// autoload and global-function owners were released just above, and the object-identity registry
+/// that could reach one through a destructor was cleared with them. A context PCNTL still holds a
+/// signal handler for is left alone, exactly as the ABI free leaves it alone.
+#[cfg(not(test))]
+pub(crate) fn reset_retained_eval_contexts() {
+    let contexts = {
+        let Ok(mut contexts) = live_eval_contexts().lock() else {
+            return;
+        };
+        std::mem::take(&mut *contexts).into_iter().collect::<Vec<_>>()
+    };
+    for address in contexts {
+        let context = address as *mut ElephcEvalContext;
+        if crate::context::pcntl_runtime::defer_context_free(context) {
+            register_live_eval_context(context);
+            continue;
+        }
+        if let Some(live) = unsafe { context.as_mut() } {
+            live.forget_request_scoped_state();
+        }
+        unsafe { drop_eval_context_now(context) };
+    }
+}
+
+/// Returns the null-handle context's address WITHOUT creating one.
+#[cfg(not(test))]
+fn shared_null_handle_context_address() -> Option<usize> {
+    SHARED_NULL_HANDLE_CONTEXT.get().copied()
+}
+
 #[cfg(not(test))]
 pub(crate) fn shared_null_handle_context() -> &'static mut ElephcEvalContext {
-    use std::sync::OnceLock;
-
-    static SHARED: OnceLock<usize> = OnceLock::new();
-    let address = *SHARED.get_or_init(|| {
+    let address = *SHARED_NULL_HANDLE_CONTEXT.get_or_init(|| {
         let context = Box::new(ElephcEvalContext::new());
         Box::into_raw(context) as usize
     });
@@ -60,6 +131,21 @@ pub(crate) fn shared_null_handle_context() -> &'static mut ElephcEvalContext {
     // all -- it refuses the parameter binding as a runtime fatal rather than as a TypeError.
     context.sync_global_eval_classes();
     context
+}
+
+/// Drops every request-scoped value held by the process-lifetime null-handle context.
+///
+/// Called from the generated web request-boundary reset, beside the global-registry resets it
+/// has to agree with. Touches the context only if one was ever created, so a program that never
+/// reached an AOT eval callback allocates nothing here.
+#[cfg(not(test))]
+pub(crate) fn forget_shared_null_handle_declarations() {
+    if let Some(address) = shared_null_handle_context_address() {
+        // SAFETY: the same leaked allocation `shared_null_handle_context` hands out, and the
+        // request boundary is single-threaded with respect to eval work.
+        let context = unsafe { &mut *(address as *mut ElephcEvalContext) };
+        context.forget_request_scoped_state();
+    }
 }
 
 /// Registers the module's paired global transfer routines before publishing AOT
@@ -143,7 +229,10 @@ pub extern "C" fn __elephc_eval_context_new() -> *mut ElephcEvalContext {
     install_object_relation_hook();
     #[cfg(not(test))]
     install_serialize_object_hook();
-    Box::into_raw(Box::new(ElephcEvalContext::new()))
+    let context = Box::into_raw(Box::new(ElephcEvalContext::new()));
+    #[cfg(not(test))]
+    register_live_eval_context(context);
+    context
 }
 
 /// Publishes one generated context's complete AOT metadata for null-context fallback execution.
@@ -202,7 +291,7 @@ pub unsafe extern "C" fn __elephc_eval_trace_aot_null_method_receiver(
     line: u64,
 ) {
     crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_trace_aot_null_method_receiver");
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_none() {
+    if !crate::eval_trace::enabled() {
         return;
     }
     let Ok(function) = abi_name_to_string(function_ptr, function_len) else {
@@ -231,7 +320,7 @@ pub unsafe extern "C" fn __elephc_eval_trace_aot_raw_null_method_receiver(
     receiver: usize,
 ) {
     crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_trace_aot_raw_null_method_receiver");
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_none() {
+    if !crate::eval_trace::enabled() {
         return;
     }
     let Ok(function) = abi_name_to_string(function_ptr, function_len) else {
@@ -380,6 +469,18 @@ pub extern "C" fn __elephc_eval_set_php_version_id(version_id: u32) {
     crate::eval_php_profile::set_eval_php_version_id(version_id);
 }
 
+/// Forwards the compile mode so `PHP_SAPI` agrees across the eval boundary.
+///
+/// Generated code emits this beside the version-profile call. A `--web` binary reported
+/// `cli-server` natively and `cli` from inside `eval()` before this existed, and interpreted
+/// library code that branches on `PHP_SAPI` — Symfony's dumped container most of all — then took
+/// the console path inside an HTTP request.
+#[no_mangle]
+pub extern "C" fn __elephc_eval_set_web_sapi(web: u8) {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_set_web_sapi");
+    crate::eval_php_profile::set_eval_web_sapi(web != 0);
+}
+
 /// Frees a process-level eval context handle allocated by the eval bridge.
 ///
 /// Releases every retained `CURLOPT_PRIVATE` value in `context.stream_resources` ONE STEP
@@ -448,6 +549,8 @@ pub(crate) unsafe fn finalize_eval_context_free(ctx: *mut ElephcEvalContext) {
     if ctx.is_null() {
         return;
     }
+    #[cfg(not(test))]
+    unregister_live_eval_context(ctx);
     let owned_global_scope = if let Some(context) = unsafe { ctx.as_mut() } {
         context.unregister_dynamic_object_context();
         context.take_owned_global_scope()
@@ -659,6 +762,44 @@ unsafe fn eval_context_set_global_scope_inner(
         return EvalStatus::RuntimeFatal.code();
     }
     EvalStatus::Ok.code()
+}
+
+/// Records the lexical class of the compiled frame that is about to call into the bridge.
+///
+/// A compiled body with no eval context of its own hands the bridge a null caller, and the
+/// interpreter then reads no calling scope at all -- a protected method reached from such a
+/// body was refused "from global scope". This publishes the one missing fact without an eval
+/// context and without widening the method-call ABI. Always paired with
+/// `__elephc_eval_pop_native_caller_class` around exactly one call.
+///
+/// # Safety
+/// `class_ptr` must be readable for `class_len` bytes when `class_len > 0`.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_push_native_caller_class(
+    class_ptr: *const u8,
+    class_len: u64,
+) {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_push_native_caller_class");
+    let _ = std::panic::catch_unwind(|| {
+        let Ok(class_name) = (unsafe { abi_name_to_string(class_ptr, class_len) }) else {
+            // Push regardless so the pop stays balanced; an unreadable name simply carries none.
+            crate::context::push_native_caller_class("");
+            return;
+        };
+        crate::context::push_native_caller_class(&class_name);
+    });
+}
+
+/// Drops the innermost compiled-frame lexical class.
+///
+/// # Safety
+/// Must match exactly one earlier `__elephc_eval_push_native_caller_class`.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_pop_native_caller_class() {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_pop_native_caller_class");
+    let _ = std::panic::catch_unwind(crate::context::pop_native_caller_class);
 }
 
 /// Runs the class-scope push ABI body after installing a panic boundary.

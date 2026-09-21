@@ -543,6 +543,24 @@ pub fn function_symbol(name: &str) -> String {
     format!("_fn_{}", mangle_fqn(name))
 }
 
+/// The PHP prelude function `__rt_diag_warning` calls to offer an engine-raised diagnostic to a
+/// `set_error_handler()` callback.
+///
+/// Named here rather than spelled at each use because three unrelated places have to agree on
+/// it: the prelude that DECLARES it, `ir_lower` which decides the runtime feature bit from
+/// whether it survived pruning, and the runtime emitter that calls `function_symbol` on it.
+pub const DIAG_RENDER_FUNCTION: &str = "__elephc_diag_render";
+
+/// The nullary PHP prelude function every process-exit site calls to run the
+/// `register_shutdown_function()` queue.
+///
+/// Named here for the same reason as [`DIAG_RENDER_FUNCTION`]: three unrelated places have to
+/// agree on it — `error_handling_prelude` which DECLARES it, `codegen::lower_inst::builtins::
+/// system::lower_exit` and `codegen::frame::emit_main_epilogue` which call `function_symbol` on
+/// it, and `codegen::context` which decides from the surviving function list whether the call
+/// has a target at all.
+pub const SHUTDOWN_RUN_FUNCTION: &str = "__elephc_shutdown_run";
+
 /// Returns the variant-active dispatch helper symbol for a given PHP function name.
 ///
 /// Format: `_fn_variant_active_<mangled_fqn>`. Used for functions with conditional

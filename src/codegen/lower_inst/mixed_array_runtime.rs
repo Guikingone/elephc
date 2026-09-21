@@ -38,13 +38,14 @@ pub(super) fn lower_mixed_array_runtime_get(
     let receiver = expect_operand(inst, 0)?;
     let key = expect_operand(inst, 1)?;
     let warn_on_missing = expect_operand(inst, 2)?;
-    if !for_write && value_is_const_int(ctx, key, 0)? {
-        return lower_mixed_callable_receiver_or_array_get(
+    if let Some(slot) = callable_array_slot(ctx, key, for_write)? {
+        return lower_mixed_callable_slot_or_array_get(
             ctx,
             inst,
             receiver,
             key,
             warn_on_missing,
+            slot,
         );
     }
     match ctx.emitter.target.arch {
@@ -71,16 +72,60 @@ pub(super) fn lower_mixed_array_runtime_get(
     store_if_result(ctx, inst)
 }
 
-/// Reads index zero from a boxed callable-array descriptor, otherwise delegates to the ordinary
-/// boxed array/hash reader. This preserves object identity for APIs returning callable arrays.
-fn lower_mixed_callable_receiver_or_array_get(
+/// Which slot of PHP's two-element callable array a constant index is asking for.
+///
+/// A `callable` slot holds a DESCRIPTOR, not the `[$object, 'method']` array the caller wrote, so
+/// indexing one has to rebuild the array slot by slot. The descriptor keeps both halves: the
+/// receiver as its first runtime capture, and the method name inside its qualified PHP name.
+#[derive(Clone, Copy)]
+enum CallableArraySlot {
+    /// Index 0 — the bound receiver, returned as the SAME object so identity is preserved.
+    Receiver,
+    /// Index 1 — the bare method name, split off the descriptor's qualified `"Class::method"`.
+    MethodName,
+}
+
+/// Recognizes a constant read of index 0 or 1, the only two slots a callable array has.
+///
+/// Reads for write are excluded: `$callable[0] = ...` is not something a descriptor can model,
+/// and the ordinary boxed-array writer already handles that path.
+fn callable_array_slot(
+    ctx: &FunctionContext<'_>,
+    key: ValueId,
+    for_write: bool,
+) -> Result<Option<CallableArraySlot>> {
+    if for_write {
+        return Ok(None);
+    }
+    if value_is_const_int(ctx, key, 0)? {
+        return Ok(Some(CallableArraySlot::Receiver));
+    }
+    if value_is_const_int(ctx, key, 1)? {
+        return Ok(Some(CallableArraySlot::MethodName));
+    }
+    Ok(None)
+}
+
+/// Reads one slot of a boxed callable-array descriptor, otherwise delegates to the ordinary boxed
+/// array/hash reader.
+///
+/// Index 0 preserves object identity for APIs returning callable arrays. Index 1 used to fall
+/// through to `__rt_mixed_array_get`, which answers null for the callable descriptor tag, so
+/// `$callable[1]` read back EMPTY while `is_array($callable)` on the same value answered true —
+/// the descriptor impersonated an array for the predicate but not for the read. Symfony's
+/// `ControllerEvent::getAttributes` is the caller that needs both halves: it reaches
+/// `method_exists($this->controller[0], $this->controller[1])` under an `\is_array` guard, and
+/// with an empty second argument no `match` arm matched and the request died on
+/// `unhandled match case`.
+fn lower_mixed_callable_slot_or_array_get(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     receiver: ValueId,
     key: ValueId,
     warn_on_missing: ValueId,
+    slot: CallableArraySlot,
 ) -> Result<()> {
-    let callable_label = ctx.next_label("mixed_callable_array_receiver");
+    let callable_label = ctx.next_label("mixed_callable_array_slot");
     let native_label = ctx.next_label("mixed_callable_array_native");
     let done_label = ctx.next_label("mixed_callable_array_done");
     let descriptor_reg = abi::nested_call_reg(ctx.emitter);
@@ -100,14 +145,21 @@ fn lower_mixed_callable_receiver_or_array_get(
             ctx.emitter.instruction(&format!("b.eq {}", callable_label));
             ctx.emitter.instruction(&format!("b {}", native_label));
             ctx.emitter.label(&callable_label);
-            ctx.emitter
-                .instruction(&format!("mov {}, x9", descriptor_reg));
-            abi::emit_load_from_address(
-                ctx.emitter,
-                "x0",
-                descriptor_reg,
-                callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET,
-            );
+            match slot {
+                CallableArraySlot::Receiver => {
+                    ctx.emitter
+                        .instruction(&format!("mov {}, x9", descriptor_reg));
+                    abi::emit_load_from_address(
+                        ctx.emitter,
+                        "x0",
+                        descriptor_reg,
+                        callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET,
+                    );
+                }
+                CallableArraySlot::MethodName => {
+                    ctx.emitter.instruction("mov x0, x9");                     // pass the descriptor to the method-name reader
+                }
+            }
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(receiver, "rax")?;
@@ -123,17 +175,33 @@ fn lower_mixed_callable_receiver_or_array_get(
             ctx.emitter.instruction(&format!("je {}", callable_label));
             ctx.emitter.instruction(&format!("jmp {}", native_label));
             ctx.emitter.label(&callable_label);
-            ctx.emitter
-                .instruction(&format!("mov {}, r10", descriptor_reg));
-            abi::emit_load_from_address(
-                ctx.emitter,
-                "rax",
-                descriptor_reg,
-                callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET,
-            );
+            match slot {
+                CallableArraySlot::Receiver => {
+                    ctx.emitter
+                        .instruction(&format!("mov {}, r10", descriptor_reg));
+                    abi::emit_load_from_address(
+                        ctx.emitter,
+                        "rax",
+                        descriptor_reg,
+                        callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET,
+                    );
+                }
+                CallableArraySlot::MethodName => {
+                    ctx.emitter.instruction("mov rax, r10");                   // pass the descriptor to the method-name reader
+                }
+            }
         }
     }
-    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(String::new()));
+    match slot {
+        // The receiver capture is a raw object pointer and still needs a Mixed box; the
+        // method-name helper already returns one.
+        CallableArraySlot::Receiver => {
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(String::new()));
+        }
+        CallableArraySlot::MethodName => {
+            abi::emit_call_label(ctx.emitter, "__rt_callable_descriptor_method_name");
+        }
+    }
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&native_label);
@@ -350,4 +418,19 @@ pub(super) fn lower_mixed_array_runtime_set_x86_64(
     abi::emit_pop_reg(ctx.emitter, "rcx");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_array_set");
     Ok(())
+}
+
+/// Lowers the spread-source materialization: a boxed value in, an indexed array out.
+///
+/// The whole body is one call. `__rt_mixed_spread_array` passes an indexed array through and
+/// rebuilds the two elements of a callable descriptor, so the spread's length guard and element
+/// reads see an ordinary array either way.
+pub(super) fn lower_mixed_spread_array(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let source = expect_operand(inst, 0)?;
+    ctx.load_value_to_result(source)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_spread_array");
+    store_if_result(ctx, inst)
 }

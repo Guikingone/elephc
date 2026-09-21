@@ -49,7 +49,15 @@ pub(in crate::codegen) fn emit_runtime_callable_invoker_inline_with_boundary(
             return label;
         }
     }
-    let label = ctx.next_global_label("callable_invoker");
+    // An invoker shared through the cache takes its name from the cache key, so every worker
+    // that reaches it spells the same symbol. One that is NOT shared (the exception-boundary
+    // form) keeps a host-scoped name, because nothing else may reference it.
+    let key = format!("callable_invoker:{:?}:{:?}", sig, captures);
+    let label = if catch_native_throws {
+        ctx.next_global_label("callable_invoker")
+    } else {
+        ctx.keyed_global_label(&key, "callable_invoker")
+    };
     let done_label = ctx.next_label("callable_invoker_done");
     let invoker = super::super::runtime_callable_invoker::RuntimeCallableInvoker {
         label: &label,
@@ -61,13 +69,18 @@ pub(in crate::codegen) fn emit_runtime_callable_invoker_inline_with_boundary(
     let enclosing = ctx.emitter.current_text_section();
     abi::emit_jump(ctx.emitter, &done_label);
     if catch_native_throws {
+        // The boundary form is NOT shared: its symbol is host-scoped and nothing caches it, so
+        // every instance is a distinct body. Marking it as a keyed helper would make the merge
+        // treat two different invokers as copies of one and drop a definition still referenced.
         super::super::runtime_callable_invoker::emit_runtime_callable_invoker_with_exception_boundary(
             ctx.emitter,
             ctx.data,
             &invoker,
         );
     } else {
-        super::super::runtime_callable_invoker::emit_runtime_callable_invoker(ctx.emitter, ctx.data, &invoker);
+        ctx.emit_keyed_helper(&key, |ctx| {
+            super::super::runtime_callable_invoker::emit_runtime_callable_invoker(ctx.emitter, ctx.data, &invoker);
+        });
     }
     ctx.emitter.reopen_text_section(enclosing);
     ctx.emitter.label(&done_label);
@@ -142,21 +155,28 @@ fn emit_runtime_call_wrapper_inline(
         RuntimeCallWrapperKind::Builtin { .. } => "callable_builtin",
         RuntimeCallWrapperKind::Extern => "callable_extern",
     };
-    let label = ctx.next_global_label(label_prefix);
+    let strictness = match kind {
+        RuntimeCallWrapperKind::Builtin { strict_php } => strict_php,
+        RuntimeCallWrapperKind::Extern => false,
+    };
+    let key = format!("{}:{}:{:?}:{}", label_prefix, name, sig, strictness);
+    let label = ctx.keyed_global_label(&key, label_prefix);
     let done_label = ctx.next_label(&format!("{}_done", label_prefix));
     let mut wrapper_module = ctx.module.clone();
     let wrapper = build_runtime_call_wrapper_function(&mut wrapper_module, &label, name, sig, kind)?;
     let enclosing = ctx.emitter.current_text_section();
     abi::emit_jump(ctx.emitter, &done_label);
-    super::super::block_emit::emit_synthetic_function_with_label(
-        &wrapper_module,
-        &wrapper,
-        &label,
-        ctx.emitter,
-        ctx.data,
-        ctx.shared,
-        false,
-    )?;
+    ctx.emit_keyed_helper(&key, |ctx| {
+        super::super::block_emit::emit_synthetic_function_with_label(
+            &wrapper_module,
+            &wrapper,
+            &label,
+            ctx.emitter,
+            ctx.data,
+            ctx.shared,
+            false,
+        )
+    })?;
     ctx.emitter.reopen_text_section(enclosing);
     ctx.emitter.label(&done_label);
     match kind {
@@ -211,6 +231,7 @@ fn build_runtime_call_wrapper_function(
                     name,
                 ))
             })?;
+            let operands = coerce_gradual_wrapper_operands(&mut builder, name, sig, operands);
             let mut lowering = WrapperBuiltinLoweringContext {
                 builder: &mut builder,
                 strict_php,
@@ -239,8 +260,95 @@ fn build_runtime_call_wrapper_function(
             Ownership::for_php_type(&return_php_type),
         ),
     };
+    let result = persist_scratch_backed_wrapper_string(&mut builder, result, &return_php_type);
     builder.terminate(Terminator::Return { value: result });
     Ok(function)
+}
+
+/// Copies a scratch-backed string out of the concat arena before the wrapper hands it back.
+///
+/// A wrapper body is built here rather than lowered from PHP, so it never reaches
+/// `persist_scratch_return_string` — and the descriptor invoker that calls it REWINDS `_concat_off`
+/// to the pre-call value the moment the wrapper returns, on the documented understanding that a
+/// `Str` result is already owned (`emit_boxed_invoker_return`). Returning the arena pointer instead
+/// left every result of `array_map('strtoupper', …)` pointing at one address, each with its own
+/// length, so the last element overwrote the others in place.
+///
+/// The question asked is the one return lowering asks: does the DEFINING op write to the shared
+/// scratch storage? A builtin that already returns heap-owned bytes is left alone, because copying
+/// it here would orphan the copy the invoker does not know about.
+fn persist_scratch_backed_wrapper_string(
+    builder: &mut Builder<'_>,
+    result: Option<ValueId>,
+    return_php_type: &PhpType,
+) -> Option<ValueId> {
+    let value = result?;
+    if return_php_type.codegen_repr() != PhpType::Str {
+        return result;
+    }
+    let scratch_backed = builder
+        .value_defining_instruction(value)
+        .is_some_and(|inst| crate::ir_lower::string_op_uses_scratch_storage(inst.op));
+    if !scratch_backed {
+        return result;
+    }
+    builder.emit(
+        Op::StrPersist,
+        vec![value],
+        None,
+        IrType::Str,
+        PhpType::Str,
+        Ownership::for_php_type(&PhpType::Str),
+    )
+}
+
+/// Casts a GRADUAL wrapper operand to the parameter type the builtin's own lowering needs.
+///
+/// A callable wrapper's parameters ARE the source element types: the descriptor case is
+/// specialized to the array it will walk. A `Mixed` element therefore reached, say, `strtolower`'s
+/// lowering, which needs a concrete string -- so the only way to keep the wrapper lowerable was to
+/// refuse every gradual source up front (`callable_accepts_string_source`), and
+/// `array_map('strtolower', $gradual)` compiled into a runtime abort:
+/// `callback string does not name a supported callable`. php casts there, and so does this.
+///
+/// Only a SCALAR target is cast. A container or object parameter has no single cast, and the
+/// builtins that take one already accept a gradual source through their own policy.
+fn coerce_gradual_wrapper_operands(
+    builder: &mut Builder<'_>,
+    name: &str,
+    sig: &FunctionSig,
+    operands: Vec<ValueId>,
+) -> Vec<ValueId> {
+    let Some(declared) = crate::types::first_class_callable_builtin_sig(name) else {
+        return operands;
+    };
+    operands
+        .into_iter()
+        .enumerate()
+        .map(|(idx, operand)| {
+            let source = sig.params.get(idx).map(|(_, ty)| ty.codegen_repr());
+            let target = declared.params.get(idx).map(|(_, ty)| ty.codegen_repr());
+            let (Some(PhpType::Mixed), Some(target)) = (source, target) else {
+                return operand;
+            };
+            if !matches!(
+                target,
+                PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool
+            ) {
+                return operand;
+            }
+            builder
+                .emit(
+                    Op::RuntimeCall,
+                    vec![operand],
+                    None,
+                    wrapper_value_ir_type(&target),
+                    target.clone(),
+                    Ownership::for_php_type(&target),
+                )
+                .unwrap_or(operand)
+        })
+        .collect()
 }
 
 /// EIR construction adapter used by synthetic builtin callable wrappers.

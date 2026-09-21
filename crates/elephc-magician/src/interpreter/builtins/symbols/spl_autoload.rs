@@ -143,7 +143,7 @@ fn eval_spl_autoload_queue(
         }
     }
     queue.sort_by_key(|(sequence, _, _)| *sequence);
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         eprintln!(
             "[elephc-eval-trace] phase=spl_autoload_queue class={class_name:?} callbacks={}",
             queue.len(),
@@ -158,7 +158,7 @@ fn eval_spl_autoload_queue(
             let loaded_class = unsafe {
                 owner
                     .as_ref()
-                    .and_then(|owner| owner.class(class_name).cloned())
+                    .and_then(|owner| owner.class_shared(class_name).cloned())
             };
             if !context.has_class(class_name) {
                 if let Some(loaded_class) = loaded_class {
@@ -198,12 +198,12 @@ fn eval_invoke_autoload_callback(
     let class = values.string(class_name)?;
     let outcome = (|| {
         let callback = eval_callable(callback, context, values).map_err(|status| {
-            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            if crate::eval_trace::enabled() {
                 eprintln!("[elephc-eval-trace] phase=spl_autoload_callback stage=normalize status={status:?}");
             }
             status
         })?;
-        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        if crate::eval_trace::enabled() {
             eprintln!(
                 "[elephc-eval-trace] phase=spl_autoload_callback stage=normalized kind={}",
                 eval_autoload_callback_trace_kind(&callback),
@@ -211,7 +211,7 @@ fn eval_invoke_autoload_callback(
         }
         let result = eval_evaluated_callable_with_values(&callback, vec![class], context, values)
             .map_err(|status| {
-                if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                if crate::eval_trace::enabled() {
                     eprintln!("[elephc-eval-trace] phase=spl_autoload_callback stage=invoke status={status:?}");
                 }
                 status
@@ -307,30 +307,30 @@ fn eval_spl_autoload_class_local(
     }
     let class = values.string(class_name)?;
     let callbacks = context.autoload_callbacks();
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         eprintln!("[elephc-eval-trace] phase=spl_autoload_local class={class_name:?} callbacks={}", callbacks.len());
     }
     let result = (|| {
         for callback in callbacks {
             let callback = eval_callable(callback, context, values).map_err(|status| {
-                if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                if crate::eval_trace::enabled() {
                     eprintln!("[elephc-eval-trace] phase=spl_autoload_callback stage=normalize status={status:?}");
                 }
                 status
             })?;
-            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            if crate::eval_trace::enabled() {
                 let kind = eval_autoload_callback_trace_kind(&callback);
                 eprintln!("[elephc-eval-trace] phase=spl_autoload_callback stage=normalized kind={kind}");
             }
             let result = eval_evaluated_callable_with_values(&callback, vec![class], context, values)
                 .map_err(|status| {
-                    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                    if crate::eval_trace::enabled() {
                         eprintln!("[elephc-eval-trace] phase=spl_autoload_callback stage=invoke status={status:?}");
                     }
                     status
                 })?;
             eval_release_value(context, values, result).map_err(|status| {
-                if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                if crate::eval_trace::enabled() {
                     eprintln!(
                         "[elephc-eval-trace] phase=spl_autoload_callback stage=release status={status:?}",
                     );
@@ -340,7 +340,7 @@ fn eval_spl_autoload_class_local(
             #[cfg(not(test))]
             context.sync_global_eval_classes();
             if eval_autoload_target_exists(class_name, context, values)? {
-                if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                if crate::eval_trace::enabled() {
                     eprintln!(
                         "[elephc-eval-trace] phase=spl_autoload_callback stage=completed class={class_name:?}",
                     );

@@ -33,6 +33,14 @@ macro_rules! param {
             by_ref: false,
         }
     };
+    (ref $name:literal, $ty:ident) => {
+        ParamSpec {
+            name: $name,
+            ty: TypeSpec::$ty,
+            default: None,
+            by_ref: true,
+        }
+    };
 }
 
 macro_rules! surface {
@@ -287,6 +295,22 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         None,
         Int,
         "Computes the Levenshtein edit distance between two strings."
+    ),
+    // `PreludeProvided` for the same asymmetry as `levenshtein` above: the AOT side declares
+    // `parse_str` as a conditionally injected prelude (`src/parse_str_prelude.rs`) rather than a
+    // `builtin!` registry binding, because its mandatory by-reference `$result` is an ordinary
+    // by-reference PARAMETER there and needs no runtime symbol. The INTERPRETER has its own
+    // implementation (`interpreter::builtins::string::parse_str`), reached from `eval_call`'s
+    // ladder, because interpreted code never runs through a compiler prelude.
+    surface!(
+        "parse_str",
+        String,
+        Standard,
+        PreludeProvided,
+        [param!("string", Str), param!(ref "result", Mixed)],
+        None,
+        Void,
+        "Parses a query string into an array of variables."
     ),
     // `PreludeProvided` for the same asymmetry as `levenshtein` above: the AOT side serves
     // `var_export` as a conditionally injected PHP-source prelude (`src/var_export_prelude.rs`),

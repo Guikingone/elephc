@@ -36,6 +36,13 @@ enum DynamicClassIndex {
 /// Per-statement reference collection state, including possible class-string assignments.
 struct ReferenceSet {
     names: HashSet<String>,
+    /// Names reached by something OTHER than a class-like existence probe.
+    ///
+    /// PHP loads a class when code USES it; `class_exists()` merely asks whether it can be
+    /// loaded. Separating the two is what lets [`probe_only_class_names`] tell a class the
+    /// program genuinely depends on from one the closed world carries only so a probe can be
+    /// answered -- and the latter must still report "not loaded" to `class_exists($n, false)`.
+    non_probe: HashSet<String>,
     dynamic_class_defaults: HashMap<DynamicClassTarget, HashSet<String>>,
 }
 
@@ -44,14 +51,53 @@ impl ReferenceSet {
     fn new(dynamic_class_defaults: &HashMap<DynamicClassTarget, HashSet<String>>) -> Self {
         Self {
             names: HashSet::new(),
+            non_probe: HashSet::new(),
             dynamic_class_defaults: dynamic_class_defaults.clone(),
         }
     }
 
     /// Inserts one canonical class-like name into this statement's autoload demands.
     fn insert(&mut self, name: String) {
+        self.non_probe.insert(name.clone());
         self.names.insert(name);
     }
+
+    /// Inserts one name demanded ONLY by a class-like existence probe.
+    fn insert_probe(&mut self, name: String) {
+        self.names.insert(name);
+    }
+}
+
+/// Returns the class-like names the program references ONLY through existence probes.
+///
+/// `class_exists($name, false)` asks whether a class is already LOADED, not whether it could be.
+/// A closed-world build declares everything it compiled from the first instruction, so a class
+/// the compiler pulled in solely to answer `class_exists(X::class)` answered "loaded" where php
+/// answers "not loaded" -- and `symfony/runtime` reads exactly that difference to decide whether
+/// `symfony/dotenv` is installed:
+///
+/// ```php
+/// class_exists(MissingDotenv::class, false) || class_exists(Dotenv::class) || class_exists(MissingDotenv::class);
+/// // ...
+/// if (... && !class_exists(MissingDotenv::class, false)) { $dotenv->bootEnv(...); }
+/// ```
+///
+/// php never loads `MissingDotenv` when dotenv IS installed (the second probe short-circuits), so
+/// the guard passes and `.env` is read. elephc carried the class, answered `true`, skipped
+/// `bootEnv()`, and every `%env(...)%` parameter then failed to resolve.
+///
+/// A name reached by anything else -- `new`, `extends`, a type, a static call, a catch -- is NOT
+/// returned: the program depends on it, so php would have loaded it too.
+pub(super) fn probe_only_class_names(program: &Program) -> HashSet<String> {
+    let mut refs = ReferenceSet::new(&HashMap::new());
+    for stmt in program {
+        collect_refs_stmt(stmt, &mut refs);
+    }
+    let non_probe = refs.non_probe;
+    refs.names
+        .into_iter()
+        .filter(|name| !non_probe.contains(name))
+        .collect()
 }
 
 /// Collect all declared fully-qualified class-like names from the program.
@@ -79,6 +125,87 @@ fn collect_declared_in_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
             }
         }
         _ => {}
+    }
+}
+
+/// Collect the class-likes one freshly autoloaded file needs before its own top-level statements
+/// can run: the binding dependencies of every declaration it makes, plus every reference point of
+/// its executable file-scope statements, in source order.
+///
+/// Method bodies are deliberately left out. PHP binds a class without loading the classes its
+/// methods merely mention, so following those here would drag the whole transitive vendor closure
+/// in front of the file that asked for one class.
+pub(super) fn collect_file_scope_dependencies(program: &Program) -> Vec<String> {
+    let mut out = Vec::new();
+    for stmt in program {
+        collect_file_scope_dependencies_in_stmt(stmt, &mut out);
+    }
+    out
+}
+
+/// Recurse into one statement to collect the names its file-scope execution demands.
+fn collect_file_scope_dependencies_in_stmt(stmt: &Stmt, out: &mut Vec<String>) {
+    let mut push = |name: &crate::names::Name, out: &mut Vec<String>| {
+        out.push(name.as_canonical().trim_start_matches('\\').to_string());
+    };
+    match &stmt.kind {
+        StmtKind::ClassDecl {
+            extends,
+            implements,
+            trait_uses,
+            ..
+        } => {
+            if let Some(parent) = extends {
+                push(parent, out);
+            }
+            for name in implements {
+                push(name, out);
+            }
+            for trait_use in trait_uses {
+                for name in &trait_use.trait_names {
+                    push(name, out);
+                }
+            }
+        }
+        StmtKind::InterfaceDecl { extends, .. } => {
+            for name in extends {
+                push(name, out);
+            }
+        }
+        StmtKind::TraitDecl { trait_uses, .. } => {
+            for trait_use in trait_uses {
+                for name in &trait_use.trait_names {
+                    push(name, out);
+                }
+            }
+        }
+        StmtKind::EnumDecl {
+            implements,
+            trait_uses,
+            ..
+        } => {
+            for name in implements {
+                push(name, out);
+            }
+            for trait_use in trait_uses {
+                for name in &trait_use.trait_names {
+                    push(name, out);
+                }
+            }
+        }
+        StmtKind::PackedClassDecl { .. } | StmtKind::ClassLikeActivate { .. } => {}
+        StmtKind::NamespaceBlock { body, .. } => {
+            for inner in body {
+                collect_file_scope_dependencies_in_stmt(inner, out);
+            }
+        }
+        _ => {
+            let mut refs = ReferenceSet::new(&HashMap::new());
+            collect_refs_stmt(stmt, &mut refs);
+            let mut names: Vec<String> = refs.names.into_iter().collect();
+            names.sort();
+            out.extend(names);
+        }
     }
 }
 
@@ -866,6 +993,15 @@ fn collect_refs_expr(expr: &Expr, out: &mut ReferenceSet) {
                 collect_refs_expr(inner, out);
             }
         }
+        // `Foo::class` is NOT a load. PHP resolves it lexically, from the name alone, and never
+        // consults the autoloader — `Foo::class` is legal for a class that does not exist at all.
+        // Collecting it here was tried and measured: it pulled `DoctrineDbalAdapter` into the
+        // build off a `sprintf()` argument in `PdoAdapter`, and that file `use`s
+        // `Doctrine\DBAL\Connection` from a package this app does not install, so the build
+        // then failed on a class PHP would never have loaded. The plain `index.php` entry went
+        // from 7 errors to 30 that way, against one error saved on the widest preload. The four
+        // existence functions stay the exception, in their own arm above: handing `Foo::class` to
+        // `class_exists()` is what runs the loader.
         ExprKind::ClassConstant { .. } => {}
         ExprKind::ScopedConstantAccess { receiver, .. }
         | ExprKind::StaticPropertyAccess { receiver, .. } => {
@@ -963,7 +1099,15 @@ fn collect_refs_expr(expr: &Expr, out: &mut ReferenceSet) {
                         Some(_) => false,
                     };
                     if triggers_autoload {
-                        push_literal_fqn(args.first(), out);
+                        push_probe_literal_fqn(args.first(), out);
+                        // `Foo::class` does not autoload on its own — the general walker ignores
+                        // it for that reason — but handing it to one of these four functions is
+                        // what runs the loader. `symfony/string`'s `AsciiSlugger.php` guards its
+                        // whole file with `interface_exists(LocaleAwareInterface::class)`, and
+                        // without this the interface never entered the closed world and the
+                        // compiled program threw its "package is not installed" LogicException on
+                        // boot.
+                        push_probe_class_constant_fqn(args.first(), out);
                         if args
                             .first()
                             .is_some_and(|arg| !matches!(arg.kind, ExprKind::StringLiteral(_)))
@@ -1002,6 +1146,7 @@ fn collect_refs_expr(expr: &Expr, out: &mut ReferenceSet) {
         ExprKind::ArrayLiteral(items) => {
             if items.len() == 2 {
                 collect_dynamic_class_target_candidates(&items[0], out);
+                push_callable_array_class(items, out);
             }
             for i in items {
                 collect_refs_expr(i, out);
@@ -1085,6 +1230,33 @@ fn collect_dynamic_class_target_candidates(expr: &Expr, out: &mut ReferenceSet) 
     }
 }
 
+/// Extracts the class named by a `[Foo::class, 'method']` callable array.
+///
+/// Distinct from the blanket `::class` rule this walker deliberately does NOT have (see the
+/// `ClassConstant` arm): a bare `Foo::class` is a string PHP resolves lexically and may hand to
+/// anything — `sprintf()` included — whereas THIS shape is built to be called, and calling it is
+/// what runs the autoloader. The second element must be a string literal, so a two-element data
+/// pair that merely happens to start with a `::class` is not mistaken for one.
+///
+/// Twig's `EscaperExtension` needs it: `$defaultStrategy = [FileExtensionEscapingStrategy::class,
+/// 'guess'];` was the program's only reference to that class, and the file is right there in the
+/// package — the build reported `Undefined class: Twig\FileExtensionEscapingStrategy` for a class
+/// it could have read off disk.
+fn push_callable_array_class(items: &[Expr], out: &mut ReferenceSet) {
+    let [class_const, method] = items else {
+        return;
+    };
+    if !matches!(method.kind, ExprKind::StringLiteral(_)) {
+        return;
+    }
+    if let ExprKind::ClassConstant {
+        receiver: StaticReceiver::Named(name),
+    } = &class_const.kind
+    {
+        push_name(name, out);
+    }
+}
+
 /// Collect a class reference from a static receiver (::scope).
 fn collect_static_receiver(receiver: &StaticReceiver, out: &mut ReferenceSet) {
     if let StaticReceiver::Named(name) = receiver {
@@ -1107,6 +1279,40 @@ fn push_name(name: &crate::names::Name, out: &mut ReferenceSet) {
     let trimmed = canonical.trim_start_matches('\\');
     if !trimmed.is_empty() {
         out.insert(trimmed.to_string());
+    }
+}
+
+/// Records a `class_exists()`-family literal argument as a PROBE-ONLY demand.
+///
+/// Kept separate from `push_literal_fqn` because the two spellings are separate facts: a string
+/// literal names a class the call may autoload, and so does `::class`, but `::class` ANYWHERE
+/// ELSE does not autoload and must keep being ignored by the general walker.
+///
+/// The name still enters the closed world -- the probe has to be answerable -- but it is not
+/// counted as a use, so [`probe_only_class_names`] can report it as a class php would not have
+/// loaded.
+fn push_probe_literal_fqn(arg: Option<&crate::parser::ast::Expr>, out: &mut ReferenceSet) {
+    let Some(arg) = arg else { return };
+    let ExprKind::StringLiteral(name) = &arg.kind else {
+        return;
+    };
+    let cleaned = name.trim_start_matches('\\').to_string();
+    if !cleaned.is_empty() {
+        out.insert_probe(cleaned);
+    }
+}
+
+/// Records a `class_exists(X::class)`-style argument as a PROBE-ONLY demand.
+fn push_probe_class_constant_fqn(arg: Option<&crate::parser::ast::Expr>, out: &mut ReferenceSet) {
+    let Some(arg) = arg else { return };
+    if let ExprKind::ClassConstant {
+        receiver: StaticReceiver::Named(name),
+    } = &arg.kind
+    {
+        let cleaned = name.as_canonical().trim_start_matches('\\').to_string();
+        if !cleaned.is_empty() {
+            out.insert_probe(cleaned);
+        }
     }
 }
 

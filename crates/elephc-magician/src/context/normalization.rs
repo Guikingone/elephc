@@ -22,16 +22,24 @@ pub(super) fn normalize_class_name(name: &str) -> String {
 }
 
 /// Adds an external declaration name once while preserving PHP-visible spelling.
-pub(super) fn push_external_declared_name(names: &mut Vec<String>, name: &str) -> bool {
+///
+/// `shared` is the prefix this context inherited and cannot write to; `names` is its own tail.
+/// The duplicate check reads both, and compares case-insensitively in place -- the previous
+/// version allocated a normalized `String` for every candidate it walked past.
+pub(super) fn push_external_declared_name(
+    shared: &[String],
+    names: &mut Vec<String>,
+    name: &str,
+) -> bool {
     let visible_name = name.trim_start_matches('\\');
-    let key = normalize_class_name(visible_name);
-    if key.is_empty() {
+    if visible_name.is_empty() {
         return false;
     }
-    if !names
+    let already_declared = shared
         .iter()
-        .any(|existing| normalize_class_name(existing) == key)
-    {
+        .chain(names.iter())
+        .any(|existing| existing.trim_start_matches('\\').eq_ignore_ascii_case(visible_name));
+    if !already_declared {
         names.push(visible_name.to_string());
     }
     true

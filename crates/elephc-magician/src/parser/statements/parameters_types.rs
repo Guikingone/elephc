@@ -351,6 +351,11 @@ impl Parser {
                     return Err(EvalParseError::UnsupportedConstruct);
                 }
                 "callable" => Some(EvalParameterTypeVariant::Callable),
+                // PHP 8.2 standalone value types. Without these arms both fell through to the
+                // class branch below and became a class named "false"/"true", which no boolean
+                // can ever satisfy.
+                "false" => Some(EvalParameterTypeVariant::False),
+                "true" => Some(EvalParameterTypeVariant::True),
                 "float" => Some(EvalParameterTypeVariant::Float),
                 "int" => Some(EvalParameterTypeVariant::Int),
                 "iterable" => Some(EvalParameterTypeVariant::Iterable),

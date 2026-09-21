@@ -11,6 +11,110 @@
 
 use super::*;
 
+/// Verifies a descendant that NARROWS the constructor may still inherit a `new static` factory.
+/// PHP raises `ArgumentCountError` only for too FEW arguments; surplus positional arguments are
+/// evaluated and then discarded, so `Narrow::make(1, 'x', [])` binds `$message` from the first
+/// argument and drops the rest. The compiler used to validate the factory against EVERY concrete
+/// descendant and refuse the whole program — which is how Symfony's
+/// `HttpException::fromStatusCode()` (ending in
+/// `new static($statusCode, $message, $previous, $headers, $code)`) was rejected because
+/// `AccessDeniedHttpException` declares four parameters. PHP outputs
+/// "Base:200:ok:1|Narrow:403:1".
+#[test]
+fn test_late_static_factory_with_a_narrowing_descendant() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public function __construct(
+        public int $status = 0,
+        public string $message = '',
+        public array $headers = [],
+    ) {
+    }
+
+    public static function make(int $status, string $message, array $headers): static {
+        return new static($status, $message, $headers);
+    }
+}
+
+class Narrow extends Base {
+    public function __construct(string $message = '') {
+        parent::__construct(403, $message, []);
+    }
+}
+
+$b = Base::make(200, 'ok', ['h' => 1]);
+echo get_class($b), ':', $b->status, ':', $b->message, ':', count($b->headers), '|';
+
+$n = Narrow::make(1, 'x', []);
+echo get_class($n), ':', $n->status, ':', $n->message;
+"#,
+    );
+    assert_eq!(out, "Base:200:ok:1|Narrow:403:1");
+}
+
+/// Verifies a descendant whose constructor parameter TYPES disagree with the inherited factory's
+/// arguments does not refuse the whole program. Symfony's `MethodNotAllowedHttpException` takes
+/// `array $allow` first where `HttpException::fromStatusCode()` passes `$statusCode`; PHP raises a
+/// TypeError only for a program that calls the factory on that descendant, and constructs the
+/// class normally otherwise. PHP outputs "Base:200:ok|Mismatch:405:direct:1".
+#[test]
+fn test_late_static_factory_with_a_type_mismatched_descendant() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public function __construct(public int $status = 0, public string $message = '') {}
+
+    public static function make(int $status, string $message): static {
+        return new static($status, $message);
+    }
+}
+
+class Mismatch extends Base {
+    public function __construct(array $allow, string $message = '') {
+        parent::__construct(405, $message . ':' . count($allow));
+    }
+}
+
+$b = Base::make(200, 'ok');
+echo get_class($b), ':', $b->status, ':', $b->message, '|';
+
+$m = new Mismatch(['GET'], 'direct');
+echo get_class($m), ':', $m->status, ':', $m->message;
+"#,
+    );
+    assert_eq!(out, "Base:200:ok|Mismatch:405:direct:1");
+}
+
+/// Verifies a descendant that WIDENS the constructor still binds its own defaults for the
+/// parameters the factory does not pass. PHP outputs "Base:1:made|Wide:2:made:x".
+#[test]
+fn test_late_static_factory_with_a_widening_descendant() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public function __construct(public int $status = 0, public string $tag = 'base') {}
+
+    public static function make(int $status): static {
+        return new static($status, 'made');
+    }
+}
+
+class Wide extends Base {
+    public function __construct(int $status = 0, string $tag = 'wide', public string $extra = 'x') {
+        parent::__construct($status, $tag);
+    }
+}
+
+$b = Base::make(1);
+echo get_class($b), ':', $b->status, ':', $b->tag, '|';
+$w = Wide::make(2);
+echo get_class($w), ':', $w->status, ':', $w->tag, ':', $w->extra;
+"#,
+    );
+    assert_eq!(out, "Base:1:made|Wide:2:made:x");
+}
+
 /// Verifies that a `self` return type lets a method return `$this` and be chained.
 #[test]
 fn test_self_return_type_chains() {

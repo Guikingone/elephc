@@ -9,6 +9,45 @@
 
 use super::*;
 
+/// Verifies an UNTYPED parameter on a bodyless declaration stays `mixed`. The compiler starts an
+/// untyped parameter at `int` and lets a concrete body refine it from its own call sites, but an
+/// interface method has no body to refine from, so the starting point froze and became the
+/// contract: a program that logged an int first then rejected the string call with
+/// "parameter $level expects Int, got Str". PSR-3 declares `log($level, …)` exactly this way and
+/// Symfony's `ErrorListener` calls it with a string level. PHP outputs "int:a|string:b|".
+#[test]
+fn test_untyped_interface_parameter_stays_mixed() {
+    let out = compile_and_run(
+        r#"<?php
+interface Log {
+    public function log($level, string $message): void;
+}
+
+abstract class BaseLog implements Log {
+    abstract public function describe($level): string;
+}
+
+class Plain extends BaseLog {
+    public function log($level, string $message): void {
+        echo get_debug_type($level), ':', $message, '|';
+    }
+
+    public function describe($level): string { return get_debug_type($level); }
+}
+
+function emit(Log $logger, string $level): void {
+    $logger->log($level, 'b');
+}
+
+$l = new Plain();
+$l->log(3, 'a');
+emit($l, 'critical');
+echo $l->describe(1), ',', $l->describe('x');
+"#,
+    );
+    assert_eq!(out, "int:a|string:b|int,string");
+}
+
 /// Verifies virtual/interface calls forward the hidden argc operand used by an overriding method.
 #[test]
 fn test_interface_dispatch_forwards_hidden_func_get_args_count() {
@@ -584,4 +623,40 @@ echo invoke(new StringRunner());
 "#,
     );
     assert_eq!(out, "ok");
+}
+
+
+/// A class implements PHP's `Serializable`, which elephc never declared.
+///
+/// `TENTATIVE_RETURN_TYPE_METHODS` already named the interface, but it was absent from
+/// `BUILTIN_INTERFACE_NAMES`, so a class implementing it sent the interpreter to `spl_autoload` —
+/// and Composer cannot autoload a PHP built-in. `Twig\Profiler\Profile` is
+/// `final class Profile implements \IteratorAggregate, \Serializable`, so the whole declaration
+/// was refused with `class Twig\Profiler\Profile could not be declared`, killing the `--web`
+/// worker while Symfony rendered its error page.
+///
+/// Deprecated since PHP 8.1 and still declared by the engine, which is what matters: userland code
+/// implements it. Both its methods carry tentative return types, so the implementer below declares
+/// a narrower `string` for `serialize()` and no type at all for `unserialize()`'s parameter.
+///
+/// Oracle: `php -n` prints the asserted line.
+#[test]
+fn test_class_implements_the_serializable_builtin_interface() {
+    let out = compile_and_run(
+        r#"<?php
+final class Profile implements \IteratorAggregate, \Serializable {
+    private array $items = ['a', 'b'];
+    public function getIterator(): \Traversable { return new \ArrayIterator($this->items); }
+    public function serialize(): string { return \serialize($this->__serialize()); }
+    public function unserialize($data): void { $this->__unserialize(\unserialize($data)); }
+    public function __serialize(): array { return [$this->items]; }
+    public function __unserialize(array $data): void { [$this->items] = $data; }
+}
+$p = new Profile();
+echo ($p instanceof Serializable ? 'yes' : 'no'), '|';
+foreach ($p as $v) { echo $v; }
+echo '|', $p->serialize();
+"#,
+    );
+    assert_eq!(out, "yes|ab|a:1:{i:0;a:2:{i:0;s:1:\"a\";i:1;s:1:\"b\";}}");
 }

@@ -174,15 +174,13 @@ pub(super) const EVAL_PHP_RELEASE_VERSION: i64 = 0;
 /// [`EVAL_PHP_RELEASE_VERSION`] is.
 pub(super) const EVAL_PHP_EXTRA_VERSION: &str = "";
 
-/// `PHP_SAPI` reported from inside `eval()`.
+/// `PHP_SAPI` reported from inside `eval()` when nothing forwarded the compile mode.
 ///
-/// KEEP IN SYNC with `crate::web_prelude::sapi_name()` in the compiler. Unlike the version
-/// surface — which the compiler forwards through
-/// [`crate::eval_php_profile::set_eval_php_version_id`] — nothing forwards `--web`, so this
-/// stays the CLI default, the same choice `opcache_reset` makes with `is_web_sapi = false`.
-/// DOCUMENTED DIVERGENCE: inside a `--web` binary, native `PHP_SAPI` is `cli-server` while
-/// `eval('echo PHP_SAPI;')` reports `cli`. Closing it would take the same one-call bridge the
-/// version surface uses.
+/// KEEP IN SYNC with `crate::web_prelude::sapi_name()` in the compiler. The compile mode now
+/// reaches eval through [`crate::eval_php_profile::set_eval_web_sapi`], the same one-call bridge
+/// the version surface uses, so this is only the default a consumer that links this archive
+/// without elephc's codegen sees. Read the live value with
+/// [`crate::eval_php_profile::eval_php_sapi`], never this constant.
 pub(super) const EVAL_PHP_SAPI: &str = "cli";
 
 pub(super) const DEFINE_ALREADY_DEFINED_WARNING: &str =

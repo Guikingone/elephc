@@ -346,6 +346,15 @@ pub(in crate::codegen::lower_inst) fn lower_closure_bind(ctx: &mut FunctionConte
     ensure_arg_count(inst, "closure_bind", 2)?;
     let descriptor = expect_operand(inst, 0)?;
     let new_this = expect_operand(inst, 1)?;
+    // `__rt_closure_bind` takes the new receiver as a RAW object pointer — it stores it straight
+    // into the descriptor's capture slot, boxing it there when the capture is a Mixed one. A
+    // gradual receiver arrives already boxed, so passing it through handed the helper a Mixed cell
+    // where an object belongs and it boxed the box: `Closure::bind(fn () => $this->n, $gradual)`
+    // then answered `Warning: Undefined property: ::$n` and `0` where PHP prints `7` — a wrong
+    // ANSWER, not a refusal. Unbox first, and dispatch on what the box actually holds.
+    if matches!(ctx.raw_value_php_type(new_this)?, PhpType::Mixed) {
+        return lower_closure_bind_gradual_receiver(ctx, inst, descriptor, new_this);
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(descriptor, "x0")?;
@@ -357,6 +366,84 @@ pub(in crate::codegen::lower_inst) fn lower_closure_bind(ctx: &mut FunctionConte
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_closure_bind");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `Closure::bind($closure, $newThis)` when `$newThis` is a boxed gradual value.
+///
+/// PHP declares `$newThis` as `?object`, so the runtime tag decides between three outcomes and
+/// only one of them may reach `__rt_closure_bind`:
+///
+/// - an OBJECT is unboxed to its raw pointer and bound, which is what the helper expects;
+/// - NULL unbinds `$this`, and an unbound closure is what the source descriptor already is — the
+///   same answer the literal-`null` path in `expr::static_method_calls` returns without calling
+///   the helper at all;
+/// - anything else is PHP's `TypeError`, raised with the runtime type in the message.
+fn lower_closure_bind_gradual_receiver(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    descriptor: crate::ir::ValueId,
+    new_this: crate::ir::ValueId,
+) -> Result<()> {
+    let (first_arg, second_arg, scratch) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x0", "x1", "x2"),
+        Arch::X86_64 => ("rdi", "rsi", "rdx"),
+    };
+    load_value_to_first_int_arg(ctx, new_this)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let object_label = ctx.next_label("closure_bind_object_this");
+    let unbind_label = ctx.next_label("closure_bind_unbind_this");
+    let wrong_label = ctx.next_label("closure_bind_wrong_this");
+    let done_label = ctx.next_label("closure_bind_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #6");                              // runtime tag 6 = object
+            ctx.emitter.instruction(&format!("b.eq {}", object_label));
+            ctx.emitter.instruction("cmp x0, #8");                              // runtime tag 8 = null unbinds $this
+            ctx.emitter.instruction(&format!("b.eq {}", unbind_label));
+            ctx.emitter.instruction(&format!("b {}", wrong_label));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 6");                              // runtime tag 6 = object
+            ctx.emitter.instruction(&format!("je {}", object_label));
+            ctx.emitter.instruction("cmp rax, 8");                              // runtime tag 8 = null unbinds $this
+            ctx.emitter.instruction(&format!("je {}", unbind_label));
+            ctx.emitter.instruction(&format!("jmp {}", wrong_label));
+        }
+    }
+
+    ctx.emitter.label(&object_label);
+    let payload = crate::codegen::lower_inst::mixed_unbox_low_payload_reg(ctx);
+    // The unboxed pointer and the descriptor compete for the first argument register on x86_64,
+    // so the receiver rides the stack across the reload.
+    abi::emit_push_reg_pair(ctx.emitter, payload, scratch);
+    ctx.load_value_to_reg(descriptor, first_arg)?;
+    abi::emit_pop_reg_pair(ctx.emitter, second_arg, scratch);
+    abi::emit_call_label(ctx.emitter, "__rt_closure_bind");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b {}", done_label)),
+        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {}", done_label)),
+    }
+
+    ctx.emitter.label(&unbind_label);
+    ctx.load_value_to_result(descriptor)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b {}", done_label)),
+        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {}", done_label)),
+    }
+
+    super::arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
+        ctx,
+        &wrong_label,
+        &|given| {
+            format!(
+                "Closure::bind(): Argument #2 ($newThis) must be of type ?object, {} given",
+                given
+            )
+        },
+    );
+
+    ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
 

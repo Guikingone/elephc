@@ -924,6 +924,7 @@ fn emit_undefined_hash_key_warning_aarch64(
 ) -> Result<()> {
     let integer_label = ctx.next_label("hash_warn_integer_key");
     let done_label = ctx.next_label("hash_warn_key_done");
+    super::arrays::emit_publish_diag_location(ctx);
     materialize_hash_key_aarch64(ctx, key)?;
     ctx.emitter.instruction("cmn x2, #1");                                      // integer hash keys carry key_hi = -1
     ctx.emitter.instruction(&format!("b.eq {}", integer_label));                // select the decimal undefined-key warning
@@ -943,6 +944,7 @@ fn emit_undefined_hash_key_warning_x86_64(
 ) -> Result<()> {
     let integer_label = ctx.next_label("hash_warn_integer_key");
     let done_label = ctx.next_label("hash_warn_key_done");
+    super::arrays::emit_publish_diag_location(ctx);
     materialize_hash_key_x86_64(ctx, key)?;
     ctx.emitter.instruction("cmp rdx, -1");                                     // integer hash keys carry key_hi = -1
     ctx.emitter.instruction(&format!("je {}", integer_label));                  // select the decimal undefined-key warning

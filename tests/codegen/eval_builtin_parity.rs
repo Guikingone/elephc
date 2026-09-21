@@ -718,3 +718,24 @@ try {
         "ValueError|iconv_strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)"
     );
 }
+
+/// Verifies `headers_sent()` inside eval reports the COMPILED program's flag, not an eval-local one.
+///
+/// The flag lives in generated-runtime storage and is raised by the real-output path, so the only
+/// honest answer comes from the compiled side. Before this it was not joined at all and every
+/// interpreted caller died with "call to undefined function headers_sent()" -- which is what
+/// Composer's own `vendor/composer/platform_check.php` hits the moment its version guard fails.
+///
+/// `php -n` 8.5.6 (`scratchpad/hsent.php`, this session): `clean` / `x` / `sent`.
+#[test]
+fn test_eval_headers_sent_reads_the_compiled_output_flag() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval("return headers_sent() ? \"sent\" : \"clean\";"), "\n";
+echo "x\n";
+echo eval("return headers_sent() ? \"sent\" : \"clean\";"), "\n";
+"#,
+    );
+
+    assert_eq!(out, "clean\nx\nsent\n");
+}

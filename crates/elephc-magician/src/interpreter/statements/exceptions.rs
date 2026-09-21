@@ -38,7 +38,7 @@ pub(in crate::interpreter) fn execute_try_stmt(
         }
         Err(EvalStatus::UncaughtThrowable) => {
             let pending = context.take_pending_throw();
-            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            if crate::eval_trace::enabled() {
                 eprintln!(
                     "[elephc-eval-trace] phase=try_uncaught pending={} catches={}",
                     pending.is_some(),
@@ -61,7 +61,7 @@ pub(in crate::interpreter) fn execute_try_stmt(
             // leaves here without ever looking at them. If a throwable reaches an enclosing try
             // under some OTHER status, this is where it slipped past the one that should have
             // caught it -- so say which status did it.
-            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            if crate::eval_trace::enabled() {
                 eprintln!(
                     "[elephc-eval-trace] phase=try_bypass status={status:?} catches={}",
                     catches.len(),
@@ -179,7 +179,7 @@ pub(in crate::interpreter) fn catch_types_match_thrown(
         // Which catch clause accepted a throwable -- and which declined -- is the first thing worth
         // knowing when an exception escapes a `try` that should have caught it. Exceptional path
         // only: nothing reaches here unless something was actually thrown.
-        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        if crate::eval_trace::enabled() {
             eprintln!(
                 "[elephc-eval-trace] phase=catch_match class={class_name:?} dynamic={dynamic:?} native={native:?}",
             );

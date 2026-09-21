@@ -234,7 +234,7 @@ fn eval_reflection_function_callable_target_arg(
         }
         EVAL_TAG_CALLABLE => {
             let descriptor = values.raw_value_word(value)? as usize as *mut c_void;
-            let trace = std::env::var_os("ELEPHC_EVAL_TRACE").is_some();
+            let trace = crate::eval_trace::enabled();
             if trace {
                 eprintln!(
                     "[elephc-eval-trace] phase=reflection-callable descriptor={descriptor:p}"

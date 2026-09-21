@@ -32,6 +32,8 @@ pub(super) enum ReceiverPlace {
     Local(LocalSlotId),
     /// A slot whose value is reached through its ref-cell representation.
     RefCell(LocalSlotId),
+    /// A function `static`, whose storage is a `.comm` symbol rather than a frame slot.
+    StaticLocal(LocalSlotId),
     /// A declared object property whose runtime container owner may be replaced by COW.
     Property {
         object: ValueId,
@@ -59,6 +61,11 @@ impl ReceiverPlace {
             return match inst_ref.op {
                 Op::LoadLocal => Ok(Self::Local(slot)),
                 Op::LoadRefCell => Ok(Self::RefCell(slot)),
+                // A function `static` is a writable place too, just not a frame one. Leaving it
+                // `Opaque` made every relocating mutation on a `static` array publish its new
+                // pointer nowhere — silently, because `Opaque`'s write-back is `Ok(())` and only
+                // the growth paths call `require_writable`.
+                Op::LoadStaticLocal => Ok(Self::StaticLocal(slot)),
                 _ => Ok(Self::Opaque),
             };
         }
@@ -76,6 +83,11 @@ impl ReceiverPlace {
         match self {
             Self::Opaque => None,
             Self::Local(slot) | Self::RefCell(slot) => Some(*slot),
+            // NOT a frame slot. The pre-mutation bookkeeping this feeds
+            // (`release_mutated_source_local_owner`) releases the FRAME slot's occupant, and a
+            // `static` local has none — its owner lives in the `.comm` symbol and is released
+            // by `__rt_web_reset`, not per call.
+            Self::StaticLocal(_) => None,
             Self::Property { .. } => None,
         }
     }
@@ -122,6 +134,9 @@ impl ReceiverPlace {
         match self {
             Self::Opaque => Ok(()),
             Self::Local(slot) => ctx.store_mutated_container_to_local(*slot, value),
+            Self::StaticLocal(slot) => {
+                ctx.store_relocated_container_to_static_local(*slot, value)
+            }
             Self::RefCell(slot) => super::store_value_through_ref_cell_slot(
                 ctx,
                 *slot,
@@ -149,6 +164,9 @@ impl ReceiverPlace {
             Self::Opaque => Ok(()),
             Self::Local(slot) | Self::RefCell(slot) => {
                 ctx.store_mutated_container_to_local(*slot, value)
+            }
+            Self::StaticLocal(slot) => {
+                ctx.store_relocated_container_to_static_local(*slot, value)
             }
             // The property path already publishes the owner without consuming the SSA value, so
             // it is the same call `store_back` makes — the distinction the two methods draw is

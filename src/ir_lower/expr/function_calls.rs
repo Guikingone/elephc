@@ -100,6 +100,11 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         return value;
     }
     if let Some(value) =
+        compat_preludes::lower_is_callable_with_options(ctx, canonical, args, expr)
+    {
+        return value;
+    }
+    if let Some(value) =
         compat_preludes::lower_backend_gap_builtin_shape(ctx, canonical, args, expr)
     {
         return value;

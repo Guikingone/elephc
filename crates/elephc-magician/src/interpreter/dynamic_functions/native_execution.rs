@@ -212,7 +212,7 @@ fn write_back_native_function_ref_args(
                 let Some(target) = target else {
                     continue;
                 };
-                let value = values.raw_word_value(*tag, word)?;
+                let value = raw_slot_word_value(*tag, word, values)?;
                 eval_write_direct_ref_target(
                     target,
                     value,

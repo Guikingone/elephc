@@ -58,6 +58,18 @@ pub(crate) const ARRAY_INTERSECT_NAME: &str = "__elephc_array_intersect";
 /// Reserved helper used for one-argument `array_reverse()` calls on gradual arrays.
 pub(crate) const ARRAY_REVERSE_GRADUAL_NAME: &str = "__elephc_array_reverse_gradual";
 
+/// Reserved helper used for two-argument `array_chunk()` calls on gradual or hash arrays.
+pub(crate) const ARRAY_CHUNK_GRADUAL_NAME: &str = "__elephc_array_chunk_gradual";
+
+/// Reserved helper used for the three-argument gradual `array_chunk()`.
+pub(crate) const ARRAY_CHUNK_GRADUAL_FLAGGED_NAME: &str = "__elephc_array_chunk_gradual_flagged";
+
+/// Reserved helper used for `array_rand()` over a gradual or hash array.
+pub(crate) const ARRAY_RAND_GRADUAL_NAME: &str = "__elephc_array_rand_gradual";
+
+/// Reserved helper used for the three-argument `array_column()`, which re-keys its result.
+pub(crate) const ARRAY_COLUMN_INDEXED_NAME: &str = "__elephc_array_column_indexed";
+
 /// Reserved helper used for `array_combine()` across generic array layouts.
 pub(crate) const ARRAY_COMBINE_GRADUAL_NAME: &str = "__elephc_array_combine_gradual";
 
@@ -458,6 +470,243 @@ function __elephc_array_reverse_gradual(array $input): array {
 }
 "#;
 
+/// Splits any array layout into renumbered chunks, which is PHP's two-argument behavior.
+///
+/// Written against a materialized list rather than accumulating into a reset `$chunk`, because
+/// that shorter shape is MISCOMPILED. Reduced:
+///
+/// ```php
+/// function g(array $in): array {
+///     $result = []; $chunk = [];
+///     foreach ($in as $v) {
+///         $chunk[] = $v;
+///         if (count($chunk) === 2) { $result[] = $chunk; $chunk = []; }
+///     }
+///     if (count($chunk) > 0) { $result[] = $chunk; }
+///     return $result;
+/// }
+/// ```
+///
+/// The callee returns `array<mixed>` -- boxed elements, because loop-storage stabilization widened
+/// `$result` before the loop -- while the CALL SITE is typed `array<array<mixed>>`. The caller then
+/// reads each boxed cell as a raw array: `count()` answers the cell's runtime tag (4) instead of
+/// the chunk length. `php -n` prints `[1/2][3/4][5]`; elephc prints pointers and then segfaults.
+///
+/// Binding `$chunk` fresh inside the outer loop and giving `$result` a single append site keeps
+/// both sides on the same representation. Do not "simplify" this back without re-checking that
+/// reduction.
+const ARRAY_CHUNK_GRADUAL_SRC: &str = r#"<?php
+function __elephc_array_chunk_gradual(array $input, int $length): array {
+    if ($length < 1) {
+        throw new ValueError('array_chunk(): Argument #2 ($length) must be greater than 0');
+    }
+    $values = [];
+    foreach ($input as $value) {
+        $values[] = $value;
+    }
+    $total = count($values);
+    $result = [];
+    $start = 0;
+    while ($start < $total) {
+        $chunk = [];
+        $offset = 0;
+        while ($offset < $length && $start + $offset < $total) {
+            $chunk[] = $values[$start + $offset];
+            $offset++;
+        }
+        $result[] = $chunk;
+        $start += $length;
+    }
+    return $result;
+}
+"#;
+
+/// Strips tags while keeping an allowlist, which is php's two-argument `strip_tags()`.
+///
+/// The native helper only implements the one-argument form. The scanner here follows php-src's own
+/// rules, which are not the obvious ones: a `<` is only a tag start when the next byte is a letter,
+/// `/`, `!` or `?` -- that is why `'a < b and c > d'` survives untouched -- comments are dropped
+/// whatever the allowlist says, and an unterminated tag swallows the rest of the string. The
+/// allowlist accepts both php spellings, the `'<a><b>'` string and an array of bare names, and is
+/// matched case-insensitively.
+///
+/// Checked against `php -n` on twenty inputs covering attributes, uppercase tags, self-closing
+/// tags, comments, unterminated tags, bare comparison operators and both allowlist spellings.
+const STRIP_TAGS_ALLOWED_SRC: &str = r#"<?php
+function __elephc_strip_tags_allowed(string $string, $allowed): string {
+    $alpha = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    $alnum = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    $names = [];
+    if (is_array($allowed)) {
+        foreach ($allowed as $name) {
+            $names[strtolower((string) $name)] = true;
+        }
+    } elseif (null !== $allowed) {
+        $spec = (string) $allowed;
+        $specLength = strlen($spec);
+        $cursor = 0;
+        while ($cursor < $specLength) {
+            if ('<' !== $spec[$cursor]) {
+                $cursor = $cursor + 1;
+                continue;
+            }
+            $scan = $cursor + 1;
+            $name = '';
+            while ($scan < $specLength && '>' !== $spec[$scan]) {
+                $name = $name . $spec[$scan];
+                $scan = $scan + 1;
+            }
+            $name = strtolower(trim($name));
+            if ('' !== $name) {
+                $names[$name] = true;
+            }
+            $cursor = $scan + 1;
+        }
+    }
+
+    $out = '';
+    $length = strlen($string);
+    $index = 0;
+    while ($index < $length) {
+        if ('<' !== $string[$index]) {
+            $out = $out . $string[$index];
+            $index = $index + 1;
+            continue;
+        }
+        $next = ($index + 1 < $length) ? $string[$index + 1] : '';
+        $starts = '' !== $next
+            && (false !== strpos($alpha, $next) || '/' === $next || '!' === $next || '?' === $next);
+        if (!$starts) {
+            $out = $out . $string[$index];
+            $index = $index + 1;
+            continue;
+        }
+        if ('!' === $next && $index + 3 < $length && '-' === $string[$index + 2] && '-' === $string[$index + 3]) {
+            $end = strpos($string, '-->', $index + 4);
+            $index = (false === $end) ? $length : $end + 3;
+            continue;
+        }
+        $end = strpos($string, '>', $index + 1);
+        if (false === $end) {
+            $index = $length;
+            continue;
+        }
+        $name = '';
+        $scan = $index + 1;
+        if ('/' === $string[$scan]) {
+            $scan = $scan + 1;
+        }
+        while ($scan <= $end && false !== strpos($alnum, $string[$scan])) {
+            $name = $name . $string[$scan];
+            $scan = $scan + 1;
+        }
+        if ('' !== $name && isset($names[strtolower($name)])) {
+            $out = $out . substr($string, $index, $end - $index + 1);
+        }
+        $index = $end + 1;
+    }
+
+    return $out;
+}
+"#;
+
+/// Chunks a generic array layout when `preserve_keys` is only known at run time.
+///
+/// Separate from the two-argument helper because the shapes differ: that one's chunks are dense
+/// arrays and its result type says so, while these carry the source keys and are hashes.
+///
+/// EVERY write here goes through an explicit key -- `$chunk[$key]` and `$result[$outer]` -- so both
+/// levels keep ONE representation. An append (`$result[] =`) next to a keyed write is what made the
+/// first attempt at this helper segfault at the first consumer: the caller read boxed cells where
+/// the callee had stored raw pointers. The declared result type must be the one this body infers.
+const ARRAY_CHUNK_GRADUAL_FLAGGED_SRC: &str = r#"<?php
+function __elephc_array_chunk_gradual_flagged(array $input, int $length, $preserveKeys): array {
+    if ($length < 1) {
+        throw new ValueError('array_chunk(): Argument #2 ($length) must be greater than 0');
+    }
+    $keys = [];
+    $values = [];
+    foreach ($input as $key => $value) {
+        $keys[] = $key;
+        $values[] = $value;
+    }
+    $total = count($values);
+    $result = [];
+    $outer = 0;
+    $start = 0;
+    while ($start < $total) {
+        $chunk = [];
+        $offset = 0;
+        while ($offset < $length && $start + $offset < $total) {
+            $chunkKey = $preserveKeys ? $keys[$start + $offset] : $offset;
+            $chunk[$chunkKey] = $values[$start + $offset];
+            $offset = $offset + 1;
+        }
+        $result[$outer] = $chunk;
+        $outer = $outer + 1;
+        $start = $start + $length;
+    }
+    return $result;
+}
+"#;
+
+/// Picks one random KEY out of a generic array layout.
+///
+/// `__rt_array_rand` walks the fixed-size slots of a dense indexed array, so a hash or a gradual
+/// value has no native path and the key it would answer is a string as often as an integer.
+/// Collecting the keys into a dense list first puts the random pick back on the native helper,
+/// and the answer is the key itself, which is what php returns.
+const ARRAY_RAND_GRADUAL_SRC: &str = r#"<?php
+function __elephc_array_rand_gradual(array $input) {
+    $keys = [];
+    foreach ($input as $key => $value) {
+        $keys[] = $key;
+    }
+    if (0 === count($keys)) {
+        throw new ValueError('array_rand(): Argument #1 ($array) cannot be empty');
+    }
+    return $keys[array_rand($keys)];
+}
+"#;
+
+/// Extracts one column and re-keys the result, which is php's three-argument `array_column()`.
+///
+/// The backend has no lowering for the `$index_key` form: it produces a HASH whose keys come from
+/// the data, which a dense indexed result cannot express. Written here in PHP instead, with ONE
+/// `$result[$key] = $value;` write site so the whole result keeps a single representation -- the
+/// same rule the gradual `array_chunk()` helper documents, and the one whose violation segfaults at
+/// the first consumer rather than failing to build.
+///
+/// `$next` reproduces php's own append key: a row with no usable index key takes the next integer,
+/// and an integer index key pushes that counter past itself, exactly as `$result[] =` would.
+const ARRAY_COLUMN_INDEXED_SRC: &str = r#"<?php
+function __elephc_array_column_indexed(array $input, $column, $index): array {
+    $result = [];
+    $next = 0;
+    foreach ($input as $row) {
+        $row = (array) $row;
+        if (null === $column) {
+            $value = $row;
+        } elseif (array_key_exists($column, $row)) {
+            $value = $row[$column];
+        } else {
+            continue;
+        }
+        if (null !== $index && array_key_exists($index, $row)) {
+            $key = $row[$index];
+            if (is_int($key) && $key >= $next) {
+                $next = $key + 1;
+            }
+        } else {
+            $key = $next;
+            $next = $next + 1;
+        }
+        $result[$key] = $value;
+    }
+    return $result;
+}
+"#;
+
 /// Combines generic array layouts in iteration order after validating equal cardinality.
 const ARRAY_COMBINE_GRADUAL_SRC: &str = r#"<?php
 function __elephc_array_combine_gradual(array $keys, array $values): array {
@@ -699,9 +948,18 @@ const LEVENSHTEIN_WRAPPER_SRC: &str = r#"<?php
 function levenshtein(string $first, string $second): int { return __elephc_levenshtein_two_arg($first, $second); }
 "#;
 
-/// PHP-visible wrapper for the supported `strip_tags()` call shape.
+/// PHP-visible wrapper for `strip_tags()`, in both of php's call shapes.
+///
+/// The allowlist form dispatches to its own helper rather than extending the one-argument one:
+/// that one is the fast path every caller without an allowlist takes, and keeping the scanner out
+/// of it leaves it untouched.
 const STRIP_TAGS_WRAPPER_SRC: &str = r#"<?php
-function strip_tags(string $string): string { return __elephc_strip_tags_one_arg($string); }
+function strip_tags(string $string, $allowed = null): string {
+    if (null === $allowed) {
+        return __elephc_strip_tags_one_arg($string);
+    }
+    return __elephc_strip_tags_allowed($string, $allowed);
+}
 "#;
 
 /// PHP-visible wrapper for `is_countable()`.
@@ -763,6 +1021,7 @@ pub fn inject_if_used(
     }
     if usage.references("strip_tags") {
         sources.push(STRIP_TAGS_ONE_ARG_SRC);
+        sources.push(STRIP_TAGS_ALLOWED_SRC);
         sources.push(STRIP_TAGS_WRAPPER_SRC);
     }
     if usage.references("is_countable") {
@@ -800,8 +1059,18 @@ pub fn inject_if_used(
     if usage.references("array_intersect") {
         sources.push(ARRAY_INTERSECT_SRC);
     }
+    if usage.references("array_chunk") {
+        sources.push(ARRAY_CHUNK_GRADUAL_SRC);
+        sources.push(ARRAY_CHUNK_GRADUAL_FLAGGED_SRC);
+    }
     if usage.references("array_reverse") {
         sources.push(ARRAY_REVERSE_GRADUAL_SRC);
+    }
+    if usage.references("array_rand") {
+        sources.push(ARRAY_RAND_GRADUAL_SRC);
+    }
+    if usage.references("array_column") {
+        sources.push(ARRAY_COLUMN_INDEXED_SRC);
     }
     if usage.references("array_combine") {
         sources.push(ARRAY_COMBINE_GRADUAL_SRC);
@@ -840,12 +1109,43 @@ pub fn inject_if_used(
     // So is the tokenizer surface.
     let needs_tokenizer =
         usage.references("token_get_all") || usage.references("token_name");
-    if sources.is_empty() && !inject_randomizer && !needs_natural_order && !needs_tokenizer {
+    // So is `array_filter()`'s callback form.
+    let needs_array_filter_callback = usage.references("array_filter");
+    // And so are `is_callable()`'s second and third parameters: the backend predicate takes the
+    // value alone, and `$syntax_only` asks a different question than "can this be called".
+    let needs_is_callable_ext = usage.references("is_callable");
+    // And so is `parse_str()`, which has no backend implementation of any kind: no runtime symbol
+    // and no lowering, so a compiled call fell through to the eval bridge, whose array ABI cannot
+    // bind the mandatory by-reference `$result`.
+    let needs_parse_str = usage.references("parse_str");
+    if sources.is_empty()
+        && !inject_randomizer
+        && !needs_natural_order
+        && !needs_tokenizer
+        && !needs_parse_str
+        && !needs_array_filter_callback
+        && !needs_is_callable_ext
+    {
         return program;
     }
     let mut combined = Vec::new();
     if needs_natural_order {
         let declarations = crate::strnatcmp_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_parse_str {
+        let declarations = crate::parse_str_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_array_filter_callback {
+        let declarations = crate::array_filter_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_is_callable_ext {
+        let declarations = crate::is_callable_prelude::declarations();
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);
         combined.extend(declarations);
     }

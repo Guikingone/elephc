@@ -33,6 +33,18 @@ builtin! {
 /// already inferred every argument once for side effects, and arity (exactly 2) is pre-validated.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    if cx.args.len() == 3 {
+        // `$index_key` re-keys the result from the data, so it is a hash whatever the rows look
+        // like. `__elephc_array_column_indexed` answers it, and the type here is the one that
+        // helper's body infers from its single `$result[$key] = $value;` site.
+        for arg in &cx.args[1..] {
+            cx.checker.infer_type(arg, cx.env)?;
+        }
+        return Ok(PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        });
+    }
     match ty {
         PhpType::Array(inner) => match *inner {
             PhpType::AssocArray { value, .. } => Ok(PhpType::Array(value)),

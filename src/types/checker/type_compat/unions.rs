@@ -62,15 +62,76 @@ impl Checker {
         // member satisfies the destination. Apply this before dispatching on `expected` so
         // non-union supertypes such as `iterable`, `object`, and generic arrays see each member
         // instead of rejecting the union wrapper itself.
+        // A union that CONTAINS `callable` is a value already PROVEN callable, whose runtime shape
+        // is merely not decided: that is what `is_callable($x)` narrows an unconstrained value to
+        // (`callable|string`), because the storage stays the boxed cell it was and a callable may
+        // be a plain function-name string. Decomposing it member by member asks the wrong
+        // question — `string` alone is not proven callable, so the `string` member would sink the
+        // whole union — while PHP's own `callable` destination accepts every one of these shapes.
+        // A union WITHOUT a `callable` member (`string|array`) carries no such proof and keeps the
+        // member-by-member rule below.
+        if matches!(expected, PhpType::Callable) {
+            if let PhpType::Union(actual_members) = actual {
+                if actual_members.contains(&PhpType::Callable)
+                    && actual_members.iter().all(|member| {
+                        matches!(
+                            member,
+                            PhpType::Callable
+                                | PhpType::Str
+                                | PhpType::Array(_)
+                                | PhpType::AssocArray { .. }
+                                | PhpType::Object(_)
+                        )
+                    })
+                {
+                    return true;
+                }
+            }
+        }
         if let PhpType::Union(actual_members) = actual {
             return actual_members
                 .iter()
                 .all(|actual_member| self.type_accepts(expected, actual_member));
         }
+        // A `callable` value is, at run time, exactly one of three things: a function-name string,
+        // an `[object, 'method']` array, or an invokable object. PHP has no `callable` PROPERTY or
+        // return type, so code that needs to store one declares those three shapes instead —
+        // Symfony's `ControllerEvent::$controller` is `private string|array|object`, written
+        // straight from a `callable $controller` parameter. Such a destination accepts a callable
+        // exactly when it accepts ALL THREE shapes; one that leaves a shape out (`string|object`,
+        // say) would still fail at run time for the shape it omitted, so it is refused.
+        if matches!(actual, PhpType::Callable) && !matches!(expected, PhpType::Callable) {
+            return self.type_accepts(expected, &PhpType::Str)
+                && self.type_accepts(expected, &PhpType::Array(Box::new(PhpType::Mixed)))
+                && self.type_accepts(expected, &PhpType::Object(String::new()));
+        }
         match expected {
             PhpType::Mixed => true,
             PhpType::Bool if matches!(actual, PhpType::False) => true,
             PhpType::Callable if actual.is_closure_object() => true,
+            // php's `callable` accepts an ARRAY: `[$object, 'method']` and `['Class', 'method']`
+            // are two of the three shapes a callable HAS, not a coercion into one. elephc already
+            // resolves both in builtin callback position (`array_map([$g, 'hello'], …)` compiles
+            // and runs), so refusing them at a user-declared `callable` parameter was an
+            // inconsistency rather than a policy: `symfony/http-foundation`'s
+            // `SessionFactory(…, ?callable $usageReporter)` is handed exactly such a pair by the
+            // generated container, and the whole build stopped there.
+            //
+            // The element bound is not cosmetic. `Op::NormalizeCallable` -- which
+            // `coerce_scalar_arg_to_param_storage` emits to turn the pair into the descriptor the
+            // parameter's storage actually holds -- implements `Array` of `Mixed` or `Str` and
+            // refuses anything else, so accepting a wider element here would hand the backend a
+            // shape it cannot convert. Whether the pair NAMES something real stays a runtime
+            // question, exactly as it is in php.
+            PhpType::Callable
+                if matches!(
+                    actual,
+                    PhpType::Array(element)
+                        if matches!(element.codegen_repr(), PhpType::Mixed | PhpType::Str)
+                ) =>
+            {
+                true
+            }
             // PHP coercive mode: scalars accept Mixed with runtime narrowing. `False`
             // belongs here alongside `Bool` — it is the same runtime representation, and
             // leaving it out would make a `T|false` contract stricter than the `T|bool`

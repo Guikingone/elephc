@@ -30,6 +30,7 @@ fn emit_object_to_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_object_to_array_common");                       // share the property walk with foreach conversion
     emitter.label_global("__rt_object_to_foreach_array");
     emitter.instruction("mov x1, #1");                                          // select bare visible names for in-scope foreach iteration
+    emitter.instruction("b __rt_object_to_array_common");                       // branch, never fall through: `.subsections_via_symbols` makes the shared body its own atom
     emitter.label_global("__rt_object_to_array_common");
 
     // [0]=object [8]=result [16]=index [24]=count [32]=key ptr [40]=key len
@@ -116,6 +117,7 @@ fn emit_object_to_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_object_to_array_common_x86");                 // share the property walk with foreach conversion
     emitter.label_global("__rt_object_to_foreach_array");
     emitter.instruction("mov esi, 1");                                          // select bare visible names for in-scope foreach iteration
+    emitter.instruction("jmp __rt_object_to_array_common_x86");                 // branch, never fall through: `.subsections_via_symbols` makes the shared body its own atom
     emitter.label_global("__rt_object_to_array_common_x86");
 
     // [rbp-8]=object [16]=result [24]=index [32]=count [40]=key ptr [48]=key len

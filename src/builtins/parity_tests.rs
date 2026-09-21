@@ -200,7 +200,7 @@ fn catalog_hosted_preludes() -> Vec<(&'static str, String, bool)> {
 /// that needs different behaviour. The contract records the route that survives everywhere.
 const PRELUDE_SHADOWED_REGISTRY_BUILTINS: &[(&str, &str)] = &[(
     "error_log",
-    "the registry builtin (`src/builtins/system/error_log.rs` + `__rt_error_log`) is the CLI      implementation and writes to stderr. Under `--web` the request prelude declares a PHP      `error_log()` that implements PHP's `message_type` routing (mail/file/SAPI) on top of it,      which shadows the builtin for that mode only. `Implemented(Registry)` is the route every      compile has; the prelude one exists in `--web` builds alone.",
+    "the registry builtin (`src/builtins/system/error_log.rs` + `__rt_error_log`) writes the      message to stderr and ignores `$message_type`, which is right for the one-argument call      and wrong for every other. `crate::error_handling_prelude` declares a PHP `error_log()`      that implements PHP's `message_type` routing (mail/file/SAPI) on top of it and shadows      the builtin — in BOTH SAPIs now (it used to be `--web` only, so a CLI      `error_log($m, 3, $file)` logged to the console), and pay-for-use: a program that never      spells `error_log` keeps the direct runtime call. `Implemented(Registry)` is the route      every compile has; the prelude one is added by the injection gate.",
 )];
 
 /// PHP-visible functions a catalog-hosted prelude declares WITHOUT a shared contract,

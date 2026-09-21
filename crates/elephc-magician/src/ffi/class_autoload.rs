@@ -64,7 +64,7 @@ unsafe fn class_autoload_inner(name_ptr: *const u8, name_len: u64) -> u64 {
     context.sync_global_eval_classes();
     let declared =
         loaded || context.class(&name).is_some() || values.class_exists(&name).unwrap_or(false);
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         eprintln!(
             "[elephc-eval-trace] phase=class_autoload name={name:?} loaded={loaded} declared={declared}"
         );

@@ -578,3 +578,36 @@ emitDeprecation(["vendor/package", "1.0", "use another setting"]);
     );
     assert_eq!(out, "setting|vendor/package|1.0|use another setting");
 }
+
+/// Verifies a spread supplies a BUILTIN's arguments too. The written argument count says nothing
+/// about the call's real arity, so the arity check has to stand aside — it used to reject
+/// `method_exists(...$controller)`, which is how Symfony's `ControllerEvent` reflects on an array
+/// callable, with "method_exists() takes exactly 2 arguments". PHP outputs "bool(true)
+/// bool(false) bool(true)" for this fixture.
+#[test]
+fn test_spread_supplies_builtin_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+class SpreadWidget {
+    public function run(): string { return 'ran'; }
+}
+
+function makePair(object $object, string $method): array {
+    $out = [];
+    $out[] = $object;
+    $out[] = $method;
+
+    return $out;
+}
+
+$present = makePair(new SpreadWidget(), 'run');
+$absent = makePair(new SpreadWidget(), 'nope');
+$words = ['hello world', 'world'];
+
+echo var_export(method_exists(...$present), true), "|";
+echo var_export(method_exists(...$absent), true), "|";
+echo var_export(str_contains(...$words), true);
+"#,
+    );
+    assert_eq!(out, "true|false|true");
+}

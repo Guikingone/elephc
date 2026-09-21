@@ -90,6 +90,13 @@ pub(super) fn emit_runtime_closure_descriptor_with_captures(
     let descriptor_reg = abi::nested_call_reg(ctx.emitter);
     let total_bytes =
         callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + captures.len() * 16;
+    // `nested_call_reg` is x19 / r12, both CALLEE-SAVED, and an ordinary compiled function's
+    // prologue saves neither. Holding the descriptor there across the allocation and the capture
+    // stores therefore returned to the caller with its own x19 destroyed. Compiled-to-compiled
+    // calls survived that by luck; the eval bridge does not, because its caller is Rust, and a
+    // static method returning a closure to interpreted code — Symfony's
+    // `HtmlErrorRenderer::isDebug(): \Closure` — corrupted the interpreter instead.
+    abi::emit_push_reg(ctx.emitter, descriptor_reg);
     abi::emit_load_int_immediate(ctx.emitter, result_reg, total_bytes as i64);
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
     crate::codegen_support::runtime::emit_acquire_object_handle(ctx.emitter); // a PHP Closure is an object: draw its handle from the object pool
@@ -141,6 +148,9 @@ pub(super) fn emit_runtime_closure_descriptor_with_captures(
         ctx.emitter
             .instruction(&format!("mov {}, {}", result_reg, descriptor_reg)); // return the runtime closure descriptor pointer
     }
+    // Restored only after the descriptor has been moved into the result register, so the caller's
+    // callee-saved value comes back and the closure still leaves in `result_reg`.
+    abi::emit_pop_reg(ctx.emitter, descriptor_reg);
     Ok(())
 }
 

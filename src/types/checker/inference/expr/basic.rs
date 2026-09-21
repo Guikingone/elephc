@@ -393,7 +393,8 @@ impl Checker {
                 match thrown_ty {
                     PhpType::Object(type_name)
                         if self.object_type_implements_throwable(&type_name)
-                            || self.unresolved_new_object_defers_to_runtime(inner, &type_name) =>
+                            || self.unresolved_new_object_defers_to_runtime(inner, &type_name)
+                            || self.absent_class_defers_to_runtime(&type_name) =>
                     {
                         Ok(PhpType::Void)
                     }
@@ -401,6 +402,9 @@ impl Checker {
                         expr.span,
                         "Type error: throw requires an object implementing Throwable",
                     )),
+                    // `Never` reaches here only from a guard the checker has just proven
+                    // cannot be taken, so the statement is unreachable rather than wrong.
+                    PhpType::Never => Ok(PhpType::Void),
                     ref ty
                         if crate::types::checker::type_compat::type_is_gradual_object_family(ty) =>
                     {

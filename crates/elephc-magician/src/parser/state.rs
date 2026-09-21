@@ -19,7 +19,6 @@ use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-const EVAL_TRACE_ENV: &str = "ELEPHC_EVAL_TRACE";
 pub(crate) const EVAL_YIELD_INTRINSIC: &str = "__elephc_eval_yield";
 
 /// Marker call the parser emits for `yield from EXPR`.
@@ -266,7 +265,7 @@ impl Parser {
 
     /// Emits the failing token position when opt-in eval tracing is enabled.
     fn trace_parse_error(&self, error: &EvalParseError) {
-        if std::env::var_os(EVAL_TRACE_ENV).is_none() {
+        if !crate::eval_trace::enabled() {
             return;
         }
         let _ = catch_unwind(AssertUnwindSafe(|| {

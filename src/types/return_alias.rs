@@ -65,9 +65,44 @@ impl ReturnArgAlias {
 pub(crate) struct ReturnAliasSummaries {
     functions: HashMap<String, ReturnArgAlias>,
     methods: HashMap<(String, String), ReturnArgAlias>,
+    /// Dispatch folds already computed, keyed by the receiver the fold ranged over.
+    ///
+    /// `method_return_arg_alias` answers a non-final or `mixed` receiver by merging the
+    /// resolved summary of EVERY closed-world class that could be dispatched to — a scan of
+    /// the whole class table at each such call site. The answer is a pure function of the
+    /// method name, the receiver, the class table and these summaries; the class table and
+    /// the summaries are borrowed by `LoweringContext` as `&'m`, so none of them can change
+    /// while lowering runs, and the fold only needs to happen once per key.
+    ///
+    /// `merge` absorbs on `Unknown`, is neutral on `None` and unions elsewhere, so it is
+    /// commutative and associative: the memoized answer does not depend on the iteration
+    /// order the fold happened to see.
+    dispatch_folds: std::cell::RefCell<crate::fast_hash::FastMap<DispatchFoldKey, ReturnArgAlias>>,
+}
+
+/// Identifies one dispatch fold: a case-folded method name, over one receiver or over all.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct DispatchFoldKey {
+    /// The base class the fold was restricted to, or `None` for the `mixed` fallback.
+    pub(crate) base_class: Option<String>,
+    /// The case-folded method name.
+    pub(crate) method_key: String,
 }
 
 impl ReturnAliasSummaries {
+    /// Returns a dispatch fold computed earlier, if this key has already been answered.
+    pub(crate) fn cached_dispatch_fold(&self, key: &DispatchFoldKey) -> Option<ReturnArgAlias> {
+        self.dispatch_folds.borrow().get(key).cloned()
+    }
+
+    /// Records the result of one dispatch fold so the scan is not repeated.
+    ///
+    /// Taken by value and borrowed only here, so the caller runs its scan with no borrow of
+    /// the cache outstanding and re-entrancy cannot panic.
+    pub(crate) fn store_dispatch_fold(&self, key: DispatchFoldKey, alias: ReturnArgAlias) {
+        self.dispatch_folds.borrow_mut().insert(key, alias);
+    }
+
     /// Looks up a source-declared function summary by its canonical name.
     pub(crate) fn function(&self, name: &str) -> Option<&ReturnArgAlias> {
         self.functions.get(name)

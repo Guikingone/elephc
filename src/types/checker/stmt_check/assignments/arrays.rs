@@ -37,6 +37,8 @@ pub(super) fn check_array_assign(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
+    // Same as the append below: a name `$rows['id'] = $v` CREATES is bound at scope entry by
+    // `Checker::seed_vivified_array_locals`, so an unbound name here really is undefined.
     let arr_ty = env
         .get(array)
         .cloned()
@@ -286,6 +288,9 @@ pub(super) fn check_array_push(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
+    // A name this write CREATES (`$keys[] = $k` with nothing assigned before it) is already bound
+    // to the empty indexed shape by `Checker::seed_vivified_array_locals`, at scope entry, where
+    // EIR lowering seeds the same storage. Reaching the error here means no such seed was made.
     let arr_ty = env
         .get(array)
         .cloned()

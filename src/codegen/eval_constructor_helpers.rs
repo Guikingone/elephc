@@ -34,6 +34,8 @@ use super::eval_ref_arg_helpers::{
     eval_normalized_ref_params, eval_ref_arg_slots, eval_signature_ref_params_supported,
     emit_aarch64_write_back_ref_args, emit_x86_64_write_back_ref_args,
 };
+use super::eval_callable_helpers::{EVAL_ARG_BOXED_VALUE_AARCH64_OFFSET, EVAL_ARG_BOXED_VALUE_X86_64_OFFSET,
+    EVAL_ARG_CONTEXT_AARCH64_OFFSET};
 use super::eval_callable_helpers::EvalCallableDescriptorSupport;
 
 /// Every builtin Throwable the eval bridge can construct from a runtime string.
@@ -1463,6 +1465,8 @@ fn emit_aarch64_cast_eval_arg(
                 callable_support,
                 label_prefix,
                 fail_label,
+                EVAL_ARG_CONTEXT_AARCH64_OFFSET,
+                EVAL_ARG_BOXED_VALUE_AARCH64_OFFSET,
             );
         }
         PhpType::TaggedScalar => {
@@ -1623,6 +1627,7 @@ fn emit_x86_64_cast_eval_arg(
                 label_prefix,
                 fail_label,
                 X86_64_CONSTRUCTOR_CONTEXT_FRAME_OFFSET,
+                EVAL_ARG_BOXED_VALUE_X86_64_OFFSET,
             );
         }
         PhpType::TaggedScalar => {

@@ -35,7 +35,11 @@ pub mod array_reduce_prelude;
 /// Single-argument `assert()` compatibility prelude.
 pub mod assert_prelude;
 /// Whole-program PHP symbol usage collection for conditional prelude injection.
+pub(crate) mod append_vivify;
 pub mod ast_usage;
+mod array_filter_prelude;
+mod is_callable_prelude;
+pub mod opcache_preload_sources;
 /// Narrow PHP-level fallbacks for builtin shapes not handled natively yet.
 pub mod backend_gap_prelude;
 mod strnatcmp_prelude;
@@ -57,6 +61,9 @@ pub mod dom_prelude;
 pub mod curl_prelude;
 /// Error and warning reporting.
 pub mod errors;
+/// PHP's SAPI-independent error/exception-handler surface, shared by the `--web` prelude and
+/// the pay-for-use CLI injection.
+pub mod error_handling_prelude;
 mod eval_aot;
 /// `#[Export]` attribute scan for cdylib emission.
 pub mod exports;
@@ -108,6 +115,8 @@ pub mod opcache_prelude;
 pub mod optimize;
 /// Parser for PHP syntax.
 pub mod parser;
+/// `parse_str()` query-string prelude injection.
+mod parse_str_prelude;
 /// Selected PHP compatibility version for version-sensitive compiler surfaces.
 pub mod php_version;
 /// PDO (SQLite) standard-library prelude injection.

@@ -29,18 +29,89 @@ const BUILTIN_INTERFACE_NAMES: &[&str] = &[
     "SeekableIterator",
     "SplObserver",
     "SplSubject",
+    "Serializable",
     "Stringable",
     "Reflector",
     "UnitEnum",
     "BackedEnum",
 ];
 
+/// `(interface, method)` pairs whose return type PHP declares TENTATIVE.
+///
+/// PHP 8.1 gave its own interfaces return types but kept them tentative: a class that implements
+/// one WITHOUT declaring a return type stays legal, and PHP raises a deprecation rather than a
+/// fatal. `#[\ReturnTypeWillChange]` silences that deprecation but is not what makes the method
+/// legal -- `php -n` fatals on the same shape against a USERLAND parent whether or not the
+/// attribute is there, which is why the rule lives here and not on the attribute.
+///
+/// Refusing these outright is what stopped `Twig\Node\Node` (`#[\ReturnTypeWillChange] public
+/// function count()`) from registering at all, and with it every Twig node class that extends it:
+/// each then reported `Undefined class` against its own file.
+///
+/// Deliberately absent: every userland interface, and `Stringable::__toString(): string`, which
+/// PHP 8.0 declared outright rather than tentatively, so an implementer must still declare it.
+/// `UnitEnum` and `BackedEnum` are absent too -- userland cannot implement them.
+///
+/// The attribute-less spelling is accepted with PHP's own deprecation on it
+/// (`validate_interface_method`); with the attribute, PHP is silent and so is elephc.
+const TENTATIVE_RETURN_TYPE_METHODS: &[(&str, &str)] = &[
+    ("ArrayAccess", "offsetExists"),
+    ("ArrayAccess", "offsetGet"),
+    ("ArrayAccess", "offsetSet"),
+    ("ArrayAccess", "offsetUnset"),
+    ("Countable", "count"),
+    ("DateTimeInterface", "diff"),
+    ("DateTimeInterface", "format"),
+    ("DateTimeInterface", "getOffset"),
+    ("DateTimeInterface", "getTimestamp"),
+    ("DateTimeInterface", "getTimezone"),
+    ("Iterator", "current"),
+    ("Iterator", "key"),
+    ("Iterator", "next"),
+    ("Iterator", "rewind"),
+    ("Iterator", "valid"),
+    ("IteratorAggregate", "getIterator"),
+    ("JsonSerializable", "jsonSerialize"),
+    ("OuterIterator", "getInnerIterator"),
+    ("RecursiveIterator", "getChildren"),
+    ("RecursiveIterator", "hasChildren"),
+    ("SeekableIterator", "seek"),
+    ("Serializable", "serialize"),
+    ("Serializable", "unserialize"),
+    ("SessionHandlerInterface", "close"),
+    ("SessionHandlerInterface", "destroy"),
+    ("SessionHandlerInterface", "gc"),
+    ("SessionHandlerInterface", "open"),
+    ("SessionHandlerInterface", "read"),
+    ("SessionHandlerInterface", "write"),
+    ("SplObserver", "update"),
+    ("SplSubject", "attach"),
+    ("SplSubject", "detach"),
+    ("SplSubject", "notify"),
+];
+
+/// Reports whether PHP declares `interface::method`'s return type TENTATIVE.
+///
+/// Both halves are compared under PHP's case-insensitive symbol rule, and a leading `\` on a
+/// fully qualified interface name is ignored, so `\Countable` and `countable` both match.
+/// See [`TENTATIVE_RETURN_TYPE_METHODS`] for what the list does and does not cover.
+pub(crate) fn interface_return_type_is_tentative(interface: &str, method: &str) -> bool {
+    let interface_key = php_symbol_key(interface.trim_start_matches('\\'));
+    let method_key = php_symbol_key(method);
+    TENTATIVE_RETURN_TYPE_METHODS
+        .iter()
+        .any(|(tentative_interface, tentative_method)| {
+            php_symbol_key(tentative_interface) == interface_key
+                && php_symbol_key(tentative_method) == method_key
+        })
+}
+
 /// Injects PHP core and SPL builtin interfaces into the type environment.
 ///
 /// Adds `Traversable`, `Iterator`, `IteratorAggregate`, `ArrayAccess`, `Countable`,
 /// `OuterIterator`, `RecursiveIterator`, `SeekableIterator`, `SplObserver`, `SplSubject`,
-/// `Stringable`, `Reflector`, `UnitEnum`, and `BackedEnum` as declared interfaces with their
-/// full method signatures.
+/// `Serializable`, `Stringable`, `Reflector`, `UnitEnum`, and `BackedEnum` as declared interfaces
+/// with their full method signatures.
 ///
 /// ## Errors
 /// Returns an error if any user-defined interface or class has a PHP-case-insensitive
@@ -246,6 +317,34 @@ pub(crate) fn inject_builtin_interfaces(
                     TypeExpr::Void,
                 ),
                 builtin_interface_method("notify", TypeExpr::Void),
+            ],
+            span: crate::span::Span::dummy(),
+            constants: Vec::new(),
+        },
+    );
+
+    // Deprecated since PHP 8.1 and still declared by the engine. Without it a class that
+    // implements it sends the interpreter to `spl_autoload`, and Composer cannot autoload a PHP
+    // built-in: `Twig\Profiler\Profile` was refused outright for exactly that reason.
+    //
+    // Both methods carry TENTATIVE return types, so an implementer may declare none; see
+    // `TENTATIVE_RETURN_TYPE_METHODS`, which already listed this pair.
+    interface_map.insert(
+        "Serializable".to_string(),
+        InterfaceDeclInfo {
+            name: "Serializable".to_string(),
+            extends: Vec::new(),
+            properties: Vec::new(),
+            methods: vec![
+                builtin_interface_method(
+                    "serialize",
+                    TypeExpr::Nullable(Box::new(TypeExpr::Str)),
+                ),
+                builtin_interface_method_with_params(
+                    "unserialize",
+                    vec![("data", TypeExpr::Str)],
+                    TypeExpr::Void,
+                ),
             ],
             span: crate::span::Span::dummy(),
             constants: Vec::new(),

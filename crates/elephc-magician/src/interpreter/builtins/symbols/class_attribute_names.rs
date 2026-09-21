@@ -157,8 +157,14 @@ pub(in crate::interpreter) fn eval_reflection_attribute_array_result(
         let key = values.int(index as i64)?;
         let args = eval_class_attribute_args_result(args, values)?;
         let repeated = eval_attribute_is_repeated(attributes, attribute.name());
+        // Rendered HERE, not in the emitted helper: PHP's `__toString()` spells out every literal
+        // argument, and only the interpreter holds them for a runtime-declared class.
+        let rendered = crate::eval_ir::render_reflection_attribute_string(
+            attribute.name(),
+            attribute.args().unwrap_or(&[]),
+        );
         let reflection_attribute =
-            values.reflection_attribute_new(attribute.name(), args, target, repeated)?;
+            values.reflection_attribute_new(attribute.name(), args, target, repeated, &rendered)?;
         let identity = values.object_identity(reflection_attribute)?;
         context.register_eval_reflection_attribute(identity, attribute.clone(), target, repeated);
         values.release(args)?;

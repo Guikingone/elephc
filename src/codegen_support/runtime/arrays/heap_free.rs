@@ -34,6 +34,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     }
 
     let double_free_msg = "Fatal error: heap debug detected double free\n";
+    let live_free_msg = "Fatal error: heap debug detected free of a still-referenced block\n";
 
     emitter.blank();
     emitter.comment("--- runtime: heap_free ---");
@@ -52,6 +53,9 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction("add x17, x16, x17");                                   // compute the current heap end
     emitter.instruction("cmp x0, x17");                                         // is the candidate at or beyond the heap end?
     emitter.instruction("b.hs __rt_heap_free_done");                            // yes — ignore pointers outside the live heap
+    emitter.instruction("sub x9, x0, x16");                                     // offset of the candidate payload within the arena
+    emitter.instruction("and x9, x9, #15");                                     // every real payload starts on a 16-byte boundary
+    emitter.instruction("cbnz x9, __rt_heap_free_done");                        // not a block start: an interior pointer must never be freed
     emitter.instruction("sub x9, x0, #16");                                     // recover the candidate block header
     emitter.instruction("ldr w11, [x9]");                                       // load the candidate payload byte size
     emitter.instruction("cmp x11, #8");                                         // can this block hold the minimum heap allocation?
@@ -100,6 +104,23 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction("ldr x14, [x13]");                                      // load current live bytes
     emitter.instruction("sub x14, x14, x12");                                   // subtract the freed block footprint from the live-byte total
     emitter.instruction("str x14, [x13]");                                      // store updated live bytes
+    // -- heap-debug: a block with owners left must not be freed --
+    //
+    // Nothing reads the refcount here: free clears it and moves on, so releasing a block another
+    // value still holds is silent, and the block comes back out of the free list to a second
+    // owner. Two live values then share one allocation -- which is what the Twig generator crash
+    // looks like from the wreckage, a hash whose header is intact while its entry region is
+    // interleaved with other blocks. Reading it first names the caller that got it wrong.
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_heap_debug_enabled");
+    emitter.instruction("ldr x16, [x16]");                                      // load the heap-debug enabled flag
+    emitter.instruction("cbz x16, __rt_heap_free_live_checked");                // skip the owner check outside heap-debug
+    emitter.instruction("ldr w16, [x9, #4]");                                   // load the refcount the caller is freeing through
+    emitter.instruction("cmp w16, #1");                                         // does another owner still hold this block?
+    emitter.instruction("b.ls __rt_heap_free_live_checked");                    // 0 or 1 owner is the normal release
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_heap_dbg_live_free_msg");
+    emitter.instruction(&format!("mov x2, #{}", live_free_msg.len()));          // pass the exact live-free debug message length
+    emitter.instruction("b __rt_heap_debug_fail");                              // report the premature free and terminate immediately
+    emitter.label("__rt_heap_free_live_checked");
     emitter.instruction("str wzr, [x9, #4]");                                   // mark the block header as not live while it is being freed
     emitter.instruction("str xzr, [x9, #8]");                                   // clear the heap kind while the block sits on the free list
     crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_heap_buf");
@@ -111,10 +132,33 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction("add x12, x0, x11");                                    // x12 = user_ptr + size = block end
     emitter.instruction("cmp x12, x14");                                        // is block end == heap end?
     emitter.instruction("b.ne __rt_heap_free_cache_small");                     // no — cache small blocks or insert into the free list
-
     // -- bump reset: block is at end of heap, just shrink the bump pointer --
-    emitter.instruction("sub x14, x9, x15");                                    // x14 = header - heap_buf = new offset
-    emitter.instruction("str x14, [x13]");                                      // heap_off = header offset (shrink heap)
+    emitter.instruction("sub x14, x9, x15");                                   // x14 = header - heap_buf = new offset
+    emitter.instruction("str x14, [x13]");                                     // heap_off = header offset (shrink heap)
+
+    // -- drop cached small blocks the rewind just put above the bump --
+    emitter.instruction("add x12, x15, x14");                                  // x12 = the new live heap end
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_small_bins");
+    emitter.instruction("mov x16, #0");                                        // x16 = current small-bin class index
+    emitter.label("__rt_heap_free_purge_bin");
+    emitter.instruction("cmp x16, #4");                                        // have all four size classes been purged?
+    emitter.instruction("b.ge __rt_heap_free_trim_tail");                      // yes — continue with the ordered free list
+    emitter.instruction("add x17, x10, x16, lsl #3");                          // x17 = address of this bin's head pointer
+    emitter.label("__rt_heap_free_purge_scan");
+    emitter.instruction("ldr x11, [x17]");                                     // x11 = cached block in this bin, or null at its end
+    emitter.instruction("cbz x11, __rt_heap_free_purge_next");                 // this bin is exhausted
+    emitter.instruction("cmp x11, x12");                                       // does the cached block sit above the new bump?
+    emitter.instruction("b.lo __rt_heap_free_purge_keep");                     // no — it still describes live arena
+    emitter.instruction("ldr x9, [x11, #16]");                                 // x9 = cached_block->next
+    emitter.instruction("str x9, [x17]");                                      // unlink the stale entry from its bin
+    emitter.instruction("b __rt_heap_free_purge_scan");                        // re-examine the new occupant of this slot
+    emitter.label("__rt_heap_free_purge_keep");
+    emitter.instruction("add x17, x11, #16");                                  // advance to this block's next pointer
+    emitter.instruction("b __rt_heap_free_purge_scan");                        // keep walking the bin
+    emitter.label("__rt_heap_free_purge_next");
+    emitter.instruction("add x16, x16, #1");                                   // move on to the next size class
+    emitter.instruction("b __rt_heap_free_purge_bin");                         // purge the remaining bins
+
     emitter.instruction("b __rt_heap_free_trim_tail");                          // trim any newly-exposed free tail blocks too
 
     // -- small non-tail blocks go through segregated bins first --
@@ -227,6 +271,8 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
 
     emitter.label("__rt_heap_free_trim_tail_scan");
     emitter.instruction("cbz x11, __rt_heap_free_post_validate");               // no free block reaches the tail anymore
+    emitter.instruction("cmp x11, x14");                                        // is this node at or above the live heap end?
+    emitter.instruction("b.hs __rt_heap_free_trim_tail_drop");                  // the bump already reclaimed it: so is everything after it
     emitter.instruction("ldr w12, [x11]");                                      // x12 = candidate free block size
     emitter.instruction("add x16, x11, x12");                                   // x16 = header + payload size
     emitter.instruction("add x16, x16, #16");                                   // x16 = end of candidate free block
@@ -235,6 +281,11 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction("add x10, x11, #16");                                   // x10 = address of candidate->next for the next iteration
     emitter.instruction("ldr x11, [x11, #16]");                                 // x11 = candidate->next
     emitter.instruction("b __rt_heap_free_trim_tail_scan");                     // continue scanning the free list
+
+    // -- a node the bump has overtaken describes memory that no longer exists --
+    emitter.label("__rt_heap_free_trim_tail_drop");
+    emitter.instruction("str xzr, [x10]");                                      // truncate the stranded suffix of the ordered free list
+    emitter.instruction("b __rt_heap_free_post_validate");                      // nothing below it can reach the tail either
 
     emitter.label("__rt_heap_free_trim_tail_found");
     emitter.instruction("ldr x12, [x11, #16]");                                 // x12 = candidate->next
@@ -316,6 +367,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
 /// Output: `rax` preserved through the free path; all other scratch registers are clobbered.
 fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     let double_free_msg = "Fatal error: heap debug detected double free\n";
+    let live_free_msg = "Fatal error: heap debug detected free of a still-referenced block\n";
 
     emitter.blank();
     emitter.comment("--- runtime: heap_free ---");
@@ -384,6 +436,18 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [r8]");                             // load the current live-byte count before subtracting the freed block footprint
     emitter.instruction("sub rcx, r10");                                        // subtract this block's payload-plus-header footprint from the live-byte count
     emitter.instruction("mov QWORD PTR [r8], rcx");                             // store the updated live-byte count after freeing the block
+    // See the AArch64 arm: freeing a block that still has owners is otherwise silent.
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rsi", "_heap_debug_enabled");
+    emitter.instruction("mov rsi, QWORD PTR [rsi]");                            // load the heap-debug enabled flag
+    emitter.instruction("test rsi, rsi");                                       // is heap-debug mode active?
+    emitter.instruction("jz __rt_heap_free_live_checked");                      // skip the owner check outside heap-debug
+    emitter.instruction("mov esi, DWORD PTR [r9 + 4]");                         // load the refcount the caller is freeing through
+    emitter.instruction("cmp esi, 1");                                          // does another owner still hold this block?
+    emitter.instruction("jbe __rt_heap_free_live_checked");                     // 0 or 1 owner is the normal release
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rsi", "_heap_dbg_live_free_msg");
+    emitter.instruction(&format!("mov rdx, {}", live_free_msg.len()));          // pass the exact live-free debug message length
+    emitter.instruction("jmp __rt_heap_debug_fail");                            // report the premature free and terminate immediately
+    emitter.label("__rt_heap_free_live_checked");
     emitter.instruction("mov DWORD PTR [r9 + 4], 0");                           // clear the live refcount while this block sits on the free list or in a small bin
     emitter.instruction("mov QWORD PTR [r9 + 8], 0");                           // clear the heap kind so free blocks do not look like live typed payloads
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
@@ -393,11 +457,35 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rdx, [rax + r11]");                                // compute the freed block end address from the user pointer plus payload size
     emitter.instruction("cmp rdx, rcx");                                        // does the freed block reach the current heap end?
     emitter.instruction("jne __rt_heap_free_cache_small");                      // no — cache small blocks or insert larger blocks into the general free list
-
     // -- bump reset: block is at end of heap, just shrink the bump pointer --
     emitter.instruction("mov rdx, r9");                                         // preserve the freed block header address while converting it back into a bump offset
     emitter.instruction("sub rdx, r10");                                        // compute the new bump offset from the heap base to the reclaimed block header
     emitter.instruction("mov QWORD PTR [r8], rdx");                             // shrink the bump pointer back to the start of the freed tail block
+
+    // -- drop cached small blocks the rewind just put above the bump (see the AArch64 arm) --
+    emitter.instruction("lea rcx, [r10 + rdx]");                                // rcx = the new live heap end
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_small_bins");
+    emitter.instruction("xor esi, esi");                                        // rsi = current small-bin class index
+    emitter.label("__rt_heap_free_purge_bin");
+    emitter.instruction("cmp rsi, 4");                                          // have all four size classes been purged?
+    emitter.instruction("jae __rt_heap_free_trim_tail");                        // yes — continue with the ordered free list
+    emitter.instruction("lea rdi, [r11 + rsi*8]");                              // rdi = address of this bin's head pointer
+    emitter.label("__rt_heap_free_purge_scan");
+    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // r9 = cached block in this bin, or null at its end
+    emitter.instruction("test r9, r9");                                         // is this bin exhausted?
+    emitter.instruction("jz __rt_heap_free_purge_next");                        // yes — move to the next class
+    emitter.instruction("cmp r9, rcx");                                         // does the cached block sit above the new bump?
+    emitter.instruction("jb __rt_heap_free_purge_keep");                        // no — it still describes live arena
+    emitter.instruction("mov rdx, QWORD PTR [r9 + 16]");                        // rdx = cached_block->next
+    emitter.instruction("mov QWORD PTR [rdi], rdx");                            // unlink the stale entry from its bin
+    emitter.instruction("jmp __rt_heap_free_purge_scan");                       // re-examine the new occupant of this slot
+    emitter.label("__rt_heap_free_purge_keep");
+    emitter.instruction("lea rdi, [r9 + 16]");                                  // advance to this block's next pointer
+    emitter.instruction("jmp __rt_heap_free_purge_scan");                       // keep walking the bin
+    emitter.label("__rt_heap_free_purge_next");
+    emitter.instruction("inc rsi");                                             // move on to the next size class
+    emitter.instruction("jmp __rt_heap_free_purge_bin");                        // purge the remaining bins
+
     emitter.instruction("jmp __rt_heap_free_trim_tail");                        // trim any newly exposed free tail blocks too before returning
 
     // -- small non-tail blocks go through segregated bins first --
@@ -511,6 +599,8 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_heap_free_trim_tail_scan");
     emitter.instruction("test rdx, rdx");                                       // did the scan run out of ordered free blocks?
     emitter.instruction("jz __rt_heap_free_count");                             // yes — no more free blocks reach the current bump tail
+    emitter.instruction("cmp rdx, rcx");                                        // is this node at or above the live heap end?
+    emitter.instruction("jae __rt_heap_free_trim_tail_drop");                   // the bump already reclaimed it: so is everything after it
     emitter.instruction("mov esi, DWORD PTR [rdx]");                            // load this candidate free block payload size before checking whether it reaches the tail
     emitter.instruction("lea rdi, [rdx + rsi + 16]");                           // compute the end address of the candidate free block
     emitter.instruction("cmp rdi, rcx");                                        // does this ordered free block end at the current heap tail?
@@ -518,6 +608,11 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea r11, [rdx + 16]");                                 // advance prev_next_addr to the candidate block next field
     emitter.instruction("mov rdx, QWORD PTR [rdx + 16]");                       // move on to the next ordered free block
     emitter.instruction("jmp __rt_heap_free_trim_tail_scan");                   // keep scanning for a free block that now touches the bump tail
+
+    // -- a node the bump has overtaken describes memory that no longer exists --
+    emitter.label("__rt_heap_free_trim_tail_drop");
+    emitter.instruction("mov QWORD PTR [r11], 0");                              // truncate the stranded suffix of the ordered free list
+    emitter.instruction("jmp __rt_heap_free_count");                            // nothing below it can reach the tail either
 
     emitter.label("__rt_heap_free_trim_tail_found");
     emitter.instruction("mov rsi, QWORD PTR [rdx + 16]");                       // preserve the reclaimed block successor before unlinking it from the free list

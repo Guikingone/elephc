@@ -115,6 +115,7 @@ pub mod strtolower;
 pub mod strtoupper;
 pub mod strtr;
 pub mod substr;
+pub mod substr_compare;
 pub mod substr_count;
 pub mod substr_replace;
 pub mod trim;

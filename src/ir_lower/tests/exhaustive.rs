@@ -204,6 +204,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         property_declared_slots: Vec::new(),
         final_properties: Default::default(),
         readonly_properties: Default::default(),
+        backed_hooked_properties: Default::default(),
         reference_properties: Default::default(),
         owned_reference_properties: Default::default(),
         promoted_properties: Default::default(),

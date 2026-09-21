@@ -327,6 +327,7 @@ fn arm64_eval_generator_probe(
 ) {
     let native = format!("__rt_gen_{}_eval_native", tag);
     let miss = format!("__rt_gen_{}_eval_miss", tag);
+    let thrown = format!("__rt_gen_{}_eval_thrown", tag);
     crate::codegen_support::abi::emit_symbol_address(
         emitter,
         "x9",
@@ -344,9 +345,17 @@ fn arm64_eval_generator_probe(
     emitter.instruction("mov x3, sp");                                          // x3 = where the callback writes its answer
     emitter.instruction("blr x9");                                              // ask the interpreter whether it owns this generator
     emitter.instruction(&format!("cbz x0, {}", miss));                          // a native generator keeps the fiber path
+    emitter.instruction("cmp x0, #2");                                          // answer 2 means a Throwable escaped this step
+    emitter.instruction(&format!("b.eq {}", thrown));                           // publish it through the native unwinder
     emitter.instruction("ldr x0, [sp]");                                        // load the answer the interpreter wrote
     emitter.instruction("add sp, sp, #16");                                     // release the out-word slot
     emitter.instruction(&format!("b {}", done_label));                          // skip the fiber body entirely
+    emitter.label(&thrown);
+    emitter.instruction("ldr x0, [sp]");                                        // load the boxed Throwable the interpreter handed back
+    emitter.instruction("add sp, sp, #16");                                     // release the out-word slot before unwinding
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the Throwable object payload
+    crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x1", "_exc_value", 0);
+    emitter.instruction("bl __rt_throw_current");                               // enter the native Throwable unwinder
     emitter.label(&miss);
     emitter.instruction("add sp, sp, #16");                                     // release the out-word slot before the native body
     emitter.label(&native);
@@ -365,6 +374,7 @@ fn x86_eval_generator_probe(
 ) {
     let native = format!("__rt_gen_{}_eval_native_x86", tag);
     let miss = format!("__rt_gen_{}_eval_miss_x86", tag);
+    let thrown = format!("__rt_gen_{}_eval_thrown_x86", tag);
     crate::codegen_support::abi::emit_symbol_address(
         emitter,
         "r10",
@@ -384,9 +394,17 @@ fn x86_eval_generator_probe(
     emitter.instruction("call r10");                                            // ask the interpreter whether it owns this generator
     emitter.instruction("test rax, rax");                                       // did the interpreter answer for this generator?
     emitter.instruction(&format!("jz {}", miss));                               // a native generator keeps the fiber path
+    emitter.instruction("cmp rax, 2");                                          // answer 2 means a Throwable escaped this step
+    emitter.instruction(&format!("je {}", thrown));                             // publish it through the native unwinder
     emitter.instruction("mov rax, QWORD PTR [rsp]");                            // load the answer the interpreter wrote
     emitter.instruction("add rsp, 16");                                         // release the out-word slot
     emitter.instruction(&format!("jmp {}", done_label));                        // skip the fiber body entirely
+    emitter.label(&thrown);
+    emitter.instruction("mov rax, QWORD PTR [rsp]");                            // load the boxed Throwable the interpreter handed back
+    emitter.instruction("add rsp, 16");                                         // release the out-word slot before unwinding
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the Throwable object payload
+    crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "rdi", "_exc_value", 0);
+    emitter.instruction("call __rt_throw_current");                             // enter the native Throwable unwinder
     emitter.label(&miss);
     emitter.instruction("add rsp, 16");                                         // release the out-word slot before the native body
     emitter.label(&native);

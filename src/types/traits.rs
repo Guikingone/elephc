@@ -381,13 +381,12 @@ fn trait_alias_source_trait(
     method: &str,
     trait_map: &HashMap<String, TraitDeclInfo>,
 ) -> Option<String> {
-    let method_key = php_symbol_key(method);
     trait_use.trait_names.iter().find_map(|trait_name| {
         let trait_info = trait_map.get(trait_name.as_str())?;
         trait_info
             .methods
             .iter()
-            .any(|candidate| php_symbol_key(&candidate.name) == method_key)
+            .any(|candidate| candidate.name.eq_ignore_ascii_case(method))
             .then(|| trait_name.as_str().to_string())
     })
 }

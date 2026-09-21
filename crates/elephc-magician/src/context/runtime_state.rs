@@ -50,9 +50,31 @@ impl ElephcEvalContext {
             .get(&(callback.as_ptr() as usize))
     }
 
-    /// Returns true when the context has a dynamic or native function with this lowercase PHP name.
+    /// Returns true when this lowercase PHP name resolves to a dynamic or native function.
+    ///
+    /// A function ANOTHER eval context declared counts: PHP's function table is process-global,
+    /// while elephc gives every compiled function that performs an eval or include its own
+    /// `LocalKind::EvalContext` frame slot. So a `require` inside a closure declares into a
+    /// context the caller has never seen — which is exactly Composer's `files` autoload shape
+    /// (`Closure::bind(static function ($file) { require $file; }, null, null)`), and why
+    /// `trigger_deprecation()` came back undefined while Symfony rendered an error page.
+    ///
+    /// Classes already cross that boundary through `sync_global_eval_classes`; this is the
+    /// function half of the same rule. The registry entry is removed when its owning context is
+    /// destroyed (`unregister_global_eval_functions_for_context`), so a hit here names a context
+    /// that is still alive — the same one `global_eval_function_owner_context` dispatches through.
     pub fn has_function(&self, name: &str) -> bool {
-        self.functions.contains_key(name) || self.native_functions.contains_key(name)
+        if self.functions.contains_key(name) || self.native_functions.contains_key(name) {
+            return true;
+        }
+        #[cfg(not(test))]
+        {
+            crate::context::global_eval_function_owner_context(name).is_some()
+        }
+        #[cfg(test)]
+        {
+            false
+        }
     }
 
     /// Returns true when the context has a closure registered under this synthetic name.

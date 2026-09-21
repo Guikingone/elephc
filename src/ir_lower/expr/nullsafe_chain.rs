@@ -18,7 +18,7 @@ use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
 use super::{
-    branch_to, lower_array_access_from_value, lower_boxed_null,
+    branch_to, callable_receiver_nullability, lower_array_access_from_value, lower_boxed_null,
     lower_dynamic_property_get_from_value, lower_expr, lower_expr_call_from_value,
     lower_method_call_with_receiver, lower_property_get_from_value, property_can_be_uninitialized,
     store_value_into_temp, take_owned_temp, value_is_definitely_null, value_is_nullable,
@@ -306,6 +306,15 @@ fn lower_nullsafe_postfix_segment(
                 }
             } else if !guard_regular_method_receiver(ctx, current, method, expr) {
                 return None;
+            }
+            // `$this->disabled?->__invoke()` reaches here as a chain segment: the null guard has
+            // already run, so what is left is the closure call itself, which has no instance
+            // dispatch to go through.
+            if method == "__invoke"
+                && callable_receiver_nullability(&ctx.builder.value_php_type(current.value))
+                    .is_some()
+            {
+                return Some(lower_expr_call_from_value(ctx, current, args, expr));
             }
             Some(lower_method_call_with_receiver(
                 ctx,

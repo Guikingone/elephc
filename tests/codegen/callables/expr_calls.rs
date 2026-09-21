@@ -1176,6 +1176,29 @@ echo $copy(14);
     assert_eq!(out, "42");
 }
 
+/// Verifies first-class callable syntax applies to a CALL RESULT, not just a name or a variable:
+/// `$obj->method()(...)` and `f()(...)` take the Closure out of whatever the call returned.
+/// Symfony's `ErrorListener::onControllerArguments()` reaches `ReflectionFunction` through
+/// `$event->getController()(...)`, which used to fail to parse with "Unexpected token: RParen".
+/// PHP outputs "8|15".
+#[test]
+fn test_first_class_callable_from_call_result() {
+    let out = compile_and_run(
+        r#"<?php
+class Holder {
+    public function get(): callable { return static fn (int $n): int => $n * 2; }
+}
+function factory(): callable { return static fn (int $n): int => $n * 3; }
+
+$holder = new Holder();
+$fromMethod = $holder->get()(...);
+$fromFunction = factory()(...);
+echo $fromMethod(4), "|", $fromFunction(5);
+"#,
+    );
+    assert_eq!(out, "8|15");
+}
+
 /// Verifies a callable-typed constructor parameter can copy an incoming closure descriptor.
 #[test]
 fn test_first_class_callable_from_callable_parameter_closure() {

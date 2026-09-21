@@ -12,9 +12,8 @@
 
 use crate::context::EvalCallFrame;
 use super::*;
-use crate::parse_cache::{parse_fragment_cached, parse_source_file_cached};
+use crate::parse_cache::{parse_fragment_cached, parse_source_file_at_path, parse_source_file_cached};
 
-const EVAL_TRACE_ENV: &str = "ELEPHC_EVAL_TRACE";
 
 #[cfg(all(test, unix))]
 mod source_identity_tests {
@@ -103,12 +102,38 @@ pub(super) fn eval_include_value(
     if once && context.has_included_file(&include_key) {
         return values.bool_value(true);
     }
+    // A file already parsed in this process, unchanged on disk, needs no read: the path cache
+    // answers from one `stat`. A web worker re-includes the same vendor tree on every request, so
+    // this is the difference between reading 76 files per request and stat-ing them. A cached
+    // PARSE ERROR deliberately falls through to the read below, so the diagnostic still carries
+    // the offending bytes.
+    if let Some(Ok(program)) = parse_source_file_at_path(&resolved_path) {
+        context.mark_included_file(include_key);
+        trace_cached_include(&resolved_path, context);
+        return eval_include_control_value(
+            eval_execute_include_program(program, &resolved_path, context, scope, values)?,
+            context,
+            values,
+        );
+    }
     let bytes = match std::fs::read(&resolved_path) {
         Ok(bytes) => bytes,
         Err(_) => return eval_include_missing_file(&path, required, values),
     };
     context.mark_included_file(include_key);
     eval_execute_include_bytes(&bytes, &resolved_path, context, scope, values)
+}
+
+/// Emits the opt-in include trace for a file served from the parse cache.
+fn trace_cached_include(path: &std::path::Path, context: &ElephcEvalContext) {
+    if !crate::eval_trace::enabled() {
+        return;
+    }
+    let caller = context.call_site();
+    eprintln!(
+        "[elephc-eval-trace] kind=include phase=input_cached path={path:?} caller_file={:?} caller_line={}",
+        caller.0, caller.2,
+    );
 }
 
 /// Returns the include/require result for a file that cannot be opened.
@@ -149,9 +174,21 @@ fn eval_resolve_include_path(path: &str, context: &ElephcEvalContext) -> std::pa
 }
 
 /// Builds the stable include_once key for a resolved path.
+///
+/// The key has to be the CANONICAL path: `include_once` dedupes on it and `get_included_files()`
+/// reports it, so two spellings that reach one file must produce one key — and on macOS even a
+/// lexically normal absolute path can cross a symlinked component, `/tmp` and `/var` being
+/// symlinks into `/private`. php-src canonicalizes here too, for every include and not only the
+/// `_once` forms, because a plain `include` adds its file to the same set a later `include_once`
+/// consults.
+///
+/// It is also the single most expensive thing an interpreted include does. `realpath()` issues one
+/// `getattrlist` per path component on macOS, the generated Symfony container fragments sit ten
+/// components deep, and a `--web` worker re-includes the same tree on every request: 31% of the
+/// samples inside request handling were this one call. `realpath_cache` is php-src's answer to
+/// exactly that, so the memo behind this call is matching PHP rather than diverging from it.
 fn eval_include_key(path: &std::path::Path) -> std::path::PathBuf {
-    std::fs::canonicalize(path)
-        .unwrap_or_else(|_| path.to_path_buf())
+    crate::realpath_cache::canonicalize_cached(path)
 }
 
 /// Executes a local include file as one program covering its inline HTML and every PHP block.
@@ -167,7 +204,17 @@ fn eval_execute_include_bytes(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    match eval_execute_include_code(bytes, path, context, scope, values)? {
+    let control = eval_execute_include_code(bytes, path, context, scope, values)?;
+    eval_include_control_value(control, context, values)
+}
+
+/// Converts the control flow an included file ended with into `include`'s PHP-visible value.
+fn eval_include_control_value(
+    control: EvalControl,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match control {
         EvalControl::None => values.int(1),
         EvalControl::ReturnVoid => values.null(),
         EvalControl::Return(value) => Ok(value),
@@ -195,6 +242,17 @@ fn eval_execute_include_code(
         report_fatal_diagnostic(&diagnostic.include_message(&path.to_string_lossy()));
         diagnostic.status()
     })?;
+    eval_execute_include_program(program, path, context, scope, values)
+}
+
+/// Executes one already-parsed included PHP source file.
+fn eval_execute_include_program(
+    program: std::sync::Arc<crate::eval_ir::EvalProgram>,
+    path: &std::path::Path,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalControl, EvalStatus> {
     let previous = context.call_site();
     // An included file's `declare(strict_types=1)` governs that file and stops at its edge. Left
     // unrestored it made one strict vendor file turn the whole rest of the program strict, which
@@ -210,7 +268,7 @@ fn eval_execute_include_code(
     context.push_include_execution(true);
     let result = execute_statements(program.statements(), context, scope, values);
     if let Err(ref status) = result {
-        if std::env::var_os(EVAL_TRACE_ENV).is_some() {
+        if crate::eval_trace::enabled() {
             eprintln!(
                 "[elephc-eval-trace] kind=include phase=execute_error path={path:?} status={status:?}"
             );
@@ -231,7 +289,7 @@ fn trace_include_fragment(
     context: &ElephcEvalContext,
     error: Option<&EvalParseDiagnostic>,
 ) {
-    if std::env::var_os(EVAL_TRACE_ENV).is_none() {
+    if !crate::eval_trace::enabled() {
         return;
     }
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

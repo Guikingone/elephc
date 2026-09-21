@@ -262,7 +262,15 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<(), CompileError> {
-        if class_name == "ReflectionMethod" && args.len() == 1 {
+        // `new ReflectionMethod($x)` is the deprecated one-argument `"Class::method"` form, but
+        // `new ReflectionMethod(...$pair)` is NOT one argument: a spread expands at run time, and
+        // Symfony's `ControllerEvent` spreads a two-element `[$object, $method]` array into the
+        // ordinary two-argument constructor. Counting the spread as one argument sent that call
+        // to the string-name validator, which then rejected it for not being a string.
+        if class_name == "ReflectionMethod"
+            && args.len() == 1
+            && !matches!(args[0].kind, ExprKind::Spread(_))
+        {
             return self.validate_reflection_method_constructor_from_method_name(args, expr, env);
         }
         let sig = self

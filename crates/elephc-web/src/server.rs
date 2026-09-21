@@ -109,6 +109,7 @@ fn spawn_worker(
     handler: extern "C" fn(),
     args: &ServerArgs,
     isolation: IsolationMode,
+    inherited_listener: Option<std::os::fd::RawFd>,
 ) -> libc::pid_t {
     match unsafe { libc::fork() } {
         -1 => {
@@ -118,10 +119,13 @@ fn spawn_worker(
         0 => {
             reset_signal_handlers_to_default();
             match isolation.broker_mode() {
-                None => worker::serve(listen, handler, args.worker_config()),
-                Some(mode) => {
-                    isolated_worker::serve(listen, handler, args.isolated_worker_config(mode))
-                }
+                None => worker::serve(listen, handler, args.worker_config(), inherited_listener),
+                Some(mode) => isolated_worker::serve(
+                    listen,
+                    handler,
+                    args.isolated_worker_config(mode),
+                    inherited_listener,
+                ),
             }
             // serve() only returns when the worker stopped accepting on purpose
             // after serving its --max-requests quota; exit with the recycle code
@@ -181,6 +185,39 @@ fn trace_worker_exit(pid: libc::pid_t, status: libc::c_int) {
     }
 }
 
+extern "C" {
+    /// The generated program's small-bin double-free guard flag, raised by the `--web` entry
+    /// stub. It is a `.comm` slot in the compiled binary, declared here the way `probe_route`
+    /// declares the probe slots; the codegen side spells the label with a leading underscore on
+    /// every target, which is already what a C symbol becomes on Apple platforms.
+    #[cfg_attr(not(target_vendor = "apple"), link_name = "_web_heap_guard_enabled")]
+    static mut web_heap_guard_enabled: u64;
+}
+
+/// Lets `ELEPHC_WEB_HEAP_GUARD=0` turn the small-bin double-free guard off for a measurement.
+///
+/// The guard walks the whole bin chain on EVERY small free looking for the block it is about to
+/// insert, so its cost grows with how full the bin is -- and a profile of a served request put
+/// `__rt_heap_free` at the top of the stack by a factor of two over `__rt_heap_alloc`. There was
+/// no way to price it: the entry stub raises the flag unconditionally before this function runs.
+/// Called before the fork, so every worker and every request child inherits the decision.
+///
+/// It stays ON by default. The guard contains a heap corruption to the one request that caused
+/// it, which is worth its cost in production; this exists so the cost can be MEASURED.
+fn apply_heap_guard_override() {
+    let Ok(value) = std::env::var("ELEPHC_WEB_HEAP_GUARD") else {
+        return;
+    };
+    let enabled = !matches!(value.trim(), "0" | "off" | "false");
+    // Single-threaded here: `elephc_web_run` has not forked or started a runtime yet.
+    unsafe {
+        web_heap_guard_enabled = u64::from(enabled);
+    }
+    if !enabled {
+        eprintln!("elephc-web: small-bin double-free guard DISABLED by ELEPHC_WEB_HEAP_GUARD=0");
+    }
+}
+
 /// Server entry: parse args, prefork workers, supervise. Returns an exit code.
 ///
 /// # Safety
@@ -227,11 +264,33 @@ fn run_server(
         ParsedArgs::Exit(code) => return code,
     };
     install_signal_handlers();
+    apply_heap_guard_override();
     // Fork workers BEFORE creating any tokio runtime. Track each worker's spawn
     // time so a crash-on-startup loop (e.g. a failed bind) can be detected.
     let mut children: Vec<(libc::pid_t, Instant)> = Vec::new();
+    // Where SO_REUSEPORT does not load-balance (Darwin), bind ONCE here so every worker accepts
+    // from the same queue; see `shared_listener` for the measurement that made this necessary.
+    // The master keeps it open for the whole run so a respawned worker inherits the same socket.
+    let shared = if crate::shared_listener::workers_share_one_listener() {
+        match args.listen.parse::<std::net::SocketAddr>() {
+            Ok(addr) => match crate::shared_listener::bind_shared(addr) {
+                Ok(listener) => Some(listener),
+                Err(e) => {
+                    eprintln!("elephc-web: failed to bind {}: {}", args.listen, e);
+                    return 1;
+                }
+            },
+            Err(_) => {
+                eprintln!("elephc-web: invalid --listen address {:?}", args.listen);
+                return 2;
+            }
+        }
+    } else {
+        None
+    };
+    let shared_fd = shared.as_ref().map(std::os::fd::AsRawFd::as_raw_fd);
     for _ in 0..args.workers {
-        let pid = spawn_worker(&args.listen, handler, &args, isolation);
+        let pid = spawn_worker(&args.listen, handler, &args, isolation, shared_fd);
         children.push((pid, Instant::now()));
     }
     eprintln!(
@@ -295,7 +354,7 @@ fn run_server(
                 }
             }
             // The worker is gone (crash or recycle): replace it to keep the pool at N.
-            let new_pid = spawn_worker(&args.listen, handler, &args, isolation);
+            let new_pid = spawn_worker(&args.listen, handler, &args, isolation, shared_fd);
             children.push((new_pid, Instant::now()));
         } else if pid == -1 {
             // ECHILD: nothing left to wait for. EINTR: a signal arrived → re-loop

@@ -37,7 +37,7 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         let tag = values.type_tag(object).ok();
         if !matches!(tag, Some(EVAL_TAG_OBJECT)) {
             let call_site = context.call_site();
@@ -49,7 +49,7 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         }
     }
     let Ok(identity) = values.object_identity(object) else {
-        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        if crate::eval_trace::enabled() {
             let call_site = context.call_site();
             eprintln!(
                 "[elephc-eval-trace] phase=method_call_non_object method={method_name:?} tag={:?} file={:?} line={}",
@@ -67,10 +67,10 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         context,
         values,
     )?;
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         let dynamic_class = context
-            .dynamic_object_class(identity)
-            .map(|class| class.name().to_string());
+            .dynamic_object_declaring_class(identity)
+            .map(|(_, class)| class.name().to_string());
         let runtime_class = runtime_object_class_name(object, values).ok();
         eprintln!(
             "[elephc-eval-trace] phase=method_dispatch method={method_name:?} identity={identity} dynamic_class={dynamic_class:?} runtime_class={runtime_class:?}",
@@ -559,7 +559,15 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
     )? {
         return Ok(instance);
     }
-    let Some(class) = context.dynamic_object_class(identity) else {
+    // Owner-aware on purpose. `dynamic_object_class` resolves the owner's class NAME against the
+    // ASKER's table, so an object whose class only the owning context declared is reported as
+    // having no eval class at all, and dispatch falls through to the native path with the
+    // object's runtime class -- `stdClass` for every interpreted instance. That is how a Symfony
+    // request after the first one died: the container meta file is unserialized through the
+    // null-handle bridge context, which autoloads and declares `ContainerParametersResource`,
+    // and the request context that then calls `getParameters()` on it had never declared that
+    // name, so the call was dispatched as `stdClass::getParameters()` and fatally missed.
+    let Some((_, class)) = context.dynamic_object_declaring_class(identity) else {
         let class_name = runtime_object_class_name(object, values)?;
         if method_name.eq_ignore_ascii_case("__clone") {
             if let Some((declaring_class, visibility, is_static, is_abstract)) =
@@ -605,7 +613,9 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         if method.is_abstract() {
             return Err(EvalStatus::RuntimeFatal);
         }
-        if validate_eval_member_access(&class_name, method.visibility(), context).is_ok() {
+        if validate_eval_method_access(&class_name, method_name, method.visibility(), context, values)
+            .is_ok()
+        {
             if method.is_static() {
                 return eval_dynamic_static_method_with_values(
                     &class_name,
@@ -1018,7 +1028,7 @@ fn eval_rebind_foreign_reflection_target(
     match owner_class.as_str() {
         "ReflectionClass" | "ReflectionObject" | "ReflectionEnum" => {
             if context.eval_reflection_class_name(identity).is_some() {
-                if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                if crate::eval_trace::enabled() {
                     eprintln!(
                         "[elephc-eval-trace] phase=reflection_rebind kind=class identity={identity} stage=already_bound"
                     );
@@ -1030,7 +1040,7 @@ fn eval_rebind_foreign_reflection_target(
             let Some(name) =
                 eval_reflection_slot_string(object, &owner_class, "__name", context, values)?
             else {
-                if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+                if crate::eval_trace::enabled() {
                     eprintln!(
                         "[elephc-eval-trace] phase=reflection_rebind kind=class identity={identity} stage=missing_name_slot"
                     );
@@ -1039,7 +1049,7 @@ fn eval_rebind_foreign_reflection_target(
             };
             let declared = eval_context_declared_class_like(&name, context);
             let target_name = eval_rebound_reflection_class_name(&name, context, values)?;
-            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            if crate::eval_trace::enabled() {
                 eprintln!(
                     "[elephc-eval-trace] phase=reflection_rebind kind=class identity={identity} stage=resolved name={name:?} declared={declared} target_name={target_name:?} has_class={} native_parent={:?}",
                     context.has_class(&name),

@@ -389,10 +389,13 @@ pub(super) fn lookup_folded_name<'a, I>(names: I, requested: &str) -> Option<Str
 where
     I: IntoIterator<Item = &'a String>,
 {
-    let requested = php_symbol_key(requested);
+    // Folding both sides through `php_symbol_key` allocated a lowercased `String` for EVERY
+    // candidate in the table, on every lookup, and this runs against the whole class, function
+    // and extern-function tables per string-callable site. The ASCII fold is byte-wise, so the
+    // comparison below is the same predicate with nothing allocated.
     names
         .into_iter()
-        .find(|candidate| php_symbol_key(candidate) == requested)
+        .find(|candidate| candidate.eq_ignore_ascii_case(requested))
         .cloned()
 }
 

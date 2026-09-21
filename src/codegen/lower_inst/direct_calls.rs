@@ -535,10 +535,34 @@ pub(in crate::codegen) fn coerce_loaded_value_to_tagged_scalar(
             emit_string_result_as_tagged_scalar(ctx);
             Ok(PhpType::TaggedScalar)
         }
-        other => Err(CodegenIrError::unsupported(format!(
-            "conversion from PHP type {:?} to PHP type TaggedScalar",
-            other
-        ))),
+        // An object, an array or a float reaching a declared `?int` is not a missing lowering:
+        // it is the argument PHP itself refuses, with a `TypeError`, before the callee runs. The
+        // shape that produces one is a runtime-selected class — `new $class($a, $b)` lowers to a
+        // ladder with one arm per candidate class in the program, and an arm whose constructor
+        // happens to declare `?int` where the site passes an object is simply never taken.
+        // Refusing to COMPILE that arm let one unrelated class veto the whole construction site:
+        // Symfony's `Router::getMatcher` could not be compiled because `NumericNode::__construct`
+        // exists somewhere in the same program.
+        other => {
+            exceptions::emit_type_error(
+                ctx,
+                &format!("Argument must be of type ?int, {} given", php_type_label(&other)),
+            );
+            Ok(PhpType::TaggedScalar)
+        }
+    }
+}
+
+/// Spells a representation the way PHP names it in a `TypeError`.
+fn php_type_label(ty: &PhpType) -> String {
+    match ty {
+        PhpType::Object(class_name) if !class_name.is_empty() => class_name.clone(),
+        PhpType::Object(_) => "object".to_string(),
+        PhpType::Array(_) | PhpType::AssocArray { .. } => "array".to_string(),
+        PhpType::Float => "float".to_string(),
+        PhpType::Iterable => "iterable".to_string(),
+        PhpType::Resource(_) => "resource".to_string(),
+        other => format!("{:?}", other),
     }
 }
 

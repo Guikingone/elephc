@@ -112,7 +112,7 @@ pub(in crate::interpreter) fn eval_array_get_result(
                 .array_element_alias(array_identity, &key)
                 .cloned()
         });
-        if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        if crate::eval_trace::enabled() {
             eprintln!(
                 "[elephc-eval-trace] phase=array_reference_read identity={array_identity:#x} key={key:?} bound={}",
                 target.is_some(),
@@ -232,7 +232,7 @@ pub(in crate::interpreter) fn eval_object_array_cast_value(
     let property_count = values.object_property_len(object)?;
     let identity = values.object_identity(object)?;
     let dynamic_properties = context.dynamic_property_values_for_clone(identity);
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         eprintln!(
             "[elephc-eval-trace] phase=array_cast_object identity={identity:#x} runtime_properties={property_count} dynamic_properties={}",
             dynamic_properties.len(),
@@ -415,7 +415,7 @@ pub(super) fn trace_new_object_error(
     status: EvalStatus,
     context: &ElephcEvalContext,
 ) -> EvalStatus {
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         let call_site = context.call_site();
         eprintln!(
             "[elephc-eval-trace] phase=new_object_error stage={stage} class={class_name:?} status={status:?} file={:?} line={}",
@@ -641,7 +641,7 @@ pub(super) fn eval_closure_expr(
         }
     }
     closure.set_declaring_call_site(context.call_site());
-    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+    if crate::eval_trace::enabled() {
         eprintln!(
             "[elephc-eval-trace] phase=closure_create function={:?} lexical_class={:?} called_class={:?}",
             function.name(),
@@ -690,7 +690,7 @@ fn eval_closure_capture(
     if capture.by_ref() {
         let expr = EvalExpr::LoadVar(capture.name().to_string());
         let (value, target) = eval_call_arg_value(&expr, context, scope, values).map_err(|status| {
-            if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+            if crate::eval_trace::enabled() {
                 eprintln!(
                     "[elephc-eval-trace] phase=closure_capture_error capture={:?} by_ref=true status={status:?}",
                     capture.name(),

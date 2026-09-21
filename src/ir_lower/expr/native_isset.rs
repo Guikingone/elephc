@@ -144,6 +144,22 @@ pub(super) fn lower_native_isset_offset_probe_from_value(
             )
         }
         _ => {
+            // An `ArrayAccess` receiver whose EXPRESSION could not name its class — a call is
+            // typed `int` before lowering — reaches this arm rather than the syntactic
+            // `offsetExists` path. Decide it here on the value that was actually produced:
+            // `isset($obj[$k])` is `offsetExists` in PHP, never `offsetGet`, and an
+            // implementation is free to make the two observably different.
+            let receiver_ty = ctx.builder.value_php_type(array_value.value);
+            if type_satisfies_array_access_for_ir(ctx, &receiver_ty) {
+                return lower_method_call_with_receiver(
+                    ctx,
+                    array_value,
+                    "offsetExists",
+                    &[index.clone()],
+                    Op::MethodCall,
+                    expr,
+                );
+            }
             let read_value = lower_array_access_from_value(ctx, array_value, index, expr, false);
             emit_builtin_call_value(
                 ctx,
@@ -155,29 +171,6 @@ pub(super) fn lower_native_isset_offset_probe_from_value(
             )
         }
     }
-}
-
-/// Returns whether a syntactic array receiver can use a non-materializing native `isset` probe.
-pub(super) fn array_access_expr_supports_native_isset_probe(
-    ctx: &LoweringContext<'_, '_>,
-    array: &Expr,
-) -> bool {
-    let ty = match &array.kind {
-        ExprKind::Variable(name) => ctx
-            .local_types
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| infer_expr_type_syntactic(array)),
-        ExprKind::PropertyAccess { object, property } => {
-            property_access_expr_type_for_ir(ctx, object, property)
-                .unwrap_or_else(|| infer_expr_type_syntactic(array))
-        }
-        ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, array),
-        ExprKind::ArrayLiteralAssoc(pairs) => assoc_array_literal_type_for_ir(ctx, pairs, array),
-        _ => infer_expr_type_syntactic(array),
-    }
-    .codegen_repr();
-    matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
 }
 
 /// Lowers `isset($object->property)` without performing a normal property read first.
@@ -220,7 +213,14 @@ pub(super) fn property_isset_action(
     object: &Expr,
     property: &str,
 ) -> Option<IssetPropertyAction> {
-    let (class_name, _) = isset_object_expr_class(ctx, object)?;
+    let Some((class_name, _)) = isset_object_expr_class(ctx, object) else {
+        // No single receiver class — an untyped parameter, a `mixed` local, a union of two
+        // classes. The probe resolves the class at run time and answers "initialized" for every
+        // shape it cannot settle there, which sends this back to the ordinary read. Without it
+        // the read happened unconditionally and `isset($untyped->typedProp)` raised the
+        // uninitialized-typed-property fatal where PHP simply answers false.
+        return Some(IssetPropertyAction::Initialized);
+    };
     if is_builtin_stdclass_name(&class_name) {
         return Some(IssetPropertyAction::Fallback);
     }

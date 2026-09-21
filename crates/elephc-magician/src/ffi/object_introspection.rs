@@ -231,7 +231,7 @@ unsafe fn eval_object_is_a_inner(
         return 0;
     }
     let object = RuntimeCellHandle::from_raw(object);
-    let trace = std::env::var_os("ELEPHC_EVAL_TRACE").is_some();
+    let trace = crate::eval_trace::enabled();
     let Ok(target) = abi_name_to_string(target_ptr, target_len) else {
         return 0;
     };

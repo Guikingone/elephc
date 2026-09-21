@@ -61,7 +61,9 @@ pub fn emit_cstr(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #32");                                   // establish the helper frame
     emitter.instruction("stp x1, x2, [sp, #0]");                               // retain source bytes and length across allocation and release calls
     emitter.instruction("adds x0, x2, #1");                                    // request source bytes plus a trailing C terminator
-    emitter.instruction("b.cs __rt_heap_exhausted");                           // an impossible length must fail before size arithmetic wraps
+    emitter.instruction("b.cc __rt_cstr_size_ok");                           // the ordinary path skips the cross-atom fatal branch
+    emitter.instruction("b __rt_heap_exhausted_entry");                        // an impossible length must fail before size arithmetic wraps
+    emitter.label("__rt_cstr_size_ok");
     emitter.instruction("bl __rt_heap_alloc");                                 // allocate a runtime-owned replacement buffer
     emitter.instruction("str x0, [sp, #16]");                                  // save the new buffer while replacing the retained old one
     abi::emit_symbol_address(emitter, "x9", "_cstr_buf_dynamic");              // locate the persistent dynamic scratch-pointer slot
@@ -121,7 +123,9 @@ pub fn emit_cstr(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #32");                                   // establish the helper frame
     emitter.instruction("stp x1, x2, [sp, #0]");                               // retain source bytes and length across allocation and release calls
     emitter.instruction("adds x0, x2, #1");                                    // request source bytes plus a trailing C terminator
-    emitter.instruction("b.cs __rt_heap_exhausted");                           // an impossible length must fail before size arithmetic wraps
+    emitter.instruction("b.cc __rt_cstr2_size_ok");                           // the ordinary path skips the cross-atom fatal branch
+    emitter.instruction("b __rt_heap_exhausted_entry");                        // an impossible length must fail before size arithmetic wraps
+    emitter.label("__rt_cstr2_size_ok");
     emitter.instruction("bl __rt_heap_alloc");                                 // allocate a runtime-owned replacement buffer
     emitter.instruction("str x0, [sp, #16]");                                  // save the new buffer while replacing the retained old one
     abi::emit_symbol_address(emitter, "x9", "_cstr_buf2_dynamic");             // locate the persistent secondary dynamic-pointer slot
@@ -192,7 +196,9 @@ fn emit_cstr_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                       // retain source length across allocation and release calls
     emitter.instruction("mov rax, rdx");                                       // prepare source length for allocation-size arithmetic
     emitter.instruction("add rax, 1");                                         // request source bytes plus a trailing C terminator
-    emitter.instruction("jc __rt_heap_exhausted");                             // an impossible length must fail before size arithmetic wraps
+    emitter.instruction("jnc __rt_cstr_size_ok_linux_x86_64");               // the ordinary path skips the cross-atom fatal branch
+    emitter.instruction("jmp __rt_heap_exhausted_entry");                      // an impossible length must fail before size arithmetic wraps
+    emitter.label("__rt_cstr_size_ok_linux_x86_64");
     emitter.instruction("call __rt_heap_alloc");                               // allocate a runtime-owned replacement buffer
     emitter.instruction("mov QWORD PTR [rsp + 16], rax");                      // save the new buffer while replacing the retained old one
     abi::emit_symbol_address(emitter, "r8", "_cstr_buf_dynamic");              // locate the persistent dynamic scratch-pointer slot
@@ -258,7 +264,9 @@ fn emit_cstr_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                       // retain source length across allocation and release calls
     emitter.instruction("mov rax, rdx");                                       // prepare source length for allocation-size arithmetic
     emitter.instruction("add rax, 1");                                         // request source bytes plus a trailing C terminator
-    emitter.instruction("jc __rt_heap_exhausted");                             // an impossible length must fail before size arithmetic wraps
+    emitter.instruction("jnc __rt_cstr2_size_ok_linux_x86_64");               // the ordinary path skips the cross-atom fatal branch
+    emitter.instruction("jmp __rt_heap_exhausted_entry");                      // an impossible length must fail before size arithmetic wraps
+    emitter.label("__rt_cstr2_size_ok_linux_x86_64");
     emitter.instruction("call __rt_heap_alloc");                               // allocate a runtime-owned replacement buffer
     emitter.instruction("mov QWORD PTR [rsp + 16], rax");                      // save the new buffer while replacing the retained old one
     abi::emit_symbol_address(emitter, "r8", "_cstr_buf2_dynamic");             // locate the persistent secondary dynamic-pointer slot

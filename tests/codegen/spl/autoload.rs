@@ -793,6 +793,205 @@ fn test_register_with_str_replace_closure() {
     assert_eq!(out, "Ada");
 }
 
+/// Verifies the canonical hand-written PSR-4 leaf expression resolves a namespaced class.
+#[test]
+fn test_register_with_substr_strrpos_leaf_closure() {
+    // `substr($class, strrpos($class, '\\') + 1)` is the ordinary way to take a class's leaf
+    // name; both builtins and the integer `+` between them must fold.
+    let out = compile_and_run_files(
+        &[
+            (
+                "src/Probe.php",
+                "<?php\nnamespace App;\nclass Probe { public function run(): string { return \"reached\"; } }\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+spl_autoload_register(function (string $class): void {
+    $leaf = substr($class, strrpos($class, '\\') + 1);
+    require __DIR__ . '/src/' . $leaf . '.php';
+});
+$p = new App\Probe();
+echo $p->run();
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "reached");
+}
+
+/// Verifies the leaf expression takes the LAST segment of a nested namespace.
+#[test]
+fn test_register_substr_strrpos_leaf_takes_last_namespace_segment() {
+    // `App\Sub\Thing` has two separators; `strrpos` must find the rightmost one.
+    let out = compile_and_run_files(
+        &[
+            (
+                "src/Thing.php",
+                "<?php\nnamespace App\\Sub;\nclass Thing { public function run(): string { return \"nested\"; } }\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+spl_autoload_register(function (string $class): void {
+    $leaf = substr($class, strrpos($class, '\\') + 1);
+    require __DIR__ . '/src/' . $leaf . '.php';
+});
+$t = new App\Sub\Thing();
+echo $t->run();
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "nested");
+}
+
+/// Verifies a global-namespace class reproduces PHP's `false + 1`, not a "sensible" 0.
+#[test]
+fn test_register_substr_strrpos_global_class_drops_first_character_like_php() {
+    // php 8.5.10:
+    //   php -r '$c="Gadget"; var_dump(strrpos($c,"\\")+1, substr($c, strrpos($c,"\\")+1));'
+    //   int(1)  string(5) "adget"
+    // `strrpos` misses, `false + 1` is `1`, and the loader therefore looks for the class
+    // MINUS its first character. The fixture file is named accordingly: making the
+    // compiler "fix" this would silently resolve a global class to the wrong file.
+    let out = compile_and_run_files(
+        &[
+            (
+                "src/adget.php",
+                "<?php\nclass Gadget { public function run(): string { return \"chopped\"; } }\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+spl_autoload_register(function (string $class): void {
+    $leaf = substr($class, strrpos($class, '\\') + 1);
+    require __DIR__ . '/src/' . $leaf . '.php';
+});
+$g = new Gadget();
+echo $g->run();
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "chopped");
+}
+
+/// Verifies `strrpos` yields `false` (not `0`) when the needle is absent.
+#[test]
+fn test_register_substr_strrpos_miss_is_false_not_zero() {
+    // The defensive form of the same loader branches on `$pos === false`. If a miss folded
+    // to `0` instead, the global-namespace class would take the `else` branch and look for
+    // `src/olo.php`; the class would not be found and this test would fail.
+    let out = compile_and_run_files(
+        &[
+            (
+                "src/Solo.php",
+                "<?php\nclass Solo { public function run(): string { return \"solo\"; } }\n",
+            ),
+            (
+                "src/Leaf.php",
+                "<?php\nnamespace App\\Nested;\nclass Leaf { public function run(): string { return \"leaf\"; } }\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+spl_autoload_register(function (string $class): void {
+    $pos = strrpos($class, '\\');
+    if ($pos === false) {
+        require __DIR__ . '/src/' . $class . '.php';
+    } else {
+        require __DIR__ . '/src/' . substr($class, $pos + 1) . '.php';
+    }
+});
+$s = new Solo();
+echo $s->run();
+$l = new App\Nested\Leaf();
+echo $l->run();
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "sololeaf");
+}
+
+/// Verifies the three-argument `substr` form, including an explicit and a negative length.
+#[test]
+fn test_register_substr_with_explicit_and_negative_length() {
+    // `substr($class, 0, $pos)` takes the namespace prefix and `substr($leaf, 0, -6)` strips
+    // a fixed suffix — both are ordinary PHP and exercise `substr`'s length clamping.
+    let out = compile_and_run_files(
+        &[
+            (
+                "src/App/Sub/Thing.php",
+                "<?php\nnamespace App\\Sub;\nclass ThingBundle { public function run(): string { return \"sliced\"; } }\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+spl_autoload_register(function (string $class): void {
+    $pos = strrpos($class, '\\');
+    $prefix = substr($class, 0, $pos);
+    $leaf = substr($class, $pos + 1);
+    $stem = substr($leaf, 0, -6);
+    require __DIR__ . '/src/' . str_replace('\\', '/', $prefix) . '/' . $stem . '.php';
+});
+$t = new App\Sub\ThingBundle();
+echo $t->run();
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "sliced");
+}
+
+/// Verifies a body outside the supported subset is still rejected and falls through.
+#[test]
+fn test_register_expression_outside_subset_is_rejected_and_falls_through() {
+    // The first rule computes its leaf with a ternary and `strrev` — neither is in the
+    // subset, so the rule must yield nothing rather than being evaluated approximately.
+    // Resolution falls through to the second, supported rule. `src/eborP.php` exists but
+    // declares something else, so if the first rule ever started folding it would be
+    // selected, `App\Probe` would stay undeclared, and this test would fail loudly.
+    // php agrees on the output: it requires the decoy, gets no `App\Probe` from it, and
+    // goes on to the second loader.
+    let out = compile_and_run_files(
+        &[
+            (
+                "src/Probe.php",
+                "<?php\nnamespace App;\nclass Probe { public function run(): string { return \"fellthrough\"; } }\n",
+            ),
+            (
+                "src/eborP.php",
+                "<?php\nnamespace App;\nclass Decoy { public function run(): string { return \"wrong\"; } }\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+spl_autoload_register(function (string $class): void {
+    $pos = strrpos($class, '\\');
+    $leaf = $pos === false ? $class : substr($class, $pos + 1);
+    require __DIR__ . '/src/' . strrev($leaf) . '.php';
+});
+spl_autoload_register(function (string $class): void {
+    $leaf = substr($class, strrpos($class, '\\') + 1);
+    require __DIR__ . '/src/' . $leaf . '.php';
+});
+$p = new App\Probe();
+echo $p->run();
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "fellthrough");
+}
+
 /// Verifies register with intermediate variable.
 #[test]
 fn test_register_with_intermediate_variable() {
@@ -2611,4 +2810,42 @@ fn test_member_probes_autoload_a_runtime_registered_class_string() {
         "main.php",
     );
     assert_eq!(out, "CBIm:u:RuntimeChild:H:ChildWork:ReflectionException");
+}
+
+/// Verifies an autoloaded class file whose FILE-SCOPE guard asks `interface_exists()` for the
+/// interface it implements sees that interface declared.
+///
+/// `symfony/string`'s `AsciiSlugger.php` is written exactly this way, and the compiled Symfony
+/// binary threw its "the symfony/translation-contracts package is not installed" LogicException
+/// before the entry file's first statement ran. Two things were wrong. The autoload pass appended
+/// each discovered file at its own first reference point, which is breadth-first, so the interface
+/// landed AFTER the class file that demanded it; PHP's loader is depth-first and would have run it
+/// first. And an autoloaded interface never emitted the activation event that `interface_exists()`
+/// reads, so its overlay cell stayed zero no matter where the declaration sat.
+///
+/// Value-checked against `php -n`, which prints the same line.
+#[test]
+fn test_an_autoloaded_file_scope_guard_sees_the_interface_it_implements() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"Guarded\\":"src/"}}}"#,
+            ),
+            (
+                "src/Marker.php",
+                "<?php\nnamespace Guarded;\ninterface Marker { public function name(): string; }\n",
+            ),
+            (
+                "src/Widget.php",
+                "<?php\nnamespace Guarded;\n\nif (!interface_exists(Marker::class)) {\n    throw new \\LogicException('Marker is missing');\n}\n\nclass Widget implements Marker {\n    public function name(): string { return \"widget\"; }\n}\n",
+            ),
+            (
+                "main.php",
+                "<?php\n$w = new Guarded\\Widget();\necho $w->name(), \":\", (int) interface_exists('Guarded\\\\Marker');\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "widget:1");
 }

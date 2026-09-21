@@ -329,6 +329,11 @@ pub struct ClassInfo {
     pub property_declared_slots: Vec<bool>,
     pub final_properties: HashSet<String>,
     pub readonly_properties: HashSet<String>,
+    /// Hooked properties that keep a backing slot because a hook names `$this-><prop>`.
+    ///
+    /// PHP refuses a write only to a VIRTUAL hooked property — one whose hooks never touch the
+    /// store. A backed one is ordinary storage the declaring class assigns like any other.
+    pub backed_hooked_properties: HashSet<String>,
     pub reference_properties: HashSet<String>,
     /// Reference properties whose ref-cell the OBJECT allocates and frees (created by
     /// taking a reference to a regular property — `$x = &$obj->prop` — or returning one

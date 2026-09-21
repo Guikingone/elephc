@@ -130,11 +130,7 @@ pub(crate) unsafe fn write_outcome(outcome: EvalOutcome, out: *mut ElephcEvalRes
 /// It is a level of its own because it is loud -- a request makes hundreds of thousands of bridge
 /// calls -- so `ELEPHC_EVAL_TRACE=1` keeps the readable phase trace, and `ffi` or `all` adds this.
 pub(crate) fn trace_eval_ffi_entry(symbol: &str) {
-    let Some(level) = std::env::var_os("ELEPHC_EVAL_TRACE") else {
-        return;
-    };
-    let level = level.to_string_lossy();
-    if level != "ffi" && level != "all" {
+    if !crate::eval_trace::ffi_enabled() {
         return;
     }
     eprintln!("[elephc-eval-trace] phase=ffi_entry symbol={symbol}");

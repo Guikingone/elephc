@@ -90,6 +90,12 @@ pub fn loop_carried_storage_types<'a>(
         }
     }
 
+    let mut iterated_sources = HashSet::new();
+    collect_foreach_sources(body, &mut iterated_sources);
+    if let Some(update) = update {
+        collect_foreach_sources(std::slice::from_ref(update), &mut iterated_sources);
+    }
+
     let mut contracts = entry
         .iter()
         .filter_map(|(name, entry_ty)| {
@@ -98,6 +104,7 @@ pub fn loop_carried_storage_types<'a>(
                 entry_ty,
                 fixed_ty,
                 whole_representation_sources.contains(name),
+                iterated_sources.contains(name.as_str()),
             )
                 .map(|contract| (name.clone(), contract))
         })
@@ -507,6 +514,7 @@ fn representation_contract(
     entry: &PhpType,
     fixed: &PhpType,
     has_whole_representation_source: bool,
+    iterated_in_body: bool,
 ) -> Option<PhpType> {
     match (entry.codegen_repr(), fixed.codegen_repr()) {
         (PhpType::Array(entry_element), PhpType::Array(fixed_element))
@@ -533,6 +541,31 @@ fn representation_contract(
             })
         }
         (PhpType::Array(_), fixed @ PhpType::AssocArray { .. }) => Some(fixed),
+        // An empty-array local that the body both ITERATES and grows. `$seen = []` enters the
+        // loop as `array<never>`, and the body's own `$seen[] = ...` is the only statement that
+        // says what it holds; a `foreach ($seen as ...)` placed BEFORE that append textually is
+        // still reached WITH elements on the second iteration. Leaving the element at `never`
+        // made that read refuse code `php -n` runs — Symfony's
+        // `CompiledUrlMatcherDumper::groupStaticRoutes` is the shape it was found on, where the
+        // read destructures the element (`foreach ($dynamicRegex as [$hostRx, $rx, $prefix])`).
+        //
+        // The contract is the BOXED payload rather than the fixed point's own element type,
+        // because that is the one promotion the lowering can materialize: the loop-storage
+        // contract pass converts an indexed array in place with `ArrayToMixed`, which rewrites
+        // the runtime element tag in the array header. Recording `array<array<mixed>>` instead
+        // left the header saying `never` while every read was typed as an array, and the
+        // destructuring read came back null.
+        //
+        // Gated on the iteration because a plain accumulator — `$out = []; foreach (…) { $out[] =
+        // $n; }` — must keep its precise `array<int>` element: nothing in the loop reads it, so
+        // boxing it would cost an allocation per element and buy nothing.
+        (PhpType::Array(entry_element), PhpType::Array(fixed_element))
+            if iterated_in_body
+                && matches!(entry_element.as_ref(), PhpType::Never)
+                && !matches!(fixed_element.as_ref(), PhpType::Never) =>
+        {
+            Some(PhpType::Array(Box::new(PhpType::Mixed)))
+        }
         (PhpType::Void | PhpType::Never, PhpType::TaggedScalar)
             if has_whole_representation_source =>
         {
@@ -980,7 +1013,7 @@ fn collect_growth_calls_from_expr<'a>(expr: &'a Expr, out: &mut Vec<ArrayWrite<'
 }
 
 /// Visits direct executable child expressions without descending into closure bodies.
-fn visit_child_expressions<'a>(expr: &'a Expr, visitor: &mut dyn FnMut(&'a Expr)) {
+pub(crate) fn visit_child_expressions<'a>(expr: &'a Expr, visitor: &mut dyn FnMut(&'a Expr)) {
     match &expr.kind {
         ExprKind::BinaryOp { left, right, .. }
         | ExprKind::NullCoalesce {
@@ -1156,4 +1189,82 @@ fn call_arg_value(argument: &Expr) -> &Expr {
         ExprKind::NamedArg { value, .. } => value,
         _ => argument,
     }
+}
+
+/// Collects the plain locals a body ITERATES, so a growing empty array whose elements the loop
+/// reads back can be told apart from one it only accumulates into.
+///
+/// Only `foreach` sources count. That is deliberately narrower than "every element read": a case
+/// this misses keeps exactly today's behaviour, which is the same "only what can be answered
+/// exactly" discipline the rest of this analysis follows, while a case it answers wrongly would
+/// change a storage representation.
+///
+/// Nested function, closure and class bodies are separate scopes and are not descended into, the
+/// same boundary [`visit_child_expressions`] observes.
+fn collect_foreach_sources<'a>(statements: &'a [Stmt], out: &mut HashSet<&'a str>) {
+    for statement in statements {
+        if let StmtKind::Foreach { array, .. } = &statement.kind {
+            if let ExprKind::Variable(name) = &array.kind {
+                out.insert(name.as_str());
+            }
+        }
+        for body in nested_statement_bodies(statement) {
+            collect_foreach_sources(body, out);
+        }
+    }
+}
+
+/// Borrows every statement list nested directly in `statement`, stopping at scope boundaries.
+fn nested_statement_bodies(statement: &Stmt) -> Vec<&[Stmt]> {
+    let mut bodies: Vec<&[Stmt]> = Vec::new();
+    match &statement.kind {
+        StmtKind::If {
+            then_body,
+            elseif_clauses,
+            else_body,
+            ..
+        } => {
+            bodies.push(then_body);
+            bodies.extend(elseif_clauses.iter().map(|(_, body)| body.as_slice()));
+            if let Some(body) = else_body {
+                bodies.push(body);
+            }
+        }
+        StmtKind::IfDef {
+            then_body,
+            else_body,
+            ..
+        } => {
+            bodies.push(then_body);
+            if let Some(body) = else_body {
+                bodies.push(body);
+            }
+        }
+        StmtKind::While { body, .. }
+        | StmtKind::DoWhile { body, .. }
+        | StmtKind::For { body, .. }
+        | StmtKind::Foreach { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. }
+        | StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::Synthetic(body) => bodies.push(body),
+        StmtKind::Switch { cases, default, .. } => {
+            bodies.extend(cases.iter().map(|(_, body)| body.as_slice()));
+            if let Some(body) = default {
+                bodies.push(body);
+            }
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            bodies.push(try_body);
+            bodies.extend(catches.iter().map(|catch| catch.body.as_slice()));
+            if let Some(body) = finally_body {
+                bodies.push(body);
+            }
+        }
+        _ => {}
+    }
+    bodies
 }

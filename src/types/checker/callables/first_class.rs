@@ -297,9 +297,14 @@ impl Checker {
                             Self::callable_sig_for_declared_params(sig, &declared_flags);
                         Ok(Self::callable_wrapper_sig(&effective_sig))
                     }
-                    PhpType::Mixed | PhpType::Union(_) if method == "__invoke" => {
-                        Ok(dynamic_first_class_callable_sig())
-                    }
+                    // A receiver with no single class names its method the same way an ordinary
+                    // `$mixed->method()` call does — at run time, from the descriptor. `__invoke`
+                    // was already allowed here; every other method name needs the same answer,
+                    // because Symfony's generated container factories take
+                    // `$container->getService(...)` off an UNTYPED `$container` parameter that
+                    // nothing in sight narrows (the container reaches them through
+                    // `$this->{$this->methodMap[$id]}($this)`).
+                    PhpType::Mixed | PhpType::Union(_) => Ok(dynamic_first_class_callable_sig()),
                     PhpType::Array(element)
                         if method == "__invoke"
                             && matches!(

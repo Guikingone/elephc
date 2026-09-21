@@ -1400,6 +1400,10 @@ fn lower_body_into_function(
         ctx.privatize_container_param(name, php_type, None);
     }
     seed_recursive_closure_binding(&mut ctx, recursive_closure_binding);
+    // Before any statement: the `static` declaration's storage decision reads this, and it is
+    // the first statement of the bodies that have one.
+    ctx.record_non_integer_keyed_locals(body);
+    seed_vivified_array_locals(&mut ctx, body, params);
     for stmt in body {
         crate::ir_lower::stmt::lower_stmt(&mut ctx, stmt);
     }
@@ -1420,6 +1424,43 @@ fn lower_body_into_function(
     // maintaining a second producer allow-list (issue #595).
     ctx.finalize_value_ownership_metadata();
     ctx.into_closures()
+}
+
+/// Stores an empty array into every local this scope CREATES with an array element write.
+///
+/// `$keys[] = $k` against a name nothing has assigned yet is how PHP makes the array, so the
+/// storage has to exist before the write runs. The store is emitted here, in the still-open entry
+/// block, rather than at the write: the write is usually inside a loop, and initializing it there
+/// would discard the previous iterations' elements.
+///
+/// A name backed by global storage is skipped — `global $rows;` and the `$GLOBALS` aliases already
+/// have a home, and re-seeding it would clear what another scope put there.
+fn seed_vivified_array_locals(
+    ctx: &mut LoweringContext<'_, '_>,
+    body: &[Stmt],
+    params: &[(String, PhpType)],
+) {
+    let names = crate::append_vivify::vivified_array_locals(
+        body,
+        params.iter().map(|(name, _)| name.as_str()),
+    );
+    if names.is_empty() {
+        return;
+    }
+    let span = body.first().map_or_else(|| Span::new(0, 0), |stmt| stmt.span);
+    for name in names {
+        if ctx.uses_global_storage_for_seeding(&name) {
+            continue;
+        }
+        let seed = Stmt::new(
+            StmtKind::Assign {
+                name,
+                value: Expr::new(ExprKind::ArrayLiteral(Vec::new()), span),
+            },
+            span,
+        );
+        crate::ir_lower::stmt::lower_stmt(ctx, &seed);
+    }
 }
 
 /// Seeds a self-recursive closure capture as a static callable local inside its body.
