@@ -459,11 +459,16 @@ echo implode(",", array_keys($a)), "\n";
 /// path, and they do not — every one of them refuses an associative receiver before codegen,
 /// so there is no reindexed hash for `array_keys()` to read:
 ///
-/// - `usort` and `natsort` are backend refusals naming the `AssocArray` type;
-/// - `array_multisort` is a checker refusal, because its arguments must be indexed arrays.
+/// - `usort` and `natsort` are backend refusals naming the `AssocArray` type, and are the two
+///   this test pins;
+/// - `array_multisort` is a CHECKER refusal ("arguments must be indexed arrays"), so it is
+///   pinned by `test_error_array_multisort_rejects_an_associative_receiver` in
+///   `tests/error_tests/array_builtins.rs` instead. It cannot share the table below: the
+///   codegen harness type-checks with `.expect("type check failed")` on its way to the
+///   backend, so a checker error aborts the fixture rather than being returned to it.
 ///
 /// Pinning the three refusals is what makes this coverage question answerable. The day any of
-/// them accepts a hash, this test fails and the `array_keys()` rows it is standing in for have
+/// them accepts a hash, its own test fails and the `array_keys()` rows they stand in for have
 /// to be written.
 ///
 /// PHP itself only renumbers for `usort`: `natsort` and `array_multisort` KEEP string keys, so
