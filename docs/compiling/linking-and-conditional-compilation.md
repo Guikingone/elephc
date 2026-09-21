@@ -286,10 +286,33 @@ those locations again. `elephc --print-capabilities` lists every archive this
 binary can need.
 ```
 
+#### The `eval()` bridge has two archive names
+
+`elephc_magician` is the one bridge whose archive filename depends on the
+program being compiled. A program that calls `eval()` links
+`libelephc_magician.a`. A program that calls `eval()` **and** uses the curl
+surface links `libelephc_magician_curl.a` instead — a separate file, not the
+same slot rebuilt, because `cargo build --features curl` would otherwise
+overwrite the curl-free archive an earlier build left behind and a later
+curl-free program still expects.
+
+Both names go through the search order above and through the same
+`ELEPHC_MAGICIAN_LIB_DIR` override, so an install directory has to carry
+whichever of the two the programs built against it need; the release tarball and
+the Homebrew formula ship both. A missing curl-aware archive is reported under
+its own name:
+
+```
+Linker error: required Elephc bridge `elephc_magician` could not be found
+  needs: libelephc_magician_curl.a
+```
+
 [`--print-capabilities`](cli-reference.md) is the
 authoritative list for the binary you are holding — one line per capability with
 the archives it needs — so a packaging script can check a tarball carries
 everything the compiler inside it advertises rather than guessing from this page.
+It reports the `eval` bridge under the plain `libelephc_magician.a`; the
+curl-aware variant above is the one name it does not print.
 
 ## Heap size
 
