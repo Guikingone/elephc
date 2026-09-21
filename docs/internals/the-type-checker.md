@@ -575,17 +575,35 @@ So the precision rules are load-bearing, and two of them exist only for this rea
   whatever the caller lent it (issue #992).
 - **A known source function does not invalidate everything.** `eval` and `extract` can rebind
   locals the call does not name, and so can a builtin taking a `callback`. A source-declared
-  function cannot: it reaches the caller's locals only through its own by-reference parameters,
-  which the rule above already handles argument by argument. Treating every user call like
-  `extract` wiped the whole state, so `peek($v); return $v;` had the same defect as the builtin
-  case.
+  function reaches the caller's locals only through its own by-reference parameters, which the
+  rule above already handles argument by argument — with one exception, below. Treating every
+  user call like `extract` wiped the whole state, so `peek($v); return $v;` had the same defect
+  as the builtin case.
+- **A by-reference CAPTURE poisons the name for the rest of the body.** This is the exception,
+  and the one that makes the rule above safe. `function () use (&$v)` creates a ref cell that
+  anything holding the closure can write through, so the name is unknowable from that point on —
+  not merely at the moment the closure is created. Invalidating only at creation was not enough:
+  a later `$v = $other;` re-establishes a provenance, and with user calls no longer wiping the
+  state, that provenance survives `apply($f)` and the caller suppresses a release it owed.
+- **A binary operator is a fresh value.** Concatenation builds a new string, arithmetic and
+  comparison produce numbers, and PHP's `&&`/`||` yield a bool rather than handing back an
+  operand. The catch-all answered `Unknown`, so `if ($c) { return $v; } return $v . "x";` merged
+  a proven path with an unknown one and collapsed to `Unknown` — one concatenating branch was
+  enough to poison the branch that returns the parameter.
 
-What remains undecidable is genuinely undecidable, and answering `Unknown` there is correct
-even though it costs a corruption at the call site: a by-reference argument really may have been
-rebound, and `Parameters({0})` merged with `Unknown` across two branches really does mean the
-pass cannot say which storage comes back. Closing those needs a richer lattice — one that
-remembers WHICH parameters an unknown value might still be — rather than more rules of this
+What remains undecidable is genuinely undecidable, and answering `Unknown` there is correct even
+though it costs a release of lent storage at the call site: a by-reference argument really may
+have been rebound, and `Parameters({0})` merged with `Unknown` across two branches really does
+mean the pass cannot say which storage comes back. Closing those needs a richer lattice — one
+that remembers WHICH parameters an unknown value might still be — rather than more rules of this
 shape.
+
+One shape looks like this family and is not: a parameter declared as a class type
+(`function f(Tag $v): Tag { …; return $v; }`) still releases lent storage even though the summary
+is `Parameters({0})`. The loss is downstream, in `value_is_owned_unboxed_local_load`, which
+classifies any local load of an array/object/iterable slot as a provisional owner — so the
+argument reads as owning, the borrowed-result test is rejected before the summary is consulted,
+and the result is released. No amount of precision in this pass reaches it.
 
 The rule that is easy to get wrong is the cast. A cast is only alias-transparent when EIR
 lowering ELIDES it, and `lower_cast` elides exactly one shape: `(string)` over a value whose IR

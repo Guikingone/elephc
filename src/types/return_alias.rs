@@ -85,6 +85,10 @@ struct AliasState<'a> {
     /// How each source-declared function takes its parameters, so a by-value argument is not
     /// treated as one the callee might rebind.
     parameter_modes: &'a HashMap<String, ParameterModes>,
+    /// Names some closure in this body captured BY REFERENCE. Such a name has a live ref cell
+    /// that anything holding the closure can write through, so its provenance is unknowable
+    /// from here on — not merely at the moment the closure is created.
+    ref_captured: HashSet<String>,
 }
 
 impl<'a> AliasState<'a> {
@@ -100,6 +104,7 @@ impl<'a> AliasState<'a> {
             string_parameter_indices,
             str_slot_locals: string_parameters.iter().cloned().collect(),
             parameter_modes,
+            ref_captured: HashSet::new(),
         }
     }
 
@@ -696,18 +701,24 @@ fn merge_states<'a>(states: Vec<AliasState<'a>>) -> AliasState<'a> {
         .map(|state| state.str_slot_locals.clone())
         .reduce(|acc, next| acc.intersection(&next).cloned().collect())
         .unwrap_or_default();
+    let ref_captured = states
+        .iter()
+        .flat_map(|state| state.ref_captured.iter().cloned())
+        .collect();
     AliasState {
         locals,
         string_parameters,
         string_parameter_indices,
         str_slot_locals,
         parameter_modes,
+        ref_captured,
     }
 }
 
 /// Computes the argument provenance of one expression's resulting storage.
 fn expr_alias(expr: &Expr, state: &AliasState<'_>) -> ReturnArgAlias {
     match &expr.kind {
+        ExprKind::Variable(name) if state.ref_captured.contains(name) => ReturnArgAlias::Unknown,
         ExprKind::Variable(name) => state
             .locals
             .get(name)
@@ -761,7 +772,8 @@ fn expr_alias(expr: &Expr, state: &AliasState<'_>) -> ReturnArgAlias {
         | ExprKind::StaticMethodCall { .. }
         | ExprKind::Pipe { .. }
         | ExprKind::YieldFrom(_) => ReturnArgAlias::Unknown,
-        ExprKind::StringLiteral(_)
+        ExprKind::BinaryOp { .. }
+        | ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)
         | ExprKind::BoolLiteral(_)
@@ -1028,8 +1040,13 @@ fn apply_expr_effects(expr: &Expr, state: &mut AliasState<'_>) {
             }
         }
         ExprKind::Closure { capture_refs, .. } => {
+            // Marking the name `Unknown` here is not enough on its own: a later assignment
+            // re-establishes a provenance, and the ref cell the closure holds can still be
+            // written through afterwards — by this body, or by anything the closure is handed
+            // to. Recording the name keeps it unknowable for the rest of the body.
             for name in capture_refs {
                 state.locals.insert(name.clone(), ReturnArgAlias::Unknown);
+                state.ref_captured.insert(name.clone());
             }
         }
         ExprKind::StringLiteral(_)

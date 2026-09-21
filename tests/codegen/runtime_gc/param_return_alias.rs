@@ -22,6 +22,16 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Reads `live_blocks=` out of a `--heap-debug` exit summary.
+fn live_blocks(stderr: &str) -> i64 {
+    stderr
+        .lines()
+        .find_map(|line| line.split("live_blocks=").nth(1))
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|n| n.trim_end_matches(|c: char| !c.is_ascii_digit()).parse().ok())
+        .unwrap_or_else(|| panic!("no live_blocks in: {stderr}"))
+}
+
 /// Verifies the reported shape: a `mixed` parameter inspected by a type predicate and then
 /// returned, reached through a local, called more than once.
 #[test]
@@ -172,4 +182,83 @@ echo $n;
         "expected a by-reference rebind to stay correct, got: {}",
         out.stderr
     );
+}
+
+/// Verifies a name captured BY REFERENCE stays unknowable for the rest of the body, not only at
+/// the moment the closure is created.
+///
+/// Recording the capture is what makes the by-value call rule above safe. Without it, a later
+/// assignment re-establishes a provenance the closure can still write through, and because a
+/// source function is no longer treated as able to rebind anything, that provenance survives the
+/// call — so the caller suppresses a release it owed.
+///
+/// Measured as a SLOPE across two iteration counts rather than against a clean heap: a
+/// by-reference capture costs a ref cell per call whatever the summary says, so the absolute
+/// count is not the signal. Measured 2.0 blocks per iteration with the rule and 4.0 without it.
+#[test]
+fn test_a_by_reference_capture_is_never_proven_again() {
+    /// The loop, parameterised by iteration count so the per-call cost can be isolated.
+    fn capture_loop(iterations: usize) -> String {
+        format!(
+            r#"<?php
+function apply_one(callable $cb, mixed $v): mixed {{ $cb(); return $v; }}
+function ident(mixed $value, mixed $other): mixed {{
+    $f = function () use (&$value) {{ $value = str_repeat("x", 3); }};
+    $value = $other;
+    apply_one($f, 1);
+    return $value;
+}}
+$n = 0;
+for ($i = 0; $i < {iterations}; $i++) {{
+    $a = str_repeat("y", 4);
+    $b = str_repeat("z", 5);
+    $n = $n + strlen(ident($a, $b));
+}}
+echo $n;
+"#
+        )
+    }
+
+    let small = compile_and_run_with_heap_debug(&capture_loop(100));
+    let large = compile_and_run_with_heap_debug(&capture_loop(300));
+
+    assert!(small.success, "the 100-iteration program failed: {}", small.stderr);
+    assert!(large.success, "the 300-iteration program failed: {}", large.stderr);
+    assert_eq!(small.stdout, "300");
+    assert_eq!(large.stdout, "900");
+
+    let per_call = (live_blocks(&large.stderr) - live_blocks(&small.stderr)) as f64 / 200.0;
+    assert!(
+        per_call <= 3.0,
+        "a by-reference capture kept a provenance it cannot have: {per_call} blocks per call"
+    );
+}
+
+/// Verifies a branch returning a CONCATENATION of the parameter does not poison the branch that
+/// returns the parameter itself.
+///
+/// `Parameters({0})` merged with `Unknown` collapses to `Unknown`, so one such branch was enough
+/// to make the caller release storage it had only lent. A binary operator always computes a new
+/// value — concatenation builds a fresh string, arithmetic and comparison produce numbers, and
+/// PHP's `&&`/`||` yield a bool rather than an operand — so it answers `None` and the merge keeps
+/// the proven path. Without that, this program dies with `bad refcount`.
+#[test]
+fn test_a_concatenating_branch_does_not_poison_the_returning_branch() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function pick(int $i): mixed { if ($i > 100) { return 1; } return str_repeat("q", 3); }
+function f(mixed $v, bool $c): mixed { if ($c) { return $v; } return $v . "x"; }
+$n = 0;
+for ($i = 0; $i < 200; $i++) { $tmp = pick($i); $n = $n + strlen(f($tmp, true)); }
+$m = 0;
+for ($i = 0; $i < 5; $i++) { $tmp = pick($i); $m = $m + strlen(f($tmp, false)); }
+echo $n + $m;
+"#,
+    );
+    assert!(
+        out.success,
+        "the concatenating branch made the caller release a lent reference: {}",
+        out.stderr
+    );
+    assert_eq!(out.stdout, "422");
 }
