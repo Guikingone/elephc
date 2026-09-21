@@ -15,6 +15,9 @@
 #
 # EVAL_SHARD_NEXTEST_ARCHIVE / EVAL_SHARD_NEXTEST_EXTRACT_DIR point pass 2 at the
 # CI test archive; without them pass 2 runs nextest against the local workspace.
+# EVAL_SHARD_NEXTEST_BIN names a cargo-nextest binary to run pass 2 with, for a
+# runner that packages the binary with the archive instead of installing one
+# (the macOS shards); without it pass 2 uses the `cargo nextest` on PATH.
 
 set -euo pipefail
 
@@ -186,5 +189,10 @@ if [[ -n ${EVAL_SHARD_NEXTEST_ARCHIVE:-} ]]; then
     if [[ -n ${EVAL_SHARD_NEXTEST_EXTRACT_DIR:-} ]]; then
         nextest_args+=(--extract-to "$EVAL_SHARD_NEXTEST_EXTRACT_DIR" --extract-overwrite)
     fi
+fi
+if [[ -n ${EVAL_SHARD_NEXTEST_BIN:-} ]]; then
+    # The Cargo subcommand protocol: a `cargo-<name>` binary receives `<name>` as its
+    # first argument, exactly as `cargo nextest` would pass it.
+    exec "$EVAL_SHARD_NEXTEST_BIN" nextest run "${nextest_args[@]}"
 fi
 exec cargo nextest run "${nextest_args[@]}"

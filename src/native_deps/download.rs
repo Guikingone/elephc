@@ -6,13 +6,15 @@
 //!
 //! Key details:
 //! - Offline mode never invokes the downloader and all bytes are size/SHA verified before publication.
+//! - Online requests retry bounded transient transport, throttling, and server failures.
 
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::thread;
 use std::time::Duration;
 
-use ureq::{Agent, ResponseExt};
+use ureq::{Agent, Error as UreqError, ResponseExt};
 use sha2::{Digest, Sha256};
 
 use super::catalog::SourceArchive;
@@ -50,8 +52,28 @@ impl Downloader for HttpsDownloader {
         if !source.https_url.starts_with("https://") {
             return Err(NativeError::new(NativeErrorKind::Network, "catalog source URL is not HTTPS"));
         }
-        let mut response = self.agent.get(source.https_url).call()
-            .map_err(|error| NativeError::new(NativeErrorKind::Network, format!("download failed for trusted source '{}': {error}", source.https_url)))?;
+        let mut attempt = 1_u32;
+        let mut response = loop {
+            match self.agent.get(source.https_url).call() {
+                Ok(response) => break response,
+                Err(error) if attempt < 4 && retryable_download_error(&error) => {
+                    let delay = Duration::from_secs(1_u64 << (attempt - 1));
+                    eprintln!(
+                        "native network warning: download attempt {attempt} failed for trusted source '{}': {error}; retrying in {}s",
+                        source.https_url,
+                        delay.as_secs(),
+                    );
+                    thread::sleep(delay);
+                    attempt += 1;
+                }
+                Err(error) => {
+                    return Err(NativeError::new(
+                        NativeErrorKind::Network,
+                        format!("download failed for trusted source '{}': {error}", source.https_url),
+                    ));
+                }
+            }
+        };
         if response.get_uri().scheme_str() != Some("https") {
             return Err(NativeError::new(NativeErrorKind::Network, "native download ended at a non-HTTPS URL"));
         }
@@ -82,6 +104,19 @@ impl Downloader for HttpsDownloader {
             ));
         }
         output.sync_all().map_err(|error| NativeError::io("flush native download temporary file", destination, error))
+    }
+}
+
+/// Returns whether another request can safely recover from a transient transport or server error.
+fn retryable_download_error(error: &UreqError) -> bool {
+    match error {
+        UreqError::StatusCode(status) => *status == 408 || *status == 429 || (500..=599).contains(status),
+        UreqError::Protocol(_)
+        | UreqError::Io(_)
+        | UreqError::Timeout(_)
+        | UreqError::HostNotFound
+        | UreqError::ConnectionFailed => true,
+        _ => false,
     }
 }
 
@@ -197,6 +232,17 @@ mod tests {
     use sha2::{Digest, Sha256};
     use std::cell::{Cell, RefCell};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// Verifies retries are limited to transient transport and HTTP failures.
+    #[test]
+    fn retryability_rejects_permanent_http_errors() {
+        assert!(retryable_download_error(&UreqError::StatusCode(408)));
+        assert!(retryable_download_error(&UreqError::StatusCode(429)));
+        assert!(retryable_download_error(&UreqError::StatusCode(500)));
+        assert!(retryable_download_error(&UreqError::StatusCode(504)));
+        assert!(!retryable_download_error(&UreqError::StatusCode(400)));
+        assert!(!retryable_download_error(&UreqError::StatusCode(404)));
+    }
 
     /// In-memory fake downloader that records whether network transport was requested.
     struct FakeDownloader<'a> { bytes: &'a [u8], calls: Cell<usize> }

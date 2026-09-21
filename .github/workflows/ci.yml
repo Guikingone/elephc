@@ -119,7 +119,9 @@ jobs:
             target/debug/libelephc_magician_curl.a
 
       - name: Archive test binaries
-        run: cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
+        run: |
+          cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
+          cp "$(command -v cargo-nextest)" "$RUNNER_TEMP/cargo-nextest"
 
       - name: Run doctests
         # Doctests cannot run from a nextest archive, so run them here where the
@@ -161,11 +163,30 @@ jobs:
           ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh macos-aarch64)" \
             cargo test -p elephc-xml
 
+      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
+        # Materialize the complete curl chain once in this prerequisite job. The
+        # four curl shards restore this exact key after the job's post-cache step,
+        # avoiding concurrent cold downloads of the same GitHub release assets.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/elephc/native
+          key: curl-native-macos-aarch64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            curl-native-macos-aarch64-
+
+      - name: Materialize managed native curl
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/curl-get/elephc.toml
+
       - name: Upload test archive
         uses: actions/upload-artifact@v4
         with:
           name: nextest-archive-macos-aarch64
-          path: ${{ runner.temp }}/nextest-archive.tar.zst
+          path: |
+            ${{ runner.temp }}/nextest-archive.tar.zst
+            ${{ runner.temp }}/cargo-nextest
           retention-days: 1
           if-no-files-found: error
 
@@ -293,6 +314,22 @@ jobs:
         run: |
           ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh linux-x86_64)" \
             cargo test -p elephc-xml
+
+      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
+        # Seed the cache before any curl shard starts, so a cold key causes one
+        # source build instead of four concurrent downloads and builds.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/elephc/native
+          key: curl-native-linux-x86_64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            curl-native-linux-x86_64-
+
+      - name: Materialize managed native curl
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/curl-get/elephc.toml
 
       - name: Upload test archive
         uses: actions/upload-artifact@v4
@@ -422,6 +459,22 @@ jobs:
           ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh linux-aarch64)" \
             cargo test -p elephc-xml
 
+      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
+        # Seed the cache before any curl shard starts, so a cold key causes one
+        # source build instead of four concurrent downloads and builds.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/elephc/native
+          key: curl-native-linux-aarch64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            curl-native-linux-aarch64-
+
+      - name: Materialize managed native curl
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/curl-get/elephc.toml
+
       - name: Upload test archive
         uses: actions/upload-artifact@v4
         with:
@@ -445,9 +498,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
-
       - name: Install test-only native providers
         run: brew install pcre2
 
@@ -457,9 +507,12 @@ jobs:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
+      - name: Prepare archived cargo-nextest
+        run: chmod 0755 "$RUNNER_TEMP/cargo-nextest"
+
       - name: Run non-codegen tests
         run: |
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests)' \
@@ -548,9 +601,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
-
       - name: Install native test dependencies
         run: brew install pcre2
 
@@ -560,9 +610,12 @@ jobs:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
+      - name: Prepare archived cargo-nextest
+        run: chmod 0755 "$RUNNER_TEMP/cargo-nextest"
+
       - name: Run web test shard
         run: |
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             -E 'binary(web_tests) or binary(web_session_tests)' \
@@ -648,9 +701,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
-
       - name: Install test-only native providers
         run: brew install pcre2
 
@@ -659,6 +709,9 @@ jobs:
         with:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
+
+      - name: Prepare archived cargo-nextest
+        run: chmod 0755 "$RUNNER_TEMP/cargo-nextest"
 
       - name: Cache managed native libxml2
         # tests/codegen/xml fixtures link the elephc_xml bridge against the managed
@@ -677,7 +730,7 @@ jobs:
         # compiler is what materializes the managed package below.
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
@@ -700,7 +753,7 @@ jobs:
           # the package was materialized just above, so absence is a provisioning bug.
           ELEPHC_TEST_REQUIRE_XML_NATIVE: "1"
         run: |
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)' \
@@ -865,9 +918,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
-
       - name: Install test-only native providers
         run: brew install pcre2
 
@@ -877,13 +927,16 @@ jobs:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
+      - name: Prepare archived cargo-nextest
+        run: chmod 0755 "$RUNNER_TEMP/cargo-nextest"
+
       - name: Run PDO codegen shard in one process
         env:
           CARGO_NET_OFFLINE: "true"
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
@@ -998,9 +1051,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
-
       - name: Install test-only native providers
         run: brew install pcre2
 
@@ -1024,6 +1074,9 @@ jobs:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
+      - name: Prepare archived cargo-nextest
+        run: chmod 0755 "$RUNNER_TEMP/cargo-nextest"
+
       - name: Extract test archive
         # `elephc` is a build dependency of other integration tests that invoke it via
         # CARGO_BIN_EXE_elephc, so the same nextest archive that carries the
@@ -1031,7 +1084,7 @@ jobs:
         # notes in .config/nextest.toml) -- one extraction gives us both.
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
@@ -1045,11 +1098,10 @@ jobs:
         # more deterministic for a test job than `add`, which resolves against the
         # manifest and can rewrite the lock. Artifacts are content-addressed by
         # (recipe, source sha, target, toolchain fingerprint) under the cache
-        # restored above, so this is a fast no-op once warm and only pays the
-        # ~4.5 minute from-source build (see managed-native-smoke) on a cold or
-        # invalidated cache.
+        # restored above. The prerequisite build job owns cold materialization;
+        # shards stay offline and fail clearly if cache provisioning regresses.
         run: |
-          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked --offline \
             --target macos-aarch64 \
             --manifest-path examples/curl-get/elephc.toml
 
@@ -1122,11 +1174,10 @@ jobs:
         # more deterministic for a test job than `add`, which resolves against the
         # manifest and can rewrite the lock. Artifacts are content-addressed by
         # (recipe, source sha, target, toolchain fingerprint) under the cache
-        # restored above, so this is a fast no-op once warm and only pays the
-        # ~4.5 minute from-source build (see managed-native-smoke) on a cold or
-        # invalidated cache.
+        # restored above. The prerequisite build job owns cold materialization;
+        # shards stay offline and fail clearly if cache provisioning regresses.
         run: |
-          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked --offline \
             --target linux-x86_64 \
             --manifest-path examples/curl-get/elephc.toml
 
@@ -1199,11 +1250,10 @@ jobs:
         # more deterministic for a test job than `add`, which resolves against the
         # manifest and can rewrite the lock. Artifacts are content-addressed by
         # (recipe, source sha, target, toolchain fingerprint) under the cache
-        # restored above, so this is a fast no-op once warm and only pays the
-        # ~4.5 minute from-source build (see managed-native-smoke) on a cold or
-        # invalidated cache.
+        # restored above. The prerequisite build job owns cold materialization;
+        # shards stay offline and fail clearly if cache provisioning regresses.
         run: |
-          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked --offline \
             --target linux-aarch64 \
             --manifest-path examples/curl-get/elephc.toml
 
@@ -1353,9 +1403,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
-
       - name: Install native test dependencies
         run: brew install pcre2
 
@@ -1365,10 +1412,13 @@ jobs:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
+      - name: Prepare archived cargo-nextest
+        run: chmod 0755 "$RUNNER_TEMP/cargo-nextest"
+
       - name: Extract test archive
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
@@ -1381,6 +1431,9 @@ jobs:
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
           EVAL_SHARD_NEXTEST_ARCHIVE: ${{ runner.temp }}/nextest-archive.tar.zst
           EVAL_SHARD_NEXTEST_EXTRACT_DIR: ${{ runner.temp }}/nextest
+          # The shard runner installs no nextest of its own: pass 2 runs the
+          # binary packaged with the archive (see build-archive-macos-aarch64).
+          EVAL_SHARD_NEXTEST_BIN: ${{ runner.temp }}/cargo-nextest
         run: |
           eval_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
             -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
