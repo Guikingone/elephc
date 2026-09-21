@@ -16,6 +16,11 @@
 //! - An INTERFACE name is reachable only through the string form — there is no instance of an
 //!   interface to pass — and its parents live in `interface_infos`, not `class_infos`, so it
 //!   needs its own walk.
+//! - A RUNTIME `$allow_string` is not guessed at. For a literal name the answer is exactly
+//!   `$allow_string && relation`, so when the relation holds the flag IS the answer. Substituting
+//!   the builtin's default instead made `is_subclass_of("Derived", "Base", $false)` answer `y`.
+//! - A name that resolves to nothing answers `false`, INCLUDING against itself: PHP looks the
+//!   subject up before comparing, so `is_a("Ghost", "Ghost", true)` is false.
 //! - Still `false`, and deliberately: a NON-LITERAL name. That needs a name-keyed table the
 //!   emitted program can consult at runtime, which is the second half of #1113 and what
 //!   `ReflectionAttribute::IS_INSTANCEOF` actually needs.
@@ -117,4 +122,57 @@ echo \is_subclass_of("", "App\\Base") ? "y" : "n";
     );
 
     assert_eq!(out, "yyynnn");
+}
+
+/// Verifies a RUNTIME `$allow_string` decides the answer rather than being replaced by the
+/// builtin's compile-time default.
+///
+/// The flag governs only a string subject, so for a literal name the result is exactly
+/// `$allow_string && relation`. Guessing the default instead answered `y` for a false flag —
+/// a wrong answer this lowering did not produce before it learned to read names at all — and `n`
+/// for a true one on `is_a`, which was wrong before and after.
+#[test]
+fn test_a_runtime_allow_string_flag_decides_the_answer() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {}
+class Derived extends Base {}
+
+function pick(int $i): bool { return $i > 100; }
+
+$off = pick(0);
+$on  = pick(200);
+
+echo is_subclass_of("Derived", "Base", $off) ? "y" : "n";
+echo is_subclass_of("Derived", "Base", $on) ? "y" : "n";
+echo is_a("Derived", "Base", $off) ? "y" : "n";
+echo is_a("Derived", "Base", $on) ? "y" : "n";
+echo is_subclass_of(new Derived(), "Base", $off) ? "y" : "n";
+echo is_subclass_of("Derived", "Missing", $on) ? "y" : "n";
+"#,
+    );
+
+    assert_eq!(out, "nynyyn");
+}
+
+/// Verifies a name that resolves to nothing answers `false` even against itself.
+///
+/// PHP looks the subject up before comparing, so an undeclared name is not "equal to itself" for
+/// `is_a`. The self-check has to run AFTER the name is known to exist, which is why the interface
+/// branch gates on the interface table first.
+#[test]
+fn test_an_undeclared_name_answers_false_even_against_itself() {
+    let out = compile_and_run(
+        r#"<?php
+interface I {}
+
+echo is_a("Ghost", "Ghost", true) ? "y" : "n";
+echo is_a("Ghost", "ghost", true) ? "y" : "n";
+echo is_subclass_of("Ghost", "Ghost") ? "y" : "n";
+echo is_a("Ghost", "I", true) ? "y" : "n";
+echo is_a("I", "I", true) ? "y" : "n";
+"#,
+    );
+
+    assert_eq!(out, "nnnny");
 }
