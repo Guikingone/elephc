@@ -8,7 +8,7 @@
 //! - Object/class/member expressions retain their original source evaluation order.
 
 use super::*;
-use super::dispatch::retain_unretained_scope_borrow;
+use super::dispatch::value_is_an_unretained_scope_borrow;
 
 /// Executes one property-oriented statement selected by the exhaustive statement dispatcher.
 pub(super) fn execute_property_stmt(
@@ -53,9 +53,9 @@ pub(super) fn execute_property_stmt(
             let property = eval_dynamic_member_name(property, context, scope, values)?;
             let value_expr = value;
             let value = eval_expr(value_expr, context, scope, values)?;
-            let value =
-                retain_unretained_scope_borrow(value_expr, value, context, scope, values)?;
-            eval_property_set_result(object, &property, value, context, values)?;
+            let borrowed =
+                value_is_an_unretained_scope_borrow(value_expr, value, context, scope);
+            eval_property_set_result(object, &property, value, borrowed, context, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::DynamicPropertyArrayAppend {
@@ -93,7 +93,7 @@ pub(super) fn execute_property_stmt(
             let current = eval_property_get_result(object, &property, context, values)?;
             let right = eval_expr(value, context, scope, values)?;
             let value = eval_binary_result(*op, current, right, context, values)?;
-            eval_property_set_result(object, &property, value, context, values)?;
+            eval_property_set_result(object, &property, value, false, context, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::DynamicPropertyIncDec {
@@ -113,9 +113,9 @@ pub(super) fn execute_property_stmt(
             let object = eval_expr(object, context, scope, values)?;
             let value_expr = value;
             let value = eval_expr(value_expr, context, scope, values)?;
-            let value =
-                retain_unretained_scope_borrow(value_expr, value, context, scope, values)?;
-            eval_property_set_result(object, property, value, context, values)?;
+            let borrowed =
+                value_is_an_unretained_scope_borrow(value_expr, value, context, scope);
+            eval_property_set_result(object, property, value, borrowed, context, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::PropertyArrayAppend {
@@ -150,7 +150,7 @@ pub(super) fn execute_property_stmt(
             let current = eval_property_get_result(object, property, context, values)?;
             let right = eval_expr(value, context, scope, values)?;
             let value = eval_binary_result(*op, current, right, context, values)?;
-            eval_property_set_result(object, property, value, context, values)?;
+            eval_property_set_result(object, property, value, false, context, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::PropertyIncDec {

@@ -33,7 +33,7 @@ pub(super) fn eval_property_inc_dec_result(
 ) -> Result<(), EvalStatus> {
     let current = eval_property_get_result(object, property, context, values)?;
     let value = eval_inc_dec_value(current, increment, values)?;
-    eval_property_set_result(object, property, value, context, values)
+    eval_property_set_result(object, property, value, false, context, values)
 }
 
 /// Reads, updates, and writes one static property after the receiver/name are resolved.
@@ -138,7 +138,7 @@ pub(super) fn eval_array_unset_element_stmt(
             if let Some(array) =
                 eval_array_unset_target_result(array, index, context, scope, values)?
             {
-                eval_property_set_result(object, property, array, context, values)?;
+                eval_property_set_result(object, property, array, false, context, values)?;
             }
             return Ok(());
         }
@@ -149,7 +149,7 @@ pub(super) fn eval_array_unset_element_stmt(
             if let Some(array) =
                 eval_array_unset_target_result(array, index, context, scope, values)?
             {
-                eval_property_set_result(object, &property, array, context, values)?;
+                eval_property_set_result(object, &property, array, false, context, values)?;
             }
             return Ok(());
         }
@@ -425,7 +425,7 @@ pub(super) fn eval_property_array_append_result(
     let index = eval_array_append_key(array, values)?;
     let value = eval_expr(value, context, scope, values)?;
     let array = values.array_set(array, index, value)?;
-    eval_property_set_result(object, property, array, context, values)
+    eval_property_set_result(object, property, array, false, context, values)
 }
 
 /// Executes `$object->property[index] = value` and compound indexed property writes.
@@ -460,7 +460,7 @@ pub(super) fn eval_property_array_set_result(
     let array = eval_array_set_target_for_index(array, index, values)?;
     let value = eval_property_array_set_value(array, index, op, value, context, scope, values)?;
     let array = values.array_set(array, index, value)?;
-    eval_property_set_result(object, property, array, context, values)
+    eval_property_set_result(object, property, array, false, context, values)
 }
 
 /// Computes the value written by a simple or compound property-array assignment.

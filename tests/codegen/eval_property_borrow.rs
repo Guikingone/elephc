@@ -17,8 +17,25 @@
 //! - Instance, static and dynamic-name property stores all reach it. Property ARRAY appends and
 //!   keyed sets do not: that path already retains before storing, and the fixtures below pin
 //!   that this fix did not disturb it.
+//! - Nor does an AOT-declared slot, a `set` hook or `__set`. Only one exit of
+//!   `eval_property_set_result` consumes the value the transferring way — the stdClass store —
+//!   so the retain lives there rather than at the statement arm. The generated setter for a
+//!   compiled slot and the native bridge take their own reference; a hook and `__set` merely
+//!   lend the value on as a by-value argument, and their own body does the storing. Retaining
+//!   before that dispatch leaked five blocks per store through `__set` and two through an AOT
+//!   slot, both measured; the last two fixtures pin those.
 
 use crate::support::{compile_and_run, compile_and_run_with_heap_debug};
+
+/// Reads `live_blocks=` out of a `--heap-debug` exit summary.
+fn live_blocks(stderr: &str) -> i64 {
+    stderr
+        .lines()
+        .find_map(|line| line.split("live_blocks=").nth(1))
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|n| n.trim_end_matches(|c: char| !c.is_ascii_digit()).parse().ok())
+        .unwrap_or_else(|| panic!("no live_blocks in: {stderr}"))
+}
 
 /// Verifies a borrowed value stored into an instance property survives the slot being
 /// overwritten, whether it came from `$this` or from a by-value parameter.
@@ -135,4 +152,93 @@ echo ($o instanceof EvalArrBag) ? "yes" : "no", "|", $o->k, "|";
     );
 
     assert_eq!(out, "123|yes|4|");
+}
+
+/// Verifies the retain does NOT fire for an AOT-declared property slot, which takes its own
+/// reference through the generated setter.
+///
+/// Measured as a SLOPE across two iteration counts: each iteration allocates a holder and a bag,
+/// so the absolute count is not the signal. 6.0 blocks per iteration when the retain correctly
+/// stands aside, 8.0 when it fires anyway — the two extra being the reference the slot already
+/// holds. The holder is fresh each time on purpose, so nothing overwrites the slot and absorbs
+/// the surplus.
+#[test]
+fn test_an_aot_declared_slot_does_not_get_a_second_retain() {
+    /// The loop, parameterised by iteration count so the per-store cost can be isolated.
+    fn store_loop(iterations: usize) -> String {
+        format!(
+            r#"<?php
+class AotTyped {{ public ?AotBag $slot = null; }}
+class AotBag {{ public int $k = 1; }}
+eval('
+function evalAotStore(AotBag $b, AotTyped $h): int {{ $h->slot = $b; return 1; }}
+for ($i = 0; $i < {iterations}; $i++) {{
+    $b = new AotBag();
+    $h = new AotTyped();
+    evalAotStore($b, $h);
+}}
+echo "ok";
+');
+"#
+        )
+    }
+
+    let small = compile_and_run_with_heap_debug(&store_loop(100));
+    let large = compile_and_run_with_heap_debug(&store_loop(300));
+
+    assert!(small.success, "the 100-iteration program failed: {}", small.stderr);
+    assert!(large.success, "the 300-iteration program failed: {}", large.stderr);
+    assert_eq!(small.stdout, "ok");
+    assert_eq!(large.stdout, "ok");
+
+    let per_store = (live_blocks(&large.stderr) - live_blocks(&small.stderr)) as f64 / 200.0;
+    assert!(
+        per_store <= 7.0,
+        "an AOT-declared slot was handed a second reference: {per_store} blocks per store"
+    );
+}
+
+/// Verifies the retain does NOT fire when the store is dispatched to `__set`, which receives the
+/// value as a by-value argument and stores it itself.
+///
+/// Measured as a slope, like the AOT fixture: 8.0 blocks per store when the retain correctly
+/// stands aside — the same as before this issue was fixed at all — and 13.0 when it fires before
+/// the dispatch, because nothing on that path ever gives the reference back.
+#[test]
+fn test_a_magic_setter_does_not_get_a_second_retain() {
+    /// The loop, parameterised by iteration count so the per-store cost can be isolated.
+    fn magic_loop(iterations: usize) -> String {
+        format!(
+            r#"<?php
+eval('
+class MagicHold {{
+    private array $bag = [];
+    public function __set($n, $v) {{ $this->bag[$n] = $v; }}
+}}
+class MBag {{ public int $k = 1; }}
+function evalMagicStore(MBag $b, MagicHold $h): int {{ $h->undeclared = $b; return 1; }}
+for ($i = 0; $i < {iterations}; $i++) {{
+    $b = new MBag();
+    $h = new MagicHold();
+    evalMagicStore($b, $h);
+}}
+echo "ok";
+');
+"#
+        )
+    }
+
+    let small = compile_and_run_with_heap_debug(&magic_loop(100));
+    let large = compile_and_run_with_heap_debug(&magic_loop(300));
+
+    assert!(small.success, "the 100-iteration program failed: {}", small.stderr);
+    assert!(large.success, "the 300-iteration program failed: {}", large.stderr);
+    assert_eq!(small.stdout, "ok");
+    assert_eq!(large.stdout, "ok");
+
+    let per_store = (live_blocks(&large.stderr) - live_blocks(&small.stderr)) as f64 / 200.0;
+    assert!(
+        per_store <= 9.0,
+        "a `__set` dispatch was handed a reference nobody releases: {per_store} blocks per store"
+    );
 }

@@ -235,11 +235,22 @@ replaces, which destroyed the lent object outright, while a self-reference
 (`$this->me = $this;`) instead failed `--heap-debug` with `bad refcount` and
 printed the right answer without it.
 
-Only the plain stores need it. A compound assignment's right operand is consumed
-by the operator, which yields a fresh value the slot then owns, and the property
-ARRAY paths (`$h->slots[] = $param;`, `$h->slots["x"] = $param;`) already retain
-before storing — a second retain there would leak. Two more sites that look like
-they should share the defect do not, for the same reason: an array literal
+Where that retain goes matters as much as that it happens, because a property
+write has several exits and only ONE of them consumes the value that way.
+`eval_property_set_result` may dispatch to a `set` hook or `__set`, which receive
+the value as a by-value argument and store it themselves; to the generated setter
+for an AOT-declared slot, or the native bridge, both of which take a reference of
+their own; or fall through to the stdClass store, which keeps the handle verbatim
+and releases whatever it replaces. Only that last exit needs the reference, so the
+statement arm computes the predicate and hands the ANSWER down, and the retain
+happens at the exit. Retaining before the dispatch instead leaked five blocks per
+store through `__set` and two through an AOT slot, both measured.
+
+Two neighbouring paths never need it at all. A compound assignment's right operand
+is consumed by the operator, which yields a fresh value the slot then owns, and the
+property ARRAY paths (`$h->slots[] = $param;`, `$h->slots["x"] = $param;`) already
+retain before storing — a second retain there would leak. Two more sites that look
+like they should share the defect do not, for the same reason: an array literal
 element (`[$param]`) and by-value argument binding both materialize an owner.
 
 A related but distinct hole stays open: the predicate asks for a **borrowed**

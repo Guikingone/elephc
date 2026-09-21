@@ -149,10 +149,20 @@ pub(in crate::interpreter) fn eval_property_get_result(
 }
 
 /// Writes one object property while enforcing eval-declared member visibility.
+///
+/// `value_is_borrowed` says the caller handed over a reference it does not own — a read of a
+/// `ScopeCellOwnership::Borrowed` cell, which `EvalExpr::LoadVar` returns without retaining.
+/// Only ONE of the exits below consumes the value that way, and it is the one that takes the
+/// reference (issue #1123). Every other exit either retains for itself — the generated setter
+/// for an AOT-declared slot, the native bridge — or merely lends it on, as a `set` hook and
+/// `__set` do when they pass it as a by-value argument whose own body does the storing.
+/// Retaining before the dispatch instead of at the exit leaked five blocks per store through
+/// `__set` and two through an AOT slot, both measured.
 pub(in crate::interpreter) fn eval_property_set_result(
     object: RuntimeCellHandle,
     property_name: &str,
     value: RuntimeCellHandle,
+    value_is_borrowed: bool,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
@@ -320,6 +330,13 @@ pub(in crate::interpreter) fn eval_property_set_result(
             values,
         );
     }
+    // Past every hook, magic and bridge exit: this is the stdClass store, which keeps the
+    // handle verbatim, so the slot needs a reference of its own.
+    let value = if value_is_borrowed {
+        values.retain(value)?
+    } else {
+        value
+    };
     if let Some(target) = context
         .dynamic_property_alias(identity, &storage_property_name)
         .cloned()
