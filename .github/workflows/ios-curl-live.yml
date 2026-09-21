@@ -1,0 +1,77 @@
+# One real HTTPS GET on ios-sim-arm64, opt-in.
+#
+# `curl-ios-compile-link` in ci.yml proves the SecTrust build links: libcurl carries
+# `AppleSecTrust`, `SecTrustCreateWithCertificates` resolves, and the whole host/native/bridge
+# graph links for device and Simulator. It cannot prove a request VERIFIES. Default iOS HTTPS
+# leaves `CURLOPT_CAINFO` unset on purpose so SecTrust supplies the anchors, so a regression
+# that compiles, links, and still fails TLS is invisible there (issue #873).
+#
+# It lives outside ci.yml and off the `ci-complete` gate for two reasons: it reaches the public
+# internet, which no required check should depend on, and it needs a Simulator runtime the
+# runner image may change under us. Run it from the Actions tab before a release, or let the
+# weekly schedule catch a drifting trust store.
+#
+# The transfer is driven from the application host's C code. An iOS build is a library:
+# `elephc_init()` runs no top-level statements and an export that reached curl is refused by
+# the export gate, so the PHP half settles which archives are linked and the host half
+# exercises them. elephc's own PHP curl surface is covered by the Linux and macOS shards.
+#
+# The device row cannot be run at all — ios-arm64 needs signing, provisioning and hardware —
+# so compile/link evidence remains the whole story there.
+name: iOS curl live
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Mondays 05:20 UTC, well clear of the nightly.
+    - cron: "20 5 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-curl-live
+  cancel-in-progress: false
+
+jobs:
+  curl-ios-live-transfer:
+    name: Curl iOS Live HTTPS (ios-sim-arm64)
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust with the iOS Simulator standard library
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          targets: aarch64-apple-ios-sim
+
+      - name: Cache Rust build state
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: rust-curl-ios-sim-arm64-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            rust-curl-ios-sim-arm64-
+
+      - name: Cache managed native curl for iOS
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/elephc-native
+          key: curl-native-ios-sim-arm64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            curl-native-ios-sim-arm64-
+
+      - name: Build, link, and perform one HTTPS GET in the Simulator
+        env:
+          ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
+        run: |
+          bash scripts/ci/test_ios_curl_link.sh \
+            ios-sim-arm64 \
+            aarch64-apple-ios-sim \
+            iphonesimulator \
+            arm64-apple-ios13.0-simulator \
+            --run

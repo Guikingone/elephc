@@ -251,11 +251,24 @@ builds the whole native chain with the real Xcode toolchain and proves the
 archive is the SecTrust build — `AppleSecTrust` in its strings,
 `SecTrustCreateWithCertificates` among its undefined symbols — then links the
 complete host/native/bridge graph for device and Simulator. It does not perform
-a transfer. A separate opt-in workflow, `iOS curl live`, boots a Simulator and
-performs one real HTTPS GET on `ios-sim-arm64`; it runs weekly and on demand
-rather than on every push, because it reaches the public internet. `ios-arm64`
-cannot be run in CI at all — it needs signing, provisioning and hardware — so
-compile/link evidence is the whole story there.
+a transfer.
+
+A separate opt-in workflow, `iOS curl live`, boots a Simulator and performs one
+real HTTPS GET on `ios-sim-arm64` against the linked libcurl with no CA option
+set, so SecTrust is what decides. It runs weekly and on demand rather than on
+every push, because it reaches the public internet.
+
+That transfer is driven from the **application host's C code**, not from the
+PHP half, and the reason is structural rather than convenience. An iOS build is
+a library: `elephc_init()` runs no top-level statements, and an exported
+function that reached curl would be refused by the export gate, which requires
+every export to be recoverable at the host boundary. So the PHP side of the
+fixture settles which archives are linked and the host side exercises them.
+elephc's own PHP curl surface is covered at run time by the Linux and macOS
+codegen shards instead.
+
+`ios-arm64` cannot be run in CI at all — it needs signing, provisioning and
+hardware — so compile/link evidence is the whole story there.
 
 An explicit CA setting remains explicit on iOS. `CURLOPT_CAINFO`,
 `CURLOPT_CAPATH`, or `$CURL_CA_BUNDLE` disables the automatic SecTrust path for
