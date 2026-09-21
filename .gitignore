@@ -20,10 +20,27 @@ docs/superpowers/
 /bundle.tar.bz2
 
 # Native artifacts generated beside the stock web entry point.
+#
+# Every build is given its own output name (`build-symfony.sh <tag>` compiles
+# `index_<tag>.php`), because a shared `public/index` means two builds silently overwrite each
+# other — which once left an afternoon of latency and symbol measurements describing a binary
+# nobody had built. So the patterns below have to cover the variants, not just `index`. They
+# also have to cover the per-slice `.s`/`.o` the parallel assembler leaves behind: a single
+# `.s` for this app is over a gigabyte, and one of them reached 109 MB in a commit and blocked
+# every push to GitHub until the history was rewritten.
 /examples/symfony-app/public/index
 /examples/symfony-app/public/index.s
 /examples/symfony-app/public/index.o
 /examples/symfony-app/public/index.map
+/examples/symfony-app/public/index_*
+/examples/symfony-app/**/*.s
+/examples/symfony-app/**/*.o
+
+# Probe scripts and their compiled twins, written straight into the fixture while debugging.
+# They are scratch: keep them in the session scratchpad, not here.
+/examples/symfony-app/debug_*
+/examples/symfony-app/probe_*
+/examples/symfony-app/*.lock.tmp
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 graft/
