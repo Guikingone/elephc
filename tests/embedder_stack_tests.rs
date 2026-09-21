@@ -144,3 +144,93 @@ fn constant_propagation_survives_the_nesting_limit_on_a_small_embedder_stack() {
     });
     assert_eq!(report, "2 statements");
 }
+
+/// Verifies include resolution survives the same depth called on its own.
+///
+/// Follow-up for #1150: the resolver runs BEFORE the checker, so every fixture above that
+/// starts at `name_resolver` skips it entirely, and an embedder that resolves includes itself
+/// reaches it with no wrapper of its own in between. The fixture declares no includes; what is
+/// being walked is the expression tree the resolver descends on its way to finding none.
+#[test]
+fn include_resolution_survives_the_nesting_limit_on_a_small_embedder_stack() {
+    let report = on_a_small_embedder_stack(|| {
+        let ast = parse_deeply_nested();
+        match elephc::resolver::resolve(ast, std::path::Path::new(".")) {
+            Ok(ast) => summarize(ast),
+            Err(error) => error.message,
+        }
+    });
+    assert_eq!(report, "2 statements");
+}
+
+/// Verifies dead-code elimination survives the same depth called on its own.
+///
+/// Follow-up for #1150. Like constant propagation, DCE runs after the checker, so a fixture
+/// that stops at type checking cannot reach it; unlike propagation, it also rewrites the tree
+/// it walks, which is the shape that grows frames.
+#[test]
+fn dead_code_elimination_survives_the_nesting_limit_on_a_small_embedder_stack() {
+    let report = on_a_small_embedder_stack(|| {
+        let ast = parse_deeply_nested();
+        let ast = elephc::conditional::apply(ast, &HashSet::new());
+        let ast = elephc::name_resolver::resolve(ast).expect("name resolve");
+        let ast = elephc::optimize::fold_constants(ast);
+        let check = elephc::types::check(&ast).expect("type check");
+        summarize(elephc::optimize::eliminate_dead_code(
+            ast,
+            check.local_binding_decision_spans(),
+        ))
+    });
+    assert_eq!(report, "2 statements");
+}
+
+/// Verifies EIR lowering survives the same depth called on its own.
+///
+/// Follow-up for #1150, and the deepest walker of the set: lowering descends the same tree the
+/// checker did and BUILDS one frame per level while it emits. An embedder that drives lowering
+/// directly — to inspect EIR, or to run its own backend — gets there without the CLI driver's
+/// wrapper.
+#[test]
+fn eir_lowering_survives_the_nesting_limit_on_a_small_embedder_stack() {
+    let report = on_a_small_embedder_stack(|| {
+        let ast = parse_deeply_nested();
+        let ast = elephc::conditional::apply(ast, &HashSet::new());
+        let ast = elephc::name_resolver::resolve(ast).expect("name resolve");
+        let ast = elephc::optimize::fold_constants(ast);
+        let check = elephc::types::check(&ast).expect("type check");
+        let target = elephc::codegen::platform::Target::detect_host();
+        match elephc::ir_lower::lower_program(&ast, &check, target, false) {
+            Ok(module) => {
+                // A count would pin the synthetic-function set, which is not what this is
+                // about; that lowering RETURNED at this depth is.
+                assert!(!module.functions.is_empty(), "lowering produced no functions");
+                "lowered".to_string()
+            }
+            Err(error) => format!("lowering failed: {error}"),
+        }
+    });
+    assert_eq!(report, "lowered");
+}
+
+/// Verifies source PAST the cap is still diagnosed rather than walked.
+///
+/// The fixtures above all sit AT `MAX_COMPILER_NESTING`, which is the depth the budget is
+/// sized for. One level further has to be refused by the parser's own guard, on the small
+/// stack as anywhere else — an embedder that lost the diagnostic would get an abort instead of
+/// an error, which is the failure mode #686 was filed for.
+#[test]
+fn over_cap_nesting_is_diagnosed_on_a_small_embedder_stack() {
+    let report = on_a_small_embedder_stack(|| {
+        let source = format!(
+            "<?php\n$a = {}1{};\necho count($a);\n",
+            "[".repeat(NESTING_DEPTH + 1),
+            "]".repeat(NESTING_DEPTH + 1)
+        );
+        let tokens = elephc::lexer::tokenize(&source).expect("tokenize");
+        match elephc::parser::parse(&tokens) {
+            Ok(program) => summarize(program),
+            Err(error) => error.message,
+        }
+    });
+    assert_eq!(report, "maximum compiler nesting depth exceeded");
+}
