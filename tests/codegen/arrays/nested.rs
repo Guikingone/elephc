@@ -173,11 +173,12 @@ var_dump($a["outer"]["inner"][1]);
     assert_eq!(out, "string(1) \"q\"\n");
 }
 
-/// The same nesting through an intermediate local, and with an int-valued inner array.
+/// The same nesting, reached through an intermediate local instead of one chained read.
 ///
 /// Reading `$a["outer"]` into its own local first goes through a different read path than the
 /// chained `$a["outer"]["inner"]` above, but both consume the same fabricated stamp, so both
-/// answered the pointer-as-integer before the fix.
+/// answered the pointer-as-integer before the fix. The inner array is string-valued on purpose:
+/// the fabricated stamp was `int`, so only a non-int element type tells the two apart.
 #[test]
 fn test_nested_assoc_literal_element_type_survives_an_intermediate_local() {
     let out = compile_and_run(
