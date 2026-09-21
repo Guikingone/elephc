@@ -646,7 +646,15 @@ pub(crate) fn lower_is_a_relation(
             return super::lower_eval_object_is_a(ctx, inst, object, &target_class, exclude_self);
         }
     }
-    let result = static_relation_holds(ctx, object, target, exclude_self)?;
+    // `$allow_string` decides whether a string first operand names a class, and the two builtins
+    // disagree on its default: `is_subclass_of` takes names unless told otherwise, `is_a` only
+    // when told to. Measured, `is_a("Derived", "Base")` is false and `is_a("Derived", "Base",
+    // true)` is true. A non-literal flag keeps the conservative answer for its builtin.
+    let allow_string_subject = match inst.operands.get(2) {
+        Some(flag) => const_bool_operand(ctx, *flag)?.unwrap_or(exclude_self),
+        None => exclude_self,
+    };
+    let result = static_relation_holds(ctx, object, target, exclude_self, allow_string_subject)?;
     emit_bool_result(ctx, result);
     store_if_result(ctx, inst)
 }
@@ -1321,9 +1329,37 @@ fn static_relation_holds(
     object: ValueId,
     target: ValueId,
     exclude_self: bool,
+    allow_string_subject: bool,
 ) -> Result<bool> {
-    let PhpType::Object(object_class) = ctx.value_php_type(object)? else {
-        return Ok(false);
+    // PHP takes a class NAME as readily as an object here, and answering `false` for the name
+    // form is a silent wrong answer rather than a refusal (issue #1113). A literal name is as
+    // decidable as a typed object: the parent and interface walks below need a class name, and
+    // do not care which operand shape it arrived in.
+    let object_class = match ctx.value_php_type(object)? {
+        PhpType::Object(class_name) => class_name,
+        _ if allow_string_subject => {
+            let Some(name) = optional_const_string_operand(ctx, object)? else {
+                return Ok(false);
+            };
+            let subject = name.trim_start_matches('\\');
+            // An interface name is a legal subject and is reachable ONLY this way — there is no
+            // instance of an interface to pass, so the object form can never ask the question.
+            // `interface J extends I {}` makes `is_subclass_of("J", "I")` true in PHP.
+            if lookup_class(ctx, subject).is_none() {
+                let Some(target_class) = optional_const_string_operand(ctx, target)? else {
+                    return Ok(false);
+                };
+                let target_key = php_symbol_key(target_class.trim_start_matches('\\'));
+                // `is_a` counts the subject itself, `is_subclass_of` does not — the same
+                // asymmetry the class path applies below.
+                if !exclude_self && php_symbol_key(subject) == target_key {
+                    return Ok(true);
+                }
+                return Ok(interface_extends(ctx, subject, &target_key));
+            }
+            name
+        }
+        _ => return Ok(false),
     };
     let Some(target_class) = optional_const_string_operand(ctx, target)? else {
         return Ok(false);
@@ -1358,6 +1394,27 @@ fn parent_chain_contains(
         current = parent.to_string();
     }
     false
+}
+
+/// Returns true when one interface extends the target interface, directly or transitively.
+///
+/// `class_infos` covers classes; an interface's own parents live in `interface_infos`, which is
+/// why an interface subject needs its own walk rather than the class one.
+fn interface_extends(ctx: &FunctionContext<'_>, interface_name: &str, target_key: &str) -> bool {
+    let key = php_symbol_key(interface_name.trim_start_matches('\\'));
+    let Some(info) = ctx
+        .module
+        .interface_infos
+        .iter()
+        .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == key)
+        .map(|(_, info)| info)
+    else {
+        return false;
+    };
+    info.parents.iter().any(|parent| {
+        let parent = parent.trim_start_matches('\\');
+        php_symbol_key(parent) == target_key || interface_extends(ctx, parent, target_key)
+    })
 }
 
 /// Returns true when an object's implemented interface set contains the target PHP symbol key.
