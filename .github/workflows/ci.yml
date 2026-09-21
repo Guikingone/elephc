@@ -505,7 +505,7 @@ jobs:
 
       - name: Run non-codegen tests
         run: |
-          "$RUNNER_TEMP/cargo-nextest" run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests)' \
@@ -594,7 +594,7 @@ jobs:
 
       - name: Run web test shard
         run: |
-          "$RUNNER_TEMP/cargo-nextest" run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             -E 'binary(web_tests) or binary(web_session_tests)' \
@@ -709,7 +709,7 @@ jobs:
         # compiler is what materializes the managed package below.
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          "$RUNNER_TEMP/cargo-nextest" run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
@@ -732,7 +732,7 @@ jobs:
           # the package was materialized just above, so absence is a provisioning bug.
           ELEPHC_TEST_REQUIRE_XML_NATIVE: "1"
         run: |
-          "$RUNNER_TEMP/cargo-nextest" run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)' \
@@ -915,7 +915,7 @@ jobs:
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          "$RUNNER_TEMP/cargo-nextest" run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
@@ -1063,7 +1063,7 @@ jobs:
         # notes in .config/nextest.toml) -- one extraction gives us both.
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          "$RUNNER_TEMP/cargo-nextest" run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
@@ -1398,7 +1398,7 @@ jobs:
           CARGO_NET_OFFLINE: "true"
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
-          "$RUNNER_TEMP/cargo-nextest" run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             -E 'binary(codegen_tests) and test(~codegen::eval)' \
