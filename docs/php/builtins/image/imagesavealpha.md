@@ -1,6 +1,6 @@
 ---
 title: "imagesavealpha()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Controls whether full alpha channel information is saved with the image."
 sidebar:
   order: 526
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagesavealpha(mixed $image, bool $enable): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Controls whether full alpha channel information is saved with the image.
 
 **Parameters**:
 - `$image` (`mixed`)

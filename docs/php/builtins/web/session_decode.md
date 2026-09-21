@@ -1,6 +1,6 @@
 ---
 title: "session_decode()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Loads serialized session data into the session superglobal."
 sidebar:
   order: 920
 ---
@@ -11,7 +11,7 @@ sidebar:
 function session_decode(string $data): bool
 ```
 
-Implemented by the compiler-injected web prelude.
+Loads serialized session data into the session superglobal.
 
 **Parameters**:
 - `$data` (`string`)

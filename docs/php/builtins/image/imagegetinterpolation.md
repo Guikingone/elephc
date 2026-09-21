@@ -1,6 +1,6 @@
 ---
 title: "imagegetinterpolation()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the interpolation method used when resampling."
 sidebar:
   order: 511
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagegetinterpolation(mixed $image): int
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the interpolation method used when resampling.
 
 **Parameters**:
 - `$image` (`mixed`)

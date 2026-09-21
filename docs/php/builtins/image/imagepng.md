@@ -1,6 +1,6 @@
 ---
 title: "imagepng()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Writes an image as PNG, to a file or to the output buffer."
 sidebar:
   order: 521
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagepng(mixed $image, ?string $file = null, int $quality = -1, int $filters = -1): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Writes an image as PNG, to a file or to the output buffer.
 
 **Parameters**:
 - `$image` (`mixed`)

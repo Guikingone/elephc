@@ -1,6 +1,6 @@
 ---
 title: "mysqli_begin_transaction()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Starts a transaction."
 sidebar:
   order: 101
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_begin_transaction(mixed $mysql, int $flags = 0, ?string $name = null): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Starts a transaction.
 
 **Parameters**:
 - `$mysql` (`mixed`)

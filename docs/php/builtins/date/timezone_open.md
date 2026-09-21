@@ -1,6 +1,6 @@
 ---
 title: "timezone_open()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Creates a DateTimeZone from an identifier."
 sidebar:
   order: 250
 ---
@@ -11,7 +11,7 @@ sidebar:
 function timezone_open(string $timezone): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Creates a DateTimeZone from an identifier.
 
 **Parameters**:
 - `$timezone` (`string`)

@@ -1,6 +1,6 @@
 ---
 title: "error_log()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Sends an error message to the log, a file, or an email address."
 sidebar:
   order: 911
 ---
@@ -11,7 +11,7 @@ sidebar:
 function error_log(string $message, int $message_type = 0, ?string $destination = null, ?string $additional_headers = null): bool
 ```
 
-Implemented by the compiler-injected web prelude.
+Sends an error message to the log, a file, or an email address.
 
 **Parameters**:
 - `$message` (`string`)

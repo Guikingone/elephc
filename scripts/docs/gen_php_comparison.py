@@ -195,6 +195,19 @@ class Coverage:
     def eval(self, module: str) -> int:
         return sum(1 for s in self.supported.get(module, []) if s["_eval"])
 
+    def aot_only_routes(self, module: str) -> set:
+        """Returns the compile-time routes of a module's symbols that `eval()` does not have.
+
+        The zero columns below the table are more interesting when they share a route:
+        every function reached only through an injected prelude is missing from `eval()`
+        for one reason, not for its own.
+        """
+        return {
+            s.get("_aot_kind")
+            for s in self.supported.get(module, [])
+            if s["_aot"] and not s["_eval"]
+        }
+
 
 def classify(registry: list, symbols: dict, baseline: dict):
     """Attribute every elephc symbol to its PHP module and cross-check it with the baseline.
@@ -267,6 +280,7 @@ def classify(registry: list, symbols: dict, baseline: dict):
             "description": entry.get("description", ""),
             "target_support": (entry.get("semantics") or {}).get("target_support"),
             "_aot": bool(aot.get("supported", not entry.get("eval_only", False))),
+            "_aot_kind": aot.get("kind"),
             "_eval": bool((entry.get("eval") or {}).get("supported")),
         }
         if aot.get("kind") in CONSTRUCT_KINDS and not (
@@ -447,6 +461,32 @@ def render(
             "",
         ]
         lines += [f"- {item}" for item in divergences]
+
+        # Group the modules whose whole eval() gap is prelude-routed. They are one gap with
+        # one shape: the interpreter dispatches through the shared builtin registry, and a
+        # prelude function has no registry binding for it to find.
+        prelude_modules, prelude_count = [], 0
+        for ext in modules:
+            coverage = coverages["functions"]
+            missing = coverage.aot(ext) - coverage.eval(ext)
+            if missing <= 0 or coverage.aot_only_routes(ext) != {"prelude"}:
+                continue
+            prelude_modules.append(ext)
+            prelude_count += missing
+        if prelude_modules:
+            names = ", ".join(f"`{m}`" for m in prelude_modules)
+            lines += [
+                "",
+                f"Most of that is one gap rather than several. {prelude_count} of those "
+                f"functions — every one missing from {names} — are implemented by a PHP "
+                "prelude the compiler injects into the program it is compiling. The "
+                "interpreter dispatches through the shared builtin registry, and a prelude "
+                "function has no registry binding there, so it is not that these surfaces "
+                "were skipped one by one: none of them has an entry point `eval()` can "
+                "reach. Closing it means an `eval_builtin!` binding per surface; see "
+                "**eval() coverage of the prelude-implemented modules** under "
+                "[Known limitations](#known-limitations) for what is tracked.",
+            ]
     eval_only = [
         (kind, s)
         for kind, coverage in coverages.items()

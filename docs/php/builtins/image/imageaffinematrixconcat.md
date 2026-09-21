@@ -1,6 +1,6 @@
 ---
 title: "imageaffinematrixconcat()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the product of two affine transformation matrices."
 sidebar:
   order: 457
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imageaffinematrixconcat(array $matrix1, array $matrix2): array
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the product of two affine transformation matrices.
 
 **Parameters**:
 - `$matrix1` (`array`)

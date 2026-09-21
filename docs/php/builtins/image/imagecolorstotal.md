@@ -1,6 +1,6 @@
 ---
 title: "imagecolorstotal()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns how many colors a palette image holds."
 sidebar:
   order: 478
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagecolorstotal(mixed $image): int
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns how many colors a palette image holds.
 
 **Parameters**:
 - `$image` (`mixed`)

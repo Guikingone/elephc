@@ -1,6 +1,6 @@
 ---
 title: "session_unset()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Removes every variable from the session without destroying it."
 sidebar:
   order: 936
 ---
@@ -11,7 +11,7 @@ sidebar:
 function session_unset(): bool
 ```
 
-Implemented by the compiler-injected web prelude.
+Removes every variable from the session without destroying it.
 
 **Parameters**: none.
 

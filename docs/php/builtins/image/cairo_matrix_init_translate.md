@@ -1,6 +1,6 @@
 ---
 title: "cairo_matrix_init_translate()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates a matrix that translates by the given x and y offsets."
 sidebar:
   order: 416
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_matrix_init_translate(float $tx, float $ty): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates a matrix that translates by the given x and y offsets.
 
 **Parameters**:
 - `$tx` (`float`)

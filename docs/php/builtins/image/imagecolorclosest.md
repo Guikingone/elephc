@@ -1,6 +1,6 @@
 ---
 title: "imagecolorclosest()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the palette index closest to the requested color."
 sidebar:
   order: 467
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagecolorclosest(mixed $image, int $red, int $green, int $blue): int
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the palette index closest to the requested color.
 
 **Parameters**:
 - `$image` (`mixed`)

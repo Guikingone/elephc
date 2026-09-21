@@ -1,6 +1,6 @@
 ---
 title: "trigger_error()"
-description: "Generates a user-level PHP error."
+description: "Raises a user-level error, warning, or notice."
 sidebar:
   order: 688
 ---
@@ -11,7 +11,7 @@ sidebar:
 function trigger_error(string $message, int $error_level = E_USER_NOTICE): bool
 ```
 
-Generates a user-level PHP error.
+Raises a user-level error, warning, or notice.
 
 **Parameters**:
 - `$message` (`string`)

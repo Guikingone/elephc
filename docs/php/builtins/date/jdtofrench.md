@@ -1,6 +1,6 @@
 ---
 title: "jdtofrench()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Converts a Julian Day count into a French Republican date string."
 sidebar:
   order: 230
 ---
@@ -11,7 +11,7 @@ sidebar:
 function jdtofrench(int $julian_day): string
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Converts a Julian Day count into a French Republican date string.
 
 **Parameters**:
 - `$julian_day` (`int`)

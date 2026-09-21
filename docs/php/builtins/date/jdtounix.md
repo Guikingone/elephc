@@ -1,6 +1,6 @@
 ---
 title: "jdtounix()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Converts a Julian Day count into a Unix timestamp."
 sidebar:
   order: 234
 ---
@@ -11,7 +11,7 @@ sidebar:
 function jdtounix(int $julian_day): int
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Converts a Julian Day count into a Unix timestamp.
 
 **Parameters**:
 - `$julian_day` (`int`)

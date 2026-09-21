@@ -1,6 +1,6 @@
 ---
 title: "inet_pton()"
-description: "Converts a human-readable IP address to its packed in_addr representation."
+description: "Packs a textual IPv4 or IPv6 address into its 4- or 16-byte network-order form, or false when the string is not a valid address."
 sidebar:
   order: 822
 ---
@@ -11,7 +11,7 @@ sidebar:
 function inet_pton(string $ip): mixed
 ```
 
-Converts a human-readable IP address to its packed in_addr representation.
+Packs a textual IPv4 or IPv6 address into its 4- or 16-byte network-order form, or false when the string is not a valid address.
 
 **Parameters**:
 - `$ip` (`string`)

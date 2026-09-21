@@ -1,6 +1,6 @@
 ---
 title: "imageresolution()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Reads or sets an image's horizontal and vertical resolution in DPI."
 sidebar:
   order: 524
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imageresolution(mixed $image, ?int $resolution_x = null, ?int $resolution_y = null): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Reads or sets an image's horizontal and vertical resolution in DPI.
 
 **Parameters**:
 - `$image` (`mixed`)

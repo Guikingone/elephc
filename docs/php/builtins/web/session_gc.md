@@ -1,6 +1,6 @@
 ---
 title: "session_gc()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Runs session garbage collection and returns how many sessions it removed."
 sidebar:
   order: 923
 ---
@@ -11,7 +11,7 @@ sidebar:
 function session_gc(): mixed
 ```
 
-Implemented by the compiler-injected web prelude.
+Runs session garbage collection and returns how many sessions it removed.
 
 **Parameters**: none.
 

@@ -1,6 +1,6 @@
 ---
 title: "mysqli_set_opt()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Alias of mysqli_options()."
 sidebar:
   order: 157
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_set_opt(mixed $mysql, int $option, mixed $value): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Alias of mysqli_options().
 
 **Parameters**:
 - `$mysql` (`mixed`)

@@ -1,6 +1,6 @@
 ---
 title: "session_write_close()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Writes the session data and releases the session lock."
 sidebar:
   order: 937
 ---
@@ -11,7 +11,7 @@ sidebar:
 function session_write_close(): bool
 ```
 
-Implemented by the compiler-injected web prelude.
+Writes the session data and releases the session lock.
 
 **Parameters**: none.
 

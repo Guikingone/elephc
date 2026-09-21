@@ -1,6 +1,6 @@
 ---
 title: "strftime()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Formats a local timestamp with locale-aware specifiers. Deprecated since PHP 8.1."
 sidebar:
   order: 240
 ---
@@ -11,7 +11,7 @@ sidebar:
 function strftime(string $format, ?int $timestamp = null): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Formats a local timestamp with locale-aware specifiers. Deprecated since PHP 8.1.
 
 **Parameters**:
 - `$format` (`string`)

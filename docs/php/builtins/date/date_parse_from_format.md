@@ -1,6 +1,6 @@
 ---
 title: "date_parse_from_format()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Parses a date/time string against a format into components, warnings, and errors."
 sidebar:
   order: 207
 ---
@@ -11,7 +11,7 @@ sidebar:
 function date_parse_from_format(string $format, string $datetime): array
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Parses a date/time string against a format into components, warnings, and errors.
 
 **Parameters**:
 - `$format` (`string`)

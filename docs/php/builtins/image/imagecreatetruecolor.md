@@ -1,6 +1,6 @@
 ---
 title: "imagecreatetruecolor()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates an empty truecolor image of the given size."
 sidebar:
   order: 494
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagecreatetruecolor(int $width, int $height): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates an empty truecolor image of the given size.
 
 **Parameters**:
 - `$width` (`int`)

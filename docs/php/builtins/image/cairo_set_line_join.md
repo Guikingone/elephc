@@ -1,6 +1,6 @@
 ---
 title: "cairo_set_line_join()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Selects how corners between stroked segments are drawn."
 sidebar:
   order: 436
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_set_line_join(mixed $context, int $lineJoin): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Selects how corners between stroked segments are drawn.
 
 **Parameters**:
 - `$context` (`mixed`)

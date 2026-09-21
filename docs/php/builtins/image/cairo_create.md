@@ -1,6 +1,6 @@
 ---
 title: "cairo_create()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates a drawing context for a surface."
 sidebar:
   order: 402
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_create(mixed $surface): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates a drawing context for a surface.
 
 **Parameters**:
 - `$surface` (`mixed`)

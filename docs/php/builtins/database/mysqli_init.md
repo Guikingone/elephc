@@ -1,6 +1,6 @@
 ---
 title: "mysqli_init()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Creates an unconnected mysqli object for mysqli_real_connect()."
 sidebar:
   order: 137
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_init(): mixed
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Creates an unconnected mysqli object for mysqli_real_connect().
 
 **Parameters**: none.
 

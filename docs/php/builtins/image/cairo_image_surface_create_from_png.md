@@ -1,6 +1,6 @@
 ---
 title: "cairo_image_surface_create_from_png()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates an image surface from a PNG file."
 sidebar:
   order: 409
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_image_surface_create_from_png(string $filename): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates an image surface from a PNG file.
 
 **Parameters**:
 - `$filename` (`string`)

@@ -1,6 +1,6 @@
 ---
 title: "imagecharup()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Draws one character vertically with a built-in font."
 sidebar:
   order: 463
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagecharup(mixed $image, int $font, int $x, int $y, string $char, int $color): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Draws one character vertically with a built-in font.
 
 **Parameters**:
 - `$image` (`mixed`)

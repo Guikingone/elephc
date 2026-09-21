@@ -1,6 +1,6 @@
 ---
 title: "mysqli_field_count()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns how many columns the last query produced."
 sidebar:
   order: 125
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_field_count(mixed $mysql): int
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns how many columns the last query produced.
 
 **Parameters**:
 - `$mysql` (`mixed`)

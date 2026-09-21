@@ -1,6 +1,6 @@
 ---
 title: "cairo_image_surface_get_width()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns an image surface's width in pixels."
 sidebar:
   order: 411
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_image_surface_get_width(mixed $surface): int
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns an image surface's width in pixels.
 
 **Parameters**:
 - `$surface` (`mixed`)

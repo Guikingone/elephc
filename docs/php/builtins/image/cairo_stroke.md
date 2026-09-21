@@ -1,6 +1,6 @@
 ---
 title: "cairo_stroke()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Strokes the current path with the current source and clears the path."
 sidebar:
   order: 442
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_stroke(mixed $context): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Strokes the current path with the current source and clears the path.
 
 **Parameters**:
 - `$context` (`mixed`)

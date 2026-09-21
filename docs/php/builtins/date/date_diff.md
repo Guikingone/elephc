@@ -1,6 +1,6 @@
 ---
 title: "date_diff()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Returns the DateInterval between two dates."
 sidebar:
   order: 198
 ---
@@ -11,7 +11,7 @@ sidebar:
 function date_diff(mixed $baseObject, mixed $targetObject, bool $absolute = false): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Returns the DateInterval between two dates.
 
 **Parameters**:
 - `$baseObject` (`mixed`)

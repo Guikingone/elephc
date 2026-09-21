@@ -244,6 +244,68 @@ echo implode(',', $plain[0]);
     assert_eq!(out, "caught;10,20,30|caught;10,20,30|caught;10,20,30");
 }
 
+/// Verifies the same caught throw over a CALL-RESULT receiver, with `finally` on the way out.
+///
+/// The fixture above covers the array-element, direct-property and plain-element sources. The
+/// call-result receiver is the one the loop actually holds a reference to, so it is the one a
+/// throw can free early: the catch resumes inside the loop, and releasing the held receiver on
+/// the way to it frees the object whose slot owns the container still being written. `finally`
+/// is on the same path and runs on both the throwing and the non-throwing iterations.
+///
+/// The second half repeats the shape under heap debug: a fresh `Outer` per iteration, a throw
+/// caught inside the loop every time, so a missed release leaks one object per iteration and a
+/// double release frees a live one.
+#[test]
+fn test_regression_690_a_caught_throw_under_a_call_result_receiver_keeps_iterating() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Inner { public array $x = [1, 2, 3]; }
+class Outer {
+    private Inner $i;
+    function __construct() { $this->i = new Inner(); }
+    function get(): Inner { return $this->i; }
+}
+function step(&$v) {
+    try {
+        if ($v === 2) { throw new RuntimeException('mid'); }
+    } catch (RuntimeException $e) {
+        echo "caught;";
+    } finally {
+        echo "fin;";
+    }
+    $v *= 10;
+}
+
+$o = new Outer();
+foreach ($o->get()->x as &$a) { step($a); }
+unset($a);
+echo implode(',', $o->get()->x), "|";
+
+$total = 0;
+for ($i = 0; $i < 30; $i++) {
+    $p = new Outer();
+    foreach ($p->get()->x as &$b) {
+        try { throw new RuntimeException('stop'); }
+        catch (RuntimeException $e) { $b *= 2; }
+    }
+    unset($b);
+    $total += $p->get()->x[2];
+}
+echo $total;
+"#,
+    );
+    assert_eq!(
+        out.stdout, "fin;caught;fin;fin;10,20,30|180",
+        "stderr: {}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "a caught throw under a held receiver must release it exactly once: {}",
+        out.stderr
+    );
+}
+
 /// Verifies an unmatched catch inside the loop still releases what the loop holds.
 ///
 /// The exception continues outward, so the rethrow DOES leave the loop — the opposite of the

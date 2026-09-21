@@ -1,6 +1,6 @@
 ---
 title: "mysqli_select_db()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Selects the default database for the connection."
 sidebar:
   order: 155
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_select_db(mixed $mysql, string $database): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Selects the default database for the connection.
 
 **Parameters**:
 - `$mysql` (`mixed`)

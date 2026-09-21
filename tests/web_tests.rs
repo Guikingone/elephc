@@ -1112,6 +1112,55 @@ echo $code, "|", $t, "|", strlen($code);
     }
 }
 
+/// Follow-up for #1129: the same #510 shape under `--web-isolation=request`.
+///
+/// The fixture above serves every request from ONE long-lived worker, which is the lifecycle
+/// the corruption was reported on. `request` isolation is the opposite end: the broker hands
+/// each request to a handler process that exits when it is done, so the heap the self-aliasing
+/// store runs against is fresh every time and the request-teardown path runs eight times
+/// instead of once. Measured during #1017 and never added to the suite.
+///
+/// The response is compared byte for byte, leading token included: the failure was eight bytes
+/// of allocator metadata in front of correct text, never a wrong length.
+#[test]
+fn web_substr_self_reassignment_is_stable_under_request_isolation() {
+    let dir = make_test_dir("web_substr_alias_request");
+    let src = r#"<?php
+function body(): string { return "private function foo() {}
+"; }
+
+class Paste {
+    public function __construct(public string $body) {}
+}
+
+$code = body();
+$code = substr($code, 0, -1);
+
+$p = new Paste("second body here
+");
+$t = $p->body;
+$t = substr($t, 0, -1);
+
+echo $code, "|", $t, "|", strlen($code);
+"#;
+    let bin = compile_isolated_web(&dir, src, "app", "request");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server_with_args(&bin, &addr, "1", &["--handler-concurrency", "2"]);
+    let mut seen = Vec::new();
+    for _ in 0..8 {
+        seen.push(http_request(&addr, "GET", "/", &[], ""));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    for (i, resp) in seen.iter().enumerate() {
+        assert!(
+            resp.ends_with("private function foo() {}|second body here|25"),
+            "request {i} came back corrupted: {resp:?}"
+        );
+    }
+}
+
 /// Verifies echoing a superglobal value directly (a boxed Mixed string) reaches
 /// the HTTP response body, not the worker's stdout. This is the output-capture
 /// completeness fix: `__rt_mixed_write_stdout` routes through `__rt_stdout_write`.

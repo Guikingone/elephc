@@ -1,6 +1,6 @@
 ---
 title: "exif_read_data()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Reads the EXIF headers of a JPEG or TIFF image."
 sidebar:
   order: 448
 ---
@@ -11,7 +11,7 @@ sidebar:
 function exif_read_data(string $filename, ?string $required_sections = null, bool $as_arrays = false, bool $read_thumbnail = false): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Reads the EXIF headers of a JPEG or TIFF image.
 
 **Parameters**:
 - `$filename` (`string`)

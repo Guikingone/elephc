@@ -1,6 +1,6 @@
 ---
 title: "mysqli_get_server_info()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the server version as a string."
 sidebar:
   order: 134
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_get_server_info(mixed $mysql): string
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the server version as a string.
 
 **Parameters**:
 - `$mysql` (`mixed`)

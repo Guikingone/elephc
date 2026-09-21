@@ -1,6 +1,6 @@
 ---
 title: "imagecolorexact()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the palette index of an exact color, or -1."
 sidebar:
   order: 471
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagecolorexact(mixed $image, int $red, int $green, int $blue): int
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the palette index of an exact color, or -1.
 
 **Parameters**:
 - `$image` (`mixed`)

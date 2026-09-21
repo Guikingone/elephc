@@ -1,6 +1,6 @@
 ---
 title: "cairo_pattern_create_linear()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates a linear gradient pattern between two points."
 sidebar:
   order: 425
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_pattern_create_linear(float $x0, float $y0, float $x1, float $y1): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates a linear gradient pattern between two points.
 
 **Parameters**:
 - `$x0` (`float`)

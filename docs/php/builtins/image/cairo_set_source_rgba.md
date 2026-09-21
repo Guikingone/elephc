@@ -1,6 +1,6 @@
 ---
 title: "cairo_set_source_rgba()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Uses a color with alpha as the source for subsequent drawing."
 sidebar:
   order: 441
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_set_source_rgba(mixed $context, float $red, float $green, float $blue, float $alpha): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Uses a color with alpha as the source for subsequent drawing.
 
 **Parameters**:
 - `$context` (`mixed`)

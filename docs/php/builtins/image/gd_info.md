@@ -1,6 +1,6 @@
 ---
 title: "gd_info()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the GD version and which image formats this build supports."
 sidebar:
   order: 451
 ---
@@ -11,7 +11,7 @@ sidebar:
 function gd_info(): array
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the GD version and which image formats this build supports.
 
 **Parameters**: none.
 

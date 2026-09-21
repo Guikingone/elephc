@@ -1,6 +1,6 @@
 ---
 title: "mysqli_real_escape_string()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Escapes a string for use in a statement, honoring the connection charset."
 sidebar:
   order: 149
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_real_escape_string(mixed $mysql, string $string): string
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Escapes a string for use in a statement, honoring the connection charset.
 
 **Parameters**:
 - `$mysql` (`mixed`)

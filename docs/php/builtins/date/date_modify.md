@@ -1,6 +1,6 @@
 ---
 title: "date_modify()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Applies a relative modifier such as \"+1 day\" to a DateTime."
 sidebar:
   order: 204
 ---
@@ -11,7 +11,7 @@ sidebar:
 function date_modify(mixed $object, string $modifier): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Applies a relative modifier such as "+1 day" to a DateTime.
 
 **Parameters**:
 - `$object` (`mixed`)

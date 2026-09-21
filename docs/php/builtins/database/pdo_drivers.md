@@ -1,6 +1,6 @@
 ---
 title: "pdo_drivers()"
-description: "Implemented by the compiler-injected PDO prelude."
+description: "Returns the names of the PDO drivers this build provides."
 sidebar:
   order: 183
 ---
@@ -11,7 +11,7 @@ sidebar:
 function pdo_drivers(): array
 ```
 
-Implemented by the compiler-injected PDO prelude.
+Returns the names of the PDO drivers this build provides.
 
 **Parameters**: none.
 

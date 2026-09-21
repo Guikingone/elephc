@@ -1,6 +1,6 @@
 ---
 title: "cairo_paint()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Paints the current source over the whole clip region."
 sidebar:
   order: 422
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_paint(mixed $context): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Paints the current source over the whole clip region.
 
 **Parameters**:
 - `$context` (`mixed`)

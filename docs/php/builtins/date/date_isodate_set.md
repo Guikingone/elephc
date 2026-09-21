@@ -1,6 +1,6 @@
 ---
 title: "date_isodate_set()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Sets a DateTime from an ISO year, week, and day of week."
 sidebar:
   order: 203
 ---
@@ -11,7 +11,7 @@ sidebar:
 function date_isodate_set(mixed $object, int $year, int $week, int $dayOfWeek = 1): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Sets a DateTime from an ISO year, week, and day of week.
 
 **Parameters**:
 - `$object` (`mixed`)

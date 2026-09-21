@@ -1,6 +1,6 @@
 ---
 title: "mysqli_stmt_init()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Creates a statement object bound to a connection."
 sidebar:
   order: 170
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stmt_init(mixed $mysql): mixed
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Creates a statement object bound to a connection.
 
 **Parameters**:
 - `$mysql` (`mixed`)

@@ -1,6 +1,6 @@
 ---
 title: "imagecreatefrombmp()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates an image from a BMP file."
 sidebar:
   order: 487
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagecreatefrombmp(string $filename): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates an image from a BMP file.
 
 **Parameters**:
 - `$filename` (`string`)

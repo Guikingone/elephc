@@ -1,6 +1,6 @@
 ---
 title: "imagetruecolortopalette()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Converts a truecolor image to a palette image in place."
 sidebar:
   order: 535
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagetruecolortopalette(mixed $image, bool $dither, int $num_colors): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Converts a truecolor image to a palette image in place.
 
 **Parameters**:
 - `$image` (`mixed`)

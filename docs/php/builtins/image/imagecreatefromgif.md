@@ -1,6 +1,6 @@
 ---
 title: "imagecreatefromgif()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates an image from a GIF file."
 sidebar:
   order: 488
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagecreatefromgif(string $filename): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates an image from a GIF file.
 
 **Parameters**:
 - `$filename` (`string`)

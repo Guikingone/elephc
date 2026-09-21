@@ -1,6 +1,6 @@
 ---
 title: "cairo_surface_write_to_png()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Writes a surface to a PNG file."
 sidebar:
   order: 444
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_surface_write_to_png(mixed $surface, string $filename): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Writes a surface to a PNG file.
 
 **Parameters**:
 - `$surface` (`mixed`)

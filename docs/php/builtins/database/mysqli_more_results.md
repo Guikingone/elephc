@@ -1,6 +1,6 @@
 ---
 title: "mysqli_more_results()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Reports whether a multi-query has more results waiting."
 sidebar:
   order: 139
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_more_results(mixed $mysql): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Reports whether a multi-query has more results waiting.
 
 **Parameters**:
 - `$mysql` (`mixed`)

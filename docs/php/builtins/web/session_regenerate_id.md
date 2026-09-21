@@ -1,6 +1,6 @@
 ---
 title: "session_regenerate_id()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Replaces the session id, optionally deleting the old session's data."
 sidebar:
   order: 928
 ---
@@ -11,7 +11,7 @@ sidebar:
 function session_regenerate_id(bool $delete_old = false): bool
 ```
 
-Implemented by the compiler-injected web prelude.
+Replaces the session id, optionally deleting the old session's data.
 
 **Parameters**:
 - `$delete_old` (`bool`), default `false`, optional

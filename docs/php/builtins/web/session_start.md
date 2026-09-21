@@ -1,6 +1,6 @@
 ---
 title: "session_start()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Starts a new session or resumes the one the request identifies."
 sidebar:
   order: 934
 ---
@@ -11,7 +11,7 @@ sidebar:
 function session_start(mixed $options = []): bool
 ```
 
-Implemented by the compiler-injected web prelude.
+Starts a new session or resumes the one the request identifies.
 
 **Parameters**:
 - `$options` (`mixed`), default `[]`, optional

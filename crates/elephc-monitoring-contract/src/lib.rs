@@ -200,6 +200,15 @@ mod tests {
 
     // C ABI fixture callbacks share counters when the test harness runs in parallel.
     static HOOK_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Takes the shared-counter lock, ignoring poisoning from an earlier failed hook test.
+    ///
+    /// The guard protects plain atomics, so a panic while holding it leaves nothing
+    /// inconsistent — but `lock().unwrap()` would still panic in every later hook test and
+    /// report one real failure as three.
+    fn hook_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        HOOK_TEST_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
     static OPERATIONS: AtomicU64 = AtomicU64::new(0);
     static WAIT_CALLS: AtomicU64 = AtomicU64::new(0);
     static EXCLUDED_WAIT: AtomicU64 = AtomicU64::new(0);
@@ -229,7 +238,7 @@ mod tests {
     /// Verifies inactive hooks still forward events but avoid timed callbacks.
     #[test]
     fn dormant_hooks_leave_window_gating_to_the_event_consumer() {
-        let _guard = HOOK_TEST_LOCK.lock().unwrap();
+        let _guard = hook_test_guard();
         OPERATIONS.store(0, Ordering::Relaxed);
         WAIT_CALLS.store(0, Ordering::Relaxed);
         let hooks = EventHooks::new(
@@ -247,7 +256,7 @@ mod tests {
     /// Verifies active hooks report one operation and exactly one timed callback.
     #[test]
     fn active_hooks_report_operation_and_wait() {
-        let _guard = HOOK_TEST_LOCK.lock().unwrap();
+        let _guard = hook_test_guard();
         OPERATIONS.store(0, Ordering::Relaxed);
         WAIT_CALLS.store(0, Ordering::Relaxed);
         let hooks = EventHooks::new(
@@ -263,9 +272,16 @@ mod tests {
     }
 
     /// Verifies a consumer-owned window gates each call without the exact-capture flag.
+    ///
+    /// The assertion COUNTS callbacks; it must never go back to measuring the reported
+    /// duration. `timed()` reports whatever `Instant::elapsed()` gives it, and a body this
+    /// small finishes below the clock's resolution — so `WAIT > 0` was true on one machine
+    /// and false on another, and the test failed twice on macOS while both Linux targets
+    /// stayed green (issue #940). A zero-nanosecond span is a VALID report, and the thing
+    /// under test is whether the window gated the call at all.
     #[test]
     fn consumer_window_enables_timing() {
-        let _guard = HOOK_TEST_LOCK.lock().unwrap();
+        let _guard = hook_test_guard();
         WAIT_CALLS.store(0, Ordering::Relaxed);
         WINDOW_ACTIVE.store(false, Ordering::Relaxed);
         let hooks = EventHooks::new(

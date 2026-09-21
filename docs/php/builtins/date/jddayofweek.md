@@ -1,6 +1,6 @@
 ---
 title: "jddayofweek()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Returns the day of the week for a Julian Day count, as a number or a name."
 sidebar:
   order: 228
 ---
@@ -11,7 +11,7 @@ sidebar:
 function jddayofweek(int $julian_day, int $mode = CAL_DOW_DAYNO): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Returns the day of the week for a Julian Day count, as a number or a name.
 
 **Parameters**:
 - `$julian_day` (`int`)

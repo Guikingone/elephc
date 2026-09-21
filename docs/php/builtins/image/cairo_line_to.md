@@ -1,6 +1,6 @@
 ---
 title: "cairo_line_to()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Adds a straight line from the current point to the given point."
 sidebar:
   order: 412
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_line_to(mixed $context, float $x, float $y): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Adds a straight line from the current point to the given point.
 
 **Parameters**:
 - `$context` (`mixed`)

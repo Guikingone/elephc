@@ -1,6 +1,6 @@
 ---
 title: "cal_to_jd()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Converts a date in the given calendar into a Julian Day count."
 sidebar:
   order: 187
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cal_to_jd(int $calendar, int $month, int $day, int $year): int
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Converts a date in the given calendar into a Julian Day count.
 
 **Parameters**:
 - `$calendar` (`int`)

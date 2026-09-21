@@ -1,6 +1,6 @@
 ---
 title: "imagecolorclosesthwb()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the palette index closest in hue, whiteness, and blackness."
 sidebar:
   order: 469
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagecolorclosesthwb(mixed $image, int $red, int $green, int $blue): int
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the palette index closest in hue, whiteness, and blackness.
 
 **Parameters**:
 - `$image` (`mixed`)

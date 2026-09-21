@@ -1,6 +1,6 @@
 ---
 title: "mysqli_thread_id()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the connection's thread id on the server."
 sidebar:
   order: 179
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_thread_id(mixed $mysql): int
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the connection's thread id on the server.
 
 **Parameters**:
 - `$mysql` (`mixed`)

@@ -1,6 +1,6 @@
 ---
 title: "exif_imagetype()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Identifies an image file's type, or false when it is not an image."
 sidebar:
   order: 447
 ---
@@ -11,7 +11,7 @@ sidebar:
 function exif_imagetype(string $filename): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Identifies an image file's type, or false when it is not an image.
 
 **Parameters**:
 - `$filename` (`string`)

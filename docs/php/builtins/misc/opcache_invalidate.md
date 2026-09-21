@@ -1,6 +1,6 @@
 ---
 title: "opcache_invalidate()"
-description: "Implemented by the compiler-injected OPcache prelude."
+description: "Invalidates a script's cached opcodes, optionally without checking its timestamp."
 sidebar:
   order: 639
 ---
@@ -11,7 +11,7 @@ sidebar:
 function opcache_invalidate(mixed $filename, mixed $force = false): bool
 ```
 
-Implemented by the compiler-injected OPcache prelude.
+Invalidates a script's cached opcodes, optionally without checking its timestamp.
 
 **Parameters**:
 - `$filename` (`mixed`)

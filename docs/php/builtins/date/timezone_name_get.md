@@ -1,6 +1,6 @@
 ---
 title: "timezone_name_get()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Returns a timezone's identifier."
 sidebar:
   order: 248
 ---
@@ -11,7 +11,7 @@ sidebar:
 function timezone_name_get(mixed $object): string
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Returns a timezone's identifier.
 
 **Parameters**:
 - `$object` (`mixed`)

@@ -1,6 +1,6 @@
 ---
 title: "session_abort()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Discards the session changes made in this request and closes the session."
 sidebar:
   order: 915
 ---
@@ -11,7 +11,7 @@ sidebar:
 function session_abort(): bool
 ```
 
-Implemented by the compiler-injected web prelude.
+Discards the session changes made in this request and closes the session.
 
 **Parameters**: none.
 

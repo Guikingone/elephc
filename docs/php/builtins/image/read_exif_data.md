@@ -1,6 +1,6 @@
 ---
 title: "read_exif_data()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Alias of exif_read_data()."
 sidebar:
   order: 540
 ---
@@ -11,7 +11,7 @@ sidebar:
 function read_exif_data(string $filename, ?string $required_sections = null, bool $as_arrays = false, bool $read_thumbnail = false): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Alias of exif_read_data().
 
 **Parameters**:
 - `$filename` (`string`)

@@ -15,6 +15,10 @@
 //! - The destination comes from `__rt_concat_reserve` and is published with
 //!   `__rt_concat_publish`, so a 16-byte result cannot run off the end of the 64 KiB scratch
 //!   buffer and falls back to the heap when it no longer fits.
+//! - `MAX_ADDRESS_BYTES` is a documented divergence: PHP passes a string of any length to
+//!   `inet_pton(3)`. See "Known divergence: `inet_pton()` caps its argument at 255 bytes" in
+//!   `docs/php/strings.md` for why the two cannot disagree on anything that is an address
+//!   (issue #1160).
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch, platform::Platform};
 

@@ -7,6 +7,11 @@
 //!
 //! Key details:
 //! - The helper constructs PHP $argv arrays from OS argc/argv without taking ownership of OS-provided storage.
+//! - Both targets allocate through `__rt_array_new`, which writes the packed kind word at
+//!   `[array - 8]` (heap kind, string value_type tag, copy-on-write flag). x86_64 used to
+//!   `malloc` the block by hand and fill the 24-byte header only, so `[array - 8]` held
+//!   malloc's own metadata: boxing `$argv` into a `mixed` cell then read its elements with
+//!   the wrong stride and answered a pointer as `int` (issue #984).
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -151,7 +156,7 @@ fn emit_build_argv_linux_x86_64(emitter: &mut Emitter) {
 
 #[cfg(test)]
 mod tests {
-    use crate::codegen_support::platform::Target;
+    use crate::codegen_support::platform::{Platform, Target};
 
     use super::*;
 
@@ -170,6 +175,28 @@ mod tests {
                 assert!(asm.find("stp x21, x22").unwrap() < asm.find("mov x22, #0").unwrap(), "{name}");
                 assert!(asm.contains("ldp x21, x22"), "{name}");
             }
+        }
+    }
+
+    /// Both targets build `$argv` the same way: `__rt_array_new` with a 16-byte element size.
+    ///
+    /// AGENTS.md forbids landing runtime work ARM64-first, and this helper was exactly that —
+    /// ARM64 went through the runtime allocator from the start while x86_64 open-coded the
+    /// header. Deriving the expectation from both targets is what keeps them together.
+    #[test]
+    fn test_emit_build_argv_uses_the_runtime_allocator_on_every_target() {
+        for arch in [Arch::AArch64, Arch::X86_64] {
+            let mut emitter = Emitter::new(Target::new(Platform::Linux, arch));
+            emit_build_argv(&mut emitter);
+            let asm = emitter.output();
+            assert!(
+                asm.contains("__rt_array_new"),
+                "{arch:?} must allocate $argv through the runtime: {asm}"
+            );
+            assert!(
+                !asm.contains("call malloc") && !asm.contains("bl malloc"),
+                "{arch:?} must not hand-roll the $argv block: {asm}"
+            );
         }
     }
 }

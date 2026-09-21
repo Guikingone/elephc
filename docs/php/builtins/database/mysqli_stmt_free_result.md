@@ -1,6 +1,6 @@
 ---
 title: "mysqli_stmt_free_result()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Releases the result a prepared statement buffered."
 sidebar:
   order: 168
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stmt_free_result(mixed $statement): void
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Releases the result a prepared statement buffered.
 
 **Parameters**:
 - `$statement` (`mixed`)

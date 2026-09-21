@@ -1,6 +1,6 @@
 ---
 title: "exif_thumbnail()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the embedded thumbnail of an image, with its size and type."
 sidebar:
   order: 450
 ---
@@ -11,7 +11,7 @@ sidebar:
 function exif_thumbnail(string $filename, mixed $width = 0, mixed $height = 0, mixed $image_type = 0): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the embedded thumbnail of an image, with its size and type.
 
 **Parameters**:
 - `$filename` (`string`)

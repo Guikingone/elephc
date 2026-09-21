@@ -15,7 +15,7 @@ use crate::codegen::platform::Target;
 use crate::ir::print_module;
 use crate::names::Name;
 use crate::parser::ast::{
-    BinOp, CallableTarget, CastType, CatchClause, ClassConst, ClassMethod, ClassProperty,
+    ArrayEntry, BinOp, CallableTarget, CastType, CatchClause, ClassConst, ClassMethod, ClassProperty,
     CType, EnumCaseDecl, Expr, ExprKind, ExternField, ExternParam, InstanceOfTarget,
     MagicConstant, PackedField, Program, PropertyHooks, StaticReceiver, Stmt, StmtKind,
     TraitUse, TypeExpr, UseItem, UseKind, Visibility,
@@ -301,6 +301,11 @@ fn lowers_every_expr_variant_smoke() {
         expr(ExprKind::FunctionCall { name: name("strlen"), args: vec![str_lit("abc")] }),
         expr(ExprKind::ArrayLiteral(vec![int(1), int(2)])),
         expr(ExprKind::ArrayLiteralAssoc(vec![(str_lit("k"), int(1))])),
+        expr(ExprKind::ArrayLiteralMixed(vec![
+            ArrayEntry::Keyed(str_lit("k"), int(1)),
+            ArrayEntry::Spread(expr(ExprKind::ArrayLiteral(vec![int(2)]))),
+            ArrayEntry::Value(int(3)),
+        ])),
         expr(ExprKind::Match {
             subject: Box::new(int(1)),
             arms: vec![(vec![int(1)], str_lit("one"))],
@@ -530,5 +535,54 @@ fn class_method(name: &str, is_static: bool) -> ClassMethod {
         body: vec![stmt(StmtKind::Return(Some(int(1))))],
         span: sp(),
         attributes: Vec::new(),
+    }
+}
+
+/// Verifies the three `ArrayLiteralMixed` entry forms lower to the ops their order depends on.
+///
+/// The smoke list above only proves the node lowers at all. `["k" => 1, ...[2], 3]` is the shape
+/// the ORDER matters for -- the spread's elements take the next free integer key where the
+/// spread sits -- so each form has to emit its own op, in source order, into the one hash the
+/// literal opens with. The bare value appends through a generic `runtime_call` rather than an
+/// op of its own, so this also pins that the call takes the literal's hash as its receiver.
+#[test]
+fn lowers_a_mixed_array_literal_through_set_spread_and_append() {
+    let text = lower_program(vec![stmt(StmtKind::Assign {
+        name: "mixed".to_string(),
+        value: expr(ExprKind::ArrayLiteralMixed(vec![
+            ArrayEntry::Keyed(str_lit("k"), int(1)),
+            ArrayEntry::Spread(expr(ExprKind::ArrayLiteral(vec![int(2)]))),
+            ArrayEntry::Value(int(3)),
+        ])),
+    })]);
+
+    let ops: Vec<&str> = text
+        .lines()
+        .filter_map(|line| {
+            ["hash_new", "hash_set", "array_to_hash", "hash_spread", "runtime_call"]
+                .into_iter()
+                .find(|op| line.contains(op))
+        })
+        .collect();
+    assert_eq!(
+        ops,
+        vec!["hash_new", "hash_set", "array_to_hash", "hash_spread", "runtime_call"],
+        "unexpected mixed-literal EIR: {text}"
+    );
+
+    // The one hash every entry writes into: an indexed source is promoted to its own hash first
+    // (`array_to_hash`), so "a hash exists" is not enough to prove the append went to the right
+    // one.
+    let hash = text
+        .lines()
+        .find_map(|line| line.split_once(": Heap(Hash)"))
+        .map(|(value, _)| value.trim())
+        .unwrap_or_else(|| panic!("no hash in mixed-literal EIR: {text}"));
+    for op in ["hash_set", "hash_spread", "runtime_call"] {
+        assert!(
+            text.lines()
+                .any(|line| line.trim().starts_with(&format!("{op} {hash} "))),
+            "{op} does not write into the literal's own hash {hash}: {text}"
+        );
     }
 }

@@ -1,6 +1,6 @@
 ---
 title: "mysqli_error_list()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns every error of the last call on a connection."
 sidebar:
   order: 111
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_error_list(mixed $mysql): array
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns every error of the last call on a connection.
 
 **Parameters**:
 - `$mysql` (`mixed`)

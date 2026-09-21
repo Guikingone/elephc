@@ -1,6 +1,6 @@
 ---
 title: "imageline()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Draws a straight line."
 sidebar:
   order: 517
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imageline(mixed $image, int $x1, int $y1, int $x2, int $y2, int $color): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Draws a straight line.
 
 **Parameters**:
 - `$image` (`mixed`)

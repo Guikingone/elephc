@@ -1,6 +1,6 @@
 ---
 title: "mysqli_store_result()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Buffers a query's whole result on the client."
 sidebar:
   order: 178
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_store_result(mixed $mysql, int $mode = 0): mixed
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Buffers a query's whole result on the client.
 
 **Parameters**:
 - `$mysql` (`mixed`)

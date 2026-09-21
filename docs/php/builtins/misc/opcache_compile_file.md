@@ -1,6 +1,6 @@
 ---
 title: "opcache_compile_file()"
-description: "Implemented by the compiler-injected OPcache prelude."
+description: "Compiles a script into the opcode cache without executing it."
 sidebar:
   order: 636
 ---
@@ -11,7 +11,7 @@ sidebar:
 function opcache_compile_file(mixed $filename): bool
 ```
 
-Implemented by the compiler-injected OPcache prelude.
+Compiles a script into the opcode cache without executing it.
 
 **Parameters**:
 - `$filename` (`mixed`)

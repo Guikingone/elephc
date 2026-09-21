@@ -71,7 +71,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
 
       - name: Cache Rust build state
         uses: actions/cache@v4
@@ -350,7 +350,7 @@ jobs:
           echo "LD_LIBRARY_PATH=$RUNNER_TEMP/oracle-client" >> "$GITHUB_ENV"
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
 
       - name: Cache Rust build state
         uses: actions/cache@v4

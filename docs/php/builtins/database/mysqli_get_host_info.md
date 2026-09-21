@@ -1,6 +1,6 @@
 ---
 title: "mysqli_get_host_info()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the server host name and connection type."
 sidebar:
   order: 132
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_get_host_info(mixed $mysql): string
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the server host name and connection type.
 
 **Parameters**:
 - `$mysql` (`mixed`)

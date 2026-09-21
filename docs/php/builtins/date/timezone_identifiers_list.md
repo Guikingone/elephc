@@ -1,6 +1,6 @@
 ---
 title: "timezone_identifiers_list()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Returns the timezone identifiers this build knows, optionally filtered."
 sidebar:
   order: 245
 ---
@@ -11,7 +11,7 @@ sidebar:
 function timezone_identifiers_list(int $timezoneGroup = DateTimeZone::ALL, ?string $countryCode = null): array
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Returns the timezone identifiers this build knows, optionally filtered.
 
 **Parameters**:
 - `$timezoneGroup` (`int`), default `DateTimeZone::ALL`, optional

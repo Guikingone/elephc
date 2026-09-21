@@ -1,6 +1,6 @@
 ---
 title: "mysqli_stmt_bind_param()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Binds variables to a prepared statement's placeholders."
 sidebar:
   order: 161
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stmt_bind_param(mixed $statement, string $types, ...$vars): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Binds variables to a prepared statement's placeholders.
 
 **Parameters**:
 - `$statement` (`mixed`)

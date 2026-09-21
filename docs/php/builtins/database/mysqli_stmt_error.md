@@ -1,6 +1,6 @@
 ---
 title: "mysqli_stmt_error()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the error message of the last call on a statement."
 sidebar:
   order: 164
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stmt_error(mixed $statement): string
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the error message of the last call on a statement.
 
 **Parameters**:
 - `$statement` (`mixed`)

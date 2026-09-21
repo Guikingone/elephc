@@ -1,6 +1,6 @@
 ---
 title: "imageistruecolor()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Reports whether an image is truecolor rather than palette-based."
 sidebar:
   order: 514
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imageistruecolor(mixed $image): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Reports whether an image is truecolor rather than palette-based.
 
 **Parameters**:
 - `$image` (`mixed`)

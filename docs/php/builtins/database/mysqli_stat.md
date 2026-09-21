@@ -1,6 +1,6 @@
 ---
 title: "mysqli_stat()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the server's current status line."
 sidebar:
   order: 159
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stat(mixed $mysql): mixed
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the server's current status line.
 
 **Parameters**:
 - `$mysql` (`mixed`)

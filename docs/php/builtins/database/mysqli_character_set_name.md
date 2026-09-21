@@ -1,6 +1,6 @@
 ---
 title: "mysqli_character_set_name()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the connection's current character set."
 sidebar:
   order: 102
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_character_set_name(mixed $mysql): string
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the connection's current character set.
 
 **Parameters**:
 - `$mysql` (`mixed`)

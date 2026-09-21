@@ -1,6 +1,6 @@
 ---
 title: "mysqli_close()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Closes a connection."
 sidebar:
   order: 103
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_close(mixed $mysql): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Closes a connection.
 
 **Parameters**:
 - `$mysql` (`mixed`)

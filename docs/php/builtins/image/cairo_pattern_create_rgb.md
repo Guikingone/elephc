@@ -1,6 +1,6 @@
 ---
 title: "cairo_pattern_create_rgb()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates a solid opaque color pattern."
 sidebar:
   order: 427
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_pattern_create_rgb(float $red, float $green, float $blue): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates a solid opaque color pattern.
 
 **Parameters**:
 - `$red` (`float`)

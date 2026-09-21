@@ -1,6 +1,6 @@
 ---
 title: "imagecreatefromtga()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates an image from a TGA file."
 sidebar:
   order: 492
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagecreatefromtga(string $filename): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates an image from a TGA file.
 
 **Parameters**:
 - `$filename` (`string`)

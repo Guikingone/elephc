@@ -1,6 +1,6 @@
 ---
 title: "session_status()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Reports whether sessions are disabled, inactive, or active."
 sidebar:
   order: 935
 ---
@@ -11,7 +11,7 @@ sidebar:
 function session_status(): int
 ```
 
-Implemented by the compiler-injected web prelude.
+Reports whether sessions are disabled, inactive, or active.
 
 **Parameters**: none.
 

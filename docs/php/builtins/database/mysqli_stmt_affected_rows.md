@@ -1,6 +1,6 @@
 ---
 title: "mysqli_stmt_affected_rows()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns how many rows a prepared write affected."
 sidebar:
   order: 160
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stmt_affected_rows(mixed $statement): int
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns how many rows a prepared write affected.
 
 **Parameters**:
 - `$statement` (`mixed`)

@@ -47,7 +47,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
 
       - name: Cache Rust build state
         uses: actions/cache@v4
@@ -61,7 +61,7 @@ jobs:
             rust-macos-aarch64-
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@e88e69ecdb9658bd172693dcdc2c84e7f0ab6a11 # nextest, 2026-09-20
 
       - name: Install native test dependencies
         run: brew install freetds pcre2 unixodbc
@@ -502,7 +502,7 @@ jobs:
         run: brew install pcre2
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
@@ -539,7 +539,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-x86_64
           path: ${{ runner.temp }}
@@ -573,7 +573,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-aarch64
           path: ${{ runner.temp }}
@@ -605,7 +605,7 @@ jobs:
         run: brew install pcre2
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
@@ -641,7 +641,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-x86_64
           path: ${{ runner.temp }}
@@ -674,7 +674,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-aarch64
           path: ${{ runner.temp }}
@@ -705,7 +705,7 @@ jobs:
         run: brew install pcre2
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
@@ -779,7 +779,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-x86_64
           path: ${{ runner.temp }}
@@ -850,7 +850,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-aarch64
           path: ${{ runner.temp }}
@@ -922,7 +922,7 @@ jobs:
         run: brew install pcre2
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
@@ -966,7 +966,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-x86_64
           path: ${{ runner.temp }}
@@ -1007,7 +1007,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-aarch64
           path: ${{ runner.temp }}
@@ -1069,7 +1069,7 @@ jobs:
             curl-native-macos-aarch64-
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
@@ -1148,7 +1148,7 @@ jobs:
             curl-native-linux-x86_64-
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-x86_64
           path: ${{ runner.temp }}
@@ -1224,7 +1224,7 @@ jobs:
             curl-native-linux-aarch64-
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-aarch64
           path: ${{ runner.temp }}
@@ -1294,7 +1294,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust with the iOS standard library
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
         with:
           targets: ${{ matrix.rust_target }}
 
@@ -1354,7 +1354,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust with the iOS standard library
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
         with:
           targets: ${{ matrix.rust_target }}
 
@@ -1407,7 +1407,7 @@ jobs:
         run: brew install pcre2
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
@@ -1459,7 +1459,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-x86_64
           path: ${{ runner.temp }}
@@ -1505,7 +1505,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Download test archive
-        uses: actions/download-artifact@v4
+        uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-linux-aarch64
           path: ${{ runner.temp }}
@@ -1565,7 +1565,7 @@ jobs:
         # The exact toolchain `.github/docker/ci.Dockerfile` pins (RUST_VERSION), not
         # floating `stable`: an unchanged commit must not start failing because a new
         # compiler shipped.
-        uses: dtolnay/rust-toolchain@1.95.0
+        uses: dtolnay/rust-toolchain@46817827a5bfabe028bf34e1cce71fd40e2ff697 # 1.95.0, 2026-09-03
 
       - name: Install cargo-audit
         # Pinned for the same reason, and `--locked` so its own dependency tree is the
@@ -1588,7 +1588,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
 
       - name: Cache Rust build state
         uses: actions/cache@v4
@@ -1667,7 +1667,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
 
       - name: Cache Rust build state
         uses: actions/cache@v4
@@ -1738,7 +1738,7 @@ jobs:
         run: echo "ELEPHC_NATIVE_CACHE=$RUNNER_TEMP/elephc-managed-native-cache" >> "$GITHUB_ENV"
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
 
       - name: Cache Rust build state
         uses: actions/cache@v4
@@ -1984,7 +1984,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
 
       - name: Build release binary
         run: cargo build --release

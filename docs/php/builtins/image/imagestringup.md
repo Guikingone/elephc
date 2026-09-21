@@ -1,6 +1,6 @@
 ---
 title: "imagestringup()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Draws a string vertically with a built-in font."
 sidebar:
   order: 532
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagestringup(mixed $image, int $font, int $x, int $y, string $string, int $color): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Draws a string vertically with a built-in font.
 
 **Parameters**:
 - `$image` (`mixed`)

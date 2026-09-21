@@ -1,6 +1,6 @@
 ---
 title: "mysqli_stmt_reset()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Resets a prepared statement so it can be executed again."
 sidebar:
   order: 175
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stmt_reset(mixed $statement): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Resets a prepared statement so it can be executed again.
 
 **Parameters**:
 - `$statement` (`mixed`)

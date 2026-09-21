@@ -1,6 +1,6 @@
 ---
 title: "mysqli_fetch_field_direct()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns metadata for one column of a result by index."
 sidebar:
   order: 120
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_fetch_field_direct(mixed $result, int $index): mixed
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns metadata for one column of a result by index.
 
 **Parameters**:
 - `$result` (`mixed`)

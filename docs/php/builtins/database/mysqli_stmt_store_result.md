@@ -1,6 +1,6 @@
 ---
 title: "mysqli_stmt_store_result()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Buffers a prepared statement's whole result on the client."
 sidebar:
   order: 177
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stmt_store_result(mixed $statement): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Buffers a prepared statement's whole result on the client.
 
 **Parameters**:
 - `$statement` (`mixed`)

@@ -1,6 +1,6 @@
 ---
 title: "date_interval_create_from_date_string()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Creates a DateInterval from a relative date string such as \"2 days\"."
 sidebar:
   order: 201
 ---
@@ -11,7 +11,7 @@ sidebar:
 function date_interval_create_from_date_string(string $datetime): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Creates a DateInterval from a relative date string such as "2 days".
 
 **Parameters**:
 - `$datetime` (`string`)

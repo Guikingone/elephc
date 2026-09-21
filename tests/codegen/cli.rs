@@ -1512,6 +1512,106 @@ echo 1 + 2;
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies the LINKED binary's debug info resolves through `addr2line`, not just the assembly.
+///
+/// Follow-up for #943. The two fixtures around this one assert assembler DIRECTIVES — a
+/// `.file` header, a `.loc`, an escaped `DW_AT_name`. What they cannot say is whether the
+/// assembler and linker turned those into debug info a debugger can actually use: a compile
+/// unit whose `DW_TAG_subprogram` anchors carry `DW_AT_low_pc`, and a line program covering
+/// those addresses. The author measured that separately; CI did not.
+///
+/// The probe is `addr2line -f` over the bytes of a known function. The exact prologue length
+/// is not part of the contract, so the fixture sweeps the first 256 bytes of `greet` rather
+/// than naming one offset, and requires at least one of them to answer both the function name
+/// and the PHP file and line it came from.
+///
+/// Linux only, and skipped when binutils is absent: this is about the ELF toolchain's own
+/// consumption of what elephc emitted.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_cli_debug_info_resolves_compile_unit_anchors_with_addr2line() {
+    fn tool_missing(tool: &str) -> bool {
+        std::process::Command::new(tool)
+            .arg("--version")
+            .output()
+            .is_err()
+    }
+    if tool_missing("addr2line") || tool_missing("nm") {
+        eprintln!("skipping: binutils addr2line/nm not available");
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_debug_info_addr2line");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function greet(): void {
+    echo "hi\n";
+}
+greet();
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--debug-info")
+        .arg(&php_path)
+        .output()
+        .expect("failed to run elephc CLI with --debug-info");
+    assert!(
+        output.status.success(),
+        "elephc --debug-info failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("main");
+
+    // The symbol prefix differs by target, so both spellings are accepted.
+    let symbols = std::process::Command::new("nm")
+        .arg(&binary)
+        .output()
+        .expect("failed to run nm");
+    let listing = String::from_utf8_lossy(&symbols.stdout);
+    let greet_address = listing
+        .lines()
+        .find_map(|line| {
+            let mut fields = line.split_whitespace();
+            let address = fields.next()?;
+            let _kind = fields.next()?;
+            let name = fields.next()?;
+            (name == "_fn_greet" || name == "fn_greet")
+                .then(|| u64::from_str_radix(address, 16).ok())
+                .flatten()
+        })
+        .unwrap_or_else(|| panic!("no greet symbol in the linked binary:\n{listing}"));
+
+    let probes: Vec<String> = (0..64)
+        .map(|step| format!("0x{:x}", greet_address + step * 4))
+        .collect();
+    let resolved = std::process::Command::new("addr2line")
+        .arg("-f")
+        .arg("-e")
+        .arg(&binary)
+        .args(&probes)
+        .output()
+        .expect("failed to run addr2line");
+    let answers = String::from_utf8_lossy(&resolved.stdout);
+
+    // `addr2line -f` prints the function name and then the source location, per address.
+    let expected_location = format!("{}:3", php_path.display());
+    let anchored = answers
+        .lines()
+        .collect::<Vec<_>>()
+        .chunks(2)
+        .any(|pair| pair.len() == 2 && pair[0] == "greet" && pair[1] == expected_location);
+    assert!(
+        anchored,
+        "no address inside greet resolved to {expected_location}; addr2line said:\n{answers}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `--debug-info` survives a source path that carries assembler string
 /// metacharacters. A `\` used to be spliced into `.file`/`.asciz` unescaped, so
 /// the assembler rejected the module outright; combined with `"` it terminated

@@ -30228,3 +30228,36 @@ rmdir($root);
     );
     assert_eq!(out, "10:700:700:4:4:6:one,two,three,:6:short,");
 }
+
+/// Follow-up for #1173: the #1061 narrowed-union shape, run through `eval()`.
+///
+/// #1061 pinned the AOT side: a value typed `Box|bool` that an `instanceof` guard narrowed,
+/// passed to a `Box` parameter, must arrive as the OBJECT and not as the Mixed cell holding
+/// it. The interpreter resolves the argument its own way, so nothing carried over — a missed
+/// unbox there prints a heap address, or a wrong field, rather than the object's own value.
+///
+/// The second half is the multi-union variant: `Wide|int|null` narrowed the same way, with
+/// two fields read so a wrong receiver cannot coincide with the first one at offset zero.
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_eval_narrowed_union_argument_reaches_a_typed_object_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+eval('
+class Box { public int $n = 0; }
+function readnum(Box $b): int { return $b->n; }
+function mk(): Box|bool { $b = new Box(); $b->n = 2; return $b; }
+$v = mk();
+if ($v instanceof Box) { echo readnum($v); }
+echo "|";
+class Wide { public int $n = 7; public string $s = "s"; }
+function readwide(Wide $w): string { return $w->n . $w->s; }
+function mkw(int $k): Wide|int|null { return $k === 1 ? new Wide() : ($k === 2 ? 5 : null); }
+$w = mkw(1);
+if ($w instanceof Wide) { echo readwide($w); }
+');
+"#,
+    );
+    assert_eq!(out, "2|7s");
+}

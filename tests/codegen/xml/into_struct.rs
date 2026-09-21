@@ -129,3 +129,46 @@ echo gettype($captured), " ", gettype($ci), "\n";
     );
     assert_eq!(out, "3 2\n4 3\narray array\n");
 }
+
+/// Follow-up for #933: `XML_OPTION_SKIP_WHITE` decides on `" "`, `"\t"` and `"\n"` only.
+///
+/// php-src's character-data handler walks the chunk and stops at the first byte that is not
+/// one of those three; a carriage return is NOT among them, so a chunk containing one is
+/// KEPT even under skip-white. That is easy to read as an oversight and "fix" into
+/// `ctype_space()`, which would drop values PHP keeps — hence a pin rather than a comment.
+///
+/// A literal CR never survives to the handler: XML line-ending normalization turns `\r\n`
+/// and a lone `\r` into `\n` before the parser sees them. `&#13;` is the one spelling that
+/// reaches it, because the spec requires a character reference to survive normalization, and
+/// it also splits the surrounding text into separate chunks — which is why ` &#13; ` keeps
+/// the CR and its trailing space but drops the leading one, each chunk being judged alone.
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_xml_parse_into_struct_skip_white_keeps_carriage_returns() {
+    if skip_without_xml_native("test_xml_parse_into_struct_skip_white_keeps_carriage_returns") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+$doc = "<r><cr>&#13;</cr><crlf>&#13;&#10;</crlf><sp> </sp><tab>\t</tab><nl>\n</nl><mix> &#13; </mix><x>x</x></r>";
+foreach ([0, 1] as $skip) {
+    $p = xml_parser_create();
+    xml_parser_set_option($p, XML_OPTION_SKIP_WHITE, $skip);
+    xml_parse_into_struct($p, $doc, $values);
+    echo "skip=", $skip, ":";
+    foreach ($values as $v) {
+        echo $v["tag"], "=", isset($v["value"]) ? bin2hex($v["value"]) : "-", ";";
+    }
+    echo "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "skip=0:R=-;CR=0d;CRLF=0d0a;SP=20;TAB=09;NL=0a;MIX=200d20;X=78;R=-;\n",
+            "skip=1:R=-;CR=0d;CRLF=0d0a;SP=-;TAB=-;NL=-;MIX=0d20;X=78;R=-;\n",
+        )
+    );
+}

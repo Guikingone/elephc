@@ -1,6 +1,6 @@
 ---
 title: "imagesy()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns an image's height in pixels."
 sidebar:
   order: 534
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagesy(mixed $image): int
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns an image's height in pixels.
 
 **Parameters**:
 - `$image` (`mixed`)

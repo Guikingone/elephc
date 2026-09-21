@@ -1,6 +1,6 @@
 ---
 title: "mysqli_warning_count()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns how many warnings the last query raised."
 sidebar:
   order: 182
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_warning_count(mixed $mysql): int
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns how many warnings the last query raised.
 
 **Parameters**:
 - `$mysql` (`mixed`)

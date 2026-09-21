@@ -1,6 +1,6 @@
 ---
 title: "imagecropauto()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Crops an image automatically by the chosen mode."
 sidebar:
   order: 496
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagecropauto(mixed $image, int $mode = IMG_CROP_DEFAULT, float $threshold = 0.5, int $color = -1): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Crops an image automatically by the chosen mode.
 
 **Parameters**:
 - `$image` (`mixed`)

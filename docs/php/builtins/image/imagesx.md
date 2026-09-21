@@ -1,6 +1,6 @@
 ---
 title: "imagesx()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns an image's width in pixels."
 sidebar:
   order: 533
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagesx(mixed $image): int
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns an image's width in pixels.
 
 **Parameters**:
 - `$image` (`mixed`)

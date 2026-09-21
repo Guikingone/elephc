@@ -1084,6 +1084,103 @@ mod tests {
         );
     }
 
+    /// Verifies a bare `string` parameter keeps its passthrough through a `(string)` cast.
+    ///
+    /// This is the one cast `lower_cast` elides: the parameter already has a bare `Str` slot,
+    /// so the cast compiles to nothing and the result IS the caller's string.
+    #[test]
+    fn string_cast_over_a_string_parameter_is_a_borrow() {
+        let program = parse("<?php function f(string $s): string { return (string)$s; }");
+        let summaries = collect_return_alias_summaries(&program);
+        assert_eq!(
+            summaries.function("f"),
+            Some(&ReturnArgAlias::Parameters(BTreeSet::from([0])))
+        );
+    }
+
+    /// Verifies the wrappers that produce no value of their own stay transparent.
+    ///
+    /// `@$s` and an already-elided inner `(string)` both leave the same bare `Str` behind, so
+    /// `lower_cast` still elides the outer cast. Failing to see through them would call a
+    /// borrowed result independent, and the caller would free its own argument.
+    #[test]
+    fn string_cast_sees_through_suppression_and_a_nested_cast() {
+        let program = parse(
+            "<?php function suppressed(string $s): string { return (string)@$s; } function nested(string $s): string { return (string)(string)$s; }",
+        );
+        let summaries = collect_return_alias_summaries(&program);
+        assert_eq!(
+            summaries.function("suppressed"),
+            Some(&ReturnArgAlias::Parameters(BTreeSet::from([0])))
+        );
+        assert_eq!(
+            summaries.function("nested"),
+            Some(&ReturnArgAlias::Parameters(BTreeSet::from([0])))
+        );
+    }
+
+    /// Verifies every parameter spelling other than exactly `string` makes the cast COPY.
+    ///
+    /// `mixed`, `?string` and `string|int` are all boxed slots, so `lower_cast` emits `Op::Cast`
+    /// and the result is a fresh allocation the caller owns. Reporting a borrow here is the
+    /// per-call leak issue #700 was filed for.
+    #[test]
+    fn string_cast_over_a_boxed_parameter_is_a_copy() {
+        let program = parse(
+            "<?php function anything(mixed $v): string { return (string)$v; } function nullable(?string $v): string { return (string)$v; } function union(string|int $v): string { return (string)$v; }",
+        );
+        let summaries = collect_return_alias_summaries(&program);
+        assert_eq!(summaries.function("anything"), Some(&ReturnArgAlias::None));
+        assert_eq!(summaries.function("nullable"), Some(&ReturnArgAlias::None));
+        assert_eq!(summaries.function("union"), Some(&ReturnArgAlias::None));
+    }
+
+    /// Verifies a `string` parameter loses the passthrough as soon as it is widened.
+    ///
+    /// The declaration says what the slot began as, not what it holds now: assigning a `mixed`
+    /// parameter into `$a` boxes it, and the cast allocates from there on. Assigning another
+    /// bare `Str` keeps the slot, and the summary then names the SOURCE parameter.
+    #[test]
+    fn assigning_a_string_parameter_decides_the_passthrough_by_source() {
+        let program = parse(
+            "<?php function widened(string $a, mixed $b): string { $a = $b; return (string)$a; } function kept(string $a, string $b): string { $a = $b; return (string)$a; }",
+        );
+        let summaries = collect_return_alias_summaries(&program);
+        assert_eq!(summaries.function("widened"), Some(&ReturnArgAlias::None));
+        assert_eq!(
+            summaries.function("kept"),
+            Some(&ReturnArgAlias::Parameters(BTreeSet::from([1])))
+        );
+    }
+
+    /// Verifies a slot only stays a bare `Str` when it is one on EVERY path into the cast.
+    ///
+    /// The widening happens on one branch of the `if`, so the merge has to intersect the two
+    /// sets. Keeping the union would elide the cast on the widened path and leak a copy there.
+    #[test]
+    fn a_branch_that_widens_the_slot_removes_it_after_the_merge() {
+        let program = parse(
+            "<?php function maybe(string $a, mixed $b, bool $c): string { if ($c) { $a = $b; } return (string)$a; }",
+        );
+        let summaries = collect_return_alias_summaries(&program);
+        assert_eq!(summaries.function("maybe"), Some(&ReturnArgAlias::None));
+    }
+
+    /// Verifies binding a `string` parameter by reference drops its bare `Str` slot.
+    ///
+    /// A `&` write is not an assignment statement the pass can see, so the slot could widen
+    /// behind its back; the name leaves the set the moment the reference is taken. The cast
+    /// therefore allocates and the result is the caller's to release, even though the name's
+    /// provenance itself became `Unknown` at the same point.
+    #[test]
+    fn a_reference_binding_drops_the_str_slot() {
+        let program = parse(
+            "<?php function aliased(string $a, mixed $b): string { $a = &$b; return (string)$a; }",
+        );
+        let summaries = collect_return_alias_summaries(&program);
+        assert_eq!(summaries.function("aliased"), Some(&ReturnArgAlias::None));
+    }
+
     /// Verifies switch fallthrough and catch entry cannot hide a parameter alias
     /// written along a predecessor path that the lightweight CFG does not model.
     #[test]

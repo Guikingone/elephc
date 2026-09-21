@@ -1,6 +1,6 @@
 ---
 title: "date_create()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Creates a DateTime from a date/time string."
 sidebar:
   order: 191
 ---
@@ -11,7 +11,7 @@ sidebar:
 function date_create(string $datetime = 'now', mixed $timezone = null): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Creates a DateTime from a date/time string.
 
 **Parameters**:
 - `$datetime` (`string`), default `'now'`, optional

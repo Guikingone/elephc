@@ -1,6 +1,6 @@
 ---
 title: "imagescale()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns a copy of an image scaled to a new size."
 sidebar:
   order: 527
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagescale(mixed $image, int $width, int $height = -1, int $mode = IMG_BILINEAR_FIXED): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns a copy of an image scaled to a new size.
 
 **Parameters**:
 - `$image` (`mixed`)

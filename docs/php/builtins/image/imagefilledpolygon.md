@@ -1,6 +1,6 @@
 ---
 title: "imagefilledpolygon()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Draws a filled polygon."
 sidebar:
   order: 503
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagefilledpolygon(mixed $image, array $points, int $color): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Draws a filled polygon.
 
 **Parameters**:
 - `$image` (`mixed`)

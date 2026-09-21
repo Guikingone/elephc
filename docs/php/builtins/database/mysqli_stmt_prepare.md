@@ -1,6 +1,6 @@
 ---
 title: "mysqli_stmt_prepare()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Prepares SQL on a statement created by mysqli_stmt_init()."
 sidebar:
   order: 174
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stmt_prepare(mixed $statement, string $query): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Prepares SQL on a statement created by mysqli_stmt_init().
 
 **Parameters**:
 - `$statement` (`mixed`)

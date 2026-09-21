@@ -1,6 +1,6 @@
 ---
 title: "session_destroy()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Destroys the data stored for the current session."
 sidebar:
   order: 921
 ---
@@ -11,7 +11,7 @@ sidebar:
 function session_destroy(): bool
 ```
 
-Implemented by the compiler-injected web prelude.
+Destroys the data stored for the current session.
 
 **Parameters**: none.
 

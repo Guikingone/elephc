@@ -1,6 +1,6 @@
 ---
 title: "session_id()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Reads or sets the current session id."
 sidebar:
   order: 925
 ---
@@ -11,7 +11,7 @@ sidebar:
 function session_id(?string $id = null): mixed
 ```
 
-Implemented by the compiler-injected web prelude.
+Reads or sets the current session id.
 
 **Parameters**:
 - `$id` (`?string`), default `null`, optional

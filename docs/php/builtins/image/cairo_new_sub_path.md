@@ -1,6 +1,6 @@
 ---
 title: "cairo_new_sub_path()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Begins a new subpath without a starting point."
 sidebar:
   order: 421
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_new_sub_path(mixed $context): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Begins a new subpath without a starting point.
 
 **Parameters**:
 - `$context` (`mixed`)

@@ -1,6 +1,6 @@
 ---
 title: "mysqli_fetch_lengths()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the byte lengths of the columns in the current row."
 sidebar:
   order: 122
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_fetch_lengths(mixed $result): ?array
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the byte lengths of the columns in the current row.
 
 **Parameters**:
 - `$result` (`mixed`)

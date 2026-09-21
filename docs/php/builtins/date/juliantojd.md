@@ -1,6 +1,6 @@
 ---
 title: "juliantojd()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Converts a Julian calendar date into a Julian Day count."
 sidebar:
   order: 236
 ---
@@ -11,7 +11,7 @@ sidebar:
 function juliantojd(int $month, int $day, int $year): int
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Converts a Julian calendar date into a Julian Day count.
 
 **Parameters**:
 - `$month` (`int`)

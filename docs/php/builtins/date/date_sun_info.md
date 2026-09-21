@@ -1,6 +1,6 @@
 ---
 title: "date_sun_info()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Returns the sunrise, sunset, and twilight times for a day and location."
 sidebar:
   order: 209
 ---
@@ -11,7 +11,7 @@ sidebar:
 function date_sun_info(int $timestamp, float $latitude, float $longitude): array
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Returns the sunrise, sunset, and twilight times for a day and location.
 
 **Parameters**:
 - `$timestamp` (`int`)

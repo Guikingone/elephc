@@ -1,6 +1,6 @@
 ---
 title: "imagefilledellipse()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Draws a filled ellipse."
 sidebar:
   order: 502
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagefilledellipse(mixed $image, int $center_x, int $center_y, int $width, int $height, int $color): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Draws a filled ellipse.
 
 **Parameters**:
 - `$image` (`mixed`)

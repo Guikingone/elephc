@@ -1,6 +1,6 @@
 ---
 title: "session_cache_expire()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Reads or sets the cache expiry, in minutes, of the session cache limiter."
 sidebar:
   order: 916
 ---
@@ -11,7 +11,7 @@ sidebar:
 function session_cache_expire(?int $value = null): mixed
 ```
 
-Implemented by the compiler-injected web prelude.
+Reads or sets the cache expiry, in minutes, of the session cache limiter.
 
 **Parameters**:
 - `$value` (`?int`), default `null`, optional

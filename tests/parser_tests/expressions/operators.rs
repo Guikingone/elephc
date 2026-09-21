@@ -271,6 +271,103 @@ fn test_increment_decrement_parses() {
     assert_eq!(echoed_expr(&post_dec), &ExprKind::PostDecrement("i".into()));
 }
 
+/// Verifies the prefix `++`/`--` fast path declines a variable that a place suffix continues.
+///
+/// `++$o->n` starts with `Token::Variable("o")`. Taking the bare-variable node on that alone
+/// consumed the name and left `->n` unparsed, so the increment landed on the OBJECT (issue
+/// #682). The four suffix tokens are `->`, `?->`, `::` and `[`; seeing any of them has to send
+/// the parse down the l-value desugar, which shows up as an `Assignment` carrying a prelude.
+#[test]
+fn test_prefix_incdec_declines_a_variable_with_a_place_suffix() {
+    for source in ["<?php echo ++$o->n;", "<?php echo ++$a[0];"] {
+        let stmts = parse_source(source);
+        let parsed = echoed_expr(&stmts);
+        assert!(
+            matches!(parsed, ExprKind::Assignment { prelude, .. } if !prelude.is_empty()),
+            "{source} must desugar the place, got {parsed:?}"
+        );
+    }
+
+    // `?->` and `$o::$n` are places the desugar does not support either, so they end at the
+    // fallback error. What matters is the same thing: NEITHER silently becomes `++$o`.
+    for source in ["<?php echo ++$o?->n;", "<?php echo ++$o::$n;"] {
+        assert!(parse_fails(source), "{source} must not parse as ++$o");
+    }
+
+    // The bare variable still takes the dedicated node: the guard narrows the fast path, it
+    // does not remove it.
+    let bare = parse_source("<?php echo ++$i;");
+    assert_eq!(echoed_expr(&bare), &ExprKind::PreIncrement("i".into()));
+}
+
+/// Verifies the l-value desugar evaluates a computed index exactly ONCE.
+///
+/// `$b[ix()]++` reads the element, writes it back, and answers the old value, so a desugar that
+/// spelled the index out at each use would call `ix()` three times. The index is stabilized into
+/// a prelude temporary first, and every later mention names that temporary.
+#[test]
+fn test_postfix_incdec_desugar_evaluates_a_computed_index_once() {
+    let stmts = parse_source("<?php echo $b[ix()]++;");
+    let ExprKind::Assignment { prelude, .. } = echoed_expr(&stmts) else {
+        panic!("expected a desugared assignment, got {:?}", echoed_expr(&stmts));
+    };
+
+    let rendered = format!("{prelude:?}");
+    assert_eq!(
+        rendered.matches("FunctionCall").count(),
+        1,
+        "the index must be evaluated once: {prelude:?}"
+    );
+    assert!(
+        rendered.contains("__elephc_assign_expr"),
+        "the index must be stabilized into a temporary: {prelude:?}"
+    );
+}
+
+/// Verifies the statement-level postfix scan declines when a top-level assignment comes first.
+///
+/// `$t += $b[0]++;` increments `$b[0]`; it does not increment `$t += $b[0]`. The scan used to
+/// claim the whole line, parse that as its target, and reject it with `Invalid assignment
+/// target` (issue #682). Declining hands the statement to the assignment parsers, which lower
+/// the increment inside the value expression.
+#[test]
+fn test_statement_postfix_scan_declines_behind_a_top_level_assignment() {
+    let stmts = parse_source("<?php $t += $b[0]++;");
+    assert!(
+        matches!(&stmts[0].kind, StmtKind::Assign { name, .. } if name == "t"),
+        "expected a compound assignment to $t, got {:?}",
+        stmts[0].kind
+    );
+
+    // The same scan still claims the statement when nothing precedes the `++`.
+    let plain = parse_source("<?php $b[0]++;");
+    assert!(
+        matches!(&plain[0].kind, StmtKind::ArrayAssign { array, .. } if array == "b"),
+        "expected the element increment to be claimed, got {:?}",
+        plain[0].kind
+    );
+}
+
+/// Verifies a ternary at statement position is not claimed by the postfix scan.
+///
+/// `$c ? $a[0]++ : $b;` has a top-level `?`, so the `++` sits in a BRANCH. The scan used to
+/// claim the statement, truncate it at the `++`, and report `Expected ':' in ternary operator`
+/// from the middle of a fragment it had cut itself. A ternary as a statement is a separate,
+/// tracked gap (#827, #841) — this pins that the increment scan is no longer what reports it.
+#[test]
+fn test_ternary_statement_with_an_element_increment_is_not_an_increment_statement() {
+    assert!(parse_fails("<?php $c ? $a[0]++ : $b;"));
+
+    let tokens = elephc::lexer::tokenize("<?php $c ? $a[0]++ : $b;").expect("tokenize");
+    let reported = elephc::parser::parse(&tokens)
+        .expect_err("a ternary statement is not parsed yet")
+        .to_string();
+    assert!(
+        !reported.contains("ternary operator"),
+        "the increment scan must not report a truncated ternary: {reported}"
+    );
+}
+
 /// Verifies that `<?php echo ~$x;` parses as a bitwise NOT unary operation.
 /// The `~` operator inverts bits of its operand.
 #[test]

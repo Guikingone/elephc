@@ -1,6 +1,6 @@
 ---
 title: "mysqli_stmt_field_count()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns how many columns a prepared statement produces."
 sidebar:
   order: 167
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stmt_field_count(mixed $statement): int
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns how many columns a prepared statement produces.
 
 **Parameters**:
 - `$statement` (`mixed`)

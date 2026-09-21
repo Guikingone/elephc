@@ -1,6 +1,6 @@
 ---
 title: "mysqli_stmt_execute()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Executes a prepared statement."
 sidebar:
   order: 166
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stmt_execute(mixed $statement, ?array $params = null): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Executes a prepared statement.
 
 **Parameters**:
 - `$statement` (`mixed`)

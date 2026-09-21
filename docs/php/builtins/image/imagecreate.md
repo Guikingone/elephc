@@ -1,6 +1,6 @@
 ---
 title: "imagecreate()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates an empty palette image of the given size."
 sidebar:
   order: 486
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagecreate(int $width, int $height): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates an empty palette image of the given size.
 
 **Parameters**:
 - `$width` (`int`)

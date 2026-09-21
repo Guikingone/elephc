@@ -116,8 +116,30 @@ echo count($snapshot); // 2 — the copy taken before the call is untouched
 The one shape this does not cover is an **indexed** array reached by reference
 (`function f(array &$a) { unset($a[1]); }`). Removing a key from a packed list leaves a hole, so
 the array has to become a hash — and the caller's slot, still described as `array<T>`, is storage
-the callee cannot retype. That case reports a named compile error instead; an associative array,
-or a local copy the function returns, is the workaround.
+the callee cannot retype. That case reports a named compile error instead.
+
+**This refusal is deliberate and permanent, not a gap waiting to be filled.** Lifting it would
+mean a callee silently changing the representation of a caller's local, which is the one thing
+the typed-slot model does not allow; refusing loudly is the intended behaviour. Two workarounds
+cover every use:
+
+```php
+<?php
+// 1. Key the array with strings: the removal happens in place, through the reference.
+function dropAssoc(array &$a, string $k) { unset($a[$k]); }
+$map = ["a" => 10, "b" => 20];
+dropAssoc($map, "b");
+print_r($map);    // ["a" => 10]
+
+// 2. Or rebuild and return, letting the CALLER rebind its own slot.
+function dropIndexed(array $a, int $i): array {
+    unset($a[$i]);
+    return $a;
+}
+$list = [10, 20, 30];
+$list = dropIndexed($list, 1);
+print_r($list);   // [0 => 10, 2 => 30] — PHP's holes, no renumbering
+```
 
 ## Array union
 

@@ -575,6 +575,52 @@ fn any_file_newer_than(directory: &Path, instant: std::time::SystemTime) -> bool
     false
 }
 
+/// Returns the directories of the sibling workspace crates `crate_dir` depends on by path.
+///
+/// Only `path` dependencies declared in the crate's OWN manifest are followed, because a
+/// sibling crate changes every time someone edits it while an ordinary registry dependency is
+/// a fixed download.
+///
+/// That leaves one hole, and it is real rather than theoretical: the workspace root redirects
+/// `mysql` to `vendor/mysql-28.0.0` through `[patch.crates-io]`, and `elephc-pdo` names it by
+/// VERSION, so nothing here sees the vendored tree. Editing it does not mark
+/// `libelephc_pdo.a` stale. Closing that means resolving patches, not just reading manifests;
+/// until then `cargo build -p elephc-pdo` after such an edit is the manual refresh.
+///
+/// Manifest sections that cannot be read, parsed, or understood contribute nothing — this
+/// decides whether to SPAWN CARGO, and an unreadable manifest is not evidence of an edit.
+fn path_dependency_dirs(crate_dir: &Path) -> Vec<PathBuf> {
+    let Ok(manifest) = std::fs::read_to_string(crate_dir.join("Cargo.toml")) else {
+        return Vec::new();
+    };
+    let Ok(parsed) = manifest.parse::<toml::Table>() else {
+        return Vec::new();
+    };
+    let mut dirs = Vec::new();
+    collect_path_dependencies(&parsed, crate_dir, &mut dirs);
+    // `[target.'cfg(...)'.dependencies]` nests one level deeper than the three plain kinds.
+    if let Some(targets) = parsed.get("target").and_then(toml::Value::as_table) {
+        for entry in targets.values().filter_map(toml::Value::as_table) {
+            collect_path_dependencies(entry, crate_dir, &mut dirs);
+        }
+    }
+    dirs
+}
+
+/// Appends the `path` dependency directories declared by one manifest table.
+fn collect_path_dependencies(table: &toml::Table, crate_dir: &Path, dirs: &mut Vec<PathBuf>) {
+    for kind in ["dependencies", "dev-dependencies", "build-dependencies"] {
+        let Some(dependencies) = table.get(kind).and_then(toml::Value::as_table) else {
+            continue;
+        };
+        for dependency in dependencies.values().filter_map(toml::Value::as_table) {
+            if let Some(path) = dependency.get("path").and_then(toml::Value::as_str) {
+                dirs.push(crate_dir.join(path));
+            }
+        }
+    }
+}
+
 impl BridgeStaticlib {
     /// Returns the archive filename produced by this bridge's Cargo package.
     pub(super) fn archive_filename(&self) -> String {
@@ -977,16 +1023,36 @@ impl BridgeStaticlib {
             .is_ok_and(|mut attempted| attempted.insert(self.crate_name))
     }
 
-    /// Returns whether any file under this bridge's crate is newer than `archive`.
+    /// Returns whether any source this bridge's archive is built from is newer than `archive`.
     ///
     /// The whole crate directory is walked, not just `src`, because `Cargo.toml` and build
     /// scripts change what the archive contains too. The walk stops at the first newer file.
+    ///
+    /// It also follows the bridge's `path` dependencies on sibling workspace crates,
+    /// transitively. Asking only about the bridge's own directory is what let issue #1204
+    /// happen: `ksort()` gained a `$flags` parameter in the SHARED builtin contract, the
+    /// magician's dispatch tables are generated from that contract, and nothing under
+    /// `crates/elephc-magician` changed — so a cached `libelephc_magician.a` still looked
+    /// fresh, was linked unrebuilt, and rejected the two-argument call with
+    /// `Fatal error: eval() runtime failed`. CI never saw it because CI starts from an empty
+    /// target directory.
     fn sources_are_newer_than(&self, workspace: &Path, archive: &Path) -> bool {
         let Ok(built_at) = std::fs::metadata(archive).and_then(|meta| meta.modified()) else {
             return false;
         };
-        let crate_dir = workspace.join("crates").join(self.crate_name);
-        any_file_newer_than(&crate_dir, built_at)
+        let mut pending = vec![workspace.join("crates").join(self.crate_name)];
+        let mut visited: HashSet<PathBuf> = HashSet::new();
+        while let Some(crate_dir) = pending.pop() {
+            let identity = std::fs::canonicalize(&crate_dir).unwrap_or_else(|_| crate_dir.clone());
+            if !visited.insert(identity) {
+                continue;
+            }
+            if any_file_newer_than(&crate_dir, built_at) {
+                return true;
+            }
+            pending.extend(path_dependency_dirs(&crate_dir));
+        }
+        false
     }
 
     /// Finds the checkout this elephc was built from, if it was built from one.
@@ -1145,6 +1211,73 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&output);
+    }
+
+    /// A shared crate the bridge depends on by path counts as one of the bridge's own sources.
+    ///
+    /// Regression for issue #1204. `ksort()` gained its `$flags` parameter in the SHARED
+    /// builtin contract; the magician's eval dispatch is generated from that contract but
+    /// nothing under `crates/elephc-magician` changed. Walking only the bridge's own directory
+    /// therefore called a pre-change `libelephc_magician.a` fresh, linked it, and the compiled
+    /// program answered `Fatal error: eval() runtime failed` for a two-argument `ksort()`
+    /// inside `eval()`.
+    #[test]
+    fn staleness_follows_the_bridges_path_dependencies() {
+        let bridge = bridge_for_library("elephc_magician").expect("magician bridge");
+        let workspace = scratch("staleness_path_deps");
+        let bridge_dir = workspace.join("crates").join(bridge.crate_name);
+        let shared_dir = workspace.join("crates/elephc-builtin-contract");
+        std::fs::create_dir_all(bridge_dir.join("src")).expect("create bridge crate");
+        std::fs::create_dir_all(shared_dir.join("src")).expect("create shared crate");
+        std::fs::write(
+            bridge_dir.join("Cargo.toml"),
+            "[package]\nname = \"elephc-magician\"\n\n\
+             [dependencies]\nelephc-builtin-contract = { path = \"../elephc-builtin-contract\" }\n",
+        )
+        .expect("write bridge manifest");
+        std::fs::write(bridge_dir.join("src/lib.rs"), "// bridge").expect("write bridge source");
+        std::fs::write(shared_dir.join("src/lib.rs"), "// shared").expect("write shared source");
+
+        // Written last, so nothing in either crate is newer than the archive yet.
+        let archive = workspace.join("libelephc_magician.a");
+        std::fs::write(&archive, "archive").expect("write archive");
+        assert!(
+            !bridge.sources_are_newer_than(&workspace, &archive),
+            "an archive newer than every source must not be called stale"
+        );
+
+        std::fs::write(shared_dir.join("src/lib.rs"), "// shared, edited")
+            .expect("rewrite shared source");
+        assert!(
+            bridge.sources_are_newer_than(&workspace, &archive),
+            "an edit to a path dependency must make the archive stale"
+        );
+
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    /// The manifest walk reads the three dependency kinds and ignores registry dependencies.
+    #[test]
+    fn path_dependency_dirs_reads_only_path_dependencies() {
+        let crate_dir = scratch("path_deps");
+        std::fs::write(
+            crate_dir.join("Cargo.toml"),
+            "[package]\nname = \"x\"\n\n\
+             [dependencies]\nlibc = \"0.2\"\na = { path = \"../a\" }\n\n\
+             [dev-dependencies]\nb = { path = \"../b\" }\n\n\
+             [build-dependencies]\nc = { path = \"../c\" }\n\n\
+             [target.'cfg(unix)'.dependencies]\nd = { path = \"../d\" }\n",
+        )
+        .expect("write manifest");
+
+        let mut found: Vec<String> = path_dependency_dirs(&crate_dir)
+            .iter()
+            .filter_map(|path| path.file_name().map(|name| name.to_string_lossy().into_owned()))
+            .collect();
+        found.sort();
+        assert_eq!(found, vec!["a", "b", "c", "d"]);
+
+        let _ = std::fs::remove_dir_all(&crate_dir);
     }
 
     /// Every bridge crate must appear in the lists CI, the Docker scripts and the

@@ -1,6 +1,6 @@
 ---
 title: "imageaffine()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns a copy of an image with an affine matrix applied."
 sidebar:
   order: 456
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imageaffine(mixed $image, array $affine, ?array $clip = null): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns a copy of an image with an affine matrix applied.
 
 **Parameters**:
 - `$image` (`mixed`)

@@ -1,6 +1,6 @@
 ---
 title: "mysqli_options()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Sets a connection option before connecting."
 sidebar:
   order: 144
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_options(mixed $mysql, int $option, mixed $value): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Sets a connection option before connecting.
 
 **Parameters**:
 - `$mysql` (`mixed`)

@@ -1,6 +1,6 @@
 ---
 title: "imagecreatefromstring()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates an image from encoded bytes, detecting the format."
 sidebar:
   order: 491
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagecreatefromstring(string $data): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates an image from encoded bytes, detecting the format.
 
 **Parameters**:
 - `$data` (`string`)

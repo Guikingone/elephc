@@ -1,6 +1,6 @@
 ---
 title: "opcache_get_configuration()"
-description: "Implemented by the compiler-injected OPcache prelude."
+description: "Returns the OPcache directives, blacklist, and version."
 sidebar:
   order: 637
 ---
@@ -11,7 +11,7 @@ sidebar:
 function opcache_get_configuration(): array
 ```
 
-Implemented by the compiler-injected OPcache prelude.
+Returns the OPcache directives, blacklist, and version.
 
 **Parameters**: none.
 

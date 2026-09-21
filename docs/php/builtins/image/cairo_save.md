@@ -1,6 +1,6 @@
 ---
 title: "cairo_save()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Saves the context state so a later cairo_restore() can return to it."
 sidebar:
   order: 432
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_save(mixed $context): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Saves the context state so a later cairo_restore() can return to it.
 
 **Parameters**:
 - `$context` (`mixed`)

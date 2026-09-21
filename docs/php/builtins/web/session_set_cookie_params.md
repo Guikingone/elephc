@@ -1,6 +1,6 @@
 ---
 title: "session_set_cookie_params()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Sets the session cookie's lifetime, path, domain, and flags."
 sidebar:
   order: 932
 ---
@@ -11,7 +11,7 @@ sidebar:
 function session_set_cookie_params(...$args): bool
 ```
 
-Implemented by the compiler-injected web prelude.
+Sets the session cookie's lifetime, path, domain, and flags.
 
 **Parameters**:
 - `...$args` — variadic: collects excess arguments into `$args`.

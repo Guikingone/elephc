@@ -1,6 +1,6 @@
 ---
 title: "jdmonthname()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Returns the month name for a Julian Day count in the requested calendar."
 sidebar:
   order: 229
 ---
@@ -11,7 +11,7 @@ sidebar:
 function jdmonthname(int $julian_day, int $mode): string
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Returns the month name for a Julian Day count in the requested calendar.
 
 **Parameters**:
 - `$julian_day` (`int`)

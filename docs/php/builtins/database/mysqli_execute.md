@@ -1,6 +1,6 @@
 ---
 title: "mysqli_execute()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Alias of mysqli_stmt_execute()."
 sidebar:
   order: 113
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_execute(mixed $statement): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Alias of mysqli_stmt_execute().
 
 **Parameters**:
 - `$statement` (`mixed`)

@@ -503,6 +503,16 @@ fn find_top_level_postfix_incdec(tokens: &[SpannedToken], start: usize) -> Optio
             Token::Assign if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
                 return None;
             }
+            // A top-level `?` opens a ternary, so the `++` sits in one of its BRANCHES:
+            // `$c ? $a[0]++ : $b;` increments `$a[0]`, it does not increment `$c ? $a[0]`.
+            // Claiming it anyway made the scan parse `$c ? $a[0]` as its target and report
+            // `Expected ':' in ternary operator` from the middle of a statement the scan had
+            // truncated itself (issue #1139). Declining leaves the honest diagnostic, which is
+            // that a ternary at statement position is not parsed at all yet (#827, #841).
+            // `??` and `?->` are their own tokens, so neither reaches this arm.
+            Token::Question if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                return None;
+            }
             Token::PlusPlus if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
                 return Some((pos, true));
             }

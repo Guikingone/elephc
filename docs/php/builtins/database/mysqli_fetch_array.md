@@ -1,6 +1,6 @@
 ---
 title: "mysqli_fetch_array()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the next row as a numeric array, an associative array, or both."
 sidebar:
   order: 116
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_fetch_array(mixed $result, int $mode = 3): ?array
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the next row as a numeric array, an associative array, or both.
 
 **Parameters**:
 - `$result` (`mixed`)

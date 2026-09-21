@@ -1,6 +1,6 @@
 ---
 title: "mysqli_get_client_version()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the client library version as an integer."
 sidebar:
   order: 131
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_get_client_version(mixed $mysql): int
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the client library version as an integer.
 
 **Parameters**:
 - `$mysql` (`mixed`)

@@ -1,6 +1,6 @@
 ---
 title: "imageflip()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Flips an image horizontally, vertically, or both."
 sidebar:
   order: 507
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imageflip(mixed $image, int $mode): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Flips an image horizontally, vertically, or both.
 
 **Parameters**:
 - `$image` (`mixed`)

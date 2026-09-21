@@ -1,6 +1,6 @@
 ---
 title: "mysqli_fetch_column()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns one column of the next row."
 sidebar:
   order: 118
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_fetch_column(mixed $result, int $column = 0): mixed
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns one column of the next row.
 
 **Parameters**:
 - `$result` (`mixed`)

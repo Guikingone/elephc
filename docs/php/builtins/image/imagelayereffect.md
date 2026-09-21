@@ -1,6 +1,6 @@
 ---
 title: "imagelayereffect()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Selects the alpha blending effect used by subsequent drawing."
 sidebar:
   order: 516
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagelayereffect(mixed $image, int $effect): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Selects the alpha blending effect used by subsequent drawing.
 
 **Parameters**:
 - `$image` (`mixed`)

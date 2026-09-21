@@ -1,6 +1,6 @@
 ---
 title: "imagecolormatch()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Adjusts a palette image's colors to better match a truecolor original."
 sidebar:
   order: 473
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagecolormatch(mixed $image1, mixed $image2): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Adjusts a palette image's colors to better match a truecolor original.
 
 **Parameters**:
 - `$image1` (`mixed`)

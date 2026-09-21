@@ -1,6 +1,6 @@
 ---
 title: "cairo_matrix_init_identity()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates an identity transformation matrix."
 sidebar:
   order: 413
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_matrix_init_identity(): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates an identity transformation matrix.
 
 **Parameters**: none.
 

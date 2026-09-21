@@ -1,6 +1,6 @@
 ---
 title: "mysqli_free_result()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Releases the memory a result set holds."
 sidebar:
   order: 128
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_free_result(mixed $result): void
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Releases the memory a result set holds.
 
 **Parameters**:
 - `$result` (`mixed`)

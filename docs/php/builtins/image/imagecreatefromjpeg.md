@@ -1,6 +1,6 @@
 ---
 title: "imagecreatefromjpeg()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates an image from a JPEG file."
 sidebar:
   order: 489
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagecreatefromjpeg(string $filename): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates an image from a JPEG file.
 
 **Parameters**:
 - `$filename` (`string`)

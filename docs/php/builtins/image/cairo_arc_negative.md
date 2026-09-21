@@ -1,6 +1,6 @@
 ---
 title: "cairo_arc_negative()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Adds a counter-clockwise arc of the given radius and angle span to the current path."
 sidebar:
   order: 400
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_arc_negative(mixed $context, float $xc, float $yc, float $radius, float $angle1, float $angle2): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Adds a counter-clockwise arc of the given radius and angle span to the current path.
 
 **Parameters**:
 - `$context` (`mixed`)

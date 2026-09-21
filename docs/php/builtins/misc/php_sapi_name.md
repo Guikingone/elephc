@@ -1,6 +1,6 @@
 ---
 title: "php_sapi_name()"
-description: "Implemented by the compiler-injected version prelude."
+description: "Returns the name of the server API this build runs under."
 sidebar:
   order: 677
 ---
@@ -11,7 +11,7 @@ sidebar:
 function php_sapi_name(): string
 ```
 
-Implemented by the compiler-injected version prelude.
+Returns the name of the server API this build runs under.
 
 **Parameters**: none.
 

@@ -873,6 +873,37 @@ foreach ($cases as $s) { echo (int)$s, ","; }
     );
 }
 
+/// Pins the same cap on the LITERAL inputs the constant folder sees, and on `intval()`.
+///
+/// The runtime siblings above feed the helper a variable, so they never reach `fold_intval` or
+/// the literal `(int)` fold. Those entry points parse with Rust's `i64::from_str`, which simply
+/// refuses `"1e19"` and a 310-digit run and leaves the call to the runtime; a future fold that
+/// accepted them by routing through `f64` would silently answer `-8446744073709551616` and `0`
+/// here while every existing test stayed green.
+#[test]
+fn test_int_cast_and_intval_of_literal_numeric_strings_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+echo (int)"1e19", ",", (int)"-1e19", ",";
+echo intval("1e19"), ",", intval("-1e19"), ",";
+echo (int)"1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111", ",";
+echo intval("1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"), ",";
+echo (int)"1e309", ",", intval("1e309"), ",";
+echo intval("9223372036854775808"), ",", intval("-9223372036854775809"), ",";
+echo intval("9007199254740993"), ",", intval("42"), ",";
+"#,
+    );
+    assert_eq!(
+        out,
+        "9223372036854775807,-9223372036854775808,\
+9223372036854775807,-9223372036854775808,\
+0,0,\
+0,0,\
+9223372036854775807,-9223372036854775808,\
+9007199254740993,42,"
+    );
+}
+
 /// Verifies a numeric string whose value overflows the double casts to 0, as PHP does.
 ///
 /// `strtoll` saturates a 310-digit integer to PHP_INT_MAX, so the integer-form path answered

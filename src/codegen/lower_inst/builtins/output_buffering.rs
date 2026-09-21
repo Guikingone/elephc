@@ -522,7 +522,7 @@ pub(crate) fn lower_ob_get_status(
         None => abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0),
     }
     abi::emit_call_label(ctx.emitter, "__rt_ob_get_status");
-    emit_box_hash_pointer_as_assoc_mixed(ctx);
+    super::system::emit_box_hash_pointer_as_assoc_mixed(ctx);
     store_if_result(ctx, inst)
 }
 
@@ -571,25 +571,6 @@ fn box_int_or_false_result(ctx: &mut FunctionContext<'_>, label_prefix: &str) {
             ctx.emitter.instruction("mov eax, 3");                              // select runtime tag 3 for a boolean false Mixed value
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             ctx.emitter.label(&done_label);
-        }
-    }
-}
-
-/// Boxes the raw associative-array hash pointer in the integer result register
-/// into a `Mixed` cell (runtime tag 5), mirroring `getdate`/`localtime`/`stat`.
-fn emit_box_hash_pointer_as_assoc_mixed(ctx: &mut FunctionContext<'_>) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x1, x0");                              // Mixed payload low word = hash pointer
-            ctx.emitter.instruction("mov x2, #0");                              // associative-array payloads do not use the high word
-            ctx.emitter.instruction("mov x0, #5");                              // runtime tag 5 = associative array
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov rdi, rax");                            // Mixed payload low word = hash pointer
-            ctx.emitter.instruction("xor esi, esi");                            // associative-array payloads do not use the high word
-            ctx.emitter.instruction("mov rax, 5");                              // runtime tag 5 = associative array
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
         }
     }
 }

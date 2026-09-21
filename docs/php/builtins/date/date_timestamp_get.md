@@ -1,6 +1,6 @@
 ---
 title: "date_timestamp_get()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Returns a date's Unix timestamp."
 sidebar:
   order: 213
 ---
@@ -11,7 +11,7 @@ sidebar:
 function date_timestamp_get(mixed $object): int
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Returns a date's Unix timestamp.
 
 **Parameters**:
 - `$object` (`mixed`)

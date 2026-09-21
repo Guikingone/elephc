@@ -1,6 +1,6 @@
 ---
 title: "gettimeofday()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Returns the current time as an array of parts, or as a float."
 sidebar:
   order: 221
 ---
@@ -11,7 +11,7 @@ sidebar:
 function gettimeofday(bool $as_float = false): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Returns the current time as an array of parts, or as a float.
 
 **Parameters**:
 - `$as_float` (`bool`), default `false`, optional

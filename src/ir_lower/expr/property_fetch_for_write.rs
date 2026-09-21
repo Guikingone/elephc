@@ -1,17 +1,23 @@
 //! Purpose:
-//! Lowers stable object-property sources for by-reference iteration and nested writes.
+//! Lowers object-property sources for by-reference `foreach` and nested writes, whatever the receiver.
 //!
 //! Called from:
 //! - `crate::ir_lower::stmt::typed_foreach` when the loop source is a property access.
 //! - `crate::ir_lower::stmt::nested_array_writes` for boxed property write roots.
 //!
 //! Key details:
-//! - Emits a borrowed `PropGetForWrite` only when frontend and backend slot
-//!   classification agree. A nested write also needs every receiver-chain step to
-//!   have stable backing storage; a by-reference `foreach` pins an unstable receiver
-//!   for the loop instead (issue #690).
-//! - Hooked, magic, dynamic, nullable, and packed receiver paths keep the ordinary
-//!   retaining property read.
+//! - Emits a borrowed `PropGetForWrite` when the receiver is a statically known non-null object
+//!   and the final property is a fixed container slot. Frontend and backend slot classification
+//!   are mirrored over the same class metadata so the two sides cannot silently disagree.
+//! - For a by-reference `foreach` the receiver no longer has to name stable backing storage.
+//!   That question now only decides WHO releases the receiver: a stable root (a variable,
+//!   `$this`, a chain of declared non-null object slots) releases its temporary here as before,
+//!   while an OWNING temporary -- `$arr[0]->x`, `$o->get()->x` -- is handed to the loop, which
+//!   outlives the borrow and releases it on every way out, including `break`, `return` and a
+//!   caught throw (issue #690). A nested write has no loop to hand the receiver to, so every
+//!   step of its receiver chain must still be stable backing storage.
+//! - Hooked, magic, dynamic, nullable, `stdClass`, and non-container property slots keep the
+//!   ordinary retaining property read.
 
 use super::*;
 

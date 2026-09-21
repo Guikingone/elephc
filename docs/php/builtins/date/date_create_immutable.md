@@ -1,6 +1,6 @@
 ---
 title: "date_create_immutable()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Creates a DateTimeImmutable from a date/time string."
 sidebar:
   order: 193
 ---
@@ -11,7 +11,7 @@ sidebar:
 function date_create_immutable(string $datetime = 'now', mixed $timezone = null): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Creates a DateTimeImmutable from a date/time string.
 
 **Parameters**:
 - `$datetime` (`string`), default `'now'`, optional

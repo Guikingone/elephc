@@ -1,6 +1,6 @@
 ---
 title: "cairo_close_path()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Closes the current subpath with a line back to its starting point."
 sidebar:
   order: 401
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_close_path(mixed $context): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Closes the current subpath with a line back to its starting point.
 
 **Parameters**:
 - `$context` (`mixed`)

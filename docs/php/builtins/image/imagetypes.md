@@ -1,6 +1,6 @@
 ---
 title: "imagetypes()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns a bitmask of the image formats this build supports."
 sidebar:
   order: 536
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagetypes(): int
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns a bitmask of the image formats this build supports.
 
 **Parameters**: none.
 

@@ -1,6 +1,6 @@
 ---
 title: "imagecolorresolvealpha()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the palette index of a color with alpha, allocating or approximating it."
 sidebar:
   order: 475
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagecolorresolvealpha(mixed $image, int $red, int $green, int $blue, int $alpha): int
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the palette index of a color with alpha, allocating or approximating it.
 
 **Parameters**:
 - `$image` (`mixed`)
