@@ -101,6 +101,8 @@ The counts above are what a compiled program has. Code run through `eval()` sees
 - `standard` constants: 163 / 142
 - `zend opcache` functions: 8 / 0
 
+Most of that is one gap rather than several. 203 of those functions — every one missing from `exif`, `gd`, `mysqli`, `pdo`, `session`, `zend opcache` — are implemented by a PHP prelude the compiler injects into the program it is compiling. The interpreter dispatches through the shared builtin registry, and a prelude function has no registry binding there, so it is not that these surfaces were skipped one by one: none of them has an entry point `eval()` can reach. Closing it means an `eval_builtin!` binding per surface; see **eval() coverage of the prelude-implemented modules** under [Known limitations](#known-limitations) for what is tracked.
+
 3 symbol(s) exist only inside `eval()` and are not counted in the table: `get_called_class()`, `get_class_methods()`, `get_class_vars()`.
 
 The remaining 2 baseline extensions expose no functions, classes, or constants of their own, so they have no row above: `lexbor`, `mysqlnd`.
@@ -204,6 +206,8 @@ Classes: `DateUnknownException` (`date`), `ImageException` (`gd`).
 Constants: `ARRAY_FILTER_USE_VALUE` (`standard`), `MYSQLI_TYPE_VARCHAR` (`mysqli`).
 
 ## Known limitations
+
+**eval() coverage of the prelude-implemented modules.** The modules whose eval() column is zero — gd, exif, mysqli, PDO, session, OPcache — are all implemented by a PHP prelude the compiler injects, and the interpreter dispatches through the shared builtin registry, where a prelude function has no binding. Closing it is one `eval_builtin!` surface at a time, tracked per module: mysqli #746, PDO #748, session #1211, gd and exif #1212, OPcache #1213, with #906 as the umbrella. Until then, call those functions from compiled code and pass the results into the fragment.
 
 **Static subset, AOT only.** Ordinary source is compiled ahead of time with no opcode fallback; runtime code loading exists only through the experimental eval() interpreter bridge.
 

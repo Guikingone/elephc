@@ -282,6 +282,10 @@ evidence = "tests/opcache_ini_tests.rs"
 notes    = "Compatibility surface; programs are AOT-compiled, there is no opcode cache"
 
 [[limitations]]
+title = "eval() coverage of the prelude-implemented modules"
+notes = "The modules whose eval() column is zero \u2014 gd, exif, mysqli, PDO, session, OPcache \u2014 are all implemented by a PHP prelude the compiler injects, and the interpreter dispatches through the shared builtin registry, where a prelude function has no binding. Closing it is one `eval_builtin!` surface at a time, tracked per module: mysqli #746, PDO #748, session #1211, gd and exif #1212, OPcache #1213, with #906 as the umbrella. Until then, call those functions from compiled code and pass the results into the fragment."
+
+[[limitations]]
 title = "Static subset, AOT only"
 notes = "Ordinary source is compiled ahead of time with no opcode fallback; runtime code loading exists only through the experimental eval() interpreter bridge."
 
