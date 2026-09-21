@@ -1,6 +1,6 @@
 ---
 title: "date_format()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Formats a date according to a format string."
 sidebar:
   order: 199
 ---
@@ -11,7 +11,7 @@ sidebar:
 function date_format(mixed $object, string $format): string
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Formats a date according to a format string.
 
 **Parameters**:
 - `$object` (`mixed`)

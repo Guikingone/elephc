@@ -1,6 +1,6 @@
 ---
 title: "imagecopyresized()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Copies and resizes a rectangle without interpolation."
 sidebar:
   order: 485
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagecopyresized(mixed $dst_image, mixed $src_image, int $dst_x, int $dst_y, int $src_x, int $src_y, int $dst_width, int $dst_height, int $src_width, int $src_height): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Copies and resizes a rectangle without interpolation.
 
 **Parameters**:
 - `$dst_image` (`mixed`)

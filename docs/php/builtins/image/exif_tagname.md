@@ -1,6 +1,6 @@
 ---
 title: "exif_tagname()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the name of an EXIF tag index."
 sidebar:
   order: 449
 ---
@@ -11,7 +11,7 @@ sidebar:
 function exif_tagname(int $index): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the name of an EXIF tag index.
 
 **Parameters**:
 - `$index` (`int`)

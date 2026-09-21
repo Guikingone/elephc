@@ -1,6 +1,6 @@
 ---
 title: "mysqli_stmt_insert_id()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the id the last prepared INSERT generated."
 sidebar:
   order: 171
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stmt_insert_id(mixed $statement): int
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the id the last prepared INSERT generated.
 
 **Parameters**:
 - `$statement` (`mixed`)

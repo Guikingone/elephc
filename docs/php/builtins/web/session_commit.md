@@ -1,6 +1,6 @@
 ---
 title: "session_commit()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Alias of session_write_close()."
 sidebar:
   order: 889
 ---
@@ -11,7 +11,7 @@ sidebar:
 function session_commit(): bool
 ```
 
-Implemented by the compiler-injected web prelude.
+Alias of session_write_close().
 
 **Parameters**: none.
 

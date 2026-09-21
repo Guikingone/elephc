@@ -1,6 +1,6 @@
 ---
 title: "mysqli_stmt_param_count()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns how many placeholders a prepared statement has."
 sidebar:
   order: 173
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stmt_param_count(mixed $statement): int
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns how many placeholders a prepared statement has.
 
 **Parameters**:
 - `$statement` (`mixed`)

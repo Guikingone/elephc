@@ -1,6 +1,6 @@
 ---
 title: "mysqli_connect()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Opens a connection to a MySQL server."
 sidebar:
   order: 105
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_connect(?string $hostname = null, ?string $username = null, ?string $password = null, ?string $database = null, ?int $port = null, ?string $socket = null): mixed
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Opens a connection to a MySQL server.
 
 **Parameters**:
 - `$hostname` (`?string`), default `null`, optional

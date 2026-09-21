@@ -1,6 +1,6 @@
 ---
 title: "date_sub()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Subtracts an interval from a DateTime, modifying it in place."
 sidebar:
   order: 208
 ---
@@ -11,7 +11,7 @@ sidebar:
 function date_sub(mixed $object, mixed $interval): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Subtracts an interval from a DateTime, modifying it in place.
 
 **Parameters**:
 - `$object` (`mixed`)

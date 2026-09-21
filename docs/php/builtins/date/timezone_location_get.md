@@ -1,6 +1,6 @@
 ---
 title: "timezone_location_get()"
-description: "Implemented by the compiler-injected tz prelude."
+description: "Returns a timezone's country code, latitude, longitude, and comments."
 sidebar:
   order: 246
 ---
@@ -11,7 +11,7 @@ sidebar:
 function timezone_location_get(mixed $object): mixed
 ```
 
-Implemented by the compiler-injected tz prelude.
+Returns a timezone's country code, latitude, longitude, and comments.
 
 **Parameters**:
 - `$object` (`mixed`)

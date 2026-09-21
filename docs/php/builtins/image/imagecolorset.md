@@ -1,6 +1,6 @@
 ---
 title: "imagecolorset()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Changes the color a palette index stands for."
 sidebar:
   order: 476
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagecolorset(mixed $image, int $color, int $red, int $green, int $blue, int $alpha = 0): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Changes the color a palette index stands for.
 
 **Parameters**:
 - `$image` (`mixed`)

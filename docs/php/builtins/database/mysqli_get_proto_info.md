@@ -1,6 +1,6 @@
 ---
 title: "mysqli_get_proto_info()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the MySQL protocol version in use."
 sidebar:
   order: 133
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_get_proto_info(mixed $mysql): int
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the MySQL protocol version in use.
 
 **Parameters**:
 - `$mysql` (`mixed`)

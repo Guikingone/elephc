@@ -1,6 +1,6 @@
 ---
 title: "imagecolortransparent()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Reads or sets an image's transparent color index."
 sidebar:
   order: 479
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagecolortransparent(mixed $image, ?int $color = null): int
 ```
 
-Implemented by the compiler-injected image prelude.
+Reads or sets an image's transparent color index.
 
 **Parameters**:
 - `$image` (`mixed`)

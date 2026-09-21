@@ -1,6 +1,6 @@
 ---
 title: "mysqli_report()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Selects which mysqli conditions raise exceptions or warnings."
 sidebar:
   order: 152
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_report(int $flags): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Selects which mysqli conditions raise exceptions or warnings.
 
 **Parameters**:
 - `$flags` (`int`)

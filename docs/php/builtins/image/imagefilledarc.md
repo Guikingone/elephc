@@ -1,6 +1,6 @@
 ---
 title: "imagefilledarc()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Draws a filled arc, pie slice, or chord."
 sidebar:
   order: 501
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagefilledarc(mixed $image, int $center_x, int $center_y, int $width, int $height, int $start_angle, int $end_angle, int $color, int $style): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Draws a filled arc, pie slice, or chord.
 
 **Parameters**:
 - `$image` (`mixed`)

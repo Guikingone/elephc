@@ -1,6 +1,6 @@
 ---
 title: "timezone_version_get()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Returns the version of the bundled timezone database."
 sidebar:
   order: 252
 ---
@@ -11,7 +11,7 @@ sidebar:
 function timezone_version_get(): string
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Returns the version of the bundled timezone database.
 
 **Parameters**: none.
 

@@ -1,6 +1,6 @@
 ---
 title: "date_timestamp_set()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Sets a DateTime from a Unix timestamp."
 sidebar:
   order: 214
 ---
@@ -11,7 +11,7 @@ sidebar:
 function date_timestamp_set(mixed $object, int $timestamp): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Sets a DateTime from a Unix timestamp.
 
 **Parameters**:
 - `$object` (`mixed`)

@@ -1,6 +1,6 @@
 ---
 title: "cal_days_in_month()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Returns the number of days in a month of the given calendar and year."
 sidebar:
   order: 184
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cal_days_in_month(int $calendar, int $month, int $year): int
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Returns the number of days in a month of the given calendar and year.
 
 **Parameters**:
 - `$calendar` (`int`)

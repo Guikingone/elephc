@@ -1,6 +1,6 @@
 ---
 title: "mysqli_savepoint()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Creates a named savepoint in the open transaction."
 sidebar:
   order: 154
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_savepoint(mixed $mysql, string $name): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Creates a named savepoint in the open transaction.
 
 **Parameters**:
 - `$mysql` (`mixed`)

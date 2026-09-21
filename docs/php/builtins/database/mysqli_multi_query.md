@@ -1,6 +1,6 @@
 ---
 title: "mysqli_multi_query()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Runs several semicolon-separated statements in one call."
 sidebar:
   order: 140
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_multi_query(mixed $mysql, string $query): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Runs several semicolon-separated statements in one call.
 
 **Parameters**:
 - `$mysql` (`mixed`)

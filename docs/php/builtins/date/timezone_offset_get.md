@@ -1,6 +1,6 @@
 ---
 title: "timezone_offset_get()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Returns a timezone's UTC offset in seconds at the given date."
 sidebar:
   order: 249
 ---
@@ -11,7 +11,7 @@ sidebar:
 function timezone_offset_get(mixed $object, mixed $datetime): int
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Returns a timezone's UTC offset in seconds at the given date.
 
 **Parameters**:
 - `$object` (`mixed`)

@@ -1,6 +1,6 @@
 ---
 title: "date_create_from_format()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Creates a DateTime by parsing a string against an explicit format."
 sidebar:
   order: 192
 ---
@@ -11,7 +11,7 @@ sidebar:
 function date_create_from_format(string $format, string $datetime, mixed $timezone = null): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Creates a DateTime by parsing a string against an explicit format.
 
 **Parameters**:
 - `$format` (`string`)

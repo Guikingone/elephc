@@ -1,6 +1,6 @@
 ---
 title: "ini_get()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Returns the value of a configuration directive."
 sidebar:
   order: 883
 ---
@@ -11,7 +11,7 @@ sidebar:
 function ini_get(string $option): mixed
 ```
 
-Implemented by the compiler-injected web prelude.
+Returns the value of a configuration directive.
 
 **Parameters**:
 - `$option` (`string`)

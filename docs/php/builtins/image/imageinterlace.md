@@ -1,6 +1,6 @@
 ---
 title: "imageinterlace()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Reads or sets whether an image is written interlaced."
 sidebar:
   order: 513
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imageinterlace(mixed $image, ?bool $enable = null): int
 ```
 
-Implemented by the compiler-injected image prelude.
+Reads or sets whether an image is written interlaced.
 
 **Parameters**:
 - `$image` (`mixed`)

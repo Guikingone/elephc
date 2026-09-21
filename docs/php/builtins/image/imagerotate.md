@@ -1,6 +1,6 @@
 ---
 title: "imagerotate()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns a copy of an image rotated by an angle."
 sidebar:
   order: 525
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagerotate(mixed $image, float $angle, int $background_color, int $ignore_transparent = 0): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns a copy of an image rotated by an angle.
 
 **Parameters**:
 - `$image` (`mixed`)

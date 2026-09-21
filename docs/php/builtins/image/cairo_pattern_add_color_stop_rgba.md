@@ -1,6 +1,6 @@
 ---
 title: "cairo_pattern_add_color_stop_rgba()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Adds a color stop with alpha to a gradient pattern."
 sidebar:
   order: 424
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_pattern_add_color_stop_rgba(mixed $pattern, float $offset, float $red, float $green, float $blue, float $alpha): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Adds a color stop with alpha to a gradient pattern.
 
 **Parameters**:
 - `$pattern` (`mixed`)

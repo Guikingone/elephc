@@ -1,6 +1,6 @@
 ---
 title: "mysqli_errno()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the error code of the last call on a connection."
 sidebar:
   order: 109
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_errno(mixed $mysql): int
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the error code of the last call on a connection.
 
 **Parameters**:
 - `$mysql` (`mixed`)

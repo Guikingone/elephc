@@ -1,6 +1,6 @@
 ---
 title: "mysqli_fetch_fields()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns metadata for every column of a result."
 sidebar:
   order: 121
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_fetch_fields(mixed $result): array
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns metadata for every column of a result.
 
 **Parameters**:
 - `$result` (`mixed`)

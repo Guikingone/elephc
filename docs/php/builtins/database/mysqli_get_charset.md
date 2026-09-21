@@ -1,6 +1,6 @@
 ---
 title: "mysqli_get_charset()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the connection character set as an object."
 sidebar:
   order: 129
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_get_charset(mixed $mysql): mixed
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the connection character set as an object.
 
 **Parameters**:
 - `$mysql` (`mixed`)

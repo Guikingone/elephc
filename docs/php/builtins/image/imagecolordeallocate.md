@@ -1,6 +1,6 @@
 ---
 title: "imagecolordeallocate()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Frees a palette entry allocated earlier."
 sidebar:
   order: 470
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagecolordeallocate(mixed $image, int $color): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Frees a palette entry allocated earlier.
 
 **Parameters**:
 - `$image` (`mixed`)

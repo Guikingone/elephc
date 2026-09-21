@@ -1,6 +1,6 @@
 ---
 title: "opcache_reset()"
-description: "Implemented by the compiler-injected OPcache prelude."
+description: "Clears the whole opcode cache."
 sidebar:
   order: 620
 ---
@@ -11,7 +11,7 @@ sidebar:
 function opcache_reset(): bool
 ```
 
-Implemented by the compiler-injected OPcache prelude.
+Clears the whole opcode cache.
 
 **Parameters**: none.
 

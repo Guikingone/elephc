@@ -10746,7 +10746,7 @@
     },
     "area": "Image",
     "canonical_name": "_cairo_clamp8",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Internal: clamps an integer into the 0-255 channel range.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -10831,7 +10831,7 @@
     },
     "area": "Image",
     "canonical_name": "_cairo_color",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Internal: packs red, green, blue, and alpha channels into one integer.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -10916,7 +10916,7 @@
     },
     "area": "Image",
     "canonical_name": "_cairo_fx",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Internal: rounds a user-space float coordinate to a device pixel.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -10987,7 +10987,7 @@
     },
     "area": "Image",
     "canonical_name": "_cairo_pack",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Internal: packs an x/y pair into one integer key.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -11079,7 +11079,7 @@
     },
     "area": "Image",
     "canonical_name": "_elephc_img_output",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Internal: encodes an image handle in the requested format, to a file or to the output buffer.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -11164,7 +11164,7 @@
     },
     "area": "Image",
     "canonical_name": "_gmagick_norm_color",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Internal: normalizes a Gmagick color argument into a packed integer.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -11228,7 +11228,7 @@
     },
     "area": "Image",
     "canonical_name": "_gmagick_parse_color",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Internal: parses a Gmagick color string into a packed integer.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -11292,7 +11292,7 @@
     },
     "area": "Image",
     "canonical_name": "_gmagick_pixel_from_int",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Internal: builds a GmagickPixel from a packed color integer.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -11356,7 +11356,7 @@
     },
     "area": "Image",
     "canonical_name": "_imagick_code_to_fmt",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Internal: maps an internal format code to its Imagick format name.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -11420,7 +11420,7 @@
     },
     "area": "Image",
     "canonical_name": "_imagick_color_name",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Internal: resolves a named CSS color to a packed integer.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -11484,7 +11484,7 @@
     },
     "area": "Image",
     "canonical_name": "_imagick_fmt_from_path",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Internal: infers an image format code from a file path's extension.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -11548,7 +11548,7 @@
     },
     "area": "Image",
     "canonical_name": "_imagick_fmt_to_code",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Internal: maps an Imagick format name to its internal format code.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -11612,7 +11612,7 @@
     },
     "area": "Image",
     "canonical_name": "_imagick_hexval",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Internal: parses a hexadecimal color component.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -11676,7 +11676,7 @@
     },
     "area": "Image",
     "canonical_name": "_imagick_norm_color",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Internal: normalizes an Imagick color argument into a packed integer.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -11747,7 +11747,7 @@
     },
     "area": "Image",
     "canonical_name": "_imagick_pack2",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Internal: packs two 32-bit halves into one integer.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -11818,7 +11818,7 @@
     },
     "area": "Image",
     "canonical_name": "_imagick_parse_color",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Internal: parses an Imagick color string into a packed integer.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -11882,7 +11882,7 @@
     },
     "area": "Image",
     "canonical_name": "_imagick_pixel_from_int",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Internal: builds an ImagickPixel from a packed color integer.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -23156,7 +23156,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_arc",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Adds a clockwise arc of the given radius and angle span to the current path.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -23290,7 +23290,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_arc_negative",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Adds a counter-clockwise arc of the given radius and angle span to the current path.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -23389,7 +23389,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_close_path",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Closes the current subpath with a line back to its starting point.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -23453,7 +23453,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_create",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Creates a drawing context for a surface.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -23559,7 +23559,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_curve_to",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Adds a cubic Bezier curve through two control points to the current path.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -23665,7 +23665,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_fill",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Fills the current path with the current source and clears the path.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -23729,7 +23729,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_fill_preserve",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Fills the current path with the current source and keeps the path.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -23793,7 +23793,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_get_current_point",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns the current point of the path as an [x, y] pair.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -23857,7 +23857,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_identity_matrix",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Resets the context's transformation to the identity matrix.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -23935,7 +23935,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_image_surface_create",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Creates an in-memory image surface of the given pixel format and size.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -24013,7 +24013,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_image_surface_create_from_png",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Creates an image surface from a PNG file.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -24077,7 +24077,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_image_surface_get_height",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns an image surface's height in pixels.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -24141,7 +24141,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_image_surface_get_width",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns an image surface's width in pixels.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -24219,7 +24219,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_line_to",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Adds a straight line from the current point to the given point.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -24289,7 +24289,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_matrix_init_identity",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Creates an identity transformation matrix.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -24345,7 +24345,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_matrix_init_rotate",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Creates a matrix that rotates by the given angle in radians.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -24416,7 +24416,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_matrix_init_scale",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Creates a matrix that scales by the given x and y factors.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -24494,7 +24494,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_matrix_init_translate",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Creates a matrix that translates by the given x and y offsets.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -24572,7 +24572,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_matrix_multiply",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns the product of two transformation matrices.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -24657,7 +24657,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_matrix_transform_point",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Applies a matrix to a point and returns the transformed [x, y] pair.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -24749,7 +24749,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_move_to",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Begins a new subpath at the given point.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -24827,7 +24827,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_new_path",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Discards the current path.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -24891,7 +24891,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_new_sub_path",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Begins a new subpath without a starting point.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -24955,7 +24955,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_paint",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Paints the current source over the whole clip region.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -25047,7 +25047,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_pattern_add_color_stop_rgb",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Adds an opaque color stop to a gradient pattern.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -25174,7 +25174,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_pattern_add_color_stop_rgba",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Adds a color stop with alpha to a gradient pattern.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -25294,7 +25294,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_pattern_create_linear",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Creates a linear gradient pattern between two points.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -25414,7 +25414,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_pattern_create_radial",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Creates a radial gradient pattern between two circles.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -25527,7 +25527,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_pattern_create_rgb",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Creates a solid opaque color pattern.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -25626,7 +25626,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_pattern_create_rgba",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Creates a solid color pattern with alpha.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -25739,7 +25739,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_rectangle",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Adds a closed rectangular subpath to the current path.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -25831,7 +25831,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_restore",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Restores the context state saved by the matching cairo_save().",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -25902,7 +25902,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_rotate",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Rotates the context's transformation by the given angle in radians.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -25973,7 +25973,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_save",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Saves the context state so a later cairo_restore() can return to it.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -26051,7 +26051,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_scale",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Scales the context's transformation by the given x and y factors.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -26136,7 +26136,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_set_fill_rule",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Selects the fill rule used to decide which regions a path encloses.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -26214,7 +26214,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_set_line_cap",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Selects how the ends of a stroked line are drawn.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -26292,7 +26292,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_set_line_join",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Selects how corners between stroked segments are drawn.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -26370,7 +26370,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_set_line_width",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Sets the stroke width in user-space units.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -26448,7 +26448,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_set_matrix",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Replaces the context's transformation with the given matrix.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -26526,7 +26526,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_set_source",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Uses a pattern as the source for subsequent drawing.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -26618,7 +26618,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_set_source_rgb",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Uses an opaque color as the source for subsequent drawing.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -26731,7 +26731,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_set_source_rgba",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Uses a color with alpha as the source for subsequent drawing.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -26823,7 +26823,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_stroke",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Strokes the current path with the current source and clears the path.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -26887,7 +26887,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_stroke_preserve",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Strokes the current path with the current source and keeps the path.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -26958,7 +26958,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_surface_write_to_png",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Writes a surface to a PNG file.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -27036,7 +27036,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_transform",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Composes the given matrix onto the context's transformation.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -27121,7 +27121,7 @@
     },
     "area": "Image",
     "canonical_name": "cairo_translate",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Translates the context's transformation by the given x and y offsets.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -27213,7 +27213,7 @@
     },
     "area": "Date",
     "canonical_name": "cal_days_in_month",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Returns the number of days in a month of the given calendar and year.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -27298,7 +27298,7 @@
     },
     "area": "Date",
     "canonical_name": "cal_from_jd",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Converts a Julian Day count into a date array for the given calendar.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -27369,7 +27369,7 @@
     },
     "area": "Date",
     "canonical_name": "cal_info",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Returns a calendar's month names, abbreviations, and day count.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -27454,7 +27454,7 @@
     },
     "area": "Date",
     "canonical_name": "cal_to_jd",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Converts a date in the given calendar into a Julian Day count.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -35845,7 +35845,7 @@
     },
     "area": "Date",
     "canonical_name": "date_add",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Adds an interval to a DateTime, modifying it in place.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -35923,7 +35923,7 @@
     },
     "area": "Date",
     "canonical_name": "date_create",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Creates a DateTime from a date/time string.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -36008,7 +36008,7 @@
     },
     "area": "Date",
     "canonical_name": "date_create_from_format",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Creates a DateTime by parsing a string against an explicit format.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -36093,7 +36093,7 @@
     },
     "area": "Date",
     "canonical_name": "date_create_immutable",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Creates a DateTimeImmutable from a date/time string.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -36178,7 +36178,7 @@
     },
     "area": "Date",
     "canonical_name": "date_create_immutable_from_format",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Creates a DateTimeImmutable by parsing a string against an explicit format.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -36277,7 +36277,7 @@
     },
     "area": "Date",
     "canonical_name": "date_date_set",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Sets a DateTime's year, month, and day.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -36619,7 +36619,7 @@
     },
     "area": "Date",
     "canonical_name": "date_diff",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Returns the DateInterval between two dates.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -36704,7 +36704,7 @@
     },
     "area": "Date",
     "canonical_name": "date_format",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Formats a date according to a format string.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -36767,7 +36767,7 @@
     },
     "area": "Date",
     "canonical_name": "date_get_last_errors",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Returns the warnings and errors from the last date parse.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -36823,7 +36823,7 @@
     },
     "area": "Date",
     "canonical_name": "date_interval_create_from_date_string",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Creates a DateInterval from a relative date string such as \"2 days\".",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -36894,7 +36894,7 @@
     },
     "area": "Date",
     "canonical_name": "date_interval_format",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Formats a DateInterval according to a format string.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -36986,7 +36986,7 @@
     },
     "area": "Date",
     "canonical_name": "date_isodate_set",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Sets a DateTime from an ISO year, week, and day of week.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -37078,7 +37078,7 @@
     },
     "area": "Date",
     "canonical_name": "date_modify",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Applies a relative modifier such as \"+1 day\" to a DateTime.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -37149,7 +37149,7 @@
     },
     "area": "Date",
     "canonical_name": "date_offset_get",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Returns a date's UTC offset in seconds.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -37213,7 +37213,7 @@
     },
     "area": "Date",
     "canonical_name": "date_parse",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Parses a date/time string into its components, warnings, and errors.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -37284,7 +37284,7 @@
     },
     "area": "Date",
     "canonical_name": "date_parse_from_format",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Parses a date/time string against a format into components, warnings, and errors.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -37362,7 +37362,7 @@
     },
     "area": "Date",
     "canonical_name": "date_sub",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Subtracts an interval from a DateTime, modifying it in place.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -37447,7 +37447,7 @@
     },
     "area": "Date",
     "canonical_name": "date_sun_info",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Returns the sunrise, sunset, and twilight times for a day and location.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -37562,7 +37562,7 @@
     },
     "area": "Date",
     "canonical_name": "date_sunrise",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Returns the sunrise time for a day and location. Deprecated since PHP 8.1.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -37698,7 +37698,7 @@
     },
     "area": "Date",
     "canonical_name": "date_sunset",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Returns the sunset time for a day and location. Deprecated since PHP 8.1.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -37825,7 +37825,7 @@
     },
     "area": "Date",
     "canonical_name": "date_time_set",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Sets a DateTime's hour, minute, second, and microsecond.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -37917,7 +37917,7 @@
     },
     "area": "Date",
     "canonical_name": "date_timestamp_get",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Returns a date's Unix timestamp.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -37988,7 +37988,7 @@
     },
     "area": "Date",
     "canonical_name": "date_timestamp_set",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Sets a DateTime from a Unix timestamp.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -38059,7 +38059,7 @@
     },
     "area": "Date",
     "canonical_name": "date_timezone_get",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Returns a date's timezone.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -38130,7 +38130,7 @@
     },
     "area": "Date",
     "canonical_name": "date_timezone_set",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Sets a date's timezone, converting the wall-clock time to it.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -39468,7 +39468,7 @@
     },
     "area": "Date",
     "canonical_name": "easter_date",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Returns the Unix timestamp of midnight on Easter Sunday of a year.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -39548,7 +39548,7 @@
     },
     "area": "Date",
     "canonical_name": "easter_days",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Returns the number of days from March 21 to Easter Sunday of a year.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -40028,7 +40028,7 @@
     },
     "area": "Web",
     "canonical_name": "error_log",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Sends an error message to the log, a file, or an email address.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -40253,7 +40253,7 @@
     },
     "area": "Image",
     "canonical_name": "exif_imagetype",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Identifies an image file's type, or false when it is not an image.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -40338,7 +40338,7 @@
     },
     "area": "Image",
     "canonical_name": "exif_read_data",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Reads the EXIF headers of a JPEG or TIFF image.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -40423,7 +40423,7 @@
     },
     "area": "Image",
     "canonical_name": "exif_tagname",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns the name of an EXIF tag index.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -40508,7 +40508,7 @@
     },
     "area": "Image",
     "canonical_name": "exif_thumbnail",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns the embedded thumbnail of an image, with its size and type.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -45914,7 +45914,7 @@
     },
     "area": "Date",
     "canonical_name": "frenchtojd",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Converts a French Republican date into a Julian Day count.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -47435,7 +47435,7 @@
     },
     "area": "Image",
     "canonical_name": "gd_info",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns the GD version and which image formats this build supports.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -49635,7 +49635,7 @@
     },
     "area": "Image",
     "canonical_name": "getimagesize",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns an image file's size, type, and MIME type.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -49699,7 +49699,7 @@
     },
     "area": "Image",
     "canonical_name": "getimagesizefromstring",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns the size, type, and MIME type of an image held in a string.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -50373,7 +50373,7 @@
     },
     "area": "Date",
     "canonical_name": "gettimeofday",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Returns the current time as an array of parts, or as a float.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -51118,7 +51118,7 @@
     },
     "area": "Date",
     "canonical_name": "gmstrftime",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Formats a UTC timestamp with locale-aware strftime specifiers. Deprecated since PHP 8.1.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -51328,7 +51328,7 @@
     },
     "area": "Date",
     "canonical_name": "gregoriantojd",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Converts a Gregorian date into a Julian Day count.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -56382,7 +56382,7 @@
     },
     "area": "Date",
     "canonical_name": "idate",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Formats a timestamp with a single format character and returns it as an integer.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -56460,7 +56460,7 @@
     },
     "area": "Image",
     "canonical_name": "image_type_to_extension",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns the filename extension for an IMAGETYPE_* constant.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -56531,7 +56531,7 @@
     },
     "area": "Image",
     "canonical_name": "image_type_to_mime_type",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns the MIME type for an IMAGETYPE_* constant.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -56609,7 +56609,7 @@
     },
     "area": "Image",
     "canonical_name": "imageaffine",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns a copy of an image with an affine matrix applied.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -56694,7 +56694,7 @@
     },
     "area": "Image",
     "canonical_name": "imageaffinematrixconcat",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns the product of two affine transformation matrices.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -56772,7 +56772,7 @@
     },
     "area": "Image",
     "canonical_name": "imagealphablending",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Turns alpha blending on or off for subsequent drawing.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -56850,7 +56850,7 @@
     },
     "area": "Image",
     "canonical_name": "imageantialias",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Turns antialiased drawing on or off for lines and polygons.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -56970,7 +56970,7 @@
     },
     "area": "Image",
     "canonical_name": "imagearc",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Draws an arc of an ellipse.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -57097,7 +57097,7 @@
     },
     "area": "Image",
     "canonical_name": "imagebmp",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Writes an image as BMP, to a file or to the output buffer.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -57210,7 +57210,7 @@
     },
     "area": "Image",
     "canonical_name": "imagechar",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Draws one character horizontally with a built-in font.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -57344,7 +57344,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecharup",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Draws one character vertically with a built-in font.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -57464,7 +57464,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecolorallocate",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Allocates an opaque color in a palette image.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -57577,7 +57577,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecolorallocatealpha",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Allocates a color with alpha in a palette image.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -57683,7 +57683,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecolorat",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns the color index or packed color of one pixel.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -57782,7 +57782,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecolorclosest",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns the palette index closest to the requested color.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -57895,7 +57895,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecolorclosestalpha",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns the palette index closest to the requested color with alpha.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -58008,7 +58008,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecolorclosesthwb",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns the palette index closest in hue, whiteness, and blackness.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -58100,7 +58100,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecolordeallocate",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Frees a palette entry allocated earlier.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -58192,7 +58192,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecolorexact",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns the palette index of an exact color, or -1.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -58305,7 +58305,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecolorexactalpha",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns the palette index of an exact color with alpha, or -1.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -58404,7 +58404,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecolormatch",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Adjusts a palette image's colors to better match a truecolor original.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -58496,7 +58496,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecolorresolve",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns the palette index of a color, allocating or approximating it.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -58609,7 +58609,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecolorresolvealpha",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns the palette index of a color with alpha, allocating or approximating it.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -58736,7 +58736,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecolorset",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Changes the color a palette index stands for.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -58842,7 +58842,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecolorsforindex",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns the red, green, blue, and alpha channels of a palette index.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -58913,7 +58913,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecolorstotal",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns how many colors a palette image holds.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -58984,7 +58984,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecolortransparent",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Reads or sets an image's transparent color index.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -59076,7 +59076,7 @@
     },
     "area": "Image",
     "canonical_name": "imageconvolution",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Applies a 3x3 convolution matrix to an image.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -59210,7 +59210,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecopy",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Copies a rectangle from one image into another.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -59379,7 +59379,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecopymerge",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Copies a rectangle into another image, blending it by a percentage.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -59555,7 +59555,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecopymergegray",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Copies a rectangle into another image as grayscale, blending it by a percentage.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -59738,7 +59738,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecopyresampled",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Copies and resizes a rectangle with pixel interpolation.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -59928,7 +59928,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecopyresized",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Copies and resizes a rectangle without interpolation.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -60062,7 +60062,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecreate",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Creates an empty palette image of the given size.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -60133,7 +60133,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecreatefrombmp",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Creates an image from a BMP file.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -60197,7 +60197,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecreatefromgif",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Creates an image from a GIF file.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -60261,7 +60261,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecreatefromjpeg",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Creates an image from a JPEG file.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -60325,7 +60325,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecreatefrompng",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Creates an image from a PNG file.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -60389,7 +60389,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecreatefromstring",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Creates an image from encoded bytes, detecting the format.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -60453,7 +60453,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecreatefromtga",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Creates an image from a TGA file.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -60517,7 +60517,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecreatefromwebp",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Creates an image from a WebP file.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -60588,7 +60588,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecreatetruecolor",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Creates an empty truecolor image of the given size.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -60668,7 +60668,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecrop",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns the given rectangle of an image as a new image.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -60762,7 +60762,7 @@
     },
     "area": "Image",
     "canonical_name": "imagecropauto",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Crops an image automatically by the chosen mode.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -60882,7 +60882,7 @@
     },
     "area": "Image",
     "canonical_name": "imagedashedline",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Draws a dashed line. Superseded by imagesetstyle() with imageline().",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -60981,7 +60981,7 @@
     },
     "area": "Image",
     "canonical_name": "imagedestroy",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Releases an image handle. A no-op since PHP 8.0.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -61080,7 +61080,7 @@
     },
     "area": "Image",
     "canonical_name": "imageellipse",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Draws the outline of an ellipse.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -61200,7 +61200,7 @@
     },
     "area": "Image",
     "canonical_name": "imagefill",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Flood-fills from a point with a color.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -61341,7 +61341,7 @@
     },
     "area": "Image",
     "canonical_name": "imagefilledarc",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Draws a filled arc, pie slice, or chord.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -61496,7 +61496,7 @@
     },
     "area": "Image",
     "canonical_name": "imagefilledellipse",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Draws a filled ellipse.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -61609,7 +61609,7 @@
     },
     "area": "Image",
     "canonical_name": "imagefilledpolygon",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Draws a filled polygon.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -61722,7 +61722,7 @@
     },
     "area": "Image",
     "canonical_name": "imagefilledrectangle",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Draws a filled rectangle.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -61849,7 +61849,7 @@
     },
     "area": "Image",
     "canonical_name": "imagefilltoborder",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Flood-fills from a point until it reaches a border color.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -61976,7 +61976,7 @@
     },
     "area": "Image",
     "canonical_name": "imagefilter",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Applies one of GD's built-in filters to an image.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -62082,7 +62082,7 @@
     },
     "area": "Image",
     "canonical_name": "imageflip",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Flips an image horizontally, vertically, or both.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -62153,7 +62153,7 @@
     },
     "area": "Image",
     "canonical_name": "imagefontheight",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns the pixel height of a built-in font.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -62217,7 +62217,7 @@
     },
     "area": "Image",
     "canonical_name": "imagefontwidth",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns the pixel width of a built-in font.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -62295,7 +62295,7 @@
     },
     "area": "Image",
     "canonical_name": "imagegammacorrect",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Applies a gamma correction from one gamma value to another.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -62373,7 +62373,7 @@
     },
     "area": "Image",
     "canonical_name": "imagegetinterpolation",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns the interpolation method used when resampling.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -62444,7 +62444,7 @@
     },
     "area": "Image",
     "canonical_name": "imagegif",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Writes an image as GIF, to a file or to the output buffer.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -62522,7 +62522,7 @@
     },
     "area": "Image",
     "canonical_name": "imageinterlace",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Reads or sets whether an image is written interlaced.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -62593,7 +62593,7 @@
     },
     "area": "Image",
     "canonical_name": "imageistruecolor",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Reports whether an image is truecolor rather than palette-based.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -62671,7 +62671,7 @@
     },
     "area": "Image",
     "canonical_name": "imagejpeg",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Writes an image as JPEG, to a file or to the output buffer.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -62756,7 +62756,7 @@
     },
     "area": "Image",
     "canonical_name": "imagelayereffect",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Selects the alpha blending effect used by subsequent drawing.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -62862,7 +62862,7 @@
     },
     "area": "Image",
     "canonical_name": "imageline",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Draws a straight line.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -62975,7 +62975,7 @@
     },
     "area": "Image",
     "canonical_name": "imageopenpolygon",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Draws an unclosed polyline.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -63060,7 +63060,7 @@
     },
     "area": "Image",
     "canonical_name": "imagepalettecopy",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Copies one image's palette onto another.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -63131,7 +63131,7 @@
     },
     "area": "Image",
     "canonical_name": "imagepalettetotruecolor",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Converts a palette image to truecolor in place.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -63216,7 +63216,7 @@
     },
     "area": "Image",
     "canonical_name": "imagepng",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Writes an image as PNG, to a file or to the output buffer.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -63315,7 +63315,7 @@
     },
     "area": "Image",
     "canonical_name": "imagepolygon",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Draws the outline of a closed polygon.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -63428,7 +63428,7 @@
     },
     "area": "Image",
     "canonical_name": "imagerectangle",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Draws the outline of a rectangle.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -63541,7 +63541,7 @@
     },
     "area": "Image",
     "canonical_name": "imageresolution",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Reads or sets an image's horizontal and vertical resolution in DPI.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -63640,7 +63640,7 @@
     },
     "area": "Image",
     "canonical_name": "imagerotate",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns a copy of an image rotated by an angle.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -63732,7 +63732,7 @@
     },
     "area": "Image",
     "canonical_name": "imagesavealpha",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Controls whether full alpha channel information is saved with the image.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -63826,7 +63826,7 @@
     },
     "area": "Image",
     "canonical_name": "imagescale",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns a copy of an image scaled to a new size.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -63920,7 +63920,7 @@
     },
     "area": "Image",
     "canonical_name": "imagesetinterpolation",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Selects the interpolation method used when resampling.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -64012,7 +64012,7 @@
     },
     "area": "Image",
     "canonical_name": "imagesetpixel",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Sets one pixel to a color.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -64104,7 +64104,7 @@
     },
     "area": "Image",
     "canonical_name": "imagesetthickness",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Sets the line thickness used by subsequent drawing.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -64210,7 +64210,7 @@
     },
     "area": "Image",
     "canonical_name": "imagestring",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Draws a string horizontally with a built-in font.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -64344,7 +64344,7 @@
     },
     "area": "Image",
     "canonical_name": "imagestringup",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Draws a string vertically with a built-in font.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -64443,7 +64443,7 @@
     },
     "area": "Image",
     "canonical_name": "imagesx",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns an image's width in pixels.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -64507,7 +64507,7 @@
     },
     "area": "Image",
     "canonical_name": "imagesy",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns an image's height in pixels.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -64585,7 +64585,7 @@
     },
     "area": "Image",
     "canonical_name": "imagetruecolortopalette",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Converts a truecolor image to a palette image in place.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -64655,7 +64655,7 @@
     },
     "area": "Image",
     "canonical_name": "imagetypes",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Returns a bitmask of the image formats this build supports.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -64725,7 +64725,7 @@
     },
     "area": "Image",
     "canonical_name": "imagewebp",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Writes an image as WebP, to a file or to the output buffer.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -65382,7 +65382,7 @@
     },
     "area": "Web",
     "canonical_name": "ini_get",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Returns the value of a configuration directive.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -65453,7 +65453,7 @@
     },
     "area": "Web",
     "canonical_name": "ini_get_all",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Returns every configuration directive, optionally with its access level and scope.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -65524,7 +65524,7 @@
     },
     "area": "Misc",
     "canonical_name": "ini_restore",
-    "description": "Implemented by the compiler-injected version prelude.",
+    "description": "Restores a configuration directive to its startup value.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -65595,7 +65595,7 @@
     },
     "area": "Web",
     "canonical_name": "ini_set",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Overrides a configuration directive for the rest of the request.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -66271,7 +66271,7 @@
     },
     "area": "Image",
     "canonical_name": "iptcembed",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Embeds an IPTC block into a JPEG file.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -66349,7 +66349,7 @@
     },
     "area": "Image",
     "canonical_name": "iptcparse",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Parses an IPTC block into its tag arrays.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -70646,7 +70646,7 @@
     },
     "area": "Date",
     "canonical_name": "jddayofweek",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Returns the day of the week for a Julian Day count, as a number or a name.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -70724,7 +70724,7 @@
     },
     "area": "Date",
     "canonical_name": "jdmonthname",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Returns the month name for a Julian Day count in the requested calendar.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -70795,7 +70795,7 @@
     },
     "area": "Date",
     "canonical_name": "jdtofrench",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Converts a Julian Day count into a French Republican date string.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -70859,7 +70859,7 @@
     },
     "area": "Date",
     "canonical_name": "jdtogregorian",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Converts a Julian Day count into a Gregorian date string.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -70937,7 +70937,7 @@
     },
     "area": "Date",
     "canonical_name": "jdtojewish",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Converts a Julian Day count into a Jewish date string.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -71015,7 +71015,7 @@
     },
     "area": "Date",
     "canonical_name": "jdtojulian",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Converts a Julian Day count into a Julian calendar date string.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -71079,7 +71079,7 @@
     },
     "area": "Date",
     "canonical_name": "jdtounix",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Converts a Julian Day count into a Unix timestamp.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -71157,7 +71157,7 @@
     },
     "area": "Date",
     "canonical_name": "jewishtojd",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Converts a Jewish date into a Julian Day count.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -72144,7 +72144,7 @@
     },
     "area": "Date",
     "canonical_name": "juliantojd",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Converts a Julian calendar date into a Julian Day count.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -76032,7 +76032,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_affected_rows",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns how many rows the last write affected.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -76103,7 +76103,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_autocommit",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Turns automatic committing on or off.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -76188,7 +76188,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_begin_transaction",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Starts a transaction.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -76266,7 +76266,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_character_set_name",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns the connection's current character set.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -76330,7 +76330,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_close",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Closes a connection.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -76408,7 +76408,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_commit",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Commits the open transaction.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -76521,7 +76521,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_connect",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Opens a connection to a MySQL server.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -76612,7 +76612,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_connect_errno",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns the error code of the last connection attempt.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -76660,7 +76660,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_connect_error",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns the error message of the last connection attempt.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -76723,7 +76723,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_data_seek",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Moves a buffered result's row cursor to an offset.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -76794,7 +76794,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_errno",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns the error code of the last call on a connection.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -76858,7 +76858,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_error",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns the error message of the last call on a connection.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -76922,7 +76922,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_error_list",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns every error of the last call on a connection.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -76993,7 +76993,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_escape_string",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Alias of mysqli_real_escape_string().",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -77064,7 +77064,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_execute",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Alias of mysqli_stmt_execute().",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -77142,7 +77142,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_execute_query",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Prepares, binds, and executes a statement in one call.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -77227,7 +77227,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_fetch_all",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns every remaining row of a result at once.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -77305,7 +77305,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_fetch_array",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns the next row as a numeric array, an associative array, or both.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -77376,7 +77376,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_fetch_assoc",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns the next row as an associative array.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -77447,7 +77447,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_fetch_column",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns one column of the next row.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -77518,7 +77518,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_fetch_field",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns metadata for the next column of a result.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -77589,7 +77589,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_fetch_field_direct",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns metadata for one column of a result by index.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -77660,7 +77660,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_fetch_fields",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns metadata for every column of a result.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -77724,7 +77724,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_fetch_lengths",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns the byte lengths of the columns in the current row.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -77802,7 +77802,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_fetch_object",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns the next row as an object.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -77880,7 +77880,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_fetch_row",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns the next row as a numeric array.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -77944,7 +77944,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_field_count",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns how many columns the last query produced.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -78015,7 +78015,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_field_seek",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Moves a result's column cursor to an offset.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -78086,7 +78086,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_field_tell",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns a result's current column cursor position.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -78150,7 +78150,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_free_result",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Releases the memory a result set holds.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -78214,7 +78214,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_get_charset",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns the connection character set as an object.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -78278,7 +78278,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_get_client_info",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns the client library version as a string.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -78342,7 +78342,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_get_client_version",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns the client library version as an integer.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -78406,7 +78406,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_get_host_info",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns the server host name and connection type.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -78470,7 +78470,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_get_proto_info",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns the MySQL protocol version in use.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -78534,7 +78534,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_get_server_info",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns the server version as a string.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -78598,7 +78598,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_get_server_version",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns the server version as an integer.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -78662,7 +78662,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_info",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns information about the last query, when the server supplies it.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -78718,7 +78718,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_init",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Creates an unconnected mysqli object for mysqli_real_connect().",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -78774,7 +78774,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_insert_id",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns the id generated by the last INSERT on an AUTO_INCREMENT column.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -78838,7 +78838,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_more_results",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Reports whether a multi-query has more results waiting.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -78909,7 +78909,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_multi_query",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Runs several semicolon-separated statements in one call.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -78980,7 +78980,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_next_result",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Advances a multi-query to its next result set.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -79044,7 +79044,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_num_fields",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns how many columns a result has.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -79108,7 +79108,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_num_rows",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns how many rows a result has.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -79186,7 +79186,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_options",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Sets a connection option before connecting.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -79264,7 +79264,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_ping",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Checks the connection and reconnects when that is enabled.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -79335,7 +79335,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_prepare",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Prepares a statement for execution.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -79420,7 +79420,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_query",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Runs one statement and returns a result set or a success flag.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -79547,7 +79547,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_real_connect",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Connects an object created by mysqli_init(), with the full option set.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -79667,7 +79667,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_real_escape_string",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Escapes a string for use in a statement, honoring the connection charset.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -79745,7 +79745,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_real_query",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Runs one statement without fetching its result.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -79823,7 +79823,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_release_savepoint",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Removes a named savepoint from the open transaction.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -79894,7 +79894,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_report",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Selects which mysqli conditions raise exceptions or warnings.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -79972,7 +79972,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_rollback",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Rolls back the open transaction.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -80057,7 +80057,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_savepoint",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Creates a named savepoint in the open transaction.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -80135,7 +80135,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_select_db",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Selects the default database for the connection.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -80213,7 +80213,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_set_charset",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Sets the character set used by the connection.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -80298,7 +80298,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_set_opt",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Alias of mysqli_options().",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -80376,7 +80376,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_sqlstate",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns the SQLSTATE of the last call on a connection.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -80440,7 +80440,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_stat",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns the server's current status line.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -80504,7 +80504,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_stmt_affected_rows",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns how many rows a prepared write affected.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -80575,7 +80575,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_stmt_bind_param",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Binds variables to a prepared statement's placeholders.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -80646,7 +80646,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_stmt_close",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Closes a prepared statement and frees its resources.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -80710,7 +80710,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_stmt_errno",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns the error code of the last call on a statement.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -80774,7 +80774,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_stmt_error",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns the error message of the last call on a statement.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -80838,7 +80838,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_stmt_error_list",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns every error of the last call on a statement.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -80909,7 +80909,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_stmt_execute",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Executes a prepared statement.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -80980,7 +80980,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_stmt_field_count",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns how many columns a prepared statement produces.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -81044,7 +81044,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_stmt_free_result",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Releases the result a prepared statement buffered.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -81108,7 +81108,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_stmt_get_result",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns a prepared statement's result as a mysqli_result.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -81172,7 +81172,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_stmt_init",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Creates a statement object bound to a connection.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -81236,7 +81236,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_stmt_insert_id",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns the id the last prepared INSERT generated.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -81300,7 +81300,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_stmt_num_rows",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns how many rows a prepared statement's buffered result has.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -81364,7 +81364,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_stmt_param_count",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns how many placeholders a prepared statement has.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -81435,7 +81435,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_stmt_prepare",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Prepares SQL on a statement created by mysqli_stmt_init().",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -81506,7 +81506,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_stmt_reset",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Resets a prepared statement so it can be executed again.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -81570,7 +81570,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_stmt_sqlstate",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns the SQLSTATE of the last call on a statement.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -81634,7 +81634,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_stmt_store_result",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Buffers a prepared statement's whole result on the client.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -81705,7 +81705,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_store_result",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Buffers a query's whole result on the client.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -81776,7 +81776,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_thread_id",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns the connection's thread id on the server.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -81832,7 +81832,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_thread_safe",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Reports whether the client library is thread-safe.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -81888,7 +81888,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_use_result",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Starts reading a result row by row from the server.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -81952,7 +81952,7 @@
     },
     "area": "Database",
     "canonical_name": "mysqli_warning_count",
-    "description": "Implemented by the compiler-injected mysqli prelude.",
+    "description": "Returns how many warnings the last query raised.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -84466,7 +84466,7 @@
     },
     "area": "Misc",
     "canonical_name": "opcache_compile_file",
-    "description": "Implemented by the compiler-injected OPcache prelude.",
+    "description": "Compiles a script into the opcode cache without executing it.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -84522,7 +84522,7 @@
     },
     "area": "Misc",
     "canonical_name": "opcache_get_configuration",
-    "description": "Implemented by the compiler-injected OPcache prelude.",
+    "description": "Returns the OPcache directives, blacklist, and version.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -84578,7 +84578,7 @@
     },
     "area": "Misc",
     "canonical_name": "opcache_get_status",
-    "description": "Implemented by the compiler-injected OPcache prelude.",
+    "description": "Returns OPcache memory, statistics, and optionally the cached scripts.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -84649,7 +84649,7 @@
     },
     "area": "Misc",
     "canonical_name": "opcache_invalidate",
-    "description": "Implemented by the compiler-injected OPcache prelude.",
+    "description": "Invalidates a script's cached opcodes, optionally without checking its timestamp.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -84720,7 +84720,7 @@
     },
     "area": "Misc",
     "canonical_name": "opcache_is_script_cached",
-    "description": "Implemented by the compiler-injected OPcache prelude.",
+    "description": "Reports whether a script is in the opcode cache.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -84784,7 +84784,7 @@
     },
     "area": "Misc",
     "canonical_name": "opcache_is_script_cached_in_file_cache",
-    "description": "Implemented by the compiler-injected OPcache prelude.",
+    "description": "Reports whether a script is in the on-disk file cache.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -84848,7 +84848,7 @@
     },
     "area": "Misc",
     "canonical_name": "opcache_jit_blacklist",
-    "description": "Implemented by the compiler-injected OPcache prelude.",
+    "description": "Excludes a function from JIT compilation.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -84904,7 +84904,7 @@
     },
     "area": "Misc",
     "canonical_name": "opcache_reset",
-    "description": "Implemented by the compiler-injected OPcache prelude.",
+    "description": "Clears the whole opcode cache.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -91323,7 +91323,7 @@
     },
     "area": "Database",
     "canonical_name": "pdo_drivers",
-    "description": "Implemented by the compiler-injected PDO prelude.",
+    "description": "Returns the names of the PDO drivers this build provides.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -91596,7 +91596,7 @@
     },
     "area": "Misc",
     "canonical_name": "php_sapi_name",
-    "description": "Implemented by the compiler-injected version prelude.",
+    "description": "Returns the name of the server API this build runs under.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -97603,7 +97603,7 @@
     },
     "area": "Image",
     "canonical_name": "read_exif_data",
-    "description": "Implemented by the compiler-injected image prelude.",
+    "description": "Alias of exif_read_data().",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -100068,7 +100068,7 @@
     },
     "area": "Web",
     "canonical_name": "session_abort",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Discards the session changes made in this request and closes the session.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -100124,7 +100124,7 @@
     },
     "area": "Web",
     "canonical_name": "session_cache_expire",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Reads or sets the cache expiry, in minutes, of the session cache limiter.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -100188,7 +100188,7 @@
     },
     "area": "Web",
     "canonical_name": "session_cache_limiter",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Reads or sets the cache limiter that controls session response caching.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -100244,7 +100244,7 @@
     },
     "area": "Web",
     "canonical_name": "session_commit",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Alias of session_write_close().",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -100300,7 +100300,7 @@
     },
     "area": "Web",
     "canonical_name": "session_create_id",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Generates a new session id, optionally with a prefix.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -100364,7 +100364,7 @@
     },
     "area": "Web",
     "canonical_name": "session_decode",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Loads serialized session data into the session superglobal.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -100420,7 +100420,7 @@
     },
     "area": "Web",
     "canonical_name": "session_destroy",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Destroys the data stored for the current session.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -100468,7 +100468,7 @@
     },
     "area": "Web",
     "canonical_name": "session_encode",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Serializes the current session data into a string.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -100516,7 +100516,7 @@
     },
     "area": "Web",
     "canonical_name": "session_gc",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Runs session garbage collection and returns how many sessions it removed.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -100564,7 +100564,7 @@
     },
     "area": "Web",
     "canonical_name": "session_get_cookie_params",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Returns the session cookie's lifetime, path, domain, and flags.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -100620,7 +100620,7 @@
     },
     "area": "Web",
     "canonical_name": "session_id",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Reads or sets the current session id.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -100684,7 +100684,7 @@
     },
     "area": "Web",
     "canonical_name": "session_module_name",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Reads or sets the session save handler module.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -100748,7 +100748,7 @@
     },
     "area": "Web",
     "canonical_name": "session_name",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Reads or sets the session name, which is also the cookie name.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -100812,7 +100812,7 @@
     },
     "area": "Web",
     "canonical_name": "session_regenerate_id",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Replaces the session id, optionally deleting the old session's data.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -100868,7 +100868,7 @@
     },
     "area": "Web",
     "canonical_name": "session_register_shutdown",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Registers session_write_close() as a shutdown function.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -100916,7 +100916,7 @@
     },
     "area": "Web",
     "canonical_name": "session_reset",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Reloads the session data from storage, discarding this request's changes.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -100972,7 +100972,7 @@
     },
     "area": "Web",
     "canonical_name": "session_save_path",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Reads or sets the directory session data is stored in.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -101028,7 +101028,7 @@
     },
     "area": "Web",
     "canonical_name": "session_set_cookie_params",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Sets the session cookie's lifetime, path, domain, and flags.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -101140,7 +101140,7 @@
     },
     "area": "Web",
     "canonical_name": "session_set_save_handler",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Installs a custom session storage handler.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -101260,7 +101260,7 @@
     },
     "area": "Web",
     "canonical_name": "session_start",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Starts a new session or resumes the one the request identifies.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -101316,7 +101316,7 @@
     },
     "area": "Web",
     "canonical_name": "session_status",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Reports whether sessions are disabled, inactive, or active.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -101364,7 +101364,7 @@
     },
     "area": "Web",
     "canonical_name": "session_unset",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Removes every variable from the session without destroying it.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -101412,7 +101412,7 @@
     },
     "area": "Web",
     "canonical_name": "session_write_close",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Writes the session data and releases the session lock.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -101510,7 +101510,7 @@
     },
     "area": "Web",
     "canonical_name": "setcookie",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Adds a Set-Cookie header, URL-encoding the value.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -101658,7 +101658,7 @@
     },
     "area": "Web",
     "canonical_name": "setrawcookie",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Adds a Set-Cookie header without URL-encoding the value.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -113763,7 +113763,7 @@
     },
     "area": "Date",
     "canonical_name": "strftime",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Formats a local timestamp with locale-aware specifiers. Deprecated since PHP 8.1.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -114686,7 +114686,7 @@
     },
     "area": "Date",
     "canonical_name": "strptime",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Parses a time string against a strftime format. Deprecated since PHP 8.1.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -117498,7 +117498,7 @@
     },
     "area": "Date",
     "canonical_name": "timezone_abbreviations_list",
-    "description": "Implemented by the compiler-injected tz prelude.",
+    "description": "Returns every timezone abbreviation with its offset and DST flag.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -117563,7 +117563,7 @@
     },
     "area": "Date",
     "canonical_name": "timezone_identifiers_list",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Returns the timezone identifiers this build knows, optionally filtered.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -117634,7 +117634,7 @@
     },
     "area": "Date",
     "canonical_name": "timezone_location_get",
-    "description": "Implemented by the compiler-injected tz prelude.",
+    "description": "Returns a timezone's country code, latitude, longitude, and comments.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -117712,7 +117712,7 @@
     },
     "area": "Date",
     "canonical_name": "timezone_name_from_abbr",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Resolves a timezone abbreviation and offset to an identifier.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -117790,7 +117790,7 @@
     },
     "area": "Date",
     "canonical_name": "timezone_name_get",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Returns a timezone's identifier.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -117861,7 +117861,7 @@
     },
     "area": "Date",
     "canonical_name": "timezone_offset_get",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Returns a timezone's UTC offset in seconds at the given date.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -117932,7 +117932,7 @@
     },
     "area": "Date",
     "canonical_name": "timezone_open",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Creates a DateTimeZone from an identifier.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -118012,7 +118012,7 @@
     },
     "area": "Date",
     "canonical_name": "timezone_transitions_get",
-    "description": "Implemented by the compiler-injected tz prelude.",
+    "description": "Returns a timezone's DST transitions in a time range.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -118082,7 +118082,7 @@
     },
     "area": "Date",
     "canonical_name": "timezone_version_get",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Returns the version of the bundled timezone database.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -118612,7 +118612,7 @@
     },
     "area": "Web",
     "canonical_name": "trigger_error",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Raises a user-level error, warning, or notice.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -119562,7 +119562,7 @@
     },
     "area": "Date",
     "canonical_name": "unixtojd",
-    "description": "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.",
+    "description": "Converts a Unix timestamp into a Julian Day count.",
     "eval": {
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
       "kind": "date-alias",
@@ -120683,7 +120683,7 @@
     },
     "area": "Type",
     "canonical_name": "var_export",
-    "description": "Implemented by the compiler-injected var_export prelude.",
+    "description": "Renders a value as parsable PHP code, printed or returned.",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -128818,7 +128818,7 @@
     },
     "area": "Misc",
     "canonical_name": "zend_version",
-    "description": "Implemented by the compiler-injected version prelude.",
+    "description": "Returns the version of the Zend engine the runtime reports.",
     "eval": {
       "kind": "none",
       "supported": false,

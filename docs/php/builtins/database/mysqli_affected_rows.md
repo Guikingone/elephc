@@ -1,6 +1,6 @@
 ---
 title: "mysqli_affected_rows()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns how many rows the last write affected."
 sidebar:
   order: 99
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_affected_rows(mixed $mysql): int
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns how many rows the last write affected.
 
 **Parameters**:
 - `$mysql` (`mixed`)

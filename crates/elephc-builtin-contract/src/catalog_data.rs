@@ -2880,7 +2880,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Internal: clamps an integer into the 0-255 channel range.",
         examples: &[
         ],
         php_manual: None,
@@ -2929,7 +2929,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Internal: packs red, green, blue, and alpha channels into one integer.",
         examples: &[
         ],
         php_manual: None,
@@ -2960,7 +2960,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Internal: rounds a user-space float coordinate to a device pixel.",
         examples: &[
         ],
         php_manual: None,
@@ -2997,7 +2997,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Internal: packs an x/y pair into one integer key.",
         examples: &[
         ],
         php_manual: None,
@@ -3046,7 +3046,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Internal: encodes an image handle in the requested format, to a file or to the output buffer.",
         examples: &[
         ],
         php_manual: None,
@@ -3077,7 +3077,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Internal: normalizes a Gmagick color argument into a packed integer.",
         examples: &[
         ],
         php_manual: None,
@@ -3108,7 +3108,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Internal: parses a Gmagick color string into a packed integer.",
         examples: &[
         ],
         php_manual: None,
@@ -3139,7 +3139,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Internal: builds a GmagickPixel from a packed color integer.",
         examples: &[
         ],
         php_manual: None,
@@ -3170,7 +3170,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Str,
         by_ref_return: false,
-        summary: "",
+        summary: "Internal: maps an internal format code to its Imagick format name.",
         examples: &[
         ],
         php_manual: None,
@@ -3201,7 +3201,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Internal: resolves a named CSS color to a packed integer.",
         examples: &[
         ],
         php_manual: None,
@@ -3232,7 +3232,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Internal: infers an image format code from a file path's extension.",
         examples: &[
         ],
         php_manual: None,
@@ -3263,7 +3263,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Internal: maps an Imagick format name to its internal format code.",
         examples: &[
         ],
         php_manual: None,
@@ -3294,7 +3294,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Internal: parses a hexadecimal color component.",
         examples: &[
         ],
         php_manual: None,
@@ -3325,7 +3325,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Internal: normalizes an Imagick color argument into a packed integer.",
         examples: &[
         ],
         php_manual: None,
@@ -3362,7 +3362,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Internal: packs two 32-bit halves into one integer.",
         examples: &[
         ],
         php_manual: None,
@@ -3393,7 +3393,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Internal: parses an Imagick color string into a packed integer.",
         examples: &[
         ],
         php_manual: None,
@@ -3424,7 +3424,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Internal: builds an ImagickPixel from a packed color integer.",
         examples: &[
         ],
         php_manual: None,
@@ -6269,7 +6269,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Adds a clockwise arc of the given radius and angle span to the current path.",
         examples: &[
         ],
         php_manual: None,
@@ -6330,7 +6330,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Adds a counter-clockwise arc of the given radius and angle span to the current path.",
         examples: &[
         ],
         php_manual: None,
@@ -6361,7 +6361,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Closes the current subpath with a line back to its starting point.",
         examples: &[
         ],
         php_manual: None,
@@ -6392,7 +6392,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates a drawing context for a surface.",
         examples: &[
         ],
         php_manual: None,
@@ -6459,7 +6459,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Adds a cubic Bezier curve through two control points to the current path.",
         examples: &[
         ],
         php_manual: None,
@@ -6490,7 +6490,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Fills the current path with the current source and clears the path.",
         examples: &[
         ],
         php_manual: None,
@@ -6521,7 +6521,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Fills the current path with the current source and keeps the path.",
         examples: &[
         ],
         php_manual: None,
@@ -6552,7 +6552,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Array,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the current point of the path as an [x, y] pair.",
         examples: &[
         ],
         php_manual: None,
@@ -6583,7 +6583,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Resets the context's transformation to the identity matrix.",
         examples: &[
         ],
         php_manual: None,
@@ -6626,7 +6626,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates an in-memory image surface of the given pixel format and size.",
         examples: &[
         ],
         php_manual: None,
@@ -6657,7 +6657,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates an image surface from a PNG file.",
         examples: &[
         ],
         php_manual: None,
@@ -6688,7 +6688,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns an image surface's height in pixels.",
         examples: &[
         ],
         php_manual: None,
@@ -6719,7 +6719,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns an image surface's width in pixels.",
         examples: &[
         ],
         php_manual: None,
@@ -6762,7 +6762,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Adds a straight line from the current point to the given point.",
         examples: &[
         ],
         php_manual: None,
@@ -6787,7 +6787,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates an identity transformation matrix.",
         examples: &[
         ],
         php_manual: None,
@@ -6818,7 +6818,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates a matrix that rotates by the given angle in radians.",
         examples: &[
         ],
         php_manual: None,
@@ -6855,7 +6855,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates a matrix that scales by the given x and y factors.",
         examples: &[
         ],
         php_manual: None,
@@ -6892,7 +6892,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates a matrix that translates by the given x and y offsets.",
         examples: &[
         ],
         php_manual: None,
@@ -6929,7 +6929,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the product of two transformation matrices.",
         examples: &[
         ],
         php_manual: None,
@@ -6972,7 +6972,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Array,
         by_ref_return: false,
-        summary: "",
+        summary: "Applies a matrix to a point and returns the transformed [x, y] pair.",
         examples: &[
         ],
         php_manual: None,
@@ -7015,7 +7015,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Begins a new subpath at the given point.",
         examples: &[
         ],
         php_manual: None,
@@ -7046,7 +7046,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Discards the current path.",
         examples: &[
         ],
         php_manual: None,
@@ -7077,7 +7077,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Begins a new subpath without a starting point.",
         examples: &[
         ],
         php_manual: None,
@@ -7108,7 +7108,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Paints the current source over the whole clip region.",
         examples: &[
         ],
         php_manual: None,
@@ -7163,7 +7163,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Adds an opaque color stop to a gradient pattern.",
         examples: &[
         ],
         php_manual: None,
@@ -7224,7 +7224,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Adds a color stop with alpha to a gradient pattern.",
         examples: &[
         ],
         php_manual: None,
@@ -7273,7 +7273,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates a linear gradient pattern between two points.",
         examples: &[
         ],
         php_manual: None,
@@ -7334,7 +7334,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates a radial gradient pattern between two circles.",
         examples: &[
         ],
         php_manual: None,
@@ -7377,7 +7377,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates a solid opaque color pattern.",
         examples: &[
         ],
         php_manual: None,
@@ -7426,7 +7426,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates a solid color pattern with alpha.",
         examples: &[
         ],
         php_manual: None,
@@ -7481,7 +7481,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Adds a closed rectangular subpath to the current path.",
         examples: &[
         ],
         php_manual: None,
@@ -7512,7 +7512,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Restores the context state saved by the matching cairo_save().",
         examples: &[
         ],
         php_manual: None,
@@ -7549,7 +7549,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Rotates the context's transformation by the given angle in radians.",
         examples: &[
         ],
         php_manual: None,
@@ -7580,7 +7580,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Saves the context state so a later cairo_restore() can return to it.",
         examples: &[
         ],
         php_manual: None,
@@ -7623,7 +7623,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Scales the context's transformation by the given x and y factors.",
         examples: &[
         ],
         php_manual: None,
@@ -7660,7 +7660,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Selects the fill rule used to decide which regions a path encloses.",
         examples: &[
         ],
         php_manual: None,
@@ -7697,7 +7697,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Selects how the ends of a stroked line are drawn.",
         examples: &[
         ],
         php_manual: None,
@@ -7734,7 +7734,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Selects how corners between stroked segments are drawn.",
         examples: &[
         ],
         php_manual: None,
@@ -7771,7 +7771,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Sets the stroke width in user-space units.",
         examples: &[
         ],
         php_manual: None,
@@ -7808,7 +7808,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Replaces the context's transformation with the given matrix.",
         examples: &[
         ],
         php_manual: None,
@@ -7845,7 +7845,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Uses a pattern as the source for subsequent drawing.",
         examples: &[
         ],
         php_manual: None,
@@ -7894,7 +7894,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Uses an opaque color as the source for subsequent drawing.",
         examples: &[
         ],
         php_manual: None,
@@ -7949,7 +7949,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Uses a color with alpha as the source for subsequent drawing.",
         examples: &[
         ],
         php_manual: None,
@@ -7980,7 +7980,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Strokes the current path with the current source and clears the path.",
         examples: &[
         ],
         php_manual: None,
@@ -8011,7 +8011,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Strokes the current path with the current source and keeps the path.",
         examples: &[
         ],
         php_manual: None,
@@ -8048,7 +8048,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Writes a surface to a PNG file.",
         examples: &[
         ],
         php_manual: None,
@@ -8085,7 +8085,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Composes the given matrix onto the context's transformation.",
         examples: &[
         ],
         php_manual: None,
@@ -8128,7 +8128,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Translates the context's transformation by the given x and y offsets.",
         examples: &[
         ],
         php_manual: None,
@@ -8171,7 +8171,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the number of days in a month of the given calendar and year.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.cal-days-in-month.php"),
@@ -8208,7 +8208,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Array,
         by_ref_return: false,
-        summary: "",
+        summary: "Converts a Julian Day count into a date array for the given calendar.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.cal-from-jd.php"),
@@ -8239,7 +8239,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Array,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns a calendar's month names, abbreviations, and day count.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.cal-info.php"),
@@ -8288,7 +8288,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Converts a date in the given calendar into a Julian Day count.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.cal-to-jd.php"),
@@ -9548,7 +9548,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Adds an interval to a DateTime, modifying it in place.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.date-add.php"),
@@ -9585,7 +9585,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates a DateTime from a date/time string.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.date-create.php"),
@@ -9628,7 +9628,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates a DateTime by parsing a string against an explicit format.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.date-create-from-format.php"),
@@ -9665,7 +9665,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates a DateTimeImmutable from a date/time string.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.date-create-immutable.php"),
@@ -9708,7 +9708,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates a DateTimeImmutable by parsing a string against an explicit format.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.date-create-immutable-from-format.php"),
@@ -9757,7 +9757,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Sets a DateTime's year, month, and day.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.date-date-set.php"),
@@ -9856,7 +9856,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the DateInterval between two dates.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.date-diff.php"),
@@ -9893,7 +9893,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Str,
         by_ref_return: false,
-        summary: "",
+        summary: "Formats a date according to a format string.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.date-format.php"),
@@ -9918,7 +9918,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the warnings and errors from the last date parse.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.date-get-last-errors.php"),
@@ -9949,7 +9949,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates a DateInterval from a relative date string such as \"2 days\".",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.date-interval-create-from-date-string.php"),
@@ -9986,7 +9986,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Str,
         by_ref_return: false,
-        summary: "",
+        summary: "Formats a DateInterval according to a format string.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.date-interval-format.php"),
@@ -10035,7 +10035,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Sets a DateTime from an ISO year, week, and day of week.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.date-isodate-set.php"),
@@ -10072,7 +10072,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Applies a relative modifier such as \"+1 day\" to a DateTime.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.date-modify.php"),
@@ -10103,7 +10103,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns a date's UTC offset in seconds.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.date-offset-get.php"),
@@ -10134,7 +10134,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Array,
         by_ref_return: false,
-        summary: "",
+        summary: "Parses a date/time string into its components, warnings, and errors.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.date-parse.php"),
@@ -10171,7 +10171,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Array,
         by_ref_return: false,
-        summary: "",
+        summary: "Parses a date/time string against a format into components, warnings, and errors.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.date-parse-from-format.php"),
@@ -10208,7 +10208,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Subtracts an interval from a DateTime, modifying it in place.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.date-sub.php"),
@@ -10251,7 +10251,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Array,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the sunrise, sunset, and twilight times for a day and location.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.date-sun-info.php"),
@@ -10312,7 +10312,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the sunrise time for a day and location. Deprecated since PHP 8.1.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.date-sunrise.php"),
@@ -10373,7 +10373,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the sunset time for a day and location. Deprecated since PHP 8.1.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.date-sunset.php"),
@@ -10428,7 +10428,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Sets a DateTime's hour, minute, second, and microsecond.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.date-time-set.php"),
@@ -10459,7 +10459,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns a date's Unix timestamp.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.date-timestamp-get.php"),
@@ -10496,7 +10496,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Sets a DateTime from a Unix timestamp.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.date-timestamp-set.php"),
@@ -10527,7 +10527,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns a date's timezone.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.date-timezone-get.php"),
@@ -10564,7 +10564,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Sets a date's timezone, converting the wall-clock time to it.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.date-timezone-set.php"),
@@ -10892,7 +10892,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the Unix timestamp of midnight on Easter Sunday of a year.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.easter-date.php"),
@@ -10929,7 +10929,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the number of days from March 21 to Easter Sunday of a year.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.easter-days.php"),
@@ -11046,7 +11046,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Sends an error message to the log, a file, or an email address.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.error-log.php"),
@@ -11108,7 +11108,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Identifies an image file's type, or false when it is not an image.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.exif-imagetype.php"),
@@ -11157,7 +11157,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Reads the EXIF headers of a JPEG or TIFF image.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.exif-read-data.php"),
@@ -11188,7 +11188,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the name of an EXIF tag index.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.exif-tagname.php"),
@@ -11237,7 +11237,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the embedded thumbnail of an image, with its size and type.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.exif-thumbnail.php"),
@@ -12484,7 +12484,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Converts a French Republican date into a Julian Day count.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.frenchtojd.php"),
@@ -12842,7 +12842,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Array,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the GD version and which image formats this build supports.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.gd-info.php"),
@@ -13315,7 +13315,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns an image file's size, type, and MIME type.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.getimagesize.php"),
@@ -13346,7 +13346,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the size, type, and MIME type of an image held in a string.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.getimagesizefromstring.php"),
@@ -13513,7 +13513,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the current time as an array of parts, or as a float.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.gettimeofday.php"),
@@ -13710,7 +13710,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Formats a UTC timestamp with locale-aware strftime specifiers. Deprecated since PHP 8.1.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.gmstrftime.php"),
@@ -13784,7 +13784,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Converts a Gregorian date into a Julian Day count.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.gregoriantojd.php"),
@@ -14905,7 +14905,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Formats a timestamp with a single format character and returns it as an integer.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.idate.php"),
@@ -14942,7 +14942,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the filename extension for an IMAGETYPE_* constant.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.image-type-to-extension.php"),
@@ -14973,7 +14973,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Str,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the MIME type for an IMAGETYPE_* constant.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.image-type-to-mime-type.php"),
@@ -15016,7 +15016,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns a copy of an image with an affine matrix applied.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imageaffine.php"),
@@ -15053,7 +15053,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Array,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the product of two affine transformation matrices.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imageaffinematrixconcat.php"),
@@ -15090,7 +15090,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Turns alpha blending on or off for subsequent drawing.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagealphablending.php"),
@@ -15127,7 +15127,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Turns antialiased drawing on or off for lines and polygons.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imageantialias.php"),
@@ -15200,7 +15200,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Draws an arc of an ellipse.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagearc.php"),
@@ -15243,7 +15243,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Writes an image as BMP, to a file or to the output buffer.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagebmp.php"),
@@ -15304,7 +15304,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Draws one character horizontally with a built-in font.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagechar.php"),
@@ -15365,7 +15365,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Draws one character vertically with a built-in font.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecharup.php"),
@@ -15414,7 +15414,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Allocates an opaque color in a palette image.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecolorallocate.php"),
@@ -15469,7 +15469,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Allocates a color with alpha in a palette image.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecolorallocatealpha.php"),
@@ -15512,7 +15512,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the color index or packed color of one pixel.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecolorat.php"),
@@ -15561,7 +15561,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the palette index closest to the requested color.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecolorclosest.php"),
@@ -15616,7 +15616,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the palette index closest to the requested color with alpha.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecolorclosestalpha.php"),
@@ -15665,7 +15665,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the palette index closest in hue, whiteness, and blackness.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecolorclosesthwb.php"),
@@ -15702,7 +15702,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Frees a palette entry allocated earlier.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecolordeallocate.php"),
@@ -15751,7 +15751,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the palette index of an exact color, or -1.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecolorexact.php"),
@@ -15806,7 +15806,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the palette index of an exact color with alpha, or -1.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecolorexactalpha.php"),
@@ -15843,7 +15843,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Adjusts a palette image's colors to better match a truecolor original.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecolormatch.php"),
@@ -15892,7 +15892,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the palette index of a color, allocating or approximating it.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecolorresolve.php"),
@@ -15947,7 +15947,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the palette index of a color with alpha, allocating or approximating it.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecolorresolvealpha.php"),
@@ -16008,7 +16008,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Changes the color a palette index stands for.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecolorset.php"),
@@ -16045,7 +16045,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Array,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the red, green, blue, and alpha channels of a palette index.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecolorsforindex.php"),
@@ -16076,7 +16076,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns how many colors a palette image holds.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecolorstotal.php"),
@@ -16113,7 +16113,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Reads or sets an image's transparent color index.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecolortransparent.php"),
@@ -16162,7 +16162,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Applies a 3x3 convolution matrix to an image.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imageconvolution.php"),
@@ -16235,7 +16235,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Copies a rectangle from one image into another.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecopy.php"),
@@ -16314,7 +16314,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Copies a rectangle into another image, blending it by a percentage.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecopymerge.php"),
@@ -16393,7 +16393,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Copies a rectangle into another image as grayscale, blending it by a percentage.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecopymergegray.php"),
@@ -16478,7 +16478,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Copies and resizes a rectangle with pixel interpolation.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecopyresampled.php"),
@@ -16563,7 +16563,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Copies and resizes a rectangle without interpolation.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecopyresized.php"),
@@ -16600,7 +16600,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates an empty palette image of the given size.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecreate.php"),
@@ -16631,7 +16631,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates an image from a BMP file.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecreatefrombmp.php"),
@@ -16662,7 +16662,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates an image from a GIF file.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecreatefromgif.php"),
@@ -16693,7 +16693,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates an image from a JPEG file.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecreatefromjpeg.php"),
@@ -16724,7 +16724,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates an image from a PNG file.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecreatefrompng.php"),
@@ -16755,7 +16755,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates an image from encoded bytes, detecting the format.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecreatefromstring.php"),
@@ -16786,7 +16786,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates an image from a TGA file.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecreatefromtga.php"),
@@ -16817,7 +16817,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates an image from a WebP file.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecreatefromwebp.php"),
@@ -16854,7 +16854,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates an empty truecolor image of the given size.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecreatetruecolor.php"),
@@ -16891,7 +16891,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the given rectangle of an image as a new image.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecrop.php"),
@@ -16940,7 +16940,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Crops an image automatically by the chosen mode.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagecropauto.php"),
@@ -17001,7 +17001,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Draws a dashed line. Superseded by imagesetstyle() with imageline().",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagedashedline.php"),
@@ -17032,7 +17032,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Releases an image handle. A no-op since PHP 8.0.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagedestroy.php"),
@@ -17093,7 +17093,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Draws the outline of an ellipse.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imageellipse.php"),
@@ -17142,7 +17142,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Flood-fills from a point with a color.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagefill.php"),
@@ -17221,7 +17221,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Draws a filled arc, pie slice, or chord.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagefilledarc.php"),
@@ -17282,7 +17282,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Draws a filled ellipse.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagefilledellipse.php"),
@@ -17325,7 +17325,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Draws a filled polygon.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagefilledpolygon.php"),
@@ -17386,7 +17386,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Draws a filled rectangle.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagefilledrectangle.php"),
@@ -17441,7 +17441,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Flood-fills from a point until it reaches a border color.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagefilltoborder.php"),
@@ -17502,7 +17502,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Applies one of GD's built-in filters to an image.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagefilter.php"),
@@ -17539,7 +17539,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Flips an image horizontally, vertically, or both.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imageflip.php"),
@@ -17570,7 +17570,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the pixel height of a built-in font.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagefontheight.php"),
@@ -17601,7 +17601,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the pixel width of a built-in font.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagefontwidth.php"),
@@ -17644,7 +17644,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Applies a gamma correction from one gamma value to another.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagegammacorrect.php"),
@@ -17675,7 +17675,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the interpolation method used when resampling.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagegetinterpolation.php"),
@@ -17712,7 +17712,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Writes an image as GIF, to a file or to the output buffer.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagegif.php"),
@@ -17749,7 +17749,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Reads or sets whether an image is written interlaced.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imageinterlace.php"),
@@ -17780,7 +17780,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Reports whether an image is truecolor rather than palette-based.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imageistruecolor.php"),
@@ -17823,7 +17823,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Writes an image as JPEG, to a file or to the output buffer.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagejpeg.php"),
@@ -17860,7 +17860,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Selects the alpha blending effect used by subsequent drawing.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagelayereffect.php"),
@@ -17921,7 +17921,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Draws a straight line.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imageline.php"),
@@ -17964,7 +17964,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Draws an unclosed polyline.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imageopenpolygon.php"),
@@ -18001,7 +18001,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Copies one image's palette onto another.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagepalettecopy.php"),
@@ -18032,7 +18032,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Converts a palette image to truecolor in place.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagepalettetotruecolor.php"),
@@ -18081,7 +18081,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Writes an image as PNG, to a file or to the output buffer.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagepng.php"),
@@ -18124,7 +18124,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Draws the outline of a closed polygon.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagepolygon.php"),
@@ -18185,7 +18185,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Draws the outline of a rectangle.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagerectangle.php"),
@@ -18228,7 +18228,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Reads or sets an image's horizontal and vertical resolution in DPI.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imageresolution.php"),
@@ -18277,7 +18277,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns a copy of an image rotated by an angle.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagerotate.php"),
@@ -18314,7 +18314,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Controls whether full alpha channel information is saved with the image.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagesavealpha.php"),
@@ -18363,7 +18363,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns a copy of an image scaled to a new size.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagescale.php"),
@@ -18400,7 +18400,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Selects the interpolation method used when resampling.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagesetinterpolation.php"),
@@ -18449,7 +18449,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Sets one pixel to a color.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagesetpixel.php"),
@@ -18486,7 +18486,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Sets the line thickness used by subsequent drawing.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagesetthickness.php"),
@@ -18547,7 +18547,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Draws a string horizontally with a built-in font.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagestring.php"),
@@ -18608,7 +18608,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Draws a string vertically with a built-in font.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagestringup.php"),
@@ -18639,7 +18639,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns an image's width in pixels.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagesx.php"),
@@ -18670,7 +18670,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns an image's height in pixels.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagesy.php"),
@@ -18713,7 +18713,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Converts a truecolor image to a palette image in place.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagetruecolortopalette.php"),
@@ -18738,7 +18738,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns a bitmask of the image formats this build supports.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagetypes.php"),
@@ -18781,7 +18781,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Writes an image as WebP, to a file or to the output buffer.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.imagewebp.php"),
@@ -18954,7 +18954,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the value of a configuration directive.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.ini-get.php"),
@@ -18991,7 +18991,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns every configuration directive, optionally with its access level and scope.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.ini-get-all.php"),
@@ -19022,7 +19022,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Restores a configuration directive to its startup value.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.ini-restore.php"),
@@ -19059,7 +19059,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Overrides a configuration directive for the rest of the request.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.ini-set.php"),
@@ -19244,7 +19244,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Embeds an IPTC block into a JPEG file.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.iptcembed.php"),
@@ -19275,7 +19275,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Parses an IPTC block into its tag arrays.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.iptcparse.php"),
@@ -20315,7 +20315,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the day of the week for a Julian Day count, as a number or a name.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.jddayofweek.php"),
@@ -20352,7 +20352,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Str,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the month name for a Julian Day count in the requested calendar.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.jdmonthname.php"),
@@ -20383,7 +20383,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Str,
         by_ref_return: false,
-        summary: "",
+        summary: "Converts a Julian Day count into a French Republican date string.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.jdtofrench.php"),
@@ -20414,7 +20414,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Str,
         by_ref_return: false,
-        summary: "",
+        summary: "Converts a Julian Day count into a Gregorian date string.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.jdtogregorian.php"),
@@ -20457,7 +20457,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Str,
         by_ref_return: false,
-        summary: "",
+        summary: "Converts a Julian Day count into a Jewish date string.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.jdtojewish.php"),
@@ -20488,7 +20488,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Str,
         by_ref_return: false,
-        summary: "",
+        summary: "Converts a Julian Day count into a Julian calendar date string.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.jdtojulian.php"),
@@ -20519,7 +20519,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Converts a Julian Day count into a Unix timestamp.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.jdtounix.php"),
@@ -20562,7 +20562,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Converts a Jewish date into a Julian Day count.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.jewishtojd.php"),
@@ -20827,7 +20827,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Converts a Julian calendar date into a Julian Day count.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.juliantojd.php"),
@@ -21759,7 +21759,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns how many rows the last write affected.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-affected-rows.php"),
@@ -21796,7 +21796,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Turns automatic committing on or off.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-autocommit.php"),
@@ -21839,7 +21839,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Starts a transaction.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-begin-transaction.php"),
@@ -21870,7 +21870,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Str,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the connection's current character set.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-character-set-name.php"),
@@ -21901,7 +21901,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Closes a connection.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-close.php"),
@@ -21944,7 +21944,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Commits the open transaction.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-commit.php"),
@@ -22005,7 +22005,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Opens a connection to a MySQL server.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-connect.php"),
@@ -22030,7 +22030,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the error code of the last connection attempt.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-connect-errno.php"),
@@ -22055,7 +22055,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Nullable(&TypeSpec::Str),
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the error message of the last connection attempt.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-connect-error.php"),
@@ -22092,7 +22092,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Moves a buffered result's row cursor to an offset.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-data-seek.php"),
@@ -22123,7 +22123,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the error code of the last call on a connection.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-errno.php"),
@@ -22154,7 +22154,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Str,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the error message of the last call on a connection.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-error.php"),
@@ -22185,7 +22185,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Array,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns every error of the last call on a connection.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-error-list.php"),
@@ -22222,7 +22222,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Str,
         by_ref_return: false,
-        summary: "",
+        summary: "Alias of mysqli_real_escape_string().",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-escape-string.php"),
@@ -22253,7 +22253,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Alias of mysqli_stmt_execute().",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-execute.php"),
@@ -22296,7 +22296,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Prepares, binds, and executes a statement in one call.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-execute-query.php"),
@@ -22333,7 +22333,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Array,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns every remaining row of a result at once.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-fetch-all.php"),
@@ -22370,7 +22370,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Nullable(&TypeSpec::Array),
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the next row as a numeric array, an associative array, or both.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-fetch-array.php"),
@@ -22401,7 +22401,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Nullable(&TypeSpec::Array),
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the next row as an associative array.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-fetch-assoc.php"),
@@ -22438,7 +22438,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns one column of the next row.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-fetch-column.php"),
@@ -22469,7 +22469,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns metadata for the next column of a result.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-fetch-field.php"),
@@ -22506,7 +22506,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns metadata for one column of a result by index.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-fetch-field-direct.php"),
@@ -22537,7 +22537,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Array,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns metadata for every column of a result.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-fetch-fields.php"),
@@ -22568,7 +22568,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Nullable(&TypeSpec::Array),
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the byte lengths of the columns in the current row.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-fetch-lengths.php"),
@@ -22611,7 +22611,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the next row as an object.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-fetch-object.php"),
@@ -22642,7 +22642,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Nullable(&TypeSpec::Array),
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the next row as a numeric array.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-fetch-row.php"),
@@ -22673,7 +22673,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns how many columns the last query produced.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-field-count.php"),
@@ -22710,7 +22710,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Moves a result's column cursor to an offset.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-field-seek.php"),
@@ -22741,7 +22741,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns a result's current column cursor position.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-field-tell.php"),
@@ -22772,7 +22772,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Releases the memory a result set holds.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-free-result.php"),
@@ -22803,7 +22803,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the connection character set as an object.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-get-charset.php"),
@@ -22834,7 +22834,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Str,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the client library version as a string.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-get-client-info.php"),
@@ -22865,7 +22865,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the client library version as an integer.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-get-client-version.php"),
@@ -22896,7 +22896,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Str,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the server host name and connection type.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-get-host-info.php"),
@@ -22927,7 +22927,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the MySQL protocol version in use.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-get-proto-info.php"),
@@ -22958,7 +22958,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Str,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the server version as a string.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-get-server-info.php"),
@@ -22989,7 +22989,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the server version as an integer.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-get-server-version.php"),
@@ -23020,7 +23020,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Nullable(&TypeSpec::Str),
         by_ref_return: false,
-        summary: "",
+        summary: "Returns information about the last query, when the server supplies it.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-info.php"),
@@ -23045,7 +23045,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates an unconnected mysqli object for mysqli_real_connect().",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-init.php"),
@@ -23076,7 +23076,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the id generated by the last INSERT on an AUTO_INCREMENT column.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-insert-id.php"),
@@ -23107,7 +23107,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Reports whether a multi-query has more results waiting.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-more-results.php"),
@@ -23144,7 +23144,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Runs several semicolon-separated statements in one call.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-multi-query.php"),
@@ -23175,7 +23175,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Advances a multi-query to its next result set.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-next-result.php"),
@@ -23206,7 +23206,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns how many columns a result has.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-num-fields.php"),
@@ -23237,7 +23237,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns how many rows a result has.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-num-rows.php"),
@@ -23280,7 +23280,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Sets a connection option before connecting.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-options.php"),
@@ -23311,7 +23311,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Checks the connection and reconnects when that is enabled.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-ping.php"),
@@ -23348,7 +23348,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Prepares a statement for execution.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-prepare.php"),
@@ -23391,7 +23391,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Runs one statement and returns a result set or a success flag.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-query.php"),
@@ -23464,7 +23464,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Connects an object created by mysqli_init(), with the full option set.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-real-connect.php"),
@@ -23501,7 +23501,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Str,
         by_ref_return: false,
-        summary: "",
+        summary: "Escapes a string for use in a statement, honoring the connection charset.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-real-escape-string.php"),
@@ -23538,7 +23538,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Runs one statement without fetching its result.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-real-query.php"),
@@ -23575,7 +23575,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Removes a named savepoint from the open transaction.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-release-savepoint.php"),
@@ -23606,7 +23606,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Selects which mysqli conditions raise exceptions or warnings.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-report.php"),
@@ -23649,7 +23649,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Rolls back the open transaction.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-rollback.php"),
@@ -23686,7 +23686,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates a named savepoint in the open transaction.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-savepoint.php"),
@@ -23723,7 +23723,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Selects the default database for the connection.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-select-db.php"),
@@ -23760,7 +23760,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Sets the character set used by the connection.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-set-charset.php"),
@@ -23803,7 +23803,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Alias of mysqli_options().",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-set-opt.php"),
@@ -23834,7 +23834,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Str,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the SQLSTATE of the last call on a connection.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-sqlstate.php"),
@@ -23865,7 +23865,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the server's current status line.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-stat.php"),
@@ -23896,7 +23896,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns how many rows a prepared write affected.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-stmt-affected-rows.php"),
@@ -23933,7 +23933,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Binds variables to a prepared statement's placeholders.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-stmt-bind-param.php"),
@@ -23964,7 +23964,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Closes a prepared statement and frees its resources.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-stmt-close.php"),
@@ -23995,7 +23995,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the error code of the last call on a statement.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-stmt-errno.php"),
@@ -24026,7 +24026,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Str,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the error message of the last call on a statement.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-stmt-error.php"),
@@ -24057,7 +24057,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Array,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns every error of the last call on a statement.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-stmt-error-list.php"),
@@ -24094,7 +24094,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Executes a prepared statement.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-stmt-execute.php"),
@@ -24125,7 +24125,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns how many columns a prepared statement produces.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-stmt-field-count.php"),
@@ -24156,7 +24156,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Releases the result a prepared statement buffered.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-stmt-free-result.php"),
@@ -24187,7 +24187,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns a prepared statement's result as a mysqli_result.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-stmt-get-result.php"),
@@ -24218,7 +24218,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates a statement object bound to a connection.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-stmt-init.php"),
@@ -24249,7 +24249,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the id the last prepared INSERT generated.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-stmt-insert-id.php"),
@@ -24280,7 +24280,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns how many rows a prepared statement's buffered result has.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-stmt-num-rows.php"),
@@ -24311,7 +24311,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns how many placeholders a prepared statement has.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-stmt-param-count.php"),
@@ -24348,7 +24348,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Prepares SQL on a statement created by mysqli_stmt_init().",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-stmt-prepare.php"),
@@ -24379,7 +24379,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Resets a prepared statement so it can be executed again.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-stmt-reset.php"),
@@ -24410,7 +24410,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Str,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the SQLSTATE of the last call on a statement.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-stmt-sqlstate.php"),
@@ -24441,7 +24441,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Buffers a prepared statement's whole result on the client.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-stmt-store-result.php"),
@@ -24478,7 +24478,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Buffers a query's whole result on the client.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-store-result.php"),
@@ -24509,7 +24509,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the connection's thread id on the server.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-thread-id.php"),
@@ -24534,7 +24534,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Reports whether the client library is thread-safe.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-thread-safe.php"),
@@ -24565,7 +24565,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Starts reading a result row by row from the server.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-use-result.php"),
@@ -24596,7 +24596,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns how many warnings the last query raised.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.mysqli-warning-count.php"),
@@ -25186,7 +25186,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Compiles a script into the opcode cache without executing it.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.opcache-compile-file.php"),
@@ -25211,7 +25211,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Array,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the OPcache directives, blacklist, and version.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.opcache-get-configuration.php"),
@@ -25242,7 +25242,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns OPcache memory, statistics, and optionally the cached scripts.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.opcache-get-status.php"),
@@ -25279,7 +25279,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Invalidates a script's cached opcodes, optionally without checking its timestamp.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.opcache-invalidate.php"),
@@ -25310,7 +25310,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Reports whether a script is in the opcode cache.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.opcache-is-script-cached.php"),
@@ -25341,7 +25341,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Reports whether a script is in the on-disk file cache.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.opcache-is-script-cached-in-file-cache.php"),
@@ -25372,7 +25372,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Excludes a function from JIT compilation.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.opcache-jit-blacklist.php"),
@@ -25397,7 +25397,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Clears the whole opcode cache.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.opcache-reset.php"),
@@ -25822,7 +25822,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Array,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the names of the PDO drivers this build provides.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.pdo-drivers.php"),
@@ -25902,7 +25902,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Str,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the name of the server API this build runs under.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.php-sapi-name.php"),
@@ -27268,7 +27268,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Alias of exif_read_data().",
         examples: &[
         ],
         php_manual: None,
@@ -27832,7 +27832,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Discards the session changes made in this request and closes the session.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.session-abort.php"),
@@ -27863,7 +27863,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Reads or sets the cache expiry, in minutes, of the session cache limiter.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.session-cache-expire.php"),
@@ -27894,7 +27894,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Reads or sets the cache limiter that controls session response caching.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.session-cache-limiter.php"),
@@ -27919,7 +27919,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Alias of session_write_close().",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.session-commit.php"),
@@ -27950,7 +27950,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Generates a new session id, optionally with a prefix.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.session-create-id.php"),
@@ -27981,7 +27981,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Loads serialized session data into the session superglobal.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.session-decode.php"),
@@ -28006,7 +28006,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Destroys the data stored for the current session.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.session-destroy.php"),
@@ -28031,7 +28031,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Serializes the current session data into a string.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.session-encode.php"),
@@ -28056,7 +28056,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Runs session garbage collection and returns how many sessions it removed.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.session-gc.php"),
@@ -28081,7 +28081,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Array,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the session cookie's lifetime, path, domain, and flags.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.session-get-cookie-params.php"),
@@ -28112,7 +28112,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Reads or sets the current session id.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.session-id.php"),
@@ -28143,7 +28143,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Reads or sets the session save handler module.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.session-module-name.php"),
@@ -28174,7 +28174,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Reads or sets the session name, which is also the cookie name.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.session-name.php"),
@@ -28205,7 +28205,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Replaces the session id, optionally deleting the old session's data.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.session-regenerate-id.php"),
@@ -28230,7 +28230,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Void,
         by_ref_return: false,
-        summary: "",
+        summary: "Registers session_write_close() as a shutdown function.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.session-register-shutdown.php"),
@@ -28255,7 +28255,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Reloads the session data from storage, discarding this request's changes.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.session-reset.php"),
@@ -28286,7 +28286,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Reads or sets the directory session data is stored in.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.session-save-path.php"),
@@ -28311,7 +28311,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Sets the session cookie's lifetime, path, domain, and flags.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.session-set-cookie-params.php"),
@@ -28390,7 +28390,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Installs a custom session storage handler.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.session-set-save-handler.php"),
@@ -28421,7 +28421,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Starts a new session or resumes the one the request identifies.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.session-start.php"),
@@ -28446,7 +28446,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Reports whether sessions are disabled, inactive, or active.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.session-status.php"),
@@ -28471,7 +28471,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Removes every variable from the session without destroying it.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.session-unset.php"),
@@ -28496,7 +28496,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Writes the session data and releases the session lock.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.session-write-close.php"),
@@ -28563,7 +28563,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Adds a Set-Cookie header, URL-encoding the value.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.setcookie.php"),
@@ -28630,7 +28630,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Adds a Set-Cookie header without URL-encoding the value.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.setrawcookie.php"),
@@ -31468,7 +31468,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Formats a local timestamp with locale-aware specifiers. Deprecated since PHP 8.1.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.strftime.php"),
@@ -31739,7 +31739,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Parses a time string against a strftime format. Deprecated since PHP 8.1.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.strptime.php"),
@@ -32455,7 +32455,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns every timezone abbreviation with its offset and DST flag.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.timezone-abbreviations-list.php"),
@@ -32492,7 +32492,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Array,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the timezone identifiers this build knows, optionally filtered.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.timezone-identifiers-list.php"),
@@ -32523,7 +32523,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns a timezone's country code, latitude, longitude, and comments.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.timezone-location-get.php"),
@@ -32566,7 +32566,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Resolves a timezone abbreviation and offset to an identifier.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.timezone-name-from-abbr.php"),
@@ -32597,7 +32597,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Str,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns a timezone's identifier.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.timezone-name-get.php"),
@@ -32634,7 +32634,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns a timezone's UTC offset in seconds at the given date.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.timezone-offset-get.php"),
@@ -32665,7 +32665,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Creates a DateTimeZone from an identifier.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.timezone-open.php"),
@@ -32708,7 +32708,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns a timezone's DST transitions in a time range.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.timezone-transitions-get.php"),
@@ -32733,7 +32733,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Str,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the version of the bundled timezone database.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.timezone-version-get.php"),
@@ -32875,7 +32875,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Bool,
         by_ref_return: false,
-        summary: "",
+        summary: "Raises a user-level error, warning, or notice.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.trigger-error.php"),
@@ -33116,7 +33116,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Converts a Unix timestamp into a Julian Day count.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.unixtojd.php"),
@@ -33382,7 +33382,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "",
+        summary: "Renders a value as parsable PHP code, printed or returned.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.var-export.php"),
@@ -33573,7 +33573,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Str,
         by_ref_return: false,
-        summary: "",
+        summary: "Returns the version of the Zend engine the runtime reports.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.zend-version.php"),

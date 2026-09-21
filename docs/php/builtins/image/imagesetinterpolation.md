@@ -1,6 +1,6 @@
 ---
 title: "imagesetinterpolation()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Selects the interpolation method used when resampling."
 sidebar:
   order: 528
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagesetinterpolation(mixed $image, int $method = IMG_BILINEAR_FIXED): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Selects the interpolation method used when resampling.
 
 **Parameters**:
 - `$image` (`mixed`)

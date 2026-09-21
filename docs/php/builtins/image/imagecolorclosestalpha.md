@@ -1,6 +1,6 @@
 ---
 title: "imagecolorclosestalpha()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the palette index closest to the requested color with alpha."
 sidebar:
   order: 468
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagecolorclosestalpha(mixed $image, int $red, int $green, int $blue, int $alpha): int
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the palette index closest to the requested color with alpha.
 
 **Parameters**:
 - `$image` (`mixed`)

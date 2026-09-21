@@ -1,6 +1,6 @@
 ---
 title: "session_cache_limiter()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Reads or sets the cache limiter that controls session response caching."
 sidebar:
   order: 888
 ---
@@ -11,7 +11,7 @@ sidebar:
 function session_cache_limiter(?string $value = null): mixed
 ```
 
-Implemented by the compiler-injected web prelude.
+Reads or sets the cache limiter that controls session response caching.
 
 **Parameters**:
 - `$value` (`?string`), default `null`, optional

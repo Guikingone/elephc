@@ -1,6 +1,6 @@
 ---
 title: "gmstrftime()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Formats a UTC timestamp with locale-aware strftime specifiers. Deprecated since PHP 8.1."
 sidebar:
   order: 224
 ---
@@ -11,7 +11,7 @@ sidebar:
 function gmstrftime(string $format, ?int $timestamp = null): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Formats a UTC timestamp with locale-aware strftime specifiers. Deprecated since PHP 8.1.
 
 **Parameters**:
 - `$format` (`string`)

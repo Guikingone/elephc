@@ -1,6 +1,6 @@
 ---
 title: "mysqli_real_query()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Runs one statement without fetching its result."
 sidebar:
   order: 150
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_real_query(mixed $mysql, string $query): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Runs one statement without fetching its result.
 
 **Parameters**:
 - `$mysql` (`mixed`)

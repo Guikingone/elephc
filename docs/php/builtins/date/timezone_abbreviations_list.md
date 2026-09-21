@@ -1,6 +1,6 @@
 ---
 title: "timezone_abbreviations_list()"
-description: "Implemented by the compiler-injected tz prelude."
+description: "Returns every timezone abbreviation with its offset and DST flag."
 sidebar:
   order: 244
 ---
@@ -11,7 +11,7 @@ sidebar:
 function timezone_abbreviations_list(): mixed
 ```
 
-Implemented by the compiler-injected tz prelude.
+Returns every timezone abbreviation with its offset and DST flag.
 
 **Parameters**: none.
 

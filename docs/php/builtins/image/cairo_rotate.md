@@ -1,6 +1,6 @@
 ---
 title: "cairo_rotate()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Rotates the context's transformation by the given angle in radians."
 sidebar:
   order: 431
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_rotate(mixed $context, float $angle): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Rotates the context's transformation by the given angle in radians.
 
 **Parameters**:
 - `$context` (`mixed`)

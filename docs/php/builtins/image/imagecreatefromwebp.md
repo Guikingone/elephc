@@ -1,6 +1,6 @@
 ---
 title: "imagecreatefromwebp()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates an image from a WebP file."
 sidebar:
   order: 493
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagecreatefromwebp(string $filename): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates an image from a WebP file.
 
 **Parameters**:
 - `$filename` (`string`)

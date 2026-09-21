@@ -1,6 +1,6 @@
 ---
 title: "imagedestroy()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Releases an image handle. A no-op since PHP 8.0."
 sidebar:
   order: 498
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagedestroy(mixed $image): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Releases an image handle. A no-op since PHP 8.0.
 
 **Parameters**:
 - `$image` (`mixed`)

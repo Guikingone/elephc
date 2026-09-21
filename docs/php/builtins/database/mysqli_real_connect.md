@@ -1,6 +1,6 @@
 ---
 title: "mysqli_real_connect()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Connects an object created by mysqli_init(), with the full option set."
 sidebar:
   order: 148
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_real_connect(mixed $mysql, ?string $hostname = null, ?string $username = null, ?string $password = null, ?string $database = null, ?int $port = null, ?string $socket = null, int $flags = 0): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Connects an object created by mysqli_init(), with the full option set.
 
 **Parameters**:
 - `$mysql` (`mixed`)

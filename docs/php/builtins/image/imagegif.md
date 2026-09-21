@@ -1,6 +1,6 @@
 ---
 title: "imagegif()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Writes an image as GIF, to a file or to the output buffer."
 sidebar:
   order: 512
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagegif(mixed $image, ?string $file = null): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Writes an image as GIF, to a file or to the output buffer.
 
 **Parameters**:
 - `$image` (`mixed`)

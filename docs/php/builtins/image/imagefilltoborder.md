@@ -1,6 +1,6 @@
 ---
 title: "imagefilltoborder()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Flood-fills from a point until it reaches a border color."
 sidebar:
   order: 505
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagefilltoborder(mixed $image, int $x, int $y, int $border_color, int $color): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Flood-fills from a point until it reaches a border color.
 
 **Parameters**:
 - `$image` (`mixed`)

@@ -1,6 +1,6 @@
 ---
 title: "imagechar()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Draws one character horizontally with a built-in font."
 sidebar:
   order: 462
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagechar(mixed $image, int $font, int $x, int $y, string $char, int $color): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Draws one character horizontally with a built-in font.
 
 **Parameters**:
 - `$image` (`mixed`)

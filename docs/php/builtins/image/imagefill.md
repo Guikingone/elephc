@@ -1,6 +1,6 @@
 ---
 title: "imagefill()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Flood-fills from a point with a color."
 sidebar:
   order: 500
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagefill(mixed $image, int $x, int $y, int $color): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Flood-fills from a point with a color.
 
 **Parameters**:
 - `$image` (`mixed`)

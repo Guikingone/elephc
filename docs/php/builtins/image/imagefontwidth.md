@@ -1,6 +1,6 @@
 ---
 title: "imagefontwidth()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the pixel width of a built-in font."
 sidebar:
   order: 509
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagefontwidth(int $font): int
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the pixel width of a built-in font.
 
 **Parameters**:
 - `$font` (`int`)

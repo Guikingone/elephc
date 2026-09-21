@@ -1,6 +1,6 @@
 ---
 title: "cairo_stroke_preserve()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Strokes the current path with the current source and keeps the path."
 sidebar:
   order: 443
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_stroke_preserve(mixed $context): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Strokes the current path with the current source and keeps the path.
 
 **Parameters**:
 - `$context` (`mixed`)

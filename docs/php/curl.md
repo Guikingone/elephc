@@ -245,6 +245,18 @@ they do not expect `/etc/ssl`, and the bridge does not probe for PEM files after
 `curl_version_info()` advertises `AppleSecTrust`. The same native verification
 applies independently to an HTTPS proxy connection.
 
+How that path is verified in CI is worth knowing, because the two iOS rows can
+be checked to different depths. The required `Curl iOS Compile & Link` job
+builds the whole native chain with the real Xcode toolchain and proves the
+archive is the SecTrust build — `AppleSecTrust` in its strings,
+`SecTrustCreateWithCertificates` among its undefined symbols — then links the
+complete host/native/bridge graph for device and Simulator. It does not perform
+a transfer. A separate opt-in workflow, `iOS curl live`, boots a Simulator and
+performs one real HTTPS GET on `ios-sim-arm64`; it runs weekly and on demand
+rather than on every push, because it reaches the public internet. `ios-arm64`
+cannot be run in CI at all — it needs signing, provisioning and hardware — so
+compile/link evidence is the whole story there.
+
 An explicit CA setting remains explicit on iOS. `CURLOPT_CAINFO`,
 `CURLOPT_CAPATH`, or `$CURL_CA_BUNDLE` disables the automatic SecTrust path for
 that hop and verifies against the supplied file/directory instead. To combine a

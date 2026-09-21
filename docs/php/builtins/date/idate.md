@@ -1,6 +1,6 @@
 ---
 title: "idate()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Formats a timestamp with a single format character and returns it as an integer."
 sidebar:
   order: 227
 ---
@@ -11,7 +11,7 @@ sidebar:
 function idate(string $format, ?int $timestamp = null): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Formats a timestamp with a single format character and returns it as an integer.
 
 **Parameters**:
 - `$format` (`string`)

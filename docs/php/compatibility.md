@@ -172,7 +172,7 @@ elephc-specific builtins with no PHP equivalent (not counted in coverage above):
 | `class_attribute_args()` | Class | Returns the constructor arguments of a named attribute applied to a class. |
 | `class_attribute_names()` | Class | Returns the list of attribute names applied to a class. |
 | `class_get_attributes()` | Class | Returns an array of ReflectionAttribute objects for all attributes of a class. |
-| `read_exif_data()` | Image | Implemented by the compiler-injected image prelude. |
+| `read_exif_data()` | Image | Alias of exif_read_data(). |
 | `clamp()` | Math | Clamps a value to be within a specified range. *(No PHP equivalent (not in PHP 8.4/8.5))* |
 | `log2()` | Math | Returns the base-2 logarithm of a number. *(No PHP equivalent (PHP has log(), log10(), log1p()))* |
 | `pcntl_daemon()` | Misc | Detaches the surviving child into a background daemon process. |

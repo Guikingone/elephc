@@ -1,6 +1,6 @@
 ---
 title: "imagefilter()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Applies one of GD's built-in filters to an image."
 sidebar:
   order: 506
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagefilter(mixed $image, int $filter, int $arg1 = 0, int $arg2 = 0, int $arg3 = 0, int $arg4 = 0): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Applies one of GD's built-in filters to an image.
 
 **Parameters**:
 - `$image` (`mixed`)

@@ -1,6 +1,6 @@
 ---
 title: "mysqli_stmt_sqlstate()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the SQLSTATE of the last call on a statement."
 sidebar:
   order: 176
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stmt_sqlstate(mixed $statement): string
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the SQLSTATE of the last call on a statement.
 
 **Parameters**:
 - `$statement` (`mixed`)

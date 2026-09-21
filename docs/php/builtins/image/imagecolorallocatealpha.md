@@ -1,6 +1,6 @@
 ---
 title: "imagecolorallocatealpha()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Allocates a color with alpha in a palette image."
 sidebar:
   order: 465
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagecolorallocatealpha(mixed $image, int $red, int $green, int $blue, int $alpha): int
 ```
 
-Implemented by the compiler-injected image prelude.
+Allocates a color with alpha in a palette image.
 
 **Parameters**:
 - `$image` (`mixed`)

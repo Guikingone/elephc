@@ -1,6 +1,6 @@
 ---
 title: "mysqli_ping()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Checks the connection and reconnects when that is enabled."
 sidebar:
   order: 145
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_ping(mixed $mysql): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Checks the connection and reconnects when that is enabled.
 
 **Parameters**:
 - `$mysql` (`mixed`)

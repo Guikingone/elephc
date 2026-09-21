@@ -1,6 +1,6 @@
 ---
 title: "ini_get_all()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Returns every configuration directive, optionally with its access level and scope."
 sidebar:
   order: 884
 ---
@@ -11,7 +11,7 @@ sidebar:
 function ini_get_all(?string $extension = null, bool $details = true): mixed
 ```
 
-Implemented by the compiler-injected web prelude.
+Returns every configuration directive, optionally with its access level and scope.
 
 **Parameters**:
 - `$extension` (`?string`), default `null`, optional

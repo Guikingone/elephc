@@ -1,6 +1,6 @@
 ---
 title: "mysqli_fetch_object()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the next row as an object."
 sidebar:
   order: 123
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_fetch_object(mixed $result, string $class = 'stdClass', array $constructor_args = []): mixed
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the next row as an object.
 
 **Parameters**:
 - `$result` (`mixed`)

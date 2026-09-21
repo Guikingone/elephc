@@ -1,6 +1,6 @@
 ---
 title: "session_register_shutdown()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Registers session_write_close() as a shutdown function."
 sidebar:
   order: 900
 ---
@@ -11,7 +11,7 @@ sidebar:
 function session_register_shutdown(): void
 ```
 
-Implemented by the compiler-injected web prelude.
+Registers session_write_close() as a shutdown function.
 
 **Parameters**: none.
 

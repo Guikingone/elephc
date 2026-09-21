@@ -1,6 +1,6 @@
 ---
 title: "mysqli_connect_errno()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the error code of the last connection attempt."
 sidebar:
   order: 106
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_connect_errno(): int
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the error code of the last connection attempt.
 
 **Parameters**: none.
 

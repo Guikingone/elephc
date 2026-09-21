@@ -1,6 +1,6 @@
 ---
 title: "imagecolorexactalpha()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the palette index of an exact color with alpha, or -1."
 sidebar:
   order: 472
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagecolorexactalpha(mixed $image, int $red, int $green, int $blue, int $alpha): int
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the palette index of an exact color with alpha, or -1.
 
 **Parameters**:
 - `$image` (`mixed`)

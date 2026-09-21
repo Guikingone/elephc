@@ -1,6 +1,6 @@
 ---
 title: "mysqli_prepare()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Prepares a statement for execution."
 sidebar:
   order: 146
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_prepare(mixed $mysql, string $query): mixed
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Prepares a statement for execution.
 
 **Parameters**:
 - `$mysql` (`mixed`)

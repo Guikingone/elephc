@@ -1,6 +1,6 @@
 ---
 title: "imagesetpixel()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Sets one pixel to a color."
 sidebar:
   order: 529
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagesetpixel(mixed $image, int $x, int $y, int $color): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Sets one pixel to a color.
 
 **Parameters**:
 - `$image` (`mixed`)

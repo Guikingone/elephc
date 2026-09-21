@@ -1,6 +1,6 @@
 ---
 title: "gregoriantojd()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Converts a Gregorian date into a Julian Day count."
 sidebar:
   order: 225
 ---
@@ -11,7 +11,7 @@ sidebar:
 function gregoriantojd(int $month, int $day, int $year): int
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Converts a Gregorian date into a Julian Day count.
 
 **Parameters**:
 - `$month` (`int`)

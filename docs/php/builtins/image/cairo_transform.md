@@ -1,6 +1,6 @@
 ---
 title: "cairo_transform()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Composes the given matrix onto the context's transformation."
 sidebar:
   order: 445
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_transform(mixed $context, mixed $matrix): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Composes the given matrix onto the context's transformation.
 
 **Parameters**:
 - `$context` (`mixed`)

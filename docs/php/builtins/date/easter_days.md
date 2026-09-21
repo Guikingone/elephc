@@ -1,6 +1,6 @@
 ---
 title: "easter_days()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Returns the number of days from March 21 to Easter Sunday of a year."
 sidebar:
   order: 218
 ---
@@ -11,7 +11,7 @@ sidebar:
 function easter_days(?int $year = null, int $mode = CAL_EASTER_DEFAULT): int
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Returns the number of days from March 21 to Easter Sunday of a year.
 
 **Parameters**:
 - `$year` (`?int`), default `null`, optional

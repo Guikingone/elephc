@@ -1,6 +1,6 @@
 ---
 title: "session_module_name()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Reads or sets the session save handler module."
 sidebar:
   order: 897
 ---
@@ -11,7 +11,7 @@ sidebar:
 function session_module_name(?string $module = null): mixed
 ```
 
-Implemented by the compiler-injected web prelude.
+Reads or sets the session save handler module.
 
 **Parameters**:
 - `$module` (`?string`), default `null`, optional

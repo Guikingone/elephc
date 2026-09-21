@@ -1,6 +1,6 @@
 ---
 title: "date_get_last_errors()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Returns the warnings and errors from the last date parse."
 sidebar:
   order: 200
 ---
@@ -11,7 +11,7 @@ sidebar:
 function date_get_last_errors(): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Returns the warnings and errors from the last date parse.
 
 **Parameters**: none.
 
