@@ -1,6 +1,6 @@
 ---
 title: "mysqli_field_tell()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns a result's current column cursor position."
 sidebar:
   order: 127
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_field_tell(mixed $result): int
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns a result's current column cursor position.
 
 **Parameters**:
 - `$result` (`mixed`)

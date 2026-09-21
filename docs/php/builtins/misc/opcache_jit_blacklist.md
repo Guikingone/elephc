@@ -1,6 +1,6 @@
 ---
 title: "opcache_jit_blacklist()"
-description: "Implemented by the compiler-injected OPcache prelude."
+description: "Excludes a function from JIT compilation."
 sidebar:
   order: 619
 ---
@@ -11,7 +11,7 @@ sidebar:
 function opcache_jit_blacklist(mixed $closure): void
 ```
 
-Implemented by the compiler-injected OPcache prelude.
+Excludes a function from JIT compilation.
 
 **Parameters**:
 - `$closure` (`mixed`)

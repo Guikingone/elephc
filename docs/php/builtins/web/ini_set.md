@@ -1,6 +1,6 @@
 ---
 title: "ini_set()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Overrides a configuration directive for the rest of the request."
 sidebar:
   order: 885
 ---
@@ -11,7 +11,7 @@ sidebar:
 function ini_set(string $option, mixed $value): mixed
 ```
 
-Implemented by the compiler-injected web prelude.
+Overrides a configuration directive for the rest of the request.
 
 **Parameters**:
 - `$option` (`string`)

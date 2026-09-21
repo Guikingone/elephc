@@ -1,6 +1,6 @@
 ---
 title: "strptime()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Parses a time string against a strftime format. Deprecated since PHP 8.1."
 sidebar:
   order: 241
 ---
@@ -11,7 +11,7 @@ sidebar:
 function strptime(string $timestamp, string $format): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Parses a time string against a strftime format. Deprecated since PHP 8.1.
 
 **Parameters**:
 - `$timestamp` (`string`)

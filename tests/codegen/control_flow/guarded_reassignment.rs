@@ -44,8 +44,12 @@ foreach ($g as $f) {
 /// The complement is published separately from the then-branch's view
 /// (`Checker::republish_flow_narrowing`), and is a guard fact in its own right however the
 /// then-branch ended: the chain restores the pre-`if` type before checking the `else`.
+///
+/// This is a TYPE-CHECK pin only. A pattern that matches nothing makes `glob()` return `[]`,
+/// not `false`, so the `else` here is compiled and never entered; the executing sibling below
+/// is what proves the store itself works (issue #1128).
 #[test]
-fn test_glob_false_fallback_on_the_else_side_compiles() {
+fn test_glob_false_fallback_on_the_else_side_type_checks() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
 $g = glob("*.nothing-matches-this");
@@ -59,6 +63,49 @@ var_dump($g);
     );
     assert_eq!(out, "matched 0\narray(0) {\n}\n");
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// The complement store on the `else` side, with a source that really can answer `false`.
+///
+/// `glob()` cannot be made to fail portably, so the fixture above only type-checks its `else`.
+/// `maybe_list(false)` takes it for real: the store publishes through the union slot, and the
+/// append afterwards shows the slot holds an array rather than the `false` it started with.
+/// The `true` call keeps the then-branch covered in the same program, so one fixture runs both
+/// sides of the same guard.
+#[test]
+fn test_false_fallback_on_the_else_side_stores_through_the_union_slot() {
+    let out = compile_and_run(
+        r#"<?php
+function maybe_list(bool $ok): array|false { return $ok ? ["a", "b"] : false; }
+
+$hit = maybe_list(true);
+if ($hit !== false) {
+    echo "matched ", count($hit), "\n";
+} else {
+    $hit = [];
+}
+var_dump($hit);
+
+$miss = maybe_list(false);
+if ($miss !== false) {
+    echo "matched ", count($miss), "\n";
+} else {
+    $miss = [];
+    $miss[] = "appended";
+}
+var_dump($miss);
+foreach ($miss as $e) { echo "e=", $e, "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "matched 2\n",
+            "array(2) {\n  [0]=>\n  string(1) \"a\"\n  [1]=>\n  string(1) \"b\"\n}\n",
+            "array(1) {\n  [0]=>\n  string(8) \"appended\"\n}\n",
+            "e=appended\n",
+        )
+    );
 }
 
 /// The fallback branch actually RUNS, so the store goes through the union slot rather than

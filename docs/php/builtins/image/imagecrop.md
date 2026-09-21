@@ -1,6 +1,6 @@
 ---
 title: "imagecrop()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the given rectangle of an image as a new image."
 sidebar:
   order: 495
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagecrop(mixed $image, mixed $rect = ['x' => 0, 'y' => 0, 'width' => 0, 'height' => 0]): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the given rectangle of an image as a new image.
 
 **Parameters**:
 - `$image` (`mixed`)

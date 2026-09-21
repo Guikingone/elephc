@@ -511,7 +511,15 @@ fn test_parse_property_declarator_list_shares_modifiers_and_type() {
     for property in properties {
         assert_eq!(property.visibility, Visibility::Private, "{}", property.name);
         assert!(property.is_static, "{}", property.name);
-        assert!(property.type_expr.is_some(), "{}", property.name);
+        assert_eq!(
+            property.type_expr,
+            Some(TypeExpr::Nullable(Box::new(TypeExpr::Int))),
+            "{} did not receive the declaration head's exact type",
+            property.name
+        );
+        assert!(!property.readonly, "{}", property.name);
+        assert!(!property.by_ref, "{}", property.name);
+        assert!(!property.is_promoted, "{}", property.name);
     }
     assert_eq!(properties[0].name, "a");
     assert!(properties[0].default.is_some());
@@ -535,10 +543,39 @@ fn test_parse_class_constant_declarator_list_shares_type_and_visibility() {
     assert_eq!(constants.len(), 2);
     for constant in constants {
         assert_eq!(constant.visibility, Visibility::Protected, "{}", constant.name);
-        assert!(constant.type_expr.is_some(), "{}", constant.name);
+        assert_eq!(
+            constant.type_expr,
+            Some(TypeExpr::Int),
+            "{} did not receive the declaration head's exact type",
+            constant.name
+        );
+        assert!(!constant.is_final, "{}", constant.name);
     }
     assert_eq!(constants[0].name, "A");
     assert_eq!(constants[1].name, "B");
+}
+
+/// Verifies the plain `public int $w = 40, $h = 22` list types BOTH names `int`.
+///
+/// The two lists above carry a nullable type and a `static` modifier, which makes them the
+/// interesting parses but also means neither pins the ordinary spelling. A loop that attached
+/// the head's type to the first declarator only would leave `$h` untyped here, and the checker
+/// would then infer it from the default instead of enforcing the declaration.
+#[test]
+fn test_parse_property_declarator_list_types_every_plain_member() {
+    let stmts = parse_source("<?php class Box { public int $w = 40, $h = 22; }");
+    let StmtKind::ClassDecl { properties, .. } = &stmts[0].kind else {
+        panic!("Expected ClassDecl");
+    };
+    assert_eq!(properties.len(), 2);
+    for property in properties {
+        assert_eq!(property.visibility, Visibility::Public, "{}", property.name);
+        assert_eq!(property.type_expr, Some(TypeExpr::Int), "{}", property.name);
+        assert!(!property.is_static, "{}", property.name);
+        assert!(property.default.is_some(), "{}", property.name);
+    }
+    assert_eq!(properties[0].name, "w");
+    assert_eq!(properties[1].name, "h");
 }
 
 /// Verifies an INTERFACE constant list parses the same way as a class one.

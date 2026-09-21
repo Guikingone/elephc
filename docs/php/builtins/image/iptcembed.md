@@ -1,6 +1,6 @@
 ---
 title: "iptcembed()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Embeds an IPTC block into a JPEG file."
 sidebar:
   order: 538
 ---
@@ -11,7 +11,7 @@ sidebar:
 function iptcembed(string $iptcdata, string $jpeg_file_name, int $spool = 0): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Embeds an IPTC block into a JPEG file.
 
 **Parameters**:
 - `$iptcdata` (`string`)

@@ -1,6 +1,6 @@
 ---
 title: "zend_version()"
-description: "Implemented by the compiler-injected version prelude."
+description: "Returns the version of the Zend engine the runtime reports."
 sidebar:
   order: 664
 ---
@@ -11,7 +11,7 @@ sidebar:
 function zend_version(): string
 ```
 
-Implemented by the compiler-injected version prelude.
+Returns the version of the Zend engine the runtime reports.
 
 **Parameters**: none.
 

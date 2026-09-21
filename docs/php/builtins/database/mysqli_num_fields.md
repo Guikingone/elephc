@@ -1,6 +1,6 @@
 ---
 title: "mysqli_num_fields()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns how many columns a result has."
 sidebar:
   order: 142
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_num_fields(mixed $result): int
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns how many columns a result has.
 
 **Parameters**:
 - `$result` (`mixed`)

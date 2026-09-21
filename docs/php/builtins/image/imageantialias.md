@@ -1,6 +1,6 @@
 ---
 title: "imageantialias()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Turns antialiased drawing on or off for lines and polygons."
 sidebar:
   order: 459
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imageantialias(mixed $image, bool $enable): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Turns antialiased drawing on or off for lines and polygons.
 
 **Parameters**:
 - `$image` (`mixed`)

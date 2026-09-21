@@ -1,6 +1,6 @@
 ---
 title: "mysqli_next_result()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Advances a multi-query to its next result set."
 sidebar:
   order: 141
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_next_result(mixed $mysql): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Advances a multi-query to its next result set.
 
 **Parameters**:
 - `$mysql` (`mixed`)

@@ -1,6 +1,6 @@
 ---
 title: "imagepolygon()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Draws the outline of a closed polygon."
 sidebar:
   order: 522
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagepolygon(mixed $image, array $points, int $color): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Draws the outline of a closed polygon.
 
 **Parameters**:
 - `$image` (`mixed`)

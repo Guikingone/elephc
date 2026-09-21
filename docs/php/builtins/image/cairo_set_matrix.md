@@ -1,6 +1,6 @@
 ---
 title: "cairo_set_matrix()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Replaces the context's transformation with the given matrix."
 sidebar:
   order: 438
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_set_matrix(mixed $context, mixed $matrix): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Replaces the context's transformation with the given matrix.
 
 **Parameters**:
 - `$context` (`mixed`)

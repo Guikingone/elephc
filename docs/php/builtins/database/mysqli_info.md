@@ -1,6 +1,6 @@
 ---
 title: "mysqli_info()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns information about the last query, when the server supplies it."
 sidebar:
   order: 136
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_info(mixed $mysql): ?string
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns information about the last query, when the server supplies it.
 
 **Parameters**:
 - `$mysql` (`mixed`)

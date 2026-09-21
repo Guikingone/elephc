@@ -1,6 +1,6 @@
 ---
 title: "mysqli_autocommit()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Turns automatic committing on or off."
 sidebar:
   order: 100
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_autocommit(mixed $mysql, bool $enable): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Turns automatic committing on or off.
 
 **Parameters**:
 - `$mysql` (`mixed`)

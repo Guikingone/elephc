@@ -1,6 +1,6 @@
 ---
 title: "mysqli_fetch_assoc()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the next row as an associative array."
 sidebar:
   order: 117
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_fetch_assoc(mixed $result): ?array
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the next row as an associative array.
 
 **Parameters**:
 - `$result` (`mixed`)

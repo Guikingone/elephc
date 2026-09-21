@@ -1,6 +1,6 @@
 ---
 title: "image_type_to_mime_type()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the MIME type for an IMAGETYPE_* constant."
 sidebar:
   order: 455
 ---
@@ -11,7 +11,7 @@ sidebar:
 function image_type_to_mime_type(int $image_type): string
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the MIME type for an IMAGETYPE_* constant.
 
 **Parameters**:
 - `$image_type` (`int`)

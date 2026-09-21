@@ -1,6 +1,6 @@
 ---
 title: "unixtojd()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Converts a Unix timestamp into a Julian Day count."
 sidebar:
   order: 253
 ---
@@ -11,7 +11,7 @@ sidebar:
 function unixtojd(?int $timestamp = null): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Converts a Unix timestamp into a Julian Day count.
 
 **Parameters**:
 - `$timestamp` (`?int`), default `null`, optional

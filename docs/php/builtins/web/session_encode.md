@@ -1,6 +1,6 @@
 ---
 title: "session_encode()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Serializes the current session data into a string."
 sidebar:
   order: 893
 ---
@@ -11,7 +11,7 @@ sidebar:
 function session_encode(): mixed
 ```
 
-Implemented by the compiler-injected web prelude.
+Serializes the current session data into a string.
 
 **Parameters**: none.
 

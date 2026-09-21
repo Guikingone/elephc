@@ -1,6 +1,6 @@
 ---
 title: "imagecopy()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Copies a rectangle from one image into another."
 sidebar:
   order: 481
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagecopy(mixed $dst_image, mixed $src_image, int $dst_x, int $dst_y, int $src_x, int $src_y, int $src_width, int $src_height): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Copies a rectangle from one image into another.
 
 **Parameters**:
 - `$dst_image` (`mixed`)

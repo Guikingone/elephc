@@ -1,6 +1,6 @@
 ---
 title: "mysqli_field_seek()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Moves a result's column cursor to an offset."
 sidebar:
   order: 126
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_field_seek(mixed $result, int $index): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Moves a result's column cursor to an offset.
 
 **Parameters**:
 - `$result` (`mixed`)

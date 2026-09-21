@@ -1,6 +1,6 @@
 ---
 title: "imageellipse()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Draws the outline of an ellipse."
 sidebar:
   order: 499
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imageellipse(mixed $image, int $center_x, int $center_y, int $width, int $height, int $color): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Draws the outline of an ellipse.
 
 **Parameters**:
 - `$image` (`mixed`)

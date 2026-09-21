@@ -162,6 +162,24 @@ untouched — do not push further changes, and do not rebase or merge `main` int
 to keep it aligned. From that point on the maintainers take over the Pull Request
 and will handle reviewing, updating, and integrating it.
 
+### Third-party GitHub Actions are pinned to commit SHAs
+
+Every action in `.github/workflows` that is **not** owned by GitHub is referenced
+by a full commit SHA, with its version kept as a trailing comment:
+
+```yaml
+uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+```
+
+A tag or branch name is a ref the upstream maintainer can move, and these run on
+every push and pull request — `@stable` and `@nextest` in particular are not
+version tags at all. A new third-party action goes in pinned; `.github/dependabot.yml`
+opens the bump PRs so the pins do not freeze.
+
+The `actions/*` references stay on version tags. They are GitHub-owned — same
+origin as the runner and the workflow token — and their tags are immutable by
+convention, so the threat model is much weaker.
+
 ## Coding Style
 
 Try to follow the style already used throughout the codebase.

@@ -1,6 +1,6 @@
 ---
 title: "imagecopyresampled()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Copies and resizes a rectangle with pixel interpolation."
 sidebar:
   order: 484
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagecopyresampled(mixed $dst_image, mixed $src_image, int $dst_x, int $dst_y, int $src_x, int $src_y, int $dst_width, int $dst_height, int $src_width, int $src_height): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Copies and resizes a rectangle with pixel interpolation.
 
 **Parameters**:
 - `$dst_image` (`mixed`)

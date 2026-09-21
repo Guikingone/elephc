@@ -1,6 +1,6 @@
 ---
 title: "cairo_new_path()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Discards the current path."
 sidebar:
   order: 420
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_new_path(mixed $context): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Discards the current path.
 
 **Parameters**:
 - `$context` (`mixed`)

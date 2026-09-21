@@ -1,6 +1,6 @@
 ---
 title: "imageconvolution()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Applies a 3x3 convolution matrix to an image."
 sidebar:
   order: 480
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imageconvolution(mixed $image, array $matrix, float $divisor, float $offset): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Applies a 3x3 convolution matrix to an image.
 
 **Parameters**:
 - `$image` (`mixed`)

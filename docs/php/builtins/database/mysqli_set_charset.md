@@ -1,6 +1,6 @@
 ---
 title: "mysqli_set_charset()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Sets the character set used by the connection."
 sidebar:
   order: 156
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_set_charset(mixed $mysql, string $charset): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Sets the character set used by the connection.
 
 **Parameters**:
 - `$mysql` (`mixed`)

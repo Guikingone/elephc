@@ -1,6 +1,6 @@
 ---
 title: "mysqli_rollback()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Rolls back the open transaction."
 sidebar:
   order: 153
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_rollback(mixed $mysql, int $flags = 0, ?string $name = null): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Rolls back the open transaction.
 
 **Parameters**:
 - `$mysql` (`mixed`)

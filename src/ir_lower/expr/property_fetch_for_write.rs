@@ -1,14 +1,20 @@
 //! Purpose:
-//! Lowers stable object-property sources for by-reference `foreach`.
+//! Lowers object-property sources for by-reference `foreach`, whatever the receiver.
 //!
 //! Called from:
 //! - `crate::ir_lower::stmt::typed_foreach` when the loop source is a property access.
 //!
 //! Key details:
-//! - Emits a borrowed `PropGetForWrite` only when frontend and backend slot
-//!   classification agree and every receiver-chain step has stable backing storage.
-//! - Hooked, magic, dynamic, nullable, packed, or temporary receiver paths keep
-//!   the ordinary retaining property read.
+//! - Emits a borrowed `PropGetForWrite` when the receiver is a statically known non-null object
+//!   and the final property is a fixed container slot. Frontend and backend slot classification
+//!   are mirrored over the same class metadata so the two sides cannot silently disagree.
+//! - The receiver no longer has to name stable backing storage. That question now only decides
+//!   WHO releases the receiver: a stable root (a variable, `$this`, a chain of declared non-null
+//!   object slots) releases its temporary here as before, while an OWNING temporary --
+//!   `$arr[0]->x`, `$o->get()->x` -- is handed to the loop, which outlives the borrow and
+//!   releases it on every way out, including `break`, `return` and a caught throw (issue #690).
+//! - Hooked, magic, dynamic, nullable, `stdClass`, and non-container property slots keep the
+//!   ordinary retaining property read.
 
 use super::*;
 

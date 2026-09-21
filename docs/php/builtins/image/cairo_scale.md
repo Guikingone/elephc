@@ -1,6 +1,6 @@
 ---
 title: "cairo_scale()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Scales the context's transformation by the given x and y factors."
 sidebar:
   order: 433
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_scale(mixed $context, float $sx, float $sy): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Scales the context's transformation by the given x and y factors.
 
 **Parameters**:
 - `$context` (`mixed`)

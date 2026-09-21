@@ -1,6 +1,6 @@
 ---
 title: "imagefilledrectangle()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Draws a filled rectangle."
 sidebar:
   order: 504
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagefilledrectangle(mixed $image, int $x1, int $y1, int $x2, int $y2, int $color): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Draws a filled rectangle.
 
 **Parameters**:
 - `$image` (`mixed`)

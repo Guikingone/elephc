@@ -198,7 +198,11 @@ pub(crate) fn lower_getdate(
 /// caller still holds. These helpers return a freshly allocated hash and then drop
 /// the raw pointer, so the caller's ref has to be released after boxing or the
 /// hash, its keys, and its values stay live after the Mixed cell is freed.
-fn emit_box_hash_pointer_as_assoc_mixed(ctx: &mut FunctionContext<'_>) {
+///
+/// Shared rather than copied: `ob_get_status` had its own version of this without the
+/// release, and leaked nine blocks per call as a result (issue #938). Every builtin that
+/// returns a freshly built hash by raw pointer belongs on this one.
+pub(super) fn emit_box_hash_pointer_as_assoc_mixed(ctx: &mut FunctionContext<'_>) {
     let result = abi::int_result_reg(ctx.emitter);
     emit_scratch_reserve(ctx, 16);
     emit_store_result_to_scratch(ctx, 0);

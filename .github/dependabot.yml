@@ -1,0 +1,27 @@
+# Keeps the SHA-pinned GitHub Actions current.
+#
+# Every third-party action in .github/workflows is pinned to a full commit SHA, which is what
+# stops an upstream maintainer moving a tag under a job that runs on every push. A pin without
+# this file is debt: the action freezes at whatever commit was current when the pin landed, and
+# nobody notices until a runner deprecation breaks the build. Dependabot opens the bump PRs and
+# rewrites both the SHA and the trailing `# <version>, <date>` comment beside it.
+#
+# The `actions/*` references are deliberately NOT pinned: they are GitHub-owned, same origin as
+# the runner and the workflow token, and their version tags are immutable by convention. They
+# are still listed here so their major versions are kept current.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "type:chore"
+    groups:
+      # One PR for the whole set rather than one per action: every bump is a SHA plus a
+      # comment, and reviewing them together is what makes the batch readable.
+      actions:
+        patterns:
+          - "*"

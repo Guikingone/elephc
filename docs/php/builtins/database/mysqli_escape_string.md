@@ -1,6 +1,6 @@
 ---
 title: "mysqli_escape_string()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Alias of mysqli_real_escape_string()."
 sidebar:
   order: 112
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_escape_string(mixed $mysql, string $string): string
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Alias of mysqli_real_escape_string().
 
 **Parameters**:
 - `$mysql` (`mixed`)

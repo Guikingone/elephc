@@ -173,11 +173,12 @@ var_dump($a["outer"]["inner"][1]);
     assert_eq!(out, "string(1) \"q\"\n");
 }
 
-/// The same nesting through an intermediate local, and with an int-valued inner array.
+/// The same nesting, reached through an intermediate local instead of one chained read.
 ///
 /// Reading `$a["outer"]` into its own local first goes through a different read path than the
 /// chained `$a["outer"]["inner"]` above, but both consume the same fabricated stamp, so both
-/// answered the pointer-as-integer before the fix.
+/// answered the pointer-as-integer before the fix. The inner array is string-valued on purpose:
+/// the fabricated stamp was `int`, so only a non-int element type tells the two apart.
 #[test]
 fn test_nested_assoc_literal_element_type_survives_an_intermediate_local() {
     let out = compile_and_run(
@@ -189,6 +190,40 @@ echo $mid["inner"][1], "|", count($mid["inner"]);
 "#,
     );
     assert_eq!(out, "q|2");
+}
+
+/// Regression for issue #984's ORIGINAL shape: a superglobal-backed array ASSIGNED into a cell.
+///
+/// #1068 fixed the nested-LITERAL stamp, which is a different path. This is the one the issue
+/// was filed from: `$n["nested"] = $argv`, then an element read through the boxed `mixed` cell.
+/// `$argv` is the only array the RUNTIME builds rather than the program, and on x86_64 it was
+/// built with a bare `malloc` that never wrote the packed kind word `__rt_array_new` puts at
+/// `[array - 8]`. Reading an element through the box then used the wrong slot stride and
+/// answered the string's pointer as `int(140724801510533)`, with `foreach` iterating zero times.
+///
+/// The program is run without arguments, so `$argv` holds exactly the binary path; the values
+/// are compared against `$argv` itself rather than spelled out, which is what makes the same
+/// fixture match `php -n` on the script.
+#[test]
+fn test_regression_984_argv_assigned_into_an_assoc_cell_reads_back_as_strings() {
+    let out = compile_and_run(
+        r#"<?php
+$n = ["a" => 1];
+$n["nested"] = $argv;
+echo count($n["nested"]), ";";
+echo gettype($n["nested"][0]), ";";
+echo $n["nested"][0] === $argv[0] ? "same" : "differs", ";";
+$seen = 0;
+foreach ($n["nested"] as $i => $v) { $seen++; echo $v === $argv[$i] ? "" : "MISMATCH"; }
+echo $seen, ";";
+$s = ["b" => 2];
+$s["argv"] = $_SERVER["argv"];
+echo gettype($s["argv"][0]), ";";
+echo $s["argv"][0] === $argv[0] ? "same" : "differs", ";";
+echo count($s["argv"]);
+"#,
+    );
+    assert_eq!(out, "1;string;same;1;string;same;1");
 }
 
 /// An INDEXED outer literal was always correct, and has to stay that way.

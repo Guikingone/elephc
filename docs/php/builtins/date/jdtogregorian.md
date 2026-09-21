@@ -1,6 +1,6 @@
 ---
 title: "jdtogregorian()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Converts a Julian Day count into a Gregorian date string."
 sidebar:
   order: 231
 ---
@@ -11,7 +11,7 @@ sidebar:
 function jdtogregorian(int $julian_day): string
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Converts a Julian Day count into a Gregorian date string.
 
 **Parameters**:
 - `$julian_day` (`int`)

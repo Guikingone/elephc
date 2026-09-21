@@ -1,6 +1,6 @@
 ---
 title: "imagealphablending()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Turns alpha blending on or off for subsequent drawing."
 sidebar:
   order: 458
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagealphablending(mixed $image, bool $enable): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Turns alpha blending on or off for subsequent drawing.
 
 **Parameters**:
 - `$image` (`mixed`)

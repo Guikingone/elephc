@@ -1,6 +1,6 @@
 ---
 title: "jdtojewish()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Converts a Julian Day count into a Jewish date string."
 sidebar:
   order: 232
 ---
@@ -11,7 +11,7 @@ sidebar:
 function jdtojewish(int $julian_day, bool $hebrew = false, int $flags = 0): string
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Converts a Julian Day count into a Jewish date string.
 
 **Parameters**:
 - `$julian_day` (`int`)

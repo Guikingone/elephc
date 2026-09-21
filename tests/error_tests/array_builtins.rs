@@ -895,6 +895,22 @@ fn test_error_array_multisort_non_array() {
     );
 }
 
+/// Verifies that `array_multisort()` refuses an ASSOCIATIVE receiver.
+///
+/// Follow-up for #1187, which expected `array_multisort()` to renumber a hash's keys to
+/// `0..n-1` and ride the same runtime-key materialization `array_keys()` gained in #1099. It
+/// never gets that far: the arguments must be indexed arrays, so there is no reindexed hash
+/// for `array_keys()` to read. (Reference PHP would not renumber either — it KEEPS string
+/// keys and only re-indexes numeric ones.) The sibling backend refusals for `usort` and
+/// `natsort` are pinned in `tests/codegen/arrays/key_sort.rs`.
+#[test]
+fn test_error_array_multisort_rejects_an_associative_receiver() {
+    expect_error(
+        r#"<?php $h = ["b" => 2, "a" => 1]; $t = ["x" => "B", "y" => "A"]; array_multisort($h, $t);"#,
+        "array_multisort() arguments must be indexed arrays",
+    );
+}
+
 /// Verifies that an untyped closure/arrow-function parameter passed as an array builtin's
 /// callback inherits the array's ELEMENT type instead of staying `Mixed`, so a string-only
 /// builtin call in the body type-checks. Covers every builtin that types its callback

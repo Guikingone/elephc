@@ -1,6 +1,6 @@
 ---
 title: "cairo_translate()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Translates the context's transformation by the given x and y offsets."
 sidebar:
   order: 446
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_translate(mixed $context, float $tx, float $ty): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Translates the context's transformation by the given x and y offsets.
 
 **Parameters**:
 - `$context` (`mixed`)

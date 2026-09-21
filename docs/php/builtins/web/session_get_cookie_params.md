@@ -1,6 +1,6 @@
 ---
 title: "session_get_cookie_params()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Returns the session cookie's lifetime, path, domain, and flags."
 sidebar:
   order: 895
 ---
@@ -11,7 +11,7 @@ sidebar:
 function session_get_cookie_params(): array
 ```
 
-Implemented by the compiler-injected web prelude.
+Returns the session cookie's lifetime, path, domain, and flags.
 
 **Parameters**: none.
 

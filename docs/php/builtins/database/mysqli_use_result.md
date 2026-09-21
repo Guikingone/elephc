@@ -1,6 +1,6 @@
 ---
 title: "mysqli_use_result()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Starts reading a result row by row from the server."
 sidebar:
   order: 181
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_use_result(mixed $mysql): mixed
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Starts reading a result row by row from the server.
 
 **Parameters**:
 - `$mysql` (`mixed`)

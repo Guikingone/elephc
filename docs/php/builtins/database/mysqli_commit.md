@@ -1,6 +1,6 @@
 ---
 title: "mysqli_commit()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Commits the open transaction."
 sidebar:
   order: 104
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_commit(mixed $mysql, int $flags = 0, ?string $name = null): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Commits the open transaction.
 
 **Parameters**:
 - `$mysql` (`mixed`)

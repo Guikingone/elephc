@@ -1,6 +1,6 @@
 ---
 title: "date_parse()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Parses a date/time string into its components, warnings, and errors."
 sidebar:
   order: 206
 ---
@@ -11,7 +11,7 @@ sidebar:
 function date_parse(string $datetime): array
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Parses a date/time string into its components, warnings, and errors.
 
 **Parameters**:
 - `$datetime` (`string`)

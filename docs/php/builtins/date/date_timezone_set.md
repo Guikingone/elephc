@@ -1,6 +1,6 @@
 ---
 title: "date_timezone_set()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Sets a date's timezone, converting the wall-clock time to it."
 sidebar:
   order: 216
 ---
@@ -11,7 +11,7 @@ sidebar:
 function date_timezone_set(mixed $object, mixed $timezone): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Sets a date's timezone, converting the wall-clock time to it.
 
 **Parameters**:
 - `$object` (`mixed`)

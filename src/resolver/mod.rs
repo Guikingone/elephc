@@ -102,7 +102,24 @@ pub fn resolve_collecting_includes(
 }
 
 /// Resolves includes while applying the invocation's conditional symbols to every loaded file.
+///
+/// Wrapped in `with_compiler_stack` like every other recursive phase. This is the entry all
+/// three public spellings funnel through, and the walk starts immediately: `has_includes`
+/// descends the whole tree before the early return, so even a program with no includes at all
+/// needs the budget at `MAX_COMPILER_NESTING`. Without it an embedder calling the resolver
+/// from its own worker thread aborted with `has overflowed its stack` (issues #686, #1150).
 pub fn resolve_collecting_includes_with_defines(
+    program: Program,
+    base_dir: &Path,
+    defines: &HashSet<String>,
+) -> Result<(Program, Vec<PathBuf>), CompileError> {
+    crate::compiler_stack::with_compiler_stack(|| {
+        resolve_collecting_includes_with_defines_inner(program, base_dir, defines)
+    })
+}
+
+/// The resolver body, run on a stack `with_compiler_stack` has already sized.
+fn resolve_collecting_includes_with_defines_inner(
     program: Program,
     base_dir: &Path,
     defines: &HashSet<String>,

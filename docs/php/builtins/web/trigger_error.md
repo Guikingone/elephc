@@ -1,6 +1,6 @@
 ---
 title: "trigger_error()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Raises a user-level error, warning, or notice."
 sidebar:
   order: 911
 ---
@@ -11,7 +11,7 @@ sidebar:
 function trigger_error(string $message, int $error_level = E_USER_NOTICE): bool
 ```
 
-Implemented by the compiler-injected web prelude.
+Raises a user-level error, warning, or notice.
 
 **Parameters**:
 - `$message` (`string`)

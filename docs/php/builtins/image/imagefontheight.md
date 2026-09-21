@@ -1,6 +1,6 @@
 ---
 title: "imagefontheight()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the pixel height of a built-in font."
 sidebar:
   order: 508
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagefontheight(int $font): int
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the pixel height of a built-in font.
 
 **Parameters**:
 - `$font` (`int`)

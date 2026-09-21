@@ -1,6 +1,6 @@
 ---
 title: "mysqli_thread_safe()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Reports whether the client library is thread-safe."
 sidebar:
   order: 180
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_thread_safe(): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Reports whether the client library is thread-safe.
 
 **Parameters**: none.
 

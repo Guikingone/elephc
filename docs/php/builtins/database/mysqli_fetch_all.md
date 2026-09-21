@@ -1,6 +1,6 @@
 ---
 title: "mysqli_fetch_all()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns every remaining row of a result at once."
 sidebar:
   order: 115
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_fetch_all(mixed $result, int $mode = 2): array
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns every remaining row of a result at once.
 
 **Parameters**:
 - `$result` (`mixed`)

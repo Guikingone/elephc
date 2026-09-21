@@ -1,6 +1,6 @@
 ---
 title: "opcache_get_status()"
-description: "Implemented by the compiler-injected OPcache prelude."
+description: "Returns OPcache memory, statistics, and optionally the cached scripts."
 sidebar:
   order: 615
 ---
@@ -11,7 +11,7 @@ sidebar:
 function opcache_get_status(mixed $include_scripts = true): mixed
 ```
 
-Implemented by the compiler-injected OPcache prelude.
+Returns OPcache memory, statistics, and optionally the cached scripts.
 
 **Parameters**:
 - `$include_scripts` (`mixed`), default `true`, optional

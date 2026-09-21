@@ -1,6 +1,6 @@
 ---
 title: "cairo_image_surface_create()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates an in-memory image surface of the given pixel format and size."
 sidebar:
   order: 408
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_image_surface_create(int $format, int $width, int $height): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates an in-memory image surface of the given pixel format and size.
 
 **Parameters**:
 - `$format` (`int`)

@@ -1,6 +1,6 @@
 ---
 title: "imagearc()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Draws an arc of an ellipse."
 sidebar:
   order: 460
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagearc(mixed $image, int $center_x, int $center_y, int $width, int $height, int $start_angle, int $end_angle, int $color): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Draws an arc of an ellipse.
 
 **Parameters**:
 - `$image` (`mixed`)

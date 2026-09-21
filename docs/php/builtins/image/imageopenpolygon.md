@@ -1,6 +1,6 @@
 ---
 title: "imageopenpolygon()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Draws an unclosed polyline."
 sidebar:
   order: 518
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imageopenpolygon(mixed $image, array $points, int $color): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Draws an unclosed polyline.
 
 **Parameters**:
 - `$image` (`mixed`)

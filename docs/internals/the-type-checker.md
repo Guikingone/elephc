@@ -558,26 +558,45 @@ lowering ELIDES it, and `lower_cast` elides exactly one shape: `(string)` over a
 type is already `Str`, which compiles to nothing at all. Every other cast emits `Op::Cast`,
 whose backend helpers write into storage independent of the source — `(string)` over a boxed
 `mixed` COPIES the payload into a fresh allocation, and `(array)` allocates even when its
-operand is already an array. The pass therefore carries which parameters are declared exactly
-`string` and keeps a cast's alias only when the operand resolves to one of them. Treating every
-cast as transparent is what made `function f($v) { return (string)$v; }` leak a full copy of
-the string on every call (issue #700).
+operand is already an array. Treating every cast as transparent is what made
+`function f($v) { return (string)$v; }` leak a full copy of the string on every call
+(issue #700).
 
-The declaration is the start of the answer, not all of it. A `string` parameter can be assigned
-a wider value, and the slot widens with it, so the pass also checks the provenance the operand
-actually carries:
+So the pass has to answer a question the declarations alone cannot: is this operand's slot a
+bare `Str` RIGHT HERE? It tracks that in `str_slot_locals`, a flow-sensitive set of names
+alongside the provenance map:
+
+- It is **seeded** with the visible parameters declared exactly `string`. Only those get a bare
+  `Str` slot in the first place.
+- It is **never gained**. A local is boxed Mixed whatever is written into it — `$x = $s` over a
+  `string` parameter still lowers through `mixed_box` — so no assignment can add a name.
+- It **shrinks** when a `string` parameter is assigned something that is not itself bare-`Str`
+  (a `mixed` parameter, or a boxed local such as `$c ? $p : $q`), and when the name is bound by
+  reference, since `&` writes are not visible as ordinary assignments.
+- It is **intersected** at every control-flow merge: a slot counts as bare `Str` after an `if`
+  only if it was one on every path into that point.
+
+A `(string)` cast is a candidate passthrough only when its operand is still in that set. The
+lookup sees through exactly the wrappers `expr_alias` treats as transparent — `@$s`, a named
+argument, a spread, and an already-elided inner `(string)` — so `return (string)@$s` and
+`(string)(string)$s` behave like `return (string)$s`. If the two disagreed about which
+expression "the operand" is, the result would be a use-after-free rather than a leak.
+
+Passing that gate is necessary but not sufficient, because the slot can be bare `Str` while
+holding a DIFFERENT parameter's storage:
 
 ```php
 function f(string $a, string $b): string { $a = $b; return (string)$a; }  // borrowed from $b
 function g(string $a, mixed  $b): string { $a = $b; return (string)$a; }  // a fresh copy
 ```
 
-Both operands name a parameter declared `string`. In `f` the storage now in `$a` came from
-another bare `Str` slot, the cast is still elided, and the result is `$b`'s storage. In `g` the
-assignment boxed `$a` into a Mixed, so `lower_cast` emits `Op::Cast` and the caller owns the
-copy. Only a provenance whose every parameter was declared `string` keeps the passthrough;
-anything else answers `None`, and an `Unknown` provenance stays `Unknown`, because that is the
-one case where claiming independence would be a use-after-free rather than a leak.
+In `f` the storage now in `$a` came from another bare `Str` slot, so `$a` stays in the set, the
+cast is still elided, and the summary names `$b` — the provenance, not the index the operand
+was spelled with. In `g` the assignment widened `$a`, it leaves the set, `lower_cast` emits
+`Op::Cast`, and the caller owns the copy. The second gate therefore re-checks the provenance
+itself: only one whose every parameter was declared `string` keeps the passthrough. Anything
+else answers `None`, and an `Unknown` provenance stays `Unknown`, because that is the one case
+where claiming independence would be a use-after-free rather than a leak.
 
 ### Type narrowing (`is_*` / `instanceof` / strict-comparison guards)
 

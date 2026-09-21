@@ -1,6 +1,6 @@
 ---
 title: "easter_date()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Returns the Unix timestamp of midnight on Easter Sunday of a year."
 sidebar:
   order: 217
 ---
@@ -11,7 +11,7 @@ sidebar:
 function easter_date(?int $year = null, int $mode = CAL_EASTER_DEFAULT): int
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Returns the Unix timestamp of midnight on Easter Sunday of a year.
 
 **Parameters**:
 - `$year` (`?int`), default `null`, optional

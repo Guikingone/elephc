@@ -1,6 +1,6 @@
 ---
 title: "cairo_get_current_point()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the current point of the path as an [x, y] pair."
 sidebar:
   order: 406
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_get_current_point(mixed $context): array
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the current point of the path as an [x, y] pair.
 
 **Parameters**:
 - `$context` (`mixed`)

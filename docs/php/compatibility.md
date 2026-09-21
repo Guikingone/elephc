@@ -101,6 +101,8 @@ The counts above are what a compiled program has. Code run through `eval()` sees
 - `standard` constants: 163 / 142
 - `zend opcache` functions: 8 / 0
 
+Most of that is one gap rather than several. 203 of those functions — every one missing from `exif`, `gd`, `mysqli`, `pdo`, `session`, `zend opcache` — are implemented by a PHP prelude the compiler injects into the program it is compiling. The interpreter dispatches through the shared builtin registry, and a prelude function has no registry binding there, so it is not that these surfaces were skipped one by one: none of them has an entry point `eval()` can reach. Closing it means an `eval_builtin!` binding per surface; see **eval() coverage of the prelude-implemented modules** under [Known limitations](#known-limitations) for what is tracked.
+
 3 symbol(s) exist only inside `eval()` and are not counted in the table: `get_called_class()`, `get_class_methods()`, `get_class_vars()`.
 
 The remaining 2 baseline extensions expose no functions, classes, or constants of their own, so they have no row above: `lexbor`, `mysqlnd`.
@@ -156,7 +158,7 @@ elephc also provides 91 symbols from PECL extensions php-src does not bundle, wh
 | [iconv](./iconv.md) ([PHP](https://www.php.net/manual/en/book.iconv.php)) | ✅ Supported |  |
 | [GD / image](./image.md) ([PHP](https://www.php.net/manual/en/book.image.php)) | 🟡 Partial | Enabled with --with-image |
 | [PCNTL](./pcntl.md) ([PHP](https://www.php.net/manual/en/book.pcntl.php)) | ✅ Supported | Target-aware Unix process control; auto-linked or forced with --with-pcntl |
-| [XML](./xml.md) ([PHP](https://www.php.net/manual/en/book.xml.php)) | ✅ Supported | ext/xml SAX parser (22 functions, XMLParser, 28 constants) and ext/xmlwriter (42 functions, XMLWriter) on a pinned static libxml2 2.15.3 from the native catalog (elephc native add libxml2); auto-linked or forced with --with-xml, identical inside eval(); the surface is complete, with the runtime's per-handler-invocation heap cost documented under Runtime limits in docs/php/xml.md |
+| [XML](./xml.md) ([PHP](https://www.php.net/manual/en/book.xml.php)) | ✅ Supported | ext/xml SAX parser (22 functions, XMLParser, 28 constants) and ext/xmlwriter (42 functions, XMLWriter) on a pinned static libxml2 2.15.3 from the native catalog (elephc native add libxml2); auto-linked or forced with --with-xml, identical inside eval(); the SURFACE INVENTORY is complete — every function, class and constant exists — which is not behavioural parity: see Differences from PHP in docs/php/xml.md, and Runtime limits there for the per-handler-invocation heap cost |
 | [cURL](./curl.md) ([PHP](https://www.php.net/manual/en/book.curl.php)) | ✅ Supported | All 35 functions, 6 classes and 689 constants on a pinned static libcurl 8.21.0; declare the managed curl package (elephc native add curl). 260 of 271 CURLOPT_* implemented, the rest rejected with PHP's warning. eval() covers the easy, multi and share interfaces. The coverage row counts the 34 shared-contract functions; curl_file_create() is a plain prelude alias of the CURLFile constructor with no registry binding on either backend, so it carries no shared contract and is the one function the row does not count. |
 | OpenSSL ([PHP](https://www.php.net/manual/en/book.openssl.php)) | 🟡 Partial | Encrypt/decrypt subset |
 | [OPcache](./opcache.md) ([PHP](https://www.php.net/manual/en/book.opcache.php)) | 🟡 Partial | Compatibility surface; programs are AOT-compiled, there is no opcode cache |
@@ -172,7 +174,7 @@ elephc-specific builtins with no PHP equivalent (not counted in coverage above):
 | `class_attribute_args()` | Class | Returns the constructor arguments of a named attribute applied to a class. |
 | `class_attribute_names()` | Class | Returns the list of attribute names applied to a class. |
 | `class_get_attributes()` | Class | Returns an array of ReflectionAttribute objects for all attributes of a class. |
-| `read_exif_data()` | Image | Implemented by the compiler-injected image prelude. |
+| `read_exif_data()` | Image | Alias of exif_read_data(). |
 | `clamp()` | Math | Clamps a value to be within a specified range. *(No PHP equivalent (not in PHP 8.4/8.5))* |
 | `log2()` | Math | Returns the base-2 logarithm of a number. *(No PHP equivalent (PHP has log(), log10(), log1p()))* |
 | `pcntl_daemon()` | Misc | Detaches the surviving child into a background daemon process. |
@@ -204,6 +206,8 @@ Classes: `DateUnknownException` (`date`), `ImageException` (`gd`).
 Constants: `ARRAY_FILTER_USE_VALUE` (`standard`), `MYSQLI_TYPE_VARCHAR` (`mysqli`).
 
 ## Known limitations
+
+**eval() coverage of the prelude-implemented modules.** The modules whose eval() column is zero — gd, exif, mysqli, PDO, session, OPcache — are all implemented by a PHP prelude the compiler injects, and the interpreter dispatches through the shared builtin registry, where a prelude function has no binding. Closing it is one `eval_builtin!` surface at a time, tracked per module: mysqli #746, PDO #748, session #1211, gd and exif #1212, OPcache #1213, with #906 as the umbrella. Until then, call those functions from compiled code and pass the results into the fragment.
 
 **Static subset, AOT only.** Ordinary source is compiled ahead of time with no opcode fallback; runtime code loading exists only through the experimental eval() interpreter bridge.
 

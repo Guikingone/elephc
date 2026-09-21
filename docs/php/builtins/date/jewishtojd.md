@@ -1,6 +1,6 @@
 ---
 title: "jewishtojd()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Converts a Jewish date into a Julian Day count."
 sidebar:
   order: 235
 ---
@@ -11,7 +11,7 @@ sidebar:
 function jewishtojd(int $month, int $day, int $year): int
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Converts a Jewish date into a Julian Day count.
 
 **Parameters**:
 - `$month` (`int`)

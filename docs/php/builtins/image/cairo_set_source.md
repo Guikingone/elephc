@@ -1,6 +1,6 @@
 ---
 title: "cairo_set_source()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Uses a pattern as the source for subsequent drawing."
 sidebar:
   order: 439
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_set_source(mixed $context, mixed $pattern): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Uses a pattern as the source for subsequent drawing.
 
 **Parameters**:
 - `$context` (`mixed`)

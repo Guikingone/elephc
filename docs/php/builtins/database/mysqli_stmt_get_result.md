@@ -1,6 +1,6 @@
 ---
 title: "mysqli_stmt_get_result()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns a prepared statement's result as a mysqli_result."
 sidebar:
   order: 169
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stmt_get_result(mixed $statement): mixed
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns a prepared statement's result as a mysqli_result.
 
 **Parameters**:
 - `$statement` (`mixed`)

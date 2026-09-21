@@ -1,6 +1,6 @@
 ---
 title: "imagebmp()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Writes an image as BMP, to a file or to the output buffer."
 sidebar:
   order: 461
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagebmp(mixed $image, ?string $file = null, bool $compressed = true): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Writes an image as BMP, to a file or to the output buffer.
 
 **Parameters**:
 - `$image` (`mixed`)

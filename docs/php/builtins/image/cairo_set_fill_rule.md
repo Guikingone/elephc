@@ -1,6 +1,6 @@
 ---
 title: "cairo_set_fill_rule()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Selects the fill rule used to decide which regions a path encloses."
 sidebar:
   order: 434
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_set_fill_rule(mixed $context, int $fillRule): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Selects the fill rule used to decide which regions a path encloses.
 
 **Parameters**:
 - `$context` (`mixed`)

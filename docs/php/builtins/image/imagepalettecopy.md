@@ -1,6 +1,6 @@
 ---
 title: "imagepalettecopy()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Copies one image's palette onto another."
 sidebar:
   order: 519
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagepalettecopy(mixed $dst, mixed $src): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Copies one image's palette onto another.
 
 **Parameters**:
 - `$dst` (`mixed`)

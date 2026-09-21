@@ -1,6 +1,6 @@
 ---
 title: "imagerectangle()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Draws the outline of a rectangle."
 sidebar:
   order: 523
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagerectangle(mixed $image, int $x1, int $y1, int $x2, int $y2, int $color): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Draws the outline of a rectangle.
 
 **Parameters**:
 - `$image` (`mixed`)

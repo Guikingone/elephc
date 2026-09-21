@@ -1,6 +1,6 @@
 ---
 title: "date_add()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Adds an interval to a DateTime, modifying it in place."
 sidebar:
   order: 190
 ---
@@ -11,7 +11,7 @@ sidebar:
 function date_add(mixed $object, mixed $interval): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Adds an interval to a DateTime, modifying it in place.
 
 **Parameters**:
 - `$object` (`mixed`)

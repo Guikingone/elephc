@@ -1,6 +1,6 @@
 ---
 title: "imagewebp()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Writes an image as WebP, to a file or to the output buffer."
 sidebar:
   order: 537
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagewebp(mixed $image, ?string $file = null, int $quality = -1): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Writes an image as WebP, to a file or to the output buffer.
 
 **Parameters**:
 - `$image` (`mixed`)

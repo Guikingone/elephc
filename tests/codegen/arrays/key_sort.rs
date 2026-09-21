@@ -451,3 +451,44 @@ echo implode(",", array_keys($a)), "\n";
         "array(3) {\n  [0]=>\n  int(0)\n  [1]=>\n  int(1)\n  [2]=>\n  int(2)\n}\n0,1,2\n"
     );
 }
+
+/// Follow-up for #1187: `usort`, `natsort` and `array_multisort` cannot reach a hash at all.
+///
+/// #1099 made `array_keys()` read a hash key's RUNTIME form, and `sort`/`rsort` are covered
+/// above. The three sorts named in the follow-up were expected to ride the same materialization
+/// path, and they do not — every one of them refuses an associative receiver before codegen,
+/// so there is no reindexed hash for `array_keys()` to read:
+///
+/// - `usort` and `natsort` are backend refusals naming the `AssocArray` type, and are the two
+///   this test pins;
+/// - `array_multisort` is a CHECKER refusal ("arguments must be indexed arrays"), so it is
+///   pinned by `test_error_array_multisort_rejects_an_associative_receiver` in
+///   `tests/error_tests/array_builtins.rs` instead. It cannot share the table below: the
+///   codegen harness type-checks with `.expect("type check failed")` on its way to the
+///   backend, so a checker error aborts the fixture rather than being returned to it.
+///
+/// Pinning the three refusals is what makes this coverage question answerable. The day any of
+/// them accepts a hash, its own test fails and the `array_keys()` rows they stand in for have
+/// to be written.
+///
+/// PHP itself only renumbers for `usort`: `natsort` and `array_multisort` KEEP string keys, so
+/// two of the three would need key-preserving expectations rather than `0..n-1` ones.
+#[test]
+fn test_the_remaining_sorts_refuse_an_associative_receiver() {
+    for (source, message) in [
+        (
+            r#"<?php $h = ["b" => 2, "a" => 1]; usort($h, fn($x, $y) => $x <=> $y); echo implode(",", array_keys($h));"#,
+            "usort for PHP type AssocArray",
+        ),
+        (
+            r#"<?php $h = ["b" => "img10", "a" => "img2"]; natsort($h); echo implode(",", array_keys($h));"#,
+            "natsort for PHP type AssocArray",
+        ),
+    ] {
+        let error = compile_source_expect_backend_error(source);
+        assert!(
+            error.contains(message),
+            "expected `{message}` for this source, got: {error}"
+        );
+    }
+}

@@ -1,6 +1,6 @@
 ---
 title: "session_reset()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Reloads the session data from storage, discarding this request's changes."
 sidebar:
   order: 901
 ---
@@ -11,7 +11,7 @@ sidebar:
 function session_reset(): bool
 ```
 
-Implemented by the compiler-injected web prelude.
+Reloads the session data from storage, discarding this request's changes.
 
 **Parameters**: none.
 

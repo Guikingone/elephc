@@ -1414,6 +1414,87 @@ for ($i = 0; $i < 8; $i++) {
     assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
 }
 
+/// Follow-up for #1130: the property reaches the self-reassign as a CALLEE PARAMETER.
+///
+/// The fixture above copies `$p->body` into a local and self-reassigns the local. The July
+/// triage called out the other shape: the property is passed into a function and the
+/// self-reassign runs through the parameter, so the boxed buffer the store aliases belongs to
+/// an object the callee never names. Both the by-value and the by-reference spellings are
+/// covered, and the object is re-read afterwards because a store that wrote THROUGH the
+/// parameter would have truncated the property itself.
+///
+/// The loop is what makes it meaningful: the allocator has to be handing back blocks it has
+/// already freed before a stale pointer shows as anything but correct text.
+///
+/// There is no allocation-balance assertion here, unlike its siblings. Passing a property read
+/// straight into a `string` parameter whose callee calls `substr()` leaks one block per call —
+/// issue #1208, filed from this fixture, with the table of which spellings are and are not
+/// affected. The by-reference half of this program goes through a local copy and is clean;
+/// `test_substr_self_reassignment_through_a_reference_parameter_is_heap_clean` below pins that
+/// separately so the balance is not left untested altogether.
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_substr_self_reassignment_through_a_callee_parameter_keeps_its_leading_bytes() {
+    let out = compile_and_run(
+        r#"<?php
+class Paste { public function __construct(public string $body) {} }
+
+function trimTail(string $s): string { $s = substr($s, 0, -1); return $s; }
+function trimHeadAndTail(string $s): string { $s = substr($s, 0, -1); $s = substr($s, 1); return $s; }
+function trimRef(string &$s): void { $s = substr($s, 0, -1); }
+
+for ($i = 0; $i < 8; $i++) {
+    $p = new Paste("private function foo() {}\n");
+    $cut = trimTail($p->body);
+    echo $cut, "|", strlen($cut), "|";
+    echo trimHeadAndTail($p->body), "|";
+    echo $p->body === "private function foo() {}\n" ? "intact" : "CHANGED", "|";
+
+    $q = new Paste("second body here\n");
+    $v = $q->body;
+    trimRef($v);
+    echo $v, "|", strlen($v), "|";
+    echo $q->body === "second body here\n" ? "intact" : "CHANGED", ";";
+}
+"#,
+    );
+    let expected = concat!(
+        "private function foo() {}|25|rivate function foo() {}|intact|",
+        "second body here|16|intact;",
+    )
+    .repeat(8);
+    assert_eq!(out, expected);
+}
+
+/// The by-reference parameter spelling of the same shape, with the heap balance asserted.
+///
+/// `trimRef(string &$s)` self-reassigns through the caller's own slot rather than through a
+/// property-read temporary, which is the spelling #1208 does NOT affect — so this is where the
+/// allocation balance for the parameter shape can be pinned today.
+#[test]
+fn test_substr_self_reassignment_through_a_reference_parameter_is_heap_clean() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+class Paste { public function __construct(public string $body) {} }
+
+function trimRef(string &$s): void { $s = substr($s, 0, -1); }
+
+for ($i = 0; $i < 16; $i++) {
+    $p = new Paste("private function foo() {}\n");
+    $v = $p->body;
+    trimRef($v);
+    trimRef($v);
+    echo $v, "|", strlen($v), ";";
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "private function foo() {|24;".repeat(16));
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
+}
+
 /// Issue #510, symptom 2: a NEGATIVE length on a non-literal buffer must truncate, with no
 /// self-reassignment involved.
 ///

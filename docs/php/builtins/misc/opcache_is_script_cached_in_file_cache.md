@@ -1,6 +1,6 @@
 ---
 title: "opcache_is_script_cached_in_file_cache()"
-description: "Implemented by the compiler-injected OPcache prelude."
+description: "Reports whether a script is in the on-disk file cache."
 sidebar:
   order: 618
 ---
@@ -11,7 +11,7 @@ sidebar:
 function opcache_is_script_cached_in_file_cache(mixed $filename): bool
 ```
 
-Implemented by the compiler-injected OPcache prelude.
+Reports whether a script is in the on-disk file cache.
 
 **Parameters**:
 - `$filename` (`mixed`)

@@ -1,6 +1,6 @@
 ---
 title: "date_date_set()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Sets a DateTime's year, month, and day."
 sidebar:
   order: 195
 ---
@@ -11,7 +11,7 @@ sidebar:
 function date_date_set(mixed $object, int $year, int $month, int $day): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Sets a DateTime's year, month, and day.
 
 **Parameters**:
 - `$object` (`mixed`)

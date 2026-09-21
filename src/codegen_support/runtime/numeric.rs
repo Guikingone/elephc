@@ -1,12 +1,19 @@
 //! Purpose:
-//! Emits `__rt_php_float_to_int`, the single shared PHP `float`→`int` conversion used by
-//! every cast, array-key, and numeric-coercion site on every supported target.
+//! Emits PHP's two shared `float`→`int` conversions on every supported target:
+//! `__rt_php_float_to_int`, the modulo-2^64 rule every cast, array-key, and numeric-coercion
+//! site applies to a float VALUE, and `__rt_php_float_to_int_cap`, the saturating rule a
+//! numeric STRING takes instead. Keeping both here is what stops a call site open-coding either.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()`.
 //! - Indirectly from every `crate::codegen_support::abi::emit_php_float_to_int()` call site.
+//! - `crate::codegen_support::runtime::strings::str_to_int` calls the cap helper for the
+//!   float-form branch of `__rt_str_to_int`.
 //!
 //! Key details:
+//! - The two rules genuinely disagree: `(int)1e19` is negative in PHP because a float value
+//!   wraps, while `(int)"1e19"` is `PHP_INT_MAX` because a numeric string saturates. Both cast
+//!   NaN and ±INF to `0`.
 //! - Reference PHP 8.4 (`zend_dval_to_lval`) casts NaN and ±INF to `0` and reduces any other
 //!   out-of-range finite double modulo 2^64 before reinterpreting it as a signed 64-bit value.
 //!   Raw hardware truncation does neither: AArch64 `fcvtzs` saturates to `INT64_MIN`/`INT64_MAX`

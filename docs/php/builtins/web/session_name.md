@@ -1,6 +1,6 @@
 ---
 title: "session_name()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Reads or sets the session name, which is also the cookie name."
 sidebar:
   order: 898
 ---
@@ -11,7 +11,7 @@ sidebar:
 function session_name(?string $name = null): mixed
 ```
 
-Implemented by the compiler-injected web prelude.
+Reads or sets the session name, which is also the cookie name.
 
 **Parameters**:
 - `$name` (`?string`), default `null`, optional

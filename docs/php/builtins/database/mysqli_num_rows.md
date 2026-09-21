@@ -1,6 +1,6 @@
 ---
 title: "mysqli_num_rows()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns how many rows a result has."
 sidebar:
   order: 143
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_num_rows(mixed $result): int
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns how many rows a result has.
 
 **Parameters**:
 - `$result` (`mixed`)

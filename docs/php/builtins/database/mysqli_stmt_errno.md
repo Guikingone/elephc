@@ -1,6 +1,6 @@
 ---
 title: "mysqli_stmt_errno()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the error code of the last call on a statement."
 sidebar:
   order: 163
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stmt_errno(mixed $statement): int
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the error code of the last call on a statement.
 
 **Parameters**:
 - `$statement` (`mixed`)

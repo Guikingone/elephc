@@ -1,6 +1,6 @@
 ---
 title: "mysqli_stmt_num_rows()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns how many rows a prepared statement's buffered result has."
 sidebar:
   order: 172
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stmt_num_rows(mixed $statement): int
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns how many rows a prepared statement's buffered result has.
 
 **Parameters**:
 - `$statement` (`mixed`)

@@ -1,6 +1,6 @@
 ---
 title: "setcookie()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Adds a Set-Cookie header, URL-encoding the value."
 sidebar:
   order: 909
 ---
@@ -11,7 +11,7 @@ sidebar:
 function setcookie(mixed $name, mixed $value = '', mixed $expires = 0, mixed $path = '', mixed $domain = '', mixed $secure = false, mixed $httponly = false): mixed
 ```
 
-Implemented by the compiler-injected web prelude.
+Adds a Set-Cookie header, URL-encoding the value.
 
 **Parameters**:
 - `$name` (`mixed`)

@@ -7,6 +7,11 @@
 //!
 //! Key details:
 //! - The helper constructs PHP $argv arrays from OS argc/argv without taking ownership of OS-provided storage.
+//! - Both targets allocate through `__rt_array_new`, which writes the packed kind word at
+//!   `[array - 8]` (heap kind, string value_type tag, copy-on-write flag). x86_64 used to
+//!   `malloc` the block by hand and fill the 24-byte header only, so `[array - 8]` held
+//!   malloc's own metadata: boxing `$argv` into a `mixed` cell then read its elements with
+//!   the wrong stride and answered a pointer as `int` (issue #984).
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -100,8 +105,8 @@ pub fn emit_build_argv(emitter: &mut Emitter) {
 /// Uses callee-saved registers `r8` (argc), `r9` (argv), `r10` (array pointer), `r11`
 /// (current string pointer), and `rcx` (loop index). The loop counter lives at `[rbp - 32]`
 /// and the array pointer at `[rbp - 24]`. String length is accumulated in `rdx` via null-terminator
-/// scan. Allocates with `malloc` using a precomputed size of `(argc * 16) + 24` and stores the
-/// resulting array pointer in `rax` before returning.
+/// scan. Allocates through `__rt_array_new(argc, 16)` — the same helper the ARM64 path uses — and
+/// stores the resulting array pointer in `rax` before returning.
 fn emit_build_argv_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: build_argv ---");
@@ -116,16 +121,13 @@ fn emit_build_argv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], r8");                         // save argc across the malloc call and later loop iterations
     emitter.instruction("mov QWORD PTR [rbp - 16], r9");                        // save the OS argv pointer array across the malloc call
 
-    emitter.instruction("mov rdi, r8");                                         // seed malloc's size argument from argc
-    emitter.instruction("shl rdi, 4");                                          // reserve 16 bytes per argv entry for ptr+len storage
-    emitter.instruction("add rdi, 24");                                         // include the fixed 24-byte array header in the allocation size
-    emitter.instruction("call malloc");                                         // allocate the argv array backing storage with libc malloc
+    emitter.instruction("mov rdi, r8");                                         // arg0: capacity = argc, one 16-byte slot per OS argument
+    emitter.instruction("mov rsi, 16");                                         // arg1: elem_size = 16 (ptr + len per string)
+    emitter.instruction("call __rt_array_new");                                 // allocate through the runtime so the kind word at [rax-8] is written
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the allocated array pointer for the loop body and final return
 
-    emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload argc after malloc may have clobbered caller-saved registers
-    emitter.instruction("mov QWORD PTR [rax], r8");                             // header[0] = logical argv length
-    emitter.instruction("mov QWORD PTR [rax + 8], r8");                         // header[8] = argv capacity
-    emitter.instruction("mov QWORD PTR [rax + 16], 16");                        // header[16] = elem_size for string ptr+len pairs
+    emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload argc after the call may have clobbered caller-saved registers
+    emitter.instruction("mov QWORD PTR [rax], r8");                             // header[0] = logical argv length; capacity and elem_size are already set
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize the argv loop counter to zero
 
     emitter.label("__rt_build_argv_loop");
@@ -170,18 +172,45 @@ mod tests {
 
     use super::*;
 
-    /// Verifies that the x86_64 Linux path calls `malloc` for array backing storage and
-    /// emits the expected header slots (`[rax] = argc`, `[rax + 8] = argc`, `[rax + 16] = 16`)
-    /// plus string length storage at `[r10 + 8] = rdx`.
+    /// Verifies that the x86_64 Linux path allocates through `__rt_array_new`, publishes the
+    /// logical length, and stores each string's length beside its pointer.
+    ///
+    /// `malloc` is what it used to call, and the reason issue #984 reproduced only here: the
+    /// packed kind word lives at `[array - 8]` and only `__rt_array_new` writes it, so a
+    /// hand-rolled block left malloc's own metadata where the boxed-`mixed` element reader
+    /// looks for the slot stride. The negative assertion is the regression guard.
     #[test]
-    fn test_emit_build_argv_linux_x86_64_uses_malloc_backing() {
+    fn test_emit_build_argv_linux_x86_64_allocates_through_the_runtime() {
         let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
         emit_build_argv(&mut emitter);
         let asm = emitter.output();
 
         assert!(asm.contains("__rt_build_argv:\n"));
-        assert!(asm.contains("call malloc\n"));
-        assert!(asm.contains("mov QWORD PTR [rax + 16], 16\n"));
+        assert!(asm.contains("call __rt_array_new\n"));
+        assert!(!asm.contains("call malloc\n"));
+        assert!(asm.contains("mov QWORD PTR [rax], r8\n"));
         assert!(asm.contains("mov QWORD PTR [r10 + 8], rdx\n"));
+    }
+
+    /// Both targets build `$argv` the same way: `__rt_array_new` with a 16-byte element size.
+    ///
+    /// AGENTS.md forbids landing runtime work ARM64-first, and this helper was exactly that —
+    /// ARM64 went through the runtime allocator from the start while x86_64 open-coded the
+    /// header. Deriving the expectation from both targets is what keeps them together.
+    #[test]
+    fn test_emit_build_argv_uses_the_runtime_allocator_on_every_target() {
+        for arch in [Arch::AArch64, Arch::X86_64] {
+            let mut emitter = Emitter::new(Target::new(Platform::Linux, arch));
+            emit_build_argv(&mut emitter);
+            let asm = emitter.output();
+            assert!(
+                asm.contains("__rt_array_new"),
+                "{arch:?} must allocate $argv through the runtime: {asm}"
+            );
+            assert!(
+                !asm.contains("call malloc") && !asm.contains("bl malloc"),
+                "{arch:?} must not hand-roll the $argv block: {asm}"
+            );
+        }
     }
 }

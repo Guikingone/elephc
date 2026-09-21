@@ -108,10 +108,11 @@ fn load_array_push_length_to_result(
         PhpType::Mixed | PhpType::Union(_)
     ) {
         // -- a boxed receiver keeps its container behind a cell, so ask the generic counter --
-        match ctx.emitter.target.arch {
-            Arch::AArch64 => ctx.load_value_to_reg(array, "x0")?,
-            Arch::X86_64 => ctx.load_value_to_reg(array, "rdi")?,
-        };
+        // `__rt_mixed_count` is on the single-argument INT-RESULT ABI (`x0` / `rax` in and
+        // out), not the C argument ABI. Handing it `rdi` left `rax` holding whatever the last
+        // append had put there, so `array_push()` on a boxed receiver returned 0 instead of
+        // the new element count (issue #1191).
+        ctx.load_value_to_result(array)?;
         abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
         return Ok(());
     }
@@ -132,11 +133,12 @@ fn load_array_push_length_to_result(
 
 /// Lowers `array_chunk()` by splitting an indexed array into nested indexed arrays.
 ///
-/// PHP's `bool $preserve_keys = false` keeps each chunk's source integer keys instead of
-/// renumbering it from zero. A dense indexed array cannot hold a window that does not start at
-/// key 0, so the key-preserving form lowers to `__rt_array_chunk_to_hash`, which builds one owned
-/// hash per chunk. The checker guarantees the flag is a literal (it decides the result's static
-/// shape), so a non-literal operand can only mean the checker and the backend disagree.
+/// PHP's `bool $preserve_keys = false` renumbers each chunk from zero; a literal `true` keeps the
+/// chunk's source integer keys instead. A dense indexed array cannot hold a window that does not
+/// start at key 0, so the key-preserving form lowers to `__rt_array_chunk_to_hash`, which builds
+/// one owned hash per chunk. The checker guarantees the flag is a literal (it decides the
+/// result's static shape), so a non-literal operand can only mean the checker and the backend
+/// disagree.
 pub(crate) fn lower_array_chunk(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "array_chunk", 2, 3)?;
     let array = expect_operand(inst, 0)?;
@@ -350,13 +352,13 @@ pub(super) fn hash_flip_result_value_type(result_ty: &PhpType) -> Result<PhpType
 }
 
 /// Lowers `array_reverse()` for indexed arrays with 8-byte payload slots.
-/// Lowers `array_reverse()` for indexed arrays with 8-byte payload slots.
 ///
-/// PHP's `bool $preserve_keys = false` keeps the source integer keys while reversing the
-/// iteration order. A dense indexed array cannot hold keys in descending order, so the
-/// key-preserving form lowers to `__rt_array_to_hash_reverse`, which builds an owned hash. The
-/// checker guarantees the flag is a literal (it decides the result's static shape), so a
-/// non-literal operand can only mean the checker and the backend disagree about this call.
+/// PHP's `bool $preserve_keys = false` renumbers the reversed array from zero; a literal `true`
+/// keeps the source integer keys while reversing the iteration order. A dense indexed array
+/// cannot hold keys in descending order, so the key-preserving form lowers to
+/// `__rt_array_to_hash_reverse`, which builds an owned hash. The checker guarantees the flag is a
+/// literal (it decides the result's static shape), so a non-literal operand can only mean the
+/// checker and the backend disagree about this call.
 pub(crate) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "array_reverse", 1, 2)?;
     let array = expect_operand(inst, 0)?;

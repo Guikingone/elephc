@@ -1,6 +1,6 @@
 ---
 title: "mysqli_query()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Runs one statement and returns a result set or a success flag."
 sidebar:
   order: 147
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_query(mixed $mysql, string $query, int $result_mode = 0): mixed
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Runs one statement and returns a result set or a success flag.
 
 **Parameters**:
 - `$mysql` (`mixed`)

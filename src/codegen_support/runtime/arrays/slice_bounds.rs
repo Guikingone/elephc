@@ -4,15 +4,16 @@
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::arrays::array_slice`,
-//!   `array_slice_refcounted`, `array_slice_to_hash`, `array_splice`,
-//!   `array_splice_refcounted`, `array_splice_str` and `hash_slice`.
+//!   `array_slice_refcounted`, `array_slice_str`, `array_slice_to_hash`,
+//!   `array_splice`, `array_splice_refcounted`, `array_splice_str` and
+//!   `hash_slice`.
 //!
 //! Key details:
 //! - There is no out-of-band `i64` a PHP `$length` cannot take, so "no `$length` given" travels in a
 //!   dedicated fourth argument register instead of a magic length value. `-1` used to double as the
 //!   until-the-end sentinel, which collided with PHP's `-1` = "stop one element before the end".
 //! - The emitted sequence is the single source of truth for PHP's slice window arithmetic, so the
-//!   scalar and refcounted slice/splice helpers cannot drift apart.
+//!   scalar, string-slot, refcounted and hash slice/splice helpers cannot drift apart.
 //! - Every clamp is signed and the result window is always inside `[0, length]`, so no caller can
 //!   publish a negative logical length or copy outside the source payload.
 
@@ -51,7 +52,7 @@ pub fn emit_slice_bounds(emitter: &mut Emitter, prefix: &str) {
     }
 
     emitter.comment("-- normalize the PHP slice window: offset, then length --");
-    emitter.instruction("ldr x9, [x0]");                                        // x9 = source indexed-array logical length
+    emitter.instruction("ldr x9, [x0]");                                        // x9 = logical length of the source array, indexed or hash
     emitter.instruction("cmp x1, #0");                                          // does the caller count the offset backwards from the end?
     emitter.instruction(&format!("b.ge {}_off_fwd", prefix));                   // forward offsets only need the upper clamp
     emitter.instruction("add x1, x9, x1");                                      // offset = length + offset for backward offsets
@@ -85,7 +86,7 @@ pub fn emit_slice_bounds(emitter: &mut Emitter, prefix: &str) {
 /// branch-based clamps differ. See [`emit_slice_bounds`] for the full ABI and semantics.
 fn emit_slice_bounds_x86_64(emitter: &mut Emitter, prefix: &str) {
     emitter.comment("-- normalize the PHP slice window: offset, then length --");
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // r10 = source indexed-array logical length
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // r10 = logical length of the source array, indexed or hash
     emitter.instruction("cmp rsi, 0");                                          // does the caller count the offset backwards from the end?
     emitter.instruction(&format!("jge {}_off_fwd_x86", prefix));                // forward offsets only need the upper clamp
     emitter.instruction("add rsi, r10");                                        // offset = length + offset for backward offsets

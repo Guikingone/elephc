@@ -212,7 +212,7 @@ documented divergence (PHP's `E_DEPRECATED` notices are not emitted).
 | `hex2bin()` | `hex2bin($str): string` | Convert hex to binary |
 | `long2ip()` | `long2ip($ip): string` | Format a 32-bit integer as a dotted-quad IPv4 address |
 | `ip2long()` | `ip2long($ip): int\|false` | Parse a decimal dotted-quad IPv4 string into an integer, or `false` if invalid |
-| `inet_pton()` | `inet_pton($ip): string\|false` | Pack an IPv4 or IPv6 address into its network-order binary string -- 4 bytes for IPv4, 16 for IPv6 -- or `false` if invalid. A `:` anywhere selects the IPv6 family, as in PHP. `::` compression and the embedded-IPv4 form (`::ffff:192.0.2.128`) are accepted everywhere. A zone identifier (`fe80::1%eth0`) is passed through to the platform's `inet_pton(3)`, which takes it on macOS and refuses it on Linux — the same split PHP itself has, for the same reason. The input is bounded at 255 bytes; anything longer is `false` without being parsed. |
+| `inet_pton()` | `inet_pton($ip): string\|false` | Pack an IPv4 or IPv6 address into its network-order binary string -- 4 bytes for IPv4, 16 for IPv6 -- or `false` if invalid. A `:` anywhere selects the IPv6 family, as in PHP. `::` compression and the embedded-IPv4 form (`::ffff:192.0.2.128`) are accepted everywhere. A zone identifier (`fe80::1%eth0`) is passed through to the platform's `inet_pton(3)`, which takes it on macOS and refuses it on Linux — the same split PHP itself has, for the same reason. **Divergence:** the input is bounded at 255 bytes and anything longer is `false` without being parsed, where PHP passes a string of any length to `inet_pton(3)`. See the note below the table. |
 | `inet_ntop()` | `inet_ntop($binary): string\|false` | Render a packed address as text: a 4-byte string as a dotted quad, a 16-byte string as IPv6 in PHP's canonical spelling (longest zero run compressed to `::`, an IPv4-mapped address keeping its dotted-quad tail). Any other length is `false`. |
 | `md5()` | `md5($str, $binary = false): string` | MD5 hash — 32-char lowercase hex by default, or the raw 16 digest bytes when `$binary` is `true` |
 | `sha1()` | `sha1($str, $binary = false): string` | SHA1 hash — 40-char lowercase hex by default, or the raw 20 digest bytes when `$binary` is `true` |
@@ -249,6 +249,24 @@ documented divergence (PHP's `E_DEPRECATED` notices are not emitted).
 | `ctype_digit()` | `ctype_digit($str): bool` | All chars are 0-9 |
 | `ctype_alnum()` | `ctype_alnum($str): bool` | All chars are alphanumeric |
 | `ctype_space()` | `ctype_space($str): bool` | All chars are whitespace |
+
+#### Known divergence: `inet_pton()` caps its argument at 255 bytes
+
+PHP hands the whole string argument to `inet_pton(3)`, whatever its length.
+elephc copies it into a 255-byte-plus-NUL stack buffer first and answers `false`
+for anything longer, without parsing it.
+
+The two only disagree for input that the platform parser would have accepted
+above 255 bytes. A full IPv6 address with an embedded IPv4 tail is 45 bytes, so
+the only way past the bound is a very long zone identifier — and glibc rejects
+zone identifiers outright, while Darwin's accepts interface names far shorter
+than this. Anything else that long is not an address, and both implementations
+answer `false` for it; elephc just does so without calling the parser.
+
+```php
+var_dump(inet_pton(str_repeat("a", 300)));   // false on both
+var_dump(inet_pton("::1"));                  // 16 bytes on both
+```
 
 #### `explode()` and the `$limit` argument
 

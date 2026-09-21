@@ -1,6 +1,6 @@
 ---
 title: "session_save_path()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Reads or sets the directory session data is stored in."
 sidebar:
   order: 902
 ---
@@ -11,7 +11,7 @@ sidebar:
 function session_save_path(?string $path = null): mixed
 ```
 
-Implemented by the compiler-injected web prelude.
+Reads or sets the directory session data is stored in.
 
 **Parameters**:
 - `$path` (`?string`), default `null`, optional

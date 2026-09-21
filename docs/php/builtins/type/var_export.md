@@ -1,6 +1,6 @@
 ---
 title: "var_export()"
-description: "Implemented by the compiler-injected var_export prelude."
+description: "Renders a value as parsable PHP code, printed or returned."
 sidebar:
   order: 881
 ---
@@ -11,7 +11,7 @@ sidebar:
 function var_export(mixed $value, bool $return = false): mixed
 ```
 
-Implemented by the compiler-injected var_export prelude.
+Renders a value as parsable PHP code, printed or returned.
 
 **Parameters**:
 - `$value` (`mixed`)

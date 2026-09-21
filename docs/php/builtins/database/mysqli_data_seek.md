@@ -1,6 +1,6 @@
 ---
 title: "mysqli_data_seek()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Moves a buffered result's row cursor to an offset."
 sidebar:
   order: 108
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_data_seek(mixed $result, int $offset): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Moves a buffered result's row cursor to an offset.
 
 **Parameters**:
 - `$result` (`mixed`)

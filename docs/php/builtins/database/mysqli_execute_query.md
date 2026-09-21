@@ -1,6 +1,6 @@
 ---
 title: "mysqli_execute_query()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Prepares, binds, and executes a statement in one call."
 sidebar:
   order: 114
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_execute_query(mixed $mysql, string $query, ?array $params = null): mixed
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Prepares, binds, and executes a statement in one call.
 
 **Parameters**:
 - `$mysql` (`mixed`)

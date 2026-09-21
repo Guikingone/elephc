@@ -1,6 +1,6 @@
 ---
 title: "imagejpeg()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Writes an image as JPEG, to a file or to the output buffer."
 sidebar:
   order: 515
 ---
@@ -11,7 +11,7 @@ sidebar:
 function imagejpeg(mixed $image, ?string $file = null, int $quality = -1): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Writes an image as JPEG, to a file or to the output buffer.
 
 **Parameters**:
 - `$image` (`mixed`)

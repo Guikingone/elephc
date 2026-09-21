@@ -1,6 +1,6 @@
 ---
 title: "mysqli_stmt_close()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Closes a prepared statement and frees its resources."
 sidebar:
   order: 162
 ---
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stmt_close(mixed $statement): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Closes a prepared statement and frees its resources.
 
 **Parameters**:
 - `$statement` (`mixed`)

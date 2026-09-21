@@ -1,6 +1,6 @@
 ---
 title: "cairo_set_line_cap()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Selects how the ends of a stroked line are drawn."
 sidebar:
   order: 435
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_set_line_cap(mixed $context, int $lineCap): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Selects how the ends of a stroked line are drawn.
 
 **Parameters**:
 - `$context` (`mixed`)

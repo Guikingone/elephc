@@ -1,6 +1,6 @@
 ---
 title: "image_type_to_extension()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the filename extension for an IMAGETYPE_* constant."
 sidebar:
   order: 454
 ---
@@ -11,7 +11,7 @@ sidebar:
 function image_type_to_extension(int $image_type, bool $include_dot = true): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the filename extension for an IMAGETYPE_* constant.
 
 **Parameters**:
 - `$image_type` (`int`)

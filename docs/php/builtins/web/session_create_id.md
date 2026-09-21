@@ -1,6 +1,6 @@
 ---
 title: "session_create_id()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Generates a new session id, optionally with a prefix."
 sidebar:
   order: 890
 ---
@@ -11,7 +11,7 @@ sidebar:
 function session_create_id(string $prefix = ''): mixed
 ```
 
-Implemented by the compiler-injected web prelude.
+Generates a new session id, optionally with a prefix.
 
 **Parameters**:
 - `$prefix` (`string`), default `''`, optional

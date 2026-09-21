@@ -1,6 +1,6 @@
 ---
 title: "cairo_matrix_init_rotate()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates a matrix that rotates by the given angle in radians."
 sidebar:
   order: 414
 ---
@@ -11,7 +11,7 @@ sidebar:
 function cairo_matrix_init_rotate(float $radians): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates a matrix that rotates by the given angle in radians.
 
 **Parameters**:
 - `$radians` (`float`)
