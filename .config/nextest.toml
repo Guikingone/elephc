@@ -119,6 +119,20 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 filter = 'binary(codegen_tests) and test(/^codegen::runtime_gc::[^:]+::test_core_eval_/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
+# The standalone `eval_*` integration binaries (object handles, resource ids,
+# string interpolation) link Magician for every program they compile, exactly
+# like `codegen::eval`, but run in the non-codegen shards, where they had only
+# the plain 60s cap. Two of them were terminated at 60s on both attempts on one
+# slow macOS runner while the same shard had passed in 11 minutes the run before.
+# Give them the eval budget too.
+[[profile.default.overrides]]
+filter = 'binary(/^eval_/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'binary(/^eval_/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
 # These eval fixtures live outside the Core eval GC naming family. Boxed method
 # arguments hit 60s on both macOS attempts; hook-default and post-eval instanceof
 # controls passed only on retry at 59.687s and 58.843s respectively. The latter
