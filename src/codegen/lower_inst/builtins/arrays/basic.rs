@@ -108,10 +108,11 @@ fn load_array_push_length_to_result(
         PhpType::Mixed | PhpType::Union(_)
     ) {
         // -- a boxed receiver keeps its container behind a cell, so ask the generic counter --
-        match ctx.emitter.target.arch {
-            Arch::AArch64 => ctx.load_value_to_reg(array, "x0")?,
-            Arch::X86_64 => ctx.load_value_to_reg(array, "rdi")?,
-        };
+        // `__rt_mixed_count` is on the single-argument INT-RESULT ABI (`x0` / `rax` in and
+        // out), not the C argument ABI. Handing it `rdi` left `rax` holding whatever the last
+        // append had put there, so `array_push()` on a boxed receiver returned 0 instead of
+        // the new element count (issue #1191).
+        ctx.load_value_to_result(array)?;
         abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
         return Ok(());
     }
