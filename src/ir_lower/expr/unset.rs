@@ -67,8 +67,11 @@ pub(super) fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) 
 /// `function u(array &$a) { unset($a["b"]); }` a backend error although every other write through a
 /// by-reference array (`$a["c"] = 3`, `array_unshift`, `sort`) already worked.
 ///
-/// The INDEXED case keeps the refusal: `unset()` leaves a key hole, so the local must become a
-/// hash, and the caller's slot — still typed `array<T>` — is storage this callee cannot retype.
+/// The INDEXED case keeps the refusal, deliberately and permanently: `unset()` leaves a key hole,
+/// so the local must become a hash, and the caller's slot — still typed `array<T>` — is storage
+/// this callee cannot retype. Accepting it would mean a callee silently changing the
+/// representation of a caller's local. The refusal and its two workarounds are documented under
+/// "Removing elements with unset" in `docs/php/arrays.md` (issues #677, #1090).
 pub(super) fn unset_array_access_has_local_array_receiver(
     ctx: &LoweringContext<'_, '_>,
     array: &Expr,
