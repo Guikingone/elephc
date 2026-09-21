@@ -56,7 +56,7 @@ pub(super) fn prepare_boxed_array_receiver(
     abi::emit_call_label(ctx.emitter, "__rt_array_cell_ensure_unique");
     require_valid_array_result(ctx, name);
     ctx.store_result_value(array)?;
-    receiver.store_back_value(ctx, array)
+    receiver.store_back_split_cell(ctx, array)
 }
 
 /// Transfers the owned payload at the stack top into a unique cell, then retires its old payload.

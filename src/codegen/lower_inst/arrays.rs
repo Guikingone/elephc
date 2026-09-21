@@ -694,7 +694,7 @@ fn separate_shared_mixed_array_receiver(
     ctx.load_value_to_reg(array, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
     abi::emit_call_label(ctx.emitter, "__rt_array_cell_ensure_unique");
     ctx.store_result_value(array)?;
-    receiver.store_back_value(ctx, array)?;
+    receiver.store_back_split_cell(ctx, array)?;
     ctx.emitter.label(&skip);
     Ok(())
 }
@@ -737,6 +737,7 @@ fn promote_indexed_payload_into_mixed_cell(ctx: &mut FunctionContext<'_>) {
         }
         Arch::X86_64 => {
             abi::emit_push_reg(ctx.emitter, "rdi");
+            ctx.emitter.instruction("mov rax, rdi");                            // `__rt_heap_kind` probes the pointer in the RESULT register, not `rdi`
             abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
             ctx.emitter.instruction("cmp rax, 3");                              // a source promoted earlier must not be reread as indexed
             ctx.emitter.instruction(&format!("je {already_hash}"));             // normalize an existing hash without a second promotion

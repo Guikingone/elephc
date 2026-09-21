@@ -15,6 +15,7 @@ mod closure_literal_returns;
 mod by_ref_params;
 mod by_ref_places;
 mod mixed_element_references;
+mod boxed_global_and_property_receivers;
 mod indexed;
 mod internal_pointer;
 mod key_sort;
