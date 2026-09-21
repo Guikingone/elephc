@@ -286,6 +286,11 @@ impl Checker {
                 &format!("Undefined property: {}::{}", class_name, property),
             ));
         }
+        if self.awaits_generic_instantiation(class_name) {
+            // Resolved by this round, spliced by the next one. `Mixed` keeps the rest of this
+            // round meaningful; the next sees an ordinary class and types the read properly.
+            return Ok(PhpType::Mixed);
+        }
         Err(CompileError::new(
             expr.span,
             &format!("Undefined class: {}", class_name),

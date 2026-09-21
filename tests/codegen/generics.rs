@@ -1779,3 +1779,98 @@ echo $p->of(v: "abc", n: 1), "|", $p->of(2, "z"), "|", $p->head(5, 6);
     );
     assert_eq!(out, "abc|z|5");
 }
+
+
+/// Construction and static factories order their arguments against the declaration.
+///
+/// Both paired the call's SOURCE order against the declared parameters, so a named argument bound
+/// the wrong parameter's type: `new Box(v: "abc", n: 1)` took `T` from `n`'s int and then asked
+/// for a `Box<int>` it could not build. They were the last two call surfaces still reading their
+/// arguments positionally, after the function and method paths were fixed.
+#[test]
+fn test_generic_construction_and_factories_bind_named_arguments_by_name() {
+    let out = compile_and_run(
+        r#"<?php
+class Box<T> {
+    public function __construct(public int $n, private T $v) {}
+    public function get(): T { return $this->v; }
+    public static function of(int $n, T $v): Box<T> { return new Box<T>($n, $v); }
+}
+$named = new Box(v: "abc", n: 1);
+echo $named->get(), "|", $named->n, "|";
+$positional = new Box(2, "z");
+echo $positional->get(), "|", $positional->n, "|";
+echo Box::of(v: "f", n: 3)->get();
+"#,
+    );
+    assert_eq!(out, "abc|1|z|2|f");
+}
+
+/// A property read on an INFERRED instantiation must not report the class undefined.
+///
+/// `new Box(…)` resolves `Box<string>` in one round and the class is spliced by the next, so
+/// within the first the name is legitimately absent from the class table. A method call on the
+/// object was already tolerated; a property read reported `Undefined class: Box<string>` for a
+/// construction the checker had just resolved itself. Written instantiations never hit it,
+/// which is why it survived.
+///
+/// The two spellings must name DIFFERENT instantiations. Writing `Box<string>` beside an
+/// inferred `Box<string>` puts the class in the table before the read is checked, so the
+/// deferral is never reached — an earlier version of this test proved nothing for exactly
+/// that reason, and its mutation run said so.
+#[test]
+fn test_property_read_on_an_inferred_instantiation_is_deferred_not_refused() {
+    let out = compile_and_run(
+        r#"<?php
+class Box<T> {
+    public function __construct(public int $n, private T $v) {}
+    public function get(): T { return $this->v; }
+}
+$inferred = new Box(1, "abc");
+$written = new Box<int>(2, 5);
+echo $inferred->n, $inferred->get(), "|", $written->n, $written->get();
+"#,
+    );
+    assert_eq!(out, "1abc|25");
+}
+
+/// An ATTRIBUTE between a doc block and its declaration must not drop the annotation.
+///
+/// `collect` keys a block by the first NONBLANK line after it, and `#[Marker]` is not blank, so
+/// the block was filed against the attribute's line while the lookup used the declaration's. The
+/// failure is silent rather than loud: with `@return T` gone the same program answers a different
+/// number, which is why the attributed and unattributed forms are asserted against each other.
+#[test]
+fn test_an_attribute_between_a_doc_block_and_its_declaration_keeps_the_annotation() {
+    let out = compile_and_run(
+        r#"<?php
+#[Attribute]
+class Marker {}
+
+/**
+ * @template T
+ */
+#[Marker]
+class Attributed {
+    /** @param T $v */
+    public function __construct(private $v) {}
+    /** @return T */
+    public function get() { return $this->v; }
+}
+
+/**
+ * @template T
+ */
+class Plain {
+    /** @param T $v */
+    public function __construct(private $v) {}
+    /** @return T */
+    public function get() { return $this->v; }
+}
+$a = new Attributed<int>(7);
+$p = new Plain<int>(7);
+echo $a->get() + 1, "|", $p->get() + 1;
+"#,
+    );
+    assert_eq!(out, "8|8");
+}

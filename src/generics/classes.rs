@@ -105,10 +105,16 @@ pub struct TemplateSignature {
     /// The name as the template declared it, for the instantiated name and for diagnostics.
     pub declared_name: String,
     pub type_params: Vec<TypeParam>,
+    /// The constructor's declared parameter NAMES, in order. A named argument binds by name, so
+    /// ordering a construction against the declaration needs them.
+    pub constructor_param_names: Vec<String>,
     /// The constructor's declared parameter types, in order. Empty when the template declares
     /// no constructor — in which case nothing constrains its parameters and the mention has to
     /// write them.
     pub constructor_params: Vec<Option<TypeExpr>>,
+    /// The constructor's declared variadic element type, if any — a binding position like the
+    /// fixed ones, living in its own field.
+    pub constructor_variadic: Option<TypeExpr>,
     /// The template's STATIC methods, by name, with their declared parameter and return types.
     ///
     /// `Box::of(5)` has to determine `T` the same way `new Box(5)` does, from the arguments
@@ -122,7 +128,11 @@ pub struct TemplateSignature {
 #[derive(Debug, Clone)]
 pub struct StaticMethodSignature {
     pub name: String,
+    /// Declared parameter NAMES in order, for the same reason the constructor records them.
+    pub param_names: Vec<String>,
     pub params: Vec<Option<TypeExpr>>,
+    /// Declared variadic element type, if any.
+    pub variadic_type: Option<TypeExpr>,
     pub return_type: Option<TypeExpr>,
 }
 
@@ -135,7 +145,9 @@ impl Templates {
                 key: key.clone(),
                 declared_name: template.declared_name.clone(),
                 type_params: template.type_params.clone(),
+                constructor_param_names: constructor_param_names(&template.declaration),
                 constructor_params: constructor_param_types(&template.declaration),
+                constructor_variadic: constructor_variadic_type(&template.declaration),
                 static_methods: static_method_signatures(&template.declaration),
             })
             .collect()
@@ -273,6 +285,34 @@ fn nested_bodies(stmt: &Stmt) -> Vec<&[Stmt]> {
 ///
 /// An interface cannot be constructed and a template without a `__construct` constrains
 /// nothing, so both answer with an empty list and the mention is left to write its arguments.
+fn constructor_param_names(declaration: &Stmt) -> Vec<String> {
+    constructor_method(declaration)
+        .map(|method| {
+            method
+                .params
+                .iter()
+                .map(|(name, _, _, _)| name.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Returns the constructor's declared variadic element type, if it declares one.
+fn constructor_variadic_type(declaration: &Stmt) -> Option<TypeExpr> {
+    constructor_method(declaration).and_then(|method| method.variadic_type.clone())
+}
+
+/// Returns the template's `__construct`, if it declares one.
+fn constructor_method(declaration: &Stmt) -> Option<&crate::parser::ast::ClassMethod> {
+    let StmtKind::ClassDecl { methods, .. } = &declaration.kind else {
+        return None;
+    };
+    methods
+        .iter()
+        .find(|method| method.name.eq_ignore_ascii_case("__construct"))
+}
+
+/// Returns the constructor's declared parameter types, in order.
 fn constructor_param_types(declaration: &Stmt) -> Vec<Option<TypeExpr>> {
     let StmtKind::ClassDecl { methods, .. } = &declaration.kind else {
         return Vec::new();
@@ -300,11 +340,17 @@ fn static_method_signatures(declaration: &Stmt) -> Vec<StaticMethodSignature> {
         .filter(|method| method.is_static)
         .map(|method| StaticMethodSignature {
             name: method.name.clone(),
+            param_names: method
+                .params
+                .iter()
+                .map(|(name, _, _, _)| name.clone())
+                .collect(),
             params: method
                 .params
                 .iter()
                 .map(|(_, declared, _, _)| declared.clone())
                 .collect(),
+            variadic_type: method.variadic_type.clone(),
             return_type: method.return_type.clone(),
         })
         .collect()

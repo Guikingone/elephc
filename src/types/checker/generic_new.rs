@@ -39,13 +39,27 @@ impl Checker {
         let Some(template) = self.matching_class_template(class_name) else {
             return Ok(None);
         };
-        let actual_types = args
-            .iter()
-            .map(|arg| self.infer_type(arg, env))
-            .collect::<Result<Vec<_>, _>>()?;
+        // Ordered against the declaration before pairing, for the reason every other call
+        // surface documents: a named argument binds by NAME and may be written anywhere, while
+        // inference pairs a declared parameter with the argument at the same index. Reading the
+        // call's source order bound `T` from the wrong parameter, so `new Box(v: "abc", n: 1)`
+        // asked for `Box<int>` and then refused its own argument.
+        let ordered_args = generics::arguments_in_declaration_order(&template.constructor_param_names, args);
+        let mut declared_params: Vec<Option<crate::parser::ast::TypeExpr>> = Vec::new();
+        let mut actual_types: Vec<PhpType> = Vec::new();
+        for (index, arg) in ordered_args.into_iter().enumerate() {
+            let Some(arg) = arg else { continue };
+            actual_types.push(self.infer_type(&arg, env)?);
+            declared_params.push(generics::declared_type_at(
+                index,
+                template.constructor_param_names.len(),
+                &template.constructor_params,
+                template.constructor_variadic.as_ref(),
+            ));
+        }
         let bindings = generics::infer_bindings(
             &template.type_params,
-            &template.constructor_params,
+            &declared_params,
             &actual_types,
         )
         .map_err(|error| {
@@ -81,6 +95,26 @@ impl Checker {
         Ok(Some(PhpType::Object(instantiated)))
     }
 
+    /// Returns true when this class name is one THIS ROUND has asked to be instantiated.
+    ///
+    /// `new Box(5)` infers `Box<int>` and records the request, but the class is spliced by the
+    /// NEXT monomorphization round — so within this one the name is legitimately absent from the
+    /// class table. Reading a property off such an object reported `Undefined class: Box<int>`
+    /// for a construction the checker had just resolved itself, while a method call on the same
+    /// object was already tolerated.
+    ///
+    /// The same deferral `infer_generic_method_call` documents: nothing can be checked against an
+    /// instantiation that does not exist yet, and the next round sees an ordinary class and
+    /// checks it properly. Narrow on purpose — the name must carry type arguments AND have been
+    /// produced by this checker — so no genuine undefined class is ever waved through.
+    pub(crate) fn awaits_generic_instantiation(&self, class_name: &str) -> bool {
+        class_name.contains('<')
+            && self
+                .generic_new_sites
+                .values()
+                .any(|names| names.contains(class_name))
+    }
+
     /// Resolves `Box::of(5)` — a static call on a template — to the method's return type at the
     /// instantiation its arguments determine, or `None` when the receiver is not a template.
     ///
@@ -113,12 +147,26 @@ impl Checker {
                 ),
             ));
         };
-        let actual_types = args
-            .iter()
-            .map(|arg| self.infer_type(arg, env))
-            .collect::<Result<Vec<_>, _>>()?;
+        // Ordered against the declaration before pairing, for the reason every other call
+        // surface documents: a named argument binds by NAME and may be written anywhere, while
+        // inference pairs a declared parameter with the argument at the same index. Reading the
+        // call's source order bound `T` from the wrong parameter, so `new Box(v: "abc", n: 1)`
+        // asked for `Box<int>` and then refused its own argument.
+        let ordered_args = generics::arguments_in_declaration_order(&signature.param_names, args);
+        let mut declared_params: Vec<Option<crate::parser::ast::TypeExpr>> = Vec::new();
+        let mut actual_types: Vec<PhpType> = Vec::new();
+        for (index, arg) in ordered_args.into_iter().enumerate() {
+            let Some(arg) = arg else { continue };
+            actual_types.push(self.infer_type(&arg, env)?);
+            declared_params.push(generics::declared_type_at(
+                index,
+                signature.param_names.len(),
+                &signature.params,
+                signature.variadic_type.as_ref(),
+            ));
+        }
         let bindings =
-            generics::infer_bindings(&template.type_params, &signature.params, &actual_types)
+            generics::infer_bindings(&template.type_params, &declared_params, &actual_types)
                 .map_err(|error| {
                     CompileError::new(
                         expr.span,

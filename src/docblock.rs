@@ -326,6 +326,12 @@ fn apply_member_type(
 ///
 /// Keying by the FOLLOWING line is what associates a block with its declaration, and it is why
 /// blank lines between the two are skipped: `/** … */\n\nfunction f()` is idiomatic.
+///
+/// ATTRIBUTES are skipped for the same reason. `/** @template T */ #[Marker] class Box {}` files
+/// the block against the attribute's line, while `apply_to_stmt` looks the declaration's line up —
+/// the block is silently lost and the class is treated as non-generic. `#[` is unambiguous in PHP
+/// 8 (a bare `#` is a line comment) and a group may span lines, so the walk follows its bracket
+/// depth rather than assuming one line per attribute.
 fn collect(source: &str) -> HashMap<usize, DocBlock> {
     let mut blocks: HashMap<usize, DocBlock> = HashMap::new();
     let lines: Vec<&str> = source.lines().collect();
@@ -342,8 +348,27 @@ fn collect(source: &str) -> HashMap<usize, DocBlock> {
         let end = index.min(lines.len().saturating_sub(1));
         index += 1;
         let mut target = index;
-        while target < lines.len() && lines[target].trim().is_empty() {
-            target += 1;
+        loop {
+            while target < lines.len() && lines[target].trim().is_empty() {
+                target += 1;
+            }
+            if target >= lines.len() || !lines[target].trim_start().starts_with("#[") {
+                break;
+            }
+            let mut depth = 0i32;
+            while target < lines.len() {
+                for ch in lines[target].chars() {
+                    match ch {
+                        '[' => depth += 1,
+                        ']' => depth -= 1,
+                        _ => {}
+                    }
+                }
+                target += 1;
+                if depth <= 0 {
+                    break;
+                }
+            }
         }
         if target >= lines.len() {
             continue;
