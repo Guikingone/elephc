@@ -500,14 +500,12 @@ jobs:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
-      - name: Install archived cargo-nextest
-        run: |
-          chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Prepare archived cargo-nextest
+        run: chmod 0755 "$RUNNER_TEMP/cargo-nextest"
 
       - name: Run non-codegen tests
         run: |
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests)' \
@@ -591,14 +589,12 @@ jobs:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
-      - name: Install archived cargo-nextest
-        run: |
-          chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Prepare archived cargo-nextest
+        run: chmod 0755 "$RUNNER_TEMP/cargo-nextest"
 
       - name: Run web test shard
         run: |
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             -E 'binary(web_tests) or binary(web_session_tests)' \
@@ -693,10 +689,8 @@ jobs:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
-      - name: Install archived cargo-nextest
-        run: |
-          chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Prepare archived cargo-nextest
+        run: chmod 0755 "$RUNNER_TEMP/cargo-nextest"
 
       - name: Cache managed native libxml2
         # tests/codegen/xml fixtures link the elephc_xml bridge against the managed
@@ -715,7 +709,7 @@ jobs:
         # compiler is what materializes the managed package below.
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
@@ -738,7 +732,7 @@ jobs:
           # the package was materialized just above, so absence is a provisioning bug.
           ELEPHC_TEST_REQUIRE_XML_NATIVE: "1"
         run: |
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)' \
@@ -912,10 +906,8 @@ jobs:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
-      - name: Install archived cargo-nextest
-        run: |
-          chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Prepare archived cargo-nextest
+        run: chmod 0755 "$RUNNER_TEMP/cargo-nextest"
 
       - name: Run PDO codegen shard in one process
         env:
@@ -923,7 +915,7 @@ jobs:
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
@@ -1061,10 +1053,8 @@ jobs:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
-      - name: Install archived cargo-nextest
-        run: |
-          chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Prepare archived cargo-nextest
+        run: chmod 0755 "$RUNNER_TEMP/cargo-nextest"
 
       - name: Extract test archive
         # `elephc` is a build dependency of other integration tests that invoke it via
@@ -1073,7 +1063,7 @@ jobs:
         # notes in .config/nextest.toml) -- one extraction gives us both.
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
@@ -1400,17 +1390,15 @@ jobs:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
-      - name: Install archived cargo-nextest
-        run: |
-          chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Prepare archived cargo-nextest
+        run: chmod 0755 "$RUNNER_TEMP/cargo-nextest"
 
       - name: Run eval codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
-          cargo nextest run --profile ci \
+          "$RUNNER_TEMP/cargo-nextest" run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             -E 'binary(codegen_tests) and test(~codegen::eval)' \
