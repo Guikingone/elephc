@@ -733,3 +733,122 @@ echo $a[null] ?? "miss";
     );
     assert_eq!(out, "miss");
 }
+
+
+/// Verifies `array_slice()` on an ASSOCIATIVE receiver, in both `preserve_keys` modes
+/// (issue #683).
+///
+/// Every associative receiver was refused at compile time — string-keyed and integer-keyed
+/// alike, with and without the flag — behind two different messages: `array_slice preserve_keys
+/// for PHP type AssocArray {…}` and `array_slice for PHP type AssocArray {…}`. The indexed
+/// receiver was fully supported in both modes, so the gap was the receiver being a hash, not the
+/// element type.
+///
+/// `preserve_keys` is NOT "keep all keys" versus "drop all keys", which is the rule the fixture
+/// exists to pin: php-src only ever renumbers INTEGER keys, and a string key survives either
+/// way. The third and fourth rows show an integer-keyed source renumbering, and the fifth and
+/// sixth show a MIXED source where only the integer entries move.
+///
+/// `$offset` and `$length` count positions in insertion order rather than keys, so the rest of
+/// the matrix walks the window arithmetic: an omitted length, a negative offset, a negative
+/// length, an offset past the end, an offset before the start, a zero length, an over-long
+/// length, and an empty source. Then the value kinds the copy has to own correctly — strings,
+/// floats, bools, nested arrays — and a check that the source is untouched.
+///
+/// Every expected value is verbatim host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_array_slice_on_an_associative_receiver_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+function show(array $a): void {
+    $parts = [];
+    foreach ($a as $k => $v) { $parts[] = var_export($k, true) . "=>" . var_export($v, true); }
+    echo "[", implode(", ", $parts), "]\n";
+}
+show(array_slice(["x" => 1, "y" => 2, "z" => 3], 1, 2));
+show(array_slice(["x" => 1, "y" => 2, "z" => 3], 1, 2, true));
+show(array_slice([5 => 1, 9 => 2, 12 => 3], 1, 2));
+show(array_slice([5 => 1, 9 => 2, 12 => 3], 1, 2, true));
+show(array_slice([5 => "a", "k" => "b", 9 => "c"], 0, 3));
+show(array_slice([5 => "a", "k" => "b", 9 => "c"], 0, 3, true));
+show(array_slice(["a" => 1, "b" => 2, "c" => 3], 1));
+show(array_slice(["a" => 1, "b" => 2, "c" => 3], 1, null, true));
+show(array_slice(["a" => 1, "b" => 2, "c" => 3], -2));
+show(array_slice(["a" => 1, "b" => 2, "c" => 3], -2, 1, true));
+show(array_slice(["a" => 1, "b" => 2, "c" => 3, "d" => 4], 1, -1));
+show(array_slice(["a" => 1, "b" => 2], 10, 2));
+show(array_slice(["a" => 1, "b" => 2], -10, 1));
+show(array_slice(["a" => 1, "b" => 2], 0, 0));
+show(array_slice(["a" => 1, "b" => 2], 1, 100));
+show(array_slice([], 0, 1));
+show(array_slice(["x" => "aa", "y" => "bb", "z" => "cc"], 1, 2));
+show(array_slice(["x" => "aa", "y" => "bb", "z" => "cc"], 1, 2, true));
+show(array_slice(["x" => 1.5, "y" => 2.5], 1, 1));
+show(array_slice(["x" => true, "y" => false], 0, 2));
+$nested = array_slice(["x" => [1, 2], "y" => [3, 4]], 1, 1);
+echo count($nested), ",", $nested["y"][0], ",", $nested["y"][1], "\n";
+$src = ["a" => 1, "b" => 2, "c" => 3];
+$cut = array_slice($src, 1, 1);
+echo count($src), ",", count($cut), "\n";
+show(array_slice([10, 20, 30], 1, 2));
+show(array_slice([10, 20, 30], 1, 2, true));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "['y'=>2, 'z'=>3]\n",
+            "['y'=>2, 'z'=>3]\n",
+            "[0=>2, 1=>3]\n",
+            "[9=>2, 12=>3]\n",
+            "[0=>'a', 'k'=>'b', 1=>'c']\n",
+            "[5=>'a', 'k'=>'b', 9=>'c']\n",
+            "['b'=>2, 'c'=>3]\n",
+            "['b'=>2, 'c'=>3]\n",
+            "['b'=>2, 'c'=>3]\n",
+            "['b'=>2]\n",
+            "['b'=>2, 'c'=>3]\n",
+            "[]\n",
+            "['a'=>1]\n",
+            "[]\n",
+            "['b'=>2]\n",
+            "[]\n",
+            "['y'=>'bb', 'z'=>'cc']\n",
+            "['y'=>'bb', 'z'=>'cc']\n",
+            "['y'=>2.5]\n",
+            "['x'=>true, 'y'=>false]\n",
+            "1,3,4\n",
+            "3,1\n",
+            "[0=>20, 1=>30]\n",
+            "[1=>20, 2=>30]\n",
+        )
+    );
+}
+
+/// Verifies the associative `array_slice()` copy owns what it holds, and nothing more.
+///
+/// `__rt_hash_slice` retains the string keys and the refcounted values it carries over, and
+/// re-persists string values, exactly as `__rt_hash_clone_shallow` does. A missing retain frees
+/// storage the source still references; a missing release accumulates per call. The loop makes
+/// either visible instead of hiding it in a single-iteration total.
+#[test]
+fn test_array_slice_on_an_associative_receiver_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($i = 0; $i < 32; $i++) {
+    $a = array_slice(["x" => 1, "y" => 2, "z" => 3], 1, 2);
+    $b = array_slice(["x" => 1, "y" => 2, "z" => 3], 1, 2, true);
+    $c = array_slice(["x" => "aa", "y" => "bb", "z" => "cc"], 1, 2);
+    $d = array_slice(["x" => [1, 2], "y" => [3, 4]], 1, 1);
+    $e = array_slice([5 => 1, 9 => 2, 12 => 3], 1, 2);
+}
+echo count($a), count($b), count($c), count($d), count($e), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "22212\n", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "associative array_slice leaked: {}",
+        out.stderr
+    );
+}

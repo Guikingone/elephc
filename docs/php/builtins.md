@@ -40,7 +40,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`array_pad()`](./builtins/array/array_pad.md) | `(array $array, int $length, mixed $value): array` | `array` | ✓ | ✓ |
 | [`array_pop()`](./builtins/array/array_pop.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
 | [`array_product()`](./builtins/array/array_product.md) | `(array $array): int` | `int` | ✓ | ✓ |
-| [`array_push()`](./builtins/array/array_push.md) | `(array $array, ...$values): void` | `void` | ✓ | ✓ |
+| [`array_push()`](./builtins/array/array_push.md) | `(array $array, ...$values): int` | `int` | ✓ | ✓ |
 | [`array_rand()`](./builtins/array/array_rand.md) | `(array $array): int` | `int` | ✓ | ✓ |
 | [`array_reduce()`](./builtins/array/array_reduce.md) | `(array $array, callable $callback, mixed $initial = null): int` | `int` | ✓ | ✓ |
 | [`array_replace()`](./builtins/array/array_replace.md) | `(array $array, array $replacements): mixed` | `mixed` | ✓ | — |
@@ -67,8 +67,8 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`end()`](./builtins/array/end.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
 | [`in_array()`](./builtins/array/in_array.md) | `(mixed $needle, array $haystack, bool $strict = false): bool` | `bool` | ✓ | ✓ |
 | [`key()`](./builtins/array/key.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
-| [`krsort()`](./builtins/array/krsort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
-| [`ksort()`](./builtins/array/ksort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
+| [`krsort()`](./builtins/array/krsort.md) | `(array $array, int $flags = 0): bool` | `bool` | ✓ | ✓ |
+| [`ksort()`](./builtins/array/ksort.md) | `(array $array, int $flags = 0): bool` | `bool` | ✓ | ✓ |
 | [`natcasesort()`](./builtins/array/natcasesort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`natsort()`](./builtins/array/natsort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`next()`](./builtins/array/next.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |

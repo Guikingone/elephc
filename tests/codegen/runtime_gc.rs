@@ -5,10 +5,12 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for basics, regressions, stack args, copy-on-write and cycle handling, growth, related suites, resource scope-cleanup, by-reference builtin arguments that name a property, static property, or container element, calls that OMIT an optional by-reference argument (whose caller-side cell nothing reads back), and the reference a `foreach` loop holds on an object source.
+//! - Submodules group focused fixtures for basics, regressions, stack args, copy-on-write and cycle handling, growth, related suites, resource scope-cleanup, by-reference builtin arguments that name a property, static property, or container element, calls that OMIT an optional by-reference argument (whose caller-side cell nothing reads back), the reference a `foreach` loop holds on an object source, and the containers an array literal allocates when it defaults a property, boxed or nested.
 
 #[path = "runtime_gc/basics.rs"]
 mod basics;
+#[path = "runtime_gc/mixed_string_cast_return.rs"]
+mod mixed_string_cast_return;
 #[path = "runtime_gc/object_cast.rs"]
 mod object_cast;
 #[path = "runtime_gc/nullable_string_return.rs"]
@@ -29,6 +31,8 @@ mod regressions;
 mod assoc_rebind_release;
 #[path = "runtime_gc/object_supertype_rebind.rs"]
 mod object_supertype_rebind;
+#[path = "runtime_gc/boxed_property_defaults.rs"]
+mod boxed_property_defaults;
 #[path = "runtime_gc/by_ref_place_args.rs"]
 mod by_ref_place_args;
 #[path = "runtime_gc/omitted_by_ref_default_args.rs"]

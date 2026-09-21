@@ -128,7 +128,7 @@ pub(crate) fn lower_class_alias(ctx: &mut FunctionContext<'_>, inst: &Instructio
 /// call or a dynamic-property removal, so the message lists the shapes that do lower
 /// directly and then names the one shape users hit most.
 ///
-/// THE UNTYPED FIXED SLOT is that shape. `unset($obj->untypedProp)` on a property
+/// THE UNTYPED FIXED SLOT is one such shape. `unset($obj->untypedProp)` on a property
 /// declared without a type (`public $foo = 1;`) truly REMOVES it in PHP: a later read
 /// warns `Undefined property` and answers `null`, and a later write recreates it.
 /// elephc gives each declared property a fixed, monomorphically typed slot, so a
@@ -137,6 +137,12 @@ pub(crate) fn lower_class_alias(ctx: &mut FunctionContext<'_>, inst: &Instructio
 /// error beats a wrong value, so the shape is refused here. Untyped properties whose
 /// storage is a DYNAMIC hash (`stdClass`, undeclared names on
 /// `#[AllowDynamicProperties]` classes) are genuinely removable and lower fine.
+///
+/// A BY-REFERENCE INDEXED ARRAY is the other. `unset()` removes a key without
+/// renumbering, so a packed list has to become a hash — and a callee cannot retype the
+/// caller's slot, which still reads `array<T>`. The associative form has no such problem
+/// and lowers directly (issue #677), so the message names the difference rather than
+/// leaving "array/hash elements" looking like a blanket promise.
 pub(super) fn lower_unset_builtin(
     _ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -145,8 +151,12 @@ pub(super) fn lower_unset_builtin(
         "unset target shape with {} lowered operands (supported: variables, \
          array/hash elements, ArrayAccess offsets, __unset()-backed properties, \
          declared typed object properties, and dynamic object properties). \
-         An UNTYPED declared property (`public $p = 1;`) is not supported: its fixed \
-         slot has no representation for PHP's removed-then-null read",
+         Two shapes are deliberately excluded. An UNTYPED declared property \
+         (`public $p = 1;`) has a fixed slot with no representation for PHP's \
+         removed-then-null read. An element of a by-reference INDEXED array \
+         (`function f(array &$a) {{ unset($a[1]); }}`) would leave a key hole, so the \
+         local must become a hash, and the caller's slot still says `array<T>`; the \
+         associative form (`unset($a[\"k\"])`) is supported",
         inst.operands.len()
     )))
 }

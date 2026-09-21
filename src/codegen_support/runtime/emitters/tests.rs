@@ -8,7 +8,7 @@
 //! - Exercises feature gating, cross-target symbol coverage, and macOS dead-strip label ownership.
 
 use super::*;
-use crate::codegen_support::platform::{Arch, Platform, Target};
+use crate::codegen_support::platform::{AppleVariant, Arch, Platform, Target};
 use crate::codegen_support::runtime::{arrays, buffers, pointers};
 
 /// Verifies that AArch64 runtime emits fiber routines.
@@ -315,4 +315,112 @@ fn test_macos_dead_strip_no_cross_atom_internal_refs() {
          targets):\n{}",
         violations.join("\n")
     );
+}
+
+
+/// `__rt_hash_slice` is emitted for EVERY supported target, and walks the source through the
+/// insertion-order iterator rather than addressing it by key.
+///
+/// The helper exists because `array_slice()`'s `$offset`/`$length` count POSITIONS, which a hash
+/// cannot answer without a walk (issue #683). The executable codegen shards run on
+/// `macos-aarch64`, `linux-aarch64` and `linux-x86_64`; the two iOS targets are covered by
+/// emission tests like this one, so a helper that silently stopped being emitted on one of them
+/// would otherwise only surface as a wrong answer on a device.
+///
+/// The two calls asserted inside the body are the ones that make it a hash slice rather than a
+/// clone: `__rt_hash_iter_next` is what gives positions their meaning, and `__rt_hash_new` is
+/// what makes the result a table of its own instead of a view into the source.
+#[test]
+fn test_hash_slice_is_emitted_for_every_supported_target() {
+    let targets = [
+        Target::new(Platform::MacOS, Arch::AArch64),
+        Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+        Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+        Target::new(Platform::Linux, Arch::AArch64),
+        Target::new(Platform::Linux, Arch::X86_64),
+    ];
+
+    for target in targets {
+        let mut emitter = Emitter::new(target);
+        emit_runtime(&mut emitter, RuntimeFeatures::all());
+        let asm = emitter.output();
+
+        assert!(
+            asm.contains(".globl __rt_hash_slice\n"),
+            "{} did not emit __rt_hash_slice",
+            target.as_str()
+        );
+
+        // The helper's own body: from its global directive to the next helper's.
+        let start = asm
+            .find(".globl __rt_hash_slice\n")
+            .unwrap_or_else(|| panic!("{}: no __rt_hash_slice body", target.as_str()));
+        let rest = &asm[start + ".globl __rt_hash_slice\n".len()..];
+        let body = rest.find(".globl ").map_or(rest, |end| &rest[..end]);
+        for callee in ["__rt_hash_iter_next", "__rt_hash_new", "__rt_hash_insert_owned"] {
+            assert!(
+                body.contains(callee),
+                "{} must reach {callee} from __rt_hash_slice",
+                target.as_str()
+            );
+        }
+    }
+}
+
+
+/// `__rt_array_slice_str` is emitted for EVERY supported target, with the 16-byte slot the
+/// string layout needs.
+///
+/// The helper exists because an indexed `array<string>` stores 16-byte `{pointer, length}` slots
+/// while the shared slice helpers copy 8 bytes per element (issue #675). The executable codegen
+/// shards run on `macos-aarch64`, `linux-aarch64` and `linux-x86_64`; the two iOS targets are
+/// covered by emission tests like this one, so a helper that silently stopped being emitted —
+/// or that asked `__rt_array_new` for the wrong slot width on one of them — would otherwise only
+/// surface as a wrong answer on a device.
+///
+/// The slot width is asserted rather than assumed because it is the one number that makes this
+/// helper different from its 8-byte siblings: get it wrong and the copy still runs, reading half
+/// of each pair.
+#[test]
+fn test_array_slice_str_is_emitted_for_every_supported_target() {
+    let targets = [
+        Target::new(Platform::MacOS, Arch::AArch64),
+        Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+        Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+        Target::new(Platform::Linux, Arch::AArch64),
+        Target::new(Platform::Linux, Arch::X86_64),
+    ];
+
+    for target in targets {
+        let mut emitter = Emitter::new(target);
+        emit_runtime(&mut emitter, RuntimeFeatures::all());
+        let asm = emitter.output();
+
+        assert!(
+            asm.contains(".globl __rt_array_slice_str\n"),
+            "{} did not emit __rt_array_slice_str",
+            target.as_str()
+        );
+
+        // The helper's own body: from its global directive to the next helper's.
+        let start = asm
+            .find(".globl __rt_array_slice_str\n")
+            .unwrap_or_else(|| panic!("{}: no __rt_array_slice_str body", target.as_str()));
+        let rest = &asm[start + ".globl __rt_array_slice_str\n".len()..];
+        let body = rest.find(".globl ").map_or(rest, |end| &rest[..end]);
+        let slot_request = match target.arch {
+            Arch::AArch64 => "mov x1, #16",
+            Arch::X86_64 => "mov rsi, 16",
+        };
+        assert!(
+            body.contains(slot_request),
+            "{} must allocate the slice destination with 16-byte string slots ({slot_request})",
+            target.as_str()
+        );
+        assert!(
+            body.contains("__rt_array_push_str"),
+            "{} must copy through the persisting string append helper",
+            target.as_str()
+        );
+    }
 }

@@ -29,6 +29,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // Shared numeric coercions. Emitted first because string, array, and cast helpers all
     // branch into `__rt_php_float_to_int` for PHP's float→int rules.
     numeric::emit_php_float_to_int(emitter);
+    numeric::emit_php_float_to_int_cap(emitter);
     round_mode::emit_round_mode(emitter);
 
     // String runtime functions
@@ -68,6 +69,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_chr(emitter);
     strings::emit_strcmp(emitter);
     strings::emit_strcasecmp(emitter);
+    strings::emit_strnatcmp(emitter);
     strings::emit_strncmp(emitter);
     strings::emit_strncasecmp(emitter);
     strings::emit_str_starts_with(emitter);

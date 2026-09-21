@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/types.rs`:140](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/types.rs#L140) (`lower_unset_builtin`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/types.rs`:146](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/types.rs#L146) (`lower_unset_builtin`)
 - **Function symbol**: `lower_unset_builtin()`
 
 
@@ -21,7 +21,7 @@ sidebar:
 - into a slot clear, a hash/array removal, an `offsetUnset()` call, a `__unset()`
 - call or a dynamic-property removal, so the message lists the shapes that do lower
 - directly and then names the one shape users hit most.
-- THE UNTYPED FIXED SLOT is that shape. `unset($obj->untypedProp)` on a property
+- THE UNTYPED FIXED SLOT is one such shape. `unset($obj->untypedProp)` on a property
 - declared without a type (`public $foo = 1;`) truly REMOVES it in PHP: a later read
 - warns `Undefined property` and answers `null`, and a later write recreates it.
 - elephc gives each declared property a fixed, monomorphically typed slot, so a
@@ -30,6 +30,11 @@ sidebar:
 - error beats a wrong value, so the shape is refused here. Untyped properties whose
 - storage is a DYNAMIC hash (`stdClass`, undeclared names on
 - `#[AllowDynamicProperties]` classes) are genuinely removable and lower fine.
+- A BY-REFERENCE INDEXED ARRAY is the other. `unset()` removes a key without
+- renumbering, so a packed list has to become a hash — and a callee cannot retype the
+- caller's slot, which still reads `array<T>`. The associative form has no such problem
+- and lowers directly (issue #677), so the message names the difference rather than
+- leaving "array/hash elements" looking like a blanket promise.
 
 ## Semantic descriptor
 

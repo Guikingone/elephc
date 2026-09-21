@@ -102,3 +102,18 @@ function tag($label) {
 
 echo tag("first") . "\n";
 echo tag("first", "second") . "\n";
+
+// --- An untyped parameter reached only through a callable ---
+// A parameter with no type hint takes whatever the caller passes. When every call goes through
+// a callable rather than naming the function, there is no call site to infer that type from, so
+// the return stays open instead of being pinned to whatever the compiler guessed first --
+// a returned string comes back as a string, not as int(0).
+
+function passthrough($value) { return $value; }
+
+$passthrough_fcc = passthrough(...);
+echo "callable-only passthrough (string): " . $passthrough_fcc("kept as a string") . "\n";
+echo "callable-only passthrough (int): " . $passthrough_fcc(42) . "\n";
+$passthrough_name = "passthrough";
+echo "callable-only passthrough (by name): " . call_user_func($passthrough_name, "also kept") . "\n";
+echo "callable-only passthrough (mapped): " . implode(", ", array_map($passthrough_fcc, ["a", "b"])) . "\n";

@@ -8,10 +8,12 @@
 //!
 //! Key details:
 //! - This is intentionally narrower than full PHP expression lowering: only
-//!   scalar, string, null, indexed-array literals with scalar/string/null
-//!   elements, empty object-typed indexed arrays, and associative-array literals
-//!   (empty, positional, or with constant integer/string keys and scalar/string/null
-//!   values) land here.
+//!   scalar, string, null, indexed-array literals, empty object-typed indexed
+//!   arrays, and associative-array literals (empty, positional, or with constant
+//!   integer/string keys) land here. Array elements and associative values are
+//!   themselves scalar/string/null or nested array literals, in either spelling
+//!   and to any depth; each nested container is allocated with, and owned by, the
+//!   container enclosing it.
 //! - The declared PHP type selects the storage shape, and slot-shape arms must precede the
 //!   generic `Mixed`/`Union(_)` boxing arms. A null-capable int slot (`?int` under
 //!   `NullRepr::Tagged`) is an inline two-word `{payload, tag}` TaggedScalar, so it takes
@@ -82,11 +84,12 @@ pub(crate) enum LiteralDefaultValue {
         enum_name: String,
         case_name: String,
     },
-    /// An associative-array literal stored into a `mixed`/union slot, boxed into a Mixed cell.
+    /// An ASSOCIATIVE array literal stored into a `mixed`/union slot, boxed into a Mixed cell.
     ///
-    /// The keyed counterpart of `BoxedArray`, and missing for the same reason it was: only the
-    /// positional spelling had been taught to box, so `public ?array $x = ["k" => 1];` was
-    /// refused outright while `public ?array $x = [1, 2];` beside it compiled.
+    /// The `BoxedArray` sibling covers the positional spelling; this covers the keyed one.
+    /// `class C { public ?array $x = ["k" => 1]; }` had no default form and was refused outright
+    /// with `object_new for default value of property $x with PHP type Union([Array(Mixed),
+    /// Void])` -- the same message the positional spelling used to produce (issue #688).
     BoxedAssocArray {
         value_type: PhpType,
         entries: Vec<LiteralAssocEntry>,
@@ -235,9 +238,11 @@ pub(crate) fn literal_default_value(
                 elements,
             })
         }
-        // The keyed spelling of the arm above. Values are typed `Mixed` for the same reason the
-        // positional elements are: the slot is `mixed`, so a later write of any type into the
-        // hash must not find a narrower value type stamped underneath.
+        // The keyed spelling of the arm above. PHP has no separate associative array type, so
+        // `["k" => 1]` in a `?array` slot is the same default as `[1, 2]` is; only the storage
+        // the literal needs differs, and hash storage is what a string key requires. Values are
+        // typed `Mixed` for the same reason the positional elements are: the slot is `mixed`, so
+        // a later write of any type into the hash must not find a narrower value type underneath.
         (PhpType::Mixed | PhpType::Union(_), ExprKind::ArrayLiteralAssoc(items)) => {
             let value_type = PhpType::Mixed;
             let entries = items

@@ -1186,6 +1186,20 @@ fn emit_static_property_default_value(
         LiteralDefaultValue::EmptyAssocArray { value_type } => {
             emit_empty_assoc_array_literal_to_result(ctx, value_type);
         }
+        LiteralDefaultValue::BoxedAssocArray {
+            value_type,
+            entries,
+        } => {
+            emit_assoc_array_literal_default_to_result(ctx, value_type, entries)?;
+            // The OWNED boxer, for the reason the `BoxedArray` arm below gives.
+            crate::codegen::emit_box_current_owned_value_as_mixed(
+                ctx.emitter,
+                &PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(value_type.clone()),
+                },
+            );
+        }
         LiteralDefaultValue::BoxedArray {
             elem_type,
             elements,
@@ -1197,20 +1211,6 @@ fn emit_static_property_default_value(
             crate::codegen::emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Array(Box::new(elem_type.clone())),
-            );
-        }
-        LiteralDefaultValue::BoxedAssocArray {
-            value_type,
-            entries,
-        } => {
-            emit_assoc_array_literal_default_to_result(ctx, value_type, entries)?;
-            // The OWNED boxer, for the same reason as the positional arm above.
-            crate::codegen::emit_box_current_owned_value_as_mixed(
-                ctx.emitter,
-                &PhpType::AssocArray {
-                    key: Box::new(PhpType::Mixed),
-                    value: Box::new(value_type.clone()),
-                },
             );
         }
     }

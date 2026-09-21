@@ -264,6 +264,9 @@ pub(super) fn emit_property_default(
         } => {
             abi::emit_push_reg(ctx.emitter, object_reg);
             emit_assoc_array_literal_default_to_result(ctx, value_type, entries)?;
+            // The OWNED boxer, for the reason the `BoxedArray` arm gives: the literal above
+            // allocated the hash and the box takes its own reference, so the plain boxer would
+            // retain without releasing and leak one block per object.
             crate::codegen::emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::AssocArray {

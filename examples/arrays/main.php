@@ -67,6 +67,18 @@ foreach ($slice as $value) {
 }
 echo "\n";
 
+// array_push() takes any number of values and returns the new element count, so a growing
+// list needs one call rather than one per element.
+$stack = [1];
+$size = array_push($stack, 2, 3, 4);
+echo "Pushed: " . implode(", ", $stack) . " (now " . $size . " elements)\n";
+// The same slice works on a string array, whose elements are wider than a scalar slot. The
+// result owns its own copy of every string, so writing into it leaves the source alone.
+$names = ["Ada", "Grace", "Linus", "Barbara"];
+$middle = array_slice($names, 1, 2);
+$middle[0] = "GRACE";
+echo "Sliced names: " . implode(", ", $middle) . " (source still " . implode(", ", $names) . ")\n";
+
 // array_splice() removes a window IN PLACE and returns what it removed; the optional
 // fourth argument is spliced in where the removed window was, so the array can grow.
 $queue = [10, 20, 30, 40, 50];
@@ -86,6 +98,13 @@ echo "Spliced words: " . implode(", ", $words) . " (removed " . implode(", ", $c
 $mixed = [1, 2, 3];
 array_splice($mixed, 1, 1, ["two", 2.5]);
 echo "Promoted: " . implode(", ", $mixed) . "\n";
+
+// The replacement may even be the receiver itself. PHP evaluates it into its own array
+// BEFORE the removal runs, so what gets spliced in is the array as it was on the way in --
+// not the shortened one the removal leaves behind.
+$self = [1, 2, 3];
+array_splice($self, 1, 1, $self);
+echo "Self-spliced: " . implode(", ", $self) . "\n";
 
 // A by-reference parameter is the caller's storage, so a builtin that relocates the array
 // while prepending still reaches the original variable.

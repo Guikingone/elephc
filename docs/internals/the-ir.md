@@ -157,6 +157,22 @@ pub struct Value {
 `Callable`, `Str`, and refcounted heap values can be owned even when their
 storage type is not `Heap(...)`. Ownership is a separate value property.
 
+Because the element and key/value types "stay in `php_type`", an array literal's stamp is
+load-bearing: `ArrayGet`/`HashGet` read an element back in the shape the container's
+`php_type` claims. A stamp that does not match what was actually stored is not a lost
+optimization but a miscompile — a container stamped `array<string, int>` over a hash really
+holding `array<string>` returns the inner array's pointer read back as an integer.
+
+Two functions compute that stamp, `array_literal_element_type_for_ir` for an indexed literal
+and `assoc_array_literal_value_type_for_ir` for an associative one, and both must stay
+context-aware for every element shape they can meet — including a nested array literal, which
+they each type by recursing into the same pair of functions. The context-free
+`infer_expr_type_syntactic` is only a last-resort fallback: it cannot see a local's type and
+answers `Int` for any variable, so reaching it for an element that a local reaches through
+fabricates the stamp. Keep the two functions' element-shape arms in step; an arm present in
+one and missing in the other is a bug that only shows up in the nesting order that routes
+through the incomplete one.
+
 ### Parsed Type Expressions
 
 `TypeExpr` maps into `PhpType` during type checking before EIR lowering. EIR
@@ -585,6 +601,28 @@ All mutating operations must preserve copy-on-write. The builder emits
 `ArrayEnsureUnique`/`HashEnsureUnique` before mutation unless prior ownership
 proofs make it unnecessary.
 
+`ArrayCloneShallow` also carries the one aliasing case a by-reference builtin cannot
+resolve at runtime: a `$replacement` that IS the receiver. `array_splice($a, 1, 1, $a)`
+lowers both arguments to loads of the same slot, so the backend would pass one pointer
+twice and the insertion would re-read slots the removal had already overwritten
+(`[1,2,3]` came back as `[1,1,1,3]` instead of PHP's `[1,1,2,3,3]`, issue #676).
+`ir_lower::expr::snapshot_array_splice_self_replacement` decides that on the LOWERED
+OPERANDS, which are already in parameter order, and emits an `ArrayCloneShallow` for the
+replacement operand before the call — codegen then sees two distinct arrays and a call
+that cannot alias pays no runtime compare. Operands rather than source arguments because
+every spelling then costs one test: positional, named in any order, and a named
+`$replacement` with `$length` omitted all arrive at the same operand slot, and so do the
+hidden temporaries a property, a static property or a container element is rewritten
+into. Two loads of one local slot — or one ref cell, which is how a by-reference
+parameter reaches the caller's array — are the same array, and a `&$x` binding is
+followed through the function's `AliasLocalRefCell` instructions, an over-approximation
+whose only cost when wrong is a redundant copy. The clone is an owned value, so the
+ordinary temporary-release machinery frees it; the rewrite runs before the
+receiver-widening one so the copy holds the pre-splice payload rather than a re-boxed
+version of it. `codegen::lower_inst::arrays::lower_array_clone_shallow` is the backend
+side, and this is its first user: until issue #676 the opcode was declared and validated
+but never emitted, so every target rejected it as an unsupported feature.
+
 With a typed result, `ArrayGetForWrite` and `HashGetForWrite` are also the read
 side of that rule for a container element that is about to be mutated through an
 alias — today, the source of a by-reference `foreach` (issue #580). Unlike the
@@ -637,14 +675,31 @@ reference cell by `$r = &$o->x` — there the container lives inside the cell, s
 split reads and republishes through the cell and every alias of the reference sees
 the result.
 
-The receiver has to be reachable through stable backing storage: a variable or
-`$this`, optionally followed by a chain of plain declared object properties
-(`$o->inner->x`). Proving only that the syntactic ROOT is a variable is not enough,
-because an intermediate step can be a `get` hook or a `__get` returning a fresh
-object; the read drops its receiver as soon as it takes the borrow, which would
-free the container the loop is about to iterate. Dynamic property names, hooked
-properties, `Mixed` and nullable receivers, packed fields, and receivers over a
-temporary all keep the retaining read.
+The receiver has to outlive the loop, because the borrowed container's only owner
+is the property slot inside it. A receiver that names stable backing storage does
+that by itself: a variable or `$this`, optionally followed by a chain of plain
+declared object properties (`$o->inner->x`). Any OTHER receiver is a temporary the
+loop borrows through — an array element (`$arr[0]->x`), a call result
+(`$o->get()->x`), an intermediate `get` hook or `__get` returning a fresh object —
+and dropping it when the read takes its borrow frees the container the loop is
+about to iterate. Those receivers are held by the loop instead, released on the
+exit block and, through the loop frame, on every `break`, `return` and `throw`
+that skips it (issue #690). The gate is therefore about LIFETIME, not about
+spelling; `Mixed` and nullable receivers, packed fields and hooked or undeclared
+property slots still keep the retaining read.
+
+A runtime-named property (`$o->$n`) takes the same path once its name has folded
+to a literal, which is the ordinary case: the slot the backend resolves is the one
+the static spelling reaches. A name still unresolved at lowering time keeps the
+retaining read, because the backend's slot resolution needs it.
+
+A receiver that is null at RUN TIME — an element read that missed, whose result
+still carries the element's declared type — raises PHP's
+`Attempt to modify property "x" on null` `Error` rather than being dereferenced.
+That is not a detail of the split: PHP evaluates a by-reference `foreach` source
+in a WRITE context, where a null receiver is fatal instead of the warning a plain
+read produces. It is also what lets the read describe the property's SLOT type
+instead of a nullable read type, since this path never answers null.
 
 The frontend gate in `src/ir_lower/expr/property_fetch_for_write.rs` and the lowering in
 `src/codegen/lower_inst/objects/property_fetch_for_write.rs` classify slots from the same `ClassInfo`
