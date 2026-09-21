@@ -795,6 +795,101 @@ echo "long=", strlen($cut[0]), ",", strlen($cut[1]), " first=", $cut[0][0], " se
     );
 }
 
+/// Follow-up for #1035: `preserve_keys` on the same indexed `array<string>` source.
+///
+/// The key-preserving form does NOT go through `__rt_array_slice_str`. A dense indexed array
+/// cannot hold a window that does not start at key 0, so the literal `true` lowers to
+/// `__rt_array_slice_to_hash`, which walks the header's `elem_size` and persists the 16-byte
+/// `{pointer, length}` slot into an owned hash. The rows above only ever exercised the
+/// renumbering form, so nothing pinned that the hash path reads a string array's slot width
+/// rather than the 8 bytes every other element type has.
+///
+/// The literal `false` and the named-argument spelling ride along, and the last two rows are
+/// ownership again: writing into the key-preserving result must not disturb the source.
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_array_slice_preserve_keys_on_indexed_string_array() {
+    let out = compile_and_run(
+        r#"<?php
+$s = ["alpha", "bravo", "charlie", "delta", "echo"];
+
+function row(string $label, array $a): void {
+    $parts = [];
+    foreach ($a as $k => $v) { $parts[] = $k . "=>" . $v; }
+    echo $label, "=[", implode(",", $parts), "] n=", count($a), "\n";
+}
+
+row("keep-mid", array_slice($s, 1, 2, true));
+row("drop-mid", array_slice($s, 1, 2, false));
+row("keep-neg", array_slice($s, -2, null, true));
+row("keep-named", array_slice($s, 2, 2, preserve_keys: true));
+row("keep-empty", array_slice($s, 99, 2, true));
+
+$k = array_slice($s, 1, 2, true);
+$k[1] = "MUTATED";
+row("after-mutate", $k);
+row("source-intact", $s);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "keep-mid=[1=>bravo,2=>charlie] n=2\n",
+            "drop-mid=[0=>bravo,1=>charlie] n=2\n",
+            "keep-neg=[3=>delta,4=>echo] n=2\n",
+            "keep-named=[2=>charlie,3=>delta] n=2\n",
+            "keep-empty=[] n=0\n",
+            "after-mutate=[1=>MUTATED,2=>charlie] n=2\n",
+            "source-intact=[0=>alpha,1=>bravo,2=>charlie,3=>delta,4=>echo] n=5\n",
+        )
+    );
+}
+
+/// The two `preserve_keys` spellings call two different helpers, and each calls only its own.
+///
+/// Values alone cannot tell the paths apart: a key-preserving slice of a window starting at 0
+/// prints exactly like a renumbering one. This reads the emitted assembly instead, so a future
+/// change that routed the string array's key-preserving form back through
+/// `__rt_array_slice_str` — losing the keys — cannot pass the fixture above by accident.
+#[test]
+fn test_array_slice_on_a_string_array_picks_the_helper_from_preserve_keys() {
+    let dir = make_cli_test_dir("elephc_slice_str_preserve_keys");
+    let (renumbering, _runtime, _libs) = compile_source_to_asm_with_options(
+        r#"<?php $s = ["a", "b", "c"]; $r = array_slice($s, 1, 2, false); echo count($r);"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    let (key_preserving, _runtime, _libs) = compile_source_to_asm_with_options(
+        r#"<?php $s = ["a", "b", "c"]; $r = array_slice($s, 1, 2, true); echo count($r);"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        renumbering.contains("__rt_array_slice_str"),
+        "the renumbering form must keep the string-slot helper: {renumbering}"
+    );
+    assert!(
+        !renumbering.contains("__rt_array_slice_to_hash"),
+        "the renumbering form must not build a hash: {renumbering}"
+    );
+    assert!(
+        key_preserving.contains("__rt_array_slice_to_hash"),
+        "the key-preserving form must build a hash: {key_preserving}"
+    );
+    assert!(
+        !key_preserving.contains("__rt_array_slice_str"),
+        "the key-preserving form must not reach the string-slot helper: {key_preserving}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Slicing an indexed string array in a loop must not leak or double-free.
 ///
 /// The copy persists each `{pointer, length}` pair through `__rt_array_push_str`, so the result
