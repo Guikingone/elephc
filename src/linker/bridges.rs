@@ -577,8 +577,16 @@ fn any_file_newer_than(directory: &Path, instant: std::time::SystemTime) -> bool
 
 /// Returns the directories of the sibling workspace crates `crate_dir` depends on by path.
 ///
-/// Only `path` dependencies are followed: a registry dependency is pinned in `Cargo.lock` and
-/// cannot change under a checkout, while a sibling crate changes every time someone edits it.
+/// Only `path` dependencies declared in the crate's OWN manifest are followed, because a
+/// sibling crate changes every time someone edits it while an ordinary registry dependency is
+/// a fixed download.
+///
+/// That leaves one hole, and it is real rather than theoretical: the workspace root redirects
+/// `mysql` to `vendor/mysql-28.0.0` through `[patch.crates-io]`, and `elephc-pdo` names it by
+/// VERSION, so nothing here sees the vendored tree. Editing it does not mark
+/// `libelephc_pdo.a` stale. Closing that means resolving patches, not just reading manifests;
+/// until then `cargo build -p elephc-pdo` after such an edit is the manual refresh.
+///
 /// Manifest sections that cannot be read, parsed, or understood contribute nothing — this
 /// decides whether to SPAWN CARGO, and an unreadable manifest is not evidence of an edit.
 fn path_dependency_dirs(crate_dir: &Path) -> Vec<PathBuf> {
