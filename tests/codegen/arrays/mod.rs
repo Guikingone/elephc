@@ -14,6 +14,7 @@ mod assoc;
 mod closure_literal_returns;
 mod by_ref_params;
 mod by_ref_places;
+mod mixed_element_references;
 mod indexed;
 mod internal_pointer;
 mod key_sort;

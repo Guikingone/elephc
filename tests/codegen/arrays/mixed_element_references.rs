@@ -1,0 +1,115 @@
+//! Purpose:
+//! Regression tests for element references taken through a BOXED receiver: a `mixed`
+//! parameter or local, or a declared `array` parameter (boxed on this branch so its
+//! representation can change without retyping the caller's slot).
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - PHP separates an array the moment one of its elements becomes a reference, so an alias
+//!   taken BEFORE `$r = &$a[...]` must keep the original value. The boxed lowering rewrote the
+//!   shared cell in place and every alias saw the reference and the writes through it.
+//! - The packed case additionally promotes the payload to a hash; the promoted hash is now
+//!   published into the cell before the packed owner is released, so heap debug stays clean
+//!   and nothing observes the cell pointing at freed storage.
+//! - Every expected value is real `php` 8.x output for the same fixture.
+
+use crate::support::*;
+
+/// An alias of a `mixed` hash must not observe a reference taken through the original.
+#[test]
+fn test_element_reference_through_mixed_hash_separates_the_alias() {
+    let out = compile_and_run(
+        r#"<?php
+function f(mixed $a): void {
+    $b = $a;
+    $r = &$a["x"];
+    $r = 2;
+    echo $b["x"], "|", $a["x"], "|", count($b), "|", count($a), "\n";
+}
+f(["x" => 1]);
+"#,
+    );
+    assert_eq!(out, "1|2|1|1\n");
+}
+
+/// The packed spelling: the reference promotes the payload to a hash, which must land in a
+/// cell the alias does not share.
+#[test]
+fn test_element_reference_through_mixed_packed_array_separates_the_alias() {
+    let out = compile_and_run(
+        r#"<?php
+function g(mixed $a): void {
+    $b = $a;
+    $r = &$a[0];
+    $r = 9;
+    echo $b[0], "|", $a[0], "|", count($b), "|", count($a), "\n";
+}
+g([1, 2]);
+"#,
+    );
+    assert_eq!(out, "1|9|2|2\n");
+}
+
+/// A declared `array` parameter is boxed too, by value and by reference; both must separate
+/// from a local alias, and the by-reference form must still reach the caller.
+#[test]
+fn test_element_reference_through_declared_array_parameters_separates_the_alias() {
+    let out = compile_and_run(
+        r#"<?php
+function h(array $a): void { $b = $a; $r = &$a["x"]; $r = 2; echo $b["x"], "|", $a["x"], "\n"; }
+h(["x" => 1]);
+function p(array $a): void { $b = $a; $r = &$a[0]; $r = 9; echo $b[0], "|", $a[0], "\n"; }
+p([1, 2]);
+function rf(array &$a): void { $b = $a; $r = &$a["x"]; $r = 2; echo $b["x"], "|", $a["x"], "\n"; }
+$q = ["x" => 1]; rf($q); echo $q["x"], "\n";
+"#,
+    );
+    assert_eq!(out, "1|2\n1|9\n1|2\n2\n");
+}
+
+/// A receiver that shares nothing must not be copied: the reference still reaches the only
+/// cell, a missing key is created in it, and a non-array `mixed` keeps answering no element.
+#[test]
+fn test_element_reference_through_unshared_mixed_keeps_the_single_cell() {
+    let out = compile_and_run(
+        r#"<?php
+function f(mixed $a): void {
+    $r = &$a["new"];
+    $r = 5;
+    echo count($a), "|", $a["new"], "\n";
+}
+f(["x" => 1]);
+function n(mixed $a): void {
+    $r = &$a["x"];
+    echo var_export($r, true), "\n";
+}
+n(null);
+"#,
+    );
+    assert_eq!(out, "2|5\nNULL\n");
+}
+
+/// The separation adds one cell and the promotion replaces one payload; both must be balanced
+/// on every receiver kind, including the by-reference parameter whose store-back retires the
+/// previous cell.
+#[test]
+fn test_element_reference_through_boxed_receivers_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function f(mixed $a): int { $b = $a; $r = &$a["x"]; $r = 2; return $b["x"] + $a["x"]; }
+function g(mixed $a): int { $b = $a; $r = &$a[0]; $r = 9; return $b[0] + $a[0]; }
+function rf(array &$a): void { $b = $a; $r = &$a[1]; $r = 7; }
+$t = 0;
+for ($i = 0; $i < 3; $i++) {
+    $t += f(["x" => 1]) + g([1, 2]);
+    $q = [1, 2, 3]; rf($q); $t += $q[1];
+}
+echo $t, "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "60\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

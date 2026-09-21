@@ -471,7 +471,8 @@ fn lower_array_get_in_mode(
 /// Lowers `LoadArrayElemRefCell` to an addressable element cell.
 ///
 /// Concrete receivers select inline indexed storage or a runtime-promoted hash. A boxed Mixed
-/// receiver is normalized to a Mixed-entry hash first, updating the box in place, so recursive
+/// receiver is first split away from its aliases (`separate_shared_mixed_array_receiver`) and
+/// then normalized to a Mixed-entry hash, updating that unique box in place, so recursive
 /// nested-source preparation always returns a managed tag-11 cell rather than retaining an
 /// interior indexed slot as though it were heap-owned.
 pub(super) fn lower_load_array_elem_ref_cell(
@@ -499,7 +500,9 @@ pub(super) fn lower_load_array_elem_ref_cell(
         return lower_hash_elem_ref_cell(ctx, inst, array, index, create_missing);
     }
     if matches!(array_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
-        ReceiverPlace::resolve(ctx, array)?.reload_local_value(ctx, array)?;
+        let receiver = ReceiverPlace::resolve(ctx, array)?;
+        receiver.reload_local_value(ctx, array)?;
+        separate_shared_mixed_array_receiver(ctx, &receiver, array)?;
         return match ctx.emitter.target.arch {
             Arch::AArch64 => lower_load_mixed_array_elem_ref_cell_aarch64(
                 ctx, inst, array, index, create_missing,
@@ -644,6 +647,121 @@ fn lower_hash_elem_ref_cell_x86_64(
     Ok(())
 }
 
+/// Splits a shared Mixed cell before an element reference is taken through it.
+///
+/// PHP separates an array the moment one of its elements becomes a reference: after
+/// `$b = $a; $r = &$a["x"]; $r = 2;` the copy still reads `$b["x"] === 1`. A `mixed` receiver (a
+/// `mixed` or declared `array` parameter, a `mixed` local) shares its cell with every alias
+/// through `Acquire`, and the arch lowerings below rewrite that cell in place -- tag, payload,
+/// the promoted hash -- so every alias observed the reference and every write made through it.
+/// The mutating builtins already separate through `__rt_array_cell_ensure_unique` before they
+/// touch a boxed payload (`prepare_boxed_array_receiver`); this is the same step for the
+/// reference path, published back through the receiver's place so the local, ref cell, property
+/// or global names the unique cell from here on.
+///
+/// A cell that does not hold an array (null, a scalar, an object) is left alone: the arch
+/// lowering answers it with no addressable element, exactly as before, and the consuming
+/// store-back must not be prepared for a cell that is never republished. An opaque receiver has
+/// nowhere to publish a split cell and keeps the in-place behaviour.
+fn separate_shared_mixed_array_receiver(
+    ctx: &mut FunctionContext<'_>,
+    receiver: &ReceiverPlace,
+    array: ValueId,
+) -> Result<()> {
+    if matches!(receiver, ReceiverPlace::Opaque) {
+        return Ok(());
+    }
+    let skip = ctx.next_label("mixed_array_elem_ref_cell_not_array");
+    ctx.load_value_to_result(array)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {skip}"));                // a null cell holds no array to separate
+            ctx.emitter.instruction("ldr x10, [x0]");                           // read the cell tag before touching allocation metadata
+            ctx.emitter.instruction("sub x10, x10, #4");                        // array and hash tags become zero and one
+            ctx.emitter.instruction("cmp x10, #1");                             // only the two PHP array layouts are separated
+            ctx.emitter.instruction(&format!("b.hi {skip}"));                   // scalar, object and resource cells keep the in-place path
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // a null cell holds no array to separate
+            ctx.emitter.instruction(&format!("jz {skip}"));                     // leave the non-array answer to the arch lowering
+            ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                // read the cell tag before touching allocation metadata
+            ctx.emitter.instruction("sub r10, 4");                              // array and hash tags become zero and one
+            ctx.emitter.instruction("cmp r10, 1");                              // only the two PHP array layouts are separated
+            ctx.emitter.instruction(&format!("ja {skip}"));                     // scalar, object and resource cells keep the in-place path
+        }
+    }
+    receiver.prepare_consuming_storeback(ctx, array)?;
+    ctx.load_value_to_reg(array, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+    abi::emit_call_label(ctx.emitter, "__rt_array_cell_ensure_unique");
+    ctx.store_result_value(array)?;
+    receiver.store_back_value(ctx, array)?;
+    ctx.emitter.label(&skip);
+    Ok(())
+}
+
+/// Promotes the indexed payload of a Mixed cell to a Mixed-entry hash, publishing it first.
+///
+/// The cell pointer sits at the top of the temporary stack and the unboxed indexed array is in
+/// the first argument register. The promoted hash is written into the cell BEFORE the old
+/// packed array's owner is dropped: `__rt_decref_array` deep-frees at zero, and the cell is that
+/// array's owner, so releasing first left the variable pointing at freed storage for the length
+/// of the free. `convert_loaded_indexed_source_to_hash` keeps the release-first order because
+/// its iterator callers hold the source in a register, not in a published cell. A payload that
+/// is already a hash (kind 3, an addressable source promoted earlier) is only normalized.
+fn promote_indexed_payload_into_mixed_cell(ctx: &mut FunctionContext<'_>) {
+    let already_hash = ctx.next_label("mixed_array_elem_ref_payload_already_hash");
+    let done = ctx.next_label("mixed_array_elem_ref_payload_promoted");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp x0, #3");                              // a source promoted earlier must not be reread as indexed
+            ctx.emitter.instruction(&format!("b.eq {already_hash}"));           // normalize an existing hash without a second promotion
+            ctx.emitter.instruction("ldr x0, [sp]");                            // reload the indexed payload for promotion
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+            ctx.emitter.instruction("ldr x9, [sp, #16]");                       // reload the owning Mixed cell
+            ctx.emitter.instruction("mov x10, #5");                             // runtime tag 5 publishes associative hash storage
+            ctx.emitter.instruction("str x10, [x9]");                           // publish the hash tag before the old payload is released
+            ctx.emitter.instruction("str x0, [x9, #8]");                        // publish the promoted hash into the cell
+            ctx.emitter.instruction("str xzr, [x9, #16]");                      // clear the unused high payload word
+            abi::emit_push_reg(ctx.emitter, "x0");
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // the indexed owner the published hash replaced
+            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_pop_reg(ctx.emitter, "x9");
+            ctx.emitter.instruction(&format!("b {done}"));                      // join the already-hash and promoted results
+            ctx.emitter.label(&already_hash);
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(ctx.emitter, "rdi");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp rax, 3");                              // a source promoted earlier must not be reread as indexed
+            ctx.emitter.instruction(&format!("je {already_hash}"));             // normalize an existing hash without a second promotion
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // reload the indexed payload for promotion
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
+            ctx.emitter.instruction("mov rdi, rax");                            // widen the promoted hash entries to boxed Mixed
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+            ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 16]");           // reload the owning Mixed cell
+            ctx.emitter.instruction("mov QWORD PTR [r10], 5");                  // publish the hash tag before the old payload is released
+            ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");            // publish the promoted hash into the cell
+            ctx.emitter.instruction("mov QWORD PTR [r10 + 16], 0");             // clear the unused high payload word
+            abi::emit_push_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");           // the indexed owner the published hash replaced
+            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+            abi::emit_pop_reg(ctx.emitter, "rax");
+            abi::emit_pop_reg(ctx.emitter, "r10");
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // join the already-hash and promoted results
+            ctx.emitter.label(&already_hash);
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+        }
+    }
+    ctx.emitter.label(&done);
+}
+
 /// Resolves an element reference through a boxed Mixed container on AArch64.
 fn lower_load_mixed_array_elem_ref_cell_aarch64(
     ctx: &mut FunctionContext<'_>,
@@ -668,9 +786,9 @@ fn lower_load_mixed_array_elem_ref_cell_aarch64(
     ctx.emitter.instruction(&format!("b {null_label}"));                        // non-array Mixed payloads have no addressable element
 
     ctx.emitter.label(&indexed_label);
-    ctx.emitter.instruction("mov x0, x1");                                      // pass the unboxed indexed child to shared hash promotion
-    super::iterators::convert_loaded_indexed_source_to_hash(ctx);
-    ctx.emitter.instruction(&format!("b {fetch_label}"));                       // publish the promoted child and fetch its requested entry
+    ctx.emitter.instruction("mov x0, x1");                                      // pass the unboxed indexed child to publish-first hash promotion
+    promote_indexed_payload_into_mixed_cell(ctx);
+    ctx.emitter.instruction(&format!("b {fetch_label}"));                       // fetch the requested entry from the published hash
 
     ctx.emitter.label(&hash_label);
     ctx.emitter.instruction("mov x0, x1");                                      // pass the unboxed hash child to Mixed-entry normalization
@@ -755,9 +873,8 @@ fn lower_load_mixed_array_elem_ref_cell_x86_64(
     ctx.emitter.instruction(&format!("jmp {null_label}"));                      // non-array Mixed payloads have no addressable element
 
     ctx.emitter.label(&indexed_label);
-    ctx.emitter.instruction("mov rax, rdi");                                    // pass the unboxed indexed child to shared hash promotion
-    super::iterators::convert_loaded_indexed_source_to_hash(ctx);
-    ctx.emitter.instruction(&format!("jmp {fetch_label}"));                     // publish the promoted child and fetch its requested entry
+    promote_indexed_payload_into_mixed_cell(ctx);
+    ctx.emitter.instruction(&format!("jmp {fetch_label}"));                     // fetch the requested entry from the published hash
 
     ctx.emitter.label(&hash_label);
     abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
