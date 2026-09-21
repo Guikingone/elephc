@@ -8,7 +8,10 @@ sidebar:
 elephc implements PHP's `ext/xml` (the expat-style SAX parser: `XMLParser`,
 the 22 `xml_*` functions and the 28 `XML_*` constants) and `ext/xmlwriter`
 (`XMLWriter` and the 42 `xmlwriter_*` functions) through the `elephc-xml`
-bridge, whose parser and writer are libxml2 itself — the same library PHP
+bridge. The SURFACE INVENTORY is complete — every function, class and constant
+of both extensions exists — which is not the same as behavioural parity: see
+[Runtime limits](#runtime-limits) and [Differences from PHP](#differences-from-php)
+for what does not match. The bridge's parser and writer are libxml2 itself — the same library PHP
 uses — pinned at 2.15.3 and supplied by the managed native catalog as the
 `libxml2` package. The package is linked statically, so compiled programs are
 still standalone binaries: the target machine needs neither PHP nor a system
@@ -94,6 +97,14 @@ foreach ($chunks as $i => $chunk) {
     }
 }
 ```
+
+Every handler in this guide is written as a closure because that is the
+shortest spelling, but note that **every handler invocation costs a small heap
+block**, whatever the callable is — one per string argument the runtime passes
+to it. A SAX handler receives a name or a data string on every event, so the
+cost scales with the document, and a large document can exhaust the default
+8 MB heap. Read [Runtime limits](#runtime-limits) before parsing anything
+sizeable; it gives the measured element counts and the `--heap-size` escape.
 
 Every handler PHP offers is available: element, character data, processing
 instruction, default, notation declaration, unparsed entity declaration,

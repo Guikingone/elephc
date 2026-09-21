@@ -255,7 +255,7 @@ php      = "https://www.php.net/manual/en/book.xml.php"
 docs     = "docs/php/xml.md"
 evidence = "tests/codegen/xml"
 modules  = ["xml", "xmlwriter"]
-notes    = "ext/xml SAX parser (22 functions, XMLParser, 28 constants) and ext/xmlwriter (42 functions, XMLWriter) on a pinned static libxml2 2.15.3 from the native catalog (elephc native add libxml2); auto-linked or forced with --with-xml, identical inside eval(); the surface is complete, with the runtime's per-handler-invocation heap cost documented under Runtime limits in docs/php/xml.md"
+notes    = "ext/xml SAX parser (22 functions, XMLParser, 28 constants) and ext/xmlwriter (42 functions, XMLWriter) on a pinned static libxml2 2.15.3 from the native catalog (elephc native add libxml2); auto-linked or forced with --with-xml, identical inside eval(); the SURFACE INVENTORY is complete — every function, class and constant exists — which is not behavioural parity: see Differences from PHP in docs/php/xml.md, and Runtime limits there for the per-handler-invocation heap cost"
 
 [[extensions]]
 feature  = "cURL"
