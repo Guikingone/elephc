@@ -2607,6 +2607,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// acquiring it for the caller. Such a result is borrowed when the matching
     /// argument is borrowed, but remains an owning temporary when an owning
     /// argument temporary transfers through the call.
+    ///
+    /// The summary is asked for a PROOF, not a possibility, and that makes its precision
+    /// load-bearing rather than cosmetic: every provenance the analysis loses here becomes a
+    /// release of storage the caller only borrowed — `bad refcount` under `--heap-debug` and
+    /// silent corruption without it (issue #992). Widening this to `may_alias_parameter`
+    /// instead trades that corruption for a leak wherever the callee does return something
+    /// fresh, so the answer belongs in the summary, not in this test.
     fn value_is_borrowed_user_call_result(&self, result: ValueId) -> bool {
         let Some(inst) = self.builder.value_defining_instruction(result) else {
             return false;

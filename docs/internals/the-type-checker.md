@@ -553,6 +553,40 @@ use-after-free in the other, so the pass is deliberately conservative: it merges
 across branches, runs loop bodies to a fixed point, and answers `Unknown` for any storage path
 it cannot follow.
 
+The asymmetry in that last sentence is worth stating plainly, because it decides how much
+precision this pass owes. The call site asks for a PROOF — `proven_aliases_parameter`, not
+`may_alias_parameter` — so `Unknown` and `None` are the same answer to it: release the result.
+That makes every provenance the pass drops a release of storage the caller only lent, which is
+a `bad refcount` under `--heap-debug` and a silent corruption without it. Conservatism here is
+therefore not free, and `Unknown` is not the safe default it looks like; it is the expensive
+one. Widening the call site to `may_alias_parameter` does not fix that, it only moves the cost:
+every callee that really does return something fresh then leaks instead (measured, when that
+was tried).
+
+So the precision rules are load-bearing, and two of them exist only for this reason:
+
+- **A call does not invalidate a by-value argument.** The pass marks a variable `Unknown` when
+  it is handed to a call, because the callee might take it by reference and rebind it. It asks
+  the callee first: builtins answer from the registry's `ref_params`, source-declared functions
+  from a pre-pass over the program. Only a by-reference position, a named or spread argument
+  (whose position cannot be read off the index), or a callee this pass cannot see still
+  invalidates. Without this, one `is_object($v)` in the body was enough to lose `$v`'s
+  provenance, and `function f(mixed $v) { is_object($v); return $v; }` corrupted the refcount of
+  whatever the caller lent it (issue #992).
+- **A known source function does not invalidate everything.** `eval` and `extract` can rebind
+  locals the call does not name, and so can a builtin taking a `callback`. A source-declared
+  function cannot: it reaches the caller's locals only through its own by-reference parameters,
+  which the rule above already handles argument by argument. Treating every user call like
+  `extract` wiped the whole state, so `peek($v); return $v;` had the same defect as the builtin
+  case.
+
+What remains undecidable is genuinely undecidable, and answering `Unknown` there is correct
+even though it costs a corruption at the call site: a by-reference argument really may have been
+rebound, and `Parameters({0})` merged with `Unknown` across two branches really does mean the
+pass cannot say which storage comes back. Closing those needs a richer lattice — one that
+remembers WHICH parameters an unknown value might still be — rather than more rules of this
+shape.
+
 The rule that is easy to get wrong is the cast. A cast is only alias-transparent when EIR
 lowering ELIDES it, and `lower_cast` elides exactly one shape: `(string)` over a value whose IR
 type is already `Str`, which compiles to nothing at all. Every other cast emits `Op::Cast`,

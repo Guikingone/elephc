@@ -82,6 +82,9 @@ struct AliasState<'a> {
     /// `lower_cast` elides. It starts as the `string` parameters and shrinks as they are
     /// assigned: a declaration says what a slot began as, not what it holds now.
     str_slot_locals: HashSet<String>,
+    /// How each source-declared function takes its parameters, so a by-value argument is not
+    /// treated as one the callee might rebind.
+    parameter_modes: &'a HashMap<String, ParameterModes>,
 }
 
 impl<'a> AliasState<'a> {
@@ -89,13 +92,35 @@ impl<'a> AliasState<'a> {
     fn new(
         string_parameters: &'a BTreeSet<String>,
         string_parameter_indices: &'a BTreeSet<usize>,
+        parameter_modes: &'a HashMap<String, ParameterModes>,
     ) -> Self {
         Self {
             locals: HashMap::new(),
             string_parameters,
             string_parameter_indices,
             str_slot_locals: string_parameters.iter().cloned().collect(),
+            parameter_modes,
         }
+    }
+
+    /// Returns whether `callee` is known to take the argument at `index` by value.
+    ///
+    /// A builtin answers from the registry; a source-declared function from the pre-pass.
+    /// An unknown callee answers `false`, which keeps the conservative invalidation.
+    fn callee_takes_argument_by_value(&self, callee: &str, index: usize) -> bool {
+        let key = php_symbol_key(callee.trim_start_matches('\\'));
+        if let Some(definition) = crate::builtins::registry::lookup(&key) {
+            let modes = &definition.ref_params;
+            return matches!(
+                modes
+                    .get(index)
+                    .or_else(|| modes.last().filter(|_| definition.variadic.is_some())),
+                Some(false)
+            );
+        }
+        self.parameter_modes
+            .get(&key)
+            .is_some_and(|modes| modes.takes_by_value(index))
     }
 
     /// Returns whether `name` is a visible parameter declared exactly `string`.
@@ -140,15 +165,69 @@ impl ReturnAliasSummaries {
     }
 }
 
+/// How one source-declared function takes its parameters.
+///
+/// Recorded ahead of the body walk because a function may call one declared after it.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct ParameterModes {
+    /// `true` where the parameter at that position is declared by reference.
+    by_ref: Vec<bool>,
+    /// The variadic tail's mode, when the function has one.
+    variadic_by_ref: Option<bool>,
+}
+
+impl ParameterModes {
+    /// Returns whether the argument at `index` is taken by value.
+    fn takes_by_value(&self, index: usize) -> bool {
+        match self.by_ref.get(index) {
+            Some(by_ref) => !by_ref,
+            None => matches!(self.variadic_by_ref, Some(false)),
+        }
+    }
+}
+
 /// Collects return/argument alias summaries from all source declarations.
 pub(crate) fn collect_return_alias_summaries(program: &Program) -> ReturnAliasSummaries {
+    let mut parameter_modes = HashMap::new();
+    collect_parameter_modes(program, &mut parameter_modes);
     let mut summaries = ReturnAliasSummaries::default();
-    collect_declaration_summaries(program, &mut summaries);
+    collect_declaration_summaries(program, &parameter_modes, &mut summaries);
     summaries
 }
 
+/// Records every source function's parameter modes, descending into namespace blocks.
+fn collect_parameter_modes(statements: &[Stmt], modes: &mut HashMap<String, ParameterModes>) {
+    for stmt in statements {
+        match &stmt.kind {
+            StmtKind::FunctionDecl {
+                name,
+                params,
+                variadic,
+                variadic_by_ref,
+                ..
+            } => {
+                modes.insert(
+                    php_symbol_key(name),
+                    ParameterModes {
+                        by_ref: params.iter().map(|(_, _, _, by_ref)| *by_ref).collect(),
+                        variadic_by_ref: variadic.as_ref().map(|_| *variadic_by_ref),
+                    },
+                );
+            }
+            StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body) => {
+                collect_parameter_modes(body, modes);
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Recursively records summaries for declarations nested in namespace blocks.
-fn collect_declaration_summaries(statements: &[Stmt], summaries: &mut ReturnAliasSummaries) {
+fn collect_declaration_summaries(
+    statements: &[Stmt],
+    parameter_modes: &HashMap<String, ParameterModes>,
+    summaries: &mut ReturnAliasSummaries,
+) {
     for stmt in statements {
         match &stmt.kind {
             StmtKind::FunctionDecl {
@@ -168,6 +247,7 @@ fn collect_declaration_summaries(statements: &[Stmt], summaries: &mut ReturnAlia
                         variadic.as_deref(),
                         *by_ref_return,
                         body,
+                        parameter_modes,
                     ),
                 );
             }
@@ -175,10 +255,10 @@ fn collect_declaration_summaries(statements: &[Stmt], summaries: &mut ReturnAlia
             | StmtKind::EnumDecl { name, methods, .. }
             | StmtKind::TraitDecl { name, methods, .. }
             | StmtKind::InterfaceDecl { name, methods, .. } => {
-                collect_method_summaries(name, methods, summaries);
+                collect_method_summaries(name, methods, parameter_modes, summaries);
             }
             StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body) => {
-                collect_declaration_summaries(body, summaries);
+                collect_declaration_summaries(body, parameter_modes, summaries);
             }
             _ => {}
         }
@@ -189,6 +269,7 @@ fn collect_declaration_summaries(statements: &[Stmt], summaries: &mut ReturnAlia
 fn collect_method_summaries(
     class_name: &str,
     methods: &[ClassMethod],
+    parameter_modes: &HashMap<String, ParameterModes>,
     summaries: &mut ReturnAliasSummaries,
 ) {
     for method in methods {
@@ -201,6 +282,7 @@ fn collect_method_summaries(
                 method.variadic.as_deref(),
                 method.by_ref_return,
                 &method.body,
+                parameter_modes,
             )
         } else {
             ReturnArgAlias::Unknown
@@ -221,6 +303,7 @@ fn summarize_callable<'a>(
     variadic: Option<&str>,
     by_ref_return: bool,
     body: &[Stmt],
+    parameter_modes: &HashMap<String, ParameterModes>,
 ) -> ReturnArgAlias {
     if by_ref_return {
         return ReturnArgAlias::Unknown;
@@ -239,7 +322,8 @@ fn summarize_callable<'a>(
         .filter(|(_, (_, hint))| matches!(hint, Some(TypeExpr::Str)))
         .map(|(index, _)| index)
         .collect();
-    let mut state = AliasState::new(&string_parameters, &string_parameter_indices);
+    let mut state =
+        AliasState::new(&string_parameters, &string_parameter_indices, parameter_modes);
     for (index, (name, _)) in params.iter().enumerate() {
         state
             .locals
@@ -577,6 +661,12 @@ fn merge_states<'a>(states: Vec<AliasState<'a>>) -> AliasState<'a> {
         .first()
         .map(|state| state.string_parameter_indices)
         .unwrap_or(&NO_PARAMETER_INDICES);
+    static NO_PARAMETER_MODES: std::sync::LazyLock<HashMap<String, ParameterModes>> =
+        std::sync::LazyLock::new(HashMap::new);
+    let parameter_modes = states
+        .first()
+        .map(|state| state.parameter_modes)
+        .unwrap_or(&NO_PARAMETER_MODES);
     let mut keys = BTreeSet::new();
     for state in &states {
         keys.extend(state.locals.keys().cloned());
@@ -611,6 +701,7 @@ fn merge_states<'a>(states: Vec<AliasState<'a>>) -> AliasState<'a> {
         string_parameters,
         string_parameter_indices,
         str_slot_locals,
+        parameter_modes,
     }
 }
 
@@ -802,10 +893,10 @@ fn apply_expr_effects(expr: &Expr, state: &mut AliasState<'_>) {
             for arg in args {
                 apply_expr_effects(arg, state);
             }
-            if named_call_can_rebind_unlisted_locals(name.as_str()) {
+            if named_call_can_rebind_unlisted_locals(name.as_str(), state.parameter_modes) {
                 invalidate_all_aliases(state);
             } else {
-                invalidate_call_variables(args, state);
+                invalidate_call_variables(name.as_str(), args, state);
             }
         }
         ExprKind::ClosureCall { args, .. } => {
@@ -971,7 +1062,10 @@ fn visit_expr_effects(exprs: &[Expr], state: &mut AliasState<'_>) {
 
 /// Returns whether a named call can reach arbitrary caller locals, rather than
 /// only variables explicitly passed to a by-reference parameter.
-fn named_call_can_rebind_unlisted_locals(name: &str) -> bool {
+fn named_call_can_rebind_unlisted_locals(
+    name: &str,
+    modes: &HashMap<String, ParameterModes>,
+) -> bool {
     let name = php_symbol_key(name.trim_start_matches('\\'));
     if matches!(name.as_str(), "eval" | "extract") {
         return true;
@@ -979,12 +1073,19 @@ fn named_call_can_rebind_unlisted_locals(name: &str) -> bool {
     if matches!(name.as_str(), "isset" | "empty" | "unset" | "exit" | "die") {
         return false;
     }
-    crate::builtins::registry::lookup(&name).is_none_or(|definition| {
-        definition
+    if let Some(definition) = crate::builtins::registry::lookup(&name) {
+        return definition
             .params
             .iter()
-            .any(|(parameter, _)| parameter == "callback")
-    })
+            .any(|(parameter, _)| parameter == "callback");
+    }
+    // A source-declared function cannot reach the caller's locals at all except through its
+    // own by-reference parameters, and `invalidate_call_variables` already handles those
+    // argument by argument. Wiping every provenance for such a call is what made
+    // `peek($v); return $v;` undecidable, so the caller could no longer tell that the result
+    // aliased the argument it had only lent (issue #992). An unknown callee — dynamic, or
+    // declared somewhere this pass cannot see — keeps the conservative answer.
+    !modes.contains_key(&name)
 }
 
 /// Replaces every tracked provenance with the conservative top element.
@@ -995,17 +1096,35 @@ fn invalidate_all_aliases(state: &mut AliasState<'_>) {
 }
 
 /// Marks direct variable call arguments unknown because the callee may accept them by reference.
-fn invalidate_call_variables(args: &[Expr], state: &mut AliasState<'_>) {
-    for arg in args {
+///
+/// A by-value argument is not rebound by the call, so clobbering it costs precision for
+/// nothing — and precision is load-bearing here, not cosmetic. An undecidable summary makes
+/// the caller treat the result as borrowed rather than risk releasing a reference nobody
+/// acquired, which leaks when the callee actually returns something fresh (issue #992).
+/// `is_object($v); return $v;` is the shape that mattered: one type predicate in the body
+/// was enough to lose a provenance the caller then had to guess at.
+///
+/// Builtins answer from the registry and source-declared functions from a pre-pass over the
+/// program. A dynamic or otherwise unknown callee keeps the conservative answer.
+fn invalidate_call_variables(callee: &str, args: &[Expr], state: &mut AliasState<'_>) {
+    for (index, arg) in args.iter().enumerate() {
+        let non_positional = matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_));
         let value = match &arg.kind {
             ExprKind::NamedArg { value, .. } | ExprKind::Spread(value) => value.as_ref(),
             _ => arg,
         };
-        if let ExprKind::Variable(name) = &value.kind {
-            state.locals.insert(name.clone(), ReturnArgAlias::Unknown);
+        let ExprKind::Variable(name) = &value.kind else {
+            continue;
+        };
+        // A named or spread argument does not sit at its own position, so its parameter mode
+        // cannot be read off `index`. Those keep the conservative answer.
+        if !non_positional && state.callee_takes_argument_by_value(callee, index) {
+            continue;
         }
+        state.locals.insert(name.clone(), ReturnArgAlias::Unknown);
     }
 }
+
 
 #[cfg(test)]
 mod tests {
