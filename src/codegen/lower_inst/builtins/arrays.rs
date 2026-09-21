@@ -571,7 +571,7 @@ fn lower_hash_link_sort_with_flags(
         receiver.require_writable("hash link sort")?;
         receiver.prepare_consuming_storeback(ctx, array)?;
         ensure_unique_hash_sort_source(ctx, array)?;
-        receiver.store_back_value(ctx, array)?;
+        receiver.store_back_after_consuming_split(ctx, array)?;
     }
     let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     ctx.load_value_to_reg(array, array_arg_reg)?;

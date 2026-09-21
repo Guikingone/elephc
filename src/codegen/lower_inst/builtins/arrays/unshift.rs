@@ -70,7 +70,9 @@ pub(super) fn lower_array_unshift(ctx: &mut FunctionContext<'_>, inst: &Instruct
                 Arch::X86_64 => lower_array_unshift_x86_64(ctx, array, value)?,
             }
         }
-        receiver.store_back_value(ctx, array)?;
+        // The unique source and every growth already own the transition (see
+        // `store_back_after_consuming_split`): a global must only publish the pointer.
+        receiver.store_back_after_consuming_split(ctx, array)?;
     }
     // The helper already returns the running count, but the local-slot write-back above may
     // clobber the result register, and the value-less form never calls the helper at all.

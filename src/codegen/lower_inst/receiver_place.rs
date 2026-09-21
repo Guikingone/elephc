@@ -269,24 +269,28 @@ impl ReceiverPlace {
         }
     }
 
-    /// Publishes the cell `__rt_array_cell_ensure_unique` handed back for this receiver.
+    /// Publishes the container a CONSUMING copy-on-write split handed back for this receiver.
     ///
-    /// That helper CONSUMES the receiver's owner when it splits: the shared cell loses one
-    /// count and the returned cell is a fresh sole owner. A store-back that also retires the
-    /// previous occupant therefore drops the old cell twice, which is how `array_push($g, 9)`
-    /// and `$r = &$g[0]` on a `global $g` still aliased by another variable freed the cell under
-    /// that alias. The right publication depends on who held the consumed owner:
+    /// `__rt_array_cell_ensure_unique`, `__rt_hash_ensure_unique` and `__rt_array_ensure_unique`
+    /// all consume the receiver's owner when they split: the shared container loses one count
+    /// and the returned one is a fresh sole owner. A store-back that also retires the previous
+    /// occupant therefore drops the old container twice, which is how `array_push($g, 9)` and
+    /// `$r = &$g[0]` on a `global $g` still aliased by a local freed the cell under that alias,
+    /// and how `ksort($_GET)` or `array_pop($_GET)` under `--web` freed the hash under
+    /// `$copy = $_GET`. The right publication depends on who held the consumed owner:
     ///
     /// - A raw local's store overwrites the slot without retiring it, so the consumed owner is
-    ///   the slot's and the new cell simply replaces it.
+    ///   the slot's and the new container simply replaces it.
     /// - A ref-cell receiver had an extra owner added by `prepare_consuming_storeback`; the
     ///   consumed owner is that one, and `Retire` on the store drops the cell's own.
     /// - A global symbol has no such extra owner: the helper consumed the symbol's, so the new
-    ///   cell is published with `Keep`, exactly as a container write-back publishes a grown table.
+    ///   container is published with `Keep`, exactly as a container write-back publishes a
+    ///   grown table. When nothing was shared the helper hands back the same pointer and the
+    ///   symbol keeps its owner untouched.
     /// - A declared property arrives through an owning `PropGet` acquire, so the consumed owner
-    ///   is that acquire's and the property store keeps retaining the new cell and releasing the
-    ///   old slot value; EIR's later release of the acquired value balances the retain.
-    pub(super) fn store_back_split_cell(
+    ///   is that acquire's and the property store keeps retaining the new container and
+    ///   releasing the old slot value; EIR's later release of the acquired value balances it.
+    pub(super) fn store_back_after_consuming_split(
         &self,
         ctx: &mut FunctionContext<'_>,
         value: ValueId,

@@ -33,7 +33,7 @@ pub(super) fn lower_array_shift(ctx: &mut FunctionContext<'_>, inst: &Instructio
     require_array_shift_result_type(&inst.result_php_type.codegen_repr())?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     ensure_unique_array_shift_source(ctx, array)?;
-    receiver.store_back_value(ctx, array)?;
+    receiver.store_back_after_consuming_split(ctx, array)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_array_shift_aarch64(ctx, array, &elem_ty)?,
         Arch::X86_64 => lower_array_shift_x86_64(ctx, array, &elem_ty)?,

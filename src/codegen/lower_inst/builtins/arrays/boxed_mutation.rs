@@ -37,7 +37,7 @@ pub(super) fn lower_assoc_array_pop(
     receiver.require_writable("array_pop")?;
     receiver.prepare_consuming_storeback(ctx, array)?;
     super::sort_dispatch::ensure_unique_hash_sort_source(ctx, array)?;
-    receiver.store_back_value(ctx, array)?;
+    receiver.store_back_after_consuming_split(ctx, array)?;
     ctx.load_value_to_reg(array, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
     abi::emit_call_label(ctx.emitter, "__rt_hash_pop_boxed");
     store_if_result(ctx, inst)
@@ -56,7 +56,7 @@ pub(super) fn prepare_boxed_array_receiver(
     abi::emit_call_label(ctx.emitter, "__rt_array_cell_ensure_unique");
     require_valid_array_result(ctx, name);
     ctx.store_result_value(array)?;
-    receiver.store_back_split_cell(ctx, array)
+    receiver.store_back_after_consuming_split(ctx, array)
 }
 
 /// Transfers the owned payload at the stack top into a unique cell, then retires its old payload.

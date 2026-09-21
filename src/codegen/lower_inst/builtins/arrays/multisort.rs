@@ -115,7 +115,7 @@ fn prepare_multisort_receivers(
     } else {
         receiver1.prepare_consuming_storeback(ctx, arr1)?;
         ensure_unique_sort_source(ctx, arr1)?;
-        receiver1.store_back_value(ctx, arr1)?;
+        receiver1.store_back_after_consuming_split(ctx, arr1)?;
     }
     abi::emit_pop_reg(ctx.emitter, result);
     let distinct = ctx.next_label("array_multisort_distinct_receivers");
@@ -136,7 +136,7 @@ fn prepare_multisort_receivers(
     } else {
         receiver2.prepare_consuming_storeback(ctx, arr2)?;
         ensure_unique_sort_source(ctx, arr2)?;
-        receiver2.store_back_value(ctx, arr2)?;
+        receiver2.store_back_after_consuming_split(ctx, arr2)?;
     }
     ctx.emitter.label(&ready);
     Ok(())

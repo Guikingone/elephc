@@ -2766,3 +2766,36 @@ fn web_worker_body_read_timeout_leaves_a_prompt_body_alone() {
         "a prompt body must be served normally; response was {response:?}"
     );
 }
+
+/// Verifies a superglobal that is still aliased by a local survives the mutating builtins.
+///
+/// Under `--web` the superglobals are concrete hashes behind a global symbol. `ksort()`,
+/// `array_pop()`, `asort()` and `krsort()` split a shared hash through a CONSUMING copy-on-write
+/// helper, and the global write-back then retired the previous hash a second time, so
+/// `$copy = $_GET; ksort($_GET);` left `$copy` pointing at freed memory: its `count()` came
+/// back as a garbage integer. Each line below is real PHP output for the same program.
+#[test]
+fn aliased_superglobal_survives_mutating_builtins() {
+    let dir = make_test_dir("web_aliased_superglobal");
+    let src = r#"<?php
+$copy = $_GET; ksort($_GET);
+echo count($copy), "|", count($_GET), "|", implode(",", array_keys($_GET)), "\n";
+$c2 = $_GET; $last = array_pop($_GET);
+echo count($c2), "|", count($_GET), "|", $last, "\n";
+$c5 = $_GET; asort($_GET);
+echo count($c5), "|", count($_GET), "\n";
+$c6 = $_GET; krsort($_GET);
+echo count($c6), "|", implode(",", array_keys($_GET)), "\n";
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_get(&addr, "/?a=1&b=2&c=3");
+    let r2 = http_get(&addr, "/?a=1&b=2&c=3");
+    let _ = child.kill();
+    let _ = child.wait();
+    let expected = "3|3|a,b,c\n3|2|3\n2|2\n2|b,a\n";
+    assert!(r1.ends_with(expected), "first response body: {:?}", r1);
+    assert!(r2.ends_with(expected), "second response body: {:?}", r2);
+}

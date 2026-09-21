@@ -152,7 +152,7 @@ pub(crate) fn lower_array_pop(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     require_array_pop_result_type(&inst.result_php_type.codegen_repr())?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     ensure_unique_array_pop_source(ctx, array)?;
-    receiver.store_back_value(ctx, array)?;
+    receiver.store_back_after_consuming_split(ctx, array)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_array_pop_aarch64(ctx, array, &elem_ty)?,
         Arch::X86_64 => lower_array_pop_x86_64(ctx, array, &elem_ty)?,

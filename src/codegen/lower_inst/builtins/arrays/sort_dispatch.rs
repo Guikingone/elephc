@@ -200,7 +200,7 @@ pub(super) fn lower_indexed_array_sort(
     receiver.require_writable(name)?;
     receiver.prepare_consuming_storeback(ctx, array)?;
     ensure_unique_sort_source(ctx, array)?;
-    receiver.store_back_value(ctx, array)?;
+    receiver.store_back_after_consuming_split(ctx, array)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(array, "x0")?;
@@ -246,7 +246,7 @@ pub(super) fn lower_indexed_array_shuffle(ctx: &mut FunctionContext<'_>, inst: &
     receiver.require_writable("shuffle")?;
     receiver.prepare_consuming_storeback(ctx, array)?;
     ensure_unique_sort_source(ctx, array)?;
-    receiver.store_back_value(ctx, array)?;
+    receiver.store_back_after_consuming_split(ctx, array)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(array, "x0")?;
