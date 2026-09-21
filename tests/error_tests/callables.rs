@@ -401,7 +401,7 @@ fn test_error_closure_return_type_rejects_mismatch() {
     // type produces a diagnostic showing the expected and actual types.
     expect_error(
         "<?php $f = function(): string { return 1; };",
-        "Closure return type expects Str, got Int",
+        "Closure return type expects string, got int",
     );
 }
 
@@ -412,7 +412,7 @@ fn test_error_arrow_return_type_rejects_mismatch() {
     // mismatched type produces a diagnostic showing the expected and actual types.
     expect_error(
         "<?php $f = fn(): int => \"nope\";",
-        "Closure return type expects Int, got Str",
+        "Closure return type expects int, got string",
     );
 }
 
@@ -580,7 +580,7 @@ fn test_error_pipe_closure_literal_typed_parameter_mismatch() {
     // showing the expected vs actual parameter type.
     expect_error(
         r#"<?php $r = "nope" |> (function(int $n): int { $copy = $n; return $copy; });"#,
-        "pipe target parameter $n expects Int, got Str",
+        "pipe target parameter $n expects int, got string",
     );
 }
 

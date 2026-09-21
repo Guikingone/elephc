@@ -1942,6 +1942,12 @@ impl RuntimeFnId {
                 // the same call through a named local stayed clean. Its Fresh-owning siblings
                 // `ArrayKeys` / `ArrayValues` were already listed here; this was the gap.
                 | RuntimeFnId::ArrayCountValues
+                // `array_filter` allocates its destination before writing an entry too — the
+                // indexed helpers through `__rt_array_new`, `__rt_hash_filter` through
+                // `__rt_hash_new` — so it belongs beside `ArrayMap` rather than in the default
+                // bucket, where the suppressed release leaked the destination table and its
+                // persisted keys on EVERY call, three blocks a time on a three-entry source.
+                | RuntimeFnId::ArrayFilter
                 | RuntimeFnId::ArrayFlip
                 | RuntimeFnId::ArrayFind
                 | RuntimeFnId::ArrayFilter

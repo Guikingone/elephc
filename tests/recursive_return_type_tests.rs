@@ -554,7 +554,7 @@ function r(int $x): int {
 }
 echo r(0), "\n";
 "#,
-        "Function 'r' return type expects Int, got Str",
+        "Function 'r' Method 'E::f' return type expects int, got string",
     );
 }
 

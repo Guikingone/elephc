@@ -30,6 +30,7 @@ pub(super) fn lower_typed_assign(
         .map(|assignment| assignment.value)
         .unwrap_or_else(|| lower_expr(ctx, value));
     let lowered = coerce_typed_assign_value(ctx, lowered, &php_type, span);
+    let lowered = coerce_declared_array_storage(ctx, lowered, &php_type, span);
     ctx.declare_local(name, php_type.clone());
     ctx.store_local(name, lowered, php_type, Some(span));
     let callable_result = if direct_closure {
@@ -54,6 +55,48 @@ pub(super) fn lower_typed_assign(
     if let Some(sig) = fiber_start_sig {
         ctx.bind_fiber_start_sig(name, sig);
     }
+}
+
+/// Converts a typed-local array initializer to the element storage its DECLARATION asks for.
+///
+/// Without this the declaration allocates `array<int>` from `[1,2,3]`, binds the slot as the
+/// declared `array<mixed>`, and emits nothing in between, so the element header tag still says
+/// int while every later load reads the slot as boxed — `array $a = [1,2,3]; $a[0] = 9;` then
+/// segfaulted on a CONFORMING write.
+///
+/// The INFERRED form was already correct because it has a previous local type for
+/// `array_storage_conversion` to compare against; a fresh declaration has none, so the
+/// conversion has to be driven from the value's type instead of the slot's history. Same
+/// predicate and same op mapping as the region fixpoint, so the two cannot drift.
+///
+/// Deliberately NOT part of [`coerce_typed_assign_value`], which `lower_property_assign` shares:
+/// widening into a declared `array` PROPERTY has its own copy-on-write contract that hands the
+/// property a unique converted clone while leaving the caller's source owner alone. Converting
+/// there too rewrote the source itself, so `$source = [11,22]; $bag->items = $source;` printed
+/// pointers for `$source` while the property still read correctly.
+fn coerce_declared_array_storage(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    php_type: &PhpType,
+    span: Span,
+) -> LoweredValue {
+    let target_ty = php_type.codegen_repr();
+    let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
+    if source_ty == target_ty {
+        return value;
+    }
+    let Some(op) = crate::ir_lower::stmt::repr_fixpoint::conversion_op(&source_ty, &target_ty)
+    else {
+        return value;
+    };
+    ctx.emit_value(
+        op,
+        vec![value.value],
+        None,
+        target_ty,
+        op.default_effects(),
+        Some(span),
+    )
 }
 
 /// Coerces a typed local assignment into the storage shape required by the declared type.

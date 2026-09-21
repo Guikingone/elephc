@@ -7,6 +7,14 @@
 //! Key details:
 //! - Omitted/null callbacks remove empty values; filtering preserves PHP keys and value types.
 //! - Result storage is boxed because indexed inputs may acquire holes or retain string keys.
+//! - The PHP golden signature is `optional(&["array","callback","mode"], 1, &[null, 0])`.
+//!   The legacy CHECK arm required 2 or 3 arguments (`args.len() < 2 || args.len() > 3`),
+//!   so `min_args: 2` reproduces that enforcement in `check_arity`; the derived max of 3
+//!   from the optional signature already matches.
+//! - `check` validates the first argument is an array, derives callback argument types from the
+//!   static mode value, and validates the callback signature. The return type preserves the
+//!   input array element type — and, for an ASSOCIATIVE source, its key type too, because php
+//!   drops entries without renumbering.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::builtins::semantics::{BuiltinArgumentLowering, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics};
@@ -48,6 +56,49 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     }
     if cx.args.get(1).is_none_or(|callback| matches!(callback.kind, ExprKind::Null)) {
         return Ok(PhpType::php_array());
+    match arr_ty {
+        PhpType::Array(elem_ty) => {
+            let arr_ty = PhpType::Array(elem_ty.clone());
+            let callback_arg_types =
+                crate::types::checker::builtins::array_filter_callback_arg_types(
+                    &arr_ty,
+                    cx.args.get(2),
+                );
+            crate::types::checker::builtins::check_array_callback_builtin_call(
+                cx.checker,
+                &cx.args[1],
+                &callback_arg_types,
+                cx.span,
+                cx.env,
+                "array_filter() callback",
+            )?;
+            Ok(PhpType::Array(elem_ty))
+        }
+        PhpType::AssocArray { key, value } => {
+            let arr_ty = PhpType::AssocArray {
+                key: key.clone(),
+                value: value.clone(),
+            };
+            let callback_arg_types =
+                crate::types::checker::builtins::array_filter_callback_arg_types(
+                    &arr_ty,
+                    cx.args.get(2),
+                );
+            crate::types::checker::builtins::check_array_callback_builtin_call(
+                cx.checker,
+                &cx.args[1],
+                &callback_arg_types,
+                cx.span,
+                cx.env,
+                "array_filter() callback",
+            )?;
+            // php drops entries and never renumbers, so a hash keeps BOTH of its own types.
+            Ok(PhpType::AssocArray { key, value })
+        }
+        _ => Err(CompileError::new(
+            cx.span,
+            "array_filter() first argument must be array",
+        )),
     }
     let types = crate::types::checker::builtins::array_filter_callback_arg_types(&array, cx.args.get(2));
     super::predicate::check_callback(cx, &types)?;

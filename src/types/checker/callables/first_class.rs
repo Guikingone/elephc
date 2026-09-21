@@ -128,8 +128,20 @@ impl Checker {
                 ))
             }
             CallableTarget::StaticMethod { receiver, method } => {
+
                 let method_key = crate::names::php_symbol_key(method);
+
+                // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+                // it, and this pass can run on a generic function's template body — which is
+                // walked and then stripped, never instantiated.
+                let receiver = &receiver.written_class_receiver();
+
                 let resolved_class_name = match receiver {
+                    // A generic receiver is instantiated into an ordinary named one before type checking;
+                    // a template has no class to reach through.
+                    StaticReceiver::Generic(_) => unreachable!(
+                        "StaticReceiver::Generic must be instantiated by generics::classes"
+                    ),
                     StaticReceiver::Named(class_name) => class_name.as_str().to_string(),
                     StaticReceiver::Self_ => {
                         self.current_class.as_ref().cloned().ok_or_else(|| {

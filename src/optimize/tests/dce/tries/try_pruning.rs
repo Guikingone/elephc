@@ -17,6 +17,7 @@ fn test_eliminate_dead_code_drops_statements_after_exhaustive_try_catch() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "answer".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -43,7 +44,7 @@ fn test_eliminate_dead_code_drops_statements_after_exhaustive_try_catch() {
                             Span::dummy(),
                         )],
                         catches: vec![crate::parser::ast::CatchClause {
-                            exception_types: vec!["Exception".into()],
+                            exception_type_args: Vec::new(),exception_types: vec!["Exception".into()],
                             variable: Some("e".into()),
                             body: vec![Stmt::new(
                                 StmtKind::Return(Some(Expr::int_lit(8))),
@@ -83,6 +84,7 @@ fn test_eliminate_dead_code_drops_empty_try_shell_created_by_branch_dce() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -94,7 +96,7 @@ fn test_eliminate_dead_code_drops_empty_try_shell_created_by_branch_dce() {
                 StmtKind::Try {
                     try_body: vec![Stmt::new(StmtKind::ExprStmt(pure_builtin.clone()), Span::dummy())],
                     catches: vec![crate::parser::ast::CatchClause {
-                        exception_types: vec!["Exception".into()],
+                        exception_type_args: Vec::new(),exception_types: vec!["Exception".into()],
                         variable: Some("e".into()),
                         body: vec![Stmt::new(StmtKind::ExprStmt(pure_builtin), Span::dummy())],
                     }],
@@ -122,6 +124,7 @@ fn test_eliminate_dead_code_keeps_unknown_truthy_switch_entry_before_matching_ca
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -190,6 +193,7 @@ fn test_eliminate_dead_code_invalidates_outer_guard_before_catch_body() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -216,7 +220,7 @@ fn test_eliminate_dead_code_invalidates_outer_guard_before_catch_body() {
                                 ),
                             ],
                             catches: vec![crate::parser::ast::CatchClause {
-                                exception_types: vec![Name::unqualified("Exception")],
+                                exception_type_args: Vec::new(),exception_types: vec![Name::unqualified("Exception")],
                                 variable: Some("e".into()),
                                 body: vec![Stmt::new(
                                     StmtKind::If {
@@ -274,6 +278,7 @@ fn test_eliminate_dead_code_invalidates_outer_guard_before_catch_body_from_switc
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -304,7 +309,7 @@ fn test_eliminate_dead_code_invalidates_outer_guard_before_catch_body_from_switc
                                 Span::dummy(),
                             )],
                             catches: vec![crate::parser::ast::CatchClause {
-                                exception_types: vec![Name::unqualified("Exception")],
+                                exception_type_args: Vec::new(),exception_types: vec![Name::unqualified("Exception")],
                                 variable: Some("e".into()),
                                 body: vec![Stmt::new(
                                     StmtKind::If {
@@ -363,6 +368,7 @@ fn test_eliminate_dead_code_ignores_unreachable_switch_throw_path_writes_before_
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -399,7 +405,7 @@ fn test_eliminate_dead_code_ignores_unreachable_switch_throw_path_writes_before_
                                         Span::dummy(),
                                     )],
                                     catches: vec![crate::parser::ast::CatchClause {
-                                        exception_types: vec![Name::unqualified("Exception")],
+                                        exception_type_args: Vec::new(),exception_types: vec![Name::unqualified("Exception")],
                                         variable: Some("e".into()),
                                         body: vec![Stmt::new(
                                             StmtKind::If {
@@ -456,6 +462,7 @@ fn test_eliminate_dead_code_preserves_outer_guard_for_catch_when_only_non_throw_
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
+            type_params: Vec::new(),
             params: Vec::new(),
             param_attributes: Vec::new(),
             variadic: None,
@@ -490,7 +497,7 @@ fn test_eliminate_dead_code_preserves_outer_guard_for_catch_when_only_non_throw_
                                 Span::dummy(),
                             )],
                             catches: vec![crate::parser::ast::CatchClause {
-                                exception_types: vec![Name::unqualified("Exception")],
+                                exception_type_args: Vec::new(),exception_types: vec![Name::unqualified("Exception")],
                                 variable: Some("e".into()),
                                 body: vec![Stmt::new(
                                     StmtKind::If {

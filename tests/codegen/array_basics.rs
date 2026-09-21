@@ -1751,3 +1751,44 @@ var_dump(isset($neverIndexed["k"]));
     );
     assert_eq!(out, "bool(false)\n");
 }
+
+
+/// Four string writes into an array that started empty must stay inside its own buffer.
+///
+/// `__rt_array_new` sizes an `array<never>` for EIGHT-byte slots, because the element type is
+/// not known yet. The first string write widens the slot to SIXTEEN bytes in the header and used
+/// to leave `capacity` behind at its old count, so the array claimed twice the buffer it owned
+/// and the grow check did not fire until index 4. Index 3 therefore wrote 16 bytes past the end,
+/// straight into the payload of the string allocated right after the array — slot 0's own value,
+/// which read back as two garbage bytes while `strlen` still answered 2.
+///
+/// `__rt_array_push_str` already restated the capacity in the new unit; `__rt_array_set_str` did
+/// not, which is why `$a[] = …` was correct and `$a[0] = …` was not.
+#[test]
+fn test_four_string_writes_into_an_empty_array_keep_slot_zero() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+$a[0] = "aa"; $a[1] = "bb"; $a[2] = "cc"; $a[3] = "dd";
+echo $a[0], $a[1], $a[2], $a[3], "|", count($a);
+"#,
+    );
+    assert_eq!(out, "aabbccdd|4");
+}
+
+/// The same write pattern across several growths, so the restated capacity is exercised by the
+/// copy in `__rt_array_grow` and not just by the first widening.
+#[test]
+fn test_twenty_string_writes_into_an_empty_array_survive_growth() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 20; $i++) { $a[$i] = "v$i"; }
+echo implode(",", $a), "|", count($a);
+"#,
+    );
+    assert_eq!(
+        out,
+        "v0,v1,v2,v3,v4,v5,v6,v7,v8,v9,v10,v11,v12,v13,v14,v15,v16,v17,v18,v19|20"
+    );
+}

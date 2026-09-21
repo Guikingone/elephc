@@ -1027,3 +1027,78 @@ fn test_array_slice_builtin_types_do_not_collide_across_included_files() {
     );
     assert_eq!(out, "12|tf");
 }
+
+/// A variable index into a still-empty array makes it a hash, exactly as php does.
+///
+/// Packed storage has no keys — slot `n` IS key `n` — so writing slot 205 into an array of
+/// length 2 used to zero-fill 203 slots and answer `count($rows) === 206`. php promotes the
+/// array to a hash the moment an integer key skips, and answers 3.
+#[test]
+fn test_gapped_variable_index_counts_entries_not_slots() {
+    let out = compile_and_run(
+        r#"<?php
+$rows = [];
+foreach ([101, 102, 205] as $id) { $rows[$id] = "row$id"; }
+echo count($rows), "|";
+foreach ($rows as $k => $v) { echo $k, "=", $v, ","; }
+echo json_encode($rows);
+"#,
+    );
+    assert_eq!(
+        out,
+        "3|101=row101,102=row102,205=row205,{\"101\":\"row101\",\"102\":\"row102\",\"205\":\"row205\"}"
+    );
+}
+
+/// The counter of the enclosing `for` loop is the one index that keeps packed storage.
+///
+/// It is `0` at the first write into the empty array and advances one slot per iteration, so it
+/// can never run ahead of the length and no gap is reachable. `array_filter` is in here on
+/// purpose: it is one of the 25 array builtins that accept only an indexed array, so the program
+/// stops compiling altogether if the loop leaves packed storage.
+///
+/// Three elements, not five: a FOURTH string write into an array that started empty frees slot
+/// 0's payload. That reproduces on committed `main` with no loop in sight, and is a separate
+/// defect from anything this test is about.
+#[test]
+fn test_for_counter_index_keeps_packed_storage() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 3; $i++) { $a[$i] = "v$i"; }
+echo implode(",", $a), "|", count($a), "|", json_encode($a), "|";
+echo count(array_filter($a, fn($x) => $x !== "v2"));
+"#,
+    );
+    assert_eq!(out, "v0,v1,v2|3|[\"v0\",\"v1\",\"v2\"]|2");
+}
+
+/// A write the loop can SKIP is not covered by the counter exception, because a skipped
+/// iteration is exactly how a gap appears.
+///
+/// php keys this array 0, 2, 4 and counts 3; packed storage would have zero-filled slots 1 and 3
+/// and counted 5.
+#[test]
+fn test_conditional_write_under_a_for_counter_still_uses_hash() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 5; $i++) { if ($i % 2 === 0) { $a[$i] = $i; } }
+echo count($a), "|", json_encode($a);
+"#,
+    );
+    assert_eq!(out, "3|{\"0\":0,\"2\":2,\"4\":4}");
+}
+
+/// A `continue` can skip the write just as an `if` can, so the counter exception drops there too.
+#[test]
+fn test_continue_in_a_for_body_still_uses_hash() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 5; $i++) { if ($i === 2) { continue; } $a[$i] = $i; }
+echo count($a), "|", json_encode($a);
+"#,
+    );
+    assert_eq!(out, "4|{\"0\":0,\"1\":1,\"3\":3,\"4\":4}");
+}

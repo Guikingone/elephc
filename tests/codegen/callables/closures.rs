@@ -2377,3 +2377,131 @@ $k(2.5);
         )
     );
 }
+
+
+/// A temporary passed to a CLOSURE must be released by the call, exactly as one passed to a
+/// named function, a method or a static method already was.
+///
+/// `release_owned_call_arg_temporaries` is called from every other call lowering; the
+/// static-callable closure arm never called it. The argument therefore outlived the call and its
+/// destructor never ran — observable php semantics, not merely a leak:
+///
+/// ```php
+/// $f = fn($a) => 7;
+/// $f(new D());   // php prints the destructor here; elephc printed nothing
+/// ```
+///
+/// The same closure RETURNING its parameter was always correct, because returning hands the
+/// value out as the result for the caller to release — which is what masked this.
+#[test]
+fn test_temporary_passed_to_a_closure_is_destroyed_by_the_call() {
+    let out = compile_and_run(
+        r#"<?php
+class D { public function __destruct() { echo "d"; } }
+$f = fn($a) => 7;
+$g = function ($a) { return 7; };
+$keep = fn($a) => $a;
+echo "[";
+$f(new D());
+echo "|";
+$g(new D());
+echo "|";
+$keep(new D());
+echo "]";
+"#,
+    );
+    assert_eq!(out, "[d|d|d]");
+}
+
+/// The capture operands appended after the arguments belong to the closure, not to the call, so
+/// releasing the arguments must not reach them: a captured object stays alive across calls and is
+/// destroyed once, when the closure itself goes.
+#[test]
+fn test_closure_captures_survive_releasing_the_call_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+class D {
+    public $tag;
+    public function __construct($tag) { $this->tag = $tag; }
+    public function __destruct() { echo $this->tag; }
+}
+$held = new D("H");
+$f = function ($a) use ($held) { return 1; };
+echo "[";
+$f(new D("1"));
+$f(new D("2"));
+echo "]";
+"#,
+    );
+    assert_eq!(out, "[12]H");
+}
+
+
+/// A temporary passed to a closure through the DESCRIPTOR INVOKER — which is what a call inside
+/// any loop, and every builtin callback, uses — must be released once the callee returns.
+///
+/// The invoker increfs each by-value argument on the callee's behalf and nothing released it, so
+/// the argument outlived the call and its destructor never ran. Straight-line calls resolve the
+/// callee statically and take a different path, which is why this needs the loop.
+#[test]
+fn test_temporary_passed_through_the_descriptor_invoker_is_destroyed() {
+    let out = compile_and_run(
+        r#"<?php
+class D { public $t; public function __construct($t) { $this->t = $t; } public function __destruct() { echo $this->t; } }
+$f = fn($a) => 7;
+echo "[";
+for ($i = 1; $i <= 3; $i++) { $f(new D($i)); }
+echo "]";
+"#,
+    );
+    assert_eq!(out, "[123]");
+}
+
+/// The one case a blanket release would break: a callee that HANDS THE ARGUMENT BACK.
+///
+/// There the invoker's retained reference is exactly what makes the result owned, so releasing it
+/// would free a live value — measured, removing the retain outright fails this with
+/// `heap debug detected bad refcount`. The release is skipped when the result IS that argument.
+#[test]
+fn test_closure_returning_its_argument_keeps_it_alive_through_the_invoker() {
+    let out = compile_and_run(
+        r#"<?php
+class D { public $t; public function __construct($t) { $this->t = $t; } public function __destruct() { echo $this->t; } }
+$keep = fn($a) => $a;
+echo "[";
+for ($i = 1; $i <= 2; $i++) {
+    $held = $keep(new D($i));
+    echo "-";
+}
+echo "]";
+"#,
+    );
+    assert_eq!(out, "[-1-]2");
+}
+
+/// One reference per callback invocation is what `array_filter`, `array_map` and `usort` were
+/// each losing — three blocks per call on a three-element array, eight per `usort`. At this scale
+/// a single leaked reference per invocation would be unmissable.
+#[test]
+fn test_callback_builtins_do_not_leak_a_reference_per_invocation() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [4, 1, 3, 2];
+$n = 0;
+for ($i = 0; $i < 200; $i++) {
+    $n += count(array_filter($a, fn($x) => $x > 1));
+    $n += count(array_map(fn($x) => $x + 1, $a));
+    $b = [3, 1, 2];
+    usort($b, fn($x, $y) => $x <=> $y);
+    $n += count($b);
+}
+echo $n;
+"#,
+    );
+    assert_eq!(out.stdout, "2000", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
