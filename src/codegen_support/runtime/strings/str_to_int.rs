@@ -10,10 +10,15 @@
 //! - `__rt_php_num_scan` clips the scratch string to PHP's leading numeric run before either
 //!   libc parser runs, so `"0x1A"` is `0` (not `26`), `"INF"`/`"NAN"` are `0`, and `"1_000"`
 //!   is `1` — libc's `strtoll`/`strtod` extensions never reach the value.
-//! - `strtoll` gives the exact 64-bit value and PHP's saturating overflow (LLONG_MAX/MIN == PHP_INT_MAX/MIN),
-//!   so large integer strings are not rounded through `f64`.
-//! - When `strtod` consumes more bytes than `strtoll`, the string has a `.`/`e` float part (e.g. `"1e3"`),
-//!   so the truncated double is returned, matching PHP's leading-numeric-string rules.
+//! - A run whose double is NaN or ±INF casts to `0`, whichever form the string took. That check
+//!   runs first, which is what makes `(int)str_repeat("1", 310)` agree with PHP instead of
+//!   returning the `PHP_INT_MAX` `strtoll` saturated to.
+//! - Integer-form run: `strtoll` gives the exact 64-bit value and PHP's saturating overflow
+//!   (LLONG_MAX/MIN == PHP_INT_MAX/MIN), so large integer strings are not rounded through `f64`.
+//! - Float-form run (`strtod` consumed more bytes than `strtoll`, e.g. `"1e19"`): the double goes
+//!   through `__rt_php_float_to_int_cap`, PHP's SATURATING numeric-string rule. It is not the
+//!   modulo-2^64 `__rt_php_float_to_int` a float VALUE takes — that one turns `(int)"1e19"` into
+//!   -8446744073709551616 instead of `PHP_INT_MAX`. Both rules live in `runtime::numeric`.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -23,8 +28,8 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 /// AArch64 uses `x1`/`x2`; x86_64 uses `rax`/`rdx`.
 /// The helper copies the string into the C-string scratch buffer via `__rt_cstr`, clips it to PHP's
 /// leading numeric run with `__rt_php_num_scan`, then parses that run with `strtoll` (exact +
-/// saturating) and `strtod`, returning the integer-form value unless the run is float-form, in
-/// which case the truncated double is returned.
+/// saturating) and `strtod`. A non-finite double casts to `0`; an integer-form run returns the
+/// exact `strtoll` value; a float-form run is capped by `__rt_php_float_to_int_cap`.
 pub fn emit_str_to_int(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_str_to_int_linux_x86_64(emitter);
@@ -96,8 +101,9 @@ pub fn emit_str_to_int(emitter: &mut Emitter) {
 ///
 /// The input string arrives in the elephc string-result registers (`rax`/`rdx`).
 /// Clips the scratch to PHP's leading numeric run with `__rt_php_num_scan`, then parses with
-/// `strtoll` (exact + saturating) and `strtod`, returning the integer-form value in `rax` unless
-/// `strtod` consumed a `.`/`e` float part, in which case the truncated double is used.
+/// `strtoll` (exact + saturating) and `strtod`, returning the integer-form value in `rax`. A
+/// non-finite double casts to `0`, and a run with a `.`/`e` float part is capped by
+/// `__rt_php_float_to_int_cap` rather than wrapped.
 fn emit_str_to_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_to_int ---");
