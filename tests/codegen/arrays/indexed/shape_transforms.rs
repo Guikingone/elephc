@@ -450,6 +450,42 @@ echo $n, ",", count($x), ",", $x[32], "|",
     );
 }
 
+/// Follow-up for #1190: growth republish through an instance-property and a nested-element
+/// receiver, not only through a by-reference parameter.
+///
+/// #1104 pinned `store_value_to_ref_cell_local` after `__rt_array_grow`. These two receivers
+/// republish through different store paths — a property slot and an element slot — and were
+/// covered only by the 2-value `viaRef` rows of the signature test, which never reallocate.
+/// A dropped republish here is a use-after-free rather than a leak, because
+/// `__rt_array_grow` frees the old buffer as soon as it has published the new pointer, so the
+/// stdout assertion is the load-bearing one and the heap assertion catches the double release.
+///
+/// The STATIC property receiver is the third one the follow-up asks for. It is broken: in a
+/// loop it loses one element per reallocation and, read through `implode()` in the same loop,
+/// fails outright. That is issue #1207, filed from this fixture; the row belongs here once it
+/// is fixed.
+///
+/// Every expected value is verbatim host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_array_push_growth_through_property_and_element_receivers_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Box { public array $items = [1]; }
+$o = new Box();
+for ($i = 2; $i < 34; $i++) { array_push($o->items, $i); }
+$rows = [[1]];
+for ($i = 2; $i < 34; $i++) { array_push($rows[0], $i); }
+echo count($o->items), ",", $o->items[32], "|", count($rows[0]), ",", $rows[0][32], "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "33,33|33,33\n", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "array_push growth through a property or element receiver leaked: {}",
+        out.stderr
+    );
+}
+
 /// Follow-up for #1189: proves `__rt_array_grow` really ran, rather than assuming it did.
 ///
 /// The fixture above asserts post-realloc values and heap cleanliness, neither of which a
