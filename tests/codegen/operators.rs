@@ -689,17 +689,21 @@ echo classify(2), "\n";
 /// `PHP_INT_MAX * 2` is the overflow shape from the report (it promotes to float). The
 /// `PHP_INT_MAX` comparisons are the cases ARM64 got wrong too, so this fails on either target
 /// if the cast comes back, not just on the one that reported it. `1.5` keeps an in-range float
-/// in the same fixture: truncating THAT answers `1.5 > 1` correctly by accident but
-/// `1.5 <=> PHP_INT_MAX` wrongly, so the spaceship rows carry it.
+/// in the same fixture.
 ///
 /// Each of the four relational operators is asserted on its own, because each maps to its own
 /// `CmpPredicate` (`Sgt`/`Sge`/`Slt`/`Sle`) after the shared Mixed dispatch — a regression
 /// isolated to one predicate would slip past a fixture that only exercises its sibling. The
-/// rows are chosen so every operator has at least one discriminating case: `<= PHP_INT_MAX` is
-/// the one ARM64's saturating `fcvtzs` gets wrong on the positive overflow (`INT64_MAX <=
-/// INT64_MAX` is true where `1.84e19 <= INT64_MAX` is false), `< PHP_INT_MAX` is the one
-/// x86_64's `INT64_MIN` indefinite gets wrong on the same value, and `<= 1` separates float
-/// from truncated-int for the in-range `1.5` (`1.5 <= 1` is false; `1 <= 1` is not).
+/// rows are chosen so every operator has at least one case that a truncation gets WRONG:
+///
+/// - `<= PHP_INT_MAX` is what ARM64's saturating `fcvtzs` misses on the positive overflow
+///   (`INT64_MAX <= INT64_MAX` is true where `1.84e19 <= INT64_MAX` is false);
+/// - `< PHP_INT_MAX` is what x86_64's `INT64_MIN` indefinite misses on the same value;
+/// - `>= PHP_INT_MIN` and `< PHP_INT_MIN` are the NEGATIVE overflow's discriminators, and
+///   they work on BOTH targets: saturating or indefinite, the cast lands on `INT64_MIN`, so
+///   it answers `true`/`false` where the float answers `false`/`true`;
+/// - `<= 1` and `<=> 1` separate float from truncated int for the in-range `1.5`
+///   (`1.5 <= 1` is false and `1.5 <=> 1` is `1`; truncated to `1`, both flip).
 ///
 /// Every expectation is the host PHP 8.5.10 output for the same fixture.
 #[test]
@@ -710,11 +714,14 @@ function probe($m) {
     var_dump($m > 0);
     var_dump($m > PHP_INT_MAX);
     var_dump($m >= PHP_INT_MAX);
+    var_dump($m >= PHP_INT_MIN);
     var_dump($m < 0);
     var_dump($m < PHP_INT_MAX);
+    var_dump($m < PHP_INT_MIN);
     var_dump($m <= PHP_INT_MAX);
     var_dump($m <= 1);
     var_dump($m <=> 0);
+    var_dump($m <=> 1);
     var_dump($m <=> PHP_INT_MAX);
 }
 $a = $argc > 0 ? PHP_INT_MAX : 0;
@@ -727,15 +734,18 @@ probe(1.5);
         out,
         concat!(
             // 1.8446744073709552E+19: above everything, and above INT64_MAX in particular.
-            "bool(true)\nbool(true)\nbool(true)\nbool(false)\n",
-            "bool(false)\nbool(false)\nbool(false)\nint(1)\nint(1)\n",
-            // -1.8446744073709552E+19: below everything, the saturation case in reverse.
-            "bool(false)\nbool(false)\nbool(false)\nbool(true)\n",
-            "bool(true)\nbool(true)\nbool(true)\nint(-1)\nint(-1)\n",
-            // 1.5: in range, so the PHP_INT_MAX rows and `<= 1` separate float from
-            // truncated-int.
-            "bool(true)\nbool(false)\nbool(false)\nbool(false)\n",
-            "bool(true)\nbool(true)\nbool(false)\nint(1)\nint(-1)\n",
+            "bool(true)\nbool(true)\nbool(true)\nbool(true)\n",
+            "bool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\n",
+            "int(1)\nint(1)\nint(1)\n",
+            // -1.8446744073709552E+19: below everything. `>= PHP_INT_MIN` and `< PHP_INT_MIN`
+            // are the rows a cast to INT64_MIN gets wrong on every target.
+            "bool(false)\nbool(false)\nbool(false)\nbool(false)\n",
+            "bool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(true)\n",
+            "int(-1)\nint(-1)\nint(-1)\n",
+            // 1.5: in range, so `<= 1` and `<=> 1` are what separate float from truncated int.
+            "bool(true)\nbool(false)\nbool(false)\nbool(true)\n",
+            "bool(false)\nbool(true)\nbool(false)\nbool(true)\nbool(false)\n",
+            "int(1)\nint(1)\nint(-1)\n",
         )
     );
 }
