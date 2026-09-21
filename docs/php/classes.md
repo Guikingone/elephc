@@ -266,9 +266,9 @@ Property default values are applied both for the normal `new ClassName()` form a
 
 An `array`-typed (or untyped) property may take an associative literal default such as `['a' => 1]`. The property is then stored as an associative array, so string-key reads and writes (`$this->data['a']`, `$this->data[$key]`) type-check and run like any other associative array. A positional literal default (`[1, 2, 3]`) keeps integer-keyed list storage.
 
-A **nullable or union** array property takes either literal too — `public ?array $x = [1, 2];` and `public ?array $x = ['k' => 1];` both initialize, as do the `mixed` and `array|string` spellings. The value is boxed the way any other `mixed` payload is, so the slot can later hold `null` or a non-array without changing representation.
+The elements may themselves be array literals, to any depth and in either spelling: `public array $grid = [[1, 2], [3, 4]];`, `public array $conf = ['db' => ['host' => 'localhost']];`, and mixtures such as `[[1], 2]` all initialize without running any code. Each nested container is allocated as part of the object's initialization and owned by the one enclosing it, so the whole tree is released exactly once with the object, and two instances never share storage — writing through `$a->grid[0][] = 9` leaves a second instance's default untouched, as in PHP.
 
-A default whose ELEMENTS are themselves array literals (`public array $x = [[1], [2]];`) is not supported yet and reports a compile error; assign it in the constructor instead. The same literal is accepted everywhere else — as a local, a parameter default, or a class constant.
+A **nullable or union** array property takes either literal too — `public ?array $x = [1, 2];` and `public ?array $x = ['k' => 1];` both initialize, as do the `mixed` and `array|string` spellings. The value is boxed the way any other `mixed` payload is, so the slot can later hold `null` or a non-array without changing representation.
 
 ```php
 <?php
