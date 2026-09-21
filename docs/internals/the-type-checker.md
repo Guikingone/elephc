@@ -539,6 +539,46 @@ The result is that a hint-less union return is byte-identical to writing the hin
 `codegen_repr()` maps it to the boxed representation that carries the sentinel rather than
 coercing it into the other arm's zero value.
 
+### Return-to-argument alias summaries
+
+After checking, a lightweight AST pass (`src/types/return_alias.rs`) records, for every
+source-declared function and method, whether its result can be storage the CALLER still owns.
+The answer is one of three things: `None` (every return path is independent of the arguments),
+`Parameters({i, ...})` (a return path can hand parameter `i`'s storage back), or `Unknown`.
+
+EIR lowering reads it at the call site. A result proven to alias an argument is BORROWED, so
+the caller must not release it; anything else is owned, and the caller releases it once it is
+consumed. Getting that backwards costs one leaked block per call in one direction and a
+use-after-free in the other, so the pass is deliberately conservative: it merges provenance
+across branches, runs loop bodies to a fixed point, and answers `Unknown` for any storage path
+it cannot follow.
+
+The rule that is easy to get wrong is the cast. A cast is only alias-transparent when EIR
+lowering ELIDES it, and `lower_cast` elides exactly one shape: `(string)` over a value whose IR
+type is already `Str`, which compiles to nothing at all. Every other cast emits `Op::Cast`,
+whose backend helpers write into storage independent of the source — `(string)` over a boxed
+`mixed` COPIES the payload into a fresh allocation, and `(array)` allocates even when its
+operand is already an array. The pass therefore carries which parameters are declared exactly
+`string` and keeps a cast's alias only when the operand resolves to one of them. Treating every
+cast as transparent is what made `function f($v) { return (string)$v; }` leak a full copy of
+the string on every call (issue #700).
+
+The declaration is the start of the answer, not all of it. A `string` parameter can be assigned
+a wider value, and the slot widens with it, so the pass also checks the provenance the operand
+actually carries:
+
+```php
+function f(string $a, string $b): string { $a = $b; return (string)$a; }  // borrowed from $b
+function g(string $a, mixed  $b): string { $a = $b; return (string)$a; }  // a fresh copy
+```
+
+Both operands name a parameter declared `string`. In `f` the storage now in `$a` came from
+another bare `Str` slot, the cast is still elided, and the result is `$b`'s storage. In `g` the
+assignment boxed `$a` into a Mixed, so `lower_cast` emits `Op::Cast` and the caller owns the
+copy. Only a provenance whose every parameter was declared `string` keeps the passthrough;
+anything else answers `None`, and an `Unknown` provenance stays `Unknown`, because that is the
+one case where claiming independence would be a use-after-free rather than a leak.
+
 ### Type narrowing (`is_*` / `instanceof` / strict-comparison guards)
 
 **File:** `src/types/checker/stmt_check/narrowing.rs`
@@ -575,6 +615,21 @@ function set($x): void {                 // $x inferred int|Foo from the call si
 ```
 
 Narrowing is purely a type-checker step: the variable keeps its boxed runtime (`Mixed`) representation, and codegen coerces it where the narrowed type is required — unboxing for scalar uses, and dispatching a method on a `Mixed`/union receiver by its runtime class id. Reassigning a narrowed variable inside a branch replaces the narrowed binding with the assigned type, and it invalidates any property narrowings rooted at that variable.
+
+#### Assigning inside a guarded region
+
+A guard publishes its view by OVERWRITING the environment entry, which is right for reads but wrong for the store in `$g = glob($dir . "/*.meta"); if ($g === false) { $g = []; }`: `merge_local_assignment_type` saw `false` on the left, `array<never>` on the right, and reported `cannot reassign $g from false to array<never>` — on the commonest fallback idiom in PHP (issue #509). The binding is `array<string>|false`, which holds an empty array, and no slot is abandoned, so there was nothing to reject.
+
+`Checker::narrowed_local_origins` carries the missing half. `control_flow` opens an entry for every name it narrows (`enter_flow_narrowing`), recording the type the binding held before the guard plus the view the guard published; a failed merge is re-measured against that origin, and if the binding holds the new value the store is accepted with the assigned type going into the environment. Three rules keep it honest:
+
+- **The origin is the outermost one.** Nested guards keep the first entry's origin, so a store inside `if (is_scalar($x)) { if (is_float($x)) { … } }` is judged against `$x`'s own type rather than against another guard's view.
+- **The complement re-opens the view.** An `if`/`elseif`/`else` chain narrows twice per guarded clause — to the target for its own body, then to the complement for the clauses after it — so `republish_flow_narrowing` records the second one and the `else` side of the idiom is recognised too.
+- **A store ends the guard's authority.** `record_store_over_flow_narrowing` clears the view as soon as the region binds the name, so the SECOND store in a region is measured against what the first left behind. Without it, `$a = 1; if (is_string($a)) { $a = "x"; $a = 2; }` would be accepted outright instead of reaching the branch-divergent `Mixed`-storage rule above and its `--strict-locals` error — comparing the view to the environment is not enough to tell the two apart, since the store in that example leaves `string` behind, which is also what the guard published.
+- **And it travels outward.** The enclosing region CONTAINS the closing one, so a store the inner one made is a store the enclosing one made: `exit_flow_narrowing` clears the restored entry's view too. That fact is `NarrowedLocalOrigin::stored_in_region` rather than `view.is_none()`, because a complement re-opens the view and the store still has to be remembered — including for a single-clause `if` with nothing after it, where the complement is published to an empty rest-of-chain. Without it, nesting was a way around the previous rule: `if (is_string($a)) { if (is_float($a)) { $a = 1.5; } $a = 2; }` was accepted while the same two stores written flat were not.
+
+Entries are per body (`enter_local_binding_scope` takes the map, so a closure checked inside a guarded branch starts empty) and are closed when the construct ends, including when its complement is kept for the statements after it: those are ordinary straight-line code, where a store that does not fit takes the depth-0 re-bind path instead.
+
+`mixed_storage_scan` already replayed a name's stores against the BINDING rather than against each guard's view (`guard_region_is_transparent`), so this brings the checker into line with the pre-scan rather than teaching it something new.
 
 ## Diagnostics and warnings
 

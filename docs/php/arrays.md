@@ -273,8 +273,8 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `array_values()` | `array_values($arr): array` | Returns copy of values |
 | `array_key_exists()` | `array_key_exists($key, $arr): bool` | Check if key exists |
 | `array_search()` | `array_search($needle, $haystack, $strict = false): int\|string\|false` | Search for value, returning an integer index for indexed arrays, the first matching associative-array key, or `false` if not found. `$strict` compares with `===` |
-| `array_slice()` | `array_slice($arr, $offset [, $length [, $preserve_keys]]): array` | Extract a slice. `$preserve_keys` keeps the source integer keys and must be a literal `true`/`false`. |
-| `array_splice()` | `array_splice($arr, $offset [, $length [, $replacement]]): array` | Remove a slice in place and return the removed elements. `$replacement` is inserted where the removed slice was: an array contributes its values, a bare scalar is treated as a one-element array, and `null` or `[]` inserts nothing. A replacement whose element type differs from the receiver's promotes the receiver to a heterogeneous array exactly as PHP does (`$a = [1,2,3]; array_splice($a, 1, 1, ["x"]);` leaves `[1, "x", 3]`). That promotion needs a receiver whose storage this call can retype, so it does not apply when the receiver is a by-reference parameter, a `&$x` binding, or an object/static property — those keep a named compile error instead of a mistyped insertion. |
+| `array_slice()` | `array_slice($arr, $offset [, $length [, $preserve_keys]]): array` | Extract a slice from an indexed OR associative array. `$offset` and `$length` count positions in insertion order, not keys, and must be literal only for `$preserve_keys`, which must be a literal `true`/`false`. `$preserve_keys` keeps the source INTEGER keys; string keys survive either way, so `array_slice(["x"=>1,"y"=>2], 1, 1)` is `["y"=>2]` with or without it, while `array_slice([5=>1,9=>2], 1, 1)` is `[0=>2]` without and `[9=>2]` with. Indexed **string** arrays are supported: the slice copies each element's `{pointer, length}` pair and owns its own bytes, so writing into the result never disturbs the source. |
+| `array_splice()` | `array_splice($arr, $offset [, $length [, $replacement]]): array` | Remove a slice in place and return the removed elements. `$replacement` is inserted where the removed slice was: an array contributes its values, a bare scalar is treated as a one-element array, and `null` or `[]` inserts nothing. A replacement whose element type differs from the receiver's promotes the receiver to a heterogeneous array exactly as PHP does (`$a = [1,2,3]; array_splice($a, 1, 1, ["x"]);` leaves `[1, "x", 3]`). That promotion needs a receiver whose storage this call can retype, so it does not apply when the receiver is a by-reference parameter, a `&$x` binding, or an object/static property — those keep a named compile error instead of a mistyped insertion. `$replacement` may be the receiver itself: `array_splice($a, 1, 1, $a)` inserts what `$a` held on the way in, because PHP evaluates the replacement before the removal runs (`[1,2,3]` becomes `[1,1,2,3,3]`). That holds for every receiver form — a local, a property, a static property, a container element, a by-reference parameter, or a `&$x` binding naming the same array — and for every argument spelling. |
 | `array_chunk()` | `array_chunk($arr, $size [, $preserve_keys]): array` | Split into chunks. A `$size` of `0` or less throws `\ValueError`. `$preserve_keys` keeps each chunk's source integer keys and must be a literal `true`/`false`. |
 | `array_merge()` | `array_merge($arr1, $arr2): array` | Merge two arrays |
 | `array_merge_recursive()` | `array_merge_recursive($arr1, $arr2): array` | Recursively merge two arrays: integer keys append (renumbered), string keys that collide recurse when both values are arrays and otherwise combine into a list. Accepts associative arrays or **indexed arrays of scalars** (int/float/bool); nested indexed-array values are treated as opaque. |
@@ -314,8 +314,8 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `rsort()` | `rsort($arr): void` | Sort descending |
 | `asort()` | `asort($arr): void` | Sort by value, maintain keys |
 | `arsort()` | `arsort($arr): void` | Sort by value desc, maintain keys |
-| `ksort()` | `ksort($arr): bool` | Sort by key ascending with `SORT_REGULAR`. On an indexed array this is a no-op, because its keys are already the ascending slot positions `0..n-1` |
-| `krsort()` | `krsort($arr): bool` | Sort by key descending with `SORT_REGULAR`. A non-empty indexed array is promoted to associative storage so its numeric keys can appear in descending iteration order |
+| `ksort()` | `ksort($arr, $flags = SORT_REGULAR): bool` | Sort by key ascending, comparing keys under `$flags`. On an indexed array this is a no-op, because its keys are already the ascending slot positions `0..n-1` |
+| `krsort()` | `krsort($arr, $flags = SORT_REGULAR): bool` | Sort by key descending, comparing keys under `$flags`. A non-empty indexed array is promoted to associative storage so its numeric keys can appear in descending iteration order |
 | `natsort()` | `natsort($arr): void` | Natural order sort |
 | `natcasesort()` | `natcasesort($arr): void` | Case-insensitive natural sort |
 | `shuffle()` | `shuffle($arr): void` | Randomly shuffle (in-place) |
@@ -380,11 +380,45 @@ echo implode(",", array_keys($byName));   // a,b,c
 echo implode(",", array_keys($snapshot)); // b,a,c
 ```
 
-`ksort()` and `krsort()` currently accept exactly one argument and always use PHP's default
-`SORT_REGULAR` comparison. PHP's optional `$flags` argument (`SORT_NUMERIC`, `SORT_STRING`,
-`SORT_NATURAL`, `SORT_FLAG_CASE`, and related modes) is not implemented yet; passing it is a
-compile-time arity error. Full flag parity is tracked in
-[issue #699](https://github.com/illegalstudio/elephc/issues/699).
+#### Key sort flags
+
+`ksort()` and `krsort()` take PHP's optional `$flags` argument, which chooses how two keys are
+compared. It changes the answer, not just the path:
+
+```php
+$sizes = [10 => "l", 9 => "m", 100 => "xl"];
+ksort($sizes, SORT_NUMERIC);   // keys 9, 10, 100
+ksort($sizes, SORT_STRING);    // keys 10, 100, 9 — compared as the text "10", "100", "9"
+```
+
+| Flag | Comparison |
+| --- | --- |
+| `SORT_REGULAR` (default) | PHP's standard comparison, the same one `<` and `<=>` use |
+| `SORT_NUMERIC` | Both keys as numbers; a string key contributes its leading numeric run, or `0` |
+| `SORT_STRING` | Both keys as byte strings; an integer key is compared as its decimal text |
+| `SORT_LOCALE_STRING` | As `strcoll()` in the current locale |
+| `SORT_NATURAL` | As `strnatcmp()`: digit runs compare as numbers, so `img2` sorts before `img10` |
+| `SORT_FLAG_CASE` | Combined with `SORT_STRING` or `SORT_NATURAL`, folds ASCII case |
+
+PHP selects the comparison from `$flags & ~SORT_FLAG_CASE` and silently ignores anything else,
+so `SORT_ASC`, `SORT_DESC`, a bare `SORT_FLAG_CASE` and an arbitrary number such as `999` all
+behave as `SORT_REGULAR`. Keys that compare equal keep their insertion order in both
+directions, matching PHP 8's stable sorts.
+
+Two boundaries are worth stating:
+
+- `SORT_LOCALE_STRING` observes the process locale, and elephc has no PHP-visible
+  `setlocale()`, so the locale is always `C` — where collation is byte order. The one place it
+  differs from `SORT_STRING` is a key with an embedded NUL, which a C string ends at.
+- `SORT_NATURAL | SORT_FLAG_CASE` folds ASCII `a`–`z` and nothing else. php-src folds each
+  byte through the process's `LC_CTYPE` table, so its answer above `0x7F` follows the host C
+  library. Under `LC_CTYPE=C` PHP folds ASCII only and agrees with elephc byte for byte; the
+  CLI forces `C.UTF-8` at startup, where glibc still folds ASCII only but Darwin's single-byte
+  table also maps Latin-1, so PHP on macOS sorts `"\xFF"` before `"\x80"` and PHP on Linux
+  after it. Elephc gives the `C` answer on every target rather than the answer of whichever
+  machine compiled the program. ASCII keys are unaffected either way.
+
+The sort flags are not accepted by `sort()`, `rsort()`, `asort()` or `arsort()` yet.
 
 For indexed storage, ascending `ksort()` leaves keys `0..n-1` in place. Descending `krsort()`
 promotes a non-empty indexed array to associative storage, preserving each numeric key/value pair:

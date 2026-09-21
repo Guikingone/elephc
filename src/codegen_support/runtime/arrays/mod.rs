@@ -85,6 +85,7 @@ mod array_slice_to_hash;
 mod array_splice;
 mod array_splice_insert;
 mod array_splice_refcounted;
+mod array_slice_str;
 mod array_splice_str;
 mod array_strict_eq;
 mod array_sum;
@@ -124,12 +125,14 @@ mod hash_normalize_key;
 mod hash_may_have_cyclic_values;
 mod hash_ensure_unique;
 mod hash_flip;
+mod hash_slice;
 mod hash_insert_owned;
 mod hash_map;
 mod hash_iter;
 mod hash_new;
 mod hash_set;
 mod hash_key_compare;
+mod key_compare_flags;
 mod hash_sort;
 mod hash_spread;
 mod hash_sum_mixed;
@@ -243,6 +246,7 @@ pub use array_flip::emit_array_flip;
 pub use array_flip_string::emit_array_flip_string;
 /// Emit string-only array flip helper.
 pub use hash_flip::{emit_hash_flip, ARRAY_FLIP_SKIPPED_MESSAGES};
+pub use hash_slice::emit_hash_slice;
 /// Emit associative (hash) array flip helper and its skipped-entry warning table.
 pub use hash_map::{emit_hash_map, HashMapResultKind};
 /// Emit associative (hash) array map helper and its callback result-kind selector.
@@ -342,6 +346,7 @@ pub use array_splice_insert::{
 };
 /// Emit array splice helper.
 pub use array_splice_refcounted::emit_array_splice_refcounted;
+pub use array_slice_str::emit_array_slice_str;
 pub use array_splice_str::{emit_array_splice_insert_str, emit_array_splice_str};
 /// Emit deep array strict-equality (`===`) helper.
 pub use array_strict_eq::emit_array_strict_eq;
