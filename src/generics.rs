@@ -358,10 +358,15 @@ pub fn infer_bindings_with_args(
         // annotation exists to pin, so it stays an error.
         let ty = match bound.iter().find(|(name, _)| name == &param.name) {
             Some((_, ty)) => ty.clone(),
+            // A default may NAME an earlier type parameter (`<T, U = T>`), which is a type only
+            // once that parameter is bound. `ordered` already holds every parameter declared
+            // before this one — they are filled in declaration order — so substituting through it
+            // turns `U = T` into `U = int` instead of leaving a name nothing downstream resolves.
             None => param
                 .default
                 .clone()
-                .ok_or_else(|| InferError::Unconstrained(param.name.clone()))?,
+                .ok_or_else(|| InferError::Unconstrained(param.name.clone()))?
+                .substitute_type_params(&ordered),
         };
         if type_expr_depth(&ty) > MAX_TYPE_ARGUMENT_DEPTH {
             return Err(InferError::TooDeep {
@@ -372,6 +377,63 @@ pub fn infer_bindings_with_args(
         ordered.push((param.name.clone(), ty));
     }
     Ok(ordered)
+}
+
+/// Places a call's arguments at the declaration positions they bind to.
+///
+/// Inference pairs a declared parameter with the argument at the SAME INDEX, so a call's source
+/// order has to become the declaration's first: a named argument binds by name and may be written
+/// anywhere. A positional argument takes the next declared slot; a named one takes the slot whose
+/// parameter it names, unwrapped to its value so inference sees the expression rather than the
+/// `NamedArg` wrapper.
+///
+/// Anything left over — a name the declaration does not have, or a surplus positional bound for a
+/// variadic — keeps its source order after the declared slots, which is the order the variadic
+/// collects them in. A slot no argument fills stays `None`: its default is not an argument, and
+/// inference must not read a type from one.
+pub fn arguments_in_declaration_order(
+    param_names: &[String],
+    args: &[crate::parser::ast::Expr],
+) -> Vec<Option<crate::parser::ast::Expr>> {
+    let mut slots: Vec<Option<crate::parser::ast::Expr>> = vec![None; param_names.len()];
+    let mut surplus: Vec<crate::parser::ast::Expr> = Vec::new();
+    let mut next_positional = 0usize;
+    for arg in args {
+        if let crate::parser::ast::ExprKind::NamedArg { name, value } = &arg.kind {
+            if let Some(index) = param_names.iter().position(|param| param == name) {
+                slots[index] = Some((**value).clone());
+                continue;
+            }
+            surplus.push((**value).clone());
+            continue;
+        }
+        if next_positional < slots.len() {
+            slots[next_positional] = Some(arg.clone());
+            next_positional += 1;
+            continue;
+        }
+        surplus.push(arg.clone());
+    }
+    slots.extend(surplus.into_iter().map(Some));
+    slots
+}
+
+/// Returns the declared type at one ordered argument position.
+///
+/// Past the declared parameters sit the arguments the VARIADIC collects, and its declared element
+/// type is a binding position like any other: `function first<T>(T ...$xs)` determines `T` from
+/// the first of them.
+pub fn declared_type_at(
+    index: usize,
+    declared_count: usize,
+    param_types: &[Option<TypeExpr>],
+    variadic_type: Option<&TypeExpr>,
+) -> Option<TypeExpr> {
+    if index < declared_count {
+        param_types.get(index).cloned().flatten()
+    } else {
+        variadic_type.cloned()
+    }
 }
 
 /// Binds the type parameters a `callable(T): U` mentions, from the closure the call passes.
@@ -665,10 +727,17 @@ pub fn bindings_from_written_arguments(
     for (index, param) in type_params.iter().enumerate() {
         let argument = match written.get(index) {
             Some(argument) => argument.clone(),
-            None => param.default.clone().ok_or_else(|| WrittenError::Unbound {
-                param: param.name.clone(),
-                written: written.len(),
-            })?,
+            // Same dependent default as the inferred path: `identity<int>` leaves `U` to its
+            // default `T`, which is only a type once `T` is bound. The bindings built so far are
+            // the earlier parameters, in declaration order.
+            None => param
+                .default
+                .clone()
+                .ok_or_else(|| WrittenError::Unbound {
+                    param: param.name.clone(),
+                    written: written.len(),
+                })?
+                .substitute_type_params(&bindings),
         };
         bindings.push((param.name.clone(), argument));
     }

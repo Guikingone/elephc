@@ -38,12 +38,19 @@ pub(crate) fn lower_array_filter(ctx: &mut FunctionContext<'_>, inst: &Instructi
     );
     let elem_ty = array_filter_source_element_type(ctx.value_php_type(array)?)?;
     require_array_filter_result_type(&elem_ty, &inst.result_php_type.codegen_repr())?;
-    if source_is_hash && mode.is_some() {
-        // USE_KEY and USE_BOTH pass a KEY, whose shape is independent of the value's, so their
-        // argument ABI is the product of both rather than either. That is a different helper, and
-        // saying so beats guessing one.
+    // The default mode passes the VALUE alone, so `array_filter($h, $cb, 0)` is the two-argument
+    // call written out and must lower the same way — reading the mode statically makes both
+    // spellings one predicate, since an absent operand already answers `Some(0)`.
+    //
+    // USE_KEY and USE_BOTH pass a KEY, whose shape is independent of the value's, so their
+    // argument ABI is the product of both rather than either. That is a different helper, and
+    // saying so beats guessing one. A mode the backend cannot read at compile time joins them:
+    // `__rt_hash_filter` takes no mode register to dispatch on at runtime.
+    if source_is_hash && !matches!(static_array_filter_mode(ctx, mode)?, Some(0)) {
         return Err(CodegenIrError::unsupported(
-            "array_filter with a $mode over an associative array: only              ARRAY_FILTER_USE_VALUE has a hash lowering, because the other two modes pass a key              whose register shape is independent of the value's"
+            "array_filter with a non-default $mode over an associative array: only the \
+             value-only default mode has a hash lowering, because ARRAY_FILTER_USE_KEY and \
+             ARRAY_FILTER_USE_BOTH pass a key whose register shape is independent of the value's"
                 .to_string(),
         ));
     }

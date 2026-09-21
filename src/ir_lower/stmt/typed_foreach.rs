@@ -89,6 +89,27 @@ fn coerce_declared_array_storage(
     else {
         return value;
     };
+    // The conversion takes its operand as an OWNED reference and rewrites the array's storage in
+    // place when it is the only owner — that is what makes it free for a fresh literal. A
+    // declaration that copies another local (`array $copy = $source;`) hands it a borrowed load
+    // instead, so without a reference of its own it rewrote `$source`: its elements came back as
+    // Mixed cells while its slot still read them as ints, and `echo $source[0]` printed a pointer.
+    //
+    // Acquiring first is what makes `__rt_array_ensure_unique` inside the conversion copy rather
+    // than convert in place, which is the same contract that already keeps the source intact when
+    // the destination is a declared `array` PROPERTY. A fresh temporary already owns itself and is
+    // converted directly, so the literal form allocates nothing extra.
+    //
+    // `value_is_owning_temporary` is the wrong question to ask here: it answers yes for a plain
+    // `load_local` of a user local, because it describes what a CONSUMER may release, not who
+    // holds the slot's reference. The operand's own ownership is the discriminator — a fresh
+    // temporary is `Owned`, a local read is `MaybeOwned`, and only the latter needs a reference
+    // taken before the conversion consumes one.
+    let value = if ctx.builder.value_ownership(value.value) == Ownership::Owned {
+        value
+    } else {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
+    };
     ctx.emit_value(
         op,
         vec![value.value],

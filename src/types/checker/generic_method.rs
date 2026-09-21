@@ -21,6 +21,36 @@ use crate::types::{PhpType, TypeEnv};
 use super::Checker;
 
 impl Checker {
+    /// Finds a generic method template on `class_name`, or on the nearest ancestor declaring one.
+    ///
+    /// A generic method is INHERITED like any other, but its template is recorded under the class
+    /// that declares it — there is no signature to copy into the subclass, because a template has
+    /// no signature until a call site gives it type arguments. Asking only the receiver's own name
+    /// made `class B extends A {}` report `Undefined method: B::id` for a method the object has.
+    ///
+    /// Returns the key it was found under rather than the one asked for: the instantiation is
+    /// spliced into the DECLARING class, which every subclass then inherits exactly as it inherits
+    /// an ordinary method.
+    fn generic_method_template_for(
+        &self,
+        class_name: &str,
+        method: &str,
+    ) -> Option<((String, String), generics::methods::MethodTemplate)> {
+        let mut current = Some(class_name.to_string());
+        // A hierarchy the class table has not rejected can still be cyclic while this pass runs,
+        // so the walk is bounded by the table itself rather than trusting it to terminate.
+        let mut remaining = self.classes.len() + 1;
+        while let Some(name) = current {
+            let key = generics::methods::template_key(&name, method);
+            if let Some(template) = self.method_templates.get(&key) {
+                return Some((key, template.clone()));
+            }
+            remaining = remaining.checked_sub(1)?;
+            current = self.classes.get(&name).and_then(|info| info.parent.clone());
+        }
+        None
+    }
+
     /// Resolves `$object->method(args)` against a generic method template, if one exists.
     ///
     /// Answers `Ok(None)` when the class declares no such template, which leaves the caller to
@@ -42,8 +72,7 @@ impl Checker {
             .as_ref()
             .map(|(base, _)| base.as_str())
             .unwrap_or(method);
-        let key = generics::methods::template_key(class_name, base);
-        let Some(template) = self.method_templates.get(&key).cloned() else {
+        let Some((key, template)) = self.generic_method_template_for(class_name, base) else {
             return Ok(None);
         };
         let bindings = match &written {
@@ -62,15 +91,30 @@ impl Checker {
                 )
             })?,
             None => {
-                let actual_types = args
-                    .iter()
-                    .map(|arg| self.infer_type(arg, env))
-                    .collect::<Result<Vec<PhpType>, CompileError>>()?;
+                // Ordered against the declaration for the reason the function path documents: a
+                // named argument binds by name, and inference pairs by index. The variadic's
+                // declared element type joins the fixed positions past the declared ones.
+                let ordered_args =
+                    generics::arguments_in_declaration_order(&template.param_names, args);
+                let mut declared_params: Vec<Option<crate::parser::ast::TypeExpr>> = Vec::new();
+                let mut actual_types: Vec<PhpType> = Vec::new();
+                let mut inference_args: Vec<Expr> = Vec::new();
+                for (index, arg) in ordered_args.into_iter().enumerate() {
+                    let Some(arg) = arg else { continue };
+                    actual_types.push(self.infer_type(&arg, env)?);
+                    declared_params.push(generics::declared_type_at(
+                        index,
+                        template.param_names.len(),
+                        &template.params,
+                        template.variadic_type.as_ref(),
+                    ));
+                    inference_args.push(arg);
+                }
                 generics::infer_bindings_with_args(
                     &template.type_params,
-                    &template.params,
+                    &declared_params,
                     &actual_types,
-                    args,
+                    &inference_args,
                 )
                 .map_err(|error| {
                     CompileError::new(

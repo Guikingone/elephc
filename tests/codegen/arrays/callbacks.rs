@@ -2062,7 +2062,6 @@ fn test_array_map_with_a_never_callback_throws_from_the_callback() {
     );
 }
 
-
 /// `array_filter()` over an ASSOCIATIVE source, which php has always allowed and the compiled
 /// path refused outright — the check arm matched `PhpType::Array` only, so the most ordinary
 /// associative idiom there is did not compile:
@@ -2132,3 +2131,68 @@ echo $n, "|", json_encode($h);
     );
     assert_eq!(out, "600|{\"b\":\"yy\",\"a\":\"xx\",\"c\":\"zz\"}");
 }
+
+/// `array_reduce()` over an ASSOCIATIVE source, which the backend refused outright although the
+/// checker never restricted the argument's shape — it reads the element through
+/// `array_element_type`, which understands both.
+///
+/// A hash folds its VALUES the way an indexed array folds its elements, and the answer is a
+/// scalar either way, so there is no destination to build and no key to preserve. Insertion order
+/// is what the fold follows, which the subtraction here would expose if it did not.
+#[test]
+fn test_array_reduce_over_a_hash_folds_its_values_in_insertion_order() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ["a" => 1, "b" => 2, "c" => 3];
+echo array_reduce($h, fn($c, $x) => $c + $x, 0), "|";
+echo array_reduce($h, fn($c, $x) => $c - $x, 100), "|";
+$i = [10 => 1, 20 => 2];
+echo array_reduce($i, fn($c, $x) => $c + $x, 0), "|";
+$empty = [];
+$empty["gone"] = 1;
+unset($empty["gone"]);
+echo array_reduce($empty, fn($c, $x) => $c + $x, 7);
+"#,
+    );
+    assert_eq!(out, "6|94|3|7");
+}
+
+/// The same fold over a hash built by a gapped variable index — the storage a write the checker
+/// cannot bound against the array's length now picks — and through a capturing closure, whose
+/// environment the runtime helper appends only when it is non-null.
+#[test]
+fn test_array_reduce_over_a_gapped_hash_with_a_capturing_closure() {
+    let out = compile_and_run(
+        r#"<?php
+$rows = [];
+foreach ([101, 102, 205] as $id) { $rows[$id] = 1; }
+$weight = 10;
+echo array_reduce($rows, fn($c, $x) => $c + $x * $weight, 0), "|", count($rows);
+"#,
+    );
+    assert_eq!(out, "30|3");
+}
+
+/// `array_filter($h, $cb, 0)` over a hash: the DEFAULT mode written out.
+///
+/// php passes the value alone for mode 0, which is the two-argument call exactly, so the explicit
+/// spelling has to lower the same way. Testing `mode.is_some()` refused it and reported a backend
+/// error for a valid program; the mode is read statically now, and an absent operand already
+/// answers `Some(0)`, so both spellings are one predicate.
+///
+/// The non-default modes stay refused — they pass a KEY, whose register shape is independent of
+/// the value's — and that refusal is what the second half pins.
+#[test]
+fn test_array_filter_over_a_hash_accepts_the_explicitly_written_default_mode() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ["a" => 1, "b" => 2, "c" => 3];
+$kept = array_filter($h, fn($v) => $v > 1, 0);
+echo count($kept), "|", json_encode($kept), "|";
+$none = array_filter($h, fn($v) => false, 0);
+echo count($none);
+"#,
+    );
+    assert_eq!(out, "2|{\"b\":2,\"c\":3}|0");
+}
+

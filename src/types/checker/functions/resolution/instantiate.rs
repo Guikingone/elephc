@@ -39,15 +39,32 @@ impl Checker {
             .get(name)
             .cloned()
             .ok_or_else(|| CompileError::new(span, &format!("Undefined function: {}", name)))?;
-        let actual_types = args
-            .iter()
-            .map(|arg| self.infer_type(arg, caller_env))
-            .collect::<Result<Vec<PhpType>, CompileError>>()?;
-        let bindings =
-            generics::infer_bindings_with_args(&decl.type_params, &decl.param_types, &actual_types, args)
-                .map_err(|error| {
-                    CompileError::new(span, &describe_infer_error(name, &error))
-                })?;
+        // Inference pairs a declared parameter with the argument at the SAME INDEX, so the call's
+        // source order has to become the declaration's first: a named argument binds by name and
+        // may be written anywhere. Positions no argument fills are dropped from all three vectors
+        // together, which keeps that pairing intact while contributing nothing to inference.
+        let ordered_args = generics::arguments_in_declaration_order(&decl.params, args);
+        let mut declared_params: Vec<Option<crate::parser::ast::TypeExpr>> = Vec::new();
+        let mut actual_types: Vec<PhpType> = Vec::new();
+        let mut inference_args: Vec<Expr> = Vec::new();
+        for (index, arg) in ordered_args.into_iter().enumerate() {
+            let Some(arg) = arg else { continue };
+            actual_types.push(self.infer_type(&arg, caller_env)?);
+            declared_params.push(generics::declared_type_at(
+                index,
+                decl.params.len(),
+                &decl.param_types,
+                decl.variadic_type.as_ref(),
+            ));
+            inference_args.push(arg);
+        }
+        let bindings = generics::infer_bindings_with_args(
+            &decl.type_params,
+            &declared_params,
+            &actual_types,
+            &inference_args,
+        )
+        .map_err(|error| CompileError::new(span, &describe_infer_error(name, &error)))?;
         self.finish_generic_instantiation(name, &decl, bindings, span)
     }
 

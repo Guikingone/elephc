@@ -33,9 +33,16 @@ pub struct MethodTemplate {
     /// The method as declared, which the instantiated name is built from.
     pub declared_method: String,
     pub type_params: Vec<TypeParam>,
+    /// Declared parameter NAMES in order. A named argument binds by name, so ordering a call
+    /// against the declaration needs them — pairing by source position reads the bindings off the
+    /// wrong arguments.
+    pub param_names: Vec<String>,
     /// Declared parameter types in order; `None` for a parameter with no hint, which constrains
     /// nothing and is what makes `callable $f` unable to determine anything.
     pub params: Vec<Option<TypeExpr>>,
+    /// Declared element type on the variadic parameter (`T ...$xs`), if any. It is a binding
+    /// position like the fixed ones, and it lives in its own field rather than in `params`.
+    pub variadic_type: Option<TypeExpr>,
     pub return_type: Option<TypeExpr>,
 }
 
@@ -72,11 +79,17 @@ fn collect_into(stmts: &[Stmt], templates: &mut HashMap<(String, String), Method
                             declared_class: name.clone(),
                             declared_method: method.name.clone(),
                             type_params: method.type_params.clone(),
+                            param_names: method
+                                .params
+                                .iter()
+                                .map(|(name, _, _, _)| name.clone())
+                                .collect(),
                             params: method
                                 .params
                                 .iter()
                                 .map(|(_, declared, _, _)| declared.clone())
                                 .collect(),
+                            variadic_type: method.variadic_type.clone(),
                             return_type: method.return_type.clone(),
                         },
                     );

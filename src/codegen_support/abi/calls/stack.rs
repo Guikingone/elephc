@@ -154,6 +154,44 @@ pub fn emit_push_result_value(emitter: &mut Emitter, ty: &PhpType) {
     }
 }
 
+/// Pops the current result value from the temporary stack based on its PHP type.
+/// The exact mirror of `emit_push_result_value`, restoring whichever register class that pushed,
+/// so a value is preserved across a call whatever shape it has. No-op for `void` and `never`.
+///
+/// - `ty`: PHP type of the result value to restore.
+pub fn emit_pop_result_value(emitter: &mut Emitter, ty: &PhpType) {
+    match ty.codegen_repr() {
+        PhpType::Bool
+        | PhpType::False
+        | PhpType::Int
+        | PhpType::Resource(_)
+        | PhpType::Iterable
+        | PhpType::Mixed
+        | PhpType::Union(_)
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Buffer(_)
+        | PhpType::Callable
+        | PhpType::Object(_)
+        | PhpType::Packed(_)
+        | PhpType::Pointer(_) => {
+            emit_pop_reg(emitter, int_result_reg(emitter));                             // restore the scalar or pointer result register from the temporary arg stack
+        }
+        PhpType::Float => {
+            emit_pop_float_reg(emitter, float_result_reg(emitter));                     // restore the floating-point result register from the temporary arg stack
+        }
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = string_result_regs(emitter);
+            emit_pop_reg_pair(emitter, ptr_reg, len_reg);                               // restore the string result register pair from the temporary arg stack
+        }
+        PhpType::TaggedScalar => {
+            let tag_reg = crate::codegen_support::sentinels::tagged_scalar_tag_reg(emitter);
+            emit_pop_reg_pair(emitter, int_result_reg(emitter), tag_reg);                // restore the tagged scalar payload/tag register pair from the temporary arg stack
+        }
+        PhpType::Void | PhpType::Never => {}
+    }
+}
+
 /// Releases `amount` bytes from the temporary stack (adds to SP on x86_64, deallocates on AArch64).
 /// Called after arguments have been consumed to clean up stacked values from outgoing calls.
 ///

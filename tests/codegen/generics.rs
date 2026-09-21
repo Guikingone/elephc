@@ -1658,3 +1658,124 @@ fn test_counter_reaches_union_expectations_negation_and_packed_fields() {
     );
     assert_eq!(out, "111v1-11");
 }
+
+
+/// Named arguments bind by NAME, so the call's source order is not the order inference pairs
+/// against the declaration.
+///
+/// `pick(v: "abc", n: 1)` was inferred by position: `T` took `n`'s int, the call resolved to
+/// `pick<int>`, and the ordinary argument check — which does understand named arguments — then
+/// refused `"abc"` at an `int` parameter. A valid program rejected by its own instantiation.
+#[test]
+fn test_named_arguments_bind_type_parameters_by_name_not_by_position() {
+    let out = compile_and_run(
+        r#"<?php
+/**
+ * @template T
+ * @param T $v
+ * @return T
+ */
+function pick(int $n, $v) { return $v; }
+echo pick(v: "abc", n: 1), "|", pick(n: 2, v: 7), "|", pick(3, "z");
+"#,
+    );
+    assert_eq!(out, "abc|7|z");
+}
+
+
+/// A type parameter's default may NAME an earlier one (`<T, U = T>`), which is a type only once
+/// that one is bound.
+///
+/// The default was cloned raw, so `U` was handed the name `T` and the declaration failed with
+/// `Unknown type: T` — for both the inferred call and the written one, which take different paths
+/// to the same omission.
+#[test]
+fn test_a_dependent_type_parameter_default_is_substituted() {
+    let out = compile_and_run(
+        r#"<?php
+function identity<T, U = T>(T $x): U { return $x; }
+echo identity(42), "|", identity<int>(7), "|", identity("z");
+"#,
+    );
+    assert_eq!(out, "42|7|z");
+}
+
+/// A VARIADIC parameter is a binding position like any other.
+///
+/// Its declared element type lives in its own field, so handing inference the fixed parameter
+/// types alone left `T` with nothing to determine it and the call was refused as undetermined.
+#[test]
+fn test_a_variadic_parameter_determines_a_type_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function first<T>(T ...$values): T { return $values[0]; }
+echo first(42), "|", first("a", "b"), "|", first(1, 2, 3);
+"#,
+    );
+    assert_eq!(out, "42|a|1");
+}
+
+/// A generic method is INHERITED like any other.
+///
+/// Its template is recorded under the class that DECLARES it — a template has no signature to
+/// copy into the subclass until a call site gives it type arguments — so a lookup that only asked
+/// the receiver's own name reported `Undefined method: B::id` for a method the object has.
+#[test]
+fn test_an_inherited_generic_method_resolves_through_its_declaring_class() {
+    let out = compile_and_run(
+        r#"<?php
+class A {
+    public function id<T>(T $x): T { return $x; }
+}
+class B extends A {}
+class C extends B {}
+echo (new B())->id(42), "|", (new C())->id("deep"), "|", (new A())->id(7);
+"#,
+    );
+    assert_eq!(out, "42|deep|7");
+}
+
+/// The same template, called statically.
+///
+/// The static path tried generic CLASSES (`Box<int>::of()`, where the class carries the type
+/// parameters) and then reported `Undefined method`. A method's own type parameters are a
+/// different template, and it is not in the class table either.
+#[test]
+fn test_a_static_generic_method_resolves_and_instantiates() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public static function id<T>(T $x): T { return $x; }
+}
+class D extends C {}
+echo C::id(42), "|", C::id("s"), "|", D::id(9);
+"#,
+    );
+    assert_eq!(out, "42|s|9");
+}
+
+/// The method path orders its arguments against the declaration, like the function path.
+///
+/// It paired `args` by source position, so a named argument bound the wrong parameter's type —
+/// and a variadic method parameter determined nothing, for the same missing-field reason the
+/// function form had.
+#[test]
+fn test_generic_method_named_arguments_and_variadics_bind_correctly() {
+    let out = compile_and_run(
+        r#"<?php
+class Pick {
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function of(int $n, $v) { return $v; }
+
+    public function head<T>(T ...$xs): T { return $xs[0]; }
+}
+$p = new Pick();
+echo $p->of(v: "abc", n: 1), "|", $p->of(2, "z"), "|", $p->head(5, 6);
+"#,
+    );
+    assert_eq!(out, "abc|z|5");
+}

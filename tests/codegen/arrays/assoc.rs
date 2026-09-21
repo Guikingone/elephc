@@ -1102,3 +1102,69 @@ echo count($a), "|", json_encode($a);
     );
     assert_eq!(out, "4|{\"0\":0,\"1\":1,\"3\":3,\"4\":4}");
 }
+
+
+/// A `for` counter the loop CONDITION rewrites is not a counter that tracks the array's length.
+///
+/// `packed_for_counter` was never given the condition, on the reasoning that a condition can only
+/// stop the loop earlier. It can also assign: `($i = 3) < 4` puts the counter at 3 before the
+/// first write, and packed storage has no keys, so the write zero-filled slots 0..2 and invented
+/// three entries php never has.
+#[test]
+fn test_a_for_condition_that_writes_the_counter_takes_hash_storage() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+for ($i = 0; ($i = 3) < 4; $i++) {
+    $a[$i] = 9;
+    break;
+}
+echo count($a), ":", json_encode($a);
+"#,
+    );
+    assert_eq!(out, "1:{\"3\":9}");
+}
+
+/// The same write, one level down: a counter advanced inside a larger expression.
+///
+/// `$z = $i++;` binds `$z`, so the statement's own shape says nothing about the counter — the
+/// increment is buried in its value, where a check that matched only the outermost node never
+/// looked. php promotes to a hash and keeps two entries; packed storage gapped to three.
+#[test]
+fn test_a_counter_advanced_inside_an_assigned_expression_takes_hash_storage() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 4; $i++) {
+    $a[$i] = 1;
+    $z = $i++;
+}
+echo count($a), ":", json_encode($a);
+"#,
+    );
+    assert_eq!(out, "2:{\"0\":1,\"2\":1}");
+}
+
+/// The counter exception itself, which must survive both of the above: a plain `for` that grows
+/// an array one slot at a time still keeps PACKED storage, which `json_encode` shows as a list
+/// rather than an object.
+#[test]
+fn test_a_plain_for_counter_still_keeps_packed_storage() {
+    let out = compile_and_run(
+        r#"<?php
+$src = [10, 20, 30];
+$b = [];
+for ($j = 0; $j < count($src); $j++) {
+    $b[$j] = $src[$j] * 2;
+}
+echo json_encode($b), "|";
+$limit = 3;
+$c = [];
+for ($k = 0; $k < $limit; $k++) {
+    $c[$k] = $k;
+}
+echo json_encode($c);
+"#,
+    );
+    assert_eq!(out, "[20,40,60]|[0,1,2]");
+}

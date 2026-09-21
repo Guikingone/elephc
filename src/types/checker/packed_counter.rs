@@ -38,13 +38,15 @@ pub(crate) struct PackedLoopCounter {
 ///
 /// - the init is `$i = 0`, so the first iteration writes slot 0;
 /// - the update is `$i++` or `++$i`, so each iteration advances by exactly one;
+/// - the CONDITION does not write the counter, which `($i = 3) < 4` does before any write runs;
 /// - the body neither `continue`s past a write nor assigns the counter again, either of which
 ///   would let the counter run ahead of the array's length.
 ///
-/// The condition is deliberately not examined: it can only stop the loop earlier, which ends the
+/// A condition that only READS is still ignored on purpose: stopping the loop earlier ends the
 /// array at a shorter length rather than leaving a hole in it.
 pub(super) fn packed_for_counter(
     init: Option<&Stmt>,
+    condition: Option<&Expr>,
     update: Option<&Stmt>,
     body: &[Stmt],
     depth: u32,
@@ -53,11 +55,21 @@ pub(super) fn packed_for_counter(
     if counter_incremented_by_one(update?)? != name {
         return None;
     }
+    if let Some(condition) = condition {
+        if !expr_preserves_counter(condition, &name) {
+            return None;
+        }
+    }
     if !body_preserves_counter(body, &name, 0) {
         return None;
     }
     let mut rebound_locals = HashSet::new();
     collect_rebound_locals(body, &mut rebound_locals);
+    if let Some(condition) = condition {
+        // The condition runs before every write, so a local it rebinds — the ARRAY, typically —
+        // is as rebound as one the body assigns.
+        collect_rebound_locals_from_expr(condition, &mut rebound_locals);
+    }
     Some(PackedLoopCounter {
         name,
         depth,
@@ -167,8 +179,73 @@ fn body_preserves_counter(body: &[Stmt], counter: &str, loop_depth: usize) -> bo
         .all(|stmt| stmt_preserves_counter(stmt, counter, loop_depth))
 }
 
+/// Returns true when no expression this statement carries writes the counter.
+///
+/// Nested statement bodies are NOT visited here — `stmt_preserves_counter` already recurses into
+/// them with the loop depth they run at, which this has no way to track.
+fn stmt_expressions_preserve_counter(stmt: &Stmt, counter: &str) -> bool {
+    let preserved = |expr: &Expr| expr_preserves_counter(expr, counter);
+    match &stmt.kind {
+        StmtKind::Echo(expr)
+        | StmtKind::Throw(expr)
+        | StmtKind::ExprStmt(expr)
+        | StmtKind::Return(Some(expr))
+        | StmtKind::Assign { value: expr, .. }
+        | StmtKind::TypedAssign { value: expr, .. }
+        | StmtKind::ConstDecl { value: expr, .. }
+        | StmtKind::ListUnpack { value: expr, .. }
+        | StmtKind::StaticVar { init: expr, .. }
+        | StmtKind::RefAssign { source: expr, .. }
+        | StmtKind::ArrayPush { value: expr, .. }
+        | StmtKind::Include { path: expr, .. }
+        | StmtKind::While { condition: expr, .. }
+        | StmtKind::DoWhile { condition: expr, .. }
+        | StmtKind::Foreach { array: expr, .. }
+        | StmtKind::Switch { subject: expr, .. }
+        | StmtKind::PropertyAssign { value: expr, .. }
+        | StmtKind::StaticPropertyAssign { value: expr, .. }
+        | StmtKind::StaticPropertyArrayPush { value: expr, .. }
+        | StmtKind::PropertyArrayPush { value: expr, .. } => preserved(expr),
+        StmtKind::ArrayAssign { index, value, .. }
+        | StmtKind::NestedArrayAssign {
+            target: index,
+            value,
+        }
+        | StmtKind::StaticPropertyArrayAssign { index, value, .. }
+        | StmtKind::PropertyArrayAssign { index, value, .. } => {
+            preserved(index) && preserved(value)
+        }
+        StmtKind::If {
+            condition,
+            elseif_clauses,
+            ..
+        } => {
+            preserved(condition)
+                && elseif_clauses
+                    .iter()
+                    .all(|(condition, _)| preserved(condition))
+        }
+        // The `for` header's own expressions, minus the update: a counter this loop advances is
+        // not a counter an ENCLOSING loop may trust, and `stmt_preserves_counter` rejects that
+        // through the update's assignment target.
+        StmtKind::For {
+            condition: Some(condition),
+            ..
+        } => preserved(condition),
+        _ => true,
+    }
+}
+
 /// Returns true when one statement can neither skip a write nor retarget the counter.
+///
+/// Two independent checks. The structural one below reads each statement's own shape — how far a
+/// `continue` jumps, which local an assignment binds. On top of it, every expression the statement
+/// CARRIES is walked for a counter write, because the shape alone does not see one: `$z = $i++;`
+/// binds `$z`, and the increment that matters is buried in its value.
 fn stmt_preserves_counter(stmt: &Stmt, counter: &str, loop_depth: usize) -> bool {
+    if !stmt_expressions_preserve_counter(stmt, counter) {
+        return false;
+    }
     match &stmt.kind {
         StmtKind::Continue(levels) => *levels <= loop_depth,
         StmtKind::Assign { name, .. }
@@ -227,6 +304,8 @@ fn stmt_preserves_counter(stmt: &Stmt, counter: &str, loop_depth: usize) -> bool
         StmtKind::For {
             init, update, body, ..
         } => {
+            // The condition is checked by the carrier walk above, with every other header piece
+            // that is an expression.
             init.as_ref()
                 .is_none_or(|stmt| stmt_preserves_counter(stmt, counter, loop_depth))
                 && update
@@ -238,18 +317,49 @@ fn stmt_preserves_counter(stmt: &Stmt, counter: &str, loop_depth: usize) -> bool
     }
 }
 
-/// Returns true when an expression statement does not advance the counter.
+/// Returns true when nothing ANYWHERE in this expression writes the counter.
 ///
-/// Only the bare `$i++` / `++$i` statement forms are recognized. A counter buried in a larger
-/// expression (`f($i++)`) or advanced through a by-reference argument keeps whatever storage
-/// elephc chooses today, which is the safe direction to be imprecise in.
+/// The walk has to be deep: `f($i++)` and `($i = 3) < 4` both advance the counter from inside a
+/// larger expression, and matching only the outermost node saw a `FunctionCall` and a `BinaryOp`.
+/// Accepting one of those is not a harmless imprecision — it keeps packed storage for an index
+/// that has already run past the array's length, which is the zero-filled gap php never has.
+///
+/// KNOWN HOLE, and the reason this is a `bool` and not a proof: a by-reference argument
+/// (`bump($i)` where `bump(&$x)`) writes the counter with no assignment node to find. This pass
+/// is syntactic and has no callee signature to consult, so such a loop keeps whatever storage it
+/// gets today. Closure bodies are likewise not descended into, matching the shared walker.
 fn expr_preserves_counter(expr: &Expr, counter: &str) -> bool {
-    !matches!(
-        &expr.kind,
+    if assignment_target_name(expr).is_some_and(|name| name == counter) {
+        return false;
+    }
+    let mut preserved = true;
+    super::loop_storage::visit_child_expressions(expr, &mut |child| {
+        preserved = preserved && expr_preserves_counter(child, counter);
+    });
+    preserved
+}
+
+/// Returns the local one expression writes directly, if it writes one.
+fn assignment_target_name(expr: &Expr) -> Option<&str> {
+    match &expr.kind {
         ExprKind::PostIncrement(name)
-            | ExprKind::PreIncrement(name)
-            | ExprKind::PostDecrement(name)
-            | ExprKind::PreDecrement(name)
-            if name == counter
-    )
+        | ExprKind::PreIncrement(name)
+        | ExprKind::PostDecrement(name)
+        | ExprKind::PreDecrement(name) => Some(name.as_str()),
+        ExprKind::Assignment { target, .. } => match &target.kind {
+            ExprKind::Variable(name) => Some(name.as_str()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Collects every local an expression rebinds, at any depth inside it.
+fn collect_rebound_locals_from_expr(expr: &Expr, out: &mut HashSet<String>) {
+    if let Some(name) = assignment_target_name(expr) {
+        out.insert(name.to_string());
+    }
+    super::loop_storage::visit_child_expressions(expr, &mut |child| {
+        collect_rebound_locals_from_expr(child, out)
+    });
 }

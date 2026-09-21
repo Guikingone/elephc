@@ -1145,6 +1145,16 @@ impl Checker {
                 magic_return_ty = Some(effective_sig.return_type.clone());
                 magic_original_args = Some(args.to_vec());
             } else {
+                // A generic method called STATICALLY (`C::id(42)`). The generic-class attempt at
+                // the top of this function answers for `Box<int>::of()`, where the CLASS carries
+                // the type parameters; a method's own parameters are a different template, and it
+                // is not in the class table either — so like the instance form, every ordinary
+                // lookup has already missed by the time this runs.
+                if let Some(inferred) =
+                    self.infer_generic_method_call(class_name, method, args, expr, env)?
+                {
+                    return Ok(inferred);
+                }
                 return Err(CompileError::new(
                     expr.span,
                     &format!("Undefined method: {}::{}", class_name, method),

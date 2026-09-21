@@ -295,7 +295,11 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             args,
         } => ExprKind::StaticMethodCall {
             receiver: walk_static_receiver(receiver, pass, span),
-            method,
+            // Renamed like the instance form: a generic method resolved by the checker is called
+            // under its INSTANTIATED name, and leaving the static spelling alone left the backend
+            // looking for a template that was stripped from the program. A call the checker
+            // recorded nothing for is keyed by nothing and passes through unchanged.
+            method: pass.transform_method_call_name(method, span),
             args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),
         },
         ExprKind::FirstClassCallable(target) => {

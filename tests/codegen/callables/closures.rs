@@ -2505,3 +2505,45 @@ echo $n;
         out.stderr
     );
 }
+
+
+/// The invoker's post-call argument releases must preserve the WHOLE result, not one register.
+///
+/// Every release is a call, and a call preserves nothing. Only a counted pointer fits in the
+/// integer result register: a `Str` travels as a pointer/length pair (x1/x2 on aarch64, rax/rdx on
+/// x86_64) and a `Float` in its own register. The invoker saved `int_result_reg` alone, so a
+/// string-returning callback with a refcounted argument had the half nobody saved left to whatever
+/// the release helper happened to leave behind.
+///
+/// It does not corrupt today only because the reachable release helpers are register-frugal —
+/// `__rt_decref_array` touches x0 and x9..x11 and returns without calling anything while the
+/// refcount stays positive — which is an accident of their bodies, not a contract. The zero-count
+/// path tail-calls `__rt_array_free_deep`, which is not frugal. So the assembly is what gets
+/// asserted: the result is saved by its TYPE across the releases.
+#[test]
+fn test_invoker_preserves_a_string_result_across_retained_argument_releases() {
+    let source = r#"<?php
+$f = function (array $r) { return "n" . count($r); };
+$a = call_user_func_array($f, [[1, 2, 3]]);
+$b = call_user_func_array($f, [[4, 5]]);
+echo $a, "|", $b, "|", strlen($a), strlen($b);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "n3|n2|22");
+
+    let dir = make_cli_test_dir("elephc_invoker_string_result_release");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    let invoker = user_asm
+        .split("runtime callable invoker")
+        .nth(1)
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        invoker.contains("stp x1, x2, [sp, #-16]!") && invoker.contains("ldp x1, x2, [sp], #16"),
+        "the invoker must save the string result PAIR across the retained-argument releases, \
+         not just the integer result register:\n{}",
+        invoker
+    );
+    let _ = fs::remove_dir_all(dir);
+}

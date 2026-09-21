@@ -877,6 +877,7 @@ impl Checker {
                 self.packed_loop_counter =
                     crate::types::checker::packed_counter::packed_for_counter(
                         init.as_deref(),
+                        condition.as_ref(),
                         update.as_deref(),
                         body,
                         self.local_conditional_depth,
