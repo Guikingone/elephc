@@ -458,6 +458,13 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
                 collect_assignment_target_dependencies(value, dependencies);
             }
         }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries.iter() {
+                for expr in entry.exprs() {
+                    collect_assignment_target_dependencies(expr, dependencies);
+                }
+            }
+        }
         ExprKind::Match {
             subject,
             arms,
@@ -582,6 +589,10 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
             expr_may_write_dependency(key, dependencies)
                 || expr_may_write_dependency(value, dependencies)
         }),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(|expr| expr_may_write_dependency(expr, dependencies)),
         ExprKind::ArrayAccess { array, index } => {
             expr_may_write_dependency(array, dependencies)
                 || expr_may_write_dependency(index, dependencies)
@@ -825,6 +836,10 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(items) => items.iter().any(|(key, value)| {
             expr_contains_equivalent(key, needle) || expr_contains_equivalent(value, needle)
         }),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(|expr| expr_contains_equivalent(expr, needle)),
         ExprKind::ArrayAccess { array, index } => {
             expr_contains_equivalent(array, needle) || expr_contains_equivalent(index, needle)
         }
