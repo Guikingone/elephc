@@ -132,3 +132,52 @@ var_dump(S::$x["k"], S::$x["j"], U::$v["m"]);
         "a static keyed default must cost the same however often it is read"
     );
 }
+
+/// Follow-up for #1153: an INTEGER-keyed assoc literal defaulting a union or `mixed` slot.
+///
+/// `[1 => "a"]` is still `BoxedAssocArray` — an explicit key of any kind makes the default a
+/// hash, not packed storage — but every keyed fixture so far used string keys. An integer key
+/// travels through the hash's numeric-key normalization instead of its string path, so a
+/// default emitter that assumed string keys would either refuse the shape or store a key PHP
+/// does not agree with. The mixed int+string literal pins the insertion ORDER too, which is
+/// what `foreach` observes and what a rebuilt-by-key-kind default would lose.
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_integer_keyed_array_defaults_on_union_properties_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class I { public ?array $a = [1 => "a"]; }
+class M { public mixed $b = [5 => "five", 7 => "seven"]; }
+class X { public array|string $c = [2 => "two", "k" => "kay", 0 => "zero"]; }
+for ($i = 0; $i < 32; $i++) {
+    $x = new I();
+    $y = new M();
+    $z = new X();
+}
+echo count($x->a), count($y->b), count($z->c), ";";
+var_dump($x->a[1], $y->b[5], $y->b[7], $z->c[2], $z->c["k"], $z->c[0]);
+foreach ($z->c as $k => $v) { echo "[", var_export($k, true), "=", $v, "]"; }
+echo "\n";
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "123;string(1) \"a\"\n",
+            "string(4) \"five\"\n",
+            "string(5) \"seven\"\n",
+            "string(3) \"two\"\n",
+            "string(3) \"kay\"\n",
+            "string(4) \"zero\"\n",
+            "[2=two]['k'=kay][0=zero]\n",
+        ),
+        "stderr: {}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "an integer-keyed default on a union slot leaked: {}",
+        out.stderr
+    );
+}
