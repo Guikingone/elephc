@@ -450,6 +450,87 @@ echo $n, ",", count($x), ",", $x[32], "|",
     );
 }
 
+/// Follow-up for #1189: proves `__rt_array_grow` really ran, rather than assuming it did.
+///
+/// The fixture above asserts post-realloc values and heap cleanliness, neither of which a
+/// future pre-size or bulk-append lowering would disturb: it could satisfy every assertion
+/// with ZERO reallocations and the growth pin would silently stop pinning growth.
+///
+/// The side channel is the allocation count. `__rt_array_grow` is the only thing in these
+/// programs that allocates after the array literal — the values are integers — so each
+/// program is compared against a control that builds the SAME arrays and calls a by-reference
+/// function that appends nothing. A reallocation shows up as an extra `allocs` and nothing
+/// else can produce one.
+///
+/// The two halves are measured separately on purpose. A bulk-append lowering could pre-size
+/// the variadic call and leave the one-per-call loop growing, which a combined total would
+/// hide.
+#[test]
+fn test_array_push_growth_through_a_by_ref_parameter_really_reallocates() {
+    let allocs = |source: &str, expected_stdout: &str| -> u64 {
+        let out = compile_and_run_with_gc_stats(source);
+        assert_eq!(out.stdout, expected_stdout, "stderr: {}", out.stderr);
+        let stats = out
+            .stderr
+            .lines()
+            .find(|line| line.starts_with("GC: allocs="))
+            .unwrap_or_else(|| panic!("no GC stats line in: {}", out.stderr));
+        stats
+            .trim_start_matches("GC: allocs=")
+            .split_once(" frees=")
+            .and_then(|(allocs, _)| allocs.parse().ok())
+            .unwrap_or_else(|| panic!("unexpected GC stats shape: {stats}"))
+    };
+
+    let variadic = allocs(
+        r#"<?php
+function pushMany(array &$a): int { return array_push($a, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33); }
+$x = [1];
+$n = pushMany($x);
+echo $n, ",", count($x), ",", $x[32], "\n";
+"#,
+        "33,33,33\n",
+    );
+    let variadic_control = allocs(
+        r#"<?php
+function lengthOf(array &$a): int { return count($a); }
+$x = [1];
+$n = lengthOf($x);
+echo $n, ",", count($x), ",", $x[0], "\n";
+"#,
+        "1,1,1\n",
+    );
+    assert!(
+        variadic > variadic_control,
+        "a variadic push from capacity 1 to 33 must reallocate: {variadic} allocs vs \
+         {variadic_control} for the same arrays without the push"
+    );
+
+    let one_per_call = allocs(
+        r#"<?php
+function pushOne(array &$a, int $v): int { return array_push($a, $v); }
+$y = [1];
+for ($i = 2; $i < 34; $i++) { pushOne($y, $i); }
+echo count($y), ",", $y[32], "\n";
+"#,
+        "33,33\n",
+    );
+    let one_per_call_control = allocs(
+        r#"<?php
+function lengthOf(array &$a): int { return count($a); }
+$y = [1];
+for ($i = 2; $i < 34; $i++) { lengthOf($y); }
+echo count($y), ",", $y[0], "\n";
+"#,
+        "1,1\n",
+    );
+    assert!(
+        one_per_call > one_per_call_control,
+        "32 single-value pushes must reallocate: {one_per_call} allocs vs \
+         {one_per_call_control} for the same loop without the push"
+    );
+}
+
 /// Verifies a variadic `array_push()` evaluates EVERY value before it appends any of them.
 ///
 /// PHP evaluates a call's arguments and only then enters the function, so nothing an argument
