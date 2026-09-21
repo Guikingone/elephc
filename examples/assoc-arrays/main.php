@@ -173,3 +173,17 @@ echo "By text:    " . implode(", ", array_keys($sizes)) . "\n";
 $shots = ["IMG1" => 1, "img1" => 2, "IMG10" => 3, "img2" => 4];
 ksort($shots, SORT_NATURAL | SORT_FLAG_CASE);
 echo "Ignoring case: " . implode(", ", array_keys($shots)) . "\n";
+
+// A spread can sit beside explicit keys, in any order. A spread's elements take the next free
+// INTEGER key at the position the spread occupies, so the order is observable in the result.
+$ports = [8080, 8081];
+$withDefault = [...$ports, "fallback" => 9000];
+$defaultFirst = ["fallback" => 9000, ...$ports];
+$surrounded = ["lo" => 1, ...$ports, "hi" => 2];
+
+echo "\nspread then key: " . implode(",", array_keys($withDefault)) . "\n";
+echo "key then spread: " . implode(",", array_keys($defaultFirst)) . "\n";
+echo "spread between:  " . implode(",", array_keys($surrounded)) . "\n";
+
+// Spreading reads the source; it is unchanged afterwards and can be spread again.
+echo "source intact:   " . implode(",", $ports) . "\n";

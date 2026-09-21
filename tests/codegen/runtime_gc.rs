@@ -41,6 +41,8 @@ mod omitted_by_ref_default_args;
 mod foreach_object_source;
 #[path = "runtime_gc/nested_property_defaults.rs"]
 mod nested_property_defaults;
+#[path = "runtime_gc/spread_promotion.rs"]
+mod spread_promotion;
 #[path = "runtime_gc/stack_args.rs"]
 mod stack_args;
 #[path = "runtime_gc/cow_and_cycles.rs"]
