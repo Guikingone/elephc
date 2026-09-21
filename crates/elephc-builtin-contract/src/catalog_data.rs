@@ -18892,7 +18892,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "Converts a packed internet address to a human-readable representation.",
+        summary: "Renders a packed 4-byte IPv4 or 16-byte IPv6 address as its presentation string, or false for any other length.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.inet-ntop.php"),
@@ -18923,7 +18923,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "Converts a human-readable IP address to its packed in_addr representation.",
+        summary: "Packs a textual IPv4 or IPv6 address into its 4- or 16-byte network-order form, or false when the string is not a valid address.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.inet-pton.php"),

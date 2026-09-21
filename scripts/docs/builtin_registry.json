@@ -65132,7 +65132,7 @@
     },
     "area": "String",
     "canonical_name": "inet_ntop",
-    "description": "Converts a packed internet address to a human-readable representation.",
+    "description": "Renders a packed 4-byte IPv4 or 16-byte IPv6 address as its presentation string, or false for any other length.",
     "eval": {
       "adapter_reason": "interpreter-specific-value-semantics",
       "area": "network_env",
@@ -65257,7 +65257,7 @@
     },
     "area": "String",
     "canonical_name": "inet_pton",
-    "description": "Converts a human-readable IP address to its packed in_addr representation.",
+    "description": "Packs a textual IPv4 or IPv6 address into its 4- or 16-byte network-order form, or false when the string is not a valid address.",
     "eval": {
       "adapter_reason": "interpreter-specific-value-semantics",
       "area": "network_env",
