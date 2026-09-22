@@ -250,7 +250,13 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "eval",
         whole_archive: false,
         apple_frameworks: &[],
-        apple_libraries: &[],
+        // The interpreter's `mb_strlen` path calls `iconv` directly, so the archive
+        // references `_iconv` whether or not the program uses the iconv EXTENSION. That went
+        // unnoticed while the only way to link this archive was an `eval()` in the program:
+        // the checker then required the library along the eval path anyway. A binary that
+        // links the interpreter for the runtime script cache alone has no such path, and
+        // failed at the linker with `_iconv` undefined.
+        apple_libraries: &["iconv"],
         needs_libdl: true,
         // The eval interpreter is an internal compiler facility, not an extension.
         php_extensions: &[],

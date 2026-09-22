@@ -32,6 +32,19 @@ pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module)
     module.required_runtime_features.generator |= module.class_infos.contains_key("Generator");
 }
 
+/// Returns whether this call is `__elephc_opcache_rt_compile`.
+///
+/// Matched on the runtime-function id rather than the builtin target, because these helpers
+/// are internal registry entries reached through `RuntimeCallTarget::Function`.
+fn runtime_call_targets_opcache_compile(inst: &crate::ir::Instruction) -> bool {
+    matches!(
+        inst.immediate,
+        Some(crate::ir::Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::ElephcOpcacheRtCompile)
+        ))
+    )
+}
+
 /// Derives optional runtime features from the actual EIR instruction stream.
 pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
     let mut features = RuntimeFeatures::none();
@@ -45,6 +58,22 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
         for (inst_index, inst) in function.instructions.iter().enumerate() {
             match inst.op {
                 Op::RuntimeCall => {
+                    // `opcache_compile_file()` is the ONE runtime-tier operation whose job is
+                    // to CREATE a cache entry, so it is the one whose pay-for-use fold is a
+                    // lie rather than a truth. `is_cached` and `discard` fold to `false` in a
+                    // binary with no dynamic tier and that IS the right answer — nothing can
+                    // have been cached. `compile_file` folding to `false` instead reports a
+                    // refusal reference PHP never issues: it returns `true` and the file is in
+                    // the cache, whether or not the program uses `eval()`.
+                    //
+                    // So calling it is itself a reason to link the bridge. The cost lands
+                    // exactly on programs that ask for the dynamic tier, which is what
+                    // pay-for-use means — and no wider than that: with OPcache disabled at
+                    // compile time the prelude's own gate short-circuits before this call is
+                    // ever emitted, so a disabled build never reaches here and stays small.
+                    if runtime_call_targets_opcache_compile(inst) {
+                        features.eval_bridge = true;
+                    }
                     if let Some(target) = typed_builtin_target(inst) {
                         features.regex |= target.uses_regex_runtime();
                         features.mb_strlen |= target.uses_mb_strlen_runtime();

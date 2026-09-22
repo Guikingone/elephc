@@ -122,6 +122,57 @@ foreach ($s['scripts'] as $key => $entry) {
 echo 'found=', $found, "\n";
 "#;
 
+/// Verifies `opcache_compile_file()` works WITHOUT an `eval()` anywhere in the program.
+///
+/// Every other test in this file writes an `eval()` to force the eval bridge, which is
+/// exactly what hid this: `opcache_compile_file()` folded to `0` in a binary that links no
+/// bridge, and answered `false` for a readable, parsable file where reference answers `true`
+/// and caches it. The fold is right for `is_cached` and `discard` — nothing can have been
+/// cached without a dynamic tier — and wrong for the one operation whose job is to CREATE
+/// the entry.
+///
+/// Calling it is now itself a reason to link the interpreter, which is what pay-for-use
+/// means. The cost is bounded and was measured: 2.6 MB for this binary against 69 KB for
+/// the same program with OPcache disabled, because the prelude's own gate short-circuits
+/// before the call is ever emitted there.
+///
+/// THE ABSENCE OF `eval` IS THE TEST. If a future edit adds one to this source to make
+/// something else work, the test keeps passing and stops meaning anything.
+#[test]
+fn compile_file_works_without_any_eval_in_the_program() {
+    let dir = make_test_dir("opcache_rt_compile_no_eval");
+    fs::write(dir.join("lib.php"), "<?php $lib = 1;\n").unwrap();
+    let source = r#"<?php
+$p = __DIR__ . '/lib.php';
+echo 'c1=', (opcache_compile_file($p) ? '1' : '0'), "\n";
+echo 'c2=', (opcache_compile_file($p) ? '1' : '0'), "\n";
+echo 'cached=', (opcache_is_script_cached($p) ? '1' : '0'), "\n";
+"#;
+    assert!(
+        !source.contains("eval("),
+        "this test only means something while the program has no eval()"
+    );
+    fs::write(dir.join("main.php"), source).unwrap();
+
+    let bin = compile(
+        &dir,
+        &["opcache.enable_cli=1", "opcache.file_update_protection=0"],
+    );
+    let out = run_binary(&bin);
+
+    assert_eq!(
+        field(&out, "c1"),
+        "1",
+        "compile_file folded to false in a binary with no eval bridge:\n{out}"
+    );
+    assert_eq!(field(&out, "c2"), "1", "{out}");
+    assert_eq!(
+        field(&out, "cached"),
+        "1",
+        "the file must actually be cached, not merely reported compiled:\n{out}"
+    );
+}
+
 /// Verifies `opcache_compile_file()` does not report success for a file that cannot parse.
 ///
 /// This one came out of the interaction between two changes that were each correct alone.
