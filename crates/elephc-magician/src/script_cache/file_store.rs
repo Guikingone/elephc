@@ -37,7 +37,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// written by a different eval-IR shape can decode into plausible-looking garbage rather
 /// than failing, and the result would be executed. `super::format_guard` fails the build's
 /// tests when the IR changes without this moving, so the bump is not left to memory.
-pub(crate) const FORMAT_VERSION: u32 = 1;
+pub(crate) const FORMAT_VERSION: u32 = 2;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///
@@ -151,10 +151,23 @@ pub(crate) fn load(
     if cached.magic != MAGIC || cached.format_version != FORMAT_VERSION {
         return None;
     }
-    // The source must be EXACTLY what was stored. `opcache.validate_timestamps` governs how
-    // often an in-memory entry is re-checked; it does not license running a stale file from
-    // disk, so this comparison is unconditional.
-    if cached.path != canonical.to_string_lossy() || cached.mtime != mtime || cached.size != size {
+    // IDENTITY IS UNCONDITIONAL, FRESHNESS IS NOT, and the two were conflated here.
+    //
+    // The path check stays: entries are keyed by a hash of the canonical path, and a
+    // collision must not run one script as another. That is identity, not freshness.
+    //
+    // The mtime and size checks are freshness, and `opcache.validate_timestamps=0` says not
+    // to ask. This used to check them anyway, on the reasoning that the directive "governs
+    // how often an in-memory entry is re-checked" and "does not license running a stale file
+    // from disk". php-src disagrees, and serving the stored entry is the entire point of the
+    // setting in production: the deployment swaps the files and restarts, and until it does,
+    // the cache is authoritative. MEASURED across two processes sharing a cache directory
+    // with the source rewritten between them — reference runs the STORED version, elephc
+    // re-read the new one, which is the opposite of what the directive asks for.
+    if cached.path != canonical.to_string_lossy() {
+        return None;
+    }
+    if config.validate_timestamps && (cached.mtime != mtime || cached.size != size) {
         return None;
     }
     Some(cached.segments)

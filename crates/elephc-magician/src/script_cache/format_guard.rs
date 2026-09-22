@@ -49,7 +49,13 @@ mod tests {
     /// `errors.rs` was added to `IR_SOURCES`, and the hash became a specified one. A bump
     /// would have invalidated every cache entry to record a change to the measuring
     /// instrument. Any fingerprint change that comes from an IR file still needs the bump.
-    const RECORDED_FINGERPRINT: u64 = 9523833432668113794;
+    /// BUMPED TO 2 WITH THIS VALUE, and this one IS an IR change rather than a change to
+    /// the measuring instrument. Rebasing this branch onto main replayed it over 884 commits,
+    /// several of which moved `eval_ir`; the serialised shape those files describe is not the
+    /// shape the branch recorded before the rebase. The guard caught it, which is what it is
+    /// for, and the bump is what keeps a file written by a pre-rebase build from decoding
+    /// into a plausible but wrong tree.
+    const RECORDED_FINGERPRINT: u64 = 11209568487233996037;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

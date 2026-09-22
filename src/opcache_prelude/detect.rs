@@ -280,18 +280,27 @@ fn fragment_mentions(name: &Name, args: &[Expr], target: Symbol<'_>) -> bool {
     if target.kind != SymbolKind::Function || !name.as_str().eq_ignore_ascii_case("eval") {
         return false;
     }
-    // A FRAGMENT THE COMPILER CANNOT READ COUNTS AS A MENTION, which is the rule
-    // `args_select_subject` already applies to every `ArgFilter` and this module's docblock
-    // already states. Returning `false` here broke it: `$code = 'return ' . $fn . '();';
-    // eval($code);` injected nothing, and the interpreter's stale fallback answered `false`
-    // where reference returns the status array. A computed fragment is the ORDINARY shape
-    // for dynamic code, so the exception swallowed the common case rather than an edge one.
+    // A FRAGMENT THE COMPILER CANNOT READ DOES NOT COUNT, and it is worth saying why, since
+    // the rest of this module goes the other way: `args_select_subject` treats an
+    // unresolvable argument as a match, and the module docblock states that rule.
     //
-    // The cost of being conservative is bounded and one-directional: a declaration the
-    // program never reaches. The cost of the other answer is a wrong value, silently.
+    // Answering `true` here was tried and MEASURED, and the cost is not the bounded one that
+    // reasoning assumes. It is not "a declaration the program never reaches": every watched
+    // OPcache name gets its prelude injected, and the injected surface is large enough that
+    // `$c = "echo " . "1;"; eval($c);` — a program with nothing whatever to do with OPcache —
+    // stopped compiling, with `fixup value out of range` from the assembler on an AArch64
+    // conditional branch that no longer reached its target across 1.8M lines of output. Any
+    // `eval()` on a computed string paid that, which is most of them.
+    //
+    // So the gap stays open, stated rather than papered over: a fragment the compiler cannot
+    // read that calls an OPcache function reaches the interpreter's own builtin, which
+    // answers from the compile-time CLI default instead of the live cache. Closing it belongs
+    // THERE — in `crates/elephc-magician`'s opcache builtins, which already run with the
+    // configuration this binary installed at startup — and not in a wider injection here.
+    // The literal spellings, which are what programs actually write, are covered above.
     args.iter().any(|arg| match &arg.kind {
         ExprKind::StringLiteral(source) => mentions_word(source, target.name),
-        _ => true,
+        _ => false,
     })
 }
 

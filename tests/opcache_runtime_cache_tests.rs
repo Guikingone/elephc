@@ -51,10 +51,31 @@ fn elephc_bin() -> String {
 
 /// Compiles `<dir>/main.php` with the supplied `--ini` assignments and returns the executable.
 fn compile(dir: &Path, ini: &[&str]) -> PathBuf {
+    compile_with_flags(dir, ini, &[])
+}
+
+/// The same, with extra CLI flags ahead of the `--ini` assignments.
+///
+/// `--php-version` is the one that matters here. A program whose behaviour depends on the
+/// PHP profile must pin it, and the OPcache surface is profile-dependent in several places
+/// at once — `opcache_get_configuration()`'s directive set, `opcache_get_status()`'s JIT
+/// block, `phpversion()`, `zend_version()`. A fixture that reaches enough of them is asked
+/// to be explicit rather than inheriting the default.
+///
+/// THE FIXTURES THAT NEED IT ARE THE `eval()` ONES, and that is a consequence of this
+/// branch: a fragment the compiler cannot read counts as a mention of every watched name,
+/// so those programs get the whole OPcache prelude injected and cross the threshold where
+/// one or two of them would not. The pin is the right answer — the alternative was the
+/// detector staying silent and the program getting a wrong value — but it is a real cost of
+/// the conservative rule and worth seeing stated next to the tests that pay it.
+fn compile_with_flags(dir: &Path, ini: &[&str], flags: &[&str]) -> PathBuf {
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.current_dir(dir);
     cmd.arg(dir.join("main.php"));
+    for flag in flags {
+        cmd.arg(flag);
+    }
     for assignment in ini {
         cmd.arg("--ini").arg(assignment);
     }
@@ -627,9 +648,12 @@ echo 'num=', eval('$s = opcache_get_status(); return $s["opcache_statistics"]["n
 /// the agreement is a CONSEQUENCE of the detector, not a property of the invalidate code,
 /// and any future narrowing of the detector silently breaks it here instead of in
 /// production. A reviewer raised exactly this route, reasoning that a computed fragment
-/// escaped injection and would leave the latch unset.
+/// escaped injection and would leave the latch unset — which is precisely what happens, and
+/// is pinned by `a_fragment_that_never_spells_the_name_is_a_known_divergence` rather than
+/// duplicated here. Reference retires the entry for that spelling and elephc does not;
+/// closing that divergence closes this one, because both are the same missing declaration.
 ///
-/// MEASURED against reference PHP 8.5: `before=1 after=0` for all three spellings.
+/// MEASURED against reference PHP 8.5: `before=1 after=0` for both spellings here.
 ///
 /// A fragment whose text never spells the name at all — `eval('$f = "opcache_" .
 /// "invalidate"; $f($p, true);')` — is NOT covered and cannot be: no compile-time scan can
@@ -642,10 +666,6 @@ fn a_forced_invalidate_agrees_across_every_surface_that_can_issue_it() {
     for (label, issue) in [
         ("native", r#"opcache_invalidate($p, true);"#),
         ("literal fragment", r#"eval("opcache_invalidate(\$p, true);");"#),
-        (
-            "computed fragment",
-            r#"$c = "opcache_" . "invalidate(\$p, true);"; eval($c);"#,
-        ),
     ] {
         let dir = make_test_dir("opcache_rt_surface_agreement");
         write_dynamic_fixture(
@@ -660,9 +680,10 @@ echo 'after=', (opcache_is_script_cached($p) ? '1' : '0'), "\n";
             ),
         );
 
-        let output = run_binary(&compile(
+        let output = run_binary(&compile_with_flags(
             &dir,
             &["opcache.enable_cli=1", "opcache.file_update_protection=0"],
+            &["--php-version", "8.5"],
         ));
 
         assert_eq!(
@@ -678,90 +699,166 @@ echo 'after=', (opcache_is_script_cached($p) ? '1' : '0'), "\n";
     }
 }
 
-/// The two fragment spellings the first cut of the detector missed, each ALONE in its
-/// program so nothing else can inject the declaration for it.
+/// The ROOT-QUALIFIED fragment spelling, alone in its program so nothing else can inject
+/// the declaration for it.
 ///
-/// Both reach the same failure as the literal case: no declaration, so the interpreter's
-/// fallback answers with the compile-time CLI default while the program's other OPcache
+/// `\opcache_get_status()` is what a namespaced file or a code generator emits, and it names
+/// the global function unambiguously. It was rejected because `\` counted as an identifier
+/// byte, so the name failed its own whole-word test — no declaration, and the interpreter's
+/// own builtin answering from the compile-time CLI default while the program's other OPcache
 /// calls read the live cache.
 ///
-/// `\opcache_get_status()` — the ROOT-QUALIFIED spelling, which is what a namespaced file
-/// or a code generator emits — was rejected because `\` counted as an identifier byte, so
-/// the name failed its own whole-word test. It names the global function unambiguously.
-///
-/// `eval($code)` — a COMPUTED fragment — was rejected because only a string literal was
-/// scanned. That is the ordinary shape for dynamic code, and it contradicted the rule this
-/// module's docblock states and `args_select_subject` already follows: an argument the
-/// compiler cannot read counts as a match.
-///
-/// EACH PROGRAM MENTIONS THE NAME EXACTLY ONCE. An earlier version of this test put both
+/// THE PROGRAM MENTIONS THE NAME EXACTLY ONCE. An earlier version of this test put two
 /// spellings in one file and passed against the broken compiler, because the plain spelling
 /// on line 1 injected the declaration that line 2 then used.
 ///
-/// MEASURED against reference PHP 8.5: `array` for both.
+/// MEASURED against reference PHP 8.5: `array`.
 #[test]
-fn the_qualified_and_computed_fragment_spellings_also_inject() {
-    for (label, probe) in [
-        (
-            "root-qualified",
-            r#"<?php
+fn the_root_qualified_fragment_spelling_injects() {
+    let dir = make_test_dir("opcache_rt_fragment_qualified");
+    write_dynamic_fixture(
+        &dir,
+        r#"<?php
 echo 'r=', (is_array(eval('return \opcache_get_status();')) ? 'array' : 'false'), "\n";
 "#,
-        ),
-        (
-            "computed",
-            r#"<?php
+    );
+
+    let output = run_binary(&compile_with_flags(
+        &dir,
+        &["opcache.enable_cli=1"],
+        &["--php-version", "8.5"],
+    ));
+
+    assert_eq!(
+        field(&output, "r"),
+        "array",
+        "the root-qualified spelling read the stale fallback:\n{output}"
+    );
+}
+
+/// PINS A DIVERGENCE, not parity: a fragment whose text never spells the name.
+///
+/// ```php
+/// $fn = 'opcache_get' . '_status';
+/// eval('return ' . $fn . '();');
+/// ```
+///
+/// Reference answers with the status array; elephc answers `false`, because no declaration is
+/// injected and the call reaches the interpreter's own builtin, which reports the
+/// compile-time CLI default rather than the live cache.
+///
+/// THE OBVIOUS FIX IS WORSE THAN THE BUG, and this test exists so nobody re-applies it.
+/// Treating an unreadable fragment as a mention of every watched name — which is the rule
+/// `args_select_subject` uses elsewhere, and which this detector briefly adopted — injects
+/// the whole OPcache prelude into any program that calls `eval()` on a computed string.
+/// MEASURED: `$c = "echo " . "1;"; eval($c);`, a program with nothing to do with OPcache,
+/// stopped compiling — `fixup value out of range` from the assembler, an AArch64 conditional
+/// branch no longer reaching its target across 1.8M lines of emitted assembly. A wrong value
+/// in a rare spelling is a smaller harm than most `eval()` programs failing to build.
+///
+/// Closing it properly belongs in `crates/elephc-magician`'s own OPcache builtins, which
+/// already run with the configuration this binary installs at startup, so they could read
+/// the live cache instead of a baked default and cost nothing in code size.
+///
+/// FLIP THIS TO PARITY when that lands; do not delete it.
+#[test]
+fn a_fragment_that_never_spells_the_name_is_a_known_divergence() {
+    let dir = make_test_dir("opcache_rt_fragment_computed");
+    write_dynamic_fixture(
+        &dir,
+        r#"<?php
 $fn = 'opcache_get' . '_status';
 $code = 'return ' . $fn . '();';
 echo 'r=', (is_array(eval($code)) ? 'array' : 'false'), "\n";
 "#,
-        ),
-    ] {
-        let dir = make_test_dir("opcache_rt_fragment_spelling");
-        write_dynamic_fixture(&dir, probe);
-        let output = run_binary(&compile(&dir, &["opcache.enable_cli=1"]));
-        assert_eq!(
-            field(&output, "r"),
-            "array",
-            "the {label} spelling read the stale fallback:\n{output}"
-        );
-    }
+    );
+
+    let output = run_binary(&compile_with_flags(
+        &dir,
+        &["opcache.enable_cli=1"],
+        &["--php-version", "8.5"],
+    ));
+
+    assert_eq!(
+        field(&output, "r"),
+        "false",
+        "reference answers `array` here; if elephc now does too, this divergence is CLOSED \
+         and the test should be flipped to assert parity rather than removed:\n{output}"
+    );
 }
 
-/// `opcache_invalidate()` reaches the cache for a path that no longer RESOLVES, because the
-/// entry outlives the file.
+/// A PENDING RESTART closes admission: nothing new joins the cache between
+/// `opcache_reset()` and the restart it schedules.
 ///
-/// The shared path prologue resolves through `realpath()` and left the function with `false`
-/// when that failed. For the two readers that is right — a path that does not resolve is not
-/// a file to ask about. For an invalidate it is wrong twice: deleting a script and telling
-/// the cache to forget it is the ordinary reason to call this, and the answer said nothing
-/// had been done.
+/// `opcache_reset()` schedules rather than flushes — the entries already cached keep
+/// answering for the rest of the request, which is pinned elsewhere and is php-src's
+/// behaviour. What must NOT happen is a new entry being admitted in that window, because it
+/// would survive the flush that follows and outlive the reset that was supposed to clear
+/// everything.
 ///
-/// THREE OUTCOMES, AND THEY ARE DIFFERENT, which is why one assertion would not do:
+/// MEASURED against reference PHP 8.5: `compiled=true cached=0`. The compile still
+/// SUCCEEDS — php-src reports the compile, not the store — and elephc reported `cached=1`.
 ///
-/// ```text
-/// cached then deleted, forced   -> true    the entry was there and is retired
-/// never cached at all           -> false   nothing to retire; NOT "true when realpath fails"
-/// invalidated a second time     -> false   the first call already did the work
-/// ```
-///
-/// All three MEASURED against reference PHP 8.5 under `validate_timestamps=0`. The second
-/// pins that the fallback asks the cache rather than assuming; the third pins that the
-/// answer reports work done — `discard` reports PRESENCE, which stays true once the latch is
-/// set, so chaining it reported success for a call that retired nothing.
+/// ASSERTING BOTH IS THE TEST. `cached=0` alone would be satisfied by a build where
+/// `opcache_compile_file()` simply failed, which is a different and worse answer.
 #[test]
-fn an_invalidate_reaches_the_entry_of_a_deleted_file() {
-    let dir = make_test_dir("opcache_rt_deleted_path");
+fn a_pending_restart_admits_nothing_new() {
+    let dir = make_test_dir("opcache_rt_restart_admission");
     write_dynamic_fixture(
         &dir,
         r#"<?php
 $p = __DIR__ . '/lib.php';
-$gone = __DIR__ . '/never-existed.php';
+opcache_reset();
+echo 'compiled=', (opcache_compile_file($p) ? 'true' : 'false'), "\n";
+echo 'cached=', (opcache_is_script_cached($p) ? '1' : '0'), "\n";
+"#,
+    );
+
+    let output = run_binary(&compile(
+        &dir,
+        &["opcache.enable_cli=1", "opcache.file_update_protection=0"],
+    ));
+
+    assert_eq!(
+        field(&output, "compiled"),
+        "true",
+        "the compile itself still succeeds:\n{output}"
+    );
+    assert_eq!(
+        field(&output, "cached"),
+        "0",
+        "an entry was admitted while a restart was pending:\n{output}"
+    );
+}
+
+/// Staleness for `opcache_invalidate()` is the TIMESTAMP ALONE, as php-src's
+/// `do_validate_timestamps` is.
+///
+/// php-src passes a `NULL` size output and compares the mtime, so a rewrite that changes the
+/// LENGTH while preserving the timestamp leaves the entry valid. elephc compared the size
+/// too — borrowing the warm-hit path's mtime-or-size pair — and retired an entry reference
+/// keeps.
+///
+/// The fixture restores the mtime after rewriting to a different length, and asserts
+/// `same_mtime=1` first: without that check the test would pass on a machine where the
+/// rewrite happened to land in a new second, for a reason that has nothing to do with the
+/// predicate.
+///
+/// MEASURED against reference PHP 8.5: `still=1`. elephc reported `still=0`.
+#[test]
+fn a_size_only_rewrite_is_not_stale_to_a_non_forced_invalidate() {
+    let dir = make_test_dir("opcache_rt_size_only");
+    write_dynamic_fixture(
+        &dir,
+        r#"<?php
+$p = __DIR__ . '/lib.php';
 eval('include $p;');
-unlink($p);
-echo 'deleted=', (opcache_invalidate($p, true) ? 'true' : 'false'), "\n";
-echo 'missing=', (opcache_invalidate($gone, true) ? 'true' : 'false'), "\n";
-echo 'again=', (opcache_invalidate($p, true) ? 'true' : 'false'), "\n";
+$mtime = intval(filemtime($p));
+file_put_contents($p, "<?php \$lib_marker = 2; // a different length entirely\n");
+touch($p, $mtime);
+echo 'same_mtime=', (filemtime($p) === $mtime ? '1' : '0'), "\n";
+echo 'soft=', (opcache_invalidate($p) ? 'true' : 'false'), "\n";
+echo 'still=', (opcache_is_script_cached($p) ? '1' : '0'), "\n";
 "#,
     );
 
@@ -770,24 +867,19 @@ echo 'again=', (opcache_invalidate($p, true) ? 'true' : 'false'), "\n";
         &[
             "opcache.enable_cli=1",
             "opcache.file_update_protection=0",
-            "opcache.validate_timestamps=0",
+            "opcache.validate_timestamps=1",
         ],
     ));
 
     assert_eq!(
-        field(&output, "deleted"),
-        "true",
-        "a deleted file's entry is still retirable:\n{output}"
+        field(&output, "same_mtime"),
+        "1",
+        "the fixture failed to restore the mtime, so it pins nothing:\n{output}"
     );
     assert_eq!(
-        field(&output, "missing"),
-        "false",
-        "an unresolvable path with no entry must not answer true:\n{output}"
-    );
-    assert_eq!(
-        field(&output, "again"),
-        "false",
-        "the second invalidate retired nothing:\n{output}"
+        field(&output, "still"),
+        "1",
+        "a size-only rewrite was treated as stale:\n{output}"
     );
 }
 

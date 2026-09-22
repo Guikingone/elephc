@@ -541,6 +541,72 @@ echo "disk_after=", (opcache_is_script_cached_in_file_cache($p) ? "T" : "F"), "\
     );
 }
 
+/// Verifies `opcache.validate_timestamps=0` reaches the ON-DISK cache, not just memory.
+///
+/// Under that directive php-src does not re-check timestamps at all, and a stored entry is
+/// served even when the source has moved on — that IS the setting's purpose in production:
+/// the deployment swaps files and restarts, and until it does, the cache is authoritative.
+///
+/// elephc validated the disk entry's mtime and size unconditionally, on the reasoning that
+/// the directive "governs how often an in-memory entry is re-checked" and does not license
+/// running a stale file from disk. Reference disagrees, and the difference is visible as the
+/// WRONG VERSION OF THE SCRIPT RUNNING — the second process re-read the changed file where
+/// reference replayed the stored one.
+///
+/// THE OUTPUT IS THE ASSERTION, not just the `before` flag: a build could report the entry
+/// present and still recompile it. MEASURED against reference PHP 8.5: run 2 prints
+/// `VERSION-A`, the stored text, after the source became `VERSION-B`.
+///
+/// The path identity check stays unconditional and is unaffected — entries are keyed by a
+/// hash of the canonical path, and this directive says nothing about collisions.
+#[test]
+fn validate_timestamps_off_serves_the_stored_disk_entry() {
+    let dir = make_test_dir("opcache_fc_novalidate");
+    let cache = dir.join("file-cache");
+    fs::create_dir_all(&cache).unwrap();
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+eval('
+$f = __DIR__ . "/lib.php";
+echo "before=", (opcache_is_script_cached_in_file_cache($f) ? "T" : "F"), "\n";
+include $f;
+');
+"#,
+    )
+    .unwrap();
+    fs::write(dir.join("lib.php"), "<?php echo \"VERSION-A\\n\";\n").unwrap();
+    let bin = compile(
+        &dir,
+        &[
+            "opcache.enable_cli=1",
+            "opcache.file_update_protection=0",
+            "opcache.validate_timestamps=0",
+            &format!("opcache.file_cache={}", cache.display()),
+        ],
+    );
+
+    let first = run_binary(&bin);
+    fs::write(
+        dir.join("lib.php"),
+        "<?php echo \"VERSION-B-is-a-longer-file\\n\";\n",
+    )
+    .unwrap();
+    let second = run_binary(&bin);
+
+    assert_eq!(field(&first, "before"), "F", "a cold directory holds nothing");
+    assert!(first.contains("VERSION-A"), "run 1 must run the original:\n{first}");
+    assert_eq!(
+        field(&second, "before"),
+        "T",
+        "the stored entry must still be found after the source changed:\n{second}"
+    );
+    assert!(
+        second.contains("VERSION-A"),
+        "with validate_timestamps=0 the STORED text must run, not the rewritten file:\n{second}"
+    );
+}
+
 /// Verifies a FORCED invalidate also removes the entry from disk, not just from memory.
 ///
 /// php-src's `accel_invalidate` calls `zend_file_cache_invalidate` alongside the in-memory

@@ -101,6 +101,39 @@ fn compile_and_run(dir: &Path, stem: &str, source: &str, flags: &[&str]) -> Stri
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+/// Returns the assembly from the program's entry label onward.
+///
+/// THE LEADING UNDERSCORE IS MACH-O's, NOT THE COMPILER'S. Darwin decorates every symbol
+/// with `_`, so the entry is `_main:` there and plain `main:` on Linux — on both the
+/// `ubuntu-24.04` and `ubuntu-24.04-arm` runners CI uses. Matching one spelling made these
+/// tests pass locally and panic on two of the three CI platforms, AFTER a successful
+/// compile, which is the least informative way to fail.
+fn entry_onward(asm: &str) -> &str {
+    for label in ["\n_main:", "\nmain:"] {
+        if let Some(at) = asm.find(label) {
+            return &asm[at..];
+        }
+    }
+    panic!("no entry label in the assembly");
+}
+
+/// Returns whether `body` CALLS `symbol`, on either architecture and either platform.
+///
+/// Four spellings: `bl` on AArch64 and `call` on x86_64, each with or without Mach-O's
+/// leading underscore. Searching for the bare symbol name would not do — the callee's own
+/// label is `<symbol>:`, and it can sit inside the slice being searched, so a plain
+/// `contains` reports a call that is really a definition.
+fn body_calls(body: &str, symbol: &str) -> bool {
+    [
+        format!("bl {symbol}"),
+        format!("bl _{symbol}"),
+        format!("call {symbol}"),
+        format!("call _{symbol}"),
+    ]
+    .iter()
+    .any(|spelling| body.contains(spelling.as_str()))
+}
+
 /// Runs `source` with the optimizer on and off, asserts both printed `expected`, and
 /// returns the optimized output.
 fn assert_same_with_and_without_opt(prefix: &str, source: &str, expected: &str) -> String {
@@ -233,11 +266,10 @@ echo churn(2000000), "\nEND\n";
         .expect("failed to spawn elephc");
     assert!(out.status.success(), "asm emission failed");
     let asm = fs::read_to_string(dir.join("asm.s")).expect("no asm.s emitted");
-    let main_at = asm.find("\n_main:").expect("no _main label in the assembly");
     assert!(
-        !asm[main_at..].contains("inline_cont"),
-        "a looping callee was spliced into _main; the eligibility gate is gone and the \
-         heap-exhaustion runaway is back"
+        !entry_onward(&asm).contains("inline_cont"),
+        "a looping callee was spliced into the entry; the eligibility gate is gone and \
+         the heap-exhaustion runaway is back"
     );
 }
 
@@ -275,15 +307,14 @@ printf("B:%s|%s\n", "'$v'", var_export(plain(), true));
     );
 
     let asm = fs::read_to_string(dir.join("main.s")).expect("no main.s emitted");
-    let main_at = asm.find("\n_main:").expect("no _main label in the assembly");
-    let body = &asm[main_at..];
+    let body = entry_onward(&asm);
     assert!(
         body.contains("inline_cont"),
-        "the optimizer did not inline anything into _main, so the sibling-scratch tests \
-         are comparing two unoptimized builds"
+        "the optimizer did not inline anything into the entry, so the sibling-scratch \
+         tests are comparing two unoptimized builds"
     );
     assert!(
-        !body.contains("bl _fn__u_plain"),
-        "_main still calls plain() rather than inlining it"
+        !body_calls(body, "fn__u_plain"),
+        "the entry still calls plain() rather than inlining it"
     );
 }

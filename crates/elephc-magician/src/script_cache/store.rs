@@ -285,6 +285,21 @@ fn fill_entry(
     if !config.admits_age(mtime, now) {
         return Ok(segments);
     }
+    // A PENDING RESTART CLOSES ADMISSION. `opcache_reset()` schedules rather than flushes,
+    // and php-src's accelerator refuses to admit anything new to shared memory from the
+    // moment the flag is set — the entries already there keep answering until the restart
+    // lands, but nothing joins them. Without this the script was cached DURING the window
+    // the reset opened, and survived the flush that followed.
+    //
+    // MEASURED, `opcache_reset()` then `opcache_compile_file($p)`: reference reports the
+    // file uncached, elephc reported it cached.
+    //
+    // The script still RUNS — the segments are returned exactly as the two refusals above
+    // return them. The disk write is skipped with the admission, because storing an entry
+    // the cache would not accept only moves the problem into the next process.
+    if cache.restart_pending {
+        return Ok(segments);
+    }
     if parsed_here {
         // Only a script this process actually parsed is written back, and only once the
         // refusals above have passed. Writing before them persisted files those very rules
@@ -447,12 +462,17 @@ pub fn discard(path: &Path) -> bool {
 ///   evicts a script whose source has moved on and keeps one that has not. MEASURED, both
 ///   directions: an untouched file survives a non-forced invalidate in reference too.
 ///
-/// The staleness test is `super::store`'s own — mtime OR size, the pair the warm-hit path
-/// in `serve_warm_entry` already uses — rather than a second spelling of "changed" that
-/// could disagree with it. php-src compares the timestamp alone; the two answers differ
-/// only for a rewrite that preserves both the mtime and the length, which the warm path
-/// already treats as unchanged, so aligning with it keeps ONE definition of stale in this
-/// crate instead of introducing a second.
+/// THE STALENESS TEST IS THE TIMESTAMP ALONE, not the mtime-or-size pair the warm-hit path
+/// in `serve_warm_entry` uses. Sharing the warm path's definition was tried and is wrong:
+/// `do_validate_timestamps` passes `NULL` for the size output and compares only the
+/// timestamp, so a rewrite that changes the LENGTH while preserving the mtime is fresh to
+/// reference and was stale here. MEASURED: reference reports the script still cached after
+/// such a rewrite and a non-forced `opcache_invalidate()`; elephc discarded it.
+///
+/// Two definitions of "changed" in one crate is a real cost, and it buys correctness rather
+/// than tidiness: the warm path is deciding whether to SERVE an entry, where a size change
+/// with an unchanged mtime is worth refusing, and this is reproducing a php-src predicate
+/// that a program can observe directly.
 ///
 /// RETURNS THE EVICTION, NOT THE PHP ANSWER. `opcache_invalidate()` reports whether the
 /// PATH RESOLVES, which is a question about the filesystem and not about the cache; that
@@ -488,6 +508,11 @@ pub fn invalidate(path: &Path, force: bool) -> bool {
 /// Returns whether `key`'s entry no longer matches the file on disk — php-src's
 /// `do_validate_timestamps(...) == FAILURE`.
 ///
+/// THE TIMESTAMP ONLY. php-src hands that function a `NULL` size output and compares the
+/// mtime, so a rewrite that changes the length while preserving the timestamp leaves the
+/// entry valid. Comparing the size here too made such a file stale and retired an entry
+/// reference keeps.
+///
 /// A path with NO entry is not stale; there is nothing to be stale about, and reporting it
 /// so would make the predicate above take a branch that has no work to do. A file that can
 /// no longer be stated IS stale: it was cached and is now unreadable, which is the strongest
@@ -497,10 +522,10 @@ fn entry_is_stale(key: &Path) -> bool {
     let Some(entry) = cache.entries.get(key) else {
         return false;
     };
-    let (entry_mtime, entry_size) = (entry.mtime, entry.size);
+    let entry_mtime = entry.mtime;
     drop(cache);
     match std::fs::metadata(key) {
-        Ok(metadata) => mtime_seconds(&metadata) != entry_mtime || metadata.len() != entry_size,
+        Ok(metadata) => mtime_seconds(&metadata) != entry_mtime,
         Err(_) => true,
     }
 }
