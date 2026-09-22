@@ -2334,6 +2334,39 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
     },
 
     BuiltinContract {
+        id: BuiltinId::from_canonical_name("__elephc_opcache_rt_soft_invalidate"),
+        name: "__elephc_opcache_rt_soft_invalidate",
+        area: Area::System,
+        module: PhpModule::Elephc,
+        since: None,
+        kind: BuiltinKind::Function,
+        params: &[
+            ParamSpec {
+                name: "path",
+                ty: TypeSpec::Str,
+                default: None,
+                by_ref: false,
+            },
+        ],
+        variadic: None,
+        variadic_by_ref: false,
+        min_args: None,
+        max_args: None,
+
+        arity_error: None,
+        returns: TypeSpec::Int,
+        by_ref_return: false,
+        summary: "Internal: mark this path's runtime cache entry discarded; true when there was one.",
+        examples: &[
+        ],
+        php_manual: None,
+        deprecation: None,
+        extension: false,
+        internal: true,
+        requirements: &[],
+    },
+
+    BuiltinContract {
         id: BuiltinId::from_canonical_name("__elephc_opcache_rt_compile"),
         name: "__elephc_opcache_rt_compile",
         area: Area::System,

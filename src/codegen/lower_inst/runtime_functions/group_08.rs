@@ -68,6 +68,11 @@ pub(super) fn lower(
                 ctx, inst, "__elephc_opcache_rt_discard",
             )
         }),
+        RuntimeFnId::ElephcOpcacheRtSoftInvalidate => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_path_call(
+                ctx, inst, "__elephc_opcache_rt_soft_invalidate",
+            )
+        }),
         RuntimeFnId::ElephcOpcacheRtInFileCache => Some({
             crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_path_call(
                 ctx, inst, "__elephc_opcache_rt_in_file_cache",

@@ -410,6 +410,7 @@ pub enum RuntimeFnId {
     ElephcOpcacheRtReset,
     ElephcOpcacheRtIsCached,
     ElephcOpcacheRtDiscard,
+    ElephcOpcacheRtSoftInvalidate,
     ElephcOpcacheRtCompile,
     ElephcOpcacheRtInFileCache,
     ElephcOpcacheRtStat,
@@ -1286,7 +1287,9 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcOpcacheRtIsCached | RuntimeFnId::ElephcOpcacheRtInFileCache => {
                 crate::ir::Effects::from_bits_retain(crate::ir::Effects::READS_GLOBAL.bits())
             }
-            RuntimeFnId::ElephcOpcacheRtDiscard | RuntimeFnId::ElephcOpcacheRtCompile => {
+            RuntimeFnId::ElephcOpcacheRtDiscard
+            | RuntimeFnId::ElephcOpcacheRtSoftInvalidate
+            | RuntimeFnId::ElephcOpcacheRtCompile => {
                 crate::ir::Effects::from_bits_retain(
                     crate::ir::Effects::READS_GLOBAL.bits()
                         | crate::ir::Effects::WRITES_GLOBAL.bits(),
@@ -2564,6 +2567,7 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcOpcacheRtReset => "__elephc_opcache_rt_reset",
             RuntimeFnId::ElephcOpcacheRtIsCached => "__elephc_opcache_rt_is_cached",
             RuntimeFnId::ElephcOpcacheRtDiscard => "__elephc_opcache_rt_discard",
+            RuntimeFnId::ElephcOpcacheRtSoftInvalidate => "__elephc_opcache_rt_soft_invalidate",
             RuntimeFnId::ElephcOpcacheRtCompile => "__elephc_opcache_rt_compile",
             RuntimeFnId::ElephcOpcacheRtInFileCache => "__elephc_opcache_rt_in_file_cache",
             RuntimeFnId::ElephcOpcacheRtStat => "__elephc_opcache_rt_stat",

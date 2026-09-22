@@ -482,6 +482,74 @@ fn the_file_cache_outlives_the_process_that_wrote_it() {
     );
 }
 
+/// Verifies a FORCED invalidate also removes the entry from disk, not just from memory.
+///
+/// php-src's `accel_invalidate` calls `zend_file_cache_invalidate` alongside the in-memory
+/// eviction. elephc dropped only the in-memory entry, so the on-disk copy survived — and
+/// the in-memory cache dies with the process anyway. The script therefore came back from
+/// the dead in the very next process, which is the one outcome an invalidate must prevent.
+///
+/// THE SECOND PROCESS IS THE ASSERTION. Checking the first run proves nothing: it would
+/// report the file uncached from the in-memory eviction alone, which already worked. Only a
+/// new process with an empty in-memory cache can tell whether the DISK entry went.
+///
+/// MEASURED against reference: invalidating removes one entry from the cache directory
+/// (reference holds two there, having also cached its own entry script).
+#[test]
+fn a_forced_invalidate_removes_the_on_disk_entry_too() {
+    let dir = make_test_dir("opcache_fc_invalidate");
+    let cache = dir.join("file-cache");
+    fs::create_dir_all(&cache).unwrap();
+    fs::write(dir.join("lib.php"), "<?php $lib_marker = 1;\n").unwrap();
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+eval('
+$f = __DIR__ . "/lib.php";
+echo "before=", (opcache_is_script_cached_in_file_cache($f) ? "T" : "F"), "\n";
+include $f;
+echo "after=", (opcache_is_script_cached_in_file_cache($f) ? "T" : "F"), "\n";
+if (getenv("ELEPHC_PROBE_INVALIDATE") !== false) {
+    opcache_invalidate($f, true);
+}
+echo "post=", (opcache_is_script_cached_in_file_cache($f) ? "T" : "F"), "\n";
+');
+"#,
+    )
+    .unwrap();
+    let bin = compile(
+        &dir,
+        &[
+            "opcache.enable_cli=1",
+            &format!("opcache.file_cache={}", cache.display()),
+        ],
+    );
+
+    // Run 1 writes the entry and then invalidates it.
+    let first = {
+        let output = Command::new(&bin)
+            .env("ELEPHC_PROBE_INVALIDATE", "1")
+            .output()
+            .expect("failed to run binary");
+        assert!(output.status.success(), "run 1 failed: {output:?}");
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+    // Run 2 is a fresh process: its in-memory cache is empty, so `before` reads DISK.
+    let second = run_binary(&bin);
+
+    assert_eq!(field(&first, "after"), "T", "the include must write the entry");
+    assert_eq!(
+        field(&first, "post"),
+        "F",
+        "the forced invalidate must drop the on-disk entry:\n{first}"
+    );
+    assert_eq!(
+        field(&second, "before"),
+        "F",
+        "a NEW process still found the invalidated entry on disk:\n{second}"
+    );
+}
+
 /// Verifies an edited source is not served from disk by a later process.
 ///
 /// The stored entry records the source's mtime and size; rewriting the file invalidates it,

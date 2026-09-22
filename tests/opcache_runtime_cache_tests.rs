@@ -617,6 +617,61 @@ echo 'num=', eval('$s = opcache_get_status(); return $s["opcache_statistics"]["n
     );
 }
 
+/// `opcache_invalidate()` WITHOUT `$force` follows php-src's predicate, not "do nothing".
+///
+/// `accel_invalidate` is `force || !validate_timestamps || the source moved on`, and only
+/// the first clause was implemented — so a non-forced call retired nothing, ever. The
+/// clause that matters most in production is the second: under
+/// `opcache.validate_timestamps=0` nothing is ever re-stated, which makes an explicit
+/// `opcache_invalidate()` the ONLY way to retire a script. It did not.
+///
+/// MEASURED against reference PHP 8.5, the identical sequence under each setting:
+///
+/// ```text
+/// validate_timestamps=1   soft=true  still_cached=1   <- both agree: the file is unchanged
+/// validate_timestamps=0   soft=true  still_cached=0   <- reference; elephc reported 1
+/// ```
+///
+/// BOTH SETTINGS ARE ASSERTED and the pair is the test. Making the non-forced call always
+/// retire would satisfy the `=0` row on its own while breaking the `=1` row, where
+/// reference deliberately keeps an unchanged script cached.
+///
+/// The return value is unrelated to the eviction: php-src answers whether the PATH
+/// RESOLVES, so `soft=true` holds either way and asserting it alone would pin nothing.
+#[test]
+fn a_non_forced_invalidate_follows_the_timestamp_directive() {
+    for (validate, still_cached) in [("1", "1"), ("0", "0")] {
+        let dir = make_test_dir("opcache_rt_soft_invalidate");
+        write_dynamic_fixture(
+            &dir,
+            r#"<?php
+$p = __DIR__ . '/lib.php';
+eval('include $p;');
+echo 'cached_before=', (opcache_is_script_cached($p) ? '1' : '0'), "\n";
+echo 'soft=', (opcache_invalidate($p) ? 'true' : 'false'), "\n";
+echo 'still_cached=', (opcache_is_script_cached($p) ? '1' : '0'), "\n";
+"#,
+        );
+
+        let output = run_binary(&compile(
+            &dir,
+            &[
+                "opcache.enable_cli=1",
+                "opcache.file_update_protection=0",
+                &format!("opcache.validate_timestamps={validate}"),
+            ],
+        ));
+
+        assert_eq!(field(&output, "cached_before"), "1", "nothing was cached");
+        assert_eq!(field(&output, "soft"), "true", "the path resolves");
+        assert_eq!(
+            field(&output, "still_cached"),
+            still_cached,
+            "validate_timestamps={validate}: wrong eviction decision\n{output}"
+        );
+    }
+}
+
 /// The probe: include the same freshly written file twice from `eval()`, then report
 /// whether the cache kept it. A stored entry makes the second include a HIT.
 const FRESH_FILE_PROBE: &str = r#"<?php

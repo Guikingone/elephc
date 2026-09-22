@@ -769,13 +769,21 @@ pub(crate) fn invalidate_decl(enabled: bool, manifest_paths: Expr, strict: bool)
         vec![],
         None,
     ));
-    // A FORCED call also discards the runtime tier's entry. The manifest branch above only
-    // covers code frozen into the binary; a dynamically included file lives in the runtime
-    // cache, and `opcache_invalidate($dynamic, true)` used to return `true` while leaving it
-    // cached and served — the return value said the work had been done and nothing had.
+    // The runtime tier, on BOTH arms. The manifest branch above only covers code frozen
+    // into the binary; a dynamically included file lives in the runtime cache, and
+    // `opcache_invalidate($dynamic, true)` used to return `true` while leaving it cached and
+    // served — the return value said the work had been done and nothing had.
     //
-    // Unconditional rather than gated on membership: the bridge answers `0` for a path it
-    // does not hold, and asking it is cheaper than asking whether to ask.
+    // THE NON-FORCED ARM IS NOT A NO-OP, which is what it used to be. php-src's predicate is
+    // `force || !validate_timestamps || the source moved on`, so under
+    // `opcache.validate_timestamps=0` — the deployment configuration — a plain
+    // `opcache_invalidate($p)` is the ONLY way to retire a script, and it retired nothing.
+    // The last two clauses need the cache's own recorded mtime, which no expression here can
+    // reach, so the arm calls a sibling bridge that owns the whole predicate rather than
+    // spelling half of it in PHP and getting a different answer from the eval surface.
+    //
+    // Unconditional rather than gated on manifest membership: each bridge answers `0` for a
+    // path it does not hold, and asking is cheaper than asking whether to ask.
     body.push(s_if(
         e_var("force"),
         vec![s_expr(e_call(
@@ -783,7 +791,10 @@ pub(crate) fn invalidate_decl(enabled: bool, manifest_paths: Expr, strict: bool)
             vec![e_var("path")],
         ))],
         vec![],
-        None,
+        Some(vec![s_expr(e_call(
+            "__elephc_opcache_rt_soft_invalidate",
+            vec![e_var("path")],
+        ))]),
     ));
     body.push(s_return(e_bool(true)));
 

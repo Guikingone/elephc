@@ -36,6 +36,7 @@ pub mod __elephc_opcache_rt_blacklist_entry;
 pub mod __elephc_opcache_rt_script_path;
 pub mod __elephc_opcache_rt_is_cached;
 pub mod __elephc_opcache_rt_discard;
+pub mod __elephc_opcache_rt_soft_invalidate;
 pub mod __elephc_opcache_rt_compile;
 pub mod __elephc_opcache_rt_in_file_cache;
 pub mod __elephc_opcache_rt_reset;

@@ -283,11 +283,14 @@ pub unsafe extern "C" fn __elephc_eval_opcache_rt_is_cached(ptr: *const u8, len:
     )))
 }
 
-/// Marks the runtime cache's entry for `path` discarded, as a FORCED `opcache_invalidate()`
-/// does, and answers whether there was one to discard.
+/// Retires the runtime cache's entry for `path`, as a FORCED `opcache_invalidate()` does,
+/// and answers whether anything was retired.
 ///
-/// The entry keeps its slot and its accounted footprint, matching php-src holding the
-/// shared-memory block until the next restart — so `num_cached_scripts` does not move.
+/// The in-memory entry keeps its slot and its accounted footprint, matching php-src holding
+/// the shared-memory block until the next restart — so `num_cached_scripts` does not move.
+/// THE ON-DISK ENTRY IS DIFFERENT and is removed: `accel_invalidate` calls
+/// `zend_file_cache_invalidate`, and a surviving file-cache copy resurrects the script in
+/// the next process, which is the one thing an invalidate must not allow.
 ///
 /// # Safety
 /// `ptr` must be readable for `len` bytes when `len > 0`.
@@ -297,9 +300,37 @@ pub unsafe extern "C" fn __elephc_eval_opcache_rt_discard(ptr: *const u8, len: u
     if path.is_empty() {
         return 0;
     }
-    u64::from(crate::script_cache::store::discard(std::path::Path::new(
-        &path,
-    )))
+    u64::from(crate::script_cache::invalidate(
+        std::path::Path::new(&path),
+        true,
+    ))
+}
+
+/// The NON-FORCED `opcache_invalidate()`: retires `path` only when php-src's predicate says
+/// to — `!validate_timestamps || the source has moved on`.
+///
+/// A SEPARATE ENTRY POINT RATHER THAN A FLAG, because the prelude cannot answer either half
+/// of that predicate. `validate_timestamps` it could read, but the timestamp comparison
+/// needs the mtime the ENTRY recorded when it was cached, which lives only in the cache.
+/// Splitting by force keeps the whole predicate on this side and leaves the prelude with a
+/// plain two-way branch, and it lets both spellings share the one-string-argument lowering
+/// the rest of this family already uses.
+///
+/// # Safety
+/// `ptr` must be readable for `len` bytes when `len > 0`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_opcache_rt_soft_invalidate(
+    ptr: *const u8,
+    len: u64,
+) -> u64 {
+    let path = unsafe { borrow_configured_string(ptr, len) };
+    if path.is_empty() {
+        return 0;
+    }
+    u64::from(crate::script_cache::invalidate(
+        std::path::Path::new(&path),
+        false,
+    ))
 }
 
 /// Reads and caches `path` WITHOUT executing it, as `opcache_compile_file()` does.

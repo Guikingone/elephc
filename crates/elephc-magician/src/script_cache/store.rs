@@ -432,6 +432,62 @@ pub fn discard(path: &Path) -> bool {
     discarded
 }
 
+/// `opcache_invalidate()`: evicts `path` when php-src's predicate says to.
+///
+/// php-src's `accel_invalidate` is
+/// `force || !validate_timestamps || do_validate_timestamps(...) == FAILURE`, and only the
+/// FIRST of those three was implemented. The other two are not corner cases:
+///
+/// - `!validate_timestamps` is the DEPLOYMENT configuration. With
+///   `opcache.validate_timestamps=0` nothing is ever re-stated, so an explicit
+///   `opcache_invalidate()` is the ONLY way to retire a script — and it did nothing at all
+///   unless the caller also passed `force`. MEASURED: reference reports the script
+///   uncached after a plain `opcache_invalidate($p)`; elephc reported it still cached.
+/// - the timestamp check is the ordinary `validate_timestamps=1` case, where reference
+///   evicts a script whose source has moved on and keeps one that has not. MEASURED, both
+///   directions: an untouched file survives a non-forced invalidate in reference too.
+///
+/// The staleness test is `super::store`'s own — mtime OR size, the pair the warm-hit path
+/// in `serve_warm_entry` already uses — rather than a second spelling of "changed" that
+/// could disagree with it. php-src compares the timestamp alone; the two answers differ
+/// only for a rewrite that preserves both the mtime and the length, which the warm path
+/// already treats as unchanged, so aligning with it keeps ONE definition of stale in this
+/// crate instead of introducing a second.
+///
+/// RETURNS THE EVICTION, NOT THE PHP ANSWER. `opcache_invalidate()` reports whether the
+/// PATH RESOLVES, which is a question about the filesystem and not about the cache; that
+/// stays with the builtin, where the rest of the PHP-visible behaviour lives. This reports
+/// whether an entry was actually dropped, which is what a caller here can use and what a
+/// test can assert on.
+pub fn invalidate(path: &Path, force: bool) -> bool {
+    let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if !force && config().validate_timestamps && !entry_is_stale(&key) {
+        return false;
+    }
+    let discarded = discard(&key);
+    super::file_store::invalidate(&config(), &key) || discarded
+}
+
+/// Returns whether `key`'s entry no longer matches the file on disk — php-src's
+/// `do_validate_timestamps(...) == FAILURE`.
+///
+/// A path with NO entry is not stale; there is nothing to be stale about, and reporting it
+/// so would make the predicate above take a branch that has no work to do. A file that can
+/// no longer be stated IS stale: it was cached and is now unreadable, which is the strongest
+/// possible reason not to keep serving it.
+fn entry_is_stale(key: &Path) -> bool {
+    let cache = lock_script_cache();
+    let Some(entry) = cache.entries.get(key) else {
+        return false;
+    };
+    let (entry_mtime, entry_size) = (entry.mtime, entry.size);
+    drop(cache);
+    match std::fs::metadata(key) {
+        Ok(metadata) => mtime_seconds(&metadata) != entry_mtime || metadata.len() != entry_size,
+        Err(_) => true,
+    }
+}
+
 /// Returns whether a path has a live (present, non-discarded) cache entry.
 pub fn is_cached(path: &Path) -> bool {
     let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());

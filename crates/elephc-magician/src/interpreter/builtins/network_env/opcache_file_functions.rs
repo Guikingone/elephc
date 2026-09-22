@@ -130,7 +130,16 @@ pub(in crate::interpreter) fn eval_opcache_is_script_cached_for_path(
     values.bool_value(crate::script_cache::is_cached(path))
 }
 
-/// The `opcache_invalidate()` answer for a resolved path, discarding when forced.
+/// The `opcache_invalidate()` answer for a resolved path.
+///
+/// WHETHER TO EVICT IS THE CACHE'S QUESTION, not this function's: it is php-src's
+/// `force || !validate_timestamps || timestamps_failed`, and it needs the configuration and
+/// the entry's recorded mtime to answer. This asked only `if forced`, which is one third of
+/// it. `script_cache::invalidate` owns the predicate now, next to the state it reads.
+///
+/// WHAT TO RETURN stays here, because it is a PHP-visible convention rather than a cache
+/// fact: reference answers whether the PATH RESOLVES, not whether anything was dropped, so
+/// a live path whose entry survives the predicate still answers `true`.
 pub(in crate::interpreter) fn eval_opcache_invalidate_for_path(
     path: &std::path::Path,
     forced: bool,
@@ -139,9 +148,7 @@ pub(in crate::interpreter) fn eval_opcache_invalidate_for_path(
     if !eval_opcache_cache_enabled() {
         return eval_opcache_invalidate_result(values);
     }
-    if forced {
-        crate::script_cache::discard(path);
-    }
+    crate::script_cache::invalidate(path, forced);
     values.bool_value(eval_opcache_path_resolves(path))
 }
 

@@ -59,7 +59,8 @@ pub(crate) use store::load_script;
 
 #[allow(unused_imports)]
 pub use store::{
-    apply_pending_restart, cached_scripts, compile_file, discard, is_cached, schedule_restart,
+    apply_pending_restart, cached_scripts, compile_file, discard, invalidate, is_cached,
+    schedule_restart,
     stats, CachedScriptInfo,
     ScriptCacheStats,
 };

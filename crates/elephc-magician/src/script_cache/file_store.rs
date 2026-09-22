@@ -303,6 +303,28 @@ pub(crate) fn contains(canonical: &Path) -> bool {
     .is_some()
 }
 
+/// Removes `canonical`'s on-disk entry, if the file cache is configured and holds one.
+///
+/// Returns whether a file was removed. `opcache_invalidate()` is the only caller: php-src's
+/// `accel_invalidate` calls `zend_file_cache_invalidate` alongside the in-memory eviction,
+/// and leaving the on-disk copy behind is how an invalidated script comes back from the
+/// dead in the next process.
+///
+/// UNLIKE `load`, THIS DOES NOT VALIDATE. `load` refuses an entry whose recorded mtime,
+/// size or path no longer match the source, which is right when deciding whether to EXECUTE
+/// it and wrong when deciding whether to DELETE it: a stale entry is exactly the one that
+/// most needs removing, and validating first would skip it. The path is derived from the
+/// canonical source path alone, so a mismatch cannot make this delete someone else's entry.
+///
+/// A missing directory, a missing entry and a read-only cache are all "nothing to remove"
+/// rather than errors — the same posture as `store`, which is silent when it cannot write.
+pub(crate) fn invalidate(config: &ScriptCacheConfig, canonical: &Path) -> bool {
+    let Some(dir) = cache_dir(config) else {
+        return false;
+    };
+    std::fs::remove_file(entry_path(&dir, canonical)).is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     //! Purpose:

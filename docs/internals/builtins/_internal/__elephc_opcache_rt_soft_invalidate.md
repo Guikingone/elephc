@@ -1,15 +1,15 @@
 ---
-title: "__elephc_opcache_rt_swap() — internals"
-description: "Compiler internals for __elephc_opcache_rt_swap(): lowering path, type checks, and runtime helpers."
+title: "__elephc_opcache_rt_soft_invalidate() — internals"
+description: "Compiler internals for __elephc_opcache_rt_soft_invalidate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1045
+  order: 1043
 ---
 
-## `__elephc_opcache_rt_swap()` — internals
+## `__elephc_opcache_rt_soft_invalidate()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/builtins/system/__elephc_opcache_rt_swap.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_opcache_rt_swap.rs)
+- **Signature**: [`src/builtins/system/__elephc_opcache_rt_soft_invalidate.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_opcache_rt_soft_invalidate.rs)
 - **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
@@ -17,7 +17,7 @@ sidebar:
 ### Lowering notes
 
 - Uses the `runtime_call` strategy from the single-source builtin descriptor.
-- Emits the typed EIR target `runtime.__elephc_opcache_rt_swap` through `BuiltinLoweringContext`.
+- Emits the typed EIR target `runtime.__elephc_opcache_rt_soft_invalidate` through `BuiltinLoweringContext`.
 - The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
 ## Semantic descriptor
@@ -33,18 +33,18 @@ sidebar:
 
 ## EIR and runtime boundary
 
-- **Typed EIR target**: `runtime.__elephc_opcache_rt_swap`
+- **Typed EIR target**: `runtime.__elephc_opcache_rt_soft_invalidate`
 - **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 
 ```php
-function __elephc_opcache_rt_swap(int $id, int $value): int
+function __elephc_opcache_rt_soft_invalidate(string $path): int
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 2 arguments.
+- **Arity**: takes exactly 1 argument.
 
 ## Eval interpreter (magician)
 
