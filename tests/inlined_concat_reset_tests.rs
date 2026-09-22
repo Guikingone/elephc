@@ -177,6 +177,47 @@ printf("%s|%s|%s|%s|%s\n", "<$a>", "<$b>", "<$c>",
     );
 }
 
+/// Verifies a spliced body that LOOPS keeps the shared concat arena bounded.
+///
+/// This is the objection two independent reviewers raised against neutralizing the
+/// transplanted `concat_reset`, and it is the right objection to raise: the callee's own
+/// per-statement reclaim is gone, and the host's next statement boundary is only reached
+/// after the whole spliced region — including its loop — has run. If that were the only
+/// reclaim, iterations would accumulate scratch until the 64 KiB `_concat_buf` filled and
+/// the next `sprintf` fatalled with `formatted result exceeds the 65536-byte string buffer`.
+///
+/// IT IS NOT THE ONLY RECLAIM, which is why the shape is safe: scratch is retired by the
+/// CONSUMER. A store persists the string and rewinds (`local_stores.rs`), and `echo`
+/// releases an owning temporary. The statement reset is a backstop over those, not the
+/// mechanism. MEASURED at 40000 iterations in the spliced loop — 80 KB of concat through a
+/// 64 KiB arena — for both consumers, with the trailing `printf` that would be the first
+/// casualty.
+///
+/// The `echo` case is the load-bearing one. The store case reclaims on the store itself, so
+/// it would pass even if this were broken; `echo` has no store and is the shape that isolates
+/// the statement reset.
+#[test]
+fn a_spliced_loop_does_not_exhaust_the_concat_arena() {
+    assert_same_with_and_without_opt(
+        "inline_reset_loop_echo",
+        r#"<?php
+function shout(string $a): string { for ($i = 0; $i < 40000; $i++) { echo $a . $a; } return $a; }
+shout("");
+printf("[%s]\n", "tail");
+"#,
+        "[tail]\n",
+    );
+    assert_same_with_and_without_opt(
+        "inline_reset_loop_store",
+        r#"<?php
+function churn(string $a): string { for ($i = 0; $i < 40000; $i++) { $t = $a . $a; } return $a; }
+echo churn("z"), "\n";
+printf("[%s]\n", "tail");
+"#,
+        "z\n[tail]\n",
+    );
+}
+
 /// Guards the premise of the tests above: the optimizer must actually splice `plain()` in,
 /// or they compare two identical unoptimized builds and pin nothing.
 ///

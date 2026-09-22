@@ -617,6 +617,56 @@ echo 'num=', eval('$s = opcache_get_status(); return $s["opcache_statistics"]["n
     );
 }
 
+/// The two fragment spellings the first cut of the detector missed, each ALONE in its
+/// program so nothing else can inject the declaration for it.
+///
+/// Both reach the same failure as the literal case: no declaration, so the interpreter's
+/// fallback answers with the compile-time CLI default while the program's other OPcache
+/// calls read the live cache.
+///
+/// `\opcache_get_status()` — the ROOT-QUALIFIED spelling, which is what a namespaced file
+/// or a code generator emits — was rejected because `\` counted as an identifier byte, so
+/// the name failed its own whole-word test. It names the global function unambiguously.
+///
+/// `eval($code)` — a COMPUTED fragment — was rejected because only a string literal was
+/// scanned. That is the ordinary shape for dynamic code, and it contradicted the rule this
+/// module's docblock states and `args_select_subject` already follows: an argument the
+/// compiler cannot read counts as a match.
+///
+/// EACH PROGRAM MENTIONS THE NAME EXACTLY ONCE. An earlier version of this test put both
+/// spellings in one file and passed against the broken compiler, because the plain spelling
+/// on line 1 injected the declaration that line 2 then used.
+///
+/// MEASURED against reference PHP 8.5: `array` for both.
+#[test]
+fn the_qualified_and_computed_fragment_spellings_also_inject() {
+    for (label, probe) in [
+        (
+            "root-qualified",
+            r#"<?php
+echo 'r=', (is_array(eval('return \opcache_get_status();')) ? 'array' : 'false'), "\n";
+"#,
+        ),
+        (
+            "computed",
+            r#"<?php
+$fn = 'opcache_get' . '_status';
+$code = 'return ' . $fn . '();';
+echo 'r=', (is_array(eval($code)) ? 'array' : 'false'), "\n";
+"#,
+        ),
+    ] {
+        let dir = make_test_dir("opcache_rt_fragment_spelling");
+        write_dynamic_fixture(&dir, probe);
+        let output = run_binary(&compile(&dir, &["opcache.enable_cli=1"]));
+        assert_eq!(
+            field(&output, "r"),
+            "array",
+            "the {label} spelling read the stale fallback:\n{output}"
+        );
+    }
+}
+
 /// `opcache_invalidate()` WITHOUT `$force` follows php-src's predicate, not "do nothing".
 ///
 /// `accel_invalidate` is `force || !validate_timestamps || the source moved on`, and only

@@ -271,7 +271,8 @@ pub(crate) fn program_references(program: &[Stmt], target: &str) -> bool {
 /// `opcache_get_status()` and, two lines later, that `opcache_compile_file()` had cached a
 /// file — because its siblings read the live cache and it did not.
 ///
-/// Whole-word rather than substring, so `my_opcache_get_status_helper` does not count. The
+/// Whole-word rather than substring, so `my_opcache_get_status_helper` does not count —
+/// see `mentions_word` for why the `\\` boundary is deliberately asymmetric. The
 /// heuristic errs toward injecting: a false positive costs a declaration the program never
 /// calls, which the reachability pruner then removes, while a false negative is the silent
 /// wrong answer above.
@@ -279,15 +280,24 @@ fn fragment_mentions(name: &Name, args: &[Expr], target: Symbol<'_>) -> bool {
     if target.kind != SymbolKind::Function || !name.as_str().eq_ignore_ascii_case("eval") {
         return false;
     }
+    // A FRAGMENT THE COMPILER CANNOT READ COUNTS AS A MENTION, which is the rule
+    // `args_select_subject` already applies to every `ArgFilter` and this module's docblock
+    // already states. Returning `false` here broke it: `$code = 'return ' . $fn . '();';
+    // eval($code);` injected nothing, and the interpreter's stale fallback answered `false`
+    // where reference returns the status array. A computed fragment is the ORDINARY shape
+    // for dynamic code, so the exception swallowed the common case rather than an edge one.
+    //
+    // The cost of being conservative is bounded and one-directional: a declaration the
+    // program never reaches. The cost of the other answer is a wrong value, silently.
     args.iter().any(|arg| match &arg.kind {
         ExprKind::StringLiteral(source) => mentions_word(source, target.name),
-        _ => false,
+        _ => true,
     })
 }
 
 /// Returns whether `needle` appears in `haystack` bounded by non-identifier characters.
 fn mentions_word(haystack: &str, needle: &str) -> bool {
-    let is_ident = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'\\';
+    let is_ident = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
     let haystack_lower = haystack.to_ascii_lowercase();
     let needle_lower = needle.to_ascii_lowercase();
     let bytes = haystack_lower.as_bytes();
@@ -295,8 +305,25 @@ fn mentions_word(haystack: &str, needle: &str) -> bool {
     while let Some(offset) = haystack_lower[from..].find(&needle_lower) {
         let start = from + offset;
         let end = start + needle_lower.len();
-        let before_ok = start == 0 || !is_ident(bytes[start - 1]);
-        let after_ok = end == bytes.len() || !is_ident(bytes[end]);
+        // THE TWO SIDES ARE NOT SYMMETRIC, because `\\` is not symmetric in PHP.
+        //
+        // On the LEFT it may be the global-namespace prefix: `\\opcache_get_status()` is a
+        // call to exactly this function, written the way a code generator or a namespaced
+        // file writes it. Treating `\\` as an identifier byte made that spelling a false
+        // negative — no declaration injected, the interpreter's stale fallback answering,
+        // and the self-contradicting status this detector exists to prevent. So a `\\` is
+        // skipped and the test moves to the character before it, which is where
+        // `Other\\opcache_get_status()` — a DIFFERENT function that merely ends in the same
+        // segment — is still correctly rejected.
+        //
+        // On the RIGHT it can only be a namespace separator: `opcache_get_status\\foo` makes
+        // this name a prefix, not the function, so `\\` stays a blocking boundary there.
+        let before_ok = match start {
+            0 => true,
+            _ if bytes[start - 1] == b'\\' => start < 2 || !is_ident(bytes[start - 2]),
+            _ => !is_ident(bytes[start - 1]),
+        };
+        let after_ok = end == bytes.len() || !(is_ident(bytes[end]) || bytes[end] == b'\\');
         if before_ok && after_ok {
             return true;
         }
