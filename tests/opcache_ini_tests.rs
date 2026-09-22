@@ -1004,7 +1004,8 @@ fn jit_prof_threshold_is_an_int_in_the_82_profile() {
 /// it.
 ///
 /// REFERENCE (PHP 8.5.10), the identical sequence, byte for byte:
-/// `before='2'`, `set='2'`, `after='77'`, `cfg=77`, `system=false`.
+/// `before='2'`, `set='2'`, `after='77'`, `cfg=77`, `system=false`, `bool_set='1'`,
+/// `bool_get='off'`, `bool_cfg=false`.
 ///
 /// The previous value is returned, `ini_get()` and `opcache_get_configuration()` both move,
 /// and a `PHP_INI_SYSTEM` directive still fails — `opcache.memory_consumption` is access=4
@@ -1034,11 +1035,16 @@ echo 'bool_cfg=', var_export(opcache_get_configuration()['directives']['opcache.
         out.contains("system=false"),
         "a PHP_INI_SYSTEM directive must still fail:\n{out}"
     );
-    // `off` goes through the INI scanner, which rewrites it to `''` — the same value
-    // `--ini` and `ELEPHC_INI_*` would store, and the reason the override store needs an
-    // explicit presence test rather than treating `''` as "never set".
+    // `off` is stored VERBATIM and read back verbatim, which is parity: reference echoes
+    // `'off'` from `ini_get()` here. It used to go through the INI scanner and read back
+    // `''` — defensible-sounding, since `-d opcache.validate_timestamps=off` really does
+    // read back `''`, but that is the INI SCANNER's doing on the `-d` path and `ini_set()`
+    // is not that path. The normalization moved to the read, where it belongs.
     assert!(out.contains("bool_set='1'"), "previous bool value:\n{out}");
-    assert!(out.contains("bool_get=''"), "the scanned bool raw:\n{out}");
+    assert!(
+        out.contains("bool_get='off'"),
+        "ini_set() stores the raw string:\n{out}"
+    );
     assert!(
         out.contains("bool_cfg=false"),
         "and its normalized form:\n{out}"
@@ -1071,4 +1077,133 @@ echo 'misses=', $s['opcache_statistics']['misses'], "\n";
 
     assert!(out.contains("hits=0"), "the raised guard must refuse:\n{out}");
     assert!(out.contains("misses=2"), "{out}");
+}
+
+
+/// `ini_set()` STORES THE RAW STRING and normalizes only when reporting the typed value.
+///
+/// Two surfaces, two different jobs, and conflating them was one bug wearing two faces.
+/// `ini_get()` echoes what the caller passed — reference returns `'off'`, `'On'`, `'yes'`,
+/// `'2K'` unchanged — while `opcache_get_configuration()` reports the interpreted value.
+/// elephc ran the INI scanner on the way IN, so every bareword came back `''` or `'1'` and
+/// the echoed string was a lie about what had been set. The chained `ini_set()` return
+/// inherited it, because that return is the previous raw value.
+///
+/// MEASURED against reference PHP 8.5, all thirteen rows identical including the return
+/// chain. The `cfg` column was already right, which is why only the echo diverged.
+#[test]
+fn ini_set_echoes_the_raw_string_and_normalizes_only_the_report() {
+    let dir = make_test_dir("opcache_ini_raw");
+    let probe = r#"<?php
+foreach (['off', 'On', 'true', 'yes', '0', '1', ''] as $v) {
+    $prev = ini_set('opcache.validate_timestamps', $v);
+    echo 'v=', var_export($v, true),
+         ' prev=', var_export($prev, true),
+         ' get=', var_export(ini_get('opcache.validate_timestamps'), true),
+         ' cfg=', var_export(opcache_get_configuration()['directives']['opcache.validate_timestamps'], true),
+         "\n";
+}
+"#;
+    let (binary, _) = compile_with_ini(&dir, probe, "iniraw", &[("opcache.enable_cli", "1")]);
+
+    let (out, _) = run_binary(&binary);
+
+    // Reference, line for line.
+    let expected = [
+        "v='off' prev='1' get='off' cfg=false",
+        "v='On' prev='off' get='On' cfg=true",
+        "v='true' prev='On' get='true' cfg=true",
+        "v='yes' prev='true' get='yes' cfg=true",
+        "v='0' prev='yes' get='0' cfg=false",
+        "v='1' prev='0' get='1' cfg=true",
+        "v='' prev='1' get='' cfg=false",
+    ];
+    for line in expected {
+        assert!(out.contains(line), "missing `{line}` in:\n{out}");
+    }
+}
+
+/// An INT directive set through `ini_set()` goes through the QUANTITY parser, not a cast.
+///
+/// `zend_ini_parse_quantity` is what php-src hands an `OnUpdateLong` directive, and it is
+/// the same parser on the `ini_set()` path as on the `-d` path — so `2K` is 2048 even for a
+/// directive measured in seconds. elephc cast the string instead and reported `2`.
+///
+/// THE SCANNER MUST NOT RUN HERE, and `on` is the row that proves it: the INI scanner folds
+/// `on` to `1`, while the quantity parser finds no leading digit and yields `0`, which is
+/// what reference reports. Scanning first would make every other row below pass and this
+/// one silently wrong.
+///
+/// MEASURED against reference PHP 8.5 across nineteen spellings; the ones that discriminate
+/// are kept here.
+#[test]
+fn ini_set_parses_an_int_directive_as_a_quantity() {
+    let dir = make_test_dir("opcache_ini_quantity");
+    let probe = r#"<?php
+foreach (['2K', '1M', '0x10', '010', '0b101', '12abc', ' 5 ', '-3', 'on', 'off', '08'] as $v) {
+    ini_set('opcache.revalidate_freq', $v);
+    echo 'v=', var_export($v, true),
+         ' get=', var_export(ini_get('opcache.revalidate_freq'), true),
+         ' cfg=', var_export(opcache_get_configuration()['directives']['opcache.revalidate_freq'], true),
+         "\n";
+}
+"#;
+    let (binary, _) = compile_with_ini(&dir, probe, "iniquant", &[("opcache.enable_cli", "1")]);
+
+    let (out, _) = run_binary(&binary);
+
+    let expected = [
+        "v='2K' get='2K' cfg=2048",
+        "v='1M' get='1M' cfg=1048576",
+        "v='0x10' get='0x10' cfg=16",
+        "v='010' get='010' cfg=8",
+        "v='0b101' get='0b101' cfg=5",
+        "v='12abc' get='12abc' cfg=12",
+        "v=' 5 ' get=' 5 ' cfg=5",
+        "v='-3' get='-3' cfg=-3",
+        // The scanner would make this 1.
+        "v='on' get='on' cfg=0",
+        "v='off' get='off' cfg=0",
+        "v='08' get='08' cfg=0",
+    ];
+    for line in expected {
+        assert!(out.contains(line), "missing `{line}` in:\n{out}");
+    }
+}
+
+/// The `-d` / `--ini` path KEEPS the scanner, and this is the test that says the two paths
+/// are allowed to differ.
+///
+/// It is the other half of the pair above. `--ini opcache.validate_timestamps=off` reads
+/// back `''` in reference too, because the INI scanner folds the bareword before the
+/// directive ever sees it — so making `ini_set()` store raw must not be "fixed" by making
+/// this one store raw as well. MEASURED: reference and elephc agree on both spellings.
+#[test]
+fn the_ini_flag_path_still_folds_barewords() {
+    let dir = make_test_dir("opcache_ini_flag_scan");
+    let probe = r#"<?php
+echo 'get=', var_export(ini_get('opcache.validate_timestamps'), true), "\n";
+echo 'cfg=', var_export(opcache_get_configuration()['directives']['opcache.validate_timestamps'], true), "\n";
+echo 'freq_get=', var_export(ini_get('opcache.revalidate_freq'), true), "\n";
+echo 'freq_cfg=', var_export(opcache_get_configuration()['directives']['opcache.revalidate_freq'], true), "\n";
+"#;
+    let (binary, _) = compile_with_ini(
+        &dir,
+        probe,
+        "iniflagscan",
+        &[
+            ("opcache.validate_timestamps", "off"),
+            ("opcache.revalidate_freq", "3K"),
+        ],
+    );
+
+    let (out, _) = run_binary(&binary);
+
+    assert!(
+        out.contains("get=''"),
+        "the -d path folds `off` to `''`, as reference does:\n{out}"
+    );
+    assert!(out.contains("cfg=false"), "{out}");
+    assert!(out.contains("freq_get='3K'"), "{out}");
+    assert!(out.contains("freq_cfg=3072"), "{out}");
 }

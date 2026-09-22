@@ -1150,10 +1150,10 @@ pub(crate) fn cli_ini_get_decl() -> Stmt {
 ///
 /// THE IDS ARE A WIRE CONTRACT with `elephc_magician::script_cache::config`, matched by
 /// number across the C ABI, so they may never be reordered.
-pub(crate) const INI_SETTABLE_DIRECTIVES: [(&str, i64); 3] = [
-    ("opcache.revalidate_freq", 0),
-    ("opcache.validate_timestamps", 1),
-    ("opcache.file_update_protection", 2),
+pub(crate) const INI_SETTABLE_DIRECTIVES: [(&str, i64, bool); 3] = [
+    ("opcache.revalidate_freq", 0, false),
+    ("opcache.validate_timestamps", 1, true),
+    ("opcache.file_update_protection", 2, false),
 ];
 
 /// The `ini_set(string $option, $value): string|false` wrapper.
@@ -1167,9 +1167,16 @@ pub(crate) const INI_SETTABLE_DIRECTIVES: [(&str, i64); 3] = [
 /// Returns the PREVIOUS raw value, as PHP requires — read before the write, and through
 /// `__elephc_opcache_ini_string` so it already accounts for an earlier `ini_set()`.
 ///
-/// The value goes through `__elephc_ini_scan` first, the same bareword normalizer `--ini`
-/// and `ELEPHC_INI_*` apply, so `ini_set('opcache.validate_timestamps', 'off')` stores
-/// `''` exactly as the other two paths would.
+/// THE RAW STRING IS WHAT IS STORED. `--ini` and `ELEPHC_INI_*` hand over a value that the
+/// INI scanner has already folded, which is why `-d opcache.validate_timestamps=off` reads
+/// back as `''` in reference too. `ini_set()` is not that path: it stores the argument
+/// verbatim, so reference echoes `'off'` — and `'On'`, `'yes'`, `'2K'` — back from
+/// `ini_get()` unchanged. Folding here made every one of those read back as `''` or `'1'`.
+///
+/// Normalization did not disappear, it moved to the READ. `directive_runtime_value_expr`
+/// interprets the stored string through `__elephc_ini_bool_val` / `__elephc_ini_quantity`,
+/// the same two normalizers the `ELEPHC_INI_*` helpers use — so the reported value stays
+/// right while the echoed string stops being a lie.
 pub(crate) fn cli_ini_set_decl() -> Stmt {
     let mut body = opcache_ini_set_arms();
     body.push(s_return(e_bool(false)));
@@ -1194,13 +1201,30 @@ pub(crate) fn cli_ini_set_decl() -> Stmt {
 /// in its own local. Each arm returns, so the caller appends its own fallthrough.
 pub(crate) fn opcache_ini_set_arms() -> Vec<Stmt> {
     let mut body = vec![s_assign(
-        "oc_scanned",
-        e_call(
-            "__elephc_ini_scan",
-            vec![e_cast(CastType::String, e_var("value"))],
-        ),
+        "oc_raw",
+        e_cast(CastType::String, e_var("value")),
     )];
-    for (name, id) in INI_SETTABLE_DIRECTIVES {
+    for (name, id, is_bool) in INI_SETTABLE_DIRECTIVES {
+        // What the LIVE CACHE is given. The store keeps the raw string for reporting; the
+        // cache needs the number, and it has to be the same number the reporting surface
+        // derives or the two disagree again. A bool directive is clamped to 0/1 rather than
+        // handed the quantity: `ini_set('opcache.validate_timestamps', '2')` is true, and
+        // pushing `2` into a flag slot is a value nothing downstream expects.
+        //
+        // NO `__elephc_ini_scan` HERE. That is the INI SCANNER, and `ini_set()` never runs
+        // it: php-src hands the argument straight to the directive's update handler. The
+        // difference is observable on an INT directive — the scanner folds `on` to `1`,
+        // while `zend_ini_parse_quantity` sees no leading digit and yields `0`, which is
+        // what reference reports. `__elephc_ini_bool_val` recognizes the barewords itself,
+        // so the bool arm needs no scan either.
+        let cache_value = if is_bool {
+            e_cast(
+                CastType::Int,
+                e_call("__elephc_ini_bool_val", vec![e_var("oc_raw")]),
+            )
+        } else {
+            e_call("__elephc_ini_quantity", vec![e_var("oc_raw")])
+        };
         body.push(s_if(
             e_binop(e_var("option"), BinOp::StrictEq, e_str(name)),
             vec![
@@ -1212,7 +1236,7 @@ pub(crate) fn opcache_ini_set_arms() -> Vec<Stmt> {
                 ),
                 s_expr(e_call(
                     "__elephc_opcache_ini_override",
-                    vec![e_var("option"), e_var("oc_scanned"), e_int(1)],
+                    vec![e_var("option"), e_var("oc_raw"), e_int(1)],
                 )),
                 // The cache push. In a binary with no eval bridge this whole call folds
                 // to `0` at lowering time and the interpreter is never linked; the
@@ -1220,7 +1244,7 @@ pub(crate) fn opcache_ini_set_arms() -> Vec<Stmt> {
                 // in that binary too.
                 s_expr(e_call(
                     "__elephc_opcache_rt_swap",
-                    vec![e_int(id), e_cast(CastType::Int, e_var("oc_scanned"))],
+                    vec![e_int(id), cache_value],
                 )),
                 s_return(e_var("oc_previous")),
             ],
@@ -1388,9 +1412,10 @@ pub(crate) fn ini_helper_decls(
         // whether the key is set at all.
         //
         // THE PRESENCE TEST IS NOT REDUNDANT: the empty string cannot serve as the "never
-        // set" sentinel, because it is a legitimate stored value. `__elephc_ini_scan`
-        // rewrites the boolean barewords to `''`, so `ini_set('opcache.validate_timestamps',
-        // 'off')` stores exactly that, and a value-only read could not tell it from absent.
+        // set" sentinel, because it is a legitimate stored value.
+        // `ini_set('opcache.validate_timestamps', '')` stores exactly that — reference
+        // echoes `''` back from `ini_get()` and reports the directive false — and a
+        // value-only read could not tell it from absent.
         //
         // Every reporting surface funnels through this one store, which is what keeps
         // `ini_get()`, `ini_get_all()` and `opcache_get_configuration()` agreeing with each

@@ -35,21 +35,29 @@ pub(super) fn directive_runtime_value_expr(
     if ini_set_injected
         && build::INI_SETTABLE_DIRECTIVES
             .iter()
-            .any(|(settable, _)| *settable == name)
+            .any(|(settable, _, _)| *settable == name)
     {
         let raw = e_call(
             "__elephc_opcache_ini_override",
             vec![e_str(name), e_str(""), e_int(0)],
         );
-        // Back to the directive's own type: these are reported NORMALIZED, so an int
-        // directive must come back an int and a bool a bool, not the raw INI string.
+        // Back to the directive's own type. The store holds the string `ini_set()` was
+        // given, VERBATIM, so this is where reference's normalization has to happen — and
+        // it is the same normalization, through the same two helpers the `ELEPHC_INI_*`
+        // surface uses, so the two cannot drift.
+        //
+        // An `(int)` cast was wrong twice over. `2K` is 2048 to `zend_ini_parse_quantity`
+        // and `2` to a cast, and reference applies the quantity parser even to a directive
+        // measured in seconds; and the bool arm's emptiness test only worked because the
+        // bareword had already been folded upstream, so with the raw string it would call
+        // `'off'` true.
+        //
+        // The stored string is NOT scanned, so it must not be scanned here either: the INI
+        // scanner is the `-d` / `ELEPHC_INI_*` path's, and running it would fold `on` to
+        // `1` on an int directive where reference reports `0`.
         let typed = match value {
-            DirectiveValue::Bool(_) => e_binop(
-                e_binop(raw.clone(), BinOp::StrictNotEq, e_str("")),
-                BinOp::And,
-                e_binop(raw, BinOp::StrictNotEq, e_str("0")),
-            ),
-            _ => e_cast(CastType::Int, raw),
+            DirectiveValue::Bool(_) => e_call("__elephc_ini_bool_val", vec![raw]),
+            _ => e_call("__elephc_ini_quantity", vec![raw]),
         };
         return e_ternary(
             e_binop(
