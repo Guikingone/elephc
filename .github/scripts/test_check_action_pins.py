@@ -7,6 +7,7 @@ import unittest
 
 
 CHECKER = Path(__file__).with_name("check_action_pins.rb")
+WORKFLOW_PREFIX = "jobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n"
 
 
 def run_checker(workflows=None, actions=None):
@@ -32,9 +33,10 @@ class ActionPinTests(unittest.TestCase):
     def test_pinned_third_party_and_local_actions_pass(self):
         sha = "a" * 40
         source = (
-            f"steps:\n  - uses: dtolnay/rust-toolchain@{sha} # stable, reviewed\n"
-            "  - uses: actions/checkout@v4\n"
-            "  - uses: ./github/actions/local\n"
+            WORKFLOW_PREFIX
+            + f"      - uses: dtolnay/rust-toolchain@{sha} # stable, reviewed\n"
+            "      - uses: actions/checkout@v4\n"
+            "      - uses: ./github/actions/local\n"
         )
         result = run_checker(workflows={"ci.yml": source})
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -44,35 +46,68 @@ class ActionPinTests(unittest.TestCase):
                 "owner/action@1234567", "owner/action@" + "A" * 40]
         for ref in refs:
             with self.subTest(ref=ref):
-                result = run_checker(workflows={"ci.yml": f"steps:\n  - uses: {ref}\n"})
+                result = run_checker(workflows={"ci.yml": WORKFLOW_PREFIX + f"      - uses: {ref}\n"})
                 self.assertEqual(result.returncode, 1)
-                self.assertIn("ci.yml:2", result.stderr)
+                self.assertIn("ci.yml:5", result.stderr)
 
     def test_lookalike_owner_and_quoted_refs_do_not_bypass_check(self):
-        source = "steps:\n  - uses: 'actions-evil/checkout@v4'\n  - uses: \"owner/action@v1\" # tag\n"
+        source = (WORKFLOW_PREFIX + "      - uses: 'actions-evil/checkout@v4'\n"
+                  "      - uses: \"owner/action@v1\" # tag\n")
         result = run_checker(workflows={"ci.yml": source})
         self.assertEqual(result.returncode, 1)
         self.assertEqual(result.stderr.count("third-party action must use"), 2)
 
     def test_flow_style_step_with_movable_ref_fails(self):
-        result = run_checker(workflows={"ci.yml": "steps: [ { uses: owner/action@v1 } ]\n"})
+        source = "jobs: { check: { runs-on: ubuntu-latest, steps: [ { uses: owner/action@v1 } ] } }\n"
+        result = run_checker(workflows={"ci.yml": source})
         self.assertEqual(result.returncode, 1)
         self.assertIn("ci.yml:1", result.stderr)
         self.assertIn("owner/action@v1", result.stderr)
 
     def test_flow_style_step_with_full_sha_passes(self):
         sha = "b" * 40
-        result = run_checker(workflows={"ci.yml": f"steps: [ {{ uses: owner/action@{sha} }} ]\n"})
-        self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_script_text_is_not_mistaken_for_an_action_ref(self):
-        source = "steps:\n  - run: |\n      echo 'uses: owner/action@v1'\n"
+        source = f"jobs: {{ check: {{ runs-on: ubuntu-latest, steps: [ {{ uses: owner/action@{sha} }} ] }} }}\n"
         result = run_checker(workflows={"ci.yml": source})
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_script_text_is_not_mistaken_for_an_action_ref(self):
+        source = WORKFLOW_PREFIX + "      - run: |\n          echo 'uses: owner/action@v1'\n"
+        result = run_checker(workflows={"ci.yml": source})
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_nested_uses_configuration_does_not_count_as_an_action(self):
+        source = ("jobs:\n  check:\n    runs-on: ubuntu-latest\n"
+                  "    strategy: { matrix: { include: [ { uses: cache } ] } }\n"
+                  "    steps:\n      - uses: actions/cache@v4\n"
+                  "        with: { uses: cache }\n"
+                  "        env: { uses: value }\n")
+        result = run_checker(workflows={"ci.yml": source})
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_reusable_workflow_job_uses_must_be_pinned(self):
+        source = "jobs: { reuse: { uses: owner/repo/.github/workflows/reuse.yml@main, with: { uses: cache } } }\n"
+        result = run_checker(workflows={"ci.yml": source})
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("ci.yml:1", result.stderr)
+        self.assertEqual(result.stderr.count("third-party action must use"), 1)
+
+    def test_duplicate_jobs_sections_cannot_hide_a_movable_ref(self):
+        source = (WORKFLOW_PREFIX + "      - uses: actions/checkout@v4\n"
+                  "jobs:\n  other: { uses: owner/repo/.github/workflows/reuse.yml@main }\n")
+        result = run_checker(workflows={"ci.yml": source})
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("owner/repo/.github/workflows/reuse.yml@main", result.stderr)
+
+    def test_job_alias_cannot_hide_a_movable_ref(self):
+        source = ("template: &jobs\n  check: { uses: owner/repo/.github/workflows/reuse.yml@main }\n"
+                  "jobs: *jobs\n")
+        result = run_checker(workflows={"ci.yml": source})
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("aliases cannot stand in for workflow jobs", result.stderr)
+
     def test_repository_scans_composite_actions_inside_and_outside_github(self):
         result = run_checker(
-            workflows={"ci.yml": "steps:\n  - uses: owner/workflow-action@v1\n"},
+            workflows={"ci.yml": WORKFLOW_PREFIX + "      - uses: owner/workflow-action@v1\n"},
             actions={
                 ".github/actions/custom/action.yaml":
                     "runs:\n  using: composite\n  steps:\n    - uses: owner/composite-action@main\n",
@@ -82,7 +117,7 @@ class ActionPinTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 1)
         self.assertEqual(result.stderr.count("third-party action must use"), 3)
-        self.assertIn("ci.yml:2", result.stderr)
+        self.assertIn("ci.yml:5", result.stderr)
         self.assertIn(".github/actions/custom/action.yaml:4", result.stderr)
         self.assertIn("tools/build-action/action.yml:1", result.stderr)
 
@@ -94,7 +129,7 @@ class ActionPinTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_invalid_yaml_fails_closed(self):
-        result = run_checker(workflows={"ci.yml": "steps: [ { uses: owner/action@v1\n"})
+        result = run_checker(workflows={"ci.yml": "jobs: { check: { steps: [ { uses: owner/action@v1\n"})
         self.assertEqual(result.returncode, 1)
         self.assertIn("invalid YAML", result.stderr)
 
