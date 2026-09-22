@@ -31,7 +31,8 @@ fn test_eliminate_dead_code_drops_unreachable_catches_after_non_throwing_try() {
                 StmtKind::Try {
                     try_body: vec![Stmt::echo(Expr::int_lit(7))],
                     catches: vec![crate::parser::ast::CatchClause {
-                        exception_type_args: Vec::new(),exception_types: vec!["Exception".into()],
+                        exception_type_args: Vec::new(),
+                        exception_types: vec!["Exception".into()],
                         variable: Some("e".into()),
                         body: vec![Stmt::echo(Expr::int_lit(9))],
                     }],
@@ -73,7 +74,8 @@ fn test_eliminate_dead_code_drops_unreachable_catches_before_finally() {
                 StmtKind::Try {
                     try_body: vec![Stmt::echo(Expr::int_lit(7))],
                     catches: vec![crate::parser::ast::CatchClause {
-                        exception_type_args: Vec::new(),exception_types: vec!["Exception".into()],
+                        exception_type_args: Vec::new(),
+                        exception_types: vec!["Exception".into()],
                         variable: Some("e".into()),
                         body: vec![Stmt::echo(Expr::int_lit(9))],
                     }],
@@ -119,12 +121,14 @@ fn test_eliminate_dead_code_drops_catches_shadowed_by_throwable() {
                     )],
                     catches: vec![
                         crate::parser::ast::CatchClause {
-                            exception_type_args: Vec::new(),exception_types: vec!["Throwable".into()],
+                            exception_type_args: Vec::new(),
+                            exception_types: vec!["Throwable".into()],
                             variable: Some("t".into()),
                             body: vec![Stmt::echo(Expr::int_lit(7))],
                         },
                         crate::parser::ast::CatchClause {
-                            exception_type_args: Vec::new(),exception_types: vec!["Exception".into()],
+                            exception_type_args: Vec::new(),
+                            exception_types: vec!["Exception".into()],
                             variable: Some("e".into()),
                             body: vec![Stmt::echo(Expr::int_lit(8))],
                         },
@@ -177,12 +181,14 @@ fn test_eliminate_dead_code_drops_duplicate_shadowed_catch_types() {
                     )],
                     catches: vec![
                         crate::parser::ast::CatchClause {
-                            exception_type_args: Vec::new(),exception_types: vec!["Exception".into()],
+                            exception_type_args: Vec::new(),
+                            exception_types: vec!["Exception".into()],
                             variable: Some("first".into()),
                             body: vec![Stmt::echo(Expr::int_lit(7))],
                         },
                         crate::parser::ast::CatchClause {
-                            exception_type_args: Vec::new(),exception_types: vec!["Exception".into()],
+                            exception_type_args: Vec::new(),
+                            exception_types: vec!["Exception".into()],
                             variable: Some("second".into()),
                             body: vec![Stmt::echo(Expr::int_lit(8))],
                         },
@@ -237,17 +243,20 @@ fn test_eliminate_dead_code_merges_identical_catches_exposed_by_shadow_drop() {
                     )],
                     catches: vec![
                         crate::parser::ast::CatchClause {
-                            exception_type_args: Vec::new(),exception_types: vec!["Exception".into()],
+                            exception_type_args: Vec::new(),
+                            exception_types: vec!["Exception".into()],
                             variable: Some("e".into()),
                             body: vec![Stmt::echo(Expr::int_lit(7))],
                         },
                         crate::parser::ast::CatchClause {
-                            exception_type_args: Vec::new(),exception_types: vec!["Exception".into()],
+                            exception_type_args: Vec::new(),
+                            exception_types: vec!["Exception".into()],
                             variable: Some("shadowed".into()),
                             body: vec![Stmt::echo(Expr::int_lit(8))],
                         },
                         crate::parser::ast::CatchClause {
-                            exception_type_args: Vec::new(),exception_types: vec!["Error".into()],
+                            exception_type_args: Vec::new(),
+                            exception_types: vec!["Error".into()],
                             variable: Some("e".into()),
                             body: vec![Stmt::echo(Expr::int_lit(7))],
                         },

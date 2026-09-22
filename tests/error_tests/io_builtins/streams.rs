@@ -54,7 +54,7 @@ while (($row = fgetcsv($h)) !== false) {
 }
 echo takesArray($row);
 "#,
-        "Function 'takesArray' parameter $a expects array<mixed>, got array<string>|false",
+        "Function 'takesArray' parameter $a expects array, got array<string>|false",
     );
 }
 

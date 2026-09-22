@@ -647,6 +647,8 @@ pub(super) fn parse_function_call_or_callable(
         let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
         Ok(Expr::new(ExprKind::FunctionCall { name, args }, span))
     }
+}
+
 /// Returns true for the construct-like names whose `<T>` is part of their own grammar.
 ///
 /// `buffer_new<int>(8)` and `ptr_cast<Foo>($p)` take a type argument the way `new` takes a class

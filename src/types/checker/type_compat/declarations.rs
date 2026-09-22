@@ -331,7 +331,7 @@ impl Checker {
         ) && supports_by_ref_boxed_storage(actual_ty)
         {
             return Err(CompileError::new(
-                span,
+                arg.span,
                 &format!(
                     "{} expects {}, got {} — a by-reference parameter writes back through the \
                      caller's variable, and a boxed variable cannot receive a raw {} write. \
@@ -374,7 +374,7 @@ impl Checker {
             && !self.ref_aliased_locals.contains(name)
             && !self.active_globals.contains(name)
             && !self.static_local_names.contains(name)
-            && !self.typed_local_names.contains(name)
+            && !self.typed_local_names.contains_key(name)
             && !self.name_is_seeded_program_storage(name)
             && !self.top_level_binding_is_program_global(name)
     }

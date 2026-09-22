@@ -709,7 +709,7 @@ impl Checker {
                 || self.active_external_ref_bindings.contains(name))
             && !self.active_globals.contains(name)
             && !self.static_local_names.contains(name)
-            && !self.typed_local_names.contains(name)
+            && !self.typed_local_names.contains_key(name)
             && !self.name_is_seeded_program_storage(name)
             && !self.top_level_binding_is_program_global(name)
     }

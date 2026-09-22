@@ -638,6 +638,11 @@ impl Checker {
     ) -> Option<String> {
         match receiver {
             StaticReceiver::Named(class_name) => Some(class_name.as_str().to_string()),
+            // Same contract every other checker site states: a generic receiver is instantiated
+            // into an ordinary named one before type checking, so a template never reaches here.
+            StaticReceiver::Generic(_) => unreachable!(
+                "StaticReceiver::Generic must be instantiated by generics::classes"
+            ),
             StaticReceiver::Self_ | StaticReceiver::Static => self.current_class.clone(),
             StaticReceiver::Parent => self
                 .classes

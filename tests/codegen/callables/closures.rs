@@ -2507,19 +2507,23 @@ echo $n;
 }
 
 
-/// The invoker's post-call argument releases must preserve the WHOLE result, not one register.
+/// The invoker's post-call argument releases must not run while the result is still a REGISTER PAIR.
 ///
 /// Every release is a call, and a call preserves nothing. Only a counted pointer fits in the
 /// integer result register: a `Str` travels as a pointer/length pair (x1/x2 on aarch64, rax/rdx on
-/// x86_64) and a `Float` in its own register. The invoker saved `int_result_reg` alone, so a
-/// string-returning callback with a refcounted argument had the half nobody saved left to whatever
-/// the release helper happened to leave behind.
+/// x86_64) and a `Float` in its own register, so whatever half is not saved is left to whatever the
+/// release helper happened to leave behind.
+///
+/// The invoker answers this by ORDER rather than by saving: `emit_boxed_invoker_return` turns the
+/// result into one Mixed cell pointer, and only then does `InvokerArgumentOwners::finish_return`
+/// run the releases — which save that single pointer through a frame slot. So the assertion is the
+/// order: the boxing allocation precedes the first release call. Flip the two and a string result
+/// is back to crossing a call as a pair.
 ///
 /// It does not corrupt today only because the reachable release helpers are register-frugal —
 /// `__rt_decref_array` touches x0 and x9..x11 and returns without calling anything while the
 /// refcount stays positive — which is an accident of their bodies, not a contract. The zero-count
-/// path tail-calls `__rt_array_free_deep`, which is not frugal. So the assembly is what gets
-/// asserted: the result is saved by its TYPE across the releases.
+/// path tail-calls `__rt_array_free_deep`, which is not frugal.
 #[test]
 fn test_invoker_preserves_a_string_result_across_retained_argument_releases() {
     let source = r#"<?php
@@ -2539,10 +2543,18 @@ echo $a, "|", $b, "|", strlen($a), strlen($b);
         .nth(1)
         .unwrap_or("")
         .to_string();
+    let boxing = invoker
+        .find("__rt_heap_alloc")
+        .unwrap_or_else(|| panic!("the invoker must box its result:\n{}", invoker));
+    let release = invoker
+        .find("__rt_decref_any")
+        .unwrap_or_else(|| panic!("the invoker must release its retained arguments:\n{}", invoker));
     assert!(
-        invoker.contains("stp x1, x2, [sp, #-16]!") && invoker.contains("ldp x1, x2, [sp], #16"),
-        "the invoker must save the string result PAIR across the retained-argument releases, \
-         not just the integer result register:\n{}",
+        boxing < release,
+        "the invoker must box the string result into one Mixed pointer BEFORE the \
+         retained-argument releases run; boxing at {} follows the first release at {}:\n{}",
+        boxing,
+        release,
         invoker
     );
     let _ = fs::remove_dir_all(dir);

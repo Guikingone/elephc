@@ -176,7 +176,8 @@ fn test_program_function_effects_merge_callable_aliases_across_try_paths() {
                             Span::dummy(),
                         )],
                         catches: vec![crate::parser::ast::CatchClause {
-                            exception_type_args: Vec::new(),exception_types: vec![Name::from("Exception")],
+                            exception_type_args: Vec::new(),
+                            exception_types: vec![Name::from("Exception")],
                             variable: Some("e".to_string()),
                             body: vec![Stmt::new(
                                 StmtKind::Assign {

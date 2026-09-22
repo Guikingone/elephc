@@ -2000,15 +2000,26 @@ echo c([1, 2])[1];
 /// `array_map` shape that used to carry boxed slots, and a static refusal at that boundary
 /// rejected this program (found by an external review, which ran it).
 ///
-/// The boundary now reads the payload's own value_type tag instead of deciding from the types:
+/// The boundary reads the payload's own value_type tag instead of deciding from the types:
 /// raw slots pass, boxed slots fatal. A mutation proves the second half — restoring the
 /// two-answer `array_map` makes `echo c([1,2,3])[0]` exit 1 with that fatal, where it used to
 /// print a pointer.
+///
+/// The CONTRACT is written in a doc block rather than as `: array`, and that is not a detail. A
+/// bare `array` declaration is now `array<mixed>|array<mixed, mixed>`, a type that names no
+/// element at all, so `array_pop` on one is `mixed` and the return is refused — `Function 'last'
+/// return type expects array, got mixed` — for this program and for the one that really does
+/// return an int. Neither is decidable from that declaration any more, and relaxing the boundary
+/// to accept `mixed` was measured and rejected: it compiles `function bad(array $a): array {
+/// return array_pop($a); } bad([1, 2])` into a program that prints `int(2)` where php throws a
+/// TypeError. A concrete element type is what makes the question answerable, so that is what
+/// these two fixtures declare.
 #[test]
 fn test_popped_container_unboxes_into_a_typed_element_contract() {
     let out = compile_and_run(
         "<?php \
-         function last(array $a): array { return array_pop($a); } \
+         /** @return array<int> */ \
+         function last(array $a) { return array_pop($a); } \
          $r = last([[1, 2], [3, 4]]); \
          echo $r[0], $r[1], count($r);",
     );
@@ -2020,7 +2031,8 @@ fn test_popped_container_unboxes_into_a_typed_element_contract() {
 fn test_shifted_hash_unboxes_into_a_typed_value_contract() {
     let out = compile_and_run(
         "<?php \
-         function first(array $a): array { return array_shift($a); } \
+         /** @return array<string, int> */ \
+         function first(array $a) { return array_shift($a); } \
          $r = first([['a' => 1, 'b' => 2], ['a' => 3]]); \
          echo $r['a'], $r['b'];",
     );

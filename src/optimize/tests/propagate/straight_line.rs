@@ -403,6 +403,8 @@ fn test_by_reference_return_preserves_local_place() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "relay".to_string(),
+            // An ordinary function declares none; the field exists because a template does.
+            type_params: Vec::new(),
             params: vec![("value".to_string(), None, None, true)],
             param_attributes: Vec::new(),
             variadic: None,

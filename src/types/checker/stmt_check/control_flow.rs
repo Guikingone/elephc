@@ -790,7 +790,6 @@ impl Checker {
             }
             StmtKind::DoWhile { body, condition } => {
                 self.boxed_ref_aliased_locals.clear();
-                stabilize_loop_storage(self, stmt.span, body, None, env);
                 stabilize_loop_storage(self, stmt.span, body, None, env, None);
                 let errors = self.check_break_continue_target_body(body, env);
                 self.infer_type_with_assignment_effects(condition, env)?;
@@ -804,7 +803,6 @@ impl Checker {
             }
             StmtKind::While { condition, body } => {
                 self.boxed_ref_aliased_locals.clear();
-                stabilize_loop_storage(self, stmt.span, body, None, env);
                 stabilize_loop_storage(self, stmt.span, body, None, env, None);
                 self.infer_type_with_assignment_effects(condition, env)?;
                 // The condition is re-evaluated before every iteration, so a guard on it
@@ -853,21 +851,6 @@ impl Checker {
                     self.check_stmt(s, env)?;
                 }
                 self.boxed_ref_aliased_locals.clear();
-                stabilize_loop_storage(self, stmt.span, body, update.as_deref(), env);
-                if let Some(c) = condition {
-                    self.infer_type_with_assignment_effects(c, env)?;
-                }
-                if let Some(s) = update {
-                    self.check_stmt(s, env)?;
-                }
-                let errors = self.check_break_continue_target_body(body, env);
-                self.callable_array_targets.clear();
-                self.callable_array_target_versions.clear();
-                if errors.is_empty() {
-                    Ok(())
-                } else {
-                    Err(CompileError::from_many(errors))
-                }
                 // A `for ($i = 0; …; $i++)` counter is the one index a still-empty array can be
                 // written through without leaving packed storage, because it is 0 at the first
                 // write and grows one slot at a time with the array. Recorded with the depth its
@@ -896,10 +879,12 @@ impl Checker {
                     env,
                     packed_counter_name.as_deref(),
                 );
-                // The tail re-walks this same body, so the counter stays registered through it —
-                // the storage decision must not come out differently on the second walk than on
-                // the first — and is restored on every exit, error paths included.
+                // The rest of the arm re-walks this same body, so the counter stays registered
+                // through it — the storage decision must not come out differently on the second
+                // walk than on the first — and is restored on every exit, error paths included.
                 let outcome = self.check_for_tail(condition.as_ref(), update.as_deref(), body, env);
+                self.callable_array_targets.clear();
+                self.callable_array_target_versions.clear();
                 self.packed_loop_counter = saved_packed_counter;
                 outcome
             }

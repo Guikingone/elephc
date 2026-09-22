@@ -69,8 +69,13 @@ impl Checker {
         if expected == actual {
             return true;
         }
+        // The arithmetic union is decided by the arms below, not here: this per-member rule asks
+        // whether `int` accepts `float`, which is false, so it would refuse `int|float` at every
+        // position — including the `int` parameters the preludes pass a loop counter to.
         if let PhpType::Union(members) = actual {
-            return members.iter().all(|member| self.type_accepts(expected, member));
+            if !actual.is_int_float_union() {
+                return members.iter().all(|member| self.type_accepts(expected, member));
+            }
         }
         match expected {
             PhpType::Mixed => true,
@@ -84,10 +89,6 @@ impl Checker {
             {
                 true
             }
-
-            PhpType::Union(members) => members
-                .iter()
-                .any(|member| self.type_accepts(member, actual)),
 
             // The arithmetic union belongs with `Mixed` at a scalar position, and leaving it out
             // was inconsistent: `mixed` is the widest type there is, so refusing `int|float`

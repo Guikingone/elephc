@@ -216,6 +216,7 @@ impl PhpType {
                 && actual_value.reference_payload_compatible(&expected_value),
             (actual, expected) => actual == expected,
         }
+    }
 
     /// Returns true for the `int|float` union PHP's arithmetic produces at the overflow boundary.
     ///
