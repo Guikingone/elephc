@@ -66,6 +66,126 @@ echo gettype(send(new Box(), new User()));
     assert_eq!(out, "object");
 }
 
+/// A widened reference keeps caller storage through nested by-reference calls.
+#[test]
+fn test_interface_widened_reference_writes_through_nested_aliases() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+interface Named { public function take(User &$user); }
+class Box implements Named {
+    public function take(mixed &$user) { $user = "changed"; }
+}
+class Exact implements Named {
+    public function take(User &$user) { $user = new User(); }
+}
+function relay(Named $box, User &$user) { $box->take($user); }
+$user = new User();
+$alias =& $user;
+relay(new Box(), $user);
+$other = new User();
+relay(new Exact(), $other);
+echo $user, ":", $alias, ":", gettype($other);
+"#,
+    );
+    assert_eq!(out, "changed:changed:object");
+}
+
+/// The declared object type is checked again when a widened reference is passed later.
+#[test]
+fn test_interface_widened_reference_rechecks_entry_type() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+interface Named { public function take(User &$user); }
+class Box implements Named {
+    public function take(mixed &$user) { $user = "changed"; }
+}
+function relay(Named $box, User &$user) { $box->take($user); }
+$user = new User();
+relay(new Box(), $user);
+try { relay(new Box(), $user); } catch (TypeError $error) { echo "caught"; }
+"#,
+    );
+    assert_eq!(out, "caught");
+}
+
+/// Direct interface dispatch also enforces the declared object type after a reference retypes it.
+#[test]
+fn test_interface_widened_reference_direct_dispatch_rechecks_entry_type() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+interface Named { public function take(User &$user); }
+class Box implements Named {
+    public function take(mixed &$user) { $user = "changed"; }
+}
+$box = new Box();
+function dispatch(Named $box) {
+    $user = new User();
+    $box->take($user);
+    try { $box->take($user); } catch (TypeError $error) { echo "caught"; }
+}
+dispatch($box);
+"#,
+    );
+    assert_eq!(out, "caught");
+}
+
+/// A typed implementation shares the canonical reference cell used by interface dispatch.
+#[test]
+fn test_interface_exact_object_reference_uses_shared_cell() {
+    let out = compile_and_run(
+        r#"<?php
+class User { public string $name = "before"; }
+interface Named { public function take(User &$user); }
+class Exact implements Named {
+    public function take(User &$user) { $user->name = "after"; }
+}
+function relay(Named $box, User &$user) { $box->take($user); }
+$user = new User();
+relay(new Exact(), $user);
+echo $user->name;
+"#,
+    );
+    assert_eq!(out, "after");
+}
+
+/// A static implementation can widen an object reference and update an existing alias.
+#[test]
+fn test_static_interface_widened_reference_updates_alias() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+interface Named { public static function take(User &$user); }
+class Box implements Named {
+    public static function take(mixed &$user) { $user = "changed"; }
+}
+function relay(User &$user) { Box::take($user); }
+$user = new User();
+$alias =& $user;
+relay($user);
+echo $alias;
+"#,
+    );
+    assert_eq!(out, "changed");
+}
+
+/// A typed reference can retype its caller after validating the incoming object.
+#[test]
+fn test_typed_reference_parameter_can_retype_caller() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+function change(User &$user) { $user = "changed"; }
+$user = new User();
+change($user);
+echo $user;
+"#,
+    );
+    assert_eq!(out, "changed");
+}
+
 /// Keeps untyped interface defaults callable after concrete method parameters widen.
 #[test]
 fn test_untyped_interface_method_defaults_use_stable_boxed_abi() {

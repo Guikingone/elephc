@@ -447,6 +447,40 @@ pub(super) fn lower_new_scoped_object(ctx: &mut LoweringContext<'_, '_>, receive
     if matches!(receiver, StaticReceiver::Static) {
         let fallback_class = ctx.current_class.clone().unwrap_or_else(|| receiver_name(receiver));
         let class_name = lower_class_constant(ctx, receiver, expr);
+        for (arg_index, arg) in args.iter().enumerate() {
+            let place = match &arg.kind {
+                ExprKind::NamedArg { value, .. } => value.as_ref(),
+                _ => arg,
+            };
+            let ExprKind::Variable(local_name) = &place.kind else {
+                continue;
+            };
+            if !matches!(ctx.local_type(local_name).codegen_repr(), PhpType::Object(_)) {
+                continue;
+            }
+            let needs_boxed_reference = ctx.classes.keys().any(|candidate| {
+                if !class_extends_class(ctx, candidate, &fallback_class) {
+                    return false;
+                }
+                let name = Name::from(candidate.clone());
+                let Some(signature) = constructor_signature(ctx, &name) else {
+                    return false;
+                };
+                let param_index = match &arg.kind {
+                    ExprKind::NamedArg { name, .. } =>
+                        signature.params.iter().position(|(param, _)| param == name),
+                    _ => Some(arg_index),
+                };
+                param_index.is_some_and(|index| {
+                    signature.ref_params.get(index).copied().unwrap_or(false)
+                        && signature.params.get(index)
+                            .is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Mixed)
+                })
+            });
+            if needs_boxed_reference {
+                ctx.promote_local_mixed_ref_cell(local_name, Some(place.span));
+            }
+        }
         let mut operands = vec![class_name.value];
         operands.extend(lower_args(ctx, args));
         let metadata = format!("{}|{}", fallback_class, fallback_class);

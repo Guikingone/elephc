@@ -1971,7 +1971,7 @@ fn function_params(signature: &FunctionSig) -> Vec<FunctionParam> {
         .collect()
 }
 
-/// Returns an EIR ABI signature that keeps dynamic untyped PHP parameters boxed.
+/// Returns an EIR ABI signature with boxed dynamic and object-reference parameters.
 pub(crate) fn eir_signature_with_php_param_contracts(
     owner_name: &str,
     signature: &FunctionSig,
@@ -1987,6 +1987,10 @@ pub(crate) fn eir_signature_with_php_param_contracts(
             .unwrap_or(false);
         let by_ref = signature.ref_params.get(index).copied().unwrap_or(false);
         let variadic = signature.variadic.as_deref() == Some(name.as_str());
+        if by_ref && matches!(php_type, PhpType::Object(_)) {
+            *php_type = PhpType::Mixed;
+            continue;
+        }
         if !declared && !by_ref && !variadic {
             if preserve_untyped_eir_param_contract(
                 owner_name,

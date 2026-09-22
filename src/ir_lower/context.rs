@@ -2961,6 +2961,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if target == source {
             return;
         }
+        if matches!(self.local_type(source).codegen_repr(), PhpType::Object(_)) {
+            self.promote_local_mixed_ref_cell(source, span);
+        }
         let source_ty = self.local_type(source);
         // `is_ref_bound_local` is intentionally conservative across lowered
         // branches, so a source marked by a conditional predecessor may still

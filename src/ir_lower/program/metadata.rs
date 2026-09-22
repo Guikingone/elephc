@@ -5,7 +5,7 @@
 //! - `crate::ir_lower::program`.
 //!
 //! Key details:
-//! - Keeps program metadata deterministic and EIR lowering behavior unchanged.
+//! - Keeps program metadata deterministic and object-reference ABI shapes consistent.
 
 use super::*;
 
@@ -60,6 +60,19 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
     module.class_infos = check_result.classes.clone();
     normalize_class_method_signatures_for_eir(module, &check_result.callable_param_sigs);
     module.interface_infos = check_result.interfaces.clone();
+    for interface in module.interface_infos.values_mut() {
+        for signature in interface.methods.values_mut()
+            .chain(interface.static_methods.values_mut())
+        {
+            for (index, (_, ty)) in signature.params.iter_mut().enumerate() {
+                if signature.ref_params.get(index).copied().unwrap_or(false)
+                    && matches!(ty, PhpType::Object(_))
+                {
+                    *ty = PhpType::Mixed;
+                }
+            }
+        }
+    }
     module.enum_infos = check_result.enums.clone();
     module.extern_class_infos = check_result.extern_classes.clone();
     module.packed_class_infos = check_result.packed_classes.clone();

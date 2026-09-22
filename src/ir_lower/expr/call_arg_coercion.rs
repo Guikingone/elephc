@@ -50,6 +50,7 @@ pub(super) fn lower_arg_with_signature(
     if let Some(value) = lower_by_ref_array_arg_with_signature(ctx, sig, index, arg) {
         return value;
     }
+    guard_boxed_object_reference_argument(ctx, sig, index, arg);
     promote_boxed_reference_local_argument(ctx, sig, index, arg);
     promote_reference_return_local_argument(ctx, sig, index, arg);
     if let Some(lowered) = lower_tracked_callable_array_param(ctx, sig, index, arg) {
@@ -59,11 +60,60 @@ pub(super) fn lower_arg_with_signature(
     coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
 }
 
+/// Rechecks a declared object reference when an earlier call has changed its boxed payload.
+fn guard_boxed_object_reference_argument(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+) {
+    if !sig.ref_params.get(index).copied().unwrap_or(false) {
+        return;
+    }
+    let Some((_, PhpType::Object(class_name))) = sig.params.get(index) else {
+        return;
+    };
+    let ExprKind::Variable(name) = &arg.kind else {
+        return;
+    };
+    if ctx.local_type(name).codegen_repr() != PhpType::Mixed {
+        return;
+    }
+    let condition = lower_instanceof(
+        ctx,
+        arg,
+        &InstanceOfTarget::Name(Name::from(class_name.clone())),
+        arg,
+    );
+    let accepted = ctx.builder.create_named_block("object.ref.accepted", Vec::new());
+    let rejected = ctx.builder.create_named_block("object.ref.rejected", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: condition.value,
+        then_target: accepted,
+        then_args: Vec::new(),
+        else_target: rejected,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(rejected);
+    let message = Expr::new(
+        ExprKind::StringLiteral(format!("Argument must be of type {}", class_name)),
+        arg.span,
+    );
+    let exception = lower_expr(ctx, &Expr::new(
+        ExprKind::NewObject {
+            class_name: Name::unqualified("TypeError"),
+            args: vec![message],
+        },
+        arg.span,
+    ));
+    ctx.builder.terminate(Terminator::Throw { value: exception.value });
+    ctx.builder.position_at_end(accepted);
+}
+
 /// Gives an eligible whole-local reference the canonical boxed payload required by the callee.
 ///
-/// The checker permits this only for a local that was not already part of another reference set.
-/// Promotion therefore changes one complete binding, rather than relabelling a concrete cell that
-/// another alias would still read with its earlier payload representation.
+/// The checker permits this only for an eligible whole local. An existing object alias already
+/// shares a boxed cell, so promotion never relabels a concrete cell behind another alias.
 fn promote_boxed_reference_local_argument(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
@@ -74,7 +124,7 @@ fn promote_boxed_reference_local_argument(
         || !sig
             .params
             .get(index)
-            .is_some_and(|(_, ty)| matches!(ty, PhpType::Mixed))
+            .is_some_and(|(_, ty)| matches!(ty, PhpType::Mixed | PhpType::Object(_)))
     {
         return;
     }

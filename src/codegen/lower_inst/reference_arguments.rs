@@ -263,6 +263,12 @@ pub(super) fn plan_ref_arg_writebacks(
         if matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
             continue;
         }
+        if local_ref_arg_source(ctx, *value).ok()
+            .and_then(|source| ctx.local_php_type(source.slot).ok())
+            .is_some_and(|storage| storage.codegen_repr() == PhpType::Mixed)
+        {
+            continue;
+        }
         if array_element_address_source(ctx, *value)?.is_none()
             && local_ref_arg_source(ctx, *value).is_err()
         {
