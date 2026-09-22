@@ -165,8 +165,8 @@ jobs:
 
       - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
         # Materialize the complete curl chain once in this prerequisite job. The
-        # four curl shards restore this exact key after the job's post-cache step,
-        # avoiding concurrent cold downloads of the same GitHub release assets.
+        # cross-run cache avoids repeated cold downloads, while the workflow
+        # artifact below provides the same-run handoff to the four curl shards.
         uses: actions/cache@v4
         with:
           path: ~/.cache/elephc/native
@@ -179,6 +179,20 @@ jobs:
           ./target/debug/elephc native install --locked \
             --target macos-aarch64 \
             --manifest-path examples/curl-get/elephc.toml
+
+      - name: Pack managed native curl cache
+        run: |
+          tar -C "$HOME/.cache/elephc" -czf \
+            "$RUNNER_TEMP/managed-native-curl-macos-aarch64.tar.gz" native
+
+      - name: Upload managed native curl cache
+        uses: actions/upload-artifact@v4
+        with:
+          name: managed-native-curl-macos-aarch64
+          path: ${{ runner.temp }}/managed-native-curl-macos-aarch64.tar.gz
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
 
       - name: Upload test archive
         uses: actions/upload-artifact@v4
@@ -316,8 +330,8 @@ jobs:
             cargo test -p elephc-xml
 
       - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
-        # Seed the cache before any curl shard starts, so a cold key causes one
-        # source build instead of four concurrent downloads and builds.
+        # Seed the cross-run cache before packaging the same-run artifact below,
+        # so a cold key causes one source build instead of four concurrent ones.
         uses: actions/cache@v4
         with:
           path: ~/.cache/elephc/native
@@ -330,6 +344,20 @@ jobs:
           ./target/debug/elephc native install --locked \
             --target linux-x86_64 \
             --manifest-path examples/curl-get/elephc.toml
+
+      - name: Pack managed native curl cache
+        run: |
+          tar -C "$HOME/.cache/elephc" -czf \
+            "$RUNNER_TEMP/managed-native-curl-linux-x86_64.tar.gz" native
+
+      - name: Upload managed native curl cache
+        uses: actions/upload-artifact@v4
+        with:
+          name: managed-native-curl-linux-x86_64
+          path: ${{ runner.temp }}/managed-native-curl-linux-x86_64.tar.gz
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
 
       - name: Upload test archive
         uses: actions/upload-artifact@v4
@@ -460,8 +488,8 @@ jobs:
             cargo test -p elephc-xml
 
       - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
-        # Seed the cache before any curl shard starts, so a cold key causes one
-        # source build instead of four concurrent downloads and builds.
+        # Seed the cross-run cache before packaging the same-run artifact below,
+        # so a cold key causes one source build instead of four concurrent ones.
         uses: actions/cache@v4
         with:
           path: ~/.cache/elephc/native
@@ -474,6 +502,20 @@ jobs:
           ./target/debug/elephc native install --locked \
             --target linux-aarch64 \
             --manifest-path examples/curl-get/elephc.toml
+
+      - name: Pack managed native curl cache
+        run: |
+          tar -C "$HOME/.cache/elephc" -czf \
+            "$RUNNER_TEMP/managed-native-curl-linux-aarch64.tar.gz" native
+
+      - name: Upload managed native curl cache
+        uses: actions/upload-artifact@v4
+        with:
+          name: managed-native-curl-linux-aarch64
+          path: ${{ runner.temp }}/managed-native-curl-linux-aarch64.tar.gz
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
 
       - name: Upload test archive
         uses: actions/upload-artifact@v4
@@ -1034,9 +1076,9 @@ jobs:
   # libcurl/libssh2/nghttp2/openssl/zlib build (see
   # tests/codegen/support/curl_native.rs) that the
   # ordinary shards' machines don't provision, so give them their own jobs that
-  # materialize that native cache first, cached across runs by an actions/cache keyed
-  # on the committed lock plus the recipe sources that decide what gets built. This
-  # dedicated matrix also exercises target callback trampolines, the combined
+  # consume the exact native cache packed by their prerequisite build job. The build
+  # job also caches it across runs by the committed lock and recipe sources. This
+  # dedicated matrix exercises target callback trampolines, the combined
   # elephc_magician + elephc_curl link shape, and managed-native materialization inside
   # the Linux CI container.
   curl-codegen-tests-macos-aarch64:
@@ -1054,19 +1096,17 @@ jobs:
       - name: Install test-only native providers
         run: brew install pcre2
 
-      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
-        # Deliberately the shared default path (unlike managed-native-smoke, which
-        # points ELEPHC_NATIVE_CACHE at an isolated $RUNNER_TEMP dir to prove a
-        # from-empty install): here we *want* one warm, reusable cache root that
-        # persists across runs via the key below, and it must also be the path
-        # `native install` and the skip gate (tests/codegen/support/curl_native.rs)
-        # both resolve by default, since no ELEPHC_NATIVE_CACHE override is set.
-        uses: actions/cache@v4
+      - name: Download managed native curl cache
+        uses: ./.github/actions/download-test-archive
         with:
-          path: ~/.cache/elephc/native
-          key: curl-native-macos-aarch64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
-          restore-keys: |
-            curl-native-macos-aarch64-
+          name: managed-native-curl-macos-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Extract managed native curl cache
+        run: |
+          mkdir -p "$RUNNER_TEMP/elephc-native"
+          tar -xzf "$RUNNER_TEMP/managed-native-curl-macos-aarch64.tar.gz" \
+            -C "$RUNNER_TEMP/elephc-native" --strip-components=1
 
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
@@ -1098,8 +1138,10 @@ jobs:
         # more deterministic for a test job than `add`, which resolves against the
         # manifest and can rewrite the lock. Artifacts are content-addressed by
         # (recipe, source sha, target, toolchain fingerprint) under the cache
-        # restored above. The prerequisite build job owns cold materialization;
-        # shards stay offline and fail clearly if cache provisioning regresses.
+        # extracted above. The prerequisite build job owns cold materialization;
+        # shards stay offline and fail clearly if artifact provisioning regresses.
+        env:
+          ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
         run: |
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked --offline \
             --target macos-aarch64 \
@@ -1108,6 +1150,7 @@ jobs:
       - name: Run curl codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
+          ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
           curl_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
@@ -1133,19 +1176,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
-        # Deliberately the shared default path (unlike managed-native-smoke, which
-        # points ELEPHC_NATIVE_CACHE at an isolated $RUNNER_TEMP dir to prove a
-        # from-empty install): here we *want* one warm, reusable cache root that
-        # persists across runs via the key below, and it must also be the path
-        # `native install` and the skip gate (tests/codegen/support/curl_native.rs)
-        # both resolve by default, since no ELEPHC_NATIVE_CACHE override is set.
-        uses: actions/cache@v4
+      - name: Download managed native curl cache
+        uses: ./.github/actions/download-test-archive
         with:
-          path: ~/.cache/elephc/native
-          key: curl-native-linux-x86_64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
-          restore-keys: |
-            curl-native-linux-x86_64-
+          name: managed-native-curl-linux-x86_64
+          path: ${{ runner.temp }}
+
+      - name: Extract managed native curl cache
+        run: |
+          mkdir -p "$RUNNER_TEMP/elephc-native"
+          tar -xzf "$RUNNER_TEMP/managed-native-curl-linux-x86_64.tar.gz" \
+            -C "$RUNNER_TEMP/elephc-native" --strip-components=1
 
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
@@ -1174,8 +1215,10 @@ jobs:
         # more deterministic for a test job than `add`, which resolves against the
         # manifest and can rewrite the lock. Artifacts are content-addressed by
         # (recipe, source sha, target, toolchain fingerprint) under the cache
-        # restored above. The prerequisite build job owns cold materialization;
-        # shards stay offline and fail clearly if cache provisioning regresses.
+        # extracted above. The prerequisite build job owns cold materialization;
+        # shards stay offline and fail clearly if artifact provisioning regresses.
+        env:
+          ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
         run: |
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked --offline \
             --target linux-x86_64 \
@@ -1184,6 +1227,7 @@ jobs:
       - name: Run curl codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
+          ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
           curl_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
@@ -1209,19 +1253,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
-        # Deliberately the shared default path (unlike managed-native-smoke, which
-        # points ELEPHC_NATIVE_CACHE at an isolated $RUNNER_TEMP dir to prove a
-        # from-empty install): here we *want* one warm, reusable cache root that
-        # persists across runs via the key below, and it must also be the path
-        # `native install` and the skip gate (tests/codegen/support/curl_native.rs)
-        # both resolve by default, since no ELEPHC_NATIVE_CACHE override is set.
-        uses: actions/cache@v4
+      - name: Download managed native curl cache
+        uses: ./.github/actions/download-test-archive
         with:
-          path: ~/.cache/elephc/native
-          key: curl-native-linux-aarch64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
-          restore-keys: |
-            curl-native-linux-aarch64-
+          name: managed-native-curl-linux-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Extract managed native curl cache
+        run: |
+          mkdir -p "$RUNNER_TEMP/elephc-native"
+          tar -xzf "$RUNNER_TEMP/managed-native-curl-linux-aarch64.tar.gz" \
+            -C "$RUNNER_TEMP/elephc-native" --strip-components=1
 
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
@@ -1250,8 +1292,10 @@ jobs:
         # more deterministic for a test job than `add`, which resolves against the
         # manifest and can rewrite the lock. Artifacts are content-addressed by
         # (recipe, source sha, target, toolchain fingerprint) under the cache
-        # restored above. The prerequisite build job owns cold materialization;
-        # shards stay offline and fail clearly if cache provisioning regresses.
+        # extracted above. The prerequisite build job owns cold materialization;
+        # shards stay offline and fail clearly if artifact provisioning regresses.
+        env:
+          ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
         run: |
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked --offline \
             --target linux-aarch64 \
@@ -1260,6 +1304,7 @@ jobs:
       - name: Run curl codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
+          ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
           curl_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
