@@ -40,6 +40,7 @@ pub(super) fn reflection_function_metadata(
         type_metadata: type_metadata.clone(),
         is_deprecated: signature.deprecation.is_some(),
         is_generator: function.flags.is_generator,
+        returns_reference: signature.by_ref_return,
     };
     let mut metadata = empty_reflection_metadata();
     metadata.reflected_name = Some(reflected_name);
@@ -59,6 +60,7 @@ pub(super) fn reflection_function_metadata(
     metadata.type_metadata = type_metadata;
     metadata.is_deprecated = signature.deprecation.is_some();
     metadata.is_generator = function.flags.is_generator;
+    metadata.returns_reference = signature.by_ref_return;
     Ok(metadata)
 }
 
@@ -78,6 +80,7 @@ pub(super) fn reflection_builtin_function_metadata(
         type_metadata: type_metadata.clone(),
         is_deprecated: false,
         is_generator: false,
+        returns_reference: false,
     };
     let mut metadata = empty_reflection_metadata();
     metadata.reflected_name = Some(function_name.to_string());
@@ -203,6 +206,7 @@ pub(super) fn reflection_method_owner_metadata(
         required_parameter_count: member.required_parameter_count,
         is_deprecated: member.is_deprecated,
         is_generator: member.is_generator,
+        returns_reference: member.returns_reference,
         prototype_member: member.prototype_member,
         is_final: false,
         is_abstract: false,

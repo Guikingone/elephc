@@ -75,6 +75,7 @@ pub(super) fn reflection_class_property_member(
         required_parameter_count: 0,
         is_deprecated: false,
         is_generator: false,
+        returns_reference: false,
         prototype_member: None,
         parameters: Vec::new(),
     })
@@ -185,6 +186,7 @@ pub(super) fn reflection_property_hook_method_member(
         type_metadata: return_type.clone(),
         is_deprecated: false,
         is_generator: false,
+        returns_reference: false,
     };
     let parameters = if hook_name == "set" {
         vec![reflection_property_hook_parameter_member(
@@ -211,6 +213,7 @@ pub(super) fn reflection_property_hook_method_member(
         required_parameter_count,
         is_deprecated: false,
         is_generator: false,
+        returns_reference: false,
         prototype_member: None,
         parameters,
     }

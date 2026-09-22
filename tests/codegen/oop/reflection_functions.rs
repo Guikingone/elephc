@@ -279,3 +279,66 @@ echo (new ReflectionFunction("reflect_function_invoke_inferred"))->invoke("A", "
     );
     assert_eq!(out, "AB");
 }
+
+/// Verifies `returnsReference()` reports the declaration instead of a baked `false`.
+///
+/// It was registered with `builtin_reflection_constant_false_bool_method`, so it answered `false`
+/// for every callable — including `function &f()`, where PHP answers `true` (#1231). Every
+/// sibling predicate that can vary is property-backed; this one now is too, reading
+/// `__returns_reference` off the same `FunctionSig::by_ref_return` the member is built from.
+///
+/// No static method is among the rows: a by-reference return of a `static` local is refused by
+/// the lowering ("this compiler can transfer only a local it can promote to a managed reference
+/// cell in place"), so such a declaration cannot be compiled to reflect on.
+#[test]
+fn test_returns_reference_reports_the_declaration() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public $v = 1; }
+
+function &getv(Box $o) { return $o->v; }
+function plain(Box $o) { return $o->v; }
+
+class RefHolder {
+    public $w = 2;
+    public function &get() { return $this->w; }
+    public function plain() { return $this->w; }
+}
+
+echo (new ReflectionFunction('getv'))->returnsReference() ? "y" : "n";
+echo (new ReflectionFunction('plain'))->returnsReference() ? "y" : "n";
+echo (new ReflectionMethod('RefHolder', 'get'))->returnsReference() ? "y" : "n";
+echo (new ReflectionMethod('RefHolder', 'plain'))->returnsReference() ? "y" : "n";
+"#,
+    );
+
+    assert_eq!(out, "ynyn");
+}
+
+/// Verifies the listing path agrees with the constructed one.
+///
+/// `getMethods()` builds its entries through a different path than `new ReflectionMethod(...)`,
+/// and a flag threaded through only one of them is how the two come to disagree about the same
+/// declaration — which is the shape this issue is an instance of.
+#[test]
+fn test_listed_and_constructed_returns_reference_agree() {
+    let out = compile_and_run(
+        r#"<?php
+class RefHolder {
+    public $w = 2;
+    public function &get() { return $this->w; }
+    public function plain() { return $this->w; }
+}
+
+$listed = [];
+foreach ((new ReflectionClass('RefHolder'))->getMethods() as $m) {
+    $listed[$m->getName()] = $m->returnsReference();
+}
+echo $listed['get'] ? "y" : "n";
+echo $listed['plain'] ? "y" : "n";
+echo (new ReflectionMethod('RefHolder', 'get'))->returnsReference() === $listed['get'] ? "same" : "differs";
+"#,
+    );
+
+    assert_eq!(out, "ynsame");
+}

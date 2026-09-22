@@ -347,6 +347,7 @@ pub(super) fn reflection_enum_case_members(
             required_parameter_count: 0,
             is_deprecated: false,
             is_generator: false,
+        returns_reference: false,
             prototype_member: None,
             parameters: Vec::new(),
         })
@@ -475,6 +476,7 @@ pub(super) fn push_unique_constant_reflection_member(
         required_parameter_count: 0,
         is_deprecated: false,
         is_generator: false,
+        returns_reference: false,
         prototype_member: None,
         parameters: Vec::new(),
     });
