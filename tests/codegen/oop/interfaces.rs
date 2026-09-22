@@ -9,6 +9,63 @@
 
 use super::*;
 
+/// An explicit mixed implementation keeps the boxed ABI of an untyped interface parameter.
+#[test]
+fn test_untyped_interface_parameter_accepts_explicit_mixed() {
+    let out = compile_and_run(
+        r#"<?php
+interface Sink { public function put($value, $fallback = null); }
+class Box implements Sink {
+    public function put(mixed $value, mixed $fallback = null) {
+        echo gettype($value), gettype($fallback);
+    }
+}
+function send(Sink $sink) { $sink->put(42); }
+send(new Box());
+"#,
+    );
+    assert_eq!(out, "integerNULL");
+}
+
+/// Interface dispatch boxes a typed object before entering a mixed implementation parameter.
+#[test]
+fn test_interface_object_parameter_widens_to_mixed() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+interface Named { public function take(User $user, string $label); }
+class Box implements Named {
+    public function take(mixed $user, mixed $label) {
+        echo gettype($user), gettype($label);
+    }
+}
+function send(Named $sink, User $user) { $sink->take($user, "name"); }
+$box = new Box();
+$user = new User();
+$box->take($user, "name");
+send($box, $user);
+"#,
+    );
+    assert_eq!(out, "objectstringobjectstring");
+}
+
+/// A returned mixed value remains alive after the adapter releases its argument cell.
+#[test]
+fn test_interface_widened_argument_can_be_returned() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+interface Identity { public function keep(User $user): mixed; }
+class Box implements Identity {
+    public function keep(mixed $user): mixed { return $user; }
+}
+function send(Identity $box, User $user): mixed { return $box->keep($user); }
+echo gettype(send(new Box(), new User()));
+"#,
+    );
+    assert_eq!(out, "object");
+}
+
 /// Keeps untyped interface defaults callable after concrete method parameters widen.
 #[test]
 fn test_untyped_interface_method_defaults_use_stable_boxed_abi() {

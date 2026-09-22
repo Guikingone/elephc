@@ -633,6 +633,17 @@ fn test_error_typed_implementation_of_untyped_interface_parameter() {
     }
 }
 
+/// Interface parameter errors point at the implementation method declaration.
+#[test]
+fn test_error_interface_parameter_span_is_concrete_method() {
+    let error = check_source_full(
+        "<?php\ninterface Sink { public function put($value); }\nclass Box implements Sink {\n    public function put(int $value) {}\n}",
+    )
+    .unwrap_err();
+    assert!(error.message.contains("Cannot narrow untyped parameter $value"));
+    assert_eq!(error.span.line, 4);
+}
+
 /// Verifies the error diagnostic for user class cannot implement throwable directly.
 #[test]
 fn test_error_user_class_cannot_implement_throwable_directly() {

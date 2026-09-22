@@ -8,7 +8,8 @@
 //! Key details:
 //! - Only one trailing generated collector can be synthesized because its actual count is known.
 //! - A source variadic keeps its physical entry, and no entry may drop an injected hidden argc.
-//! - The wrapper publishes its collector owner before entering PHP and preserves every return word.
+//! - The wrapper roots synthesized Mixed arguments and collectors before entering PHP.
+//! - It preserves every return word while releasing temporary owners after the call.
 
 use std::collections::{HashMap, HashSet};
 
@@ -30,6 +31,14 @@ pub(crate) enum MethodKind {
 pub(crate) enum MethodAbiPlan {
     Direct,
     AppendEmptyCollector,
+    BoxArguments,
+    BoxArgumentsAndAppendEmptyCollector,
+}
+
+impl MethodAbiPlan {
+    fn appends_collector(self) -> bool {
+        matches!(self, Self::AppendEmptyCollector | Self::BoxArgumentsAndAppendEmptyCollector)
+    }
 }
 
 /// Plans the safe adaptation between one caller contract and its physical implementation.
@@ -51,14 +60,40 @@ pub(crate) fn plan_method_abi(
     if caller.variadic.is_some() {
         return Err("source method ABI adaptation cannot forward a source variadic with an unknown actual count".to_string());
     }
-    if !crate::func_args::sig_collects_surplus_args(physical) {
-        return Err("source method ABI adaptation found an unsupported physical signature difference".to_string());
+    let append_collector = crate::func_args::sig_collects_surplus_args(physical);
+    let projected = if append_collector {
+        source_visible_signature(physical)?
+    } else {
+        physical.clone()
+    };
+    let compatible_shape = caller.ref_params == projected.ref_params
+        && caller.variadic.is_some() == projected.variadic.is_some()
+        && caller.params.len() == projected.params.len();
+    let compatible_values = caller.params.iter().zip(&projected.params).enumerate().all(
+        |(index, ((_, source_ty), (_, target_ty)))| {
+            same_physical_param_abi(source_ty, target_ty)
+                || (!caller.ref_params[index] && can_box_param_as_mixed(source_ty, target_ty))
+        },
+    );
+    if !compatible_shape || !compatible_values {
+        let reason = if append_collector {
+            "source method ABI adaptation found a visible parameter mismatch"
+        } else {
+            "source method ABI adaptation found an unsupported physical signature difference"
+        };
+        return Err(reason.to_string());
     }
-    let projected = source_visible_signature(physical)?;
-    if !same_parameter_abi(caller, &projected) {
-        return Err("source method ABI adaptation found a visible parameter mismatch".to_string());
-    }
-    Ok(MethodAbiPlan::AppendEmptyCollector)
+    let boxes_arguments = caller.params.iter().zip(&projected.params).enumerate().any(
+        |(index, ((_, source_ty), (_, target_ty)))| {
+            !caller.ref_params[index] && can_box_param_as_mixed(source_ty, target_ty)
+        },
+    );
+    Ok(match (boxes_arguments, append_collector) {
+        (false, false) => MethodAbiPlan::Direct,
+        (false, true) => MethodAbiPlan::AppendEmptyCollector,
+        (true, false) => MethodAbiPlan::BoxArguments,
+        (true, true) => MethodAbiPlan::BoxArgumentsAndAppendEmptyCollector,
+    })
 }
 
 /// Selects a source-vtable entry, keeping every source variadic on its raw physical entry.
@@ -145,7 +180,9 @@ pub(crate) fn source_method_entry_symbol(
     let source = source_visible_signature(physical)?;
     match plan_method_abi(&source, physical)? {
         MethodAbiPlan::Direct => Ok(physical_method_symbol(class_name, method_name, kind)),
-        MethodAbiPlan::AppendEmptyCollector => Ok(source_method_adapter_symbol(
+        MethodAbiPlan::AppendEmptyCollector
+        | MethodAbiPlan::BoxArguments
+        | MethodAbiPlan::BoxArgumentsAndAppendEmptyCollector => Ok(source_method_adapter_symbol(
             class_name,
             method_name,
             kind,
@@ -234,9 +271,19 @@ pub(crate) fn emit_method_adapter(
     incoming_types.extend(caller.params.iter().map(|(_, ty)| ty.codegen_repr()));
     let mut incoming_refs = vec![false];
     incoming_refs.extend(caller.ref_params.iter().copied());
-    let frame_size = (incoming_types.len() + 3) * 16;
-    let owner_offset = (incoming_types.len() + 1) * 16;
+    let boxed_params = caller.params.iter().zip(&physical.params).enumerate()
+        .filter_map(|(index, ((_, source_ty), (_, target_ty)))| {
+            (!caller.ref_params[index] && can_box_param_as_mixed(source_ty, target_ty))
+                .then_some(index + 1)
+        })
+        .collect::<Vec<_>>();
+    let mut outgoing_offsets = (1..=incoming_types.len()).map(|index| index * 16).collect::<Vec<_>>();
+    let boxed_offsets = boxed_params.iter().enumerate().map(|(index, _)| {
+        (incoming_types.len() + 1 + index) * 16
+    }).collect::<Vec<_>>();
+    let owner_offset = (incoming_types.len() + boxed_offsets.len() + 1) * 16;
     let return_offset = owner_offset + 16;
+    let frame_size = return_offset + 16;
 
     emitter.raw(".align 2");
     emitter.label_global(wrapper);
@@ -253,29 +300,43 @@ pub(crate) fn emit_method_adapter(
             &mut cursor,
         );
     }
-    if plan == MethodAbiPlan::AppendEmptyCollector {
+    let mut outgoing_types = incoming_types.clone();
+    for (&param_index, &offset) in boxed_params.iter().zip(&boxed_offsets) {
+        let source_ty = &incoming_types[param_index];
+        restore_return_value(emitter, source_ty, (param_index + 1) * 16);
+        if *source_ty == PhpType::Void {
+            abi::emit_load_int_immediate(
+                emitter,
+                abi::int_result_reg(emitter),
+                0x7fff_ffff_ffff_fffe,
+            );
+        }
+        super::value_boxing::emit_box_current_value_as_mixed(emitter, source_ty);
+        abi::store_at_offset(emitter, abi::int_result_reg(emitter), offset);
+        let owner_address = abi::tertiary_scratch_reg(emitter);
+        abi::emit_frame_slot_address(emitter, owner_address, offset);
+        abi::emit_push_call_operand_owner(emitter, owner_address, false);
+        outgoing_types[param_index] = PhpType::Mixed;
+        outgoing_offsets[param_index] = offset;
+    }
+    if plan.appends_collector() {
         abi::emit_store_zero_to_local_slot(emitter, owner_offset);
         emit_empty_collector_owner(emitter, owner_offset);
     }
 
-    let mut outgoing_types = incoming_types.clone();
     let mut outgoing_refs = incoming_refs.clone();
-    if plan == MethodAbiPlan::AppendEmptyCollector {
+    if plan.appends_collector() {
         outgoing_types.push(PhpType::Array(Box::new(PhpType::Mixed)));
         outgoing_refs.push(false);
+        outgoing_offsets.push(owner_offset);
     }
     let abi_types = outgoing_types
         .iter()
         .zip(&outgoing_refs)
         .map(|(ty, by_ref)| if *by_ref { PhpType::Int } else { ty.codegen_repr() })
         .collect::<Vec<_>>();
-    for (index, ty) in abi_types.iter().enumerate() {
-        let offset = if index < incoming_types.len() {
-            (index + 1) * 16
-        } else {
-            owner_offset
-        };
-        push_frame_value(emitter, ty, offset);
+    for (ty, offset) in abi_types.iter().zip(&outgoing_offsets) {
+        push_frame_value(emitter, ty, *offset);
     }
     let assignments = abi::build_outgoing_arg_assignments_for_target(emitter.target, &abi_types, 0);
     let overflow = abi::materialize_outgoing_args(emitter, &assignments);
@@ -291,10 +352,16 @@ pub(crate) fn emit_method_adapter(
         physical.return_type.codegen_repr()
     };
     preserve_return_value(emitter, &physical_return, return_offset);
-    if plan == MethodAbiPlan::AppendEmptyCollector {
+    if plan.appends_collector() {
         abi::emit_pop_call_operand_owner(emitter);
         abi::load_at_offset(emitter, abi::int_result_reg(emitter), owner_offset);
         abi::emit_store_zero_to_local_slot(emitter, owner_offset);
+        abi::emit_call_label(emitter, "__rt_decref_any");
+    }
+    for &offset in boxed_offsets.iter().rev() {
+        abi::emit_pop_call_operand_owner(emitter);
+        abi::load_at_offset(emitter, abi::int_result_reg(emitter), offset);
+        abi::emit_store_zero_to_local_slot(emitter, offset);
         abi::emit_call_label(emitter, "__rt_decref_any");
     }
     restore_return_value(emitter, &physical_return, return_offset);
@@ -315,9 +382,8 @@ pub(crate) fn emit_method_adapter(
 
 /// Returns true when two contracts pass the same argument words in the same order.
 ///
-/// The planner bridges generated `func_args` slots, not PHP type variance. Parameter names
-/// can differ, and object class names share one pointer representation. Arity, by-reference
-/// passing, and the value representation must match before a wrapper forwards arguments.
+/// Parameter names can differ, and object class names share one pointer representation.
+/// Arity, by-reference passing, and the value representation must match for direct forwarding.
 fn same_parameter_abi(left: &FunctionSig, right: &FunctionSig) -> bool {
     left.ref_params == right.ref_params
         && left.variadic.is_some() == right.variadic.is_some()
@@ -333,6 +399,12 @@ fn same_parameter_abi(left: &FunctionSig, right: &FunctionSig) -> bool {
 /// Register count alone does not distinguish boxed cells, pointers, scalars, or tagged values.
 fn same_physical_param_abi(left: &PhpType, right: &PhpType) -> bool {
     left.reference_payload_compatible(right)
+}
+
+fn can_box_param_as_mixed(source: &PhpType, target: &PhpType) -> bool {
+    target.codegen_repr() == PhpType::Mixed
+        && source.codegen_repr() != PhpType::Mixed
+        && !matches!(source.codegen_repr(), PhpType::Never)
 }
 
 fn physical_method_symbol(class_name: &str, method_name: &str, kind: MethodKind) -> String {
@@ -568,6 +640,14 @@ mod tests {
         assert!(plan_method_abi(&caller, &float_physical)
             .unwrap_err()
             .contains("unsupported physical signature difference"));
+
+        let mut by_ref_caller = raw_pointer.clone();
+        by_ref_caller.ref_params[1] = true;
+        let mut by_ref_mixed = by_ref_caller.clone();
+        by_ref_mixed.params[1].1 = PhpType::Mixed;
+        assert!(plan_method_abi(&by_ref_caller, &by_ref_mixed)
+            .unwrap_err()
+            .contains("unsupported physical signature difference"));
     }
 
     #[test]
@@ -659,6 +739,48 @@ mod tests {
                 "movz x0, #0xfffe"
             };
             assert!(asm.contains(null_payload), "{target}");
+        }
+    }
+
+    /// Typed arguments widened to mixed are boxed and released on every supported target.
+    #[test]
+    fn interface_wrapper_boxes_widened_parameters_on_all_targets() {
+        let caller = signature(vec![
+            ("user".to_string(), PhpType::Object("User".to_string())),
+            ("label".to_string(), PhpType::Str),
+        ], None);
+        let mut physical = caller.clone();
+        physical.params[0].1 = PhpType::Mixed;
+        physical.params[1].1 = PhpType::Mixed;
+        assert_eq!(plan_method_abi(&caller, &physical).unwrap(), MethodAbiPlan::BoxArguments);
+
+        for target in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let mut emitter = Emitter::new(
+                crate::codegen_support::platform::Target::parse(target).unwrap(),
+            );
+            emit_method_adapter(
+                &mut emitter,
+                "_test_interface_wrapper",
+                "_test_mixed_method",
+                MethodKind::Instance,
+                &caller,
+                &physical,
+                false,
+            )
+            .unwrap();
+            let asm = emitter.output();
+            assert_eq!(asm.matches("__rt_mixed_from_value").count(), 2, "{target}");
+            assert_eq!(asm.matches("__rt_decref_any").count(), 2, "{target}");
+            assert!(asm.find("param $source_method_arg").unwrap()
+                < asm.find("__rt_mixed_from_value").unwrap(), "{target}");
+            assert!(asm.find("_test_mixed_method").unwrap()
+                < asm.find("__rt_decref_any").unwrap(), "{target}");
         }
     }
 

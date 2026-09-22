@@ -270,8 +270,12 @@ fn validate_static_interface_method(
             ))
         }
     };
+    let actual_method = class
+        .methods
+        .iter()
+        .find(|m| m.is_static && php_symbol_key(&m.name) == method_name);
     validate_signature_compatibility(
-        crate::span::Span::dummy(),
+        actual_method.map(|m| m.span).unwrap_or(class.span),
         &class.name,
         method_name,
         actual_sig,
@@ -290,10 +294,6 @@ fn validate_static_interface_method(
                     |owner| declaration_is_source(checker, owner),
                 ),
     )?;
-    let actual_method = class
-        .methods
-        .iter()
-        .find(|m| m.is_static && php_symbol_key(&m.name) == method_name);
     if required_sig.declared_return && !actual_sig.declared_return {
         return Err(CompileError::new(
             actual_method
@@ -507,8 +507,12 @@ fn validate_interface_method(
             ))
         }
     };
+    let actual_method = class
+        .methods
+        .iter()
+        .find(|m| php_symbol_key(&m.name) == method_name);
     validate_signature_compatibility(
-        crate::span::Span::dummy(),
+        actual_method.map(|m| m.span).unwrap_or(class.span),
         &class.name,
         method_name,
         actual_sig,
@@ -527,10 +531,6 @@ fn validate_interface_method(
                     |owner| declaration_is_source(checker, owner),
                 ),
     )?;
-    let actual_method = class
-        .methods
-        .iter()
-        .find(|m| php_symbol_key(&m.name) == method_name);
     if required_sig.declared_return && !actual_sig.declared_return {
         return Err(CompileError::new(
             actual_method

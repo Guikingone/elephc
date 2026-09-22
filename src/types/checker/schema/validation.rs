@@ -212,6 +212,7 @@ pub(crate) fn visibility_rank(visibility: &Visibility) -> u8 {
 struct SourceVisibleShape {
     param_count: usize,
     param_names: Vec<String>,
+    param_types: Vec<PhpType>,
     declared_params: Vec<bool>,
     ref_params: Vec<bool>,
     has_defaults: Vec<bool>,
@@ -238,6 +239,13 @@ impl SourceVisibleShape {
                 .enumerate()
                 .filter(|(index, _)| keep(*index))
                 .map(|(_, (name, _))| name.clone())
+                .collect(),
+            param_types: sig
+                .params
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| keep(*index))
+                .map(|(_, (_, ty))| ty.clone())
                 .collect(),
             declared_params: sig
                 .declared_params
@@ -353,7 +361,7 @@ pub(crate) fn validate_signature_compatibility(
             .zip(&child.declared_params)
             .enumerate()
         {
-            if !parent_declared && child_declared {
+            if !parent_declared && child_declared && child.param_types[index] != PhpType::Mixed {
                 return Err(CompileError::new(
                     span,
                     &format!(
