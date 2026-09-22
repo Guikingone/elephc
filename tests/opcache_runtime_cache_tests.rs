@@ -617,6 +617,67 @@ echo 'num=', eval('$s = opcache_get_status(); return $s["opcache_statistics"]["n
     );
 }
 
+/// A forced `opcache_invalidate()` on a MANIFEST file answers the same whichever surface
+/// issued it — written natively, written in a literal fragment, or written in a computed one.
+///
+/// WHY THIS NEEDS ITS OWN TEST. The manifest tier's invalidate latch is a `static` inside
+/// the INJECTED NATIVE function, and the eval interpreter's own handler cannot reach it: it
+/// knows the runtime cache and the file store and nothing else. The surfaces agree only
+/// because an eval'd call dispatches into the native body once the prelude is injected — so
+/// the agreement is a CONSEQUENCE of the detector, not a property of the invalidate code,
+/// and any future narrowing of the detector silently breaks it here instead of in
+/// production. A reviewer raised exactly this route, reasoning that a computed fragment
+/// escaped injection and would leave the latch unset.
+///
+/// MEASURED against reference PHP 8.5: `before=1 after=0` for all three spellings.
+///
+/// A fragment whose text never spells the name at all — `eval('$f = "opcache_" .
+/// "invalidate"; $f($p, true);')` — is NOT covered and cannot be: no compile-time scan can
+/// see a name assembled at runtime. It is not a silent divergence either. That program
+/// stops with `Fatal error: eval() fragment uses an unsupported construct`, because the
+/// interpreter refuses a variable function call, which is a pre-existing limitation of
+/// `eval` rather than anything this surface decides.
+#[test]
+fn a_forced_invalidate_agrees_across_every_surface_that_can_issue_it() {
+    for (label, issue) in [
+        ("native", r#"opcache_invalidate($p, true);"#),
+        ("literal fragment", r#"eval("opcache_invalidate(\$p, true);");"#),
+        (
+            "computed fragment",
+            r#"$c = "opcache_" . "invalidate(\$p, true);"; eval($c);"#,
+        ),
+    ] {
+        let dir = make_test_dir("opcache_rt_surface_agreement");
+        write_dynamic_fixture(
+            &dir,
+            &format!(
+                r#"<?php
+$p = __FILE__;
+echo 'before=', (opcache_is_script_cached($p) ? '1' : '0'), "\n";
+{issue}
+echo 'after=', (opcache_is_script_cached($p) ? '1' : '0'), "\n";
+"#
+            ),
+        );
+
+        let output = run_binary(&compile(
+            &dir,
+            &["opcache.enable_cli=1", "opcache.file_update_protection=0"],
+        ));
+
+        assert_eq!(
+            field(&output, "before"),
+            "1",
+            "{label}: the entry script is a manifest member"
+        );
+        assert_eq!(
+            field(&output, "after"),
+            "0",
+            "{label}: the invalidate did not reach the manifest latch\n{output}"
+        );
+    }
+}
+
 /// The two fragment spellings the first cut of the detector missed, each ALONE in its
 /// program so nothing else can inject the declaration for it.
 ///
