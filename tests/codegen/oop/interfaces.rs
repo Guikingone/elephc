@@ -9,6 +9,34 @@
 
 use super::*;
 
+/// Keeps untyped interface defaults callable after concrete method parameters widen.
+#[test]
+fn test_untyped_interface_method_defaults_use_stable_boxed_abi() {
+    let out = compile_and_run(
+        r#"<?php
+interface BindingContract {
+    public function bind($abstract, $concrete = null, $shared = false);
+}
+
+class BindingContainer implements BindingContract {
+    public function bind($abstract, $concrete = null, $shared = false) {
+        echo $abstract;
+    }
+}
+
+function invoke(BindingContract $container) {
+    $result = $container->bind(42);
+    echo gettype($result);
+}
+
+$container = new BindingContainer();
+$container->bind("x", "value", true);
+invoke($container);
+"#,
+    );
+    assert_eq!(out, "x42NULL");
+}
+
 /// Verifies a concrete class can satisfy an interface contract by implementing all required methods.
 /// Fixture: interface `Named` with method `name()`, concrete `User` implementing `Named`.
 /// Asserts the method call on the concrete instance returns the expected string.

@@ -974,6 +974,7 @@ pub(crate) fn emit_runtime_data_user(
                 if let Some(impl_class) = class_info.method_impl_classes.get(method_name) {
                     let symbol = interface_method_table_symbol(
                         class_info,
+                        interface_name,
                         interface_info,
                         method_name,
                         impl_class,
@@ -2867,6 +2868,7 @@ fn emit_static_callable_method_data(out: &mut String, sorted_classes: &[(&String
 /// implementing class uses a narrower type (the wrapper bridges the type mismatch).
 fn interface_method_table_symbol(
     class_info: &ClassInfo,
+    interface_name: &str,
     interface_info: &InterfaceInfo,
     method_name: &str,
     impl_class: &str,
@@ -2880,7 +2882,12 @@ fn interface_method_table_symbol(
         .get(impl_class)
         .and_then(|class_info| class_info.methods.get(method_name))
         .ok_or_else(|| format!("missing implementation signature for {impl_class}::{method_name}"))?;
-    let abi_plan = source_method_adapters::plan_method_abi(interface_sig, actual_sig)?;
+    let abi_plan = source_method_adapters::plan_method_abi(interface_sig, actual_sig)
+        .map_err(|error| format!(
+            "{error}: {interface_name}::{method_name} implemented by {impl_class}::{method_name}; caller {:?} -> {:?}, physical {:?} -> {:?}",
+            interface_sig.params, interface_sig.return_type,
+            actual_sig.params, actual_sig.return_type,
+        ))?;
     if interface_method_needs_return_wrapper(interface_info, method_name, impl_class, classes)
         || abi_plan != MethodAbiPlan::Direct
     {

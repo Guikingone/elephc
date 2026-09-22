@@ -94,7 +94,12 @@ fn emit_class_interface_return_wrappers(
                 impl_class,
                 classes,
             );
-            let abi_plan = source_method_adapters::plan_method_abi(interface_sig, actual_sig)?;
+            let abi_plan = source_method_adapters::plan_method_abi(interface_sig, actual_sig)
+                .map_err(|error| format!(
+                    "{error}: {interface_name}::{method_name} implemented by {impl_class}::{method_name}; caller {:?} -> {:?}, physical {:?} -> {:?}",
+                    interface_sig.params, interface_sig.return_type,
+                    actual_sig.params, actual_sig.return_type,
+                ))?;
             if !needs_return_wrapper && abi_plan == MethodAbiPlan::Direct {
                 continue;
             }

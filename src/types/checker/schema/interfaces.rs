@@ -321,7 +321,18 @@ pub(crate) fn build_interface_info_recursive(
             ));
         }
 
-        let sig = build_method_sig(checker, method, &interface.name)?;
+        let mut sig = build_method_sig(checker, method, &interface.name)?;
+        if method.span.line != 0 && !method.is_static {
+            let regular_params = sig.params.len() - usize::from(sig.variadic.is_some());
+            for (index, (_, ty)) in sig.params.iter_mut().take(regular_params).enumerate() {
+                if !sig.declared_params.get(index).copied().unwrap_or(false) {
+                    *ty = PhpType::Mixed;
+                }
+            }
+            if !sig.declared_return {
+                sig.return_type = PhpType::Mixed;
+            }
+        }
         if method.is_static {
             if methods.contains_key(&method_key) {
                 return Err(interface_method_kind_conflict(

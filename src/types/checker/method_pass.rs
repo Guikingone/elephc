@@ -16,6 +16,73 @@ use crate::types::{traits::FlattenedClass, FunctionSig, PhpType, TypeEnv};
 use super::Checker;
 
 impl Checker {
+    /// Gives untyped source interface parameters one boxed ABI in every implementing class.
+    ///
+    /// Interface callers have no implementation-specific call-site types. Keep their untyped
+    /// parameters and the matching physical parameters as `Mixed`, including inherited copies,
+    /// before direct calls can specialize a concrete method's signature.
+    pub(super) fn box_untyped_interface_method_params(&mut self) {
+        let mut boxed = std::collections::HashSet::new();
+        for class_info in self.classes.values() {
+            for interface_name in &class_info.interfaces {
+                let Some(interface_info) = self.interfaces.get(interface_name) else {
+                    continue;
+                };
+                for (method_name, interface_sig) in &interface_info.methods {
+                    let source_owner = interface_info
+                        .method_declaring_interfaces
+                        .get(method_name)
+                        .map(String::as_str)
+                        .unwrap_or(interface_name);
+                    if self
+                        .interfaces
+                        .get(source_owner)
+                        .is_none_or(|owner| owner.declaration_span.line == 0)
+                    {
+                        continue;
+                    }
+                    let Some(impl_class) = class_info.method_impl_classes.get(method_name) else {
+                        continue;
+                    };
+                    let Some(physical) = self
+                        .classes
+                        .get(impl_class)
+                        .and_then(|info| info.methods.get(method_name))
+                    else {
+                        continue;
+                    };
+                    let regular_params = interface_sig.params.len()
+                        - usize::from(interface_sig.variadic.is_some());
+                    for (index, is_declared) in interface_sig
+                        .declared_params
+                        .iter()
+                        .take(regular_params)
+                        .enumerate()
+                    {
+                        if !is_declared
+                            && !physical.declared_params.get(index).copied().unwrap_or(false)
+                        {
+                            boxed.insert((format!("{}::{}", impl_class, method_name), index));
+                        }
+                    }
+                }
+            }
+        }
+        for class_info in self.classes.values_mut() {
+            for (method_name, sig) in &mut class_info.methods {
+                let Some(owner) = class_info.method_impl_classes.get(method_name) else {
+                    continue;
+                };
+                for (index, (_, ty)) in sig.params.iter_mut().enumerate() {
+                    if boxed.contains(&(format!("{}::{}", owner, method_name), index)) {
+                        *ty = PhpType::Mixed;
+                    }
+                }
+            }
+        }
+        self.interface_method_boxed_params = boxed;
+    }
+
     /// Runs method-body validation in passes until class type information stabilizes.
     ///
     /// Each pass type-checks every non-abstract method body, collecting return types and

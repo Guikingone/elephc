@@ -299,6 +299,13 @@ pub(crate) fn emit_method_adapter(
     }
     restore_return_value(emitter, &physical_return, return_offset);
     if box_return_as_mixed {
+        if physical_return == PhpType::Void {
+            abi::emit_load_int_immediate(
+                emitter,
+                abi::int_result_reg(emitter),
+                0x7fff_ffff_ffff_fffe,
+            );
+        }
         super::value_boxing::emit_box_current_value_as_mixed(emitter, &physical_return);
     }
     abi::emit_frame_restore(emitter, frame_size);
@@ -600,6 +607,45 @@ mod tests {
         )
         .unwrap_err()
         .contains("by-reference"));
+    }
+
+    /// Ensures every target materializes a null payload before boxing an untyped void return.
+    #[test]
+    fn interface_wrapper_boxes_void_return_on_all_targets() {
+        let mut caller = signature(Vec::new(), None);
+        caller.return_type = PhpType::Mixed;
+        let mut physical = caller.clone();
+        physical.return_type = PhpType::Void;
+
+        for target in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let mut emitter = Emitter::new(
+                crate::codegen_support::platform::Target::parse(target).unwrap(),
+            );
+            emit_method_adapter(
+                &mut emitter,
+                "_test_interface_wrapper",
+                "_test_void_method",
+                MethodKind::Instance,
+                &caller,
+                &physical,
+                true,
+            )
+            .unwrap();
+            let asm = emitter.output();
+            assert!(asm.contains("__rt_mixed_from_value"), "{target}");
+            let null_payload = if target == "linux-x86_64" {
+                "mov rax, 9223372036854775806"
+            } else {
+                "movz x0, #0xfffe"
+            };
+            assert!(asm.contains(null_payload), "{target}");
+        }
     }
 
     #[test]

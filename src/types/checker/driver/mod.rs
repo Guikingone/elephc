@@ -362,6 +362,7 @@ pub(super) fn check_types_impl(
             }
         }
     }
+    checker.box_untyped_interface_method_params();
     report_class_id_inventory(&checker);
     errors.extend(validate_deferred_declaration_defaults(
         &mut checker,
