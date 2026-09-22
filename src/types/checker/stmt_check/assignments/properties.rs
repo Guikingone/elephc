@@ -600,9 +600,51 @@ fn refine_object_property_type(
         };
         refined_ty
     };
-    if let Some(class_info) = checker.classes.get_mut(class_name) {
-        if let Some(slot) = class_info.visible_property_index(property) {
-            class_info.properties[slot].1 = refined_ty;
+    update_inherited_property_slot_type(checker, class_name, property, refined_ty);
+}
+
+/// Keeps copies of one inherited property slot in the same storage shape.
+///
+/// Class layouts copy an ancestor's property metadata before method bodies are checked. A
+/// later write can refine the ancestor's `Array(Never)` to an associative array, and codegen
+/// must see that refinement on every subclass that inherited the same physical slot. A child
+/// with a private property of the same name still carries the parent's slot, even though its
+/// name lookup points at a separate slot. A non-private redeclaration replaces the parent's
+/// slot and keeps its own declared default/type.
+fn update_inherited_property_slot_type(
+    checker: &mut Checker,
+    class_name: &str,
+    property: &str,
+    ty: PhpType,
+) {
+    let Some(class_info) = checker.classes.get(class_name) else {
+        return;
+    };
+    let Some(slot) = class_info.visible_property_index(property) else {
+        return;
+    };
+    if class_info.properties[slot].1 == ty {
+        return;
+    }
+    let declaring_class = class_info
+        .property_declaring_classes
+        .get(property)
+        .cloned()
+        .unwrap_or_else(|| class_name.to_string());
+    let inheritors: Vec<String> = checker
+        .classes
+        .iter()
+        .filter(|(name, info)| {
+            (name.as_str() == declaring_class || checker.is_subclass_of(name, &declaring_class))
+                && info.properties.get(slot).is_some_and(|(name, _)| name == property)
+                && (info.visible_property_index(property) != Some(slot)
+                    || info.property_declaring_classes.get(property) == Some(&declaring_class))
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
+    for name in inheritors {
+        if let Some(info) = checker.classes.get_mut(&name) {
+            info.properties[slot].1 = ty.clone();
         }
     }
 }
@@ -898,18 +940,16 @@ fn update_object_property_type(
     property_has_declared_type: bool,
     updated_prop_ty: PhpType,
 ) {
-    if let Some(class_info) = checker.classes.get_mut(class_name) {
-        if let Some(prop) = class_info
-            .properties
-            .iter_mut()
-            .find(|(name, _)| name == property)
-        {
-            if !property_has_declared_type
-                || declared_generic_array_can_use_assoc_storage(&prop.1, &updated_prop_ty)
-            {
-                prop.1 = updated_prop_ty;
-            }
-        }
+    let Some(class_info) = checker.classes.get(class_name) else {
+        return;
+    };
+    let Some((_, (_, current_ty))) = class_info.visible_property(property) else {
+        return;
+    };
+    if !property_has_declared_type
+        || declared_generic_array_can_use_assoc_storage(current_ty, &updated_prop_ty)
+    {
+        update_inherited_property_slot_type(checker, class_name, property, updated_prop_ty);
     }
 }
 

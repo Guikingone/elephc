@@ -760,6 +760,73 @@ echo $r["a"] . "," . $r["b"];
     assert_eq!(out, "10,20");
 }
 
+/// Regression for issue #1245: a child object uses the same inherited untyped array slot
+/// as the parent's method, even after a string-keyed write changes its storage shape.
+#[test]
+fn test_inherited_empty_array_property_accepts_associative_write() {
+    let out = compile_and_run(
+        r#"<?php
+class Container {
+    protected $instances = [];
+    public function instance(mixed $abstract, mixed $instance) {
+        $this->instances[$abstract] = $instance;
+    }
+    public function get(mixed $abstract): mixed { return $this->instances[$abstract]; }
+}
+class Application extends Container {}
+$app = new Application();
+$app->instance('service', 7);
+echo $app->get('service');
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+/// A child private property with the same name has its own slot; the inherited private slot
+/// still needs the parent's refined associative storage when a parent method writes through it.
+#[test]
+fn test_inherited_private_empty_array_property_with_child_shadow() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentStore {
+    private $instances = [];
+    public function put($key) { $this->instances[$key] = 7; }
+    public function parentValue($key) { return $this->instances[$key]; }
+}
+class ChildStore extends ParentStore {
+    private $instances = [11];
+    public function childValue() { return $this->instances[0]; }
+}
+$store = new ChildStore();
+$store->put('service');
+echo $store->parentValue('service') . ',' . $store->childValue();
+"#,
+    );
+    assert_eq!(out, "7,11");
+}
+
+/// A whole-array replacement must refine the shared inherited slot on every sibling layout.
+#[test]
+fn test_inherited_empty_array_property_replacement_reaches_siblings() {
+    let out = compile_and_run(
+        r#"<?php
+class SharedStore {
+    protected $items = [];
+    public function fill(mixed $value) { $this->items = ['key' => $value]; }
+    public function value(): mixed { return $this->items['key']; }
+}
+class FirstStore extends SharedStore {}
+class SecondStore extends SharedStore {}
+$first = new FirstStore();
+$second = new SecondStore();
+$first->fill(3);
+$second->fill(4);
+echo $first->value() . ',' . $second->value();
+"#,
+    );
+    assert_eq!(out, "3,4");
+}
+
 /// Verifies a positional-literal default (`[1, 2, 3]`) on a property later given string keys is
 /// stored associatively, so the whole array survives a cross-method return and string re-indexing.
 /// Regression companion: the positional default must also be rewritten to hash storage when the
