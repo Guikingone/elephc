@@ -253,6 +253,22 @@ pub(super) fn expand_value_include(
 /// is how a file says "nothing more to do here"); under reference PHP that is harmless, so a
 /// preload that truncates the whole program is a divergence with no warning attached to it.
 ///
+/// ONLY A DIRECT TOP-LEVEL `return` IS REWRITTEN, and the limit is worth stating because the
+/// shape left over is the COMMONER one. `if (!defined('APP_READY')) { return; }` at the top of
+/// an included file is the classic include guard, and its `return` is nested inside an `if`,
+/// so this walk does not see it and the inlined body still returns from the caller. MEASURED
+/// at this commit: reference prints `MAIN-START COND-START MAIN-AFTER`, elephc prints the
+/// first two and exits 0. The same gap exists in `rewrite_first_include_return` for the
+/// value-capturing form, where it predates this branch.
+///
+/// Fixing it needs more than a deeper walk: a conditional return cannot be turned into a
+/// static truncation. The shape that would work is wrapping the inlined body in a
+/// `do { … } while (false)` and rewriting each in-scope `return` to `break <n>`, where `n`
+/// counts the loops and switches between it and the wrapper — recursing through control flow
+/// but never into a nested function or class body, whose `return` belongs to them. That is
+/// its own change; this one makes the unconditional case correct and is a strict improvement
+/// on leaving both broken.
+///
 /// The value-capturing form (`$x = require F;`) has always done this through
 /// `rewrite_first_include_return`, which assigns the returned value to a temporary. The only
 /// difference here is that nobody wants the value — but `return foo();` must still CALL

@@ -24,6 +24,23 @@ pub(in crate::interpreter) fn eval_builtin_with_values(
         return Ok(Some(result));
     }
 
+    // THE SAME GUARD THE DIRECT CALL PATH CARRIES. When the binary declares these names
+    // itself — which it does whenever the OPcache prelude is injected — that declaration is
+    // the only thing that knows the resolved directives, the live cache, and
+    // `opcache.restrict_api`. Intercepting ahead of it does not merely answer with stale
+    // data: it answers INSTEAD of the refusal.
+    //
+    // `expressions/calls.rs` was fixed for the direct spelling and this path was not, so the
+    // refusal survived `opcache_reset()` and `eval('opcache_reset()')` and did not survive
+    // `eval('call_user_func("opcache_reset")')` — which returned `true`, emitted no warning,
+    // and scheduled a real flush under `opcache.restrict_api=/nonexistent`. A guard with a
+    // second way in is not a guard.
+    //
+    // `call_user_func` is what reaches here: `$f = "opcache_reset"; $f()` takes the direct
+    // path and was always refused, and `call_user_func_array` fatals on an unsupported
+    // construct before arriving. Guarding the whole block rather than the one name keeps the
+    // next spelling from needing its own discovery.
+    if context.native_function(name).is_none() {
     // `opcache_get_configuration` is prelude-provided on native and dispatched here as
     // a plain runtime handler (not a PHP-visible builtin); it takes no arguments.
     if name == "opcache_get_configuration" {
@@ -97,6 +114,7 @@ pub(in crate::interpreter) fn eval_builtin_with_values(
             return Err(EvalStatus::RuntimeFatal);
         }
         return Ok(Some(eval_opcache_jit_blacklist_result(values)?));
+    }
     }
 
     if let Some(result) =

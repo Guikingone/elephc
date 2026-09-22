@@ -194,6 +194,29 @@ fn spawn_server_with_stderr(bin: &Path, addr: &str, stderr_path: &Path) -> Serve
     }
 }
 
+/// Spawns a server with its STDOUT captured to a file.
+///
+/// The `--web` preload writes to the process's own stdout, which is the only place its
+/// execution is observable from outside — no response carries it, by design. A test that
+/// cannot read it cannot tell "the preload ran and its output went where it should" from
+/// "the preload never ran at all".
+fn spawn_server_with_stdout(bin: &Path, addr: &str, stdout_path: &Path) -> ServerHandle {
+    let stdout = fs::File::create(stdout_path).expect("failed to create server stdout capture");
+    let child = Command::new(bin)
+        .arg("--listen")
+        .arg(addr)
+        .arg("--workers")
+        .arg("1")
+        .stdout(stdout)
+        .spawn()
+        .expect("failed to spawn web server");
+    wait_until_ready(addr);
+    ServerHandle {
+        child,
+        addr: addr.to_string(),
+    }
+}
+
 /// Sends one HTTP/1.1 GET and returns the full raw response text.
 fn http_get(addr: &str, path: &str) -> String {
     let mut s = TcpStream::connect(addr).unwrap();
@@ -2216,26 +2239,31 @@ fn opcache_ini_set_works_under_web() {
 
 /// Verifies `opcache.preload` runs ONCE at startup under `--web`, not inside request 1.
 ///
-/// The `--web` top-level body IS the request handler, so the preload's inlined statements
-/// used to execute inside the first request of every worker — and again after each
-/// `--max-requests` recycle. Response 1 therefore carried the preload's output, and the
-/// preload's code saw that request's `$_SERVER`.
+/// The `--web` top-level body IS the request handler, so the preload's statements used to
+/// execute inside the first request of every worker, and again after each `--max-requests`
+/// recycle. MEASURED on reference `php -S`: the preload's output appears once on the
+/// SERVER's own stdout and in no response, while its declarations are usable from every
+/// request.
 ///
-/// MEASURED on reference `php -S`: the preload's output appears once on the SERVER's own
-/// stdout and in no response, while its declarations are usable from every request. Both
-/// halves are asserted, and they fail in opposite directions — which matters, because the
-/// first version of this fix produced clean responses by dropping the preload entirely.
-/// The declaration assertion is what catches that: the reachability pruner removes a
-/// function nothing in PHP calls, and the hoisted body is called only from the entry stub.
+/// THE SERVER'S STDOUT IS THE ONLY EVIDENCE THE PRELOAD RAN, and an earlier version of this
+/// test did not read it. Its three assertions — declaration usable, no preload output in
+/// either response — ALL HOLD when the preload body never executes at all: the resolver
+/// strips declarations out of the include guard, so `from_preload` lives at the top level
+/// and is rooted independently of the wrapper. The test therefore could not fail on the
+/// failure mode it was written for, and the counterfactual that was supposed to prove
+/// otherwise actually failed with a connection refusal — the server had not started, for an
+/// unrelated reason. Asserting the stdout is what closes that.
 ///
-/// `--workers 1` is load-bearing: both requests must land in the same process, so a second
-/// copy of the output would show up as a second response carrying it.
+/// `exactly once` is asserted rather than `at least once`: the whole point is that a hoist
+/// which ran per worker, or per request, would still put the output somewhere.
+///
+/// `--workers 1` is load-bearing: both requests must land in the same process.
 #[test]
 fn the_web_preload_runs_once_at_startup_not_in_the_first_request() {
     let dir = make_test_dir("opcache_web_preload_hoist");
     std::fs::write(
         dir.join("preload.php"),
-        "<?php\necho \"PRELOAD-OUTPUT\\n\";\nfunction from_preload(): string { return 'declared'; }\n",
+        "<?php\necho \"PRELOAD-RAN\\n\";\nfunction from_preload(): string { return 'declared'; }\n",
     )
     .unwrap();
     let bin = compile_web_with_flags(
@@ -2251,23 +2279,29 @@ fn the_web_preload_runs_once_at_startup_not_in_the_first_request() {
     );
     let port = free_port();
     let addr = format!("127.0.0.1:{}", port);
-    let mut child = spawn_server(&bin, &addr, "1");
+    let stdout_path = dir.join("server.out");
+    let mut child = spawn_server_with_stdout(&bin, &addr, &stdout_path);
     let first = http_get(&addr, "/");
     let second = http_get(&addr, "/");
     let _ = child.kill();
     let _ = child.wait();
 
-    assert!(
-        first.ends_with("REQ:declared"),
-        "the preload's declarations must be usable, and its output must not be in the \
-         response: {first:?}"
+    let captured = std::fs::read_to_string(&stdout_path).unwrap_or_default();
+    assert_eq!(
+        captured.matches("PRELOAD-RAN").count(),
+        1,
+        "the preload must run exactly once, on the server's own stdout: {captured:?}"
     );
     assert!(
-        !first.contains("PRELOAD-OUTPUT"),
+        first.ends_with("REQ:declared"),
+        "the preload's declarations must be usable from the request: {first:?}"
+    );
+    assert!(
+        !first.contains("PRELOAD-RAN"),
         "response 1 carried the preload's output: {first:?}"
     );
     assert!(
-        second.ends_with("REQ:declared") && !second.contains("PRELOAD-OUTPUT"),
+        second.ends_with("REQ:declared") && !second.contains("PRELOAD-RAN"),
         "{second:?}"
     );
 }

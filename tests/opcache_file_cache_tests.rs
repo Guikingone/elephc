@@ -13,9 +13,11 @@
 //! - THE VALIDATION IS GATED ON THE CACHE BEING ENABLED. That is reference behaviour,
 //!   not an elephc shortcut, which is why the default-CLI test asserts a clean run with
 //!   a deliberately broken path.
-//! - The fatal is raised while the eval context is built, so every fixture reaches an
-//!   `eval()`. A binary with no dynamic tier never configures the cache and so never
-//!   validates — the residual divergence documented in `docs/php/opcache.md`.
+//! - The fatal is raised from the PROLOGUE, where the OPcache configuration is installed,
+//!   so it precedes the program's first statement exactly as reference's MINIT fatal does.
+//!   It used to be raised when the eval context was built, which is why older fixtures here
+//!   all contain an `eval()`; that is now incidental rather than required. A binary with no
+//!   dynamic tier still never configures the cache and so never validates.
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an isolated
 //!   temp dir, the same harness style as `opcache_runtime_cache_tests`. Host-target only.
 

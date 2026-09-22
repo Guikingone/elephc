@@ -22,9 +22,11 @@
 //!   default of 2 seconds it refuses a just-written file for its AGE, which looks exactly
 //!   like a blacklist refusal and silently invalidates the test — this is the confound
 //!   that made an earlier revision of the matcher wrong in the opposite direction.
-//! - The blacklist is loaded when the eval context is built, so every fixture reaches an
-//!   `eval()`; a binary with no dynamic tier never loads one. Same residual divergence as
-//!   the rest of the runtime-cache surface, documented in `docs/php/opcache.md`.
+//! - The blacklist is loaded from the PROLOGUE, with the rest of the OPcache configuration,
+//!   so it is in force before the program's first statement — which is what
+//!   `the_listing_is_populated_before_the_first_eval` pins. It used to load when the eval
+//!   context was built, which is why older fixtures here all contain an `eval()`; that is now
+//!   incidental. A binary with no dynamic tier still never loads one.
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an isolated
 //!   temp dir, the same harness style as `opcache_runtime_cache_tests`. Host-target only.
 
