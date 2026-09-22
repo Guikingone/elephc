@@ -2,7 +2,7 @@
 title: "opcache_get_status()"
 description: "Returns OPcache memory, statistics, and optionally the cached scripts."
 sidebar:
-  order: 615
+  order: 638
 ---
 
 ## opcache_get_status()
@@ -23,7 +23,7 @@ Returns OPcache memory, statistics, and optionally the cached scripts.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -2,7 +2,7 @@
 title: "session_write_close()"
 description: "Writes the session data and releases the session lock."
 sidebar:
-  order: 908
+  order: 937
 ---
 
 ## session_write_close()
@@ -22,7 +22,7 @@ Writes the session data and releases the session lock.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

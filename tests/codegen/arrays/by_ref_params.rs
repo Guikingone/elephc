@@ -234,23 +234,25 @@ echo count($x), count($snapshot), "\n";
     );
 }
 
-/// Pins the DOCUMENTED refusal: an INDEXED by-reference receiver keeps its named error.
-///
-/// `unset()` removes a key without renumbering, so the local must become a hash — and a callee
-/// cannot retype the caller's slot, which still reads `array<T>`. The message has to say so,
-/// because "use an associative array, or copy" is the actual workaround.
+/// `unset($a[1])` through a by-reference INDEXED parameter has to reach the caller as a key
+/// hole, not a renumbered list. A declared `array` parameter keeps a boxed packed-or-hash
+/// representation, so the callee can turn the packed list sparse in place and the caller's slot
+/// still describes the same storage; a later append continues after the highest surviving key.
 #[test]
-fn test_unset_indexed_element_on_by_ref_parameter_is_refused() {
-    let error = crate::support::compile_source_expect_backend_error(
+fn test_unset_indexed_element_on_by_ref_parameter_reaches_the_caller() {
+    let out = compile_and_run(
         r#"<?php
 function drop(array &$a) { unset($a[1]); }
 $x = [1, 2, 3];
 drop($x);
-echo implode(",", $x);
+echo implode(",", array_keys($x)), "|", implode(",", $x), "
+";
+$x[] = 4;
+echo implode(",", array_keys($x)), "|", count($x), "
+";
 "#,
     );
-    assert!(
-        error.contains("by-reference INDEXED array") && error.contains("still says `array<T>`"),
-        "expected the named by-reference unset diagnostic, got: {error}"
-    );
+    assert_eq!(out, "0,2|1,3
+0,2,3|3
+");
 }

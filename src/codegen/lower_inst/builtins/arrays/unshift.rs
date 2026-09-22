@@ -41,6 +41,10 @@ pub(super) fn lower_array_unshift(ctx: &mut FunctionContext<'_>, inst: &Instruct
         ));
     }
     let array = expect_operand(inst, 0)?;
+    if ctx.value_php_type(array)?.codegen_repr() == PhpType::Mixed {
+        require_array_unshift_result_type(&inst.result_php_type.codegen_repr())?;
+        return super::boxed_unshift::lower_boxed_array_unshift(ctx, inst, array);
+    }
     let elem_ty = array_unshift_element_type(ctx.value_php_type(array)?)?;
     for index in 1..inst.operands.len() {
         let value = expect_operand(inst, index)?;
@@ -66,7 +70,9 @@ pub(super) fn lower_array_unshift(ctx: &mut FunctionContext<'_>, inst: &Instruct
                 Arch::X86_64 => lower_array_unshift_x86_64(ctx, array, value)?,
             }
         }
-        receiver.store_back_value(ctx, array)?;
+        // The unique source and every growth already own the transition (see
+        // `store_back_after_consuming_split`): a global must only publish the pointer.
+        receiver.store_back_after_consuming_split(ctx, array)?;
     }
     // The helper already returns the running count, but the local-slot write-back above may
     // clobber the result register, and the value-less form never calls the helper at all.

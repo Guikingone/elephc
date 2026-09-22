@@ -2,7 +2,7 @@
 title: "session_encode()"
 description: "Serializes the current session data into a string."
 sidebar:
-  order: 893
+  order: 922
 ---
 
 ## session_encode()
@@ -22,7 +22,7 @@ Serializes the current session data into a string.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

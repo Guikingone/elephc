@@ -238,9 +238,7 @@ pub(super) fn lower_catch_dispatch_with_finally(
     let current = lower_current_exception(ctx, span);
     lower_block(ctx, finally_body);
     if !ctx.builder.insertion_block_is_terminated() {
-        ctx.builder.terminate(Terminator::Throw {
-            value: current.value,
-        });
+        terminate_throw(ctx, current.value);
     }
     after_reachable
 }

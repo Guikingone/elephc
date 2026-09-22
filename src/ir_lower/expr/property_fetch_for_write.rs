@@ -1,18 +1,21 @@
 //! Purpose:
-//! Lowers object-property sources for by-reference `foreach`, whatever the receiver.
+//! Lowers object-property sources for by-reference `foreach` and nested writes, whatever the receiver.
 //!
 //! Called from:
 //! - `crate::ir_lower::stmt::typed_foreach` when the loop source is a property access.
+//! - `crate::ir_lower::stmt::nested_array_writes` for boxed property write roots.
 //!
 //! Key details:
 //! - Emits a borrowed `PropGetForWrite` when the receiver is a statically known non-null object
 //!   and the final property is a fixed container slot. Frontend and backend slot classification
 //!   are mirrored over the same class metadata so the two sides cannot silently disagree.
-//! - The receiver no longer has to name stable backing storage. That question now only decides
-//!   WHO releases the receiver: a stable root (a variable, `$this`, a chain of declared non-null
-//!   object slots) releases its temporary here as before, while an OWNING temporary --
-//!   `$arr[0]->x`, `$o->get()->x` -- is handed to the loop, which outlives the borrow and
-//!   releases it on every way out, including `break`, `return` and a caught throw (issue #690).
+//! - For a by-reference `foreach` the receiver no longer has to name stable backing storage.
+//!   That question now only decides WHO releases the receiver: a stable root (a variable,
+//!   `$this`, a chain of declared non-null object slots) releases its temporary here as before,
+//!   while an OWNING temporary -- `$arr[0]->x`, `$o->get()->x` -- is handed to the loop, which
+//!   outlives the borrow and releases it on every way out, including `break`, `return` and a
+//!   caught throw (issue #690). A nested write has no loop to hand the receiver to, so every
+//!   step of its receiver chain must still be stable backing storage.
 //! - Hooked, magic, dynamic, nullable, `stdClass`, and non-container property slots keep the
 //!   ordinary retaining property read.
 
@@ -30,8 +33,66 @@ pub(crate) fn lower_by_ref_foreach_property_source(
     property: &str,
     expr: &Expr,
 ) -> ByRefForeachPropertySource {
+    lower_property_write_source(ctx, object, property, expr, false)
+}
+
+/// Returns whether a by-reference foreach may bind a synthetic origin to this property slot.
+///
+/// The origin must name the same fixed backing storage that an ordinary fetch-for-write would
+/// mutate. Hooked, magic, inaccessible, dynamic, nullable, and temporary receiver shapes must
+/// keep the value-fetch fallback so lowering does not bypass user code or retain an interior slot
+/// after its receiver dies.
+pub(crate) fn by_ref_foreach_property_source_is_addressable(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+) -> bool {
+    let Some((class_name, nullable)) = instance_callable_object_class_and_nullability(ctx, object)
+    else {
+        return false;
+    };
+    if nullable
+        || !matches!(
+            crate::types::resolve_property_name(
+                ctx.classes,
+                class_name.trim_start_matches('\\'),
+                property,
+                ctx.current_class.as_deref(),
+            ),
+            crate::types::PropertyNameResolution::Visible
+                | crate::types::PropertyNameResolution::ScopePrivate { .. }
+        )
+    {
+        return false;
+    }
+    property_is_splittable_container_slot(ctx, &class_name, property, false)
+        && receiver_is_stable_backing_storage(ctx, object)
+}
+
+/// Separates and republishes a fixed Mixed property before mutating its nested array payload.
+///
+/// A nested write has no loop frame to hand an unstable receiver to, so
+/// `property_fetch_for_write_applies` only admits receiver chains that keep the slot alive
+/// themselves and the read never yields a receiver to pin.
+pub(crate) fn lower_nested_assignment_property_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    lower_property_write_source(ctx, object, property, expr, true).value
+}
+
+/// Selects borrowed slot access only for the stable storage shape required by its consumer.
+fn lower_property_write_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    expr: &Expr,
+    mixed_root: bool,
+) -> ByRefForeachPropertySource {
     let object_value = lower_expr(ctx, object);
-    if !property_fetch_for_write_applies(ctx, &object_value, property, expr) {
+    if !property_fetch_for_write_applies(ctx, &object_value, property, expr, mixed_root) {
         return ByRefForeachPropertySource {
             value: lower_property_get_from_value(ctx, object_value, property, Op::PropGet, expr),
             receiver: None,
@@ -48,9 +109,8 @@ pub(crate) fn lower_by_ref_foreach_property_source(
         Op::PropGetForWrite.default_effects(),
         Some(expr.span),
     );
-    // The separated container belongs to the property slot. Mark it explicitly borrowed so
-    // `mark_owned_temporaries` cannot promote it and make loop cleanup release the property's
-    // own container.
+    // The separated value belongs to the property slot. Keep it borrowed so temporary cleanup
+    // cannot release the property's owner after iteration or a nested assignment.
     ctx.builder
         .set_value_ownership(result.value, Ownership::Borrowed);
     // A receiver that names stable backing storage -- a variable, `$this`, a declared object
@@ -87,16 +147,18 @@ pub(crate) struct ByRefForeachPropertySource {
     pub(crate) receiver: Option<LoweredValue>,
 }
 
-/// Returns whether a by-reference property source can use the fetch-for-write read.
+/// Returns whether the consumer can mutate a stable property through a fetch-for-write read.
 ///
-/// The receiver must be a statically known non-null object, the final property must be a fixed
-/// container slot the backend can split, and every receiver-chain step must have stable backing
-/// storage.
+/// The receiver must be a statically known non-null object and the final property must be a
+/// fixed container slot the backend can split. A nested write (`mixed_root`) additionally needs
+/// every receiver-chain step to have stable backing storage; a by-reference `foreach` pins an
+/// unstable receiver for the loop instead.
 fn property_fetch_for_write_applies(
     ctx: &LoweringContext<'_, '_>,
     object_value: &LoweredValue,
     property: &str,
     expr: &Expr,
+    mixed_root: bool,
 ) -> bool {
     let PhpType::Object(class_name) = ctx.builder.value_php_type(object_value.value).codegen_repr()
     else {
@@ -107,20 +169,46 @@ fn property_fetch_for_write_applies(
     }
     let property_ty =
         property_slot_result_type(ctx, object_value.value, property, Op::PropGet, expr);
-    if !matches!(
-        normalize_value_php_type(property_ty).codegen_repr(),
-        PhpType::Array(_) | PhpType::AssocArray { .. }
-    ) {
+    let property_ty = normalize_value_php_type(property_ty);
+    let supported = if mixed_root {
+        property_ty.codegen_repr() == PhpType::Mixed
+    } else {
+        property_ty.is_php_array()
+            || matches!(property_ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
+    };
+    if !supported {
         return false;
     }
     // The backend has no plain-read fallback for this borrowed op. Mirror its slot
     // classification over the same class metadata so the two sides cannot silently disagree.
-    if !property_is_splittable_container_slot(ctx, &class_name, property) {
+    if !property_is_splittable_container_slot(ctx, &class_name, property, mixed_root) {
         return false;
     }
-    // The receiver itself no longer has to name stable storage: an unstable one is held by the
-    // loop instead (see `lower_by_ref_foreach_property_source`). What still has to hold is that
-    // the receiver is a real object value, which the checks above established.
+    if mixed_root {
+        // A nested write has no loop frame to hand an unstable receiver to: the receiver chain
+        // itself has to keep the slot alive across the write, or the ordinary retaining read
+        // is the only safe source.
+        let ExprKind::PropertyAccess { object, .. } = &expr.kind else {
+            return false;
+        };
+        return receiver_is_stable_backing_storage(ctx, object);
+    }
+    // A by-reference `foreach` receiver no longer has to name stable storage: an unstable one
+    // is held by the loop instead (see `lower_by_ref_foreach_property_source`). What still has
+    // to hold is that the receiver is a real object value, which the checks above established.
+    //
+    // One receiver shape keeps the ordinary retaining read: a PROPERTY chain that is not stable
+    // backing storage, i.e. one reached through a magic, hooked, or nullable accessor
+    // (`$o->inner->x` with `__get`). Its object arrives narrowed out of the accessor's boxed
+    // result, and handing that object to the loop leaves the box behind (regression #642);
+    // the element and call receivers of issue #690 do not go through such a box.
+    if let ExprKind::PropertyAccess { object, .. } = &expr.kind {
+        if matches!(object.kind, ExprKind::PropertyAccess { .. })
+            && !receiver_is_stable_backing_storage(ctx, object)
+        {
+            return false;
+        }
+    }
     true
 }
 
@@ -132,6 +220,7 @@ fn property_is_splittable_container_slot(
     ctx: &LoweringContext<'_, '_>,
     class_name: &str,
     property: &str,
+    mixed_root: bool,
 ) -> bool {
     let normalized = class_name.trim_start_matches('\\');
     if is_builtin_stdclass_name(normalized) {
@@ -151,13 +240,15 @@ fn property_is_splittable_container_slot(
     };
     let slot_ty = runtime_property_type_override(ctx, normalized, property)
         .unwrap_or_else(|| declared_ty.clone());
-    matches!(
-        slot_ty.codegen_repr(),
-        PhpType::Array(_) | PhpType::AssocArray { .. }
-    )
+    if mixed_root {
+        slot_ty.codegen_repr() == PhpType::Mixed
+    } else {
+        slot_ty.is_php_array()
+            || matches!(slot_ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
+    }
 }
 
-/// Returns whether an object expression names storage that keeps the receiver alive for the loop.
+/// Returns whether an object expression names storage that keeps the receiver alive for mutation.
 ///
 /// Variables and `$this` are stable roots. A property chain remains stable only through declared,
 /// non-null, non-hooked object slots; calls, constructors, magic access, and other temporaries fail.

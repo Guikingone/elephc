@@ -2,7 +2,7 @@
 title: "opcache_is_script_cached_in_file_cache()"
 description: "Reports whether a script is in the on-disk file cache."
 sidebar:
-  order: 618
+  order: 641
 ---
 
 ## opcache_is_script_cached_in_file_cache()
@@ -23,7 +23,7 @@ Reports whether a script is in the on-disk file cache.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

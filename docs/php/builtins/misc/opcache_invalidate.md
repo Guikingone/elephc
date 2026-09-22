@@ -2,7 +2,7 @@
 title: "opcache_invalidate()"
 description: "Invalidates a script's cached opcodes, optionally without checking its timestamp."
 sidebar:
-  order: 616
+  order: 639
 ---
 
 ## opcache_invalidate()
@@ -24,7 +24,7 @@ Invalidates a script's cached opcodes, optionally without checking its timestamp
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

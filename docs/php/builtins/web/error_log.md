@@ -2,7 +2,7 @@
 title: "error_log()"
 description: "Sends an error message to the log, a file, or an email address."
 sidebar:
-  order: 882
+  order: 911
 ---
 
 ## error_log()
@@ -26,7 +26,7 @@ Sends an error message to the log, a file, or an email address.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

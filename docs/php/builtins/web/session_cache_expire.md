@@ -2,7 +2,7 @@
 title: "session_cache_expire()"
 description: "Reads or sets the cache expiry, in minutes, of the session cache limiter."
 sidebar:
-  order: 887
+  order: 916
 ---
 
 ## session_cache_expire()
@@ -23,7 +23,7 @@ Reads or sets the cache expiry, in minutes, of the session cache limiter.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

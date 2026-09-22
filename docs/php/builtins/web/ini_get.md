@@ -2,7 +2,7 @@
 title: "ini_get()"
 description: "Returns the value of a configuration directive."
 sidebar:
-  order: 883
+  order: 912
 ---
 
 ## ini_get()
@@ -23,7 +23,7 @@ Returns the value of a configuration directive.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

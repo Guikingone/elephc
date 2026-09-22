@@ -1,16 +1,16 @@
 ---
-title: "unset() — internals"
+title: "unset() - internals"
 description: "Compiler internals for unset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 662
+  order: 690
 ---
 
-## `unset()` — internals
+## `unset()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/types.rs`:146](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/types.rs#L146) (`lower_unset_builtin`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/types.rs`:141](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/types.rs#L141) (`lower_unset_builtin`)
 - **Function symbol**: `lower_unset_builtin()`
 
 
@@ -21,16 +21,11 @@ sidebar:
 - into a slot clear, a hash/array removal, an `offsetUnset()` call, a `__unset()`
 - call or a dynamic-property removal, so the message lists the shapes that do lower
 - directly and then names the one shape users hit most.
-- THE UNTYPED FIXED SLOT is one such shape. `unset($obj->untypedProp)` on a property
-- declared without a type (`public $foo = 1;`) truly REMOVES it in PHP: a later read
-- warns `Undefined property` and answers `null`, and a later write recreates it.
-- elephc gives each declared property a fixed, monomorphically typed slot, so a
-- property the checker typed `Int` has no encoding for "removed and reading as null"
-- — every candidate encoding answers `int(0)` or a raw marker word instead. A loud
-- error beats a wrong value, so the shape is refused here. Untyped properties whose
-- storage is a DYNAMIC hash (`stdClass`, undeclared names on
-- `#[AllowDynamicProperties]` classes) are genuinely removable and lower fine.
-- A BY-REFERENCE INDEXED ARRAY is the other. `unset()` removes a key without
+- Fixed untyped slots selected by reachable property `unset()` operations are widened to
+- boxed `Mixed` and lowered through `PropUnset`, so they do not reach this fallback. Packed
+- fields, by-reference property slots, and dynamic shapes whose magic behavior depends on
+- runtime state remain deliberately unsupported.
+- A BY-REFERENCE INDEXED ARRAY is the shape named here. `unset()` removes a key without
 - renumbering, so a packed list has to become a hash — and a callee cannot retype the
 - caller's slot, which still reads `array<T>`. The associative form has no such problem
 - and lowers directly (issue #677), so the message names the difference rather than

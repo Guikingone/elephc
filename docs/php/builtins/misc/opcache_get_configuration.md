@@ -2,7 +2,7 @@
 title: "opcache_get_configuration()"
 description: "Returns the OPcache directives, blacklist, and version."
 sidebar:
-  order: 614
+  order: 637
 ---
 
 ## opcache_get_configuration()
@@ -22,7 +22,7 @@ Returns the OPcache directives, blacklist, and version.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

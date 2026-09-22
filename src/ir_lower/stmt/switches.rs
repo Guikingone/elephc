@@ -184,7 +184,10 @@ pub(super) fn lower_switch_bodies(
         break_block: exit,
         continue_block: exit,
         cleanup: None,
+        source_owner: None,
         source_pin: None,
+        iterator_owner: None,
+        iterator_cleanup: None,
         receiver_pin: None,
     });
     for index in 0..=cases.len() {

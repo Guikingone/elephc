@@ -25,7 +25,7 @@ Returns a timezone's DST transitions in a time range.
 - **Compiled (AOT)**: supported through the compiler-injected tz prelude.
 - **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

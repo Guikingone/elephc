@@ -140,6 +140,7 @@ fn constant_propagation_survives_the_nesting_limit_on_a_small_embedder_stack() {
         summarize(elephc::optimize::propagate_constants(
             ast,
             check.mixed_storage_local_names(),
+            check.buffer_read_sites.clone(),
         ))
     });
     assert_eq!(report, "2 statements");

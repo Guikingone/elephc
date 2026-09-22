@@ -58,7 +58,10 @@ pub(super) fn desugar_lvalue_incdec(
         target
     } else {
         // `$p++` evaluates to the OLD value, so it has to be captured before the write.
-        let temp = format!("__elephc_incdec_{}_{}", span.line, span.col);
+        let temp = crate::names::generated_local_name(&format!(
+            "__elephc_incdec_{}_{}",
+            span.line, span.col
+        ));
         prelude.push(Stmt::new(
             StmtKind::Assign {
                 name: temp.clone(),
@@ -69,7 +72,10 @@ pub(super) fn desugar_lvalue_incdec(
         prelude.push(write);
         Expr::new(ExprKind::Variable(temp), span)
     };
-    let result = format!("__elephc_incdec_result_{}_{}", span.line, span.col);
+    let result = crate::names::generated_local_name(&format!(
+        "__elephc_incdec_result_{}_{}",
+        span.line, span.col
+    ));
     Some(Expr::new(
         ExprKind::Assignment {
             target: Box::new(Expr::new(ExprKind::Variable(result), span)),
@@ -329,10 +335,10 @@ impl AssignmentExpressionLowerer {
     /// monotonically increasing counter. Names are formatted as
     /// `__elephc_assign_expr_{line}_{col}_{counter}`.
     fn next_temp_name(&mut self) -> String {
-        let name = format!(
+        let name = crate::names::generated_local_name(&format!(
             "__elephc_assign_expr_{}_{}_{}",
             self.span.line, self.span.col, self.next_temp
-        );
+        ));
         self.next_temp += 1;
         name
     }

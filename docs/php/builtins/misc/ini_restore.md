@@ -2,7 +2,7 @@
 title: "ini_restore()"
 description: "Restores a configuration directive to its startup value."
 sidebar:
-  order: 611
+  order: 634
 ---
 
 ## ini_restore()
@@ -23,7 +23,7 @@ Restores a configuration directive to its startup value.
 - **Compiled (AOT)**: supported through the compiler-injected version prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

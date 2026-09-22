@@ -22,40 +22,14 @@ pub(crate) fn lower_call_user_func_builtin_escape(
     )))
 }
 
-/// Lowers `array_sum()` over supported indexed arrays and boxed-Mixed associative values.
+/// Lowers sum through the storage-neutral numeric aggregate helper.
 pub(crate) fn lower_array_sum(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "array_sum", 1)?;
-    let array = expect_operand(inst, 0)?;
-    if matches!(
-        ctx.value_php_type(array)?.codegen_repr(),
-        PhpType::AssocArray { value, .. } if value.codegen_repr() == PhpType::Mixed
-    ) {
-        ctx.load_value_to_result(array)?;
-        if ctx.emitter.target.arch == Arch::X86_64 {
-            ctx.emitter.instruction("mov rdi, rax");                            // pass the associative-array pointer as the runtime helper argument
-        }
-        abi::emit_call_label(ctx.emitter, "__rt_hash_sum_mixed");
-        return store_if_result(ctx, inst);
-    }
-
-    lower_indexed_array_aggregate(
-        ctx,
-        inst,
-        "array_sum",
-        "__rt_array_sum",
-        Some("__rt_array_sum_mixed"),
-    )
+    super::boxed_aggregate::lower_aggregate(ctx, inst, false)
 }
 
-/// Lowers `array_product()` over supported indexed-array payloads.
+/// Lowers product through the storage-neutral numeric aggregate helper.
 pub(crate) fn lower_array_product(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_indexed_array_aggregate(
-        ctx,
-        inst,
-        "array_product",
-        "__rt_array_product",
-        None,
-    )
+    super::boxed_aggregate::lower_aggregate(ctx, inst, true)
 }
 
 /// Lowers `array_push()` by appending every value and publishing the mutated array.
@@ -78,6 +52,9 @@ pub(crate) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
         ctx.value_php_type(array)?.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
     );
+    if boxed_receiver && inst.operands.len() > 1 {
+        super::boxed_mutation::prepare_boxed_array_receiver(ctx, array, "array_push")?;
+    }
     for index in 1..inst.operands.len() {
         let value = expect_operand(inst, index)?;
         if boxed_receiver {
@@ -262,6 +239,23 @@ pub(crate) fn lower_array_column(ctx: &mut FunctionContext<'_>, inst: &Instructi
 pub(crate) fn lower_array_flip(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "array_flip", 1)?;
     let array = expect_operand(inst, 0)?;
+    if ctx.value_php_type(array)?.codegen_repr() == PhpType::Mixed {
+        if inst.result_php_type.codegen_repr() != PhpType::Mixed {
+            return Err(CodegenIrError::unsupported(
+                "boxed array_flip requires a boxed array result".to_string(),
+            ));
+        }
+        ctx.load_value_to_reg(array, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+        abi::emit_call_label(ctx.emitter, "__rt_array_flip_boxed");
+        let valid = ctx.next_label("array_flip_boxed_valid");
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &valid);
+        crate::codegen::lower_inst::exceptions::emit_type_error(
+            ctx, "array_flip(): Argument #1 ($array) must be of type array",
+        );
+        ctx.emitter.label(&valid);
+        box_hash_result_for_mixed_builtin(ctx, inst, &PhpType::Mixed);
+        return store_if_result(ctx, inst);
+    }
     if matches!(
         ctx.value_php_type(array)?.codegen_repr(),
         PhpType::AssocArray { .. }
@@ -351,7 +345,7 @@ pub(super) fn hash_flip_result_value_type(result_ty: &PhpType) -> Result<PhpType
     }
 }
 
-/// Lowers `array_reverse()` for indexed arrays with 8-byte payload slots.
+/// Lowers boxed PHP arrays or concrete indexed arrays through their representation-safe reverse helper.
 ///
 /// PHP's `bool $preserve_keys = false` renumbers the reversed array from zero; a literal `true`
 /// keeps the source integer keys while reversing the iteration order. A dense indexed array
@@ -362,6 +356,9 @@ pub(super) fn hash_flip_result_value_type(result_ty: &PhpType) -> Result<PhpType
 pub(crate) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "array_reverse", 1, 2)?;
     let array = expect_operand(inst, 0)?;
+    if ctx.value_php_type(array)?.codegen_repr() == PhpType::Mixed {
+        return super::boxed_reverse::lower_boxed_array_reverse(ctx, inst, array);
+    }
     let preserve_keys = match inst.operands.get(1).copied() {
         None => false,
         Some(flag) => const_bool_operand(ctx, flag)?.ok_or_else(|| {
@@ -525,4 +522,3 @@ fn const_bool_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Optio
         _ => Ok(None),
     }
 }
-

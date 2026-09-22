@@ -26,17 +26,18 @@ builtin! {
     ),
 }
 
-/// Validates the first argument is an indexed array for an `array_push` call.
+/// Validates indexed arrays and boxed PHP array declarations for an `array_push` call.
 ///
 /// Arity (at least 1 arg) is pre-validated by `check_arity`. Every argument is inferred so the
-/// appended values still produce their side effects; the first must be an indexed array or the
-/// call is rejected. Returns `Int` — the new element count.
+/// appended values still produce their side effects; the first must be an indexed array or a
+/// declared PHP array (boxed packed-or-hash storage) or the call is rejected. Returns `Int` — the
+/// new element count.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     for index in 1..cx.args.len() {
         cx.checker.infer_type(&cx.args[index], cx.env)?;
     }
-    if let PhpType::Array(_) = arr_ty {
+    if matches!(arr_ty, PhpType::Array(_)) || arr_ty.is_php_array() {
         Ok(PhpType::Int)
     } else {
         Err(CompileError::new(cx.span, "array_push() first argument must be array"))

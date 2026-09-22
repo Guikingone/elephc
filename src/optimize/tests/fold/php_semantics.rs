@@ -726,3 +726,61 @@ fn test_identical_float_ternary_arms_still_merge() {
     };
     assert_eq!(expr.kind, ExprKind::FloatLiteral(2.5));
 }
+
+/// Verifies an associative literal access does not fold through a spread entry.
+///
+/// PHP merges the spread source in source order, so `['a' => 1, ...$extra]['a']` is whatever
+/// `$extra` last wrote for key `a`, not the literal `1` the entry carries. The literal is an
+/// `ExprKind::ArrayLiteralMixed`, which the fold must not answer from.
+#[test]
+fn test_fold_declines_assoc_array_access_through_spread() {
+    let spread = Expr::new(
+        ExprKind::Spread(Box::new(Expr::var("extra"))),
+        Span::dummy(),
+    );
+    let program = vec![Stmt::echo(Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(Expr::new(
+                ExprKind::ArrayLiteralMixed(vec![
+                    crate::parser::ast::ArrayEntry::Keyed(Expr::string_lit("a"), Expr::int_lit(1)),
+                    crate::parser::ast::ArrayEntry::Spread(spread),
+                ]),
+                Span::dummy(),
+            )),
+            index: Box::new(Expr::string_lit("a")),
+        },
+        Span::dummy(),
+    ))];
+
+    let folded = fold_constants(program);
+
+    let StmtKind::Echo(expr) = &folded[0].kind else {
+        panic!("expected echo statement");
+    };
+    assert!(
+        matches!(expr.kind, ExprKind::ArrayAccess { .. }),
+        "{expr:?}",
+    );
+}
+
+/// Verifies the same access without a spread still folds, so the guard is not over-broad.
+#[test]
+fn test_fold_assoc_array_access_without_spread_still_folds() {
+    let program = vec![Stmt::echo(Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(Expr::new(
+                ExprKind::ArrayLiteralAssoc(vec![(Expr::string_lit("a"), Expr::int_lit(1))]),
+                Span::dummy(),
+            )),
+            index: Box::new(Expr::string_lit("a")),
+        },
+        Span::dummy(),
+    ))];
+
+    let folded = fold_constants(program);
+
+    let StmtKind::Echo(expr) = &folded[0].kind else {
+        panic!("expected echo statement");
+    };
+    assert_eq!(expr.kind, ExprKind::IntLiteral(1));
+}

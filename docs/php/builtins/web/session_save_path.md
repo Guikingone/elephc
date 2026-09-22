@@ -2,7 +2,7 @@
 title: "session_save_path()"
 description: "Reads or sets the directory session data is stored in."
 sidebar:
-  order: 902
+  order: 931
 ---
 
 ## session_save_path()
@@ -23,7 +23,7 @@ Reads or sets the directory session data is stored in.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

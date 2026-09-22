@@ -119,24 +119,25 @@ impl Checker {
                         "Cannot infer type of empty associative array literal",
                     ));
                 }
-                let mut key_ty = normalized_array_key_type(
-                    &pairs[0].0,
-                    self.infer_type(&pairs[0].0, env)?,
-                );
-                let mut val_ty = self.infer_type(&pairs[0].1, env)?;
-                for (k, v) in &pairs[1..] {
+                let mut key_ty: Option<PhpType> = None;
+                let mut val_ty: Option<PhpType> = None;
+                for (k, v) in pairs {
                     let kt = normalized_array_key_type(k, self.infer_type(k, env)?);
                     let vt = self.infer_type(v, env)?;
-                    if kt != key_ty {
-                        key_ty = merge_array_key_types(key_ty, kt);
-                    }
-                    if vt != val_ty {
-                        val_ty = PhpType::Mixed;
-                    }
+                    key_ty = Some(match key_ty {
+                        Some(current) if current == kt => current,
+                        Some(current) => merge_array_key_types(current, kt),
+                        None => kt,
+                    });
+                    val_ty = Some(match val_ty {
+                        Some(current) if current == vt => current,
+                        Some(_) => PhpType::Mixed,
+                        None => vt,
+                    });
                 }
                 Ok(PhpType::AssocArray {
-                    key: Box::new(key_ty),
-                    value: Box::new(val_ty),
+                    key: Box::new(key_ty.unwrap_or(PhpType::Mixed)),
+                    value: Box::new(val_ty.unwrap_or(PhpType::Mixed)),
                 })
             }
             ExprKind::ArrayLiteralMixed(entries) => {
@@ -207,8 +208,8 @@ impl Checker {
                         &elem.kind,
                         ExprKind::Spread(inner)
                             if matches!(
-                                self.infer_type(inner, env),
-                                Ok(PhpType::AssocArray { .. })
+                                self.infer_type(inner, env).map(|ty| ty.codegen_repr()),
+                                Ok(PhpType::AssocArray { .. } | PhpType::Mixed)
                             )
                     )
                 }) {
@@ -234,6 +235,10 @@ impl Checker {
             ExprKind::ArrayAccess { array, index } => {
                 let arr_ty = self.infer_type(array, env)?;
                 let idx_ty = self.infer_type(index, env)?;
+                let buffer = matches!(arr_ty, PhpType::Buffer(_));
+                self.buffer_read_observations.entry(expr.span)
+                    .and_modify(|previous| *previous &= buffer)
+                    .or_insert(buffer);
                 let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
                 match &arr_ty {
                     PhpType::Str => {
@@ -443,6 +448,12 @@ impl Checker {
                         if matches!(source_ty.codegen_repr(), PhpType::Object(_)) =>
                     {
                         source_ty.clone()
+                    }
+                    // A declared `array` is represented as the exact packed-or-associative
+                    // storage union. `codegen_repr()` erases that union to Mixed, but every
+                    // member still casts to stdClass, so retain the precise result type.
+                    CastType::Object if source_ty.is_php_array() => {
+                        PhpType::Object("stdClass".to_string())
                     }
                     CastType::Object
                         if matches!(

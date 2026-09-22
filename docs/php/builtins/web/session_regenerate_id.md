@@ -2,7 +2,7 @@
 title: "session_regenerate_id()"
 description: "Replaces the session id, optionally deleting the old session's data."
 sidebar:
-  order: 899
+  order: 928
 ---
 
 ## session_regenerate_id()
@@ -23,7 +23,7 @@ Replaces the session id, optionally deleting the old session's data.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

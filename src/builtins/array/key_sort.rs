@@ -5,7 +5,7 @@
 //! - `crate::builtins::array::ksort` and `crate::builtins::array::krsort`.
 //!
 //! Key details:
-//! - Concrete arrays are accepted directly; boxed cells of heterogeneous array places defer
+//! - Concrete arrays and PHP array declarations are accepted directly; boxed cells of array places defer
 //!   runtime tag validation to the shared nested key-sort lowering path.
 //! - Only the receiver is checked here. `$flags` is an ordinary optional `int` parameter, so
 //!   the registry's own arity and type checks own it.
@@ -17,8 +17,8 @@ use crate::types::PhpType;
 
 /// Validates the common array receiver contract for `ksort()` and `krsort()`.
 ///
-/// Concrete indexed and associative arrays are accepted statically. A boxed element of a packed
-/// or associative heterogeneous array place is also accepted because the nested lowering path
+/// Concrete arrays and boxed PHP array declarations are accepted statically. A boxed element of a declared
+/// PHP array, packed or associative heterogeneous array place is also accepted because the nested lowering path
 /// checks its runtime tag before mutation and raises the builtin-specific PHP `TypeError` for
 /// invalid cells.
 pub(super) fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
@@ -26,6 +26,7 @@ pub(super) fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let accepts_mixed_nested_element = ty == PhpType::Mixed
         && is_mixed_array_element_lvalue(cx.checker, cx.env, &cx.args[0])?;
     if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+        && !ty.is_php_array()
         && !accepts_mixed_nested_element
     {
         return Err(CompileError::new(cx.span, &format!("{}() argument must be array", cx.name)));
@@ -55,6 +56,9 @@ fn is_mixed_array_element_lvalue(
     let parent_ty = checker.infer_type(array, env)?;
     let index_ty = checker.infer_type(index, env)?;
     let normalized_key = crate::types::normalized_array_key_type(index, index_ty);
+    if parent_ty.is_php_array() {
+        return Ok(matches!(normalized_key, PhpType::Int | PhpType::Str | PhpType::Mixed));
+    }
     Ok(match parent_ty.codegen_repr() {
         PhpType::Array(element_ty) => {
             element_ty.codegen_repr() == PhpType::Mixed && normalized_key == PhpType::Int

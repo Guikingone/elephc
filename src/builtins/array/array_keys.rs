@@ -18,19 +18,46 @@
 //!   `Array<Mixed>`, because the runtime key kind is only known once the box is opened. This
 //!   matches `count()`, which has always accepted `Mixed`. The backend unboxes and dispatches
 //!   on the runtime tag, raising PHP's `TypeError` when the box does not hold an array.
+//! - EIR resolves key storage from its actual operand after reference/call coercions.
+//!   Boxed receivers and promotable Mixed-element arrays need boxed int-or-string keys.
 //! - Arity (exactly 1 argument) is validated by the registry's `check_arity` before
 //!   the hook fires; the inline arity check from the legacy arm is not reproduced here.
 
 use crate::builtins::spec::BuiltinCheckCtx;
+use crate::builtins::semantics::{
+    runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
+};
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
     contract: "array_keys",
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::ArrayKeys,
-    ),
+    semantics: array_keys_semantics(),
+}
+
+/// Reconciles key result storage with the lowered source instead of stale checker-only precision.
+const fn array_keys_semantics() -> BuiltinSemantics {
+    let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::ArrayKeys);
+    semantics.result_type = BuiltinResultType::Shared(eir_result_type);
+    semantics
+}
+
+/// Selects boxed keys for dynamic layouts and preserves concrete key storage when proven.
+fn eir_result_type(input: &BuiltinSemanticInput<'_>) -> PhpType {
+    let key = match input.arg_types.first().map(PhpType::codegen_repr) {
+        Some(PhpType::Array(elem)) if elem.codegen_repr() != PhpType::Mixed => PhpType::Int,
+        // A hash key is int-or-string at RUN TIME whatever the declared key type says: a
+        // reindexing sort leaves a string-keyed hash holding integers while the receiver keeps
+        // its type (issue #1072), so only an int-like declared key stays concrete.
+        Some(PhpType::AssocArray { key, .. })
+            if !matches!(key.codegen_repr(), PhpType::Str | PhpType::Mixed) =>
+        {
+            *key
+        }
+        _ => PhpType::Mixed,
+    };
+    PhpType::Array(Box::new(key))
 }
 
 /// Returns the key-array type for an `array_keys` call.
@@ -44,6 +71,9 @@ builtin! {
 /// registry.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    if ty.is_php_array() {
+        return Ok(PhpType::Array(Box::new(PhpType::Mixed)));
+    }
     match ty {
         // An `array<mixed>` value can be HASH-backed at run time -- `lower_dynamic_mixed_array_keys`
         // exists precisely to branch on that at run time -- so its keys can be strings, and

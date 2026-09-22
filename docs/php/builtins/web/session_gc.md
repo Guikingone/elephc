@@ -2,7 +2,7 @@
 title: "session_gc()"
 description: "Runs session garbage collection and returns how many sessions it removed."
 sidebar:
-  order: 894
+  order: 923
 ---
 
 ## session_gc()
@@ -22,7 +22,7 @@ Runs session garbage collection and returns how many sessions it removed.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

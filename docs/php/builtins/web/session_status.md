@@ -2,7 +2,7 @@
 title: "session_status()"
 description: "Reports whether sessions are disabled, inactive, or active."
 sidebar:
-  order: 906
+  order: 935
 ---
 
 ## session_status()
@@ -22,7 +22,7 @@ Reports whether sessions are disabled, inactive, or active.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 
