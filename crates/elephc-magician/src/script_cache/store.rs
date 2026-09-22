@@ -34,7 +34,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Debug)]
 struct Entry {
     segments: Arc<[ScriptSegment]>,
-    mtime: Option<i64>,
+    /// php-src's `persistent_script->timestamp`: the source's mtime when the entry was
+    /// admitted, or `0` when it was admitted under `validate_timestamps=0` — which records
+    /// no timestamp at all. See `is_unrecorded`.
+    timestamp: i64,
     footprint: usize,
     hits: u64,
     last_used: i64,
@@ -147,6 +150,29 @@ fn cache_key(path: &Path) -> std::path::PathBuf {
     }
 }
 
+/// A file's timestamp as php-src's `do_validate_timestamps` reads it: its mtime, or `0` when
+/// it cannot be stated — which never matches a recorded timestamp, so a vanished file fails.
+fn file_timestamp(path: &Path) -> i64 {
+    std::fs::metadata(path)
+        .ok()
+        .and_then(|metadata| mtime_seconds(&metadata))
+        .unwrap_or(0)
+}
+
+/// Whether an entry carries NO recorded timestamp, and so is never revalidated.
+///
+/// php-src records `timestamp` and `revalidate` only when `validate_timestamps` is on at
+/// admission, and `validate_timestamp_and_record` answers SUCCESS for `timestamp == 0`
+/// without looking at the file. So an entry admitted with validation off stays trusted by
+/// includes and `opcache_is_script_cached()` after validation is turned back on — MEASURED,
+/// reference reports it cached — while a non-forced `opcache_invalidate()`, which calls
+/// `do_validate_timestamps` directly, compares that `0` against the real mtime and retires
+/// it. MEASURED: reference answers `cached=0` after that invalidate; elephc, which recorded
+/// the mtime regardless, kept the entry.
+fn is_unrecorded(timestamp: i64) -> bool {
+    timestamp == 0
+}
+
 /// Whether an entry checked at `revalidate_at` must be re-stat'd now.
 ///
 /// `revalidate_freq=0` FORCES the check whatever deadline the entry carries. php-src tests
@@ -155,8 +181,12 @@ fn cache_key(path: &Path) -> std::path::PathBuf {
 /// force when the entry was stored — kept serving an entry for up to the OLD window.
 /// MEASURED: cache under `60`, move the mtime, `ini_set(...,'0')`; reference reports the
 /// script uncached, elephc reported it cached.
+///
+/// THE DEADLINE ITSELF IS STILL INSIDE THE WINDOW. php-src skips the check while
+/// `revalidate >= request_time`, so the stat is due only once the request time has passed
+/// the deadline — `>=` here re-stat'd one second early, at exactly `stored + freq`.
 fn revalidation_due(config: &ScriptCacheConfig, revalidate_at: i64, now: i64) -> bool {
-    config.validate_timestamps && (config.revalidate_freq == 0 || now >= revalidate_at)
+    config.validate_timestamps && (config.revalidate_freq == 0 || now > revalidate_at)
 }
 
 /// Returns a file's mtime in whole seconds since the Unix epoch, if it has one.
@@ -206,16 +236,23 @@ fn serve_warm_entry(
     if entry.discarded {
         return Ok(None);
     }
-    if revalidation_due(&config, entry.revalidate_at, now) {
-        let Some(metadata) = std::fs::metadata(key).ok() else {
-            // The file is gone. Fall through to the fill, which reproduces the
-            // caller's missing-include diagnostics rather than serving stale code.
-            return Ok(None);
-        };
+    if !is_unrecorded(entry.timestamp) && revalidation_due(&config, entry.revalidate_at, now) {
         // THE TIMESTAMP ALONE, as php-src's `do_validate_timestamps` is (it passes a NULL
         // size output). Comparing the length too re-read a file whose content changed but
         // whose mtime was restored — MEASURED, reference keeps serving the stored script.
-        if mtime_seconds(&metadata) != entry.mtime {
+        // A file that is gone fails too, and the fill reproduces the caller's
+        // missing-include diagnostics.
+        if file_timestamp(key) != entry.timestamp {
+            // A FAILED REVALIDATION DISCARDS THE ENTRY, before the fill decides whether
+            // the new version may take its place. php-src calls
+            // `zend_accel_lock_discard_script` right there, so when the fill then REFUSES
+            // the replacement — `file_update_protection` catching a fresh rewrite — the old
+            // script is not left live behind it. Leaving it made the next include serve the
+            // OLD version once `validate_timestamps` was turned off. MEASURED: reference
+            // printed `B B`, elephc `B A`.
+            let entry = cache.entries.get_mut(key).expect("entry was just observed");
+            entry.discarded = true;
+            cache.generation = cache.generation.wrapping_add(1);
             return Ok(None);
         }
         let freq = config.revalidate_freq as i64;
@@ -373,11 +410,17 @@ fn fill_entry(
         key.to_path_buf(),
         Entry {
             segments: Arc::clone(&segments),
-            mtime,
+            // Recorded only under validation, as php-src's `cache_script_in_shared_memory`
+            // does. See `is_unrecorded`.
+            timestamp: if config.validate_timestamps { mtime.unwrap_or(0) } else { 0 },
             footprint,
             hits: 0,
             last_used: now,
-            revalidate_at: now.saturating_add(config.revalidate_freq as i64),
+            revalidate_at: if config.validate_timestamps {
+                now.saturating_add(config.revalidate_freq as i64)
+            } else {
+                0
+            },
             discarded: false,
         },
     );
@@ -573,17 +616,18 @@ pub fn invalidate(path: &Path, force: bool) -> bool {
 /// so would make the predicate above take a branch that has no work to do. A file that can
 /// no longer be stated IS stale: it was cached and is now unreadable, which is the strongest
 /// possible reason not to keep serving it.
+///
+/// NO `is_unrecorded` SHORT-CIRCUIT HERE, unlike the include and query paths: php-src's
+/// `accel_invalidate` calls `do_validate_timestamps` directly, so an entry admitted without
+/// a timestamp compares `0` against the real mtime and is stale.
 fn entry_is_stale(key: &Path) -> bool {
     let cache = lock_script_cache();
     let Some(entry) = cache.entries.get(key) else {
         return false;
     };
-    let entry_mtime = entry.mtime;
+    let timestamp = entry.timestamp;
     drop(cache);
-    match std::fs::metadata(key) {
-        Ok(metadata) => mtime_seconds(&metadata) != entry_mtime,
-        Err(_) => true,
-    }
+    file_timestamp(key) != timestamp
 }
 
 /// Returns whether a path has a live cache entry — present, not discarded, and not known to
@@ -619,25 +663,28 @@ fn entry_is_stale(key: &Path) -> bool {
 /// the renewed window lapses.
 pub fn is_cached(path: &Path) -> bool {
     let key = cache_key(path);
-    let (entry_mtime, revalidate_at) = {
+    let (timestamp, revalidate_at) = {
         let cache = lock_script_cache();
         match cache.entries.get(&key) {
-            Some(entry) if !entry.discarded => (entry.mtime, entry.revalidate_at),
+            Some(entry) if !entry.discarded => (entry.timestamp, entry.revalidate_at),
             _ => return false,
         }
     };
     let config = config();
     let now = request_now();
-    if !revalidation_due(&config, revalidate_at, now) {
+    if is_unrecorded(timestamp) || !revalidation_due(&config, revalidate_at, now) {
         return true;
     }
-    let fresh = match std::fs::metadata(&key) {
-        Ok(metadata) => mtime_seconds(&metadata) == entry_mtime,
-        Err(_) => false,
-    };
+    let fresh = file_timestamp(&key) == timestamp;
     if fresh {
-        if let Some(entry) = lock_script_cache().entries.get_mut(&key) {
+        let mut cache = lock_script_cache();
+        if let Some(entry) = cache.entries.get_mut(&key) {
             entry.revalidate_at = now.saturating_add(config.revalidate_freq as i64);
+            // The renewed deadline is what `opcache_get_status()['scripts']` reports as
+            // `revalidate`, so a snapshot taken before it is stale. MEASURED: status, then
+            // `ini_set('opcache.revalidate_freq', '0')` and a query, then status again —
+            // reference's deadline moved back by the old window, elephc's did not.
+            cache.generation = cache.generation.wrapping_add(1);
         }
     }
     fresh
@@ -738,7 +785,7 @@ pub fn cached_scripts() -> Vec<CachedScriptInfo> {
             hits: entry.hits,
             memory_consumption: entry.footprint,
             last_used_timestamp: entry.last_used,
-            timestamp: if entry.discarded { 0 } else { entry.mtime.unwrap_or(0) },
+            timestamp: if entry.discarded { 0 } else { entry.timestamp },
             revalidate_at: entry.revalidate_at,
         })
         .collect();

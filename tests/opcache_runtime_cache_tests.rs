@@ -883,6 +883,41 @@ echo 'still=', (opcache_is_script_cached($p) ? '1' : '0'), "\n";
     );
 }
 
+/// A VARIABLE call and `call_user_func_array` reach the eval OPcache handlers, as
+/// `call_user_func` always did.
+///
+/// Inside eval(), `$f()` and `call_user_func_array($f, ...)` resolve a string callee through a
+/// dispatch that never consulted the runtime handlers these names live in, so both died on an
+/// unsupported construct — for the very spelling two review rounds had already probed.
+///
+/// THE NAME MUST NEVER APPEAR LITERALLY, here or in any other string of the program: a literal
+/// injects the native declaration, the call resolves through it, and the test would pass
+/// against the fatal.
+///
+/// MEASURED against reference PHP 8.5: `var=true cufa=true`.
+#[test]
+fn a_variable_call_reaches_the_eval_opcache_handlers() {
+    let dir = make_test_dir("opcache_rt_eval_variable_call");
+    write_dynamic_fixture(
+        &dir,
+        r#"<?php
+$p = __DIR__ . '/lib.php';
+eval('include $p;');
+echo 'var=', var_export(eval('$f = "opcache_" . "is_script_cached"; return $f($p);'), true), "\n";
+echo 'cufa=', var_export(eval('$f = "opcache_" . "is_script_cached"; return call_user_func_array($f, [$p]);'), true), "\n";
+"#,
+    );
+
+    let output = run_binary(&compile_with_flags(
+        &dir,
+        &["opcache.enable_cli=1", "opcache.file_update_protection=0"],
+        &["--php-version", "8.5"],
+    ));
+
+    assert_eq!(field(&output, "var"), "true", "a variable call must reach the handler:\n{output}");
+    assert_eq!(field(&output, "cufa"), "true", "so must call_user_func_array:\n{output}");
+}
+
 /// The EVAL builtin's `opcache_invalidate()` answers "cached OR resolvable", as the native
 /// surface does, for a cached file that has since been DELETED.
 ///

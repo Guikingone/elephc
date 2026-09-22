@@ -36,10 +36,11 @@ pub(in crate::interpreter) fn eval_builtin_with_values(
     // and scheduled a real flush under `opcache.restrict_api=/nonexistent`. A guard with a
     // second way in is not a guard.
     //
-    // `call_user_func` is what reaches here: `$f = "opcache_reset"; $f()` takes the direct
-    // path and was always refused, and `call_user_func_array` fatals on an unsupported
-    // construct before arriving. Guarding the whole block rather than the one name keeps the
-    // next spelling from needing its own discovery.
+    // Three spellings reach here: `call_user_func`, and — as a last resort in
+    // `eval_callable_with_call_array_args` — a variable call `$f()` and
+    // `call_user_func_array`, which used to fatal on an unsupported construct before
+    // arriving. Guarding the whole block rather than the one name keeps the next spelling
+    // from needing its own discovery.
     if context.native_function(name).is_none() {
     // `opcache_get_configuration` is prelude-provided on native and dispatched here as
     // a plain runtime handler (not a PHP-visible builtin); it takes no arguments.

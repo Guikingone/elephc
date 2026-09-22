@@ -16,7 +16,7 @@
 use super::*;
 use crate::script_cache::config::{
     clear_directive_overrides, set_config, stamp_request_time, swap_directive,
-    DIRECTIVE_REVALIDATE_FREQ,
+    DIRECTIVE_REVALIDATE_FREQ, DIRECTIVE_VALIDATE_TIMESTAMPS,
 };
 use crate::script_cache::store::lock_for_test as test_lock;
 
@@ -326,6 +326,105 @@ fn admission_measures_age_against_the_request_time() {
         !is_cached(&path),
         "zero seconds old by the request clock: the protection window must refuse it"
     );
+}
+
+/// Verifies the revalidation deadline itself is still INSIDE the window.
+///
+/// php-src skips the check while `revalidate >= request_time`, so at exactly `stored + freq`
+/// the entry is still vouched for and the stat is due one second later. `>=` re-stat'd at the
+/// deadline.
+#[test]
+fn revalidation_is_due_only_after_the_deadline() {
+    let _guard = test_lock();
+    set_config(enabled_config(2));
+    stamp_request_time(1_000_000);
+    let path = write_fixture("deadline_edge", "<?php $x = 1;");
+    set_mtime(&path, 999_000);
+    load_script(&path).expect("fixture should load");
+    set_mtime(&path, 900_000);
+
+    stamp_request_time(1_000_002);
+    assert!(is_cached(&path), "at the deadline php-src still skips the check");
+    stamp_request_time(1_000_003);
+    assert!(!is_cached(&path), "one second past it the moved timestamp is seen");
+}
+
+/// Verifies a successful renewal invalidates status snapshots.
+///
+/// The renewed deadline is what `opcache_get_status()['scripts']` reports as `revalidate`,
+/// and the FFI reuses its snapshot until `generation` moves. MEASURED: status, then
+/// `ini_set('opcache.revalidate_freq', '0')` and a query, then status again — reference's
+/// deadline moved, elephc kept reporting the old one.
+#[test]
+fn a_query_renewal_moves_the_generation() {
+    let _guard = test_lock();
+    set_config(enabled_config(60));
+    let path = write_fixture("renew_generation", "<?php $x = 1;");
+    load_script(&path).expect("fixture should load");
+    let before = generation();
+
+    swap_directive(DIRECTIVE_REVALIDATE_FREQ, 0, true);
+    let answer = is_cached(&path);
+    clear_directive_overrides();
+
+    assert!(answer, "the file is unchanged, so the forced check succeeds");
+    assert_ne!(generation(), before, "the renewed deadline must invalidate snapshots");
+}
+
+/// Verifies a FAILED revalidation discards the old entry even when the replacement is refused.
+///
+/// php-src discards the stale script before compiling the new version; when
+/// `file_update_protection` then refuses to store that version, nothing is cached — the old
+/// script is gone. Leaving it live made the next include serve the OLD version once
+/// `validate_timestamps` was turned off. MEASURED: reference printed `B B`, elephc `B A`.
+#[test]
+fn a_failed_revalidation_discards_even_when_the_refill_is_refused() {
+    let _guard = test_lock();
+    set_config(ScriptCacheConfig {
+        file_update_protection: 2,
+        ..enabled_config(0)
+    });
+    stamp_request_time(1_000_000);
+    let path = write_fixture("refused_refill", "<?php $x = 1;");
+    set_mtime(&path, 990_000);
+    assert_eq!(shape(&load_script(&path).unwrap()), ["code"], "version A is admitted");
+
+    std::fs::write(&path, "B<?php $x = 1;").expect("fixture should be rewritable");
+    set_mtime(&path, 1_000_000);
+    assert_eq!(shape(&load_script(&path).unwrap()), ["out", "code"], "version B runs");
+
+    swap_directive(DIRECTIVE_VALIDATE_TIMESTAMPS, 0, true);
+    let third = shape(&load_script(&path).unwrap());
+    clear_directive_overrides();
+    assert_eq!(third, ["out", "code"], "A was discarded; it must not come back");
+}
+
+/// Verifies an entry admitted with `validate_timestamps=0` carries NO timestamp.
+///
+/// php-src records the timestamp only under validation. Such an entry stays trusted by
+/// `opcache_is_script_cached()` once validation is back on — `validate_timestamp_and_record`
+/// answers SUCCESS for `timestamp == 0` — while a non-forced `opcache_invalidate()`, which
+/// calls `do_validate_timestamps` directly, compares that `0` with the real mtime and
+/// retires it. MEASURED: reference `cached=1` before the invalidate and `cached=0` after;
+/// elephc kept the entry, having recorded the mtime regardless.
+#[test]
+fn an_entry_admitted_without_validation_has_no_timestamp() {
+    let _guard = test_lock();
+    set_config(ScriptCacheConfig {
+        validate_timestamps: false,
+        ..enabled_config(0)
+    });
+    let path = write_fixture("unrecorded", "<?php $x = 1;");
+    load_script(&path).expect("fixture should load");
+
+    swap_directive(DIRECTIVE_VALIDATE_TIMESTAMPS, 1, true);
+    let trusted = is_cached(&path);
+    invalidate(&path, false);
+    let after = is_cached(&path);
+    clear_directive_overrides();
+
+    assert!(trusted, "an unrecorded timestamp is never checked by the query");
+    assert!(!after, "a non-forced invalidate compares 0 against the mtime and retires it");
 }
 
 /// Verifies `opcache.validate_timestamps = 0` never re-reads a changed file.
