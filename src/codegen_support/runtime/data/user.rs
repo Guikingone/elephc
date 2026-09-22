@@ -1811,7 +1811,7 @@ fn eval_reflection_instance_method_flags(class_info: &ClassInfo, method_name: &s
     if class_info.final_methods.contains(method_name) {
         flags |= EVAL_REFLECTION_METHOD_FLAG_FINAL;
     }
-    if !class_info.method_impl_classes.contains_key(method_name) {
+    if class_info.abstract_methods.contains(method_name) {
         flags |= EVAL_REFLECTION_METHOD_FLAG_ABSTRACT;
     }
     flags
@@ -1828,7 +1828,7 @@ fn eval_reflection_static_method_flags(class_info: &ClassInfo, method_name: &str
     if class_info.final_static_methods.contains(method_name) {
         flags |= EVAL_REFLECTION_METHOD_FLAG_FINAL;
     }
-    if !class_info.static_method_impl_classes.contains_key(method_name) {
+    if class_info.abstract_static_methods.contains(method_name) {
         flags |= EVAL_REFLECTION_METHOD_FLAG_ABSTRACT;
     }
     flags
@@ -3726,12 +3726,14 @@ mod tests {
             final_methods: HashSet::new(),
             method_declaring_classes: HashMap::new(),
             method_impl_classes,
+            abstract_methods: HashSet::new(),
             vtable_methods: vec![method_name.to_string()],
             vtable_slots,
             static_method_visibilities: HashMap::new(),
             final_static_methods: HashSet::new(),
             static_method_declaring_classes: HashMap::new(),
             static_method_impl_classes: HashMap::new(),
+            abstract_static_methods: HashSet::new(),
             static_vtable_methods: Vec::new(),
             static_vtable_slots: HashMap::new(),
             interfaces: Vec::new(),

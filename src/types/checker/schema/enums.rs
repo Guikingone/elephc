@@ -523,12 +523,20 @@ pub(crate) fn insert_enum_metadata(
             final_methods: HashSet::new(),
             method_declaring_classes,
             method_impl_classes,
+            // Empty on purpose, and empty by what this builder does rather than by a
+            // rule it enforces: it never inspects `method.is_abstract` and inserts every
+            // user method into `method_impl_classes` unconditionally below, so the old
+            // emission-derived inference also answered "not abstract" for all of them.
+            // If this builder ever starts injecting unimplemented interface methods into
+            // `methods`, they need an entry here or they will report as concrete.
+            abstract_methods: HashSet::new(),
             vtable_methods: Vec::new(),
             vtable_slots: HashMap::new(),
             static_method_visibilities,
             final_static_methods: HashSet::new(),
             static_method_declaring_classes,
             static_method_impl_classes,
+            abstract_static_methods: HashSet::new(),
             static_vtable_methods: Vec::new(),
             static_vtable_slots: HashMap::new(),
             interfaces,

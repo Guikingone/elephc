@@ -20201,6 +20201,102 @@ eval('class EvalAotAbstractMethodLeafSignature extends EvalAotAbstractMethodMidd
     );
 }
 
+/// Verifies concrete methods on a builtin parent are not reported abstract.
+///
+/// Codegen trims `method_impl_classes` down to the methods whose body symbol the backend
+/// actually emitted, so a concrete method nothing calls loses its entry. Deriving
+/// abstractness from that map made every uncalled builtin method look abstract (issue #1124).
+#[test]
+fn test_eval_reflection_reports_uncalled_builtin_parent_methods_as_concrete() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('
+$message = new ReflectionMethod("Exception", "getMessage");
+$construct = new ReflectionMethod("Exception", "__construct");
+$count = new ReflectionMethod("ArrayObject", "count");
+return ($message->isAbstract() ? "y" : "n")
+    . ($construct->isAbstract() ? "y" : "n")
+    . ($count->isAbstract() ? "y" : "n");');
+"#,
+    );
+    assert_eq!(out, "nnn");
+}
+
+/// Verifies an uncalled user method stays concrete while a declared abstract one stays abstract.
+///
+/// The #1124 defect was never specific to builtins: `StaticAbstractProbeMake` is never called
+/// from AOT code, so its body symbol is not emitted and its `method_impl_classes` entry is
+/// trimmed. Abstractness has to come from the declaration instead, in both directions.
+#[test]
+fn test_eval_reflection_separates_uncalled_methods_from_declared_abstract_ones() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAbstractnessProbe {
+    public static function make(): int { return 1; }
+    public static function used(): int { return 2; }
+    public function never(): int { return 3; }
+}
+abstract class EvalAbstractnessRequired {
+    abstract public static function requiredStatic(): int;
+    abstract public function requiredInstance(): int;
+}
+EvalAbstractnessProbe::used();
+echo eval('
+$probe = ["make", "used", "never"];
+$out = "";
+foreach ($probe as $name) {
+    $out .= (new ReflectionMethod("EvalAbstractnessProbe", $name))->isAbstract() ? "y" : "n";
+}
+$out .= "-";
+foreach (["requiredStatic", "requiredInstance"] as $name) {
+    $out .= (new ReflectionMethod("EvalAbstractnessRequired", $name))->isAbstract() ? "y" : "n";
+}
+return $out;');
+"#,
+    );
+    assert_eq!(out, "nnn-yy");
+}
+
+/// Verifies an eval class can extend a builtin exception class and be constructed.
+///
+/// This is the program from issue #1124. Every inherited method of `Exception` was counted
+/// as an unconcretized abstract requirement, so the DECLARATION fataled before the
+/// constructor the issue blames ever ran.
+#[test]
+fn test_eval_declared_class_extends_builtin_exception_parent() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('class EvalBuiltinExceptionChild extends Exception {
+    public function tag(): string { return "tagged"; }
+}
+$error = new EvalBuiltinExceptionChild("bad address", 422);
+return $error->getMessage() . "|" . $error->getCode() . "|" . $error->tag()
+    . "|" . (($error instanceof Exception) ? "exception" : "not")
+    . "|" . (($error instanceof Throwable) ? "throwable" : "not");');
+"#,
+    );
+    assert_eq!(out, "bad address|422|tagged|exception|throwable");
+}
+
+/// Verifies an eval class can extend builtin parents that are not exceptions.
+///
+/// The requirement scan reads reflection metadata for any runtime-backed parent, so the
+/// #1124 defect was never specific to throwables: `Error`, `ArrayObject` and `SplStack`
+/// refused to declare for the same reason.
+#[test]
+fn test_eval_declared_class_extends_non_throwable_builtin_parents() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('class EvalBuiltinErrorChild extends Error {}
+class EvalBuiltinArrayObjectChild extends ArrayObject {}
+class EvalBuiltinSplStackChild extends SplStack {}
+class EvalBuiltinRuntimeChild extends RuntimeException {}
+return "declared";');
+"#,
+    );
+    assert_eq!(out, "declared");
+}
+
 /// Verifies eval rejects overriding final generated/AOT parent properties.
 #[test]
 fn test_eval_declared_class_rejects_final_aot_parent_property_override() {

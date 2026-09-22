@@ -251,6 +251,9 @@ fn validate_static_interface_method(
                 .static_method_declaring_classes
                 .insert(method_name.to_string(), class.name.clone());
             state.static_method_impl_classes.remove(method_name);
+            state
+                .abstract_static_methods
+                .insert(method_name.to_string());
             if !state.static_vtable_slots.contains_key(method_name) {
                 let slot = state.static_vtable_methods.len();
                 state
@@ -490,6 +493,7 @@ fn validate_interface_method(
                 .method_declaring_classes
                 .insert(method_name.to_string(), class.name.clone());
             state.method_impl_classes.remove(method_name);
+            state.abstract_methods.insert(method_name.to_string());
             if !state.vtable_slots.contains_key(method_name) {
                 let slot = state.vtable_methods.len();
                 state.vtable_slots.insert(method_name.to_string(), slot);

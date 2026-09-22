@@ -235,6 +235,7 @@ fn prune_class_methods(
     info.final_methods.retain(|key| keep_instance.contains(key));
     retain_keys(&mut info.method_declaring_classes, &keep_instance);
     retain_keys(&mut info.method_impl_classes, &keep_instance);
+    info.abstract_methods.retain(|key| keep_instance.contains(key));
 
     retain_keys(&mut info.static_methods, &keep_static);
     retain_keys(&mut info.late_static_static_method_returns, &keep_static);
@@ -242,6 +243,7 @@ fn prune_class_methods(
     info.final_static_methods.retain(|key| keep_static.contains(key));
     retain_keys(&mut info.static_method_declaring_classes, &keep_static);
     retain_keys(&mut info.static_method_impl_classes, &keep_static);
+    info.abstract_static_methods.retain(|key| keep_static.contains(key));
 
     info.method_attribute_names
         .retain(|key, _| keep_any.contains(key));

@@ -195,10 +195,12 @@ fn apply_static_method(
         .insert(method_key.clone(), collect_attribute_args(&method.attributes));
     if method.is_abstract {
         state.static_method_impl_classes.remove(&method_key);
+        state.abstract_static_methods.insert(method_key.clone());
     } else {
         state
             .static_method_impl_classes
             .insert(method_key.clone(), class.name.clone());
+        state.abstract_static_methods.remove(&method_key);
     }
     if method.visibility != Visibility::Private
         && !state.static_vtable_slots.contains_key(&method_key)
@@ -321,10 +323,12 @@ fn apply_instance_method(
         .insert(method_key.clone(), collect_attribute_args(&method.attributes));
     if method.is_abstract {
         state.method_impl_classes.remove(&method_key);
+        state.abstract_methods.insert(method_key.clone());
     } else {
         state
             .method_impl_classes
             .insert(method_key.clone(), class.name.clone());
+        state.abstract_methods.remove(&method_key);
     }
     if method.visibility != Visibility::Private && !state.vtable_slots.contains_key(&method_key) {
         let slot = state.vtable_methods.len();
