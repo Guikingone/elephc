@@ -233,6 +233,8 @@ pub(crate) fn build_enum_info(
         });
     }
 
+    validate_enum_does_not_name_implicit_interfaces(name, implements, backing_type.is_some(), span)?;
+
     insert_enum_metadata(
         name,
         resolved_backing,
@@ -577,6 +579,35 @@ fn push_enum_readonly_property(
     property_declared_slots.push(true);
     readonly_properties.insert(property);
     property_reference_slots.push(false);
+}
+
+/// Refuses an enum whose `implements` clause names `UnitEnum` or `BackedEnum` itself.
+///
+/// Every enum already gets `UnitEnum`, and a backed one `BackedEnum`, from
+/// [`enum_interface_closure`], so naming one again is PHP's "previously implemented" error. A
+/// pure enum naming `BackedEnum` is a different error: it has no backing type to satisfy it.
+/// Naming an interface that merely EXTENDS one of them is legal, and not checked here. The
+/// messages are PHP 8.5.10's, measured.
+fn validate_enum_does_not_name_implicit_interfaces(
+    enum_name: &str,
+    implements: &[crate::names::Name],
+    is_backed: bool,
+    span: crate::span::Span,
+) -> Result<(), CompileError> {
+    for interface in implements {
+        let key = php_symbol_key(interface.as_str());
+        let message = if key == php_symbol_key("UnitEnum") {
+            format!("Enum {} cannot implement previously implemented interface UnitEnum", enum_name)
+        } else if key == php_symbol_key("BackedEnum") && is_backed {
+            format!("Enum {} cannot implement previously implemented interface BackedEnum", enum_name)
+        } else if key == php_symbol_key("BackedEnum") {
+            format!("Non-backed enum {} cannot implement interface BackedEnum", enum_name)
+        } else {
+            continue;
+        };
+        return Err(CompileError::new(span, &message));
+    }
+    Ok(())
 }
 
 /// Returns the interfaces an enum implements, the way PHP reports them.
