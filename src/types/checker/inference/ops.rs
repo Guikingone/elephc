@@ -605,7 +605,7 @@ impl Checker {
             }
             return Err(CompileError::new(
                 expr.span,
-                &format!("Cannot call ${} — not a callable (got {:?})", var, var_ty),
+                &format!("Cannot call ${} — not a callable (got {})", var, var_ty),
             ));
         }
         if let Some(sig) = self.callable_sigs.get(var).cloned() {
@@ -808,7 +808,7 @@ impl Checker {
             return Err(CompileError::new(
                 expr.span,
                 &format!(
-                    "Cannot call expression — not a callable (got {:?})",
+                    "Cannot call expression — not a callable (got {})",
                     callee_ty
                 ),
             ));
@@ -1314,7 +1314,7 @@ impl Checker {
             return Err(CompileError::new(
                 expr.span,
                 &format!(
-                    "Pipe operator right-hand side must be a callable, got {:?}",
+                    "Pipe operator right-hand side must be a callable, got {}",
                     callable_ty
                 ),
             ));

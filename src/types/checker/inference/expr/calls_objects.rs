@@ -414,7 +414,7 @@ impl Checker {
                     return Err(CompileError::new(
                         inner.span,
                         &format!(
-                            "yield from expects an array literal or Generator, got {:?}",
+                            "yield from expects an array literal or Generator, got {}",
                             inner_ty
                         ),
                     ));
