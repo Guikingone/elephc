@@ -10,20 +10,18 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **915 / 2169** (42%), classes **142 / 329** (43%), constants **1105 / 3180** (35%).
+Overall coverage: functions **917 / 2169** (42%), classes **142 / 329** (43%), constants **1105 / 3180** (35%).
 
 ## Coverage by PHP module
 
-Each cell counts the PHP-visible symbols a compiled elephc program has, against the symbols the module exposes in the baseline build. Any compile-time route counts once (registry builtin, injected prelude, name-resolver rewrite); symbols that exist only inside `eval()` are listed separately below. `—` marks a kind the module does not have.
-
-The 62/62 Core inventory claim refers to elephc's own contract inventory, returned by `get_extension_funcs("core")` and enumerated by `CORE_FUNCTION_NAMES`. It covers all 60 functions in the PHP 8.5 Core baseline plus the `die` and `exit` language constructs. The comparison row counts functions only, so its numerator is 60.
+Each cell counts the PHP-visible symbols a compiled elephc program has, against the symbols the module exposes in the baseline build. Any compile-time route counts once (registry builtin, injected prelude, name-resolver rewrite, or the dedicated language-construct path behind a name PHP lists as a function, such as `exit()`); symbols that exist only inside `eval()` are listed separately below. `—` marks a kind the module does not have.
 
 | PHP module | Functions | Classes | Constants |
 |---|---|---|---|
 | [`bcmath`](./bcmath.md#functions) | 14 / 14 · 100% | 0 / 1 · 0% | — |
 | `bz2` | 0 / 10 · 0% | — | — |
 | [`calendar`](./calendar.md#functions) | 18 / 18 · 100% | — | 21 / 21 · 100% |
-| `core` | 60 / 62 · 97% | 21 / 40 · 52% | 37 / 89 · 42% |
+| `core` | 62 / 62 · 100% | 21 / 40 · 52% | 37 / 89 · 42% |
 | `ctype` | 4 / 11 · 36% | — | — |
 | [`curl`](./curl.md#functions) | 34 / 35 · 97% | 6 / 6 · 100% | 689 / 689 · 100% |
 | [`date`](./datetime.md#functions) | 48 / 48 · 100% | 15 / 15 · 100% | 3 / 17 · 18% |
@@ -106,7 +104,7 @@ Most of that is one gap rather than several. 203 of those functions — every on
 
 The remaining 2 baseline extensions expose no functions, classes, or constants of their own, so they have no row above: `lexbor`, `mysqlnd`.
 
-In addition, elephc implements 5 PHP language constructs that PHP does not count as functions: `die()`, `empty()`, `exit()`, `isset()`, `unset()`.
+In addition, elephc implements 3 PHP language constructs that PHP does not count as functions: `empty()`, `isset()`, `unset()`.
 
 elephc also defines 1 constant(s) at runtime that PHP registers only in specific states and never lists statically: `SID`.
 

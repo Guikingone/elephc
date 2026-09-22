@@ -36,8 +36,12 @@ STATUS_LABELS = {
     "unsupported": "❌ Not supported",
 }
 
-# AOT routes that are PHP language constructs rather than functions: PHP never lists
-# them in get_defined_functions(), so they are reported in their own sentence.
+# AOT routes that are PHP language constructs rather than functions. A symbol on such a
+# route is reported in its own sentence when PHP does not list it in get_defined_functions()
+# (`isset`, `empty`, `unset`). One PHP does list -- `exit()` and `die()` are real functions
+# since PHP 8.4 and sit in the Core baseline -- counts in its module row like any other
+# route: the table measures the PHP-visible surface, and `exit()` is callable as a function
+# in a compiled program however the compiler lowers it.
 CONSTRUCT_KINDS = frozenset({"language-construct", "dedicated-syntax"})
 
 # Notes for elephc-only functions rendered in the "Beyond PHP" section.
@@ -283,8 +287,10 @@ def classify(registry: list, symbols: dict, baseline: dict):
             "_aot_kind": aot.get("kind"),
             "_eval": bool((entry.get("eval") or {}).get("supported")),
         }
-        if aot.get("kind") in CONSTRUCT_KINDS and not (
-            symbol["module"] == "elephc" or symbol["extension"]
+        if (
+            aot.get("kind") in CONSTRUCT_KINDS
+            and not (symbol["module"] == "elephc" or symbol["extension"])
+            and symbol["name"] not in baseline_functions
         ):
             constructs.append(symbol)
             continue
@@ -427,13 +433,10 @@ def render(
         "",
         "Each cell counts the PHP-visible symbols a compiled elephc program has, against the "
         "symbols the module exposes in the baseline build. Any compile-time route counts once "
-        "(registry builtin, injected prelude, name-resolver rewrite); symbols that exist only "
-        "inside `eval()` are listed separately below. `—` marks a kind the module does not have.",
-        "",
-        "The 62/62 Core inventory claim refers to elephc's own contract inventory, returned "
-        "by `get_extension_funcs(\"core\")` and enumerated by `CORE_FUNCTION_NAMES`. It covers "
-        "all 60 functions in the PHP 8.5 Core baseline plus the `die` and `exit` language "
-        "constructs. The comparison row counts functions only, so its numerator is 60.",
+        "(registry builtin, injected prelude, name-resolver rewrite, or the dedicated "
+        "language-construct path behind a name PHP lists as a function, such as `exit()`); "
+        "symbols that exist only inside `eval()` are listed separately below. `—` marks a kind "
+        "the module does not have.",
         "",
         "| PHP module | Functions | Classes | Constants |",
         "|---|---|---|---|",
