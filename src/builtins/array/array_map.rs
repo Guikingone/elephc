@@ -79,9 +79,11 @@ const fn array_map_semantics() -> BuiltinSemantics {
 /// unresolved callable, a nested container — keeps `Mixed`, which is what the runtime cells
 /// carry and what the widening in `normalize_indexed_array_result` then stamps.
 fn mapped_element_type(callback_ret_ty: PhpType, callback_is_string: bool) -> PhpType {
-    if callback_is_string {
-        return PhpType::Mixed;
-    }
+    // A callback named by STRING is no longer an exception. Its descriptor wrapper casts the boxed
+    // result to the declared return type, so the narrowed storage it promises is the storage the
+    // runtime builds — which is what let this arm be dropped without reintroducing the dual answer
+    // the unification exists to prevent.
+    let _ = callback_is_string;
     match callback_ret_ty {
         PhpType::Int | PhpType::Bool | PhpType::Str => callback_ret_ty,
         _ => PhpType::Mixed,

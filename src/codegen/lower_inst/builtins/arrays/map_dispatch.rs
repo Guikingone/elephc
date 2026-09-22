@@ -72,14 +72,22 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
             );
         }
         PhpType::Str => {
-            let callback_elem_ty = PhpType::Mixed;
+            // The same narrowed element type every other arm uses. A callback named by string
+            // binds through a descriptor whose result arrives boxed, but the wrapper casts that
+            // box to the declared return type before the runtime helper sees it — so there is no
+            // reason for this arm alone to force `Mixed`, and forcing it cost `array_map('label',
+            // …)` the `array<string>` that `function label(int $n): string` plainly promises.
+            //
+            // The narrowing set is `Int`/`Bool`/`Str` and nothing else, so anything the wrapper
+            // cannot cast still arrives here as `Mixed` and lowers exactly as it did.
+            let callback_elem_ty = array_map_descriptor_callback_result_element_type(inst)?;
             let result_elem_ty = array_map_result_element_type(inst, &callback_elem_ty)?;
             lower_runtime_string_descriptor_callback(
                 ctx,
                 callback,
                 Some(&PhpType::Array(Box::new(elem_ty.clone()))),
                 vec![elem_ty.clone()],
-                PhpType::Mixed,
+                callback_elem_ty.clone(),
                 super::super::super::instruction_strict_php_profile(inst),
                 "array_map",
                 |ctx, wrapper_label, env_bytes| {
