@@ -2214,6 +2214,64 @@ fn opcache_ini_set_works_under_web() {
     );
 }
 
+/// Verifies `opcache.preload` runs ONCE at startup under `--web`, not inside request 1.
+///
+/// The `--web` top-level body IS the request handler, so the preload's inlined statements
+/// used to execute inside the first request of every worker — and again after each
+/// `--max-requests` recycle. Response 1 therefore carried the preload's output, and the
+/// preload's code saw that request's `$_SERVER`.
+///
+/// MEASURED on reference `php -S`: the preload's output appears once on the SERVER's own
+/// stdout and in no response, while its declarations are usable from every request. Both
+/// halves are asserted, and they fail in opposite directions — which matters, because the
+/// first version of this fix produced clean responses by dropping the preload entirely.
+/// The declaration assertion is what catches that: the reachability pruner removes a
+/// function nothing in PHP calls, and the hoisted body is called only from the entry stub.
+///
+/// `--workers 1` is load-bearing: both requests must land in the same process, so a second
+/// copy of the output would show up as a second response carrying it.
+#[test]
+fn the_web_preload_runs_once_at_startup_not_in_the_first_request() {
+    let dir = make_test_dir("opcache_web_preload_hoist");
+    std::fs::write(
+        dir.join("preload.php"),
+        "<?php\necho \"PRELOAD-OUTPUT\\n\";\nfunction from_preload(): string { return 'declared'; }\n",
+    )
+    .unwrap();
+    let bin = compile_web_with_flags(
+        &dir,
+        "<?php echo 'REQ:' . from_preload();",
+        "app",
+        &[
+            "--ini",
+            "opcache.enable_cli=1",
+            "--ini",
+            &format!("opcache.preload={}", dir.join("preload.php").display()),
+        ],
+    );
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/");
+    let second = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(
+        first.ends_with("REQ:declared"),
+        "the preload's declarations must be usable, and its output must not be in the \
+         response: {first:?}"
+    );
+    assert!(
+        !first.contains("PRELOAD-OUTPUT"),
+        "response 1 carried the preload's output: {first:?}"
+    );
+    assert!(
+        second.ends_with("REQ:declared") && !second.contains("PRELOAD-OUTPUT"),
+        "{second:?}"
+    );
+}
+
 /// Verifies `scripts[…]['revalidate']` is the entry's OWN deadline, not `last_used + freq`.
 ///
 /// The two agree until the first warm hit and then part company: a hit moves `last_used`

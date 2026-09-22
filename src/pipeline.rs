@@ -409,6 +409,24 @@ pub(crate) fn compile(config: CliConfig) {
     );
     timings.record_since("xml-prelude", phase_started);
 
+    // The resolved `opcache.preload` path, so the web prelude can find that file's guard by
+    // label and lift it out of the per-request handler. Recomputed rather than threaded down
+    // from `inject_preload_require`: the verdict is a pure function of the directives and the
+    // entry, and passing it through six intervening phases to save one call would be worse.
+    let preload_startup_path = if web {
+        match opcache_prelude::preload_verdict(php_version, web, &ini_overrides, &[]) {
+            opcache_prelude::PreloadVerdict::Preloading { resolved, .. }
+                if opcache_prelude::canonical_entry_path(filename)
+                    .is_none_or(|entry| entry != resolved) =>
+            {
+                Some(std::path::PathBuf::from(resolved))
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+
     crate::progress::phase("web-prelude");
     let phase_started = Instant::now();
     let ast = web_prelude::inject_if_web(
@@ -417,6 +435,7 @@ pub(crate) fn compile(config: CliConfig) {
         php_version,
         &ini_overrides,
         &mut prelude_inventory,
+        preload_startup_path.as_deref(),
     );
     timings.record_since("web-prelude", phase_started);
 
@@ -644,7 +663,17 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("decl-reach");
     let phase_started = Instant::now();
-    let exported_function_names: HashSet<String> = exported_functions.keys().cloned().collect();
+    let mut exported_function_names: HashSet<String> =
+        exported_functions.keys().cloned().collect();
+    // The hoisted `opcache.preload` body is a reachability ROOT. Nothing in PHP calls it —
+    // the `--web` entry stub does, in assembly, before the request loop — so the declaration
+    // pruner sees an unreferenced function and removes it, taking the preload's side effects
+    // with it. That failure is silent: the responses come out clean, which is what the hoist
+    // was for, and the preload simply never runs.
+    if preload_startup_path.is_some() {
+        exported_function_names.insert(crate::web_prelude::PRELOAD_STARTUP_FN.to_string());
+    }
+    let exported_function_names = exported_function_names;
     let ast = optimize::prune_unreachable_declarations(
         ast,
         &mut check_result,

@@ -855,6 +855,39 @@ fn emit_opcache_configuration(ctx: &mut FunctionContext<'_>) {
     crate::codegen::lower_inst::builtins::configure_eval_opcache(ctx);
 }
 
+/// Runs `opcache.preload`'s top-level code ONCE, here in the master, before serving starts.
+///
+/// php-src runs preload during startup, before any request exists. elephc's `--web` top-level
+/// body IS the per-request handler, so the preload's statements used to execute inside the
+/// FIRST request of every worker — and again after each `--max-requests` recycle. MEASURED on
+/// reference `php -S`: the preload's output goes to the server log once, no header it sets
+/// reaches a response, and a global it assigns reads back as `NULL` in the request. elephc put
+/// all three into response 1.
+///
+/// `web_prelude::lift_preload_to_startup` has already moved those statements into a synthetic
+/// function, leaving the preload file's DECLARATIONS at the top level where they compile into
+/// the binary. This calls that function.
+///
+/// POSITION IS THE WHOLE FIX, in two ways that both fall out of it rather than needing code:
+/// this runs in the master before `elephc_web_run` forks, so it happens once for every worker
+/// rather than once per worker; and `_elephc_web_capture` is still clear, so `__rt_stdout_write`
+/// takes its plain `write(1, …)` path and the output reaches the server's stdout instead of a
+/// response body.
+fn emit_web_preload_startup(ctx: &mut FunctionContext<'_>) {
+    let declared = ctx
+        .module
+        .functions
+        .iter()
+        .any(|function| function.name == crate::web_prelude::PRELOAD_STARTUP_FN);
+    if !declared {
+        return;
+    }
+    ctx.emitter
+        .comment("run opcache.preload once, before serving (php-src does this at startup)");
+    let symbol = crate::names::function_symbol(crate::web_prelude::PRELOAD_STARTUP_FN);
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
 fn emit_opcache_restart_boundary(ctx: &mut FunctionContext<'_>) {
     if !ctx.module.required_runtime_features.eval_bridge {
         return;
@@ -955,6 +988,7 @@ pub(super) fn emit_web_entry_stub(
     // request. (A `--no-web-heap-guard` opt-out for benchmarking is a follow-up.)
     ctx.emitter.comment("enable web heap-guard flag");
     abi::emit_enable_web_heap_guard_flag(ctx.emitter);
+    emit_web_preload_startup(ctx);
     let argc_reg = abi::int_arg_reg_name(target, 0);
     let argv_reg = abi::int_arg_reg_name(target, 1);
     let handler_reg = abi::int_arg_reg_name(target, 2);
