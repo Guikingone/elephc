@@ -616,6 +616,23 @@ fn test_error_wrong_signature_vs_interface() {
     );
 }
 
+/// Rejects narrowing an untyped interface parameter to a declared implementation type.
+#[test]
+fn test_error_typed_implementation_of_untyped_interface_parameter() {
+    for (interface_param, implementation_param) in [
+        ("$abstract", "int $abstract"),
+        ("$abstract = null", "int $abstract = null"),
+    ] {
+        let source = format!(
+            "<?php interface BindingContract {{ public function bind({interface_param}); }} class BindingContainer implements BindingContract {{ public function bind({implementation_param}) {{ echo $abstract; }} }}"
+        );
+        expect_error(
+            &source,
+            "Cannot narrow untyped parameter $abstract when implementing interface method: BindingContainer::bind",
+        );
+    }
+}
+
 /// Verifies the error diagnostic for user class cannot implement throwable directly.
 #[test]
 fn test_error_user_class_cannot_implement_throwable_directly() {

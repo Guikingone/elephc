@@ -315,12 +315,9 @@ pub(crate) fn emit_method_adapter(
 
 /// Returns true when two contracts pass the same argument words in the same order.
 ///
-/// The planner bridges generated `func_args` slots, not declared types. A compiler-injected
-/// declaration routinely names a narrower type than the contract it satisfies, and a variadic
-/// parameter keeps whatever name its declaration wrote, so comparing either would report a
-/// difference that has no ABI behind it. Declared type compatibility is the checker's contract
-/// and is validated long before codegen runs. Arity, by-reference passing, and the register
-/// class or word count of a parameter do change the entry, so those stay exact.
+/// The planner bridges generated `func_args` slots, not PHP type variance. Parameter names
+/// can differ, and object class names share one pointer representation. Arity, by-reference
+/// passing, and the value representation must match before a wrapper forwards arguments.
 fn same_parameter_abi(left: &FunctionSig, right: &FunctionSig) -> bool {
     left.ref_params == right.ref_params
         && left.variadic.is_some() == right.variadic.is_some()
@@ -332,14 +329,10 @@ fn same_parameter_abi(left: &FunctionSig, right: &FunctionSig) -> bool {
             .all(|((_, left_ty), (_, right_ty))| same_physical_param_abi(left_ty, right_ty))
 }
 
-/// Returns true when two declared parameter types occupy the same argument registers and words.
+/// Returns true when two parameter types have compatible physical value representations.
+/// Register count alone does not distinguish boxed cells, pointers, scalars, or tagged values.
 fn same_physical_param_abi(left: &PhpType, right: &PhpType) -> bool {
-    let left = left.codegen_repr();
-    let right = right.codegen_repr();
-    left == right
-        || (left.register_count() == right.register_count()
-            && left.stack_size() == right.stack_size()
-            && left.is_float_reg() == right.is_float_reg())
+    left.reference_payload_compatible(right)
 }
 
 fn physical_method_symbol(class_name: &str, method_name: &str, kind: MethodKind) -> String {
@@ -527,10 +520,11 @@ mod tests {
             .contains("actual-count"));
     }
 
+    /// Rejects boxed, pointer, and tagged arguments that merely share register counts.
     #[test]
-    fn planner_accepts_a_narrower_injected_parameter_declaration() {
-        // A compiler-injected implementation may declare `Iterator $iterator` where the
-        // interface it satisfies declares `mixed $value`: one pointer word either way.
+    fn planner_rejects_incompatible_value_representations() {
+        // An object pointer and a Mixed cell pointer occupy one word, but the callee
+        // must not interpret the cell address as an object pointer.
         let caller = signature(
             vec![
                 ("offset".to_string(), PhpType::Mixed),
@@ -543,10 +537,30 @@ mod tests {
             "iterator".to_string(),
             PhpType::Object("Iterator".to_string()),
         );
-        assert_eq!(
-            plan_method_abi(&caller, &physical).unwrap(),
-            MethodAbiPlan::Direct
-        );
+        assert!(plan_method_abi(&caller, &physical)
+            .unwrap_err()
+            .contains("unsupported physical signature difference"));
+
+        let mut raw_pointer = caller.clone();
+        raw_pointer.params[1].1 = PhpType::Object("Iterator".to_string());
+        let mut raw_integer = raw_pointer.clone();
+        raw_integer.params[1].1 = PhpType::Int;
+        assert!(plan_method_abi(&raw_pointer, &raw_integer)
+            .unwrap_err()
+            .contains("unsupported physical signature difference"));
+
+        let mut string_pair = caller.clone();
+        string_pair.params[1].1 = PhpType::Str;
+        let mut tagged_pair = string_pair.clone();
+        tagged_pair.params[1].1 = PhpType::TaggedScalar;
+        assert!(plan_method_abi(&string_pair, &tagged_pair)
+            .unwrap_err()
+            .contains("unsupported physical signature difference"));
+
+        physical.params[1] = ("value".to_string(), PhpType::Int);
+        assert!(plan_method_abi(&caller, &physical)
+            .unwrap_err()
+            .contains("unsupported physical signature difference"));
 
         // A parameter that changes register class is still an unsupported difference.
         let mut float_physical = caller.clone();
