@@ -339,13 +339,16 @@ fn test_enum_from_string_failure_throws_value_error() {
 /// defaulted to an enum case, plus `=== Level::Low` on the declared one. The identity check is
 /// the part that matters — a default that allocated a fresh object, or stored the case slot
 /// before it was materialized, would still print the right `->name`.
+///
+/// The final row is the #1224 section: a backed case, a pure case and a plain object told apart
+/// through the implicit `BackedEnum` / `UnitEnum` interfaces alone.
 #[test]
 fn test_example_enums_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/enums/main.php"));
     assert_eq!(
         out,
         "1\n2\n3\nRed=1 Green=2 Blue=3 \nDefault=default Match=match MATCH=upper-match \nDESC\n\
-         Low High High same"
+         Low High High same\nbacked pure not an enum\n"
     );
 }
 
@@ -1250,4 +1253,24 @@ echo ($p instanceof UnitEnum) ? "y" : "n";
 
     // A PURE enum is a UnitEnum and not a BackedEnum, which is the seventh column.
     assert_eq!(out, "yyyyyyny");
+}
+
+/// Verifies an interface may extend `UnitEnum`, and an enum may implement that interface.
+///
+/// The guards that refuse a CLASS reaching `UnitEnum`, and an enum NAMING it directly, must
+/// leave this shape alone: PHP accepts both declarations and the case is still a `UnitEnum`.
+#[test]
+fn test_an_enum_may_implement_an_interface_that_extends_unit_enum() {
+    let out = compile_and_run(
+        r#"<?php
+interface Labelled extends UnitEnum {}
+enum Level implements Labelled { case Low; }
+
+$l = Level::Low;
+echo ($l instanceof Labelled) ? "y" : "n";
+echo ($l instanceof UnitEnum) ? "y" : "n";
+"#,
+    );
+
+    assert_eq!(out, "yy");
 }

@@ -114,6 +114,14 @@ An enum's interface list is its `implements` clause plus `UnitEnum`, plus
 extend — the same transitive closure a class gets. `class_implements()` reports
 them in that order: declared, implicit, then inherited.
 
+Only an enum may implement `UnitEnum` or `BackedEnum`. A class that names either,
+or implements an interface that extends one, is a compile error (`Non-enum class
+C cannot implement interface UnitEnum`), as in PHP. An enum may not name them
+itself either, since it already has them (`Enum E cannot implement previously
+implemented interface UnitEnum`), and a pure enum naming `BackedEnum` has no
+backing type to satisfy it. Declaring an interface that extends `UnitEnum`, and
+implementing it from an enum, is fine.
+
 User classes cannot implement `Throwable` directly, matching PHP. Extend
 `Exception` or `Error` instead; user interfaces may extend `Throwable`, and
 classes that extend `Exception` or `Error` can implement those user interfaces.
