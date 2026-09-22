@@ -428,8 +428,20 @@ pub fn is_cached(path: &Path) -> bool {
 
 /// Reads and caches a script without executing it, as `opcache_compile_file()` does.
 ///
-/// Returns whether the file could be read and parsed. A file that parses but the budget
+/// Returns whether the file could be read AND PARSED. A file that parses but the budget
 /// refuses still reports success: php-src reports the COMPILE, not the store.
+///
+/// THE PARSE RESULT HAS TO BE INSPECTED, not inferred from `fill_entry` succeeding.
+/// `fill_entry` returns `Ok` for a file that did not parse — deliberately, because the
+/// segments it hands back carry the error so a later `include` can RAISE it at the right
+/// moment. Reading `is_ok()` as "compiled" therefore reported success for a file with a
+/// syntax error, which is the one answer `opcache_compile_file()` must never give: the
+/// caller is told the file is ready and nothing is cached.
+///
+/// DIVERGENCE, stated rather than hidden: reference PHP 8.5 THROWS a `ParseError` here,
+/// where this answers `false`. Throwing needs the message and line carried across the
+/// bridge, which this signature cannot do; `false` is the honest half of the answer and no
+/// longer the wrong one.
 ///
 /// A discarded entry is re-admitted by the fill itself, which inserts a fresh entry with
 /// the latch clear. Removing it first would be worse than redundant: the removal does not
@@ -441,7 +453,24 @@ pub fn compile_file(path: &Path) -> bool {
         return false;
     }
     let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    fill_entry(&key, path, &config).is_ok()
+    // A SECOND CALL ON A CACHED FILE IS A HIT, not another compile. php-src's
+    // `opcache_compile_file()` goes through the same cache lookup as an include, so calling
+    // it twice moves `hits`, not `misses`. Going straight to `fill_entry` re-read and
+    // re-parsed the file every time, counted a miss for each, and rebuilt the entry with
+    // `hits: 0` and a reset `last_used` — so repeated calls moved every figure the wrong way
+    // and dragged `opcache_hit_rate` down with them. MEASURED on reference PHP 8.5.10: three
+    // calls give `hits=2 misses=0` beyond the first, against `hits=0 misses=2` here.
+    match serve_warm_entry(&key, &config) {
+        Ok(Some(_)) => return true,
+        Ok(None) => {}
+        Err(_) => return false,
+    }
+    match fill_entry(&key, path, &config) {
+        Ok(segments) => !segments
+            .iter()
+            .any(|segment| matches!(segment, ScriptSegment::ParseError(_))),
+        Err(_) => false,
+    }
 }
 
 /// Returns a counter that changes whenever the cache's entries change.

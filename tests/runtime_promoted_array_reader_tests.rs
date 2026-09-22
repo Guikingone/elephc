@@ -17,9 +17,8 @@
 //!     1. `var_dump`, `print_r`, `serialize` and `json_encode` walk the payload in emitted
 //!        assembly. Their indexed entries now probe the heap-kind byte and tail-jump to their
 //!        own hash counterpart.
-//!     2. `implode` is out of scope here and covered by #1054: its renderers need a
-//!        DENSE payload and cannot walk a hash at all.
-//!        the same extraction `array_values()` uses, packed storage is merely retained.
+//!     2. `implode` is out of scope here and covered by #1054: its renderers need a DENSE
+//!        payload and cannot walk a hash at all.
 //!     3. `foreach` over a `Mixed` picked its path from the boxed TAG, which still said
 //!        "indexed"; it read the hash header's first word as a length of zero and ran the body
 //!        no times. `var_export()` is a PHP-level prelude built on exactly that loop, which is

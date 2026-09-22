@@ -323,14 +323,21 @@ fn a_fatal_survives_verbosity_zero() {
     assert_accel_fatal(&output, BAD_DIRECTORY);
 }
 
-/// Verifies output written before the first bridge-reaching `eval()` precedes the fatal.
+/// Verifies the bad-directory fatal happens BEFORE the program runs, as reference does.
 ///
-/// This is the documented position divergence: reference PHP validates before the script
-/// runs and so prints nothing, while elephc validates where the cache is configured. The
-/// MESSAGE and the EXIT STATUS are identical — only the ordering differs, which is what
-/// this pins so a future change cannot quietly widen the gap.
+/// THIS TEST USED TO PIN THE OPPOSITE. elephc installed its OPcache configuration at the
+/// first `eval()`, so the startup validation of `opcache.file_cache` ran there too: a
+/// program that echoed before its first eval printed that output and only then fatalled,
+/// while reference PHP validates during module startup and prints nothing at all. The test
+/// recorded the ordering gap and existed to stop it widening.
+///
+/// Moving the configuration into the prologue closed it. The fatal now precedes the
+/// program's first statement, so the assertion flips: `BEFORE` must NOT appear.
+///
+/// The message and exit status were already identical and stay asserted, because ordering
+/// is not the only thing that could regress here.
 #[test]
-fn output_before_the_first_eval_precedes_the_fatal() {
+fn the_bad_directory_fatal_precedes_the_program() {
     let dir = make_test_dir("opcache_fc_order");
     fs::write(dir.join("lib.php"), "<?php $lib_marker = 1;\n").unwrap();
     fs::write(
@@ -349,10 +356,12 @@ fn output_before_the_first_eval_precedes_the_fatal() {
     let output = Command::new(&bin).output().expect("failed to run binary");
 
     assert_accel_fatal(&output, BAD_DIRECTORY);
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        String::from_utf8_lossy(&output.stdout).contains("BEFORE"),
-        "output before the eval should already be flushed"
+        !stdout.contains("BEFORE"),
+        "the fatal must precede the program's own output, as reference PHP's does: {stdout:?}"
     );
+    assert!(!stdout.contains("RAN"), "the program must not run: {stdout:?}");
 }
 
 /// Verifies a CONST-FOLDED `eval()` never reaches the bridge, and so never validates.

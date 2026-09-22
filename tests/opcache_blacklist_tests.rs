@@ -384,25 +384,23 @@ fn a_value_matching_no_file_is_not_fatal() {
     assert_eq!(line(&out, "scripts"), "allowed.php,blocked.php");
 }
 
-/// THE LISTING IS EMPTY UNTIL THE FIRST `eval()`, and that is worth pinning precisely
-/// BECAUSE it is a divergence rather than parity.
+/// Verifies the listing is populated BEFORE the program's first `eval()`, as reference does.
 ///
-/// Reference PHP reads the blacklist files during startup, so
-/// `opcache_get_configuration()['blacklist']` carries the resolved patterns from the first
-/// line of the program. elephc loads them when the eval context is built — the compiled
-/// binary's analogue of `MINIT`, and the only moment it has — so the same call answers `[]`
-/// before that point and the patterns after it. VERIFIED against reference PHP 8.5.10, which
-/// reports the same list both times.
+/// THIS TEST USED TO PIN THE OPPOSITE, and the flip is the point. The blacklist was loaded
+/// when the eval context was first built, so `opcache_get_configuration()['blacklist']`
+/// answered `[]` up to the program's first `eval()` and the resolved patterns after it —
+/// the same binary, the same directive, two answers decided by where the call happened to
+/// sit. The old version of this test recorded that as a deliberate divergence and said in
+/// its own docblock that it should be deleted if the load ever moved to startup.
 ///
-/// Every other test in this file happens to read the configuration AFTER its eval, so none of
-/// them could observe the pre-eval answer. That left the divergence free to change in either
-/// direction unnoticed: if the load ever moved to startup this test fails and should simply
-/// be deleted, and if the empty answer ever became something else it fails too.
+/// It has. `crate::codegen::frame` now installs the OPcache configuration in the prologue,
+/// where php-src's module startup does, so the answer no longer depends on program order.
+/// Rewritten as parity rather than deleted: the property still needs a guard, it just needs
+/// it pointing the other way.
 ///
-/// The REFUSAL is unaffected either way — nothing can be included before the eval that loads
-/// the list, because the include path itself runs through it.
+/// `before` is the assertion that matters — `after` would pass under the old behaviour too.
 #[test]
-fn the_listing_is_empty_until_the_first_eval() {
+fn the_listing_is_populated_before_the_first_eval() {
     let dir = make_test_dir("opcache_blacklist_pre_eval");
     fs::write(dir.join("blocked.php"), "<?php $blocked_ran = 1;\n").unwrap();
     fs::write(
@@ -413,10 +411,9 @@ fn the_listing_is_empty_until_the_first_eval() {
     fs::write(
         dir.join("main.php"),
         r#"<?php
-// BEFORE any eval: the bridge has not been reached, so nothing is loaded yet.
+// BEFORE any eval: reference already has the directive in force here, and so must elephc.
 echo 'before=', count(opcache_get_configuration()['blacklist']), "\n";
 eval('require __DIR__ . "/blocked.php";');
-// AFTER: the eval-context setup loaded the file, and the same call now answers differently.
 $c = opcache_get_configuration();
 echo 'after=', count($c['blacklist']), "\n";
 echo 'entry=', implode('|', $c['blacklist']), "\n";
@@ -440,15 +437,14 @@ echo 'refused=', opcache_get_status()['opcache_statistics']['blacklist_misses'],
 
     assert_eq!(
         line(&out, "before"),
-        "0",
-        "the listing must be empty before the eval that loads it:\n{out}"
+        "1",
+        "the directive must be in force before the program's first eval():\n{out}"
     );
     assert_eq!(line(&out, "after"), "1", "{out}");
     assert_eq!(
         line(&out, "entry"),
         dir.join("blocked.php").display().to_string()
     );
-    // The refusal itself never depended on the listing being visible.
     assert_eq!(line(&out, "refused"), "1", "{out}");
 }
 

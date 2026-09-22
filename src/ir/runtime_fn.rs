@@ -411,6 +411,7 @@ pub enum RuntimeFnId {
     ElephcOpcacheRtIsCached,
     ElephcOpcacheRtDiscard,
     ElephcOpcacheRtCompile,
+    ElephcOpcacheRtInFileCache,
     ElephcOpcacheRtStat,
     ElephcOpcacheRtSwap,
     ElephcPtrIsNull,
@@ -1282,7 +1283,7 @@ impl RuntimeFnId {
             // `discard` and `compile` MUTATE the process-wide cache, and neither may be
             // folded away or hoisted: two `opcache_compile_file()` calls on one path are
             // not one call, and a discard between two `is_cached` reads changes the answer.
-            RuntimeFnId::ElephcOpcacheRtIsCached => {
+            RuntimeFnId::ElephcOpcacheRtIsCached | RuntimeFnId::ElephcOpcacheRtInFileCache => {
                 crate::ir::Effects::from_bits_retain(crate::ir::Effects::READS_GLOBAL.bits())
             }
             RuntimeFnId::ElephcOpcacheRtDiscard | RuntimeFnId::ElephcOpcacheRtCompile => {
@@ -2564,6 +2565,7 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcOpcacheRtIsCached => "__elephc_opcache_rt_is_cached",
             RuntimeFnId::ElephcOpcacheRtDiscard => "__elephc_opcache_rt_discard",
             RuntimeFnId::ElephcOpcacheRtCompile => "__elephc_opcache_rt_compile",
+            RuntimeFnId::ElephcOpcacheRtInFileCache => "__elephc_opcache_rt_in_file_cache",
             RuntimeFnId::ElephcOpcacheRtStat => "__elephc_opcache_rt_stat",
             RuntimeFnId::ElephcOpcacheRtSwap => "__elephc_opcache_rt_swap",
             RuntimeFnId::ElephcPtrIsNull => "__elephc_ptr_is_null",

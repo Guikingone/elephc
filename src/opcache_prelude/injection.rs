@@ -171,7 +171,11 @@ pub fn inject_if_used(
         if detect::program_references(&program, IS_SCRIPT_CACHED_IN_FILE_CACHE_FN)
             && !detect::program_declares(&program, IS_SCRIPT_CACHED_IN_FILE_CACHE_FN)
         {
-            // Carries no manifest either way (elephc has no file cache), so it is never a bake site.
+            // Carries no manifest either way — it asks the ON-DISK cache through
+            // `__elephc_opcache_rt_in_file_cache`, not the baked script list — so it is
+            // never a bake site. It used to be a hardcoded `false` justified by "elephc has
+            // no file cache", which stopped being true the moment this branch shipped
+            // `file_store` and `opcache.file_cache`.
             declarations.push(if restricted {
                 build::restricted_is_script_cached_in_file_cache_decl(warning())
             } else {

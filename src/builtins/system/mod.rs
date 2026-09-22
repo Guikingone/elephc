@@ -37,6 +37,7 @@ pub mod __elephc_opcache_rt_script_path;
 pub mod __elephc_opcache_rt_is_cached;
 pub mod __elephc_opcache_rt_discard;
 pub mod __elephc_opcache_rt_compile;
+pub mod __elephc_opcache_rt_in_file_cache;
 pub mod __elephc_opcache_rt_reset;
 pub mod __elephc_opcache_rt_stat;
 pub mod __elephc_opcache_rt_swap;

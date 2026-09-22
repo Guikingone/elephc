@@ -42,6 +42,10 @@ pub(crate) mod ctype;
 pub(crate) mod curl;
 pub(crate) mod debug;
 pub(super) mod eval;
+/// Installing the compiled OPcache configuration is a STARTUP concern rather than an eval
+/// one, so `crate::codegen::frame` reaches it from the prologue. Re-exported here because
+/// `frame` sits a level above this module's parent, which `pub(super)` does not reach.
+pub(crate) use eval::configure_eval_opcache;
 mod eval_facade;
 pub(crate) mod iconv;
 pub(crate) mod io;

@@ -437,9 +437,9 @@ too. Guarded by `opcache.restrict_api`.
 With the directive **set**, it answers from the real on-disk cache: `true` once a
 script has been stored there, `false` before that and after the source changes.
 It applies exactly the validation a read does, so it never reports an entry a read
-would reject. Reachable from inside `eval()`, where the dynamic tier lives; a
-natively compiled call still answers `false`, for the same reason its sibling file
-functions do. See [`opcache.file_cache`](#opcachefile_cache).
+would reject. Both surfaces answer the same: a natively compiled call and one
+written inside `eval()` go through the same `__elephc_opcache_rt_in_file_cache`
+bridge. See [`opcache.file_cache`](#opcachefile_cache).
 
 ### `opcache_jit_blacklist()`
 
@@ -629,10 +629,12 @@ reduces to the right-hand side. `$force` is what discards the entry.
 A dynamic callable reaches the same answers: `call_user_func('opcache_invalidate',
 $f, true)` and `opcache_invalidate($f, true)` go through one shared core.
 
-Two functions are deliberately unchanged.
-`opcache_is_script_cached_in_file_cache()` stays `false` — php-src returns early
-on an unset `opcache.file_cache`, and elephc has no on-disk opcode cache to point
-the directive at. `opcache_jit_blacklist()` stays a no-op returning `null`.
+One function is deliberately unchanged: `opcache_jit_blacklist()` stays a no-op
+returning `null`, because there is no JIT to blacklist for.
+
+`opcache_is_script_cached_in_file_cache()` is no longer among them. It answered a
+hardcoded `false` while elephc had no on-disk cache; this branch ships one, so it
+now asks it.
 
 ### What `opcache_get_status()` reports
 

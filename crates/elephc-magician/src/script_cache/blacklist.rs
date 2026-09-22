@@ -445,15 +445,39 @@ fn expand_entry(entry: &str, base_dir: &Path) -> Option<String> {
 /// prefix exists, because an entry may legitimately name a file that is not there yet. What
 /// does not exist cannot be a symlink, so leaving that part textual loses nothing.
 fn canonicalize_existing_prefix(path: &str) -> String {
+    // Start at the wildcard (or the end), so the LAST component is offered to `canonicalize`
+    // too. Seeding at the final separator instead resolved every directory above the leaf and
+    // left the leaf's own symlink in place — which for an entry naming a file is the whole
+    // entry. The cache key it is matched against is fully resolved, so the two could never
+    // agree: blacklisting `lib/alias.php` (a symlink to `real.php`) blocked nothing, and
+    // reference reports `…/real.php` back from `opcache_get_configuration()['blacklist']`.
+    //
+    // The bug hid behind the case that was tested. A directory prefix WITH a trailing slash
+    // resolves correctly either way, because the trailing `/` already pushes the seed past
+    // the component — so the `current -> releases/42` deployment probe passed while the
+    // narrower and more common "the listed file is itself a symlink" case did not.
     let wildcard_at = path.find(['*', '?']).unwrap_or(path.len());
-    let mut boundary = match path[..wildcard_at].rfind('/') {
-        Some(0) | None => return path.to_string(),
-        Some(index) => index,
-    };
+    let mut boundary = wildcard_at;
     loop {
-        if let Ok(real) = std::fs::canonicalize(&path[..boundary]) {
-            let real = real.to_string_lossy().into_owned();
-            return format!("{}{}", real.trim_end_matches('/'), &path[boundary..]);
+        if boundary > 1 {
+            let head = &path[..boundary];
+            if let Ok(real) = std::fs::canonicalize(head) {
+                let mut out = real.to_string_lossy().into_owned();
+                if out.len() > 1 {
+                    while out.ends_with('/') {
+                        out.pop();
+                    }
+                }
+                let rest = &path[boundary..];
+                // Put back the separator canonicalization ate. `/srv/app/` resolves to
+                // `/srv/app`, so splitting at the wildcard in `/srv/app/*.php` would rejoin
+                // as `/srv/app*.php` — an entry that matches a sibling directory and not the
+                // files it was written for.
+                if head.ends_with('/') && !rest.starts_with('/') && !out.ends_with('/') {
+                    out.push('/');
+                }
+                return format!("{out}{rest}");
+            }
         }
         boundary = match path[..boundary].rfind('/') {
             Some(0) | None => return path.to_string(),

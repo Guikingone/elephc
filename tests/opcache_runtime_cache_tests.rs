@@ -122,6 +122,62 @@ foreach ($s['scripts'] as $key => $entry) {
 echo 'found=', $found, "\n";
 "#;
 
+/// Verifies `opcache_compile_file()` does not report success for a file that cannot parse.
+///
+/// This one came out of the interaction between two changes that were each correct alone.
+/// The new guard in `fill_entry` stops caching a script with a syntax error, and returns
+/// `Ok` while doing so — deliberately, because the segments it hands back carry the error so
+/// a later `include` can raise it at the right moment. `compile_file` read that `Ok` as
+/// "compiled". The result was the single worst answer available: `true` for a file that is
+/// not cached and never will be, with no diagnostic anywhere.
+///
+/// DIVERGENCE, asserted as it stands rather than as it should be: reference PHP 8.5 THROWS a
+/// `ParseError` here. Carrying the message and line across the bridge is out of reach of a
+/// `-> u64` symbol, so `false` is the honest half of the answer. If that ever becomes a
+/// throw, this assertion is what will fail and say so.
+///
+/// The `eval()` is load-bearing and not scaffolding: without one the binary links no eval
+/// bridge, every `rt_*` call folds to `0`, and the test would pass for the wrong reason.
+#[test]
+fn compile_file_refuses_a_file_that_does_not_parse() {
+    let dir = make_test_dir("opcache_rt_compile_broken");
+    fs::write(dir.join("inc.php"), "<?php $unrelated = 1;\n").unwrap();
+    fs::write(dir.join("good.php"), "<?php $ok = 1;\n").unwrap();
+    fs::write(dir.join("broken.php"), "<?php $a = ;\n").unwrap();
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+eval('include __DIR__ . "/inc.php";');
+echo 'good=', (opcache_compile_file(__DIR__ . '/good.php') ? '1' : '0'), "\n";
+echo 'broken=', (opcache_compile_file(__DIR__ . '/broken.php') ? '1' : '0'), "\n";
+echo 'broken_cached=', (opcache_is_script_cached(__DIR__ . '/broken.php') ? '1' : '0'), "\n";
+"#,
+    )
+    .unwrap();
+
+    let bin = compile(
+        &dir,
+        &["opcache.enable_cli=1", "opcache.file_update_protection=0"],
+    );
+    let out = run_binary(&bin);
+
+    assert_eq!(
+        field(&out, "good"),
+        "1",
+        "a parsable file outside the manifest must still compile:\n{out}"
+    );
+    assert_eq!(
+        field(&out, "broken"),
+        "0",
+        "compile_file claimed success for a file with a syntax error:\n{out}"
+    );
+    assert_eq!(
+        field(&out, "broken_cached"),
+        "0",
+        "a file that did not parse must not be cached:\n{out}"
+    );
+}
+
 /// Verifies a FORCED `opcache_invalidate()` and `opcache_compile_file()` reach the runtime
 /// tier, not just the manifest.
 ///
@@ -255,7 +311,11 @@ fn a_dynamically_included_file_reaches_the_status_array() {
     assert_eq!(field(&output, "keys"), "2");
     assert_eq!(field(&output, "scripts"), "2");
     assert_eq!(field(&output, "found"), "1");
-    assert_eq!(field(&output, "entry_full_path"), field(&output, "entry_full_path"));
+    assert_eq!(
+        field(&output, "entry_full_path"),
+        dir.join("lib.php").display().to_string(),
+        "the entry must carry the canonical path, not merely some path"
+    );
     // The dynamic entry carries the reference 7-key shape on an 8.5 target.
     assert_eq!(field(&output, "entry_keys"), "7");
     assert_eq!(field(&output, "entry_ts_positive"), "1");
@@ -478,9 +538,11 @@ fn a_freshly_written_file_is_run_but_not_cached() {
 
     let output = run_binary(&binary);
 
-    // `hits`/`misses` are the only usable signal here: `opcache_is_script_cached()` called
-    // natively answers from the frozen manifest, so it reports `false` for a dynamically
-    // included file whether or not the runtime cache stored it.
+    // `hits`/`misses` are the signal here, but no longer because the alternative is broken:
+    // `opcache_is_script_cached()` DOES answer for the runtime tier now, through
+    // `__elephc_opcache_rt_is_cached`. It is simply the weaker probe for this property —
+    // it cannot distinguish "ran but was refused storage" from "never included", which is
+    // exactly the distinction `file_update_protection` turns on.
     assert_eq!(
         field(&output, "hits"),
         "0",

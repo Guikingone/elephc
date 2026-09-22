@@ -1,15 +1,15 @@
 ---
-title: "__elephc_opcache_rt_is_cached() — internals"
-description: "Compiler internals for __elephc_opcache_rt_is_cached(): lowering path, type checks, and runtime helpers."
+title: "__elephc_opcache_rt_in_file_cache() — internals"
+description: "Compiler internals for __elephc_opcache_rt_in_file_cache(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1039
+  order: 1038
 ---
 
-## `__elephc_opcache_rt_is_cached()` — internals
+## `__elephc_opcache_rt_in_file_cache()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/builtins/system/__elephc_opcache_rt_is_cached.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_opcache_rt_is_cached.rs)
+- **Signature**: [`src/builtins/system/__elephc_opcache_rt_in_file_cache.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_opcache_rt_in_file_cache.rs)
 - **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
@@ -17,7 +17,7 @@ sidebar:
 ### Lowering notes
 
 - Uses the `runtime_call` strategy from the single-source builtin descriptor.
-- Emits the typed EIR target `runtime.__elephc_opcache_rt_is_cached` through `BuiltinLoweringContext`.
+- Emits the typed EIR target `runtime.__elephc_opcache_rt_in_file_cache` through `BuiltinLoweringContext`.
 - The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
 ## Semantic descriptor
@@ -33,13 +33,13 @@ sidebar:
 
 ## EIR and runtime boundary
 
-- **Typed EIR target**: `runtime.__elephc_opcache_rt_is_cached`
+- **Typed EIR target**: `runtime.__elephc_opcache_rt_in_file_cache`
 - **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 
 ```php
-function __elephc_opcache_rt_is_cached(string $path): int
+function __elephc_opcache_rt_in_file_cache(string $path): int
 ```
 
 ## What the type checker enforces

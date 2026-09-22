@@ -866,13 +866,17 @@ pub(crate) fn compile_file_decl(enabled: bool, manifest_paths: Expr) -> Stmt {
 /// `opcache_is_script_cached_in_file_cache($filename)`: always `false`, which is EXACT — php-src
 /// gates the whole function on `opcache.file_cache`, which has no default.
 pub(crate) fn is_script_cached_in_file_cache_decl() -> Stmt {
+    let mut body = vec![];
+    body.extend(path_normalization_stmts());
+    body.push(s_return(e_binop(
+        e_call("__elephc_opcache_rt_in_file_cache", vec![e_var("path")]),
+        BinOp::StrictNotEq,
+        e_int(0),
+    )));
     function("opcache_is_script_cached_in_file_cache")
         .param_untyped("filename")
         .returns(TypeExpr::Bool)
-        .body(vec![
-            s_assign("filename", e_cast(CastType::String, e_var("filename"))),
-            s_return(e_bool(false)),
-        ])
+        .body(body)
         .build()
 }
 

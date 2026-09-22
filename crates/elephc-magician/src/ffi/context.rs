@@ -304,8 +304,10 @@ pub unsafe extern "C" fn __elephc_eval_opcache_rt_discard(ptr: *const u8, len: u
 
 /// Reads and caches `path` WITHOUT executing it, as `opcache_compile_file()` does.
 ///
-/// Answers whether the file could be read and parsed. php-src reports the compile, not the
-/// store, so a file that parses but which the budget then refuses still answers `1`.
+/// Answers whether the file could be read AND PARSED. php-src reports the compile, not the
+/// store, so a file that parses but which the budget then refuses still answers `1`; a file
+/// with a syntax error answers `0`, where reference throws a `ParseError` — see
+/// `store::compile_file` for why the throw is out of reach of this signature.
 ///
 /// # Safety
 /// `ptr` must be readable for `len` bytes when `len > 0`.
@@ -316,6 +318,31 @@ pub unsafe extern "C" fn __elephc_eval_opcache_rt_compile(ptr: *const u8, len: u
         return 0;
     }
     u64::from(crate::script_cache::store::compile_file(
+        std::path::Path::new(&path),
+    ))
+}
+
+/// Answers whether the ON-DISK `opcache.file_cache` holds a usable entry for `path`.
+///
+/// The fourth path-taking runtime-tier operation, and the one that was missing. Its native
+/// prelude body was a hardcoded `return false`, written when elephc had no file cache — a
+/// claim this branch makes false, since it ships `file_store`, `opcache.file_cache` and
+/// `opcache.file_cache_read_only`. Widening the eval interception guard to all eight OPcache
+/// names then made that stub authoritative inside `eval()` as well, so merely MENTIONING the
+/// function in native code flipped the eval answer from correct to wrong.
+///
+/// # Safety
+/// `ptr` must be readable for `len` bytes when `len > 0`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_opcache_rt_in_file_cache(
+    ptr: *const u8,
+    len: u64,
+) -> u64 {
+    let path = unsafe { borrow_configured_string(ptr, len) };
+    if path.is_empty() {
+        return 0;
+    }
+    u64::from(crate::script_cache::file_cache_contains(
         std::path::Path::new(&path),
     ))
 }

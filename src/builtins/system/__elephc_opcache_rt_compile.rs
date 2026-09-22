@@ -1,6 +1,6 @@
 //! Purpose:
 //! Home of the internal `__elephc_opcache_rt_compile` builtin: the runtime script cache's
-//! compile operation, reached by path.
+//! compile operation, reached by path. Answers `0` for a file that does not parse.
 //!
 //! Called from:
 //! - The injected OPcache prelude, so a NATIVELY compiled `opcache_*` body answers about the

@@ -243,20 +243,35 @@ fn header_is_ours(bytes: &[u8]) -> bool {
 /// so a directory that refuses every create fails the store instead of spinning.
 fn create_temp_entry(target: &Path) -> Option<(std::fs::File, PathBuf)> {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
-    for _ in 0..8 {
+    create_temp_entry_named(target, || {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0);
-        let nonce = stable_hash(
+        stable_hash(
             &[
                 nanos.to_le_bytes(),
                 u64::from(std::process::id()).to_le_bytes(),
                 COUNTER.fetch_add(1, Ordering::Relaxed).to_le_bytes(),
             ]
             .concat(),
-        );
-        let temp = target.with_extension(format!("tmp{nonce:016x}"));
+        )
+    })
+}
+
+/// The body of [`create_temp_entry`], with the nonce source injected.
+///
+/// THE SEAM EXISTS SO THE NO-FOLLOW PROPERTY CAN BE TESTED AT ALL. The production nonce is
+/// deliberately unguessable, which also means a test cannot plant a symlink at the name the
+/// writer is about to choose — and a test that instead opens a path of its own with
+/// `create_new` asserts a property of the standard library, not of this function. Replacing
+/// the flags here with `create(true).truncate(true)` left such a test entirely green.
+fn create_temp_entry_named(
+    target: &Path,
+    mut nonce: impl FnMut() -> u64,
+) -> Option<(std::fs::File, PathBuf)> {
+    for _ in 0..8 {
+        let temp = target.with_extension(format!("tmp{:016x}", nonce()));
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -471,56 +486,71 @@ mod tests {
         );
     }
 
-    /// Verifies the temporary is created exclusively, so a planted symlink is not followed.
+    /// Verifies the writer itself refuses a path that is already there, symlink included.
     ///
-    /// The old `<entry>.tmp<pid>` name was fully predictable and opened through
-    /// `std::fs::write`, i.e. `O_TRUNC` with neither `O_EXCL` nor `O_NOFOLLOW`: a symlink left
-    /// at that path pointed the next cache fill at any file the worker could write. This pins
-    /// the property that makes that impossible — `create_new` on a path that already exists
-    /// fails rather than following it — without depending on the nonce being unguessable.
+    /// THE NONCE IS FORCED so the test can plant something at the exact name the writer will
+    /// try. An earlier version of this test could not do that — the production nonce is
+    /// unguessable by design — so it opened a path of its own with `create_new` and asserted
+    /// on that instead. PROVEN VACUOUS: changing the production flags to
+    /// `create(true).truncate(true)` left every one of its assertions passing, because none
+    /// of them ran the writer. It tested the standard library.
+    ///
+    /// With the seam, the symlink case is the one that matters: the victim must survive, and
+    /// the writer must fall through to its next attempt rather than truncate through the
+    /// link. The final assertion is what separates "refused" from "gave up": after the
+    /// planted name, a fresh nonce must still produce a real temp file.
     #[test]
-    fn a_pre_existing_temp_path_is_never_followed() {
+    fn the_writer_refuses_a_planted_temp_path() {
         let (_config, dir) = configure("symlink", false);
-        let target = dir.join("victim-target.bin");
-        std::fs::write(&target, b"ORIGINAL").expect("victim written");
-
-        // Reproduce the collision deterministically: create_temp_entry hands back the name it
-        // chose, so plant a file AT that name and ask for it again.
+        let victim = dir.join("victim-target.bin");
+        std::fs::write(&victim, b"ORIGINAL").expect("victim written");
         let entry = dir.join("entry.bin");
-        let (file, temp) = create_temp_entry(&entry).expect("first temp");
-        drop(file);
-        assert!(
-            std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&temp)
-                .is_err(),
-            "create_new must refuse a path that already exists"
-        );
 
-        // The same refusal is what protects a symlink: replace the temp with one and confirm
-        // the open fails instead of truncating the victim through it.
-        std::fs::remove_file(&temp).expect("temp removed");
+        // The name the writer will try first.
+        let planted = entry.with_extension(format!("tmp{:016x}", 0xdead_beefu64));
         #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(&target, &temp).expect("symlink planted");
-            assert!(
-                std::fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&temp)
-                    .is_err(),
-                "create_new must refuse an existing symlink rather than follow it"
-            );
-            assert_eq!(
-                std::fs::read(&target).expect("victim still readable"),
-                b"ORIGINAL",
-                "the symlink target was written through"
-            );
-        }
+        std::os::unix::fs::symlink(&victim, &planted).expect("symlink planted");
+
+        // Hand it the planted nonce once, then a different one.
+        let mut nonces = [0xdead_beefu64, 0x0bad_c0deu64].into_iter();
+        let (file, chosen) =
+            create_temp_entry_named(&entry, || nonces.next().unwrap_or(0x5eed)).expect("temp");
+        drop(file);
+
+        assert_ne!(
+            chosen, planted,
+            "the writer opened the planted path instead of skipping it"
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            std::fs::read(&victim).expect("victim still readable"),
+            b"ORIGINAL",
+            "the symlink target was written through"
+        );
+        assert!(
+            chosen.is_file(),
+            "the writer gave up instead of trying another name"
+        );
     }
 
-        /// Verifies an unconfigured `opcache.file_cache` is completely inert.
+    /// Verifies the writer gives up rather than spinning when every attempt collides.
+    ///
+    /// The retry loop is bounded, and a bound nothing tests is a bound that can silently
+    /// become an infinite loop the first time someone edits it.
+    #[test]
+    fn the_writer_gives_up_after_a_bounded_number_of_collisions() {
+        let (_config, dir) = configure("collide", false);
+        let entry = dir.join("entry.bin");
+        let fixed = entry.with_extension(format!("tmp{:016x}", 0x1234u64));
+        std::fs::write(&fixed, b"in the way").expect("blocker written");
+
+        assert!(
+            create_temp_entry_named(&entry, || 0x1234).is_none(),
+            "a nonce that always collides must end the loop, not spin"
+        );
+    }
+
+    /// Verifies an unconfigured `opcache.file_cache` is completely inert.
     #[test]
     fn an_unconfigured_directory_stores_nothing() {
         set_file_cache_config(FileCacheConfig::new());

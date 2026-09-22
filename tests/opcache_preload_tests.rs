@@ -536,9 +536,6 @@ fn preload_outside_manifest_is_compiled_in_silently() {
     );
 }
 
-/// CACHE ENABLED + UNRESOLVABLE PATH: a hard COMPILE ERROR naming the directive and the path.
-/// This is the AOT equivalent of reference PHP's startup fatal `Failed opening required '<path>'`,
-/// and like that fatal it does not depend on the program calling any OPcache function.
 /// Verifies a top-level `return` in the preloaded file ends THAT FILE, not the program.
 ///
 /// `return` at the top level of an included file is ordinary PHP — it is how a file says
@@ -603,6 +600,9 @@ fn a_top_level_return_in_the_preload_file_does_not_truncate_the_program() {
     );
 }
 
+/// CACHE ENABLED + UNRESOLVABLE PATH: a hard COMPILE ERROR naming the directive and the path.
+/// This is the AOT equivalent of reference PHP's startup fatal `Failed opening required '<path>'`,
+/// and like that fatal it does not depend on the program calling any OPcache function.
 #[test]
 fn missing_preload_file_fails_compilation() {
     let dir = make_test_dir("opcache_preload_missing");

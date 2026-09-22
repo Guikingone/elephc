@@ -20,7 +20,6 @@ pub(super) fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &ready);
     register_eval_regex_provider(ctx);
-    configure_eval_opcache(ctx);
     let symbol = ctx
         .emitter
         .target
@@ -241,7 +240,15 @@ fn emit_eval_constant_name_args(ctx: &mut FunctionContext<'_>, name: &str) {
 /// effective directive set exists only in the compiler. The bridge defaults to a
 /// DISABLED cache, so a binary that never reaches this call — and every consumer
 /// linking the archive without elephc's codegen — keeps the uncached behaviour.
-fn configure_eval_opcache(ctx: &mut FunctionContext<'_>) {
+///
+/// CALLED FROM THE PROLOGUE, not from here. This used to run lazily at the first
+/// `ensure_eval_context`, which made the cache's configuration depend on whether the
+/// program had already executed an `eval()` — so `opcache_compile_file()` answered `false`
+/// before the first one and `true` after, and `opcache_get_configuration()['blacklist']`
+/// was empty then populated, for the same binary and the same directives. php-src
+/// configures OPcache at startup, before a line of user code runs, and
+/// `crate::codegen::frame` now does the same.
+pub(crate) fn configure_eval_opcache(ctx: &mut FunctionContext<'_>) {
     let config = crate::opcache::runtime_cache::runtime_cache_config(
         crate::codegen::compile_php_version().version_id(),
         crate::codegen_support::compile_is_web_sapi(),

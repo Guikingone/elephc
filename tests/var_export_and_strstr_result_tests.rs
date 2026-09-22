@@ -182,11 +182,6 @@ fn run_binary_with_heap_report(bin: &Path) -> (String, String) {
 // BUG 1 — `var_export`'s `$return` flag decides the result type
 // ---------------------------------------------------------------------------
 
-/// THE REGRESSION ANCHOR, verbatim: `var_export($x, true)` used inside a `: string` function.
-///
-/// Reference PHP 8.5.6 (`php -d xdebug.mode=off`) prints `42`. elephc rejected the program with
-/// `error[1:7]: Function 'f' return type expects Str, got Union([Str, Void])` — the two-mode
-/// prelude body's inferred `string|null` leaking into a call site whose flag is a literal.
 /// Verifies `var_export()` of an array of floats does not exhaust the shared concat scratch.
 ///
 /// Floats are the expensive case: `__elephc_var_export_float` finds the shortest round-tripping
@@ -237,6 +232,11 @@ echo strlen(var_export($a, true)), "\n";
     assert_eq!(run_binary(&bin).trim(), "1263");
 }
 
+/// THE REGRESSION ANCHOR, verbatim: `var_export($x, true)` used inside a `: string` function.
+///
+/// Reference PHP 8.5.6 (`php -d xdebug.mode=off`) prints `42`. elephc rejected the program with
+/// `error[1:7]: Function 'f' return type expects Str, got Union([Str, Void])` — the two-mode
+/// prelude body's inferred `string|null` leaking into a call site whose flag is a literal.
 #[test]
 fn var_export_with_literal_true_returns_a_string() {
     let dir = make_test_dir("var_export_literal_true");

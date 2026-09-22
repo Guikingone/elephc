@@ -412,6 +412,7 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     emit_probe_init(ctx);
     register_main_instr(ctx);
     emit_instr_init(ctx);
+    emit_opcache_configuration(ctx);
     if ctx.heap_debug {
         ctx.emitter.comment("enable heap debug flag");
         abi::emit_enable_heap_debug_flag(ctx.emitter);
@@ -804,6 +805,7 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     // every function is emitted; the call here forward-references its label.
     ctx.emitter.comment("reset per-request persistent state");
     abi::emit_call_label(ctx.emitter, "__rt_web_reset");
+    emit_opcache_configuration(ctx);
     emit_opcache_restart_boundary(ctx);
     capture_concat_base(ctx);
     emit_callee_saved_saves(ctx);
@@ -829,6 +831,30 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
 /// PAY-FOR-USE, the same rule the `opcache_get_status()` readers follow: a binary with no
 /// eval bridge has no runtime script cache to restart, so the call is not emitted at all
 /// and the interpreter archive stays unlinked.
+/// Installs the compiled OPcache configuration before any of the program's code runs.
+///
+/// php-src configures OPcache during module startup, so every directive is in force for the
+/// first statement. elephc installed it lazily at the first `ensure_eval_context` instead,
+/// which made the ANSWER depend on program order: `opcache_compile_file()` returned `false`
+/// before the program's first `eval()` and `true` after it, and
+/// `opcache_get_configuration()['blacklist']` was `[]` then populated — same binary, same
+/// directives, two answers decided by where the call happened to sit.
+///
+/// Emitted only when the binary links the eval bridge, so pay-for-use is unchanged: without
+/// one there is no runtime cache to configure and every `rt_*` call folds away anyway.
+///
+/// Under `--web` this runs per request rather than once. The call is a setter over
+/// compile-time constants, so re-installing is idempotent, and putting it in the handler
+/// prologue is what guarantees a recycled worker starts configured.
+fn emit_opcache_configuration(ctx: &mut FunctionContext<'_>) {
+    if !ctx.module.required_runtime_features.eval_bridge {
+        return;
+    }
+    ctx.emitter
+        .comment("install the compiled OPcache configuration (php-src does this at startup)");
+    crate::codegen::lower_inst::builtins::configure_eval_opcache(ctx);
+}
+
 fn emit_opcache_restart_boundary(ctx: &mut FunctionContext<'_>) {
     if !ctx.module.required_runtime_features.eval_bridge {
         return;

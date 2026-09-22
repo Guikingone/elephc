@@ -98,16 +98,6 @@ impl Span {
         }
     }
 
-    /// Does this span point at a place in the program's own source?
-    ///
-    /// Three things carry a span: real source, `dummy()`, and `synthetic()`. Passes that treat a
-    /// node as compiler-generated must ask this rather than testing `line == 0`, which was the
-    /// only spelling of "generated" before synthetic spans existed and now answers wrongly for
-    /// half of them.
-    pub fn is_from_source(self) -> bool {
-        self.line != 0 && self.line < SYNTHETIC_LINE_BASE
-    }
-
     /// Can this span single out ONE node?
     ///
     /// A `dummy()` cannot: every node built without a source location shares it, so anything
