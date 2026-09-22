@@ -81,10 +81,26 @@ pub(crate) fn restrict_api_warning_stmt(text: &str) -> Stmt {
     ))
 }
 
-/// The `$path` prologue the three path-taking OPcache functions share: an empty argument
-/// resolves through `getcwd()`, anything else through `realpath()`, and an unresolvable path
-/// leaves the function early with `false`.
+/// The `$path` prologue the path-taking OPcache functions share: an empty argument resolves
+/// through `getcwd()`, anything else through `realpath()`, and an unresolvable path leaves
+/// the function early with `false`.
 fn path_normalization_stmts() -> Vec<Stmt> {
+    path_normalization_stmts_with_fallback(vec![s_return(e_bool(false))])
+}
+
+/// The same prologue, with the UNRESOLVABLE-PATH arm supplied by the caller.
+///
+/// `false` is right for the readers: `opcache_is_script_cached()` and
+/// `opcache_compile_file()` are asking about a file, and a path that does not resolve is not
+/// one. `opcache_invalidate()` is asking about a CACHE ENTRY, and the entry outlives the
+/// file — which is the whole point of deleting a script and telling the cache to forget it.
+///
+/// MEASURED against reference PHP 8.5, `validate_timestamps=0`: cache a file, `unlink()` it,
+/// then `opcache_invalidate($p, true)`. Reference answers `true`; elephc answered `false`,
+/// because `realpath()` had already failed and the function never reached the cache.
+/// Reference answers `false` for a path that was NEVER cached, so this is not "always true
+/// when realpath fails" — it is "ask the cache", which is what the fallback does.
+fn path_normalization_stmts_with_fallback(unresolved: Vec<Stmt>) -> Vec<Stmt> {
     vec![
         s_assign("path", e_str("")),
         s_if(
@@ -104,7 +120,7 @@ fn path_normalization_stmts() -> Vec<Stmt> {
                 s_assign("rp", e_call("realpath", vec![e_var("filename")])),
                 s_if(
                     e_binop(e_var("rp"), BinOp::StrictEq, e_bool(false)),
-                    vec![s_return(e_bool(false))],
+                    unresolved,
                     vec![],
                     None,
                 ),
@@ -762,7 +778,27 @@ pub(crate) fn invalidate_decl(enabled: bool, manifest_paths: Expr, strict: bool)
         ),
         s_assign("force", e_cast(CastType::Bool, e_var("force"))),
     ];
-    body.extend(path_normalization_stmts());
+    // A DELETED FILE STILL HAS AN ENTRY. `$force` is already a bool here, so the arm picks
+    // the same bridge the resolved path would and returns whether anything was retired —
+    // `false` when the cache never held it, which is what reference answers there too.
+    body.extend(path_normalization_stmts_with_fallback(vec![
+        s_if(
+            e_var("force"),
+            vec![s_return(e_cast(
+                CastType::Bool,
+                e_call("__elephc_opcache_rt_discard", vec![e_var("filename")]),
+            ))],
+            vec![],
+            None,
+        ),
+        s_return(e_cast(
+            CastType::Bool,
+            e_call(
+                "__elephc_opcache_rt_soft_invalidate",
+                vec![e_var("filename")],
+            ),
+        )),
+    ]));
     body.push(s_if(
         e_binop(e_var("force"), BinOp::And, in_manifest(manifest_paths)),
         vec![forced_action],
@@ -1412,6 +1448,11 @@ pub(crate) fn ini_helper_decls(
             None,
         ),
     ];
+    // The SAME arms without the override prelude above: the value this binary was
+    // CONFIGURED with, which is what `ini_get_all()` reports as `global_value`.
+    let mut global_body: Vec<Stmt> = string_arms.clone().into_iter().map(arm).collect();
+    global_body.push(s_return(e_bool(false)));
+
     string_body.extend(string_arms.into_iter().map(arm));
     string_body.push(s_return(e_bool(false)));
 
@@ -1490,6 +1531,44 @@ pub(crate) fn ini_helper_decls(
             .returns(TypeExpr::Bool)
             .body(null_body)
             .build(),
+        // `__elephc_opcache_ini_string` MINUS the `ini_set()` override arm.
+        //
+        // `ini_get_all()` reports two values per directive and they are not the same value.
+        // `local_value` is what the request currently sees, so an `ini_set()` moves it;
+        // `global_value` is what the engine was configured with, and php-src keeps it on the
+        // `modified`/original side where a request-scoped `ini_set` cannot reach. `-d` and an
+        // INI file DO set it, which is why this reads the baked arms rather than a constant.
+        //
+        // MEASURED, `-d opcache.revalidate_freq=2` then `ini_set('…','2K')`: reference
+        // reports `global_value='2'`, `local_value='2K'`. Both fields were filled from the
+        // override-aware reader, so elephc reported `'2K'` twice and a program asking what
+        // the server was configured with got back its own modification.
+        function("__elephc_opcache_ini_global_string")
+            .param("option", TypeExpr::Str)
+            .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
+            .body(global_body)
+            .build(),
+        // The `?string` return hint is LOAD-BEARING here for the same reason it is on
+        // `_detail_value`: without it the `return null` coerces to `''`.
+        function("__elephc_opcache_ini_global_value")
+            .param("option", TypeExpr::Str)
+            .returns(t_nullable(TypeExpr::Str))
+            .body(vec![
+                s_if(
+                    e_call("__elephc_opcache_ini_null", vec![e_var("option")]),
+                    vec![s_return(e_null())],
+                    vec![],
+                    None,
+                ),
+                s_return(e_cast(
+                    CastType::String,
+                    e_call(
+                        "__elephc_opcache_ini_global_string",
+                        vec![e_var("option")],
+                    ),
+                )),
+            ])
+            .build(),
         // The `?string` return hint is LOAD-BEARING: without it elephc infers plain `Str` and
         // coerces the `return null` to `''`.
         function("__elephc_opcache_ini_detail_value")
@@ -1564,11 +1643,18 @@ pub(crate) fn ini_helper_decls(
                                 vec![e_var("__elephc_k")],
                             ),
                         ),
+                        s_assign(
+                            "__elephc_g",
+                            e_call(
+                                "__elephc_opcache_ini_global_value",
+                                vec![e_var("__elephc_k")],
+                            ),
+                        ),
                         s_array_assign(
                             "__elephc_all",
                             e_var("__elephc_k"),
                             e_array_assoc(vec![
-                                (e_str("global_value"), e_var("__elephc_v")),
+                                (e_str("global_value"), e_var("__elephc_g")),
                                 (e_str("local_value"), e_var("__elephc_v")),
                                 (
                                     e_str("access"),

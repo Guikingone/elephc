@@ -269,6 +269,18 @@ fn callee_return_shape(callee: &Function) -> (bool, bool) {
     (saw_value, saw_void)
 }
 
+/// Returns whether `callee`'s CFG has a back edge — that is, whether its body can run a
+/// statement more than once per call.
+///
+/// Uses the shared natural-loop analysis rather than a cheaper "does any terminator target
+/// an earlier block" test, because block order in this EIR is not guaranteed to be
+/// topological and that shortcut answers wrongly in both directions on a function with
+/// `goto`-shaped control flow.
+fn callee_contains_a_loop(callee: &Function) -> bool {
+    let dominance = compute_dominance(callee);
+    !compute_loops(callee, &dominance).is_empty()
+}
+
 /// Eligibility predicate per acceptance: size threshold, non-recursive (direct or
 /// mutual), no try/catch, no generators/fibers, a 0-parameter entry block (EIR
 /// convention), and a provably ownership-safe plain-scalar boundary/body so the
@@ -286,6 +298,33 @@ fn is_eligible_callee(callee: &Function, recursive: &HashSet<String>) -> bool {
     // emit a `Release` of each transplanted shadow on the continuation edge). Keeping `-O` and
     // `-O0` semantically identical is worth more than inlining these.
     if callee_has_by_value_container_param(callee) {
+        return false;
+    }
+    // A LOOP IN THE CALLEE turns the deferral this pass accepts into an unbounded one.
+    //
+    // `transplant_callee_body` neutralizes the callee's per-statement `ConcatReset`, because
+    // once the frames are merged it would free scratch the HOST still holds. The scratch it
+    // no longer reclaims is then reclaimed at the host's next statement boundary — which for
+    // a straight-line callee is a bounded wait, since a body under the size cap can only
+    // produce a handful of intermediates.
+    //
+    // A loop breaks that argument: the whole loop runs inside ONE host statement, so the
+    // wait is proportional to the iteration count. Under 64 KiB the cost is only scratch and
+    // harmless; past it `__rt_concat_reserve` starts returning OWNED HEAP BLOCKS, and those
+    // accumulate for the rest of the host statement. MEASURED on
+    // `function s(int $n): int { for ($i = 0; $i < $n; $i++) { echo "y" . $i; } return $n; }`
+    // at two million iterations: `--ir-opt=on` died with `Fatal error: heap memory
+    // exhausted` where `--ir-opt=off` completed. An optimization that changes whether a
+    // program finishes is not an optimization.
+    //
+    // THE BETTER FIX IS NOT THIS ONE, and is worth stating so the next reader does not have
+    // to rediscover it: capture `_concat_off` into a host slot at the splice point and
+    // rewrite the transplanted reset to rewind to THAT, rather than to nothing. The callee
+    // would keep its per-statement reclamation while still being unable to reach the
+    // caller's scratch. That needs a `ConcatReset` variant carrying a slot, so it is a
+    // codegen change rather than an eligibility one; this gate is the conservative
+    // equivalent, and it costs only the inlining of small looping callees.
+    if callee_contains_a_loop(callee) {
         return false;
     }
     if has_exception_handlers(callee) {

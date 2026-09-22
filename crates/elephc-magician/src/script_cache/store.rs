@@ -461,11 +461,28 @@ pub fn discard(path: &Path) -> bool {
 /// test can assert on.
 pub fn invalidate(path: &Path, force: bool) -> bool {
     let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    // THE ON-DISK ENTRY GOES FIRST, AND UNCONDITIONALLY. php-src calls
+    // `zend_file_cache_invalidate` outside the `force || !validate_timestamps || stale`
+    // test, so an invalidate that deliberately KEEPS the in-memory entry still drops the
+    // disk copy. MEASURED: reference reports `mem_after=1 disk_after=0` for an unchanged
+    // file under `validate_timestamps=1`; elephc reported `disk_after=1`, because this
+    // returned before reaching the removal.
+    //
+    // That ordering is the point rather than an accident. The in-memory entry dies with the
+    // process; the disk entry outlives it, so leaving one behind is how an invalidated
+    // script comes back in the next process — the failure the call exists to prevent.
+    let removed = super::file_store::invalidate(&config(), &key);
     if !force && config().validate_timestamps && !entry_is_stale(&key) {
-        return false;
+        return removed;
     }
-    let discarded = discard(&key);
-    super::file_store::invalidate(&config(), &key) || discarded
+    // A SECOND INVALIDATE RETIRES NOTHING. `discard` answers whether an entry is PRESENT,
+    // which stays true once the latch is set, so chaining it here reported success for a
+    // call that did no work — reference answers `false` for the second one. The liveness is
+    // read before the discard rather than inferred from it, because the latch is idempotent
+    // by design and cannot distinguish the two on its own.
+    let was_live = is_cached(&key);
+    discard(&key);
+    was_live || removed
 }
 
 /// Returns whether `key`'s entry no longer matches the file on disk — php-src's

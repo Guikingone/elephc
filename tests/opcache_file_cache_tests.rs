@@ -482,6 +482,65 @@ fn the_file_cache_outlives_the_process_that_wrote_it() {
     );
 }
 
+/// Verifies a NON-forced invalidate still drops the on-disk entry, even when it
+/// deliberately KEEPS the in-memory one.
+///
+/// php-src calls `zend_file_cache_invalidate` OUTSIDE the
+/// `force || !validate_timestamps || stale` test, so the two tiers are not retired together:
+/// an unchanged file under `validate_timestamps=1` keeps its memory entry and loses its disk
+/// entry. elephc returned before reaching the removal, so the disk copy survived — and the
+/// memory entry dies with the process anyway, which makes the surviving disk copy the one
+/// that decides what the next process runs.
+///
+/// MEASURED against reference PHP 8.5: `mem_after=1 disk_after=0`. elephc reported
+/// `disk_after=1`.
+///
+/// THE PAIR IS THE TEST. `disk_after=0` alone would be satisfied by a build that retired
+/// both tiers, which is the OTHER wrong answer — reference keeps the memory entry here, and
+/// `mem_after=1` is what says so.
+#[test]
+fn a_non_forced_invalidate_still_drops_the_on_disk_entry() {
+    let dir = make_test_dir("opcache_fc_soft_invalidate");
+    let cache = dir.join("file-cache");
+    fs::create_dir_all(&cache).unwrap();
+    fs::write(dir.join("lib.php"), "<?php $lib_marker = 1;\n").unwrap();
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+$p = __DIR__ . '/lib.php';
+eval('include $p;');
+echo "disk_before=", (opcache_is_script_cached_in_file_cache($p) ? "T" : "F"), "\n";
+opcache_invalidate($p);
+echo "mem_after=", (opcache_is_script_cached($p) ? "T" : "F"), "\n";
+echo "disk_after=", (opcache_is_script_cached_in_file_cache($p) ? "T" : "F"), "\n";
+"#,
+    )
+    .unwrap();
+    let bin = compile(
+        &dir,
+        &[
+            "opcache.enable_cli=1",
+            "opcache.file_update_protection=0",
+            "opcache.validate_timestamps=1",
+            &format!("opcache.file_cache={}", cache.display()),
+        ],
+    );
+
+    let out = run_binary(&bin);
+
+    assert_eq!(field(&out, "disk_before"), "T", "the include writes the entry");
+    assert_eq!(
+        field(&out, "mem_after"),
+        "T",
+        "an unchanged file keeps its memory entry, as reference does:\n{out}"
+    );
+    assert_eq!(
+        field(&out, "disk_after"),
+        "F",
+        "the disk entry must go regardless of the memory predicate:\n{out}"
+    );
+}
+
 /// Verifies a FORCED invalidate also removes the entry from disk, not just from memory.
 ///
 /// php-src's `accel_invalidate` calls `zend_file_cache_invalidate` alongside the in-memory

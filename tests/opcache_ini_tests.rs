@@ -1080,6 +1080,57 @@ echo 'misses=', $s['opcache_statistics']['misses'], "\n";
 }
 
 
+/// `ini_get_all()` reports `global_value` and `local_value` SEPARATELY, and an `ini_set()`
+/// moves only the second.
+///
+/// They are different questions. `local_value` is what this request currently sees;
+/// `global_value` is what the engine was configured with, which php-src keeps on the
+/// original side where a request-scoped `ini_set` cannot reach. `-d` and an INI file DO set
+/// it, which is why the assertion below configures `2` rather than relying on the default.
+///
+/// Both fields were filled from the same override-aware reader, so a program asking what the
+/// server was configured with got back its own modification. That is a silent wrong answer
+/// to the only question the field exists to answer.
+///
+/// MEASURED against reference PHP 8.5.10, `-d opcache.revalidate_freq=2` then
+/// `ini_set('opcache.revalidate_freq', '2K')`: `global_value='2'`, `local_value='2K'`,
+/// `access=7`. elephc reported `'2K'` for both.
+///
+/// ASSERTING BOTH FIELDS IS THE TEST. Pinning `global_value` alone would pass against a
+/// build that stopped honouring `ini_set` altogether.
+#[test]
+fn ini_get_all_keeps_global_value_out_of_reach_of_ini_set() {
+    let dir = make_test_dir("opcache_ini_global_local");
+    let probe = r#"<?php
+ini_set('opcache.revalidate_freq', '2K');
+$e = ini_get_all()['opcache.revalidate_freq'];
+echo 'global=', var_export($e['global_value'], true), "\n";
+echo 'local=', var_export($e['local_value'], true), "\n";
+echo 'access=', var_export($e['access'], true), "\n";
+echo 'cfg=', var_export(opcache_get_configuration()['directives']['opcache.revalidate_freq'], true), "\n";
+"#;
+    let (binary, _) = compile_with_ini(
+        &dir,
+        probe,
+        "iniglobal",
+        &[("opcache.enable_cli", "1"), ("opcache.revalidate_freq", "2")],
+    );
+
+    let (out, _) = run_binary(&binary);
+
+    assert!(
+        out.contains("global='2'"),
+        "an ini_set() must not move global_value:\n{out}"
+    );
+    assert!(
+        out.contains("local='2K'"),
+        "local_value must carry the raw string ini_set() was given:\n{out}"
+    );
+    assert!(out.contains("access=7"), "{out}");
+    // And the interpreted value still follows the override, through the quantity parser.
+    assert!(out.contains("cfg=2048"), "{out}");
+}
+
 /// `ini_set()` STORES THE RAW STRING and normalizes only when reporting the typed value.
 ///
 /// Two surfaces, two different jobs, and conflating them was one bug wearing two faces.

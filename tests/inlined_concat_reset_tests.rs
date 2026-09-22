@@ -177,44 +177,67 @@ printf("%s|%s|%s|%s|%s\n", "<$a>", "<$b>", "<$c>",
     );
 }
 
-/// Verifies a spliced body that LOOPS keeps the shared concat arena bounded.
+/// Verifies a callee that LOOPS is not inlined, and that such a program still finishes.
 ///
-/// This is the objection two independent reviewers raised against neutralizing the
-/// transplanted `concat_reset`, and it is the right objection to raise: the callee's own
-/// per-statement reclaim is gone, and the host's next statement boundary is only reached
-/// after the whole spliced region — including its loop — has run. If that were the only
-/// reclaim, iterations would accumulate scratch until the 64 KiB `_concat_buf` filled and
-/// the next `sprintf` fatalled with `formatted result exceeds the 65536-byte string buffer`.
+/// This test used to claim the opposite and could not have shown it. Two reviewers argued
+/// that neutralizing a transplanted `concat_reset` lets a spliced loop run away, and they
+/// were right about the consequence even though the mechanism they proposed — an unbounded
+/// write past `_concat_buf` — is not what happens. `__rt_concat_reserve` IS bounded: at
+/// 64 KiB it stops handing out scratch and starts returning OWNED HEAP BLOCKS. Those are
+/// what accumulate, for as long as the host statement lasts, and a spliced loop makes that
+/// the whole loop.
 ///
-/// IT IS NOT THE ONLY RECLAIM, which is why the shape is safe: scratch is retired by the
-/// CONSUMER. A store persists the string and rewinds (`local_stores.rs`), and `echo`
-/// releases an owning temporary. The statement reset is a backstop over those, not the
-/// mechanism. MEASURED at 40000 iterations in the spliced loop — 80 KB of concat through a
-/// 64 KiB arena — for both consumers, with the trailing `printf` that would be the first
-/// casualty.
+/// MEASURED before the gate, on the carrier below at two million iterations: `--ir-opt=on`
+/// died with `Fatal error: heap memory exhausted` while `--ir-opt=off` completed and printed
+/// 14,888,902 bytes. An optimization that decides whether a program finishes is not one.
 ///
-/// The `echo` case is the load-bearing one. The store case reclaims on the store itself, so
-/// it would pass even if this were broken; `echo` has no store and is the shape that isolates
-/// the statement reset.
+/// THE EARLIER VERSION OF THIS TEST WAS VACUOUS, which is worth recording because it looked
+/// exactly like a strong test. It called the callee with `""`, so `$a . $a` was a zero-length
+/// concat: `reserve(0)` always fits and `publish` advances by zero, and `_concat_off` never
+/// moved at all. Its docblock claimed "80 KB of concat through a 64 KiB arena" and described
+/// a run that was never committed — the probe used `"z"`, the test shipped `""`.
+///
+/// Both halves are asserted now. The behavioural half runs the carrier at the scale that
+/// used to fail; the structural half reads the assembly, because once the gate is in place
+/// the behavioural half passes for a reason that has nothing to do with this pass and would
+/// keep passing if the gate were deleted and the runaway returned.
 #[test]
-fn a_spliced_loop_does_not_exhaust_the_concat_arena() {
-    assert_same_with_and_without_opt(
-        "inline_reset_loop_echo",
-        r#"<?php
-function shout(string $a): string { for ($i = 0; $i < 40000; $i++) { echo $a . $a; } return $a; }
-shout("");
-printf("[%s]\n", "tail");
-"#,
-        "[tail]\n",
+fn a_callee_that_loops_is_not_inlined() {
+    const CARRIER: &str = r#"<?php
+function churn(int $n): int { for ($i = 0; $i < $n; $i++) { echo "y" . $i; } return $n; }
+echo churn(2000000), "\nEND\n";
+"#;
+
+    let dir = make_test_dir("inline_reset_loop_gate");
+    let optimized = compile_and_run(&dir, "opt_on", CARRIER, &[]);
+    let plain = compile_and_run(&dir, "opt_off", CARRIER, &["--ir-opt=off"]);
+    assert_eq!(
+        optimized.len(),
+        plain.len(),
+        "the optimizer changed how much the program managed to print"
     );
-    assert_same_with_and_without_opt(
-        "inline_reset_loop_store",
-        r#"<?php
-function churn(string $a): string { for ($i = 0; $i < 40000; $i++) { $t = $a . $a; } return $a; }
-echo churn("z"), "\n";
-printf("[%s]\n", "tail");
-"#,
-        "z\n[tail]\n",
+    assert!(
+        optimized.ends_with("END\n"),
+        "the optimized build did not reach the end of the program"
+    );
+
+    // The structural half: this callee must NOT have been spliced.
+    let php = dir.join("asm.php");
+    fs::write(&php, CARRIER).unwrap();
+    let out = Command::new(elephc_bin())
+        .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .current_dir(&dir)
+        .arg(&php)
+        .arg("--emit-asm")
+        .output()
+        .expect("failed to spawn elephc");
+    assert!(out.status.success(), "asm emission failed");
+    let asm = fs::read_to_string(dir.join("asm.s")).expect("no asm.s emitted");
+    let main_at = asm.find("\n_main:").expect("no _main label in the assembly");
+    assert!(
+        !asm[main_at..].contains("inline_cont"),
+        "a looping callee was spliced into _main; the eligibility gate is gone and the \
+         heap-exhaustion runaway is back"
     );
 }
 

@@ -728,6 +728,69 @@ echo 'r=', (is_array(eval($code)) ? 'array' : 'false'), "\n";
     }
 }
 
+/// `opcache_invalidate()` reaches the cache for a path that no longer RESOLVES, because the
+/// entry outlives the file.
+///
+/// The shared path prologue resolves through `realpath()` and left the function with `false`
+/// when that failed. For the two readers that is right — a path that does not resolve is not
+/// a file to ask about. For an invalidate it is wrong twice: deleting a script and telling
+/// the cache to forget it is the ordinary reason to call this, and the answer said nothing
+/// had been done.
+///
+/// THREE OUTCOMES, AND THEY ARE DIFFERENT, which is why one assertion would not do:
+///
+/// ```text
+/// cached then deleted, forced   -> true    the entry was there and is retired
+/// never cached at all           -> false   nothing to retire; NOT "true when realpath fails"
+/// invalidated a second time     -> false   the first call already did the work
+/// ```
+///
+/// All three MEASURED against reference PHP 8.5 under `validate_timestamps=0`. The second
+/// pins that the fallback asks the cache rather than assuming; the third pins that the
+/// answer reports work done — `discard` reports PRESENCE, which stays true once the latch is
+/// set, so chaining it reported success for a call that retired nothing.
+#[test]
+fn an_invalidate_reaches_the_entry_of_a_deleted_file() {
+    let dir = make_test_dir("opcache_rt_deleted_path");
+    write_dynamic_fixture(
+        &dir,
+        r#"<?php
+$p = __DIR__ . '/lib.php';
+$gone = __DIR__ . '/never-existed.php';
+eval('include $p;');
+unlink($p);
+echo 'deleted=', (opcache_invalidate($p, true) ? 'true' : 'false'), "\n";
+echo 'missing=', (opcache_invalidate($gone, true) ? 'true' : 'false'), "\n";
+echo 'again=', (opcache_invalidate($p, true) ? 'true' : 'false'), "\n";
+"#,
+    );
+
+    let output = run_binary(&compile(
+        &dir,
+        &[
+            "opcache.enable_cli=1",
+            "opcache.file_update_protection=0",
+            "opcache.validate_timestamps=0",
+        ],
+    ));
+
+    assert_eq!(
+        field(&output, "deleted"),
+        "true",
+        "a deleted file's entry is still retirable:\n{output}"
+    );
+    assert_eq!(
+        field(&output, "missing"),
+        "false",
+        "an unresolvable path with no entry must not answer true:\n{output}"
+    );
+    assert_eq!(
+        field(&output, "again"),
+        "false",
+        "the second invalidate retired nothing:\n{output}"
+    );
+}
+
 /// `opcache_invalidate()` WITHOUT `$force` follows php-src's predicate, not "do nothing".
 ///
 /// `accel_invalidate` is `force || !validate_timestamps || the source moved on`, and only
