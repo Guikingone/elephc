@@ -67,15 +67,26 @@ impl ScriptCacheConfig {
     /// STRICT `<` against the age: VERIFIED on reference PHP 8.5.10 that with the
     /// default `2`, ages 0 and 1 are refused and age 2 is admitted.
     ///
-    /// `0` disables the guard (every age is `>= 0`), and an UNKNOWN mtime is admitted —
-    /// php-src compares against a zero timestamp there, which can never be in the
-    /// protected window either.
+    /// `0` DISABLES THE GUARD OUTRIGHT, and an UNKNOWN mtime is admitted — php-src
+    /// compares against a zero timestamp there, which can never be in the protected
+    /// window either.
+    ///
+    /// "Disables" has to mean it for a FUTURE-dated file too, and the arithmetic alone does
+    /// not: such a file has a negative age, and `-age >= 0` is false. This docblock used to
+    /// justify `0` with "every age is `>= 0`", which is exactly the case that is not. php-src
+    /// tests the directive BEFORE the comparison, so with `0` it never compares at all.
+    /// MEASURED on reference PHP 8.5: a file dated an hour ahead is cached under protection
+    /// `0` and refused under the default `2`; elephc refused it under both. Future mtimes are
+    /// not exotic — a checkout copied from a machine whose clock runs ahead produces them.
     pub(crate) fn admits_age(&self, mtime: Option<i64>, now: i64) -> bool {
+        if self.file_update_protection == 0 {
+            return true;
+        }
         let Some(mtime) = mtime else {
             return true;
         };
-        // A file dated in the FUTURE has a negative age and is refused while the clock
-        // catches up, which is what php-src's comparison does with the same inputs.
+        // Under a NON-ZERO guard a future-dated file has a negative age and is refused while
+        // the clock catches up, which is what php-src's comparison does with the same inputs.
         now.saturating_sub(mtime) >= self.file_update_protection as i64
     }
 
@@ -281,6 +292,34 @@ mod tests {
             ..ScriptCacheConfig::disabled()
         };
         assert!(off.admits_age(Some(now), now));
+    }
+
+    /// Verifies `0` admits a FUTURE-dated file, which the arithmetic alone would refuse.
+    ///
+    /// A file dated ahead of the clock has a negative age, and `-age >= 0` is false, so the
+    /// comparison by itself refuses it even when the guard is off. php-src tests the directive
+    /// BEFORE comparing, so with `0` it never compares. MEASURED on reference PHP 8.5: an
+    /// hour-ahead file is cached under `0` and refused under the default `2`.
+    ///
+    /// BOTH SETTINGS ARE ASSERTED. Admitting future files unconditionally would pass the
+    /// first line and break the second, which is the default everyone runs.
+    #[test]
+    fn zero_file_update_protection_admits_a_future_dated_file() {
+        let now = 1_000_000;
+        let off = ScriptCacheConfig {
+            file_update_protection: 0,
+            ..ScriptCacheConfig::disabled()
+        };
+        assert!(
+            off.admits_age(Some(now + 3600), now),
+            "protection 0 must admit a file dated an hour ahead"
+        );
+
+        let default = ScriptCacheConfig::disabled();
+        assert!(
+            !default.admits_age(Some(now + 3600), now),
+            "the default guard must still refuse it while the clock catches up"
+        );
     }
 
     /// Verifies an unknown mtime is admitted rather than refused.

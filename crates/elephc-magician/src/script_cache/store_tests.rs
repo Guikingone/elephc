@@ -136,6 +136,58 @@ fn a_changed_file_stays_stale_inside_the_revalidation_window() {
     assert_eq!((stats.hits, stats.misses), (1, 1));
 }
 
+/// Moves `path`'s mtime to `seconds` since the epoch.
+///
+/// The fixtures here rely on SIZE to detect a rewrite, because mtime has one-second
+/// resolution and a same-second rewrite looks unchanged. `is_cached` compares the timestamp
+/// ALONE, as php-src's `do_validate_timestamps` does, so a test of it has to move the mtime
+/// explicitly — otherwise it would pass on a size change the function no longer looks at.
+fn set_mtime(path: &std::path::Path, seconds: u64) {
+    let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds);
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .expect("fixture should reopen")
+        .set_modified(when)
+        .expect("mtime should be settable");
+}
+
+/// Verifies `is_cached` stops vouching for a stale entry once revalidation is due, and
+/// keeps vouching inside the window.
+///
+/// php-src's `opcache_is_script_cached()` validates the timestamp, but only once
+/// `revalidate_freq` has elapsed. MEASURED on reference PHP 8.5 with the source rewritten
+/// under an older mtime: `revalidate_freq=0` reports it uncached, the default `2` still
+/// reports it cached. This answered `true` in both.
+///
+/// THE PAIR IS THE TEST. A version that re-stat'd on every call would satisfy the first
+/// assertion and break the second, which is the configuration nearly everyone runs.
+#[test]
+fn is_cached_revalidates_only_once_the_window_has_passed() {
+    let _guard = test_lock();
+
+    set_config(enabled_config(0));
+    let due = write_fixture("iscached_due", "<?php $x = 1;");
+    set_mtime(&due, 1_000_000);
+    load_script(&due).expect("fixture should load");
+    assert!(is_cached(&due), "freshly loaded, the entry is cached");
+    set_mtime(&due, 900_000);
+    assert!(
+        !is_cached(&due),
+        "revalidate_freq=0: a moved timestamp must make the entry report uncached"
+    );
+
+    set_config(enabled_config(3600));
+    let within = write_fixture("iscached_within", "<?php $x = 1;");
+    set_mtime(&within, 1_000_000);
+    load_script(&within).expect("fixture should load");
+    set_mtime(&within, 900_000);
+    assert!(
+        is_cached(&within),
+        "inside the revalidation window php-src does not re-stat, so neither may this"
+    );
+}
+
 /// Verifies `opcache.validate_timestamps = 0` never re-reads a changed file.
 #[test]
 fn timestamp_validation_off_never_refills() {

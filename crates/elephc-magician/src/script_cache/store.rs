@@ -530,13 +530,47 @@ fn entry_is_stale(key: &Path) -> bool {
     }
 }
 
-/// Returns whether a path has a live (present, non-discarded) cache entry.
+/// Returns whether a path has a live cache entry — present, not discarded, and not known to
+/// be stale.
+///
+/// A PRESENT ENTRY IS NOT NECESSARILY A CACHED SCRIPT. php-src's `opcache_is_script_cached()`
+/// validates the timestamp before answering, so once the source has moved on it reports the
+/// script uncached rather than vouching for bytes it would not serve. This checked presence
+/// only, and answered `true` for an entry the next include was about to replace.
+///
+/// THE REVALIDATION WINDOW IS RESPECTED, and that is what makes this safe rather than merely
+/// stricter. php-src re-stats only once `revalidate_freq` has elapsed since the entry's last
+/// check. MEASURED on reference PHP 8.5 with the source rewritten under an older mtime:
+///
+/// ```text
+/// revalidate_freq=0    reference: uncached   elephc was: cached
+/// revalidate_freq=2    reference: cached     elephc was: cached   (default — unchanged)
+/// revalidate_freq=60   reference: cached     elephc was: cached
+/// ```
+///
+/// A version that re-stat'd on every call would have fixed the first row and broken the
+/// second, which is the configuration nearly everyone runs.
+///
+/// The test is the timestamp alone, as in `entry_is_stale` and php-src's
+/// `do_validate_timestamps`. This does NOT move `revalidate_at`: it is a query, and a query
+/// that pushed the next check back would change what a later include sees.
 pub fn is_cached(path: &Path) -> bool {
     let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    lock_script_cache()
-        .entries
-        .get(&key)
-        .is_some_and(|entry| !entry.discarded)
+    let (entry_mtime, revalidate_at) = {
+        let cache = lock_script_cache();
+        match cache.entries.get(&key) {
+            Some(entry) if !entry.discarded => (entry.mtime, entry.revalidate_at),
+            _ => return false,
+        }
+    };
+    let config = config();
+    if !config.validate_timestamps || now_seconds() < revalidate_at {
+        return true;
+    }
+    match std::fs::metadata(&key) {
+        Ok(metadata) => mtime_seconds(&metadata) == entry_mtime,
+        Err(_) => false,
+    }
 }
 
 /// Reads and caches a script without executing it, as `opcache_compile_file()` does.
