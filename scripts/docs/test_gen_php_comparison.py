@@ -204,6 +204,30 @@ class ValidationTests(unittest.TestCase):
         self.assertIn("language constructs", out)
         self.assertIn("`isset()`", out)
 
+    def test_construct_route_behind_a_baseline_function_counts_in_its_module_row(self):
+        """`exit()` is a language construct to the compiler but a function to PHP since 8.4.
+
+        The baseline therefore lists it under Core, and the row must count it like any
+        other route: excluding it made Core read 60 / 62 for two functions a compiled
+        program can call. `isset` stays in the constructs sentence because PHP never
+        lists it.
+        """
+        baseline = json.loads(json.dumps(BASELINE))
+        baseline["extensions"].append("core")
+        baseline["functions"]["exit"] = "core"
+        baseline["functions"]["die"] = "core"
+        reg = [
+            public("exit", module="core", aot_kind="language-construct"),
+            public("die", module="core", aot_kind="language-construct"),
+            public("isset", module="core", aot_kind="language-construct"),
+        ]
+        code, out = run_gen(registry=reg, baseline=baseline)
+        self.assertEqual(code, 0)
+        self.assertIn("| `core` | 2 / 2 · 100% | — | — |", out)
+        self.assertIn("elephc implements 1 PHP language constructs", out)
+        self.assertIn("`isset()`", out)
+        self.assertNotIn("`exit()`, `isset()`", out)
+
     def test_elephc_only_builtin_renders_in_beyond_php(self):
         code, out = run_gen(registry=[public("strlen"), public("clamp", module="elephc")])
         self.assertEqual(code, 0)
@@ -299,10 +323,6 @@ class RenderTests(unittest.TestCase):
         self.assertIn("functions **2 / 4**", first)
         self.assertIn("classes **1 / 2**", first)
         self.assertIn("constants **2 / 3**", first)
-        self.assertIn(
-            "The 62/62 Core inventory claim refers to elephc's own contract inventory",
-            first,
-        )
         # strrev is compiled-only, so the standard functions row diverges between backends.
         self.assertIn("- `standard` functions: 2 / 1", first)
 
