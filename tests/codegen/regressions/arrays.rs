@@ -827,6 +827,70 @@ echo $first->value() . ',' . $second->value();
     assert_eq!(out, "3,4");
 }
 
+/// A child's protected redeclaration replaces the parent's physical slot, so an inherited
+/// method must use the child's associative storage after a string-keyed write.
+#[test]
+fn test_redeclared_protected_empty_array_property_in_parent_method() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentStore {
+    protected $items = [];
+    public function put() { $this->items['key'] = 1; }
+    public function value() { return $this->items['key']; }
+}
+class ChildStore extends ParentStore { protected $items = []; }
+$store = new ChildStore();
+$store->put();
+echo $store->value();
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+/// A write in the redeclaring child must also update the slot type seen by an inherited
+/// parent reader, since both methods access the same physical property.
+#[test]
+fn test_redeclared_protected_empty_array_property_in_child_method() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentStore {
+    protected $items = [];
+    public function value() { return $this->items['key']; }
+}
+class ChildStore extends ParentStore {
+    protected $items = [];
+    public function put() { $this->items['key'] = 2; }
+}
+$store = new ChildStore();
+$store->put();
+echo $store->value();
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+/// An inherited method returning an element of a declared array must keep the inferred boxed
+/// return ABI on an otherwise empty subclass after a string-keyed write.
+#[test]
+fn test_inherited_declared_array_property_string_keyed_write() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentStore {
+    protected array $items = [];
+    public function put() { $this->items['key'] = 4; }
+    public function value() { return $this->items['key']; }
+}
+class ChildStore extends ParentStore {}
+$parent = new ParentStore();
+$parent->put();
+$child = new ChildStore();
+$child->put();
+echo $parent->value() . ',' . $child->value();
+"#,
+    );
+    assert_eq!(out, "4,4");
+}
+
 /// Verifies a positional-literal default (`[1, 2, 3]`) on a property later given string keys is
 /// stored associatively, so the whole array survives a cross-method return and string re-indexing.
 /// Regression companion: the positional default must also be rewritten to hash storage when the

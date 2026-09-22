@@ -388,20 +388,32 @@ impl Checker {
         } else {
             inferred_return
         };
-        if !method.is_static {
-            if let Some(ci) = self.classes.get_mut(&class.name) {
-                if let Some(sig) = ci.methods.get_mut(&php_symbol_key(&method.name)) {
-                    sig.return_type = effective_return.clone();
-                }
+        let method_key = php_symbol_key(&method.name);
+        // A subclass copies the method signature before body inference runs. Calls through
+        // that subclass must use the implementing method's return ABI, or a boxed result can
+        // be read as a scalar even though both names dispatch to the same body.
+        for (name, ci) in &mut self.classes {
+            let implementation = if method.is_static {
+                ci.static_method_impl_classes.get(&method_key)
+            } else {
+                ci.method_impl_classes.get(&method_key)
+            };
+            if name != &class.name && implementation != Some(&class.name) {
+                continue;
             }
-        } else if let Some(ci) = self.classes.get_mut(&class.name) {
-            if let Some(sig) = ci.static_methods.get_mut(&php_symbol_key(&method.name)) {
+            let sig = if method.is_static {
+                ci.static_methods.get_mut(&method_key)
+            } else {
+                ci.methods.get_mut(&method_key)
+            };
+            if let Some(sig) = sig {
                 sig.return_type = effective_return.clone();
             }
         }
         self.update_method_callable_return_metadata(
             &class.name,
-            &php_symbol_key(&method.name),
+            &method_key,
+            method.is_static,
             &effective_return,
             &callable_return_sigs,
             &callable_array_return_sigs,
@@ -441,43 +453,45 @@ impl Checker {
         Ok(generator_ty)
     }
 
-    /// Updates callable-return metadata for one checked method body.
+    /// Updates callable-return metadata on the implementing class and its inheriting views.
     fn update_method_callable_return_metadata(
         &mut self,
         class_name: &str,
         method_key: &str,
+        is_static: bool,
         return_type: &PhpType,
         callable_return_sigs: &[FunctionSig],
         callable_array_return_sigs: &[FunctionSig],
     ) {
-        let Some(class_info) = self.classes.get_mut(class_name) else {
-            return;
-        };
-        if return_type == &PhpType::Callable {
-            if let Some(callable_sig) = matching_callable_sig(callable_return_sigs) {
+        let callable_sig = (return_type == &PhpType::Callable)
+            .then(|| matching_callable_sig(callable_return_sigs))
+            .flatten();
+        let callable_array_sig = is_callable_array_return_type(return_type)
+            .then(|| matching_callable_sig(callable_array_return_sigs))
+            .flatten();
+        for (name, class_info) in &mut self.classes {
+            let implementation = if is_static {
+                class_info.static_method_impl_classes.get(method_key)
+            } else {
+                class_info.method_impl_classes.get(method_key)
+            };
+            if name != class_name && implementation.map(String::as_str) != Some(class_name) {
+                continue;
+            }
+            if let Some(sig) = &callable_sig {
                 class_info
                     .callable_method_return_sigs
-                    .insert(method_key.to_string(), callable_sig);
+                    .insert(method_key.to_string(), sig.clone());
             } else {
                 class_info.callable_method_return_sigs.remove(method_key);
             }
-        } else {
-            class_info.callable_method_return_sigs.remove(method_key);
-        }
-        if is_callable_array_return_type(return_type) {
-            if let Some(callable_sig) = matching_callable_sig(callable_array_return_sigs) {
+            if let Some(sig) = &callable_array_sig {
                 class_info
                     .callable_array_method_return_sigs
-                    .insert(method_key.to_string(), callable_sig);
+                    .insert(method_key.to_string(), sig.clone());
             } else {
-                class_info
-                    .callable_array_method_return_sigs
-                    .remove(method_key);
+                class_info.callable_array_method_return_sigs.remove(method_key);
             }
-        } else {
-            class_info
-                .callable_array_method_return_sigs
-                .remove(method_key);
         }
     }
 }

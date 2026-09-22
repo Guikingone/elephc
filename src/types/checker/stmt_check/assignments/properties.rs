@@ -609,8 +609,8 @@ fn refine_object_property_type(
 /// later write can refine the ancestor's `Array(Never)` to an associative array, and codegen
 /// must see that refinement on every subclass that inherited the same physical slot. A child
 /// with a private property of the same name still carries the parent's slot, even though its
-/// name lookup points at a separate slot. A non-private redeclaration replaces the parent's
-/// slot and keeps its own declared default/type.
+/// name lookup points at a separate slot. A non-private redeclaration with the same current
+/// storage type also shares the slot: its own `[]` default must follow the new hash shape.
 fn update_inherited_property_slot_type(
     checker: &mut Checker,
     class_name: &str,
@@ -623,7 +623,8 @@ fn update_inherited_property_slot_type(
     let Some(slot) = class_info.visible_property_index(property) else {
         return;
     };
-    if class_info.properties[slot].1 == ty {
+    let old_ty = class_info.properties[slot].1.clone();
+    if old_ty == ty {
         return;
     }
     let declaring_class = class_info
@@ -638,7 +639,8 @@ fn update_inherited_property_slot_type(
             (name.as_str() == declaring_class || checker.is_subclass_of(name, &declaring_class))
                 && info.properties.get(slot).is_some_and(|(name, _)| name == property)
                 && (info.visible_property_index(property) != Some(slot)
-                    || info.property_declaring_classes.get(property) == Some(&declaring_class))
+                    || info.property_declaring_classes.get(property) == Some(&declaring_class)
+                    || info.properties[slot].1 == old_ty)
         })
         .map(|(name, _)| name.clone())
         .collect();
