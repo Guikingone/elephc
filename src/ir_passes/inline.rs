@@ -34,14 +34,17 @@
 //!   must be released by the callee's exceptional-cleanup frame.
 //!   Objects/closures/resources/`mixed`/`iterable` and by-ref params are excluded
 //!   because their cleanup timing or aliasing cannot be reproduced by a value-copy splice.
-//! - String arguments add one more call-site condition: PHP concatenation builds
-//!   intermediates in a frame-relative scratch buffer that every function rewinds
-//!   at statement boundaries (`ConcatReset`). A real call's separate frame protects
-//!   the caller's in-flight scratch values, but the spliced body runs the callee's
-//!   `ConcatReset` in the host frame, which would free an in-flight scratch string
-//!   argument before the body reads it. So a site is only inlined when every `Str`
-//!   argument comes from a provably non-scratch source (`const_str`/`load_local`);
-//!   see `call_string_args_are_stable`.
+//! - PHP concatenation builds intermediates in a frame-relative scratch buffer that
+//!   every function rewinds at its statement boundaries (`ConcatReset`). A real call's
+//!   separate frame protects the caller's in-flight scratch; a spliced body would run
+//!   that rewind against the HOST's base and free scratch the host still holds. So a
+//!   transplanted `ConcatReset` is neutralized to `Nop` (see `transplant_callee_body`)
+//!   and the host reclaims at its own statement boundary.
+//!   `call_string_args_are_stable` additionally requires every `Str` ARGUMENT to come
+//!   from a non-scratch source (`const_str`/`load_local`). That rule was written as the
+//!   whole protection and could not be: it says nothing about a callee with no
+//!   parameters, nor about a sibling argument of the enclosing call, which is where the
+//!   miscompile was actually found. It is kept as a conservative second line.
 //! - Returns of the callee become `Br` to a continuation block carrying the
 //!   result via a param when the call produced a value; the original call is
 //!   neutralized and parked in an unreachable block to keep value-def records
@@ -463,14 +466,19 @@ fn call_args_bind_directly(host: &Function, call_inst: &Instruction, callee: &Fu
 ///
 /// PHP string concatenation builds intermediate results in a frame-relative scratch
 /// buffer that every function rewinds at its statement boundaries (`Op::ConcatReset`).
-/// In a real call the callee's own frame protects the caller's in-flight scratch values;
-/// but the inliner binds the argument with `store_local` and the spliced body then runs
-/// the callee's `concat_reset` in the *host* frame, freeing an in-flight scratch string
-/// argument before the body reads it back (a miscompile). A `const_str` literal
-/// (persistent) and a `load_local` (already persisted into a slot) are the only string
-/// sources guaranteed not to be scratch-resident; any other source (e.g. a `str_concat`
-/// result passed directly) is conservatively treated as in-flight and the site is left as
-/// an ordinary call.
+/// A `const_str` literal (persistent) and a `load_local` (already persisted into a slot)
+/// are the only string sources guaranteed not to be scratch-resident; any other source
+/// (e.g. a `str_concat` result passed directly) is conservatively treated as in-flight
+/// and the site is left as an ordinary call.
+///
+/// THIS IS NO LONGER THE PROTECTION, and on its own it never was one. A transplanted
+/// `concat_reset` rewinds the HOST frame and so endangers every scratch value live across
+/// the splice, not just the ones this function can see: a callee with no parameters
+/// satisfies it vacuously, and the value actually destroyed in the reported miscompile
+/// was a sibling argument of the enclosing call, which is not an argument to the callee at
+/// all. `transplant_callee_body` now neutralizes the reset, which covers all of those.
+/// This check is retained as a conservative second line — relaxing it would widen the set
+/// of inlined sites, which is a separate change with its own measurements.
 fn call_string_args_are_stable(host: &Function, call_inst: &Instruction, callee: &Function) -> bool {
     for (operand, param) in call_inst.operands.iter().zip(&callee.params) {
         if param.ir_type != IrType::Str {
@@ -790,6 +798,32 @@ fn transplant_callee_body(
             // program.
             if new_inst.op == Op::LoadLocal {
                 new_inst.effects |= Op::LoadLocal.default_effects();
+            }
+            // A `concat_reset` MEANS "rewind the scratch buffer to MY frame's base", and
+            // once the frames are merged that sentence points at the host's base instead.
+            // The spliced statement then frees scratch the HOST is still holding: in
+            // `printf("B:%s|%s\n", "'$v'", var_export(plain(), true))` the interpolated
+            // first argument is live in scratch when `plain()`'s one-statement body is
+            // spliced in, and its reset hands that memory back before `printf` reads it.
+            // Reference prints `B:'garbage'|'2'`; elephc printed `B::garbage'|'2'`, the
+            // temporary's first byte overwritten by the output being assembled on top of it.
+            //
+            // Neutralized rather than dropped, so every `ValueDef::Instruction { index }`
+            // in the block keeps pointing at the same slot.
+            //
+            // NOTHING LEAKS. The scratch the callee allocated now belongs to the host's
+            // statement, and the host rewinds at its own statement boundary — later than
+            // the callee would have, which is the same deferral the inliner already accepts
+            // for the locals it hands to the host epilogue.
+            //
+            // `call_string_args_are_stable` reasoned about this hazard for the callee's
+            // own `Str` ARGUMENTS and stopped there, so a callee with no parameters at all
+            // passed it trivially while a SIBLING argument of the enclosing call sat live
+            // in scratch. That guard is now belt-and-braces; relaxing it would widen
+            // inlining and belongs in its own change.
+            if new_inst.op == Op::ConcatReset {
+                new_inst.op = Op::Nop;
+                new_inst.effects = Op::Nop.default_effects();
             }
             host.instructions.push(new_inst);
             // Re-borrow block only for append.

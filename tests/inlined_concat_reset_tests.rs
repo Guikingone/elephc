@@ -1,0 +1,225 @@
+//! Purpose:
+//! End-to-end tests that the EIR inliner cannot destroy a caller's in-flight concat
+//! scratch — pinned as the invariant that `--ir-opt=on` and `--ir-opt=off` must print the
+//! same bytes.
+//!
+//! THE BUG THESE PIN. `Op::ConcatReset` means "rewind the scratch buffer to MY frame's
+//! base". Every function emits one at each statement boundary, and `capture_concat_base`
+//! gives each frame its own base, so a real call can never reach the caller's scratch.
+//! Splicing a body into its caller merges the frames, and that sentence silently starts
+//! pointing at the HOST's base — so the callee's statement boundary frees scratch the
+//! caller is still holding:
+//!
+//! ```text
+//! printf("B:%s|%s\n", "'$v'", var_export(plain(), true));
+//! reference: B:'garbage'|'2'
+//! elephc:    B::garbage'|'2'      // the temporary's first byte, overwritten
+//! ```
+//!
+//! WHY THE EXISTING GUARD DID NOT CATCH IT. `call_string_args_are_stable` covered exactly
+//! this hazard for the callee's own `Str` ARGUMENTS. `plain()` takes none, so it passed
+//! vacuously — and the value actually destroyed was a SIBLING argument of the enclosing
+//! `printf`, which is not an argument to the inlined function at all. A guard scoped to the
+//! callee's parameters cannot see the caller's other live temporaries.
+//!
+//! WHY `--ir-opt` IS THE ASSERTION AND NOT A LITERAL ALONE. The literal pins today's
+//! reference answer; the cross-check pins the property that makes it a codegen bug rather
+//! than a formatting one. An optimization pass that changes observable output is wrong even
+//! when the new output happens to look plausible, and only the two-build comparison says so.
+//! Both are asserted: a future change that corrupts BOTH builds identically would satisfy
+//! the comparison alone.
+//!
+//! Called from:
+//! - `cargo test --test inlined_concat_reset_tests` through Rust's test harness.
+//!
+//! Key details:
+//! - The callee must be small enough to be selected for inlining; `plain()` returning a
+//!   literal is about as small as a function gets. If the inliner's selection is ever
+//!   narrowed past it these tests keep passing while pinning nothing, which is why
+//!   `the_optimizer_actually_inlines_the_callee` checks the emitted assembly directly.
+//! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an isolated temp
+//!   dir. Host-target only.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static TEST_ID: AtomicUsize = AtomicUsize::new(0);
+
+/// Creates an isolated temp dir unique across parallel test threads/processes.
+fn make_test_dir(prefix: &str) -> PathBuf {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("{}_{}_{:?}_{}", prefix, pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// Resolves the elephc CLI binary path (cargo env var, fallback next to the test binary).
+fn elephc_bin() -> String {
+    std::env::var("CARGO_BIN_EXE_elephc").unwrap_or_else(|_| {
+        let mut path = std::env::current_exe().expect("failed to resolve current test binary");
+        path.pop();
+        if path.ends_with("deps") {
+            path.pop();
+        }
+        path.join("elephc").to_string_lossy().into_owned()
+    })
+}
+
+/// Compiles `source` under the given extra flags and returns the program's stdout.
+fn compile_and_run(dir: &Path, stem: &str, source: &str, flags: &[&str]) -> String {
+    let php = dir.join(format!("{stem}.php"));
+    fs::write(&php, source).unwrap();
+
+    let mut cmd = Command::new(elephc_bin());
+    cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.current_dir(dir);
+    cmd.arg(&php);
+    for flag in flags {
+        cmd.arg(flag);
+    }
+    let compiled = cmd.output().expect("failed to spawn elephc");
+    assert!(
+        compiled.status.success(),
+        "compilation failed ({flags:?}):\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&compiled.stdout),
+        String::from_utf8_lossy(&compiled.stderr),
+    );
+
+    let output = Command::new(dir.join(stem))
+        .output()
+        .expect("failed to run binary");
+    assert!(
+        output.status.success(),
+        "binary failed ({flags:?}):\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// Runs `source` with the optimizer on and off, asserts both printed `expected`, and
+/// returns the optimized output.
+fn assert_same_with_and_without_opt(prefix: &str, source: &str, expected: &str) -> String {
+    let dir = make_test_dir(prefix);
+    let optimized = compile_and_run(&dir, "opt_on", source, &[]);
+    let plain = compile_and_run(&dir, "opt_off", source, &["--ir-opt=off"]);
+    assert_eq!(
+        optimized, plain,
+        "the optimizer changed the program's output; unoptimized is the reference reading"
+    );
+    assert_eq!(optimized, expected, "output does not match reference PHP");
+    optimized
+}
+
+/// The reported miscompile, reduced: a zero-parameter callee spliced into a call whose
+/// EARLIER argument is a live interpolated temporary.
+///
+/// MEASURED against reference PHP 8.5: `B:'garbage'|'2'`. Before the fix elephc printed
+/// `B::garbage'|'2'` with `--ir-opt=on` and the correct bytes with `--ir-opt=off`.
+#[test]
+fn an_inlined_callee_does_not_free_a_sibling_arguments_scratch() {
+    assert_same_with_and_without_opt(
+        "inline_reset_sibling",
+        r#"<?php
+function plain(): string { return '2'; }
+$v = 'garbage';
+printf("B:%s|%s\n", "'$v'", var_export(plain(), true));
+"#,
+        "B:'garbage'|'2'\n",
+    );
+}
+
+/// The same hazard reached through an injected prelude rather than a user function.
+///
+/// `ini_get()` is compiler-generated PHP, and its statements only began emitting concat
+/// resets when the reset stopped being skipped for non-source spans — so this spelling is
+/// the one that regressed, while the user-function spelling above was already wrong.
+///
+/// THE LITERAL PREFIX IN THE FORMAT IS LOAD-BEARING. `"a:%s|%s\n"` corrupts and
+/// `"%s|%s\n"` does not: the prefix shifts where the output is assembled relative to the
+/// freed temporary, so without it the overwrite lands harmlessly and the test passes
+/// against the broken compiler. VERIFIED by mutation — the prefixless spelling survived
+/// the reverted fix, this one does not.
+///
+/// MEASURED against reference: `a:'garbage'|'2'`.
+#[test]
+fn an_inlined_prelude_function_does_not_free_the_callers_scratch() {
+    assert_same_with_and_without_opt(
+        "inline_reset_prelude",
+        r#"<?php
+$v = 'garbage';
+printf("a:%s|%s\n", "'$v'", var_export(ini_get('opcache.revalidate_freq'), true));
+"#,
+        "a:'garbage'|'2'\n",
+    );
+}
+
+/// A longer argument list, so a single off-by-one cannot satisfy the assertion by accident:
+/// three live interpolated temporaries straddling two spliced bodies.
+///
+/// MEASURED against reference: `<a>|<b>|<c>|'1'|'2'`.
+#[test]
+fn several_live_temporaries_survive_two_splices() {
+    assert_same_with_and_without_opt(
+        "inline_reset_many",
+        r#"<?php
+function one(): string { return '1'; }
+function two(): string { return '2'; }
+$a = 'a'; $b = 'b'; $c = 'c';
+printf("%s|%s|%s|%s|%s\n", "<$a>", "<$b>", "<$c>",
+       var_export(one(), true), var_export(two(), true));
+"#,
+        "<a>|<b>|<c>|'1'|'2'\n",
+    );
+}
+
+/// Guards the premise of the tests above: the optimizer must actually splice `plain()` in,
+/// or they compare two identical unoptimized builds and pin nothing.
+///
+/// The check is on the emitted assembly rather than on a timing or a symbol count: an
+/// inlined body leaves its continuation block behind, and the call to the callee's own
+/// label disappears from the caller.
+#[test]
+fn the_optimizer_actually_inlines_the_callee() {
+    let dir = make_test_dir("inline_reset_premise");
+    let php = dir.join("main.php");
+    fs::write(
+        &php,
+        r#"<?php
+function plain(): string { return '2'; }
+$v = 'garbage';
+printf("B:%s|%s\n", "'$v'", var_export(plain(), true));
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(elephc_bin())
+        .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .current_dir(&dir)
+        .arg(&php)
+        .arg("--emit-asm")
+        .output()
+        .expect("failed to spawn elephc");
+    assert!(
+        out.status.success(),
+        "asm emission failed:\nstderr: {}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+
+    let asm = fs::read_to_string(dir.join("main.s")).expect("no main.s emitted");
+    let main_at = asm.find("\n_main:").expect("no _main label in the assembly");
+    let body = &asm[main_at..];
+    assert!(
+        body.contains("inline_cont"),
+        "the optimizer did not inline anything into _main, so the sibling-scratch tests \
+         are comparing two unoptimized builds"
+    );
+    assert!(
+        !body.contains("bl _fn__u_plain"),
+        "_main still calls plain() rather than inlining it"
+    );
+}
