@@ -123,3 +123,5 @@ mod heap_codegen;
 mod resource_scope_cleanup;
 #[path = "runtime_gc/resource_inventory.rs"]
 mod resource_inventory;
+#[path = "runtime_gc/class_param_return.rs"]
+mod class_param_return;

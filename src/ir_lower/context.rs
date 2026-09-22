@@ -3374,11 +3374,20 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 {
                     return false;
                 }
-                let argument = LoweredValue {
+                let lowered = LoweredValue {
                     value: *argument,
                     ir_type: self.builder.value_type(*argument),
                 };
-                !self.value_is_owning_temporary(argument)
+                // A plain load of a PHP local reads as an owning temporary, but that answer is
+                // PROVISIONAL: it exists so a later store can widen the slot, and the argument's
+                // own release is repaired at builder finalization. The caller owes no release on
+                // the load itself — the local's lifetime covers it — so for the question here it
+                // is the wrong answer. Taking it made the caller release a class-typed value the
+                // callee handed back at `+0` (issue #1203). A freshly built operand is not a
+                // local load and still refuses, which is what #486 needs.
+                let argument_is_a_caller_temporary = self.value_is_owning_temporary(lowered)
+                    && !self.value_is_owned_unboxed_local_load(*argument);
+                !argument_is_a_caller_temporary
             })
     }
 
