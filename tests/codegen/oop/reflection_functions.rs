@@ -342,3 +342,37 @@ echo (new ReflectionMethod('RefHolder', 'get'))->returnsReference() === $listed[
 
     assert_eq!(out, "ynsame");
 }
+
+/// Verifies an interface's `function &m()` declaration reports through every path.
+///
+/// Interface methods are built by their own constructor, which wrote a baked `false` into both
+/// records it makes even though its signature carries `by_ref_return`: the listed method, which
+/// `getMethods()` and `new ReflectionMethod(...)` both read, and the declaring-function record a
+/// parameter's `getDeclaringFunction()` reads. Entries are keyed by name because the listing
+/// order of an interface's `getMethods()` is not what this asserts.
+#[test]
+fn test_interface_method_returns_reference_reports_the_declaration() {
+    let out = compile_and_run(
+        r#"<?php
+interface RefContract {
+    public function &byRef(int $n): array;
+    public function byVal(): array;
+}
+
+$listed = [];
+foreach ((new ReflectionClass('RefContract'))->getMethods() as $m) {
+    $listed[$m->getName()] = $m->returnsReference();
+}
+echo $listed['byRef'] ? "y" : "n";
+echo $listed['byVal'] ? "y" : "n";
+$byRef = new ReflectionMethod('RefContract', 'byRef');
+echo $byRef->returnsReference() ? "y" : "n";
+echo (new ReflectionMethod('RefContract', 'byVal'))->returnsReference() ? "y" : "n";
+$params = $byRef->getParameters();
+$declaring = $params[0]->getDeclaringFunction();
+echo $declaring->returnsReference() ? "y" : "n";
+"#,
+    );
+
+    assert_eq!(out, "ynyny");
+}

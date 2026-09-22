@@ -414,7 +414,7 @@ pub struct FunctionSig {
 
 - `param_type_exprs` preserves the exact source `TypeExpr` of each written parameter hint, alongside the resolved `PhpType` in `params`.
 - `param_attributes` carries PHP 8 attribute groups attached to each parameter, for Reflection metadata.
-- `by_ref_return` records `function &f()` / `fn &()` declarations — the function returns a reference (alias) to the returned lvalue rather than a copy.
+- `by_ref_return` records `function &f()` / `fn &()` declarations — the function returns a reference (alias) to the returned lvalue rather than a copy. It is also the only source for `ReflectionFunction::returnsReference()` / `ReflectionMethod::returnsReference()`: every reflection record codegen builds for a callable — a class, interface or trait method, the listed entry `getMethods()` returns, and the declaring-function record a parameter's `getDeclaringFunction()` returns — copies it into its `returns_reference` field and none of them bakes a value. A record built without a signature (constants, enum cases, properties) carries `false`.
 - `ref_params` tracks which parameters use `&` (pass by reference). The codegen passes the stack address of the argument instead of its value.
 
 #### Storage rules for a declared by-reference argument

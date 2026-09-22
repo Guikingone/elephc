@@ -257,7 +257,7 @@ pub(super) fn reflection_interface_method_member(
         type_metadata: type_metadata.clone(),
         is_deprecated: sig.deprecation.is_some(),
         is_generator: false,
-        returns_reference: false,
+        returns_reference: sig.by_ref_return,
     };
     let source_defaults = reflection_source_method_defaults(
         ctx,
@@ -291,7 +291,7 @@ pub(super) fn reflection_interface_method_member(
         required_parameter_count,
         is_deprecated: sig.deprecation.is_some(),
         is_generator: false,
-        returns_reference: false,
+        returns_reference: sig.by_ref_return,
         prototype_member: None,
         parameters,
     }))
