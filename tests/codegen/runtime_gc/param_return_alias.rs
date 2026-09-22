@@ -16,6 +16,17 @@
 //!   to a call, and that the argument reach the callee through a local rather than nested
 //!   directly (a nested call result is an owning temporary, which takes the other path).
 //! - Two call sites are also required: one call is inlined, which removes the boundary entirely.
+//! - The same shape reached through three other CALL SPELLINGS reproduced issue #992's own
+//!   `bad refcount` fatal, because only a positional call to a free function consulted the
+//!   parameter modes: a named argument was classified non-positional and unreadable, and a
+//!   method or static-method call wiped every tracked provenance outright. All three printed
+//!   `Fatal error: heap debug detected bad refcount` where PHP prints `ok`.
+//! - A proven parameter return does NOT make a BOXED result borrowed. When the argument is an
+//!   unboxed slot and the parameter is `mixed`, the boundary boxes it, so the cell the callee
+//!   hands back is a fresh allocation even though the summary is right about the PHP value.
+//!   Treating it as borrowed left that box unreleased — 2 heap blocks per call, measured against
+//!   a flat line at the merge-base, and invisible to the fixtures above because they carry int
+//!   and object payloads reached through a `mixed`-returning producer rather than a bare slot.
 //! - These fixtures assert `leak summary: clean`, which is the honest bar here — unlike an
 //!   `eval()` fragment, a compiled program does end clean, so both a premature release and a
 //!   skipped one are visible.
@@ -197,7 +208,7 @@ echo $n;
 /// count is not the signal. Measured 2.0 blocks per iteration with the rule and 4.0 without it.
 #[test]
 fn test_a_by_reference_capture_is_never_proven_again() {
-    /// The loop, parameterised by iteration count so the per-call cost can be isolated.
+    // The loop, parameterised by iteration count so the per-call cost can be isolated.
     fn capture_loop(iterations: usize) -> String {
         format!(
             r#"<?php
@@ -261,4 +272,96 @@ echo $n + $m;
         out.stderr
     );
     assert_eq!(out.stdout, "422");
+}
+
+/// Verifies the issue's own shape stays clean when the by-value call is spelled with a NAMED
+/// argument, a static method call, or an instance method call.
+///
+/// Only a positional call to a free function consulted the parameter modes. Every other spelling
+/// lost the provenance, and a lost provenance is not a conservative choice here: the call site
+/// asks for a proof, so `Unknown` makes the caller release storage it never acquired. All three
+/// reproduced issue #992's own `bad refcount` fatal.
+#[test]
+fn test_every_by_value_call_spelling_keeps_the_provenance() {
+    for (label, body) in [
+        ("named argument", "if (peek_free(x: $value)) { return $value; }"),
+        ("static method", "if (P::peek($value)) { return $value; }"),
+        ("instance method", "if ((new P())->look($value)) { return $value; }"),
+    ] {
+        let out = compile_and_run_with_heap_debug(&format!(
+            r#"<?php
+class Tag {{ public string $s = "tag"; }}
+class P {{
+    public static function peek(mixed $x): bool {{ return true; }}
+    public function look(mixed $x): bool {{ return true; }}
+}}
+function peek_free(mixed $x): bool {{ return true; }}
+function pick(int $i): mixed {{ if ($i > 100) {{ return "never"; }} return new Tag(); }}
+
+function ident(mixed $value): mixed {{
+    {body}
+    return $value;
+}}
+
+for ($i = 0; $i < 5; $i++) {{ $tmp = pick($i); $v = ident($tmp); }}
+echo "ok";
+"#
+        ));
+
+        assert!(out.success, "{label} failed: {}", out.stderr);
+        assert_eq!(out.stdout, "ok", "{label} printed the wrong answer");
+        assert!(
+            !out.stderr.contains("bad refcount"),
+            "{label} released storage it never acquired: {}",
+            out.stderr
+        );
+        assert!(
+            out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+            "{label} did not end clean: {}",
+            out.stderr
+        );
+    }
+}
+
+/// Verifies a proven parameter return does not suppress the release of a BOXED call result.
+///
+/// `$s` is a bare `Str` slot and the parameter is `mixed`, so the call boundary boxes it: the
+/// cell the callee returns is a fresh allocation, not the argument's storage. The summary is
+/// right that the PHP value is the parameter, and wrong that nobody owes a release.
+///
+/// Measured as a SLOPE across two iteration counts: 2.0 blocks per call before the fix, 0.0
+/// after, and 0.0 at the merge-base, so this is a regression the precision work introduced by
+/// making the proof reachable rather than a pre-existing hole.
+#[test]
+fn test_a_proven_return_of_a_boxed_argument_is_still_released() {
+    // The loop, parameterised by iteration count so the per-call cost can be isolated.
+    fn boxed_loop(iterations: usize) -> String {
+        format!(
+            r#"<?php
+function peek_free(mixed $x): int {{ return 1; }}
+function ident(mixed $v): mixed {{ peek_free($v); return $v; }}
+
+$kept = 0;
+for ($i = 0; $i < {iterations}; $i++) {{
+    $s = str_repeat("y", 4);
+    $kept = $kept + strlen(ident($s));
+}}
+echo $kept;
+"#
+        )
+    }
+
+    let small = compile_and_run_with_heap_debug(&boxed_loop(100));
+    let large = compile_and_run_with_heap_debug(&boxed_loop(300));
+
+    assert!(small.success, "the 100-iteration program failed: {}", small.stderr);
+    assert!(large.success, "the 300-iteration program failed: {}", large.stderr);
+    assert_eq!(small.stdout, "400");
+    assert_eq!(large.stdout, "1200");
+
+    let per_call = (live_blocks(&large.stderr) - live_blocks(&small.stderr)) as f64 / 200.0;
+    assert!(
+        per_call < 0.5,
+        "a boxed call result was treated as borrowed: {per_call} blocks per call"
+    );
 }

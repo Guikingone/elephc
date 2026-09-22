@@ -2631,12 +2631,26 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let Some(return_alias) = self.return_alias_summaries.function(function_name) else {
             return false;
         };
+        let result_repr = self.builder.value_php_type(result).codegen_repr();
         inst.operands
             .iter()
             .enumerate()
             .any(|(parameter_index, argument)| {
                 if !return_alias.proven_aliases_parameter(parameter_index)
                     || !self.call_result_may_alias_arg(*argument, result)
+                {
+                    return false;
+                }
+                // A `mixed` parameter BOXES an unboxed argument at the call boundary, so the cell
+                // the callee hands back is a fresh allocation even though the summary proves it
+                // returns that parameter — the proof is about the PHP value, not its
+                // representation. Treating it as borrowed leaves that box unreleased: measured at
+                // 2 heap blocks per call for `$s = str_repeat(...); ident($s)` where
+                // `ident(mixed $v): mixed` returns `$v`, against a flat line before the summary
+                // became precise enough to reach this path.
+                let argument_repr = self.builder.value_php_type(*argument).codegen_repr();
+                if matches!(result_repr, PhpType::Mixed | PhpType::Union(_))
+                    && !matches!(argument_repr, PhpType::Mixed | PhpType::Union(_))
                 {
                     return false;
                 }

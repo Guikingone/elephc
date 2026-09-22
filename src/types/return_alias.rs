@@ -20,7 +20,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::names::php_symbol_key;
 use crate::parser::ast::{
-    CastType, ClassMethod, Expr, ExprKind, Program, Stmt, StmtKind, TypeExpr,
+    CastType, ClassMethod, Expr, ExprKind, Program, StaticReceiver, Stmt, StmtKind, TypeExpr,
 };
 
 /// Describes which visible parameters a callable result may reuse as storage.
@@ -128,6 +128,18 @@ impl<'a> AliasState<'a> {
             .is_some_and(|modes| modes.takes_by_value(index))
     }
 
+    /// Returns the position a named argument fills at `callee`, when that is knowable.
+    ///
+    /// Only source declarations are consulted: the builtin registry records modes positionally
+    /// and carries no parameter names, so a named argument to a builtin stays conservative.
+    fn callee_parameter_index(&self, callee: &str, parameter: &str) -> Option<usize> {
+        let key = php_symbol_key(callee.trim_start_matches('\\'));
+        if crate::builtins::registry::lookup(&key).is_some() {
+            return None;
+        }
+        self.parameter_modes.get(&key)?.index_of_name(parameter)
+    }
+
     /// Returns whether `name` is a visible parameter declared exactly `string`.
     ///
     /// Only such a parameter is ever given a bare `Str` slot; a local is boxed regardless of
@@ -173,10 +185,14 @@ impl ReturnAliasSummaries {
 /// How one source-declared function takes its parameters.
 ///
 /// Recorded ahead of the body walk because a function may call one declared after it.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct ParameterModes {
     /// `true` where the parameter at that position is declared by reference.
     by_ref: Vec<bool>,
+    /// The declared parameter names, parallel to `by_ref`, so a NAMED argument can be resolved
+    /// to the position whose mode governs it. Without this every named argument was treated as
+    /// unreadable and cost the provenance of whatever it named.
+    names: Vec<String>,
     /// The variadic tail's mode, when the function has one.
     variadic_by_ref: Option<bool>,
 }
@@ -189,6 +205,19 @@ impl ParameterModes {
             None => matches!(self.variadic_by_ref, Some(false)),
         }
     }
+
+    /// Returns the position a named argument fills, if the callee declares that name.
+    fn index_of_name(&self, name: &str) -> Option<usize> {
+        self.names.iter().position(|declared| declared == name)
+    }
+
+    /// Returns whether two declarations of one method name govern their arguments identically.
+    ///
+    /// Only then can an instance call be resolved by method name alone: the receiver's class is
+    /// not knowable in this syntactic pass, so the answer has to hold for every candidate.
+    fn governs_arguments_like(&self, other: &Self) -> bool {
+        self == other
+    }
 }
 
 /// Collects return/argument alias summaries from all source declarations.
@@ -200,8 +229,41 @@ pub(crate) fn collect_return_alias_summaries(program: &Program) -> ReturnAliasSu
     summaries
 }
 
-/// Records every source function's parameter modes, descending into namespace blocks.
+/// Records every source function's and method's parameter modes, descending into namespace
+/// blocks.
+///
+/// Methods land in the same map under two synthetic keys: `class::method`, which a static call
+/// written with its class can resolve exactly, and `->method`, which an instance call can use
+/// when every declaration of that name agrees — the receiver's class is not knowable here.
+/// A name whose declarations disagree is REMOVED.
+///
+/// Only classes contribute. Interfaces, traits and enums declare methods too, so a trait's `&$x`
+/// is invisible here and a call can be read as by-value for a receiver that rebinds; the caller
+/// then suppresses a release it owes, which leaks. Including those declarers is NOT the free fix
+/// it looks like: more declarers means more disagreements, a disagreement removes the key, and a
+/// missing key invalidates everything — and that is the direction that FATALS, because the call
+/// site asks for a proof and an undecidable summary makes the caller release storage it never
+/// acquired. There is no conservative direction in this pass; trading a narrow leak for a
+/// `bad refcount` is not an improvement. The real fix is for the undecidable answer to be safe,
+/// which is wider than this branch and filed separately.
+///
+/// For the same reason a trait-provided `C::m` is absent from the exact key by design: traits are
+/// flattened into the using class by the checker, not here.
 fn collect_parameter_modes(statements: &[Stmt], modes: &mut HashMap<String, ParameterModes>) {
+    let mut disagreed: HashSet<String> = HashSet::new();
+    collect_parameter_modes_into(statements, modes, &mut disagreed);
+    for name in disagreed {
+        modes.remove(&name);
+    }
+}
+
+/// The recursive half of [`collect_parameter_modes`], carrying the set of method names whose
+/// declarations were found to disagree.
+fn collect_parameter_modes_into(
+    statements: &[Stmt],
+    modes: &mut HashMap<String, ParameterModes>,
+    disagreed: &mut HashSet<String>,
+) {
     for stmt in statements {
         match &stmt.kind {
             StmtKind::FunctionDecl {
@@ -213,17 +275,54 @@ fn collect_parameter_modes(statements: &[Stmt], modes: &mut HashMap<String, Para
             } => {
                 modes.insert(
                     php_symbol_key(name),
-                    ParameterModes {
-                        by_ref: params.iter().map(|(_, _, _, by_ref)| *by_ref).collect(),
-                        variadic_by_ref: variadic.as_ref().map(|_| *variadic_by_ref),
-                    },
+                    parameter_modes_of(params, variadic.as_ref(), *variadic_by_ref),
                 );
             }
+            StmtKind::ClassDecl { name, methods, .. } => {
+                for method in methods {
+                    let declared = parameter_modes_of(
+                        &method.params,
+                        method.variadic.as_ref(),
+                        method.variadic_by_ref,
+                    );
+                    let by_name = format!("->{}", php_symbol_key(&method.name));
+                    match modes.get(&by_name) {
+                        Some(existing) if !existing.governs_arguments_like(&declared) => {
+                            disagreed.insert(by_name.clone());
+                        }
+                        _ => {
+                            modes.insert(by_name, declared.clone());
+                        }
+                    }
+                    modes.insert(
+                        format!("{}::{}", php_symbol_key(name), php_symbol_key(&method.name)),
+                        declared,
+                    );
+                }
+                // A declared class with no constructor still takes nothing by reference, and
+                // `new C()` must not be read as an unknown callee that could rebind anything.
+                modes
+                    .entry(format!("{}::__construct", php_symbol_key(name)))
+                    .or_default();
+            }
             StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body) => {
-                collect_parameter_modes(body, modes);
+                collect_parameter_modes_into(body, modes, disagreed);
             }
             _ => {}
         }
+    }
+}
+
+/// Builds one callable's parameter modes from its declared parameter list.
+fn parameter_modes_of(
+    params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
+    variadic: Option<&String>,
+    variadic_by_ref: bool,
+) -> ParameterModes {
+    ParameterModes {
+        by_ref: params.iter().map(|(_, _, _, by_ref)| *by_ref).collect(),
+        names: params.iter().map(|(name, _, _, _)| name.clone()).collect(),
+        variadic_by_ref: variadic.map(|_| variadic_by_ref),
     }
 }
 
@@ -920,11 +1019,21 @@ fn apply_expr_effects(expr: &Expr, state: &mut AliasState<'_>) {
             visit_expr_effects(args, state);
             invalidate_all_aliases(state);
         }
-        ExprKind::MethodCall { object, args, .. }
-        | ExprKind::NullsafeMethodCall { object, args, .. } => {
+        ExprKind::MethodCall {
+            object,
+            method,
+            args,
+        }
+        | ExprKind::NullsafeMethodCall {
+            object,
+            method,
+            args,
+        } => {
             apply_expr_effects(object, state);
             visit_expr_effects(args, state);
-            invalidate_all_aliases(state);
+            // The receiver's class is not knowable in this syntactic pass, so the by-name key
+            // exists only when every declaration of that method agrees on its parameter modes.
+            invalidate_for_callee(&format!("->{}", php_symbol_key(method)), args, state);
         }
         ExprKind::NullsafeDynamicMethodCall {
             object,
@@ -936,9 +1045,42 @@ fn apply_expr_effects(expr: &Expr, state: &mut AliasState<'_>) {
             visit_expr_effects(args, state);
             invalidate_all_aliases(state);
         }
-        ExprKind::StaticMethodCall { args, .. }
-        | ExprKind::NewObject { args, .. }
-        | ExprKind::NewScopedObject { args, .. } => {
+        ExprKind::StaticMethodCall {
+            receiver,
+            method,
+            args,
+        } => {
+            visit_expr_effects(args, state);
+            // `self::`/`static::`/`parent::` name no class here, so only a written one resolves.
+            match receiver {
+                StaticReceiver::Named(class_name) => invalidate_for_callee(
+                    &format!(
+                        "{}::{}",
+                        php_symbol_key(class_name.as_str().trim_start_matches('\\')),
+                        php_symbol_key(method)
+                    ),
+                    args,
+                    state,
+                ),
+                _ => invalidate_all_aliases(state),
+            }
+        }
+        ExprKind::NewObject { class_name, args } => {
+            visit_expr_effects(args, state);
+            // A constructor is a call like any other, and a written class name resolves it. This
+            // matters most when it has NO arguments: `(new P())->look($v)` wiped every provenance
+            // before the method call was even considered, and `$v` was then released by a caller
+            // that never acquired it.
+            invalidate_for_callee(
+                &format!(
+                    "{}::__construct",
+                    php_symbol_key(class_name.as_str().trim_start_matches('\\'))
+                ),
+                args,
+                state,
+            );
+        }
+        ExprKind::NewScopedObject { args, .. } => {
             visit_expr_effects(args, state);
             invalidate_all_aliases(state);
         }
@@ -1105,6 +1247,18 @@ fn named_call_can_rebind_unlisted_locals(
     !modes.contains_key(&name)
 }
 
+/// Invalidates argument provenances for a call whose modes are looked up under `key`.
+///
+/// An unknown key clobbers everything, which is the conservative answer; a known one lets a
+/// by-value argument keep its provenance, exactly as a positional free-function call does.
+fn invalidate_for_callee(key: &str, args: &[Expr], state: &mut AliasState<'_>) {
+    if named_call_can_rebind_unlisted_locals(key, state.parameter_modes) {
+        invalidate_all_aliases(state);
+    } else {
+        invalidate_call_variables(key, args, state);
+    }
+}
+
 /// Replaces every tracked provenance with the conservative top element.
 fn invalidate_all_aliases(state: &mut AliasState<'_>) {
     for alias in state.locals.values_mut() {
@@ -1115,17 +1269,27 @@ fn invalidate_all_aliases(state: &mut AliasState<'_>) {
 /// Marks direct variable call arguments unknown because the callee may accept them by reference.
 ///
 /// A by-value argument is not rebound by the call, so clobbering it costs precision for
-/// nothing — and precision is load-bearing here, not cosmetic. An undecidable summary makes
-/// the caller treat the result as borrowed rather than risk releasing a reference nobody
-/// acquired, which leaks when the callee actually returns something fresh (issue #992).
-/// `is_object($v); return $v;` is the shape that mattered: one type predicate in the body
-/// was enough to lose a provenance the caller then had to guess at.
+/// nothing — and precision is load-bearing here, not cosmetic. The call site asks for a PROOF:
+/// `value_is_borrowed_user_call_result` treats the result as borrowed only when
+/// `proven_aliases_parameter` says so, which makes `Unknown` and `None` the same answer. An
+/// undecidable summary therefore makes the caller treat the result as OWNED and release it, and
+/// when the callee did hand a lent parameter back that releases storage the caller never
+/// acquired (issue #992). `is_object($v); return $v;` is the shape that mattered: one type
+/// predicate in the body was enough to lose a provenance, and losing it is not a
+/// conservative choice — there is no conservative direction here, only the right one.
 ///
 /// Builtins answer from the registry and source-declared functions from a pre-pass over the
 /// program. A dynamic or otherwise unknown callee keeps the conservative answer.
 fn invalidate_call_variables(callee: &str, args: &[Expr], state: &mut AliasState<'_>) {
     for (index, arg) in args.iter().enumerate() {
-        let non_positional = matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_));
+        // A named argument does not sit at its own position, but the callee declares the name,
+        // so the position it fills is recoverable. A SPREAD is genuinely unreadable here: its
+        // contents are a runtime array, so it keeps the conservative answer.
+        let position = match &arg.kind {
+            ExprKind::Spread(_) => None,
+            ExprKind::NamedArg { name: param, .. } => state.callee_parameter_index(callee, param),
+            _ => Some(index),
+        };
         let value = match &arg.kind {
             ExprKind::NamedArg { value, .. } | ExprKind::Spread(value) => value.as_ref(),
             _ => arg,
@@ -1133,9 +1297,7 @@ fn invalidate_call_variables(callee: &str, args: &[Expr], state: &mut AliasState
         let ExprKind::Variable(name) = &value.kind else {
             continue;
         };
-        // A named or spread argument does not sit at its own position, so its parameter mode
-        // cannot be read off `index`. Those keep the conservative answer.
-        if !non_positional && state.callee_takes_argument_by_value(callee, index) {
+        if position.is_some_and(|position| state.callee_takes_argument_by_value(callee, position)) {
             continue;
         }
         state.locals.insert(name.clone(), ReturnArgAlias::Unknown);
