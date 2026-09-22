@@ -448,10 +448,7 @@ pub(crate) fn insert_enum_metadata(
         constant_attribute_args.insert(case.name.clone(), case.attribute_args.clone());
     }
 
-    let interfaces: Vec<String> = implements
-        .iter()
-        .map(|interface| interface.as_str().to_string())
-        .collect();
+    let interfaces = enum_interface_closure(checker, implements, backing_type.is_some());
 
     checker.classes.insert(
         name.to_string(),
@@ -580,4 +577,59 @@ fn push_enum_readonly_property(
     property_declared_slots.push(true);
     readonly_properties.insert(property);
     property_reference_slots.push(false);
+}
+
+/// Returns the interfaces an enum implements, the way PHP reports them.
+///
+/// Two things the declared `implements` clause does not say on its own, and both are needed for
+/// `class_implements()` and the relation predicates to agree with PHP (#1224).
+///
+/// The IMPLICIT set: PHP gives every enum `UnitEnum`, and every backed enum `BackedEnum` as well.
+/// `BackedEnum` extends `UnitEnum`, so a backed enum reports both.
+///
+/// The TRANSITIVE closure: a class runs `collect_interfaces`, which folds in each interface's own
+/// parents. Taking the clause verbatim meant `enum Suit implements HasColor` never recorded
+/// `Colorful`, even with `interface HasColor extends Colorful`. This walks the same parent lists
+/// that collector does.
+///
+/// Declaration order is preserved and duplicates are dropped, so an enum that names an interface
+/// it also inherits reports it once, where its own clause put it.
+fn enum_interface_closure(
+    checker: &Checker,
+    implements: &[crate::names::Name],
+    is_backed: bool,
+) -> Vec<String> {
+    let mut collected: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    // PHP's order, measured on 8.5.10 for `enum Suit: string implements HasColor` where
+    // `HasColor extends Colorful`: `HasColor,UnitEnum,BackedEnum,Colorful`. The declared clause
+    // first, then the implicit set, then what the clause transitively brings in.
+    let mut push = |name: String, collected: &mut Vec<String>, seen: &mut HashSet<String>| {
+        if seen.insert(name.clone()) {
+            collected.push(name);
+        }
+    };
+
+    for interface in implements {
+        push(interface.as_str().to_string(), &mut collected, &mut seen);
+    }
+    push("UnitEnum".to_string(), &mut collected, &mut seen);
+    if is_backed {
+        push("BackedEnum".to_string(), &mut collected, &mut seen);
+    }
+
+    let mut queue: Vec<String> = collected.clone();
+    while let Some(interface_name) = queue.pop() {
+        let Some(info) = checker.interfaces.get(&interface_name) else {
+            continue;
+        };
+        for parent_name in &info.parents {
+            if seen.insert(parent_name.clone()) {
+                collected.push(parent_name.clone());
+                queue.push(parent_name.clone());
+            }
+        }
+    }
+    collected
 }
