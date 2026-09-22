@@ -847,6 +847,69 @@ echo $store->value();
     assert_eq!(out, "1");
 }
 
+/// A populated protected redeclaration keeps its indexed default when an inherited method
+/// changes the shared physical slot to associative storage.
+#[test]
+fn test_redeclared_protected_populated_array_property_in_parent_method() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentStore {
+    protected $items = [];
+    public function put() { $this->items['key'] = 1; }
+    public function values() { return $this->items[0] . ',' . $this->items['key']; }
+}
+class ChildStore extends ParentStore { protected $items = [9]; }
+$store = new ChildStore();
+$store->put();
+echo $store->values();
+"#,
+    );
+    assert_eq!(out, "9,1");
+}
+
+/// A parent's hash default also determines storage for a child list redeclaration, even when
+/// the inherited write does not change the parent's inferred property type.
+#[test]
+fn test_redeclared_protected_list_over_parent_associative_default() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentStore {
+    protected $items = ['start' => 0];
+    public function put() { $this->items['key'] = 1; }
+    public function values() { return $this->items[0] . ',' . $this->items['key']; }
+}
+class ChildStore extends ParentStore { protected $items = [9]; }
+$store = new ChildStore();
+$store->put();
+echo $store->values();
+"#,
+    );
+    assert_eq!(out, "9,1");
+}
+
+/// Sibling redeclarations with different element types must use one hash payload type after
+/// the parent writes through the shared slot.
+#[test]
+fn test_redeclared_protected_array_property_sibling_value_types() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentStore {
+    protected $items = [];
+    public function put() { $this->items['key'] = 1; }
+    public function values() { return $this->items[0] . ',' . $this->items['key']; }
+}
+class IntStore extends ParentStore { protected $items = [9]; }
+class StringStore extends ParentStore { protected $items = ['nine']; }
+$int = new IntStore();
+$string = new StringStore();
+$int->put();
+$string->put();
+echo $int->values() . ';' . $string->values();
+"#,
+    );
+    assert_eq!(out, "9,1;nine,1");
+}
+
 /// A write in the redeclaring child must also update the slot type seen by an inherited
 /// parent reader, since both methods access the same physical property.
 #[test]
