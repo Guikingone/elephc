@@ -233,6 +233,61 @@ fn emit_eval_constant_name_args(ctx: &mut FunctionContext<'_>, name: &str) {
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 1),
         &name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        name_len as i64,
+    );
+}
+
+/// Encodes one prescanned scalar constant for the eval registration ABI.
+pub(super) fn eval_native_global_constant_abi_value(
+    value: &ExprKind,
+    ty: &PhpType,
+) -> Result<(i64, i64, Option<String>)> {
+    match value {
+        ExprKind::Null => Ok((NATIVE_GLOBAL_CONSTANT_NULL, 0, None)),
+        ExprKind::BoolLiteral(value) => Ok((
+            NATIVE_GLOBAL_CONSTANT_BOOL,
+            i64::from(*value),
+            None,
+        )),
+        ExprKind::IntLiteral(value) if matches!(ty, PhpType::Resource(_)) => {
+            Ok((NATIVE_GLOBAL_CONSTANT_RESOURCE, *value, None))
+        }
+        ExprKind::IntLiteral(value) => Ok((NATIVE_GLOBAL_CONSTANT_INT, *value, None)),
+        ExprKind::FloatLiteral(value) => Ok((
+            NATIVE_GLOBAL_CONSTANT_FLOAT,
+            value.to_bits() as i64,
+            None,
+        )),
+        ExprKind::StringLiteral(value) => Ok((
+            NATIVE_GLOBAL_CONSTANT_STRING,
+            0,
+            Some(value.clone()),
+        )),
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::IntLiteral(value) => {
+                Ok((NATIVE_GLOBAL_CONSTANT_INT, value.wrapping_neg(), None))
+            }
+            ExprKind::FloatLiteral(value) => Ok((
+                NATIVE_GLOBAL_CONSTANT_FLOAT,
+                (-value).to_bits() as i64,
+                None,
+            )),
+            other => Err(CodegenIrError::unsupported(format!(
+                "eval native global constant expression {:?}",
+                other
+            ))),
+        },
+        other => Err(CodegenIrError::unsupported(format!(
+            "eval native global constant expression {:?}",
+            other
+        ))),
+    }
+}
+
 /// Installs this binary's OPcache configuration in the eval bridge, which governs the
 /// runtime script cache for dynamically included files.
 ///
@@ -303,55 +358,6 @@ fn configure_eval_opcache_file_cache(
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 2),
-        name_len as i64,
-    );
-}
-
-/// Encodes one prescanned scalar constant for the eval registration ABI.
-pub(super) fn eval_native_global_constant_abi_value(
-    value: &ExprKind,
-    ty: &PhpType,
-) -> Result<(i64, i64, Option<String>)> {
-    match value {
-        ExprKind::Null => Ok((NATIVE_GLOBAL_CONSTANT_NULL, 0, None)),
-        ExprKind::BoolLiteral(value) => Ok((
-            NATIVE_GLOBAL_CONSTANT_BOOL,
-            i64::from(*value),
-            None,
-        )),
-        ExprKind::IntLiteral(value) if matches!(ty, PhpType::Resource(_)) => {
-            Ok((NATIVE_GLOBAL_CONSTANT_RESOURCE, *value, None))
-        }
-        ExprKind::IntLiteral(value) => Ok((NATIVE_GLOBAL_CONSTANT_INT, *value, None)),
-        ExprKind::FloatLiteral(value) => Ok((
-            NATIVE_GLOBAL_CONSTANT_FLOAT,
-            value.to_bits() as i64,
-            None,
-        )),
-        ExprKind::StringLiteral(value) => Ok((
-            NATIVE_GLOBAL_CONSTANT_STRING,
-            0,
-            Some(value.clone()),
-        )),
-        ExprKind::Negate(inner) => match &inner.kind {
-            ExprKind::IntLiteral(value) => {
-                Ok((NATIVE_GLOBAL_CONSTANT_INT, value.wrapping_neg(), None))
-            }
-            ExprKind::FloatLiteral(value) => Ok((
-                NATIVE_GLOBAL_CONSTANT_FLOAT,
-                (-value).to_bits() as i64,
-                None,
-            )),
-            other => Err(CodegenIrError::unsupported(format!(
-                "eval native global constant expression {:?}",
-                other
-            ))),
-        },
-        other => Err(CodegenIrError::unsupported(format!(
-            "eval native global constant expression {:?}",
-            other
-        ))),
-    }
         i64::from(config.file_cache_read_only),
     );
     abi::emit_load_int_immediate(

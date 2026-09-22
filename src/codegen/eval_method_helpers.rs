@@ -25,7 +25,7 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::emit_box_current_value_as_mixed;
 use crate::codegen::platform::Arch;
 use crate::intrinsics::IntrinsicCall;
-use crate::ir::{Function, LocalKind, Module};
+use crate::ir::Module;
 use crate::codegen_support::source_method_adapters::MethodKind;
 use crate::names::{join_php_symbol, method_symbol, static_method_symbol};
 use crate::parser::ast::Visibility;

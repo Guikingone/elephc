@@ -1,16 +1,16 @@
 ---
-title: "__elephc_opcache_rt_soft_invalidate() — internals"
+title: "__elephc_opcache_rt_soft_invalidate() - internals"
 description: "Compiler internals for __elephc_opcache_rt_soft_invalidate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1043
+  order: 1072
 ---
 
-## `__elephc_opcache_rt_soft_invalidate()` — internals
+## `__elephc_opcache_rt_soft_invalidate()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_opcache_rt_soft_invalidate.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_opcache_rt_soft_invalidate.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

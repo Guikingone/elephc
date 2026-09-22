@@ -1,16 +1,16 @@
 ---
-title: "__elephc_opcache_rt_swap() — internals"
+title: "__elephc_opcache_rt_swap() - internals"
 description: "Compiler internals for __elephc_opcache_rt_swap(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1045
+  order: 1074
 ---
 
-## `__elephc_opcache_rt_swap()` — internals
+## `__elephc_opcache_rt_swap()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_opcache_rt_swap.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_opcache_rt_swap.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
