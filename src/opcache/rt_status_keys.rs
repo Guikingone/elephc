@@ -48,6 +48,16 @@ pub const RT_SCRIPT_LAST_USED: i64 = 2;
 /// One cached script's source mtime, or `0` when a forced invalidate discarded it.
 pub const RT_SCRIPT_TIMESTAMP: i64 = 3;
 
+/// The instant the entry is next re-stat'd, as the cache actually holds it.
+///
+/// NOT `last_used + revalidate_freq`. Those coincide only until the first warm hit, which
+/// moves `last_used` and leaves the revalidation deadline where the fill put it. MEASURED on
+/// reference PHP 8.5.10 across two `php -S` requests with `revalidate_freq=10`: request 1
+/// reports a gap of 10, request 2 — four seconds later, after a warm hit — reports 6, and
+/// the absolute `revalidate` is unchanged. Synthesizing it therefore reported a deadline
+/// that drifts forward on every hit and never arrives.
+pub const RT_SCRIPT_REVALIDATE: i64 = 4;
+
 /// Returns the figure for `key` from a status tuple, or `0` for an unknown key.
 ///
 /// An unknown key answers `0` rather than panicking: the key travels across an ABI from

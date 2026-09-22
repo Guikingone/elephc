@@ -25,7 +25,8 @@ use std::cell::RefCell;
 mod rt_status_keys;
 
 use rt_status_keys::{
-    rt_stat_value, RT_SCRIPT_HITS, RT_SCRIPT_LAST_USED, RT_SCRIPT_MEMORY, RT_SCRIPT_TIMESTAMP,
+    rt_stat_value, RT_SCRIPT_HITS, RT_SCRIPT_LAST_USED, RT_SCRIPT_MEMORY,
+    RT_SCRIPT_REVALIDATE, RT_SCRIPT_TIMESTAMP,
 };
 
 /// A borrowed `(pointer, length)` pair, returned in the first two result registers.
@@ -118,6 +119,7 @@ pub extern "C" fn __elephc_eval_opcache_rt_script_field(index: i64, field: i64) 
         RT_SCRIPT_MEMORY => script.memory_consumption as i64,
         RT_SCRIPT_LAST_USED => script.last_used_timestamp,
         RT_SCRIPT_TIMESTAMP => script.timestamp,
+        RT_SCRIPT_REVALIDATE => script.revalidate_at,
         _ => 0,
     }
 }

@@ -51,6 +51,8 @@ pub struct CachedScriptInfo {
     pub memory_consumption: usize,
     pub last_used_timestamp: i64,
     pub timestamp: i64,
+    /// The entry's own `revalidate_at`, not a figure derived from `last_used`.
+    pub revalidate_at: i64,
 }
 
 /// The counters `opcache_get_status()` reports for the dynamic tier.
@@ -193,8 +195,21 @@ fn fill_entry(
     path: &Path,
     config: &ScriptCacheConfig,
 ) -> io::Result<Arc<[ScriptSegment]>> {
-    let bytes = std::fs::read(path)?;
-    let metadata = std::fs::metadata(path).ok();
+    // ONE HANDLE FOR BOTH the bytes and the metadata that will be stored beside them.
+    //
+    // Reading the file and then stat'ing the PATH is two lookups of a name that can change
+    // in between: a rewrite landing in that window records the NEW mtime and size over the
+    // OLD bytes, and the same pair is handed to `file_store::store`, so the mismatched entry
+    // survives the process and every later validation agrees with it. php-src takes the
+    // timestamp from the handle it compiles, for exactly this reason.
+    //
+    // `opcache.file_update_protection` narrows the window rather than closing it — a file
+    // whose mtime is too young is not stored — so the default of 2 seconds hides this, and
+    // the documented way to turn that guard off reopens it.
+    let mut file = std::fs::File::open(path)?;
+    let metadata = file.metadata().ok();
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut file, &mut bytes)?;
     let mtime = metadata.as_ref().and_then(mtime_seconds);
     let file_size = metadata.as_ref().map_or(bytes.len() as u64, |meta| meta.len());
     // `opcache.blacklist_filename` is decided FIRST, and the ordering is the contract, not
@@ -514,6 +529,7 @@ pub fn cached_scripts() -> Vec<CachedScriptInfo> {
             memory_consumption: entry.footprint,
             last_used_timestamp: entry.last_used,
             timestamp: if entry.discarded { 0 } else { entry.mtime.unwrap_or(0) },
+            revalidate_at: entry.revalidate_at,
         })
         .collect();
     scripts.sort_by(|left, right| left.full_path.cmp(&right.full_path));

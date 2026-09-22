@@ -619,11 +619,15 @@ fn runtime_cache_scripts_loop(revalidate_freq: Option<i64>) -> Vec<Stmt> {
         (e_str("last_used_timestamp"), e_var("__elephc_rt_last_used")),
         (e_str("timestamp"), field(keys::RT_SCRIPT_TIMESTAMP)),
     ];
-    if let Some(freq) = revalidate_freq {
-        entry.push((
-            e_str("revalidate"),
-            e_binop(e_var("__elephc_rt_last_used"), BinOp::Add, php_int(freq)),
-        ));
+    if revalidate_freq.is_some() {
+        // THE CACHE'S OWN DEADLINE, read across the bridge, not `last_used + freq`.
+        //
+        // The two agree only until the first warm hit: a hit moves `last_used` and leaves
+        // `revalidate_at` where the fill put it. Deriving the field therefore reported a
+        // deadline that slid forward on every hit and never arrived. MEASURED on reference
+        // PHP 8.5.10 over two `php -S` requests with `revalidate_freq=10`: the gap is 10 on
+        // the first and 6 on the second, with the absolute instant unchanged.
+        entry.push((e_str("revalidate"), field(keys::RT_SCRIPT_REVALIDATE)));
     }
 
     vec![
@@ -1401,6 +1405,18 @@ pub(crate) fn ini_helper_decls(
                 // `static $s = [];`, the same restriction
                 // `__elephc_opcache_invalidate_state` documents.
                 s_static("overrides", e_array_assoc(vec![(e_str(""), e_str(""))])),
+                // THE SEED IS NOT AN ENTRY, and the empty key has to say so before anything
+                // reads it. `isset($overrides[''])` is true for the dummy, so the presence
+                // probe below answered "1" and the value read returned the seed's own `''` —
+                // making `ini_get('')` report an empty string where reference PHP reports
+                // `false`. The dummy exists only to give the static a type; treating the one
+                // key it occupies as absent is what keeps it invisible.
+                s_if(
+                    e_binop(e_var("option"), BinOp::StrictEq, e_str("")),
+                    vec![s_return(e_str(""))],
+                    vec![],
+                    None,
+                ),
                 s_if(
                     e_binop(e_var("op"), BinOp::StrictEq, e_int(1)),
                     vec![s_array_assign("overrides", e_var("option"), e_var("value"))],

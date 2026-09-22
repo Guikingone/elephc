@@ -144,6 +144,45 @@ fn run_binary(bin: &Path) -> (String, String) {
 
 /// REGRESSION ANCHOR for the `ini_get_all(null, false)` SIGSEGV.
 ///
+/// Verifies `ini_get('')` answers `false`, and that fixing it hides nothing real.
+///
+/// `__elephc_opcache_ini_override` keeps its overrides in a `static` array that has to be
+/// seeded with one typed entry, because the EIR backend rejects `static $s = [];`. The seed
+/// occupies the EMPTY key, and `isset($overrides[''])` is true for it — so the presence
+/// probe answered "1" and the value read returned the seed's own `''`, making `ini_get('')`
+/// report an empty string where reference PHP 8.5 reports `false`.
+///
+/// The last three assertions are the ones that make this a fix rather than a special case:
+/// a real directive must still read, still move under `ini_set()`, and the empty key must
+/// stay `false` afterwards — a guard placed too early would have broken all three.
+#[test]
+fn the_override_store_seed_is_invisible_to_ini_get() {
+    let dir = make_test_dir("opcache_ini_empty_key");
+    let bin = compile_with_ini(
+        &dir,
+        r#"<?php
+echo 'empty=', var_export(ini_get(''), true), "\n";
+echo 'unknown=', var_export(ini_get('nope.nothing'), true), "\n";
+echo 'real=', var_export(ini_get('opcache.revalidate_freq'), true), "\n";
+ini_set('opcache.revalidate_freq', '77');
+echo 'after_set=', var_export(ini_get('opcache.revalidate_freq'), true), "\n";
+echo 'empty_after=', var_export(ini_get(''), true), "\n";
+"#,
+        "empty_key",
+        &[("opcache.enable_cli", "1")],
+    );
+    let (stdout, stderr) = run_binary(&bin.0);
+
+    assert!(
+        stdout.contains("empty=false"),
+        "ini_get('') must be false, as reference reports:\n{stdout}{stderr}"
+    );
+    assert!(stdout.contains("unknown=false"), "{stdout}{stderr}");
+    assert!(stdout.contains("real='2'"), "{stdout}{stderr}");
+    assert!(stdout.contains("after_set='77'"), "{stdout}{stderr}");
+    assert!(stdout.contains("empty_after=false"), "{stdout}{stderr}");
+}
+
 /// `$details === false` must yield a FLAT map of raw INI strings (`'opcache.enable' => '1'`),
 /// one entry per opcache directive. Before the two-single-shape-helpers split this program
 /// exited 139 with no output, because the single projection loop wrote an array literal on the

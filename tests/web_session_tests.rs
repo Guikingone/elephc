@@ -2214,6 +2214,81 @@ fn opcache_ini_set_works_under_web() {
     );
 }
 
+/// Verifies `scripts[…]['revalidate']` is the entry's OWN deadline, not `last_used + freq`.
+///
+/// The two agree until the first warm hit and then part company: a hit moves `last_used`
+/// while `revalidate_at` stays where the fill put it. Deriving the field therefore reported
+/// a deadline that slid forward on every hit and could never arrive — a revalidation that
+/// looks permanently ten seconds away on a file being served constantly.
+///
+/// ONE REQUEST CANNOT SEE THIS, which is why it went unnoticed: php-src freezes `last_used`
+/// at request time, so within a single CLI run the derived and real values coincide exactly.
+/// Two requests against one worker separate them.
+///
+/// MEASURED on reference PHP 8.5.10 over `php -S` with `revalidate_freq=10`: the gap is 10
+/// on the first request and 6 on the second four seconds later, with the absolute
+/// `revalidate` unchanged. This asserts the SHAPE of that — gap shrinks, absolute holds —
+/// rather than the wall-clock numbers, which no test can pin.
+///
+/// `--workers 1` is load-bearing: both requests must land in the same process.
+#[test]
+fn the_revalidate_field_is_the_entrys_own_deadline() {
+    let dir = make_test_dir("opcache_revalidate_field");
+    std::fs::write(dir.join("lib.php"), "<?php $marker = 1;\n").unwrap();
+    let src = "<?php \
+        $p = __DIR__ . '/lib.php'; \
+        eval('include $p;'); \
+        $e = opcache_get_status(true)['scripts'][$p] ?? null; \
+        echo $e === null ? 'none' \
+            : ('lu=' . $e['last_used_timestamp'] . ' rv=' . $e['revalidate']);";
+    let bin = compile_web_with_flags(
+        &dir,
+        src,
+        "app",
+        &[
+            "--ini",
+            "opcache.enable_cli=1",
+            "--ini",
+            "opcache.revalidate_freq=10",
+            "--ini",
+            "opcache.file_update_protection=0",
+        ],
+    );
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/");
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    let second = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let parse = |body: &str, what: &str| -> i64 {
+        body.rsplit_once(&format!("{what}="))
+            .and_then(|(_, rest)| rest.split_whitespace().next())
+            .unwrap_or_else(|| panic!("no {what} in {body:?}"))
+            .parse()
+            .unwrap_or_else(|_| panic!("unparsable {what} in {body:?}"))
+    };
+
+    let (lu1, rv1) = (parse(&first, "lu"), parse(&first, "rv"));
+    let (lu2, rv2) = (parse(&second, "lu"), parse(&second, "rv"));
+
+    assert_eq!(
+        rv1, rv2,
+        "the deadline must not move on a warm hit: {first:?} then {second:?}"
+    );
+    assert!(
+        lu2 > lu1,
+        "the second request must have moved last_used, or the test proves nothing: \
+         {first:?} then {second:?}"
+    );
+    assert!(
+        rv2 - lu2 < rv1 - lu1,
+        "the gap must shrink as the deadline approaches: {first:?} then {second:?}"
+    );
+}
+
 /// Verifies a scheduled `opcache_reset()` is performed at the NEXT REQUEST's boundary, the
 /// way php-src defers its restart, rather than flushing inside the request that asked.
 ///
