@@ -169,9 +169,8 @@ pub(super) fn execute_property_stmt(
         } => {
             let value_expr = value;
             let value = eval_expr(value_expr, context, scope, values)?;
-            let value =
-                retain_unretained_scope_borrow(value_expr, value, context, scope, values)?;
-            eval_static_property_set_result(class_name, property, value, context, values)?;
+            let borrowed = value_is_an_unretained_scope_borrow(value_expr, value, context, scope);
+            eval_static_property_set_result(class_name, property, value, borrowed, context, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::StaticPropertyReferenceBind {
@@ -225,9 +224,8 @@ pub(super) fn execute_property_stmt(
             let class_name = eval_dynamic_class_name(class_name, context, values)?;
             let value_expr = value;
             let value = eval_expr(value_expr, context, scope, values)?;
-            let value =
-                retain_unretained_scope_borrow(value_expr, value, context, scope, values)?;
-            eval_static_property_set_result(&class_name, property, value, context, values)?;
+            let borrowed = value_is_an_unretained_scope_borrow(value_expr, value, context, scope);
+            eval_static_property_set_result(&class_name, property, value, borrowed, context, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::DynamicStaticPropertyReferenceBind {
@@ -311,9 +309,8 @@ pub(super) fn execute_property_stmt(
             let property = eval_dynamic_member_name(property, context, scope, values)?;
             let value_expr = value;
             let value = eval_expr(value_expr, context, scope, values)?;
-            let value =
-                retain_unretained_scope_borrow(value_expr, value, context, scope, values)?;
-            eval_static_property_set_result(&class_name, &property, value, context, values)?;
+            let borrowed = value_is_an_unretained_scope_borrow(value_expr, value, context, scope);
+            eval_static_property_set_result(&class_name, &property, value, borrowed, context, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::DynamicStaticPropertyNameReferenceBind {

@@ -414,7 +414,7 @@ pub fn execute_context_static_property_set(
     value: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<EvalOutcome>, EvalStatus> {
-    match eval_static_property_set_result(class_name, property_name, value, context, values) {
+    match eval_static_property_set_result(class_name, property_name, value, false, context, values) {
         Ok(()) => Ok(None),
         Err(EvalStatus::UncaughtThrowable) => context
             .take_pending_throw()

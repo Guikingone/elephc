@@ -46,7 +46,7 @@ pub(super) fn eval_static_property_inc_dec_result(
 ) -> Result<(), EvalStatus> {
     let current = eval_static_property_get_result(class_name, property, context, values)?;
     let value = eval_inc_dec_value(current, increment, values)?;
-    eval_static_property_set_result(class_name, property, value, context, values)
+    eval_static_property_set_result(class_name, property, value, false, context, values)
 }
 
 /// Releases one eval-owned value after running an eval-declared dynamic destructor if needed.
@@ -161,7 +161,7 @@ pub(super) fn eval_array_unset_element_stmt(
             if let Some(array) =
                 eval_array_unset_target_result(array, index, context, scope, values)?
             {
-                eval_static_property_set_result(class_name, property, array, context, values)?;
+                eval_static_property_set_result(class_name, property, array, false, context, values)?;
             }
             return Ok(());
         }
@@ -175,7 +175,7 @@ pub(super) fn eval_array_unset_element_stmt(
             if let Some(array) =
                 eval_array_unset_target_result(array, index, context, scope, values)?
             {
-                eval_static_property_set_result(&class_name, property, array, context, values)?;
+                eval_static_property_set_result(&class_name, property, array, false, context, values)?;
             }
             return Ok(());
         }
@@ -190,7 +190,7 @@ pub(super) fn eval_array_unset_element_stmt(
             if let Some(array) =
                 eval_array_unset_target_result(array, index, context, scope, values)?
             {
-                eval_static_property_set_result(&class_name, &property, array, context, values)?;
+                eval_static_property_set_result(&class_name, &property, array, false, context, values)?;
             }
             return Ok(());
         }
@@ -514,7 +514,7 @@ pub(super) fn eval_static_property_array_append_result(
     let index = eval_array_append_key(array, values)?;
     let value = eval_expr(value, context, scope, values)?;
     let array = values.array_set(array, index, value)?;
-    eval_static_property_set_result(class_name, property, array, context, values)
+    eval_static_property_set_result(class_name, property, array, false, context, values)
 }
 
 /// Executes `Class::$property[index] = value` and compound indexed static-property writes.
@@ -549,7 +549,7 @@ pub(super) fn eval_static_property_array_set_result(
     let array = eval_array_set_target_for_index(array, index, values)?;
     let value = eval_property_array_set_value(array, index, op, value, context, scope, values)?;
     let array = values.array_set(array, index, value)?;
-    eval_static_property_set_result(class_name, property, array, context, values)
+    eval_static_property_set_result(class_name, property, array, false, context, values)
 }
 
 /// Evaluates an array-set index and normalizes PHP integer-string keys.

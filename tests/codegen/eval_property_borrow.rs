@@ -164,7 +164,7 @@ echo ($o instanceof EvalArrBag) ? "yes" : "no", "|", $o->k, "|";
 /// the surplus.
 #[test]
 fn test_an_aot_declared_slot_does_not_get_a_second_retain() {
-    /// The loop, parameterised by iteration count so the per-store cost can be isolated.
+    // The loop, parameterised by iteration count so the per-store cost can be isolated.
     fn store_loop(iterations: usize) -> String {
         format!(
             r#"<?php
@@ -206,7 +206,7 @@ echo "ok";
 /// the dispatch, because nothing on that path ever gives the reference back.
 #[test]
 fn test_a_magic_setter_does_not_get_a_second_retain() {
-    /// The loop, parameterised by iteration count so the per-store cost can be isolated.
+    // The loop, parameterised by iteration count so the per-store cost can be isolated.
     fn magic_loop(iterations: usize) -> String {
         format!(
             r#"<?php

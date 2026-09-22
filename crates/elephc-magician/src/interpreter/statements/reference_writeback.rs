@@ -491,7 +491,7 @@ pub(super) fn write_back_method_static_property_ref_target(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let previous_scope = context.replace_execution_scope(access_scope);
-    let result = eval_static_property_set_result(class_name, property, value, context, values);
+    let result = eval_static_property_set_result(class_name, property, value, false, context, values);
     context.replace_execution_scope(previous_scope);
     result
 }

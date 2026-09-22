@@ -672,10 +672,20 @@ pub(super) fn eval_static_reference_target_write(
 }
 
 /// Writes one eval-declared static property after resolving the class-like receiver.
+///
+/// `value_is_borrowed` says the caller handed over a reference it does not own — a read of a
+/// `ScopeCellOwnership::Borrowed` cell, which `EvalExpr::LoadVar` returns without retaining.
+/// Only ONE of the exits below consumes the value that way: the eval-declared slot store, which
+/// keeps the handle verbatim and releases whatever it replaces. Every other exit either takes a
+/// reference of its own — the native bridge for an AOT-declared slot — or never stores the value
+/// at all, as the three `throw` exits above do. Retaining before the dispatch instead of at that
+/// exit hands those a reference nobody gives back (issue #1123, mirroring
+/// `eval_property_set_result`).
 pub(in crate::interpreter) fn eval_static_property_set_result(
     class_name: &str,
     property_name: &str,
     value: RuntimeCellHandle,
+    value_is_borrowed: bool,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
@@ -718,6 +728,13 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
                 values,
             )?;
         }
+        // The one exit that transfers: the slot keeps this handle and releases what it
+        // replaced, so a borrowed value has to be acquired before it lands here.
+        let value = if value_is_borrowed {
+            values.retain(value)?
+        } else {
+            value
+        };
         if let Some(replaced) =
             context.set_static_property(&declaring_class, property.name(), value)
         {
