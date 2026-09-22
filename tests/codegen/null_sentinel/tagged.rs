@@ -290,3 +290,44 @@ fn test_sentinel_optout_still_suppresses_collision_value() {
     let out = compile_and_run_sentinel("<?php echo 9223372036854775806;");
     assert_eq!(out, "");
 }
+
+/// Verifies `json_encode()` of a tagged nullable int encodes its VALUE, not `null`.
+///
+/// `emit_json_encode_loaded_value` dispatches on `codegen_repr()`, and `int|null` is the one
+/// union that does not map to `Mixed`: under the default tagged representation it stays an
+/// unboxed two-word `{payload, tag}` pair. It therefore fell to the `_` arm, which calls
+/// `__rt_json_encode_null` — so every value encoded as `null`, silently (#1121).
+///
+/// Both polarities are covered, and `0` with them: a tag test that read the payload instead of
+/// the tag would answer `null` for zero.
+#[test]
+fn test_json_encode_of_a_tagged_nullable_int_encodes_its_value() {
+    let out = compile_and_run(
+        r#"<?php
+function nint(int $i): ?int { return $i >= 0 ? $i : null; }
+echo json_encode(nint(5)), "|";
+echo json_encode(nint(0)), "|";
+echo json_encode(nint(-1)), "|";
+echo json_encode(nint(-1) ?? -7);
+"#,
+    );
+
+    assert_eq!(out, "5|0|null|-7");
+}
+
+/// Verifies the encoder does not consume the tagged value it reads.
+///
+/// The branch reads the payload in place rather than boxing, so the same local must encode twice
+/// and still print as an int afterwards.
+#[test]
+fn test_json_encode_does_not_consume_the_tagged_value() {
+    let out = compile_and_run(
+        r#"<?php
+function nint(int $i): ?int { return $i >= 0 ? $i : null; }
+$n = nint(42);
+echo json_encode($n), "|", json_encode($n), "|", $n;
+"#,
+    );
+
+    assert_eq!(out, "42|42|42");
+}
