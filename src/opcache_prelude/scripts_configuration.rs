@@ -34,6 +34,20 @@ pub(super) const SCRIPTS_REVALIDATE_MIN_VERSION_ID: u32 = 80300;
     // The underlying defect is general and belongs in its own change; this keeps
     // `opcache_get_status()` off it. Hoisting also collapses N identical `asctime` calls over
     // the manifest into one, since every entry formats the same start time.
+    //
+    // THE RESIDUAL LEAK IS `date()`, NOT OPCACHE, and it is worth writing down because five
+    // plausible hypotheses were measured and refuted before it: nested-array release, a
+    // returned nested array, a function-returned string as an array value, a literal-seeded
+    // array, and a runtime-call-derived key are all flat in equivalent user code. So is
+    // returning a memoized `static` string, which is the shape
+    // `__elephc_opcache_system_timezone` takes.
+    //
+    // `date()` leaks exactly ONE heap block per call — MEASURED with no OPcache in the
+    // program at all: seven calls per iteration give `live_blocks=7` at one iteration and
+    // `280` at forty. `__elephc_opcache_asctime` calls it three times, and
+    // `opcache_get_status(true)` calls `asctime` once per cached script, which is precisely
+    // the three blocks per script per call observed here (2 scripts → 14/call, 6 → 26,
+    // 12 → 44). Fixing `date()` closes this without another line of OPcache code.
 pub(super) fn scripts_map_expr(
     manifest: &[ScriptEntry],
     revalidate_freq: i64,
