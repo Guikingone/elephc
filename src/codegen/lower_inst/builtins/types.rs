@@ -682,10 +682,12 @@ pub(crate) fn lower_is_a_relation(
         ctx.load_value_to_result(flag)?;
         return store_if_result(ctx, inst);
     }
-    // A flag that is neither a literal nor a `bool` would need PHP's truthiness conversion; the
-    // declared signature is `bool $allow_string`, so this is the shape the checker does not
-    // produce. Keep the answer this lowering gave before names were readable at all.
-    emit_bool_result(ctx, false);
+    // The declared signature is `bool $allow_string`, but coercive mode admits any scalar and the
+    // argument lowering does not cast it, so an `int`, `string` or `float` flag reaches here.
+    // Answering `false` made `$flag = 1; is_subclass_of("Derived", "Base", $flag)` report `n`
+    // where PHP reports `y`. The relation already holds at this point, so the answer is exactly
+    // the flag's PHP truthiness.
+    super::super::predicates::emit_value_truthiness(ctx, flag, name)?;
     store_if_result(ctx, inst)
 }
 

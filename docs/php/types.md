@@ -434,7 +434,10 @@ Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are
 - `defined('Class::CONST')` follows PHP visibility for public, protected, and private members, including lexical `self::`/`parent::`, runtime-called-class `static::`, and constants imported into classes through traits; invalid relative scopes raise a catchable `Error`. The trait name itself is not a valid constant receiver. Eval-mode class-constant names remain unresolved, and dynamic and first-class-callable `defined()` names are still rejected at compile time.
 - `is_a()` and `is_subclass_of()` take a class NAME as well as an object, including an interface
   name, and follow PHP's two different `$allow_string` defaults (`is_subclass_of` accepts a name
-  unless told otherwise, `is_a` only when told to). The name must be a compile-time **literal**: a
+  unless told otherwise, `is_a` only when told to). The flag itself may be computed at runtime and
+  need not be a `bool`: coercive mode admits any scalar there, and an `int`, `string` or `float`
+  is converted with PHP's own truthiness, so `"0"` is false while `"0.0"` and `" "` are true.
+  The name must be a compile-time **literal**: a
   name only known at runtime still answers `false` rather than walking the hierarchy, because the
   emitted program has no name-keyed class table to consult. The same restriction is louder in
   `class_parents()`, `class_implements()` and `class_exists()`, which reject a non-literal name at
