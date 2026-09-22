@@ -172,26 +172,11 @@ fn emit_x86_64_checked(
 /// 64 raw bits and cannot, and the previous answer — php's float-to-int conversion of the true
 /// result — was a number php never produces.
 fn emit_int_overflow_fatal(ctx: &mut FunctionContext<'_>) {
-    let message = b"Fatal error: integer overflow in arithmetic whose result is used as an int; \
-php would promote this value to float, which this storage cannot hold\n";
-    let (label, len) = ctx.data.add_string(message);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2");                              // select stderr
-            ctx.emitter.adrp("x1", &label);
-            ctx.emitter.add_lo12("x1", "x1", &label);
-            ctx.emitter.instruction(&format!("mov x2, #{}", len));              // byte length
-            ctx.emitter.syscall(4);
-        }
-        Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
-            ctx.emitter.instruction(&format!("mov edx, {}", len));              // byte length
-            ctx.emitter.instruction("mov edi, 2");                              // select stderr
-            ctx.emitter.instruction("mov eax, 1");                              // write syscall
-            ctx.emitter.instruction("syscall");
-        }
-    }
-    abi::emit_exit(ctx.emitter, 1);
+    super::objects::emit_fatal_message(
+        ctx,
+        b"Fatal error: integer overflow in arithmetic whose result is used as an int; \
+php would promote this value to float, which this storage cannot hold\n",
+    );
 }
 
 /// Recomputes an overflowing operation as double, matching PHP's promotion path.

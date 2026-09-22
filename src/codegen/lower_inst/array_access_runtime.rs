@@ -510,28 +510,10 @@ fn emit_boxed_element_slots_fatal_guard(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Writes the boxed-slot fatal to stderr and exits.
-///
-/// Named rather than inlined so the message is written once for both architectures; the
-/// sequence mirrors `emit_fatal_message` in `objects::dynamic_factory`.
 fn emit_boxed_element_slots_fatal(ctx: &mut FunctionContext<'_>) {
-    let message = b"Fatal error: an array with boxed element slots reached a typed element \
-contract; the value's declared element type does not describe its storage\n";
-    let (label, len) = ctx.data.add_string(message);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2");                              // select stderr for the fatal diagnostic
-            ctx.emitter.adrp("x1", &label);
-            ctx.emitter.add_lo12("x1", "x1", &label);
-            ctx.emitter.instruction(&format!("mov x2, #{}", len));              // pass the diagnostic byte length to write()
-            ctx.emitter.syscall(4);
-        }
-        Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
-            ctx.emitter.instruction(&format!("mov edx, {}", len));              // pass the diagnostic byte length to write()
-            ctx.emitter.instruction("mov edi, 2");                              // select stderr for the fatal diagnostic
-            ctx.emitter.instruction("mov eax, 1");                              // select the Linux write syscall
-            ctx.emitter.instruction("syscall");                                 // write the diagnostic bytes
-        }
-    }
-    abi::emit_exit(ctx.emitter, 1);
+    super::objects::emit_fatal_message(
+        ctx,
+        b"Fatal error: an array with boxed element slots reached a typed element contract; \
+the value's declared element type does not describe its storage\n",
+    );
 }
