@@ -553,6 +553,70 @@ echo "inside_keys=", implode(",", array_keys($inside)), "\n";
     assert_eq!(field(&output, "native_num"), "2");
 }
 
+/// Verifies a name mentioned ONLY inside `eval()` fragments still reaches the live cache.
+///
+/// The detector that decides whether to inject the OPcache prelude matched a string literal
+/// only when the string WAS the name. That covers `function_exists('opcache_get_status')`
+/// and the callable spellings, and it never covers `eval('return opcache_get_status();')`,
+/// where the name is embedded in code. A program whose only mention sat inside a fragment
+/// therefore got no declaration, and the interpreter's own fallback answered instead — and
+/// that fallback reports the compile-time CLI default rather than reading the live cache.
+///
+/// The symptom was not a missing function. It was a SELF-CONTRADICTING one: measured at the
+/// head before the fix, this exact program was told `opcache_get_status()` was `false` — no
+/// cache — and on the next two lines that `opcache_compile_file()` had cached the file and
+/// that `opcache_is_script_cached()` saw it. Three siblings read the live cache and the
+/// fourth read a constant, in one process, four lines apart.
+///
+/// `num` is asserted as well as the type, so a future fallback that returns an EMPTY array
+/// instead of `false` cannot satisfy this test: only the live cache knows the count. It is
+/// `2`, not `1`, and that is parity rather than drift — reference counts the running script
+/// alongside the compiled one (`scripts` there is `lib.php,main.php`), and elephc's
+/// compile-time manifest holds `main.php` for the same reason.
+///
+/// EVERY CALL HERE IS INSIDE A FRAGMENT, and that is the test. One native `opcache_*` call
+/// added to this source injects the prelude for its own sake, and the assertions below keep
+/// passing while pinning nothing.
+#[test]
+fn opcache_names_used_only_inside_eval_still_reach_the_live_cache() {
+    let dir = make_test_dir("opcache_rt_fragment_only");
+    write_dynamic_fixture(
+        &dir,
+        r#"<?php
+$p = __DIR__ . '/lib.php';
+echo 'status=', (is_array(eval('return opcache_get_status();')) ? 'array' : 'false'), "\n";
+echo 'compile=', (eval('return opcache_compile_file($p);') ? 'true' : 'false'), "\n";
+echo 'cached=', (eval('return opcache_is_script_cached($p);') ? 'true' : 'false'), "\n";
+echo 'status2=', (is_array(eval('return opcache_get_status();')) ? 'array' : 'false'), "\n";
+echo 'num=', eval('$s = opcache_get_status(); return $s["opcache_statistics"]["num_cached_scripts"];'), "\n";
+"#,
+    );
+
+    let output = run_binary(&compile(
+        &dir,
+        &["opcache.enable_cli=1", "opcache.file_update_protection=0"],
+    ));
+
+    // Reference, same fixture: array / true / true / array, num 2.
+    assert_eq!(
+        field(&output, "status"),
+        "array",
+        "the FIRST status call read the stale fallback"
+    );
+    assert_eq!(field(&output, "compile"), "true");
+    assert_eq!(field(&output, "cached"), "true");
+    assert_eq!(
+        field(&output, "status2"),
+        "array",
+        "status contradicts its own siblings: they cached a file it cannot see"
+    );
+    assert_eq!(
+        field(&output, "num"),
+        "2",
+        "the status array is not the live one"
+    );
+}
+
 /// The probe: include the same freshly written file twice from `eval()`, then report
 /// whether the cache kept it. A stored entry makes the second include a HIT.
 const FRESH_FILE_PROBE: &str = r#"<?php

@@ -258,6 +258,53 @@ pub(crate) fn program_references(program: &[Stmt], target: &str) -> bool {
     first_reference(program, Symbol::function(target)).is_some()
 }
 
+/// Returns whether an `eval()` argument string mentions `target` as a whole word.
+///
+/// A name that appears ONLY inside an `eval()` fragment is still a reference to it. The
+/// string-literal rule above matches an exact name, which covers `function_exists('f')` and
+/// the callable spellings, but an `eval` argument carries the name embedded in code —
+/// `'return opcache_get_status();'` — so it never matched and no prelude was injected.
+///
+/// The consequence was not a missing function but a CONTRADICTORY one: with no declaration
+/// to fall through to, the interpreter's own fallback answered, and that fallback reports the
+/// compile-time CLI default. One program could be told the cache was disabled by
+/// `opcache_get_status()` and, two lines later, that `opcache_compile_file()` had cached a
+/// file — because its siblings read the live cache and it did not.
+///
+/// Whole-word rather than substring, so `my_opcache_get_status_helper` does not count. The
+/// heuristic errs toward injecting: a false positive costs a declaration the program never
+/// calls, which the reachability pruner then removes, while a false negative is the silent
+/// wrong answer above.
+fn fragment_mentions(name: &Name, args: &[Expr], target: Symbol<'_>) -> bool {
+    if target.kind != SymbolKind::Function || !name.as_str().eq_ignore_ascii_case("eval") {
+        return false;
+    }
+    args.iter().any(|arg| match &arg.kind {
+        ExprKind::StringLiteral(source) => mentions_word(source, target.name),
+        _ => false,
+    })
+}
+
+/// Returns whether `needle` appears in `haystack` bounded by non-identifier characters.
+fn mentions_word(haystack: &str, needle: &str) -> bool {
+    let is_ident = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'\\';
+    let haystack_lower = haystack.to_ascii_lowercase();
+    let needle_lower = needle.to_ascii_lowercase();
+    let bytes = haystack_lower.as_bytes();
+    let mut from = 0;
+    while let Some(offset) = haystack_lower[from..].find(&needle_lower) {
+        let start = from + offset;
+        let end = start + needle_lower.len();
+        let before_ok = start == 0 || !is_ident(bytes[start - 1]);
+        let after_ok = end == bytes.len() || !is_ident(bytes[end]);
+        if before_ok && after_ok {
+            return true;
+        }
+        from = start + 1;
+    }
+    false
+}
+
 /// Returns the span of the FIRST reference to `target`, or `None` when the program never
 /// mentions it.
 ///
@@ -478,6 +525,7 @@ fn expr_refs(expr: &Expr, target: Symbol<'_>) -> Option<Span> {
         ExprKind::FunctionCall { name, args } => (name_is(name, target)
             && args_select_subject(args, target))
         .then_some(expr.span)
+        .or_else(|| fragment_mentions(name, args, target).then_some(expr.span))
         .or_else(|| args.iter().find_map(|arg| expr_refs(arg, target))),
         ExprKind::MethodCall { object, args, .. }
         | ExprKind::NullsafeMethodCall { object, args, .. } => expr_refs(object, target)
