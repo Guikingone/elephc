@@ -1636,7 +1636,7 @@ jobs:
         run: python3 -m unittest discover -s .github/scripts -p 'test_check_action_pins.py' -v
 
       - name: Check workflow and composite Action refs
-        run: python3 .github/scripts/check_action_pins.py
+        run: ruby .github/scripts/check_action_pins.rb
 
   builtins-docs-sync:
     name: Builtins docs in sync
