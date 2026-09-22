@@ -127,7 +127,7 @@ echo $total;
 /// names a borrowed cell would leak one object per call.
 #[test]
 fn test_eval_conditional_return_retains_only_the_branch_that_ran() {
-    /// `take_borrowed` chooses which arm of the ternary the loop exercises.
+    // `take_borrowed` chooses which arm of the ternary the loop exercises.
     fn conditional_return_loop(take_borrowed: bool) -> String {
         let arg = if take_borrowed { "true" } else { "false" };
 
@@ -188,7 +188,7 @@ echo $t;
 /// the control, over 200 iterations). Recording `Borrowed` instead costs nothing.
 #[test]
 fn test_eval_aliased_borrowed_cell_that_is_never_replaced_adds_no_residue() {
-    /// `alias` chooses between aliasing the borrowed parameter and touching only an int.
+    // `alias` chooses between aliasing the borrowed parameter and touching only an int.
     fn alias_loop(alias: bool) -> String {
         let body = if alias {
             "function gcAlias(GcBag $b): int { $a = $b; return 7; }"
@@ -236,7 +236,7 @@ echo $total;
 /// replaced, so whatever the store recorded is acted on before the frame unwinds.
 #[test]
 fn test_eval_aliased_borrowed_cell_that_is_replaced_adds_no_residue() {
-    /// `alias` chooses between aliasing the borrowed parameter and touching only an int.
+    // `alias` chooses between aliasing the borrowed parameter and touching only an int.
     fn alias_loop(alias: bool) -> String {
         let body = if alias {
             "function gcAlias(GcBag $b): int { $a = $b; $a = 1; return 7; }"
@@ -283,7 +283,7 @@ echo $total;
 /// follows it is the one the statement always performed.
 #[test]
 fn test_eval_bare_borrowed_expression_statement_adds_no_residue() {
-    /// `mention` chooses between naming the borrowed parameter and naming an int.
+    // `mention` chooses between naming the borrowed parameter and naming an int.
     fn statement_loop(mention: bool) -> String {
         let body = if mention {
             "function gcDrop(GcBag $b): int { $b; return 7; }"
