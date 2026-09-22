@@ -667,3 +667,39 @@ fn explicitly_empty_preload_matches_the_default() {
     assert_eq!(err, "", "{err:?}");
     assert_eq!(run_binary(&bin), "count=9\npreload=absent\n");
 }
+
+/// PINS A DIVERGENCE, not parity: under the CLI, a global the preload assigns reaches the entry.
+///
+/// Reference preloads before the request exists and tears that scope down, so the entry script
+/// reads the variable as NULL — MEASURED: `$from_preload ?? 'absent'` prints `absent`. elephc
+/// inlines the preload's top-level code into `main` under the CLI, so the variable is still set
+/// and it prints `SURVIVED`. The `--web` build already matches reference.
+///
+/// A fix exists and was reverted: wrapping the CLI guard in the web path's synthetic function
+/// gave the preload its own scope and closed this, and broke every preload that declares a
+/// function — the declaration is emitted as an include variant that nothing then defines, and
+/// the link fails. See `inject_preload_require`'s docblock.
+///
+/// FLIP THIS TO PARITY when that is solved; do not delete it.
+#[test]
+fn a_preload_global_reaches_the_cli_entry_script_as_a_known_divergence() {
+    let dir = make_test_dir("opcache_preload_global_scope");
+    let preload = dir.join("preload.php");
+    fs::write(&preload, "<?php $from_preload = 'SURVIVED';\n").unwrap();
+    let bin = compile_source(
+        &dir,
+        "globalscope",
+        "<?php\necho $from_preload ?? 'absent', \"\\n\";\n",
+        &[
+            "opcache.enable_cli=1".to_string(),
+            format!("opcache.preload={}", preload.display()),
+        ],
+    );
+
+    assert_eq!(
+        run_binary(&bin),
+        "SURVIVED\n",
+        "reference prints `absent` here; if elephc now does too, this divergence is CLOSED and \
+         the test should be flipped to assert parity rather than removed"
+    );
+}

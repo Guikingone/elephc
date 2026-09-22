@@ -112,6 +112,11 @@ pub extern "C" fn __elephc_eval_configure_opcache(
         // without elephc's codegen therefore observes php-src's default rather than 0.
         ..crate::script_cache::ScriptCacheConfig::disabled()
     });
+    // AFTER `set_config`, which clears it. The configure call IS the request boundary —
+    // once in the CLI prologue, once per request under `--web` — so stamping here gives the
+    // cache php-src's fixed `ZCG(request_time)` instead of a clock that moves under a long
+    // request.
+    crate::script_cache::stamp_request_time_now();
 }
 
 /// Installs the accelerator diagnostic channel and applies php-src's startup validation

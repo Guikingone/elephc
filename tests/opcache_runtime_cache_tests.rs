@@ -883,6 +883,46 @@ echo 'still=', (opcache_is_script_cached($p) ? '1' : '0'), "\n";
     );
 }
 
+/// The EVAL builtin's `opcache_invalidate()` answers "cached OR resolvable", as the native
+/// surface does, for a cached file that has since been DELETED.
+///
+/// It answered "resolvable" alone, on the reasoning that a cached path always resolves because
+/// it was canonicalized when stored — false for exactly one case, the deleted file, which is
+/// the case an invalidate most often exists for. Two reviewers found it independently.
+///
+/// THE NAME IS COMPUTED ON PURPOSE. A literal `opcache_invalidate` anywhere injects the native
+/// declaration and the eval'd call dispatches into it, which already answered `true`; only a
+/// runtime-assembled name reaches the eval builtin. Spelling it literally here would make this
+/// test pass against the broken builtin.
+///
+/// MEASURED against reference PHP 8.5: `true`.
+#[test]
+fn the_eval_builtin_reports_invalidating_a_deleted_cached_file() {
+    let dir = make_test_dir("opcache_rt_eval_invalidate_deleted");
+    write_dynamic_fixture(
+        &dir,
+        r#"<?php
+$p = __DIR__ . '/lib.php';
+eval('include $p;');
+unlink($p);
+$f = 'opcache_' . 'invalidate';
+echo 'r=', (eval('return ' . $f . '($p, true);') ? 'true' : 'false'), "\n";
+"#,
+    );
+
+    let output = run_binary(&compile_with_flags(
+        &dir,
+        &["opcache.enable_cli=1", "opcache.file_update_protection=0"],
+        &["--php-version", "8.5"],
+    ));
+
+    assert_eq!(
+        field(&output, "r"),
+        "true",
+        "the entry was cached and is retired; the file being gone does not change that"
+    );
+}
+
 /// `opcache_invalidate()` WITHOUT `$force` follows php-src's predicate, not "do nothing".
 ///
 /// `accel_invalidate` is `force || !validate_timestamps || the source moved on`, and only

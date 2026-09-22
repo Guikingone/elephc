@@ -607,6 +607,54 @@ include $f;
     );
 }
 
+/// `call_user_func('opcache_is_script_cached_in_file_cache', $f)` agrees with the direct call.
+///
+/// The by-values dispatch arm answered a constant `false`, under a comment calling it terminal
+/// because "the file cache does not exist" — which this branch made untrue by shipping one.
+/// Its direct twin had been migrated to read the disk; the arm had not, so the interpreter's
+/// two spellings of one name disagreed about one file in one process.
+///
+/// AN ENTRY MUST ACTUALLY BE ON DISK, and the name must be computed. With no entry both
+/// spellings rightly answer `false`, and with a literal name the native declaration takes both
+/// calls — either way the test would pass against the stub.
+///
+/// MEASURED against reference PHP 8.5: `direct=1 cuf=1`. elephc printed `direct=1 cuf=0`.
+#[test]
+fn call_user_func_agrees_with_the_direct_file_cache_query() {
+    let dir = make_test_dir("opcache_fc_cuf");
+    let cache = dir.join("file-cache");
+    fs::create_dir_all(&cache).unwrap();
+    fs::write(dir.join("lib.php"), "<?php $lib_marker = 1;\n").unwrap();
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+$lib = __DIR__ . '/lib.php';
+eval('include $lib;');
+$n = 'opcache_' . 'is_script_cached_in_file_cache';
+echo 'direct=', (eval('return ' . $n . '($lib);') ? '1' : '0'), "\n";
+echo 'cuf=', (eval('return call_user_func($n, $lib);') ? '1' : '0'), "\n";
+"#,
+    )
+    .unwrap();
+    let bin = compile(
+        &dir,
+        &[
+            "opcache.enable_cli=1",
+            "opcache.file_update_protection=0",
+            &format!("opcache.file_cache={}", cache.display()),
+        ],
+    );
+
+    let out = run_binary(&bin);
+
+    assert_eq!(field(&out, "direct"), "1", "the entry is on disk:\n{out}");
+    assert_eq!(
+        field(&out, "cuf"),
+        "1",
+        "call_user_func must reach the same disk the direct call reads:\n{out}"
+    );
+}
+
 /// Verifies a FORCED invalidate also removes the entry from disk, not just from memory.
 ///
 /// php-src's `accel_invalidate` calls `zend_file_cache_invalidate` alongside the in-memory
@@ -697,9 +745,18 @@ fn an_edited_source_invalidates_its_disk_entry() {
     let first = run_binary(&bin);
     assert_eq!(field(&first, "after"), "T", "the entry was written");
 
-    // A different length, so the size check alone is enough even if the mtime lands in the
-    // same whole second.
+    // THE TIMESTAMP IS MOVED EXPLICITLY. Freshness is the mtime alone, as php-src's
+    // `do_validate_timestamps` is, and mtime has one-second resolution — so a rewrite landing
+    // in the same second is not a change to either engine. This used to rely on the new
+    // length instead, which pinned a rule reference does not have: reference replays the
+    // stored script when only the size moved.
     fs::write(dir.join("lib.php"), "<?php $lib_marker = 2; $extra = 'changed';\n").unwrap();
+    fs::File::options()
+        .write(true)
+        .open(dir.join("lib.php"))
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(900_000))
+        .unwrap();
     let second = run_binary(&bin);
 
     assert_eq!(

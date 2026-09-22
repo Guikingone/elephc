@@ -381,6 +381,23 @@ pub fn preload_statistics(
 /// program, so its constants necessarily exist. elephc is a SUPERSET here, never a fabrication,
 /// and reproducing the absence would mean building machinery to un-define a constant the program
 /// legitimately declared.
+///
+/// SECOND DOCUMENTED DIVERGENCE, CLI ONLY: the preload's GLOBAL VARIABLES reach the entry script.
+/// Its top-level code is inlined into `main` here, so `$from_preload = 'SURVIVED'` is still set
+/// when the entry reads it; reference tears the startup scope down and the entry reads NULL.
+/// MEASURED: reference prints `absent` for `$from_preload ?? 'absent'`, the elephc CLI prints
+/// `SURVIVED`. The `--web` build already answers `absent`, because `lift_preload_to_startup`
+/// runs the preload through a synthetic function.
+///
+/// UNLIKE THE CONSTANTS, THIS ONE IS FIXABLE, and the obvious fix was tried and reverted.
+/// Wrapping the CLI guard in the same synthetic function — leaving a call where the guard was,
+/// so ORDER is unchanged — gave the preload its own scope and closed the divergence. It also
+/// broke every preload that DECLARES a function, which is the main reason to have one: the
+/// declaration inside the moved guard is emitted as an include variant that nothing then
+/// defines, and the link fails with that symbol undefined. The web path does not hit this, and
+/// finding out why is the actual work. Until then a divergence on a rare shape is the right
+/// trade against a link failure on the common one. Pinned by
+/// `a_preload_global_reaches_the_cli_entry_script_as_a_known_divergence`.
 pub fn inject_preload_require(
     program: Program,
     php_version: PhpVersion,

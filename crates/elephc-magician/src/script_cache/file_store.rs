@@ -167,7 +167,13 @@ pub(crate) fn load(
     if cached.path != canonical.to_string_lossy() {
         return None;
     }
-    if config.validate_timestamps && (cached.mtime != mtime || cached.size != size) {
+    // The TIMESTAMP ALONE, for the same reason as the in-memory path: php-src validates a
+    // file-cache entry against the source's mtime and nothing else. MEASURED across two
+    // processes sharing a cache, with the source rewritten to a different length and its
+    // mtime restored: reference replays the stored script, elephc re-read the new one.
+    // `size` stays in the stored record but decides nothing here.
+    let _ = size;
+    if config.validate_timestamps && cached.mtime != mtime {
         return None;
     }
     Some(cached.segments)
@@ -394,11 +400,16 @@ mod tests {
         );
     }
 
-    /// Verifies a source whose mtime or size moved is REFUSED rather than served stale.
+    /// Verifies a source whose TIMESTAMP moved is refused, and one whose size alone moved is
+    /// served — php-src's rule for a file-cache entry.
     ///
-    /// This is the check that keeps a changed file from running as its old self, so it is
-    /// unconditional — `opcache.validate_timestamps` governs re-`stat` frequency in memory,
-    /// not whether a disk entry may be trusted.
+    /// This test used to pin the opposite on both counts, and both were wrong. It refused a
+    /// size change, where `do_validate_timestamps` compares the mtime and nothing else: a
+    /// rewrite to a different length under a restored timestamp is fresh to reference, which
+    /// MEASURED across two processes replays the stored script. And its docblock called the
+    /// check unconditional, where `opcache.validate_timestamps=0` in fact means the stored
+    /// entry is served even when the source has moved on — see
+    /// `a_disk_entry_is_served_without_validation_when_timestamps_are_off`.
     #[test]
     fn a_moved_source_is_refused() {
         let (config, _dir) = configure("stale", false);
@@ -409,12 +420,39 @@ mod tests {
 
         assert!(
             load(&config, path, Some(43), source.len() as u64).is_none(),
-            "mtime moved"
+            "a moved timestamp must refuse the entry"
         );
-        assert!(load(&config, path, Some(42), 999).is_none(), "size moved");
+        assert!(
+            load(&config, path, Some(42), 999).is_some(),
+            "a size change under the same timestamp is fresh to php-src and must be served"
+        );
         assert!(
             load(&config, path, Some(42), source.len() as u64).is_some(),
             "unchanged hits"
+        );
+    }
+
+    /// Verifies `validate_timestamps=0` serves the stored entry even when the source moved.
+    ///
+    /// Under that directive nothing is re-checked, and serving the stored script IS the
+    /// setting's purpose: a deployment swaps files and restarts, and until it does the cache
+    /// is authoritative. The path is still compared — identity is unconditional, freshness
+    /// is not.
+    #[test]
+    fn a_disk_entry_is_served_without_validation_when_timestamps_are_off() {
+        let (config, _dir) = configure("novalidate", false);
+        let config = ScriptCacheConfig {
+            validate_timestamps: false,
+            ..config
+        };
+        let source = b"<?php $a = 1;";
+        let segments = segment_script(source, ParseMode::Fresh);
+        let path = Path::new("/tmp/elephc-file-store-novalidate.php");
+        store(&config, path, Some(42), source.len() as u64, &segments);
+
+        assert!(
+            load(&config, path, Some(9_999), 999).is_some(),
+            "with timestamps off, a moved source must still be served from disk"
         );
     }
 

@@ -106,8 +106,41 @@ thread_local! {
 }
 
 /// Installs the compile-time OPcache configuration for the current thread.
+///
+/// Clears the request time: a configuration installed without one (every unit test in this
+/// crate) reads the wall clock, exactly as before the request time existed.
 pub(crate) fn set_config(config: ScriptCacheConfig) {
     SCRIPT_CACHE_CONFIG.with(|cell| *cell.borrow_mut() = config);
+    REQUEST_TIME.with(|cell| cell.set(None));
+}
+
+thread_local! {
+    /// php-src's `ZCG(request_time)`: the clock every freshness decision reads, FIXED when
+    /// the request starts.
+    ///
+    /// php-src never asks the wall clock whether a file is old enough to admit or whether
+    /// an entry is due for a re-stat; it asks what time the REQUEST started. Reading the
+    /// wall clock at each include let three things drift that reference holds still: a file
+    /// created during a long request became admissible once enough of it had elapsed
+    /// (reference still refuses it — its age by request time is zero), an entry crossed its
+    /// revalidation deadline mid-request, and two includes of one file in one request could
+    /// therefore run two versions. MEASURED on the first: write a file, `sleep(3)`, compile
+    /// it under the default protection of 2 — reference leaves it uncached, elephc cached it.
+    ///
+    /// Stamped by the configure bridge, which generated code calls once in the CLI prologue
+    /// and once per request in the `--web` handler — so this is process start in the CLI and
+    /// request start under `--web`, which is what `ZCG(request_time)` is in each.
+    static REQUEST_TIME: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
+}
+
+/// Fixes the request time the freshness decisions read. See [`REQUEST_TIME`].
+pub(crate) fn stamp_request_time(seconds: i64) {
+    REQUEST_TIME.with(|cell| cell.set(Some(seconds)));
+}
+
+/// The request time, when one has been stamped.
+pub(crate) fn request_time() -> Option<i64> {
+    REQUEST_TIME.with(std::cell::Cell::get)
 }
 
 thread_local! {

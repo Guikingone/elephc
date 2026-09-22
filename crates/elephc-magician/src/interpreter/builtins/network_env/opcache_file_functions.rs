@@ -148,8 +148,16 @@ pub(in crate::interpreter) fn eval_opcache_invalidate_for_path(
     if !eval_opcache_cache_enabled() {
         return eval_opcache_invalidate_result(values);
     }
-    crate::script_cache::invalidate(path, forced);
-    values.bool_value(eval_opcache_path_resolves(path))
+    // "CACHED OR RESOLVABLE", composed the way the native surface composes it. The answer
+    // used to be the right-hand side alone, on the reasoning that a cached path was
+    // canonicalized when it was stored and so always resolves — which is false for exactly
+    // one case, a cached file that was DELETED since, and that is the case an invalidate most
+    // often exists for. The eviction is what knows the entry was there. MEASURED, reached
+    // only through a computed name so no native declaration is injected: `include` a file,
+    // `unlink()` it, invalidate it — reference answers `true`, this answered `false`, while
+    // the native prelude already answered `true` for the same file in the same process.
+    let evicted = crate::script_cache::invalidate(path, forced);
+    values.bool_value(evicted || eval_opcache_path_resolves(path))
 }
 
 /// The `opcache_compile_file()` answer for a resolved path.
@@ -332,13 +340,6 @@ pub(in crate::interpreter) fn eval_opcache_is_script_cached_in_file_cache_for_pa
     values.bool_value(crate::script_cache::file_cache_contains(path))
 }
 
-/// Builds the `opcache_is_script_cached_in_file_cache()` return value for the by-values
-/// dispatch path, which has already evaluated its argument.
-pub(in crate::interpreter) fn eval_opcache_is_script_cached_in_file_cache_result(
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_opcache_file_disabled_result(values)
-}
 
 /// Evaluates a direct `opcache_jit_blacklist($closure)` call from an eval fragment. Exactly
 /// one argument is required (VERIFIED on PHP 8.5.6: one required parameter named `closure`,

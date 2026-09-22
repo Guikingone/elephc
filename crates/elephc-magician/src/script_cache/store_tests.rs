@@ -14,7 +14,10 @@
 //!   fake clock would prove nothing about it.
 
 use super::*;
-use crate::script_cache::config::set_config;
+use crate::script_cache::config::{
+    clear_directive_overrides, set_config, stamp_request_time, swap_directive,
+    DIRECTIVE_REVALIDATE_FREQ,
+};
 use crate::script_cache::store::lock_for_test as test_lock;
 
 /// Returns a configuration with the cache on and the given revalidation window.
@@ -108,9 +111,12 @@ fn a_changed_file_is_refilled_when_revalidation_is_due() {
     let path = write_fixture("changed", "<?php $x = 1;");
     load_script(&path).expect("fixture should load");
 
-    // A SIZE change is decisive on its own: mtime has one-second resolution here, so a
-    // same-second rewrite would otherwise still look unchanged.
+    // THE TIMESTAMP MUST MOVE, and is moved explicitly. Freshness is the mtime alone, as
+    // php-src's `do_validate_timestamps` is; mtime has one-second resolution, so a rewrite
+    // landing in the same second is NOT a change to either engine. This test used to rely on
+    // the length instead, which pinned a rule reference does not have.
     std::fs::write(&path, "<?php $x = 1; $y = 2;").expect("fixture should be rewritable");
+    set_mtime(&path, 900_000);
     load_script(&path).expect("fixture should load");
     let stats = stats();
 
@@ -185,6 +191,140 @@ fn is_cached_revalidates_only_once_the_window_has_passed() {
     assert!(
         is_cached(&within),
         "inside the revalidation window php-src does not re-stat, so neither may this"
+    );
+}
+
+/// Verifies `revalidate_freq=0` forces a re-stat whatever deadline the entry carries.
+///
+/// php-src tests the CURRENT frequency before the stored deadline, so lowering it to `0` with
+/// `ini_set()` takes effect at once. The entry's deadline was computed under the old
+/// frequency, and reading only that kept vouching for it for up to the OLD window.
+/// MEASURED: cache under `60`, move the mtime, `ini_set(...,'0')`; reference reports the
+/// script uncached, elephc reported it cached.
+#[test]
+fn a_zero_frequency_override_forces_revalidation() {
+    let _guard = test_lock();
+    set_config(enabled_config(3600));
+    let path = write_fixture("freq_override", "<?php $x = 1;");
+    set_mtime(&path, 1_000_000);
+    load_script(&path).expect("fixture should load");
+    set_mtime(&path, 900_000);
+    assert!(is_cached(&path), "inside the 3600s window the entry is still vouched for");
+
+    swap_directive(DIRECTIVE_REVALIDATE_FREQ, 0, true);
+    let answer = is_cached(&path);
+    clear_directive_overrides();
+    assert!(
+        !answer,
+        "revalidate_freq lowered to 0 must re-stat at once, not wait out the old deadline"
+    );
+}
+
+/// Verifies a SUCCESSFUL `is_cached` check renews the revalidation window.
+///
+/// php-src's query goes through `validate_timestamp_and_record_ex`, which records
+/// `request_time + revalidate_freq` on success. MEASURED with `revalidate_freq=2`: once the
+/// window has lapsed, a query of the unchanged file renews it, so a change made right after
+/// is not yet seen — reference answers `true, true`; elephc answered `true, false`.
+///
+/// Driven through the REQUEST TIME rather than `sleep`, which is what makes it deterministic:
+/// the second query is placed past the first deadline by stamping, not by waiting.
+#[test]
+fn a_successful_query_renews_the_revalidation_window() {
+    let _guard = test_lock();
+    set_config(enabled_config(2));
+    stamp_request_time(1_000_000);
+    let path = write_fixture("renew", "<?php $x = 1;");
+    set_mtime(&path, 999_000);
+    load_script(&path).expect("fixture should load");
+
+    // Past the first deadline (1_000_002): the check runs, succeeds, and must renew.
+    stamp_request_time(1_000_005);
+    assert!(is_cached(&path), "unchanged: cached");
+    set_mtime(&path, 900_000);
+    assert!(
+        is_cached(&path),
+        "the renewed window (to 1_000_007) must keep vouching for the entry"
+    );
+}
+
+/// Verifies invalidating a DELETED file still retires, and reports, its entry.
+///
+/// `invalidate` asked whether the entry was live through `is_cached`, which revalidates —
+/// and a deleted file fails revalidation. So it reported nothing live for exactly the entry
+/// an invalidate of a deleted file exists to retire. MEASURED, `revalidate_freq=0`:
+/// reference answers `true`, elephc answered `false`.
+///
+/// IT ALSO PINS A SECOND DEFECT, and that is not an accident of the fixture. On macOS the
+/// temp directory is `/var/folders/…`, a symlink to `/private/var/folders/…`. Once the file
+/// is deleted, `canonicalize` fails on it, and the key fell back to the raw symlinked path —
+/// which never matches the canonical key the entry was stored under. This test failed for
+/// that reason first, after the presence fix was already in; `cache_key` now resolves the
+/// directory that still exists, as php-src does. On a platform whose temp directory is not
+/// a symlink it still pins the presence half.
+#[test]
+fn invalidating_a_deleted_file_reports_the_entry_it_retired() {
+    let _guard = test_lock();
+    set_config(enabled_config(0));
+    let path = write_fixture("deleted", "<?php $x = 1;");
+    load_script(&path).expect("fixture should load");
+    std::fs::remove_file(&path).expect("fixture should be removable");
+
+    assert!(
+        invalidate(&path, true),
+        "the entry was present and is retired, even though the file is gone"
+    );
+}
+
+/// Verifies the warm path treats a size-only rewrite as FRESH, as php-src does.
+///
+/// Rewrite to a different length, restore the mtime, include again: reference replays the
+/// stored script. The warm path compared the length and re-read the file. MEASURED on
+/// reference PHP 8.5.
+#[test]
+fn a_size_only_rewrite_is_served_from_the_cache() {
+    let _guard = test_lock();
+    set_config(enabled_config(0));
+    let path = write_fixture("size_only", "<?php $x = 1;");
+    set_mtime(&path, 1_000_000);
+    load_script(&path).expect("fixture should load");
+
+    std::fs::write(&path, "<?php $x = 1; $y = 'a much longer body';")
+        .expect("fixture should be rewritable");
+    set_mtime(&path, 1_000_000);
+    load_script(&path).expect("fixture should load");
+
+    assert_eq!(
+        (stats().hits, stats().misses),
+        (1, 1),
+        "the second include must be a HIT on the stored script"
+    );
+}
+
+/// Verifies admission reads the REQUEST time, not the wall clock.
+///
+/// php-src measures a file's age against `ZCG(request_time)`, fixed when the request starts.
+/// A file whose mtime equals the request time is zero seconds old for the whole request, so
+/// the default protection of 2 refuses it however long the request runs. MEASURED: write a
+/// file, `sleep(3)`, compile it — reference leaves it uncached, elephc cached it.
+///
+/// The discriminator is stark: by the WALL clock this fixture is decades old and would be
+/// admitted at once; by the request time it is brand new and must be refused.
+#[test]
+fn admission_measures_age_against_the_request_time() {
+    let _guard = test_lock();
+    set_config(ScriptCacheConfig {
+        file_update_protection: 2,
+        ..enabled_config(0)
+    });
+    let path = write_fixture("request_age", "<?php $x = 1;");
+    set_mtime(&path, 1_000_000);
+    stamp_request_time(1_000_000);
+    load_script(&path).expect("fixture should load");
+
+    assert!(
+        !is_cached(&path),
+        "zero seconds old by the request clock: the protection window must refuse it"
     );
 }
 

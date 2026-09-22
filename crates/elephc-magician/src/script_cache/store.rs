@@ -35,7 +35,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 struct Entry {
     segments: Arc<[ScriptSegment]>,
     mtime: Option<i64>,
-    size: u64,
     footprint: usize,
     hits: u64,
     last_used: i64,
@@ -111,6 +110,55 @@ fn now_seconds() -> i64 {
         .unwrap_or(0)
 }
 
+/// Fixes the request time at the current wall clock. See `config::REQUEST_TIME`.
+pub fn stamp_request_time_now() {
+    super::config::stamp_request_time(now_seconds());
+}
+
+/// The clock every FRESHNESS decision reads: the request time when one is stamped, the
+/// wall clock otherwise (a configuration installed directly, as the unit tests do).
+fn request_now() -> i64 {
+    super::config::request_time().unwrap_or_else(now_seconds)
+}
+
+/// The cache key for `path`: its canonical form, resolving the EXISTING PREFIX when the file
+/// itself is gone.
+///
+/// Entries are stored under the canonical path, so a lookup must canonicalize the same way.
+/// For a file that exists that is `canonicalize`. For a DELETED file it fails — and the
+/// fallback used to be the raw path, which misses the stored key whenever that path runs
+/// through a symlink. That is not exotic: macOS's `sys_get_temp_dir()` is `/var/folders/…`,
+/// a symlink to `/private/var/folders/…`, and so is any deploy that includes through a
+/// `current -> releases/42` link.
+///
+/// php-src resolves the directory that still exists and joins the file name, so it finds the
+/// entry. MEASURED: include a file through a symlinked directory, `unlink()` it, then
+/// `opcache_invalidate($p, true)` through the same path — reference answers `true`, elephc
+/// answered `false`. `invalidate` of a deleted file is exactly when this matters.
+fn cache_key(path: &Path) -> std::path::PathBuf {
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return canonical;
+    }
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => std::fs::canonicalize(parent)
+            .map(|dir| dir.join(name))
+            .unwrap_or_else(|_| path.to_path_buf()),
+        _ => path.to_path_buf(),
+    }
+}
+
+/// Whether an entry checked at `revalidate_at` must be re-stat'd now.
+///
+/// `revalidate_freq=0` FORCES the check whatever deadline the entry carries. php-src tests
+/// the CURRENT frequency before the stored deadline, so an `ini_set('opcache.revalidate_freq',
+/// '0')` takes effect at once; reading only the deadline — computed under the frequency in
+/// force when the entry was stored — kept serving an entry for up to the OLD window.
+/// MEASURED: cache under `60`, move the mtime, `ini_set(...,'0')`; reference reports the
+/// script uncached, elephc reported it cached.
+fn revalidation_due(config: &ScriptCacheConfig, revalidate_at: i64, now: i64) -> bool {
+    config.validate_timestamps && (config.revalidate_freq == 0 || now >= revalidate_at)
+}
+
 /// Returns a file's mtime in whole seconds since the Unix epoch, if it has one.
 pub(super) fn mtime_seconds(metadata: &std::fs::Metadata) -> Option<i64> {
     metadata
@@ -135,7 +183,7 @@ pub(crate) fn load_script(path: &Path) -> io::Result<Arc<[ScriptSegment]>> {
         let bytes = std::fs::read(path)?;
         return Ok(Arc::from(segment_script(&bytes, ParseMode::Memoized)));
     }
-    let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let key = cache_key(path);
     if let Some(segments) = serve_warm_entry(&key, &config)? {
         return Ok(segments);
     }
@@ -150,7 +198,7 @@ fn serve_warm_entry(
     key: &Path,
     config: &ScriptCacheConfig,
 ) -> io::Result<Option<Arc<[ScriptSegment]>>> {
-    let now = now_seconds();
+    let now = request_now();
     let mut cache = lock_script_cache();
     let Some(entry) = cache.entries.get(key) else {
         return Ok(None);
@@ -158,13 +206,16 @@ fn serve_warm_entry(
     if entry.discarded {
         return Ok(None);
     }
-    if config.validate_timestamps && now >= entry.revalidate_at {
+    if revalidation_due(&config, entry.revalidate_at, now) {
         let Some(metadata) = std::fs::metadata(key).ok() else {
             // The file is gone. Fall through to the fill, which reproduces the
             // caller's missing-include diagnostics rather than serving stale code.
             return Ok(None);
         };
-        if mtime_seconds(&metadata) != entry.mtime || metadata.len() != entry.size {
+        // THE TIMESTAMP ALONE, as php-src's `do_validate_timestamps` is (it passes a NULL
+        // size output). Comparing the length too re-read a file whose content changed but
+        // whose mtime was restored — MEASURED, reference keeps serving the stored script.
+        if mtime_seconds(&metadata) != entry.mtime {
             return Ok(None);
         }
         let freq = config.revalidate_freq as i64;
@@ -248,7 +299,7 @@ fn fill_entry(
         Some(cached) => Arc::from(cached),
         None => Arc::from(segment_script(&bytes, ParseMode::Fresh)),
     };
-    let now = now_seconds();
+    let now = request_now();
     let mut cache = lock_script_cache();
     // A SECOND-LEVEL HIT IS A HIT. php-src's `persistent_compile_file` only reaches
     // `ZCSG(misses)++` when the file cache did NOT produce a script; a load from it falls
@@ -323,7 +374,6 @@ fn fill_entry(
         Entry {
             segments: Arc::clone(&segments),
             mtime,
-            size,
             footprint,
             hits: 0,
             last_used: now,
@@ -430,7 +480,7 @@ pub fn apply_pending_restart() -> bool {
 /// accounted footprint, matching php-src holding the shared-memory block until the
 /// next restart, so `num_cached_scripts` does not move.
 pub fn discard(path: &Path) -> bool {
-    let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let key = cache_key(path);
     let mut cache = lock_script_cache();
     // The mutable borrow of `entries` has to end before `generation` can be touched, so the
     // flag is read back rather than bumped inside the match arm.
@@ -462,17 +512,17 @@ pub fn discard(path: &Path) -> bool {
 ///   evicts a script whose source has moved on and keeps one that has not. MEASURED, both
 ///   directions: an untouched file survives a non-forced invalidate in reference too.
 ///
-/// THE STALENESS TEST IS THE TIMESTAMP ALONE, not the mtime-or-size pair the warm-hit path
-/// in `serve_warm_entry` uses. Sharing the warm path's definition was tried and is wrong:
+/// THE STALENESS TEST IS THE TIMESTAMP ALONE — and so is every other one in this crate now.
 /// `do_validate_timestamps` passes `NULL` for the size output and compares only the
 /// timestamp, so a rewrite that changes the LENGTH while preserving the mtime is fresh to
-/// reference and was stale here. MEASURED: reference reports the script still cached after
-/// such a rewrite and a non-forced `opcache_invalidate()`; elephc discarded it.
+/// reference. MEASURED on three surfaces: a non-forced `opcache_invalidate()` keeps such an
+/// entry, a later include replays the stored script, and a second process replays it from
+/// the file cache.
 ///
-/// Two definitions of "changed" in one crate is a real cost, and it buys correctness rather
-/// than tidiness: the warm path is deciding whether to SERVE an entry, where a size change
-/// with an unchanged mtime is worth refusing, and this is reproducing a php-src predicate
-/// that a program can observe directly.
+/// An earlier version of this docblock defended keeping the size in the warm-hit path, as
+/// the right question for deciding whether to SERVE an entry. The include measurement
+/// settled that too: reference serves the stored script there, so there is one definition
+/// of "changed" in this crate, and it is php-src's.
 ///
 /// RETURNS THE EVICTION, NOT THE PHP ANSWER. `opcache_invalidate()` reports whether the
 /// PATH RESOLVES, which is a question about the filesystem and not about the cache; that
@@ -480,7 +530,7 @@ pub fn discard(path: &Path) -> bool {
 /// whether an entry was actually dropped, which is what a caller here can use and what a
 /// test can assert on.
 pub fn invalidate(path: &Path, force: bool) -> bool {
-    let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let key = cache_key(path);
     // THE ON-DISK ENTRY GOES FIRST, AND UNCONDITIONALLY. php-src calls
     // `zend_file_cache_invalidate` outside the `force || !validate_timestamps || stale`
     // test, so an invalidate that deliberately KEEPS the in-memory entry still drops the
@@ -500,7 +550,13 @@ pub fn invalidate(path: &Path, force: bool) -> bool {
     // call that did no work — reference answers `false` for the second one. The liveness is
     // read before the discard rather than inferred from it, because the latch is idempotent
     // by design and cannot distinguish the two on its own.
-    let was_live = is_cached(&key);
+    //
+    // PRESENCE, NOT `is_cached`. The query revalidates, and a deleted file fails that — so
+    // asking it reported "nothing was live" for exactly the entry an invalidate of a deleted
+    // file exists to retire. MEASURED, `validate_timestamps=1, revalidate_freq=0`:
+    // `opcache_compile_file($p); unlink($p); opcache_invalidate($p, true)` answers `true` in
+    // reference and answered `false` here.
+    let was_live = is_present(&key);
     discard(&key);
     was_live || removed
 }
@@ -552,10 +608,17 @@ fn entry_is_stale(key: &Path) -> bool {
 /// second, which is the configuration nearly everyone runs.
 ///
 /// The test is the timestamp alone, as in `entry_is_stale` and php-src's
-/// `do_validate_timestamps`. This does NOT move `revalidate_at`: it is a query, and a query
-/// that pushed the next check back would change what a later include sees.
+/// `do_validate_timestamps`.
+///
+/// A SUCCESSFUL CHECK RENEWS THE WINDOW, as it does in php-src: the query goes through
+/// `validate_timestamp_and_record_ex`, which records `request_time + revalidate_freq` on
+/// success. This docblock used to say the opposite — that a query must not move the
+/// deadline — and that made a query answer differently from reference once the window
+/// had lapsed: the first check succeeded without renewing, so a change right after it was
+/// seen at once where reference, having just renewed, keeps vouching for the entry until
+/// the renewed window lapses.
 pub fn is_cached(path: &Path) -> bool {
-    let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let key = cache_key(path);
     let (entry_mtime, revalidate_at) = {
         let cache = lock_script_cache();
         match cache.entries.get(&key) {
@@ -564,13 +627,28 @@ pub fn is_cached(path: &Path) -> bool {
         }
     };
     let config = config();
-    if !config.validate_timestamps || now_seconds() < revalidate_at {
+    let now = request_now();
+    if !revalidation_due(&config, revalidate_at, now) {
         return true;
     }
-    match std::fs::metadata(&key) {
+    let fresh = match std::fs::metadata(&key) {
         Ok(metadata) => mtime_seconds(&metadata) == entry_mtime,
         Err(_) => false,
+    };
+    if fresh {
+        if let Some(entry) = lock_script_cache().entries.get_mut(&key) {
+            entry.revalidate_at = now.saturating_add(config.revalidate_freq as i64);
+        }
     }
+    fresh
+}
+
+/// Returns whether `key` has a present, non-discarded entry — no freshness question asked.
+fn is_present(key: &Path) -> bool {
+    lock_script_cache()
+        .entries
+        .get(key)
+        .is_some_and(|entry| !entry.discarded)
 }
 
 /// Reads and caches a script without executing it, as `opcache_compile_file()` does.
@@ -599,7 +677,7 @@ pub fn compile_file(path: &Path) -> bool {
     if !config.enabled {
         return false;
     }
-    let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let key = cache_key(path);
     // A SECOND CALL ON A CACHED FILE IS A HIT, not another compile. php-src's
     // `opcache_compile_file()` goes through the same cache lookup as an include, so calling
     // it twice moves `hits`, not `misses`. Going straight to `fill_entry` re-read and

@@ -74,8 +74,13 @@ pub(in crate::interpreter) fn eval_builtin_with_values(
     // here as plain runtime handlers (not PHP-visible builtins). Three of them answer about
     // the runtime script cache, so they resolve their path and go through the SAME core the
     // direct call handlers use — `call_user_func('opcache_is_script_cached', $f)` must not
-    // disagree with `opcache_is_script_cached($f)`. The remaining two are terminal: the file
-    // cache does not exist, and the `void` `opcache_jit_blacklist` yields `NULL`.
+    // disagree with `opcache_is_script_cached($f)`. `opcache_is_script_cached_in_file_cache`
+    // joins them: this comment used to call it terminal because "the file cache does not
+    // exist", which this branch made untrue by shipping one, and the arm went on answering a
+    // constant while its direct twin read the disk. MEASURED with an entry actually on disk
+    // and the name computed at runtime: the direct call answered `1`, `call_user_func`
+    // answered `0`, reference answers `1` to both. The one remaining terminal arm is the
+    // `void` `opcache_jit_blacklist`, which yields `NULL`.
     if name == "opcache_is_script_cached" {
         let [filename] = evaluated_args else {
             return Err(EvalStatus::RuntimeFatal);
@@ -102,11 +107,12 @@ pub(in crate::interpreter) fn eval_builtin_with_values(
         return Ok(Some(eval_opcache_compile_file_for_path(&path, values)?));
     }
     if name == "opcache_is_script_cached_in_file_cache" {
-        if evaluated_args.len() != 1 {
+        let [filename] = evaluated_args else {
             return Err(EvalStatus::RuntimeFatal);
-        }
-        return Ok(Some(eval_opcache_is_script_cached_in_file_cache_result(
-            values,
+        };
+        let path = eval_opcache_path_value(*filename, values)?;
+        return Ok(Some(eval_opcache_is_script_cached_in_file_cache_for_path(
+            &path, values,
         )?));
     }
     if name == "opcache_jit_blacklist" {

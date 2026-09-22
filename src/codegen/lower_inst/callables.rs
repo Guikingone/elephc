@@ -3254,7 +3254,21 @@ fn emit_runtime_callable_name_compare(
             abi::emit_load_int_immediate(ctx.emitter, "x4", candidate_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
             ctx.emitter.instruction("cmp x0, #0");                              // did the runtime string callable name match this user function?
-            ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // dispatch to this user function when names match case-insensitively
+            // THE ONE DISPATCH HERE THAT HOISTS EVERY COMPARE ABOVE EVERY ARM.
+            // `lower_runtime_string_call` emits all name compares first and all call arms
+            // after, so this branch jumps over the remaining compares AND every earlier arm —
+            // a distance that grows with the number of user functions the call could name.
+            // The per-case dispatches in this file interleave compare and arm, so their
+            // conditional branches only ever skip one bounded arm; this one does not.
+            //
+            // DEFENSIVE, AND SAID SO: no ordinary PHP reaches this today. `$f()` on a string
+            // lowers to `callable_descriptor_invoke` and takes the descriptor path, whose
+            // normalizer carries the same fix and is pinned by a test. No fixture could be
+            // built that emits this dispatch, so there is no test here — one was written and
+            // its premise guard refused to pass on a dispatch that was never emitted. The form
+            // costs one instruction on the taken path and removes an assembler failure the day
+            // a lowering change routes string callables back here.
+            emit_eq_branch_any_distance(ctx, matched_label);                    // dispatch to this user function when names match case-insensitively
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
