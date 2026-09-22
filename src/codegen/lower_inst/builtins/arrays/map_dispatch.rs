@@ -229,7 +229,6 @@ pub(super) fn emit_descriptor_callback_wrapper(
     return_ty: PhpType,
 ) -> String {
     let wrapper_label = ctx.next_global_label("array_map_descriptor_callback_wrapper");
-    let done_label = ctx.next_label("array_map_descriptor_callback_after_wrapper");
     let wrapper = DeferredCallbackWrapper {
         label: wrapper_label.clone(),
         visible_arg_types,
@@ -239,9 +238,10 @@ pub(super) fn emit_descriptor_callback_wrapper(
         descriptor_return_type: Some(return_ty),
         invocation_scope_class_id: ctx.lexical_class_id(),
     };
-    abi::emit_jump(ctx.emitter, &done_label);
+    // Out of line, not spliced into the caller: see `Emitter::begin_out_of_line`.
+    let scope = ctx.emitter.begin_out_of_line();
     crate::codegen::emit_callback_wrapper(ctx.emitter, &wrapper);
-    ctx.emitter.label(&done_label);
+    ctx.emitter.end_out_of_line(scope);
     wrapper_label
 }
 
