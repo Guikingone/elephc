@@ -301,7 +301,29 @@ pub(in crate::interpreter) fn eval_opcache_compile_file_call(
         return eval_opcache_compile_file_result(values);
     }
     let path = eval_opcache_path_arg(filename, context, scope, values)?;
-    eval_opcache_compile_file_for_path(&path, values)
+    eval_opcache_compile_file_checked(&path, context, values)
+}
+
+/// `opcache_compile_file()` for an already-evaluated path, with php-src's argument check.
+///
+/// AN EMPTY PATH THROWS `ValueError: Path must not be empty` — but only once the cache is
+/// enabled, because reference raises it from the open, after its "not properly started"
+/// notice. MEASURED: enabled, reference throws; disabled, it prints the notice and answers
+/// `false`. Both eval spellings — the direct call and the by-values dispatch — come through
+/// here, so the check exists once.
+pub(in crate::interpreter) fn eval_opcache_compile_file_checked(
+    path: &std::path::Path,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if eval_opcache_cache_enabled() && path.as_os_str().is_empty() {
+        return crate::interpreter::throwables::eval_throw_builtin_value_error(
+            "Path must not be empty",
+            context,
+            values,
+        );
+    }
+    eval_opcache_compile_file_for_path(path, values)
 }
 
 /// Builds the `opcache_compile_file()` return value: `false` (disabled eval cache, no

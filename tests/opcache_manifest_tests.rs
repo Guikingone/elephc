@@ -630,7 +630,8 @@ echo 'self=', var_export(opcache_invalidate(__FILE__), true), "\n";
 // A resolvable NON-manifest path is never reported as cached, however it resolves.
 echo 'cached_empty=', var_export(opcache_is_script_cached(''), true), "\n";
 echo 'cached_tmp=', var_export(opcache_is_script_cached('/tmp'), true), "\n";
-echo 'compile_empty=', var_export(opcache_compile_file(''), true), "\n";
+try { $r = var_export(opcache_compile_file(''), true); } catch (\ValueError $e) { $r = $e->getMessage(); }
+echo 'compile_empty=', $r, "\n";
 "#,
     )
     .unwrap();
@@ -648,7 +649,10 @@ echo 'compile_empty=', var_export(opcache_compile_file(''), true), "\n";
     assert!(out.contains("self=true\n"), "{out}");
     assert!(out.contains("cached_empty=false\n"), "{out}");
     assert!(out.contains("cached_tmp=false\n"), "{out}");
-    assert!(out.contains("compile_empty=false\n"), "{out}");
+    // `opcache_compile_file('')` THROWS once the cache is enabled — reference raises
+    // `ValueError: Path must not be empty` from the open. This row used to pin `false`, which
+    // was never measured: the matrix above is `opcache_invalidate()`'s. MEASURED on 8.5.10.
+    assert!(out.contains("compile_empty=Path must not be empty\n"), "{out}");
 }
 
 /// `opcache.interned_strings_buffer=0` OMITS the whole `interned_strings_usage` key, and every

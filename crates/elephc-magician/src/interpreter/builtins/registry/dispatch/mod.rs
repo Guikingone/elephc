@@ -105,7 +105,7 @@ pub(in crate::interpreter) fn eval_builtin_with_values(
             return Err(EvalStatus::RuntimeFatal);
         };
         let path = eval_opcache_path_value(*filename, values)?;
-        return Ok(Some(eval_opcache_compile_file_for_path(&path, values)?));
+        return Ok(Some(eval_opcache_compile_file_checked(&path, context, values)?));
     }
     if name == "opcache_is_script_cached_in_file_cache" {
         let [filename] = evaluated_args else {

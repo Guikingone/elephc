@@ -352,10 +352,11 @@ fn fill_entry(
             return Ok(segments);
         }
     }
-    let (segments, stored_mtime): (Arc<[ScriptSegment]>, Option<i64>) = match from_disk {
-        Some((cached, stored_mtime)) => (Arc::from(cached), stored_mtime),
-        None => (Arc::from(segment_script(&bytes, ParseMode::Fresh)), None),
-    };
+    let (segments, stored_mtime, stored_revalidate): (Arc<[ScriptSegment]>, Option<i64>, i64) =
+        match from_disk {
+            Some(entry) => (Arc::from(entry.segments), entry.mtime, entry.revalidate),
+            None => (Arc::from(segment_script(&bytes, ParseMode::Fresh)), None, 0),
+        };
     let now = request_now();
     let mut cache = lock_script_cache();
     // A SECOND-LEVEL HIT IS A HIT. php-src's `persistent_compile_file` only reaches
@@ -447,7 +448,14 @@ fn fill_entry(
         // with the real mtime and recompiles. MEASURED across two processes over an unchanged
         // source: reference's reader missed on the library, elephc's hit.
         let recorded = if config.validate_timestamps { mtime } else { Some(0) };
-        super::file_store::store(config, key, recorded, file_size, &segments);
+        super::file_store::store_entry(
+            config,
+            key,
+            recorded,
+            file_size,
+            fresh_revalidate_at(config, now),
+            &segments,
+        );
     }
     let footprint: usize = segments
         .iter()
@@ -475,17 +483,37 @@ fn fill_entry(
                 0
             },
             footprint,
-            hits: 0,
+            // A DISK HIT IS THE SCRIPT'S FIRST HIT. php-src counts it in the aggregate AND in
+            // the script's own `hits`; this counted only the aggregate. MEASURED: seed the disk,
+            // `opcache_compile_file($p)` in a fresh process — reference reports the script's
+            // `hits` as 1, elephc reported 0.
+            hits: u64::from(!parsed_here),
             last_used: now,
-            revalidate_at: if config.validate_timestamps {
-                now.saturating_add(config.revalidate_freq as i64)
+            // A DISK HIT KEEPS ITS WRITER'S DEADLINE rather than opening a new window. php-src
+            // serializes `revalidate` and its loader leaves it alone, so once the writer's window
+            // has passed, the reader re-stats on its next check. Granting a fresh window masked
+            // a change made right after the load. MEASURED: written under `revalidate_freq=0`,
+            // read two seconds later under `60`, source changed after the load — reference
+            // reports it uncached, elephc still vouched for it.
+            revalidate_at: if parsed_here {
+                fresh_revalidate_at(config, now)
             } else {
-                0
+                stored_revalidate
             },
             discarded: false,
         },
     );
     Ok(segments)
+}
+
+/// The revalidation deadline a freshly compiled entry gets: `now + revalidate_freq` under
+/// validation, `0` otherwise — php-src records `revalidate` only when it validates.
+fn fresh_revalidate_at(config: &ScriptCacheConfig, now: i64) -> i64 {
+    if config.validate_timestamps {
+        now.saturating_add(config.revalidate_freq as i64)
+    } else {
+        0
+    }
 }
 
 impl ScriptCache {

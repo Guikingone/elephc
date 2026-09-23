@@ -143,6 +143,51 @@ foreach ($s['scripts'] as $key => $entry) {
 echo 'found=', $found, "\n";
 "#;
 
+/// The "compiled without optional regex support" note is about EVALUATED code, so a program
+/// that links the interpreter only for `opcache_compile_file()` does not get it.
+///
+/// `opcache_compile_file()` links the eval bridge — see the test below — but parses and caches
+/// without running anything, so "evaluated code that uses preg_* will fail" described code the
+/// program cannot contain. The control proves the note still reaches a program that CAN
+/// evaluate code, so the silence is not the note having been removed. Reported by DeepSeek.
+#[test]
+fn the_regex_note_is_only_for_programs_that_evaluate_code() {
+    const NOTE: &str = "dynamic eval was compiled without optional regex support";
+    let compile_stderr = |name: &str, source: &str| -> String {
+        let dir = make_test_dir(name);
+        fs::write(dir.join("lib.php"), "<?php $lib = 1;\n").unwrap();
+        fs::write(dir.join("main.php"), source).unwrap();
+        let output = Command::new(elephc_bin())
+            .env("XDG_CACHE_HOME", dir.join("cache-root"))
+            .current_dir(&dir)
+            .arg(dir.join("main.php"))
+            .arg("--ini")
+            .arg("opcache.enable_cli=1")
+            .output()
+            .expect("failed to spawn elephc");
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8_lossy(&output.stderr).into_owned()
+    };
+
+    let opcache_only = compile_stderr(
+        "opcache_rt_regex_note_opcache_only",
+        "<?php\nvar_dump(opcache_compile_file(__DIR__ . '/lib.php'));\n",
+    );
+    let evaluates = compile_stderr(
+        "opcache_rt_regex_note_eval",
+        "<?php\neval('$x = 1;' . str_repeat(' ', count($argv) - 1));\n",
+    );
+
+    assert!(
+        !opcache_only.contains(NOTE),
+        "an OPcache-only bridge link runs no evaluated code:\n{opcache_only}"
+    );
+    assert!(
+        evaluates.contains(NOTE),
+        "PREMISE: a program that evaluates code still gets the note:\n{evaluates}"
+    );
+}
+
 /// Verifies `opcache_compile_file()` works WITHOUT an `eval()` anywhere in the program.
 ///
 /// Every other test in this file writes an `eval()` to force the eval bridge, which is
@@ -961,6 +1006,51 @@ echo 'second=', var_export(opcache_compile_file($p), true), "\n";
 
     assert_eq!(field(&output, "first"), "true", "the file is compiled:\n{output}");
     assert_eq!(field(&output, "second"), "true", "and still served once deleted:\n{output}");
+}
+
+/// `opcache_compile_file('')` throws `ValueError: Path must not be empty` once the cache is
+/// enabled, on both surfaces — and a disabled cache still answers with its notice.
+///
+/// Reference raises the error from the open, after the "not properly started" notice. elephc
+/// answered `false`: its path normalization turned `''` into the working directory. MEASURED:
+/// enabled, reference throws; disabled, it notices and answers `false`. Found by Kimi.
+///
+/// Separate programs for the two surfaces: a literal name injects the native wrapper, and
+/// every eval'd spelling in that program then resolves to it.
+#[test]
+fn compile_file_refuses_an_empty_path() {
+    let run = |name: &str, probe: &str, ini: &[&str]| -> String {
+        let dir = make_test_dir(name);
+        write_dynamic_fixture(&dir, probe);
+        run_binary(&compile_with_flags(&dir, ini, &["--php-version", "8.5"]))
+    };
+    let native = r#"<?php
+eval('$unrelated = 1;' . str_repeat(' ', count($argv) - 1));
+try { $r = var_export(opcache_compile_file(''), true); }
+catch (\ValueError $e) { $r = $e->getMessage(); }
+echo 'r=', $r, "\n";
+"#;
+    let eval = r#"<?php
+$n = 'opcache_' . 'compile_file';
+try { $r = var_export(eval('return ' . $n . '("");'), true); }
+catch (\ValueError $e) { $r = $e->getMessage(); }
+echo 'r=', $r, "\n";
+"#;
+    let enabled = ["opcache.enable_cli=1"];
+
+    assert_eq!(
+        field(&run("opcache_rt_empty_native", native, &enabled), "r"),
+        "Path must not be empty"
+    );
+    assert_eq!(
+        field(&run("opcache_rt_empty_eval", eval, &enabled), "r"),
+        "Path must not be empty"
+    );
+    assert_eq!(
+        field(&run("opcache_rt_empty_disabled", native, &[]), "r"),
+        "false",
+        "a disabled cache answers with its notice, before the path is looked at"
+    );
 }
 
 /// The NATIVE `opcache_compile_file()` names the real failure for a file under a directory

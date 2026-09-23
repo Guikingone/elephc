@@ -37,7 +37,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// written by a different eval-IR shape can decode into plausible-looking garbage rather
 /// than failing, and the result would be executed. `super::format_guard` fails the build's
 /// tests when the IR changes without this moving, so the bump is not left to memory.
-pub(crate) const FORMAT_VERSION: u32 = 2;
+///
+/// BUMPED TO 3 BY HAND for a HEADER change the IR fingerprint cannot see: `CacheFile` gained
+/// `revalidate`. `format_guard` fingerprints the eval IR, not this struct, so an entry written
+/// as version 2 would decode its `segments` from the wrong offset if this did not move.
+pub(crate) const FORMAT_VERSION: u32 = 3;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///
@@ -63,6 +67,9 @@ struct CacheFile {
     mtime: Option<i64>,
     /// The source's length when the entry was written.
     size: u64,
+    /// The revalidation deadline the writer recorded (`0` when it did not validate). php-src
+    /// serializes `dynamic_members.revalidate` with the script, and a reader keeps it.
+    revalidate: i64,
     /// The parsed script.
     segments: Vec<ScriptSegment>,
 }
@@ -127,7 +134,17 @@ pub(crate) fn load(
     mtime: Option<i64>,
     size: u64,
 ) -> Option<Vec<ScriptSegment>> {
-    load_entry(config, canonical, mtime, size).map(|(segments, _)| segments)
+    load_entry(config, canonical, mtime, size).map(|entry| entry.segments)
+}
+
+/// One entry read back from disk, with the validation state its writer recorded.
+pub(crate) struct DiskEntry {
+    pub(crate) segments: Vec<ScriptSegment>,
+    /// The recorded timestamp — `0` when the writer did not validate.
+    pub(crate) mtime: Option<i64>,
+    /// The writer's revalidation deadline. A disk hit KEEPS it rather than opening a new
+    /// window: php-src's loader updates `last_used` and leaves `revalidate` as stored.
+    pub(crate) revalidate: i64,
 }
 
 /// [`load`], also answering the TIMESTAMP THE ENTRY WAS STORED WITH.
@@ -143,7 +160,7 @@ pub(crate) fn load_entry(
     canonical: &Path,
     mtime: Option<i64>,
     size: u64,
-) -> Option<(Vec<ScriptSegment>, Option<i64>)> {
+) -> Option<DiskEntry> {
     let dir = cache_dir(config)?;
     let bytes = std::fs::read(entry_path(&dir, canonical)).ok()?;
     // The header is checked on the RAW BYTES, before anything is decoded. The same two fields
@@ -202,7 +219,11 @@ pub(crate) fn load_entry(
         }
         return None;
     }
-    Some((cached.segments, cached.mtime))
+    Some(DiskEntry {
+        segments: cached.segments,
+        mtime: cached.mtime,
+        revalidate: cached.revalidate,
+    })
 }
 
 /// Writes a script's segments to the file cache, doing nothing when it cannot.
@@ -210,11 +231,27 @@ pub(crate) fn load_entry(
 /// Silent by design: `opcache.file_cache_read_only` forbids writing, a missing directory is
 /// created if possible, and any I/O failure leaves the caller with a working — merely
 /// uncached — include.
+///
+/// Test-only since round 10: production writes go through [`store_entry`], which also records
+/// the revalidation deadline.
+#[cfg(test)]
 pub(crate) fn store(
     config: &ScriptCacheConfig,
     canonical: &Path,
     mtime: Option<i64>,
     size: u64,
+    segments: &[ScriptSegment],
+) {
+    store_entry(config, canonical, mtime, size, 0, segments);
+}
+
+/// [`store`], also recording the writer's revalidation deadline. See [`DiskEntry::revalidate`].
+pub(crate) fn store_entry(
+    config: &ScriptCacheConfig,
+    canonical: &Path,
+    mtime: Option<i64>,
+    size: u64,
+    revalidate: i64,
     segments: &[ScriptSegment],
 ) {
     if super::file_cache::file_cache_config().read_only {
@@ -232,6 +269,7 @@ pub(crate) fn store(
         path: canonical.to_string_lossy().into_owned(),
         mtime,
         size,
+        revalidate,
         segments: segments.to_vec(),
     };
     let Ok(bytes) = bincode::serialize(&payload) else {
@@ -508,6 +546,32 @@ mod tests {
 
         let theirs = Path::new("/tmp/elephc-file-store-theirs.php");
         assert!(load(&config, theirs, Some(42), source.len() as u64).is_none());
+    }
+
+    /// Verifies an entry written under an older FORMAT_VERSION is refused, not decoded.
+    ///
+    /// This is what makes a version bump protective. Round 10 added `revalidate` to the header
+    /// and bumped the version by hand, because the IR fingerprint cannot see a header change;
+    /// an entry written by the previous build would otherwise have decoded `segments` from the
+    /// wrong offset.
+    #[test]
+    fn an_entry_from_an_older_format_version_is_refused() {
+        let (config, dir) = configure("old_version", false);
+        let source = b"<?php $a = 1;";
+        let segments = segment_script(source, ParseMode::Fresh);
+        let path = Path::new("/tmp/elephc-file-store-old-version.php");
+        store(&config, path, Some(42), source.len() as u64, &segments);
+        assert!(load(&config, path, Some(42), source.len() as u64).is_some(), "PREMISE");
+
+        let entry = entry_path(&dir.join(system_id()), path);
+        let mut bytes = std::fs::read(&entry).expect("the entry is on disk");
+        bytes[8..12].copy_from_slice(&(FORMAT_VERSION - 1).to_le_bytes());
+        std::fs::write(&entry, &bytes).expect("rewritable");
+
+        assert!(
+            load(&config, path, Some(42), source.len() as u64).is_none(),
+            "an entry from another format version must never be decoded"
+        );
     }
 
     /// Verifies a read that finds a STALE entry removes it, so no later read can serve it.

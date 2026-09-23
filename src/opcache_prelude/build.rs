@@ -887,6 +887,20 @@ pub(crate) fn compile_file_decl(enabled: bool, manifest_paths: Expr) -> Stmt {
         vec![],
         None,
     )];
+    // AN EMPTY PATH THROWS, after the notice above and before anything is resolved: reference
+    // raises `ValueError: Path must not be empty` from the open, so a disabled cache still
+    // answers with the notice. MEASURED both ways; elephc answered `false` where reference
+    // throws. Without this, path normalization would turn `''` into the working directory.
+    body.push(s_if(
+        e_binop(
+            e_cast(CastType::String, e_var("filename")),
+            BinOp::StrictEq,
+            e_str(""),
+        ),
+        vec![s_throw(e_new("ValueError", vec![e_str("Path must not be empty")]))],
+        vec![],
+        None,
+    ));
     // BOTH ARMS ASK THE RUNTIME TIER, and the runtime tier owns the warnings.
     //
     // An unresolvable path is not necessarily uncached: a deleted script can still be a warm

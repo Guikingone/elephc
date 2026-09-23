@@ -72,6 +72,26 @@ fn compile_configures_a_live_file_cache() -> bool {
 
 /// Derives optional runtime features from the actual EIR instruction stream.
 pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
+    lowered_runtime_features_with(module, true)
+}
+
+/// Whether this program can EXECUTE interpreted code: `eval()`, a dynamic include, anything
+/// that runs through the interpreter — as opposed to linking it only for an OPcache operation.
+///
+/// `opcache_compile_file()` and the file-cache operations link the eval bridge (see below) but
+/// execute nothing through it: `opcache_compile_file()` parses and caches without running.
+/// The post-link note that "evaluated code that uses preg_* will fail" was printed for them
+/// too, about code such a program cannot run. Reported by DeepSeek.
+///
+/// Called only by the compiler binary's pipeline, which the lib target does not include, hence
+/// the dead-code allowance there.
+#[allow(dead_code)]
+pub(crate) fn module_runs_interpreted_code(module: &Module) -> bool {
+    lowered_runtime_features_with(module, false).eval_bridge
+}
+
+/// [`lowered_runtime_features`], optionally leaving out the OPcache operations' bridge links.
+fn lowered_runtime_features_with(module: &Module, count_opcache_links: bool) -> RuntimeFeatures {
     let mut features = RuntimeFeatures::none();
     // Computed lazily and once: only a program that names a file-cache operation pays for it.
     let mut live_file_cache: Option<bool> = None;
@@ -98,7 +118,7 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                     // pay-for-use means — and no wider than that: with OPcache disabled at
                     // compile time the prelude's own gate short-circuits before this call is
                     // ever emitted, so a disabled build never reaches here and stays small.
-                    if runtime_call_targets_opcache_compile(inst) {
+                    if count_opcache_links && runtime_call_targets_opcache_compile(inst) {
                         features.eval_bridge = true;
                     }
                     // THE SAME ARGUMENT, FOR THE DISK. `is_cached` and `discard` may fold
@@ -112,7 +132,8 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                     //
                     // Gated on the compile-time configuration, so a build with no file cache —
                     // php-src's default — still folds and stays small.
-                    if runtime_call_reaches_the_file_cache(inst)
+                    if count_opcache_links
+                        && runtime_call_reaches_the_file_cache(inst)
                         && *live_file_cache.get_or_insert_with(compile_configures_a_live_file_cache)
                     {
                         features.eval_bridge = true;

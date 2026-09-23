@@ -565,6 +565,61 @@ fn the_blacklist_does_not_bypass_a_disk_entry() {
     assert_eq!(shape(&load_script(&path).unwrap()), ["code"], "the stored A is served");
 }
 
+/// Verifies a DISK HIT keeps its writer's revalidation deadline instead of a fresh window.
+///
+/// php-src serializes `revalidate` and its loader leaves it alone. Granting a new window at
+/// load masked a change made right after it. MEASURED: written under `revalidate_freq=0`,
+/// read two seconds later under `60`, source changed after the load — reference reports the
+/// script uncached. And the other direction, written AND read under `60` at once: reference
+/// still vouches for it, the stored window being open. Driven by the request clock, so the
+/// "two seconds later" is a stamp rather than a sleep.
+#[test]
+fn a_disk_hit_keeps_its_writers_deadline() {
+    let _guard = test_lock();
+    with_file_cache("disk_deadline");
+    set_config(enabled_config(0));
+    stamp_request_time(1_000_000);
+    let path = write_fixture("disk_deadline", "<?php $x = 1;");
+    set_mtime(&path, 999_000);
+    load_script(&path).expect("the writer stores the entry, deadline 1_000_000");
+    forget_memory();
+
+    set_config(enabled_config(60));
+    stamp_request_time(1_000_005);
+    load_script(&path).expect("the reader loads it from disk");
+    set_mtime(&path, 900_000);
+
+    assert!(
+        !is_cached(&path),
+        "the writer's deadline has passed: the moved timestamp must be seen at once"
+    );
+}
+
+/// Verifies a DISK HIT counts in the script's own `hits`, not only in the aggregate.
+///
+/// MEASURED: seed the disk, `opcache_compile_file($p)` in a fresh process — reference reports
+/// the script's `hits` as 1; elephc reported 0 while its aggregate said 1.
+#[test]
+fn a_disk_hit_counts_its_first_hit() {
+    let _guard = test_lock();
+    with_file_cache("disk_hit_count");
+    set_config(enabled_config(0));
+    let path = write_fixture("disk_hit_count", "<?php $x = 1;");
+    set_mtime(&path, 1_000_000);
+    load_script(&path).expect("the writer stores the entry on disk");
+    forget_memory();
+
+    load_script(&path).expect("the reader loads it from disk");
+
+    let scripts = cached_scripts();
+    assert_eq!(scripts.len(), 1, "the disk hit is admitted");
+    assert_eq!(
+        (scripts[0].hits, stats().hits),
+        (1, 1),
+        "the script's own counter and the aggregate both count the disk hit"
+    );
+}
+
 /// Verifies `file_update_protection` does not refuse an EXISTING disk entry.
 ///
 /// The guard keeps a part-written file out of the cache; a disk hit's bytes were admitted by
