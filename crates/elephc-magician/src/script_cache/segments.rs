@@ -130,13 +130,148 @@ fn is_php_open_tag(window: &[u8]) -> bool {
         && window[4].eq_ignore_ascii_case(&b'p')
 }
 
-/// Finds the next PHP closing tag after a code block start.
+/// Finds the `?>` that ENDS the code block starting at `start`, as PHP's lexer does.
+///
+/// A `?>` inside a single-quoted, double-quoted or backtick string, a `/* */` comment, or a
+/// heredoc / nowdoc body is part of that token and does not close the block. One inside a `//`
+/// or `#` line comment DOES — PHP's own rule, and why a line comment is scanned for it rather
+/// than skipped. A plain byte search split `<?php echo "?>";` at the quote and handed the parser
+/// ` echo "` — an unterminated string — so a valid file failed to include and
+/// `opcache_compile_file()` refused it. MEASURED: reference prints `a?>b c?>d done` and compiles
+/// the file; elephc raised a parse error. The same naive search predates this module (it lived
+/// in `include_exec`), so every include was affected, not only the cache.
+///
+/// An unterminated string or comment runs to the end of the file, as in PHP: there is no
+/// closing tag, and the parser reports whatever is wrong with the code.
 pub(crate) fn find_php_close_tag(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut i = start;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'?' if bytes.get(i + 1) == Some(&b'>') => return Some(i),
+            b'\'' | b'"' | b'`' => i = skip_quoted(bytes, i)?,
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                i = find_from(bytes, i + 2, b"*/")? + 2;
+            }
+            b'/' if bytes.get(i + 1) == Some(&b'/') => {
+                if let Some(close) = scan_line_comment(bytes, i + 2) {
+                    return Some(close);
+                }
+                i = next_line(bytes, i + 2);
+            }
+            // `#[` opens an attribute, which is code; any other `#` is a line comment.
+            b'#' if bytes.get(i + 1) != Some(&b'[') => {
+                if let Some(close) = scan_line_comment(bytes, i + 1) {
+                    return Some(close);
+                }
+                i = next_line(bytes, i + 1);
+            }
+            b'<' if bytes[i..].starts_with(b"<<<") => match skip_heredoc(bytes, i + 3) {
+                Some(end) => i = end,
+                None => i += 3,
+            },
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// Returns the index just past the closing quote of the string opening at `open`, or `None`
+/// when it never closes. A backslash escapes the next byte in all three quote styles.
+fn skip_quoted(bytes: &[u8], open: usize) -> Option<usize> {
+    let quote = bytes[open];
+    let mut i = open + 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2,
+            byte if byte == quote => return Some(i + 1),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// Returns the offset of `needle` at or after `from`.
+fn find_from(bytes: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
     bytes
-        .get(start..)?
-        .windows(2)
-        .position(|window| window == b"?>")
-        .map(|offset| start + offset)
+        .get(from..)?
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .map(|offset| from + offset)
+}
+
+/// Returns the `?>` that ends a line comment before its newline, if there is one.
+fn scan_line_comment(bytes: &[u8], from: usize) -> Option<usize> {
+    let mut i = from;
+    while i < bytes.len() && bytes[i] != b'\n' {
+        if bytes[i] == b'?' && bytes.get(i + 1) == Some(&b'>') {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Returns the index just past the newline ending the line that contains `from`.
+fn next_line(bytes: &[u8], from: usize) -> usize {
+    find_from(bytes, from, b"\n").map_or(bytes.len(), |newline| newline + 1)
+}
+
+/// Whether `byte` can continue a PHP label.
+fn is_label_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_' || byte >= 0x80
+}
+
+/// Skips a heredoc or nowdoc whose `<<<` ends at `after_marker`, returning the index just past
+/// its closing label. `None` when this is not a heredoc opener — the caller then treats `<<<`
+/// as ordinary code. The closing label may be indented and is followed by any non-label byte,
+/// as PHP 7.3+ allows.
+fn skip_heredoc(bytes: &[u8], after_marker: usize) -> Option<usize> {
+    let mut i = after_marker;
+    while matches!(bytes.get(i), Some(b' ' | b'\t')) {
+        i += 1;
+    }
+    let quote = match bytes.get(i) {
+        Some(&q @ (b'\'' | b'"')) => {
+            i += 1;
+            Some(q)
+        }
+        _ => None,
+    };
+    let label_start = i;
+    while bytes.get(i).is_some_and(|&byte| is_label_byte(byte)) {
+        i += 1;
+    }
+    let label = &bytes[label_start..i];
+    if label.is_empty() || label[0].is_ascii_digit() {
+        return None;
+    }
+    if let Some(q) = quote {
+        if bytes.get(i) != Some(&q) {
+            return None;
+        }
+        i += 1;
+    }
+    if bytes.get(i) == Some(&b'\r') {
+        i += 1;
+    }
+    if bytes.get(i) != Some(&b'\n') {
+        return None;
+    }
+    let mut line = i + 1;
+    while line < bytes.len() {
+        let mut j = line;
+        while matches!(bytes.get(j), Some(b' ' | b'\t')) {
+            j += 1;
+        }
+        if bytes[j..].starts_with(label)
+            && !bytes.get(j + label.len()).is_some_and(|&byte| is_label_byte(byte))
+        {
+            return Some(j + label.len());
+        }
+        line = next_line(bytes, line);
+    }
+    // Never closed: the body runs to the end of the file, so there is no closing tag.
+    Some(bytes.len())
 }
 
 #[cfg(test)]
@@ -172,6 +307,65 @@ mod tests {
                 ScriptSegment::ParseError(error) => format!("err({error:?})"),
             })
             .collect()
+    }
+
+    /// Verifies a `?>` inside a string, a block comment or a heredoc does NOT close PHP mode.
+    ///
+    /// A plain byte search split `<?php echo "?>";` at the quote and handed the parser an
+    /// unterminated string, so a valid file could not be included or compiled. MEASURED:
+    /// reference runs `<?php echo "a?>b", 'c?>d';` and prints both strings whole.
+    #[test]
+    fn a_quoted_close_tag_does_not_end_the_block() {
+        let sources: [&[u8]; 3] = [
+            b"<?php echo \"a?>b\"; ?>tail",
+            b"<?php echo 'c?>d'; ?>tail",
+            b"<?php /* ?> */ $x = 1; ?>tail",
+        ];
+        for source in sources {
+            assert_eq!(
+                shape(&segment_script_fresh(source)),
+                ["code", "out(tail)"],
+                "{}",
+                String::from_utf8_lossy(source)
+            );
+        }
+        // Three more shapes, checked on the SEARCH rather than the segment shape: the eval
+        // parser accepts neither shell-exec backticks nor heredoc/nowdoc (a separate gap —
+        // even a heredoc with no `?>` in it fails there), so those blocks would be parse
+        // errors either way. What matters here is that their `?>` is not taken as the close.
+        let searched: [(&[u8], usize); 3] = [
+            (b"<?php $s = `echo ?>`; ?>tail", 22),
+            (b"<?php $h = <<<EOT\n?>\nEOT;\n?>tail", 26),
+            (b"<?php $n = <<<'EOT'\n  ?>\n  EOT;\n?>tail", 32),
+        ];
+        for (source, close) in searched {
+            assert_eq!(
+                find_php_close_tag(source, 5),
+                Some(close),
+                "{}",
+                String::from_utf8_lossy(source)
+            );
+        }
+    }
+
+    /// Verifies a `?>` inside a `//` or `#` line comment DOES close PHP mode, as PHP specifies,
+    /// while `#[` opens an attribute rather than a comment. MEASURED: reference ends the block
+    /// at a line comment's `?>` and prints the rest of the line.
+    #[test]
+    fn a_line_comment_close_tag_ends_the_block() {
+        assert_eq!(
+            shape(&segment_script_fresh(b"<?php // note ?>after")),
+            ["code", "out(after)"]
+        );
+        assert_eq!(
+            shape(&segment_script_fresh(b"<?php # note ?>after")),
+            ["code", "out(after)"]
+        );
+        assert_eq!(
+            shape(&segment_script_fresh(b"<?php #[Attr('?>')] function f() {} ?>after")),
+            ["code", "out(after)"],
+            "an attribute's quoted `?>` is inside a string, not a comment"
+        );
     }
 
     /// Verifies a file with no PHP tag is one literal output segment.

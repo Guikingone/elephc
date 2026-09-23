@@ -55,7 +55,9 @@ mod tests {
     /// shape the branch recorded before the rebase. The guard caught it, which is what it is
     /// for, and the bump is what keeps a file written by a pre-rebase build from decoding
     /// into a plausible but wrong tree.
-    const RECORDED_FINGERPRINT: u64 = 11209568487233996037;
+    /// BUMPED TO 4 WITH THIS VALUE: round 12 rewrote `segments.rs`'s close-tag search. The
+    /// stored shape did not move, but this guard does not judge that, by design.
+    const RECORDED_FINGERPRINT: u64 = 11344301316066230981;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

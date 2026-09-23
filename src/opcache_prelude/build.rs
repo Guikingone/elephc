@@ -960,8 +960,9 @@ pub(crate) fn compile_file_decl(enabled: bool, manifest_paths: Expr) -> Stmt {
         .build()
 }
 
-/// `opcache_is_script_cached_in_file_cache($filename)`: always `false`, which is EXACT — php-src
-/// gates the whole function on `opcache.file_cache`, which has no default.
+/// `opcache_is_script_cached_in_file_cache($filename)`: whether a usable entry for the path is
+/// on disk under `opcache.file_cache`, asked of the runtime tier. With no file cache configured
+/// — php-src's default, the directive having no value — the answer is `false` for every path.
 pub(crate) fn is_script_cached_in_file_cache_decl() -> Stmt {
     let mut body = vec![];
     body.extend(path_normalization_stmts());

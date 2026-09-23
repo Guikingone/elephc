@@ -41,7 +41,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// BUMPED TO 3 BY HAND for a HEADER change the IR fingerprint cannot see: `CacheFile` gained
 /// `revalidate`. `format_guard` fingerprints the eval IR, not this struct, so an entry written
 /// as version 2 would decode its `segments` from the wrong offset if this did not move.
-pub(crate) const FORMAT_VERSION: u32 = 3;
+///
+/// BUMPED TO 4 because `format_guard` fingerprints `segments.rs`'s SOURCE, and round 12 changed
+/// it — the close-tag search, not the `ScriptSegment` shape. The guard's rule is to bump on any
+/// fingerprint change from an IR file rather than judge which ones matter; an unneeded bump
+/// costs one cold parse per cached script.
+pub(crate) const FORMAT_VERSION: u32 = 4;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

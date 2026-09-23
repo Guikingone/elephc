@@ -198,11 +198,12 @@ fn prefix_matches(pattern: &str, path: &str) -> bool {
 
 /// Expands the directive value as a `glob()` over blacklist FILES and loads each match.
 ///
-/// php-src calls `glob()` here, whose wildcards stay INSIDE one path component. Only the
-/// final component is expanded: a wildcard in a DIRECTORY component is the one part of
-/// `glob()` not reproduced, because it would mean walking the tree for a shape no real
-/// configuration uses. Such a value finds no file and takes the warning path below, which
-/// is the same outcome php-src reaches whenever a pattern matches nothing.
+/// php-src calls `glob()` here, whose wildcards stay INSIDE one path component — but may sit in
+/// ANY component. Only the final one used to be expanded, on the reasoning that a wildcard in a
+/// directory "is a shape no real configuration uses"; one list per team or per app directory is
+/// exactly that shape. Such a value loaded nothing, and the scripts it listed stayed cacheable.
+/// MEASURED with `lists/*/bl.txt`: reference loads the entry and leaves the script uncached;
+/// elephc loaded nothing and cached it.
 ///
 /// Files are read as BYTES and converted lossily, never through `read_to_string`: a single
 /// non-UTF-8 byte used to drop the whole file — silently losing every valid line in it — and
@@ -212,11 +213,6 @@ fn prefix_matches(pattern: &str, path: &str) -> bool {
 /// Each match is returned with its own directory, because a relative entry inside a blacklist
 /// file resolves against THAT file's location rather than the process cwd.
 fn expand_and_read(value: &str) -> Vec<(PathBuf, String)> {
-    let mut contents = Vec::new();
-    let path = Path::new(value);
-    let Some(file_pattern) = path.file_name().and_then(|name| name.to_str()) else {
-        return contents;
-    };
     let read_lossy = |file: &Path| -> Option<(PathBuf, String)> {
         let bytes = std::fs::read(file).ok()?;
         // The file's REAL directory. A relative entry resolves against it, and the paths it
@@ -229,34 +225,73 @@ fn expand_and_read(value: &str) -> Vec<(PathBuf, String)> {
             .unwrap_or_else(|| PathBuf::from("."));
         Some((dir, String::from_utf8_lossy(&bytes).into_owned()))
     };
-    if !is_glob(file_pattern) {
-        // A literal path: read it directly rather than listing its parent.
-        if let Some(entry) = read_lossy(path) {
-            contents.push(entry);
-        }
-        return contents;
+    glob_paths(Path::new(value))
+        .iter()
+        .filter_map(|file| read_lossy(file))
+        .collect()
+}
+
+/// `glob()` over `pattern`, expanding a wildcard in ANY component, and returning the matches
+/// sorted as `glob()` sorts them.
+///
+/// Walks one component at a time: a literal component is appended to every candidate, and a
+/// wildcard one lists each candidate directory and keeps the entries `component_matches`
+/// accepts. Every intermediate match must be a directory; the final ones may be anything, and
+/// reading them is what filters out whatever is not a file. A pattern with no wildcard at all
+/// is returned as is, so a literal path is read directly rather than listed.
+fn glob_paths(pattern: &Path) -> Vec<PathBuf> {
+    let components: Vec<_> = pattern.components().collect();
+    let has_wildcard = components.iter().any(|component| match component {
+        std::path::Component::Normal(name) => name.to_str().is_some_and(is_glob),
+        _ => false,
+    });
+    if !has_wildcard {
+        return vec![pattern.to_path_buf()];
     }
-    let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
-    let dir = parent.unwrap_or_else(|| Path::new("."));
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return contents;
-    };
+    let mut candidates = vec![PathBuf::new()];
+    let last = components.len().saturating_sub(1);
+    for (index, component) in components.iter().enumerate() {
+        let std::path::Component::Normal(name) = component else {
+            for candidate in &mut candidates {
+                candidate.push(component.as_os_str());
+            }
+            continue;
+        };
+        let Some(name) = name.to_str().filter(|name| is_glob(name)) else {
+            for candidate in &mut candidates {
+                candidate.push(name);
+            }
+            continue;
+        };
+        let mut next = Vec::new();
+        for candidate in &candidates {
+            let dir = if candidate.as_os_str().is_empty() {
+                Path::new(".")
+            } else {
+                candidate.as_path()
+            };
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let Some(entry_name) = entry.file_name().to_str().map(str::to_string) else {
+                    continue;
+                };
+                if !component_matches(name, &entry_name) {
+                    continue;
+                }
+                if index != last && !entry.path().is_dir() {
+                    continue;
+                }
+                next.push(candidate.join(&entry_name));
+            }
+        }
+        candidates = next;
+    }
     // Sorted so that a configuration whose files disagree loads them in a stable order,
     // and so the tests do not depend on directory iteration order.
-    let mut matched: Vec<_> = entries
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name().to_str()?.to_string();
-            component_matches(file_pattern, &name).then(|| entry.path())
-        })
-        .collect();
-    matched.sort();
-    for file in matched {
-        if let Some(entry) = read_lossy(&file) {
-            contents.push(entry);
-        }
-    }
-    contents
+    candidates.sort();
+    candidates
 }
 
 /// Whether a filename component carries any `glob()` metacharacter.
@@ -826,6 +861,30 @@ mod tests {
         assert!(blocks(std::path::Path::new("/srv/one.php")));
         assert!(blocks(std::path::Path::new("/srv/two.php")));
         assert!(!blocks(std::path::Path::new("/srv/three.php")));
+    }
+
+    /// A wildcard in a DIRECTORY component is expanded too, as `glob()` does.
+    ///
+    /// Only the final component used to be expanded, so `lists/*/bl.txt` loaded nothing and the
+    /// scripts it listed stayed cacheable. MEASURED: reference loads the entry and leaves the
+    /// script uncached. The dotfile directory must stay hidden, as `glob()` hides it.
+    #[test]
+    fn a_wildcard_directory_component_is_expanded() {
+        let dir = scratch("dir_wildcard");
+        for (team, script) in [("team-a", "/srv/a.php"), ("team-b", "/srv/b.php"), (".hidden", "/srv/h.php")] {
+            std::fs::create_dir_all(dir.join(team)).unwrap();
+            std::fs::write(dir.join(team).join("bl.txt"), format!("{script}\n")).unwrap();
+        }
+        reset_for_tests();
+
+        load(&format!("{}/*/bl.txt", dir.display()));
+
+        assert!(blocks(std::path::Path::new("/srv/a.php")), "team-a's list is loaded");
+        assert!(blocks(std::path::Path::new("/srv/b.php")), "and team-b's");
+        assert!(
+            !blocks(std::path::Path::new("/srv/h.php")),
+            "a `*` does not match a leading dot, in a directory any more than in a file name"
+        );
     }
 
     /// A value with no wildcard is a literal path, read directly.

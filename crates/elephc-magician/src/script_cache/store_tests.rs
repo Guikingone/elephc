@@ -703,6 +703,39 @@ fn a_pending_restart_still_writes_the_disk_cache() {
     );
 }
 
+/// Verifies `invalidate` reports the MEMORY entry it found, never the disk removal.
+///
+/// php-src's `zend_accel_invalidate` answers `file_found` — the path resolved, or the memory
+/// hash held a live entry — and removes the disk entry without reporting it. MEASURED across two
+/// processes: seed the disk, unlink the source, `opcache_invalidate($p, true)` in a fresh
+/// process — reference `false`, elephc `true`; both removed the disk entry.
+#[test]
+fn invalidating_a_disk_only_entry_reports_nothing_found() {
+    let _guard = test_lock();
+    with_file_cache("disk_only_invalidate");
+    set_config(enabled_config(0));
+    let path = write_fixture("disk_only_invalidate", "<?php $x = 1;");
+    set_mtime(&path, 1_000_000);
+    load_script(&path).expect("the writer stores the entry on disk");
+    forget_memory();
+    let key = cache_key(&path);
+    std::fs::remove_file(&path).expect("fixture should be removable");
+    let unvalidated = ScriptCacheConfig {
+        validate_timestamps: false,
+        ..enabled_config(0)
+    };
+    assert!(
+        crate::script_cache::file_store::load(&unvalidated, &key, None, 0).is_some(),
+        "PREMISE: the entry is on disk and nothing is in memory"
+    );
+
+    assert!(!invalidate(&path, true), "no memory entry, and the path no longer resolves");
+    assert!(
+        crate::script_cache::file_store::load(&unvalidated, &key, None, 0).is_none(),
+        "the disk entry is still removed"
+    );
+}
+
 /// Verifies `file_update_protection` does not refuse an EXISTING disk entry.
 ///
 /// The guard keeps a part-written file out of the cache; a disk hit's bytes were admitted by

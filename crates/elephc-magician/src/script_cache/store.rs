@@ -666,11 +666,11 @@ pub fn discard(path: &Path) -> bool {
 /// settled that too: reference serves the stored script there, so there is one definition
 /// of "changed" in this crate, and it is php-src's.
 ///
-/// RETURNS THE EVICTION, NOT THE PHP ANSWER. `opcache_invalidate()` reports whether the
-/// PATH RESOLVES, which is a question about the filesystem and not about the cache; that
-/// stays with the builtin, where the rest of the PHP-visible behaviour lives. This reports
-/// whether an entry was actually dropped, which is what a caller here can use and what a
-/// test can assert on.
+/// RETURNS THE CACHE HALF OF THE PHP ANSWER. `opcache_invalidate()` reports "the path
+/// resolves, OR a live memory entry was found"; the resolution half is a filesystem question
+/// and stays with the builtin. This answers the other half — whether a live MEMORY entry was
+/// present when the call began — and never counts the disk removal, which php-src performs
+/// but does not report.
 pub fn invalidate(path: &Path, force: bool) -> bool {
     let key = cache_key(path);
     // THE ON-DISK ENTRY GOES FIRST, AND UNCONDITIONALLY. php-src calls
@@ -683,9 +683,18 @@ pub fn invalidate(path: &Path, force: bool) -> bool {
     // That ordering is the point rather than an accident. The in-memory entry dies with the
     // process; the disk entry outlives it, so leaving one behind is how an invalidated
     // script comes back in the next process — the failure the call exists to prevent.
-    let removed = super::file_store::invalidate(&config(), &key);
+    //
+    // THE ANSWER IS THE MEMORY ENTRY, read BEFORE anything is removed. php-src's
+    // `zend_accel_invalidate` reports `file_found`: the path resolved, or the shared-memory
+    // hash held a live entry. The disk removal never counts — reference deletes the disk entry
+    // of a deleted, uncached file and still answers `false`. This returned `was_live ||
+    // removed`, so a disk-only deletion read as success. MEASURED across two processes: seed
+    // the disk, unlink the source, `opcache_invalidate($p, true)` in a fresh process —
+    // reference `false`, elephc `true`; both removed the disk entry.
+    let was_live = is_present(&key);
+    super::file_store::invalidate(&config(), &key);
     if !force && config().validate_timestamps && !entry_is_stale(&key) {
-        return removed;
+        return was_live;
     }
     // A SECOND INVALIDATE RETIRES NOTHING. `discard` answers whether an entry is PRESENT,
     // which stays true once the latch is set, so chaining it here reported success for a
@@ -698,9 +707,8 @@ pub fn invalidate(path: &Path, force: bool) -> bool {
     // file exists to retire. MEASURED, `validate_timestamps=1, revalidate_freq=0`:
     // `opcache_compile_file($p); unlink($p); opcache_invalidate($p, true)` answers `true` in
     // reference and answered `false` here.
-    let was_live = is_present(&key);
     discard(&key);
-    was_live || removed
+    was_live
 }
 
 /// Returns whether `key`'s entry no longer matches the file on disk — php-src's

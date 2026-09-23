@@ -1297,10 +1297,14 @@ impl RuntimeFnId {
                     | crate::ir::Effects::READS_FS.bits()
                     | crate::ir::Effects::WRITES_FS.bits(),
             ),
+            // Both halves of `opcache_invalidate()` also REMOVE the on-disk entry, and the
+            // non-forced one stats the source to decide.
             RuntimeFnId::ElephcOpcacheRtDiscard | RuntimeFnId::ElephcOpcacheRtSoftInvalidate => {
                 crate::ir::Effects::from_bits_retain(
                     crate::ir::Effects::READS_GLOBAL.bits()
-                        | crate::ir::Effects::WRITES_GLOBAL.bits(),
+                        | crate::ir::Effects::WRITES_GLOBAL.bits()
+                        | crate::ir::Effects::READS_FS.bits()
+                        | crate::ir::Effects::WRITES_FS.bits(),
                 )
             }
             // `compile` also READS the source and WARNS when it cannot open it: the bridge
