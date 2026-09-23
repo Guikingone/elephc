@@ -2961,7 +2961,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if target == source {
             return;
         }
-        if matches!(self.local_type(source).codegen_repr(), PhpType::Object(_)) {
+        // An existing reference can point into an object property whose payload remains raw.
+        // Reboxing that shared cell here would make property reads treat a box as an object.
+        if !self.is_ref_bound_local(source)
+            && matches!(self.local_type(source).codegen_repr(), PhpType::Object(_))
+        {
             self.promote_local_mixed_ref_cell(source, span);
         }
         let source_ty = self.local_type(source);

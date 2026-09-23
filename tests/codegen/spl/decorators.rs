@@ -796,6 +796,23 @@ foreach ($append as $key => $value) {
     );
 }
 
+/// ArrayAccess dispatch passes a boxed value to the AppendIterator storage view.
+#[test]
+fn test_append_iterator_storage_offset_set_through_array_access() {
+    let out = compile_and_run(
+        r#"<?php
+function install(ArrayAccess $storage, Iterator $iterator): void {
+    $storage->offsetSet(7, $iterator);
+}
+$append = new AppendIterator();
+$storage = $append->getArrayIterator();
+install($storage, new ArrayIterator(["key" => 42]));
+echo $storage->count(), ":", $storage->offsetGet(7)->current();
+"#,
+    );
+    assert_eq!(out, "1:42");
+}
+
 /// Verifies that multiple iterator need any numeric outputs null for exhausted sources.
 #[test]
 fn test_multiple_iterator_need_any_numeric_outputs_null_for_exhausted_sources() {
