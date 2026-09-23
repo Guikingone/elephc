@@ -39,10 +39,8 @@ impl Checker {
     /// same way it does for a first-class callable. Pass `None` where that registration does
     /// not apply (variadic elements, spread-expanded positions).
     ///
-    /// `by_ref` must be true for a pass-by-reference parameter. PHP coerces those in place and
-    /// writes the converted value back to the caller's variable; elephc's binding produces a
-    /// temporary instead, so a by-reference parameter stays on the strict path rather than
-    /// silently dropping the callee's writes.
+    /// `by_ref` must be true for a pass-by-reference parameter. Those arguments retain a shared
+    /// caller cell; boxed object references defer value validation to the entry guard.
     ///
     /// When the call site's file declared `strict_types=1`, the strict rejection runs first and
     /// no coercive binding is considered at all.
@@ -63,6 +61,12 @@ impl Checker {
     ) -> Result<(), CompileError> {
         self.require_strict_types_param_binding(expected, actual, arg.span, context)?;
         if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
+            return Ok(());
+        }
+        if by_ref && matches!(expected, PhpType::Object(_))
+            && actual.codegen_repr() == PhpType::Mixed
+            && matches!(arg.kind, crate::parser::ast::ExprKind::Variable(_))
+        {
             return Ok(());
         }
         if by_ref {

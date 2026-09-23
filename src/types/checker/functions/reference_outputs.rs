@@ -28,7 +28,8 @@ impl Checker {
             && matches!(actual, PhpType::Array(_) | PhpType::AssocArray { .. })
         {
             PhpType::php_array()
-        } else if expected.codegen_repr() == PhpType::Mixed
+        } else if (expected.codegen_repr() == PhpType::Mixed
+            || matches!(expected, PhpType::Object(_)))
             && actual.codegen_repr() != PhpType::Mixed
         {
             PhpType::Mixed

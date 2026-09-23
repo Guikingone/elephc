@@ -60,6 +60,7 @@ impl Checker {
             strict_types: false,
             internal_callback_binding: false,
             param_specialization_seen: HashSet::new(),
+            interface_method_boxed_params: HashSet::new(),
             callable_return_sigs: HashMap::new(),
             callable_array_return_sigs: HashMap::new(),
             callable_captures: HashMap::new(),

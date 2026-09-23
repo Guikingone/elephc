@@ -211,6 +211,9 @@ pub(crate) fn visibility_rank(visibility: &Visibility) -> u8 {
 /// can never carry one, would report a difference the source never wrote.
 struct SourceVisibleShape {
     param_count: usize,
+    param_names: Vec<String>,
+    param_types: Vec<PhpType>,
+    declared_params: Vec<bool>,
     ref_params: Vec<bool>,
     has_defaults: Vec<bool>,
     variadic: Option<String>,
@@ -230,6 +233,27 @@ impl SourceVisibleShape {
         let keep = |index: usize| !generated.get(index).copied().unwrap_or(false);
         Self {
             param_count: generated.iter().filter(|hidden| !**hidden).count(),
+            param_names: sig
+                .params
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| keep(*index))
+                .map(|(_, (name, _))| name.clone())
+                .collect(),
+            param_types: sig
+                .params
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| keep(*index))
+                .map(|(_, (_, ty))| ty.clone())
+                .collect(),
+            declared_params: sig
+                .declared_params
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| keep(*index))
+                .map(|(_, declared)| *declared)
+                .collect(),
             ref_params: sig
                 .ref_params
                 .iter()
@@ -270,7 +294,7 @@ impl SourceVisibleShape {
 }
 
 /// Validates that `child_sig` is compatible with `parent_sig` for override purposes.
-/// Checks parameter count, ref params, defaults layout, variadic flag, and required param count.
+/// Checks parameter shape and rejects a declared type where the source parent accepts any value.
 /// Reports errors with `context` and `kind` (e.g., "overriding method") in the message.
 ///
 /// `compare_generated_abi` is true only when both signatures originate in PHP source. Compiler-
@@ -328,6 +352,25 @@ pub(crate) fn validate_signature_compatibility(
                 context, kind, owner_name, method_name
             ),
         ));
+    }
+
+    if compare_generated_abi {
+        for (index, (&parent_declared, &child_declared)) in parent
+            .declared_params
+            .iter()
+            .zip(&child.declared_params)
+            .enumerate()
+        {
+            if !parent_declared && child_declared && child.param_types[index] != PhpType::Mixed {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "Cannot narrow untyped parameter ${} when {} {}: {}::{}",
+                        child.param_names[index], context, kind, owner_name, method_name
+                    ),
+                ));
+            }
+        }
     }
 
     if child.has_defaults != parent.has_defaults {
@@ -465,7 +508,7 @@ pub(crate) fn validate_override_signature(
         parent_sig,
         kind,
         "overriding",
-        parent_declaration_is_source,
+        parent_declaration_is_source && method.span.line != 0,
     )?;
     if parent_sig.declared_return && !child_sig.declared_return {
         return Err(CompileError::new(

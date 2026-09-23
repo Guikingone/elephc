@@ -224,7 +224,11 @@ impl Checker {
         can_widen_local: bool,
         context: &str,
     ) -> Result<(), CompileError> {
+        let boxed_object_reference = matches!(expected_ty, PhpType::Object(_))
+            && actual_ty.codegen_repr() == PhpType::Mixed
+            && matches!(arg.kind, ExprKind::Variable(_));
         if expected_ty.codegen_repr() != PhpType::Mixed
+            && !boxed_object_reference
             && self.by_ref_argument_uses_mixed_or_hash_storage(actual_ty, arg, env)?
         {
             return Err(CompileError::new(
@@ -562,6 +566,12 @@ impl Checker {
 
         self.active_ref_params = ref_param_names.into_iter().collect();
         self.active_external_ref_bindings = self.active_ref_params.clone();
+        self.boxed_ref_aliased_locals.extend(
+            self.active_ref_params.iter()
+                .filter(|name| pre_bound_own_storage.get(*name)
+                    .is_some_and(|ty| matches!(ty, PhpType::Object(_))))
+                .cloned(),
+        );
         self.active_globals.clear();
         self.active_statics.clear();
         self.foreach_key_locals.clear();

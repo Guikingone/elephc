@@ -368,9 +368,10 @@ fn test_new_static_uses_runtime_subclass_constructor_signature() {
             public function __construct(A &$slot) { $slot = new B(); }
         }
         echo ChildFactory::make(new A());
+        echo BaseFactory::make(new A());
         ",
     );
-    assert_eq!(out, "B");
+    assert_eq!(out, "BA");
 }
 
 /// Verifies interface contracts and `parent::` dispatch retain the inherited implementation.

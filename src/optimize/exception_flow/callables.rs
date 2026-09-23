@@ -11,8 +11,8 @@
 
 use crate::names::php_symbol_key;
 use crate::optimize::effect_analysis::method_effect_key;
-use crate::parser::ast::{Stmt, StmtKind};
-use std::collections::HashMap;
+use crate::parser::ast::{Stmt, StmtKind, TypeExpr};
+use std::collections::{HashMap, HashSet};
 
 /// Lexical class context needed to resolve self/parent/static throw and call forms.
 #[derive(Clone, Debug)]
@@ -73,6 +73,50 @@ pub(super) fn collect_exception_bodies<'a>(
             _ => {}
         }
     }
+}
+
+/// Collects declaration-level entry checks when checker metadata is unavailable to the pass.
+pub(super) fn collect_object_reference_entry_checks(
+    stmts: &[Stmt],
+    functions: &mut HashSet<String>,
+    static_methods: &mut HashMap<String, bool>,
+    instance_methods: &mut HashMap<String, bool>,
+) {
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::FunctionDecl { name, params, .. } => {
+                if params_have_object_reference(params) {
+                    functions.insert(name.clone());
+                }
+            }
+            StmtKind::ClassDecl { name, methods, .. }
+            | StmtKind::InterfaceDecl { name, methods, .. }
+            | StmtKind::TraitDecl { name, methods, .. } => {
+                for method in methods.iter().filter(|method| params_have_object_reference(&method.params)) {
+                    let key = method_effect_key(name, &method.name);
+                    if method.is_static {
+                        static_methods.insert(key, true);
+                    } else {
+                        instance_methods.insert(key, true);
+                    }
+                }
+            }
+            StmtKind::NamespaceBlock { body, .. } => collect_object_reference_entry_checks(
+                body, functions, static_methods, instance_methods,
+            ),
+            _ => {}
+        }
+    }
+}
+
+/// Finds hints whose by-reference entry check may reject a previously retyped cell.
+fn params_have_object_reference(params: &[(String, Option<TypeExpr>, Option<crate::parser::ast::Expr>, bool)]) -> bool {
+    params.iter().any(|(_, hint, _, by_ref)| {
+        *by_ref && matches!(hint, Some(TypeExpr::Named(name)) if !matches!(
+            name.as_str().to_ascii_lowercase().as_str(),
+            "mixed" | "callable" | "closure" | "array" | "string" | "void"
+        ))
+    })
 }
 
 /// Attaches stable lexical class references to raw callable body collections.

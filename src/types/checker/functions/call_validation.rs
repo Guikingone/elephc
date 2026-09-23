@@ -854,8 +854,9 @@ impl Checker {
                             .callable_array_param_target(arg, caller_env)?
                             .is_some();
                     if !proven_callable_array && !runtime_descriptor_projection {
-                        if coercive_param_binding
-                            && sig.declared_params.get(param_idx).copied().unwrap_or(false)
+                        if (coercive_param_binding
+                            && sig.declared_params.get(param_idx).copied().unwrap_or(false))
+                            || (supplied_reference && matches!(expected_ty, PhpType::Object(_)))
                         {
                             self.require_bound_param_arg_type(
                                 expected_ty,

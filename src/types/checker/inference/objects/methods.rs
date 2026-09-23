@@ -565,6 +565,9 @@ impl Checker {
                     }
                     if i < regular_param_count
                         && !declared_flags.get(i).copied().unwrap_or(false)
+                        && !self.interface_method_boxed_params.contains(&(
+                            format!("{}::{}", impl_class_name, method_key), i,
+                        ))
                         && !matches!(*arg_ty, PhpType::Void | PhpType::Never | PhpType::Callable)
                     {
                         let key = (format!("{}::{}", impl_class_name, method_key), i);

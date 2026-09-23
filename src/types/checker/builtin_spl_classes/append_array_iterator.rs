@@ -64,7 +64,7 @@ fn spl_append_iterator_array_iterator_methods() -> Vec<ClassMethod> {
         ),
         method_with_body(
             "offsetSet",
-            vec![param("offset", mixed_type()), param("iterator", named_type("Iterator"))],
+            vec![param("offset", mixed_type()), param("iterator", mixed_type())],
             Some(TypeExpr::Void),
             append_array_iterator_offset_set_body(),
         ),
@@ -133,10 +133,13 @@ fn append_array_iterator_append_body() -> Vec<Stmt> {
 
 /// Appends array iterator offset set body to the current runtime or metadata collection.
 fn append_array_iterator_offset_set_body() -> Vec<Stmt> {
-    vec![expr_stmt(append_array_iterator_owner_call(
-        "__elephcStorageOffsetSet",
-        vec![var_expr("offset"), var_expr("iterator")],
-    ))]
+    vec![
+        typed_assign_stmt("typedIterator", named_type("Iterator"), var_expr("iterator")),
+        expr_stmt(append_array_iterator_owner_call(
+            "__elephcStorageOffsetSet",
+            vec![var_expr("offset"), var_expr("typedIterator")],
+        )),
+    ]
 }
 
 /// Appends array iterator offset exists body to the current runtime or metadata collection.
