@@ -609,6 +609,27 @@ fn a_source_with_no_timestamp_is_not_cached() {
     assert_eq!(stats().num_cached_scripts, 0);
 }
 
+/// Verifies a source whose mtime is `0` IS cached when nothing reads the timestamp.
+///
+/// php-src only fetches the timestamp for `validate_timestamps`, `file_update_protection` or
+/// `max_file_size`; with all three off there is no `0` to refuse. MEASURED: reference caches
+/// the file with all three off, and refuses it with any one of them on.
+#[test]
+fn a_source_with_no_timestamp_is_cached_when_nothing_reads_it() {
+    let _guard = test_lock();
+    set_config(ScriptCacheConfig {
+        validate_timestamps: false,
+        max_file_size: 0,
+        ..enabled_config(0)
+    });
+    let path = write_fixture("zero_mtime_unread", "<?php $x = 1;");
+    set_mtime(&path, 0);
+
+    load_script(&path).expect("fixture should load");
+
+    assert!(is_cached(&path), "nothing asked for the timestamp, so nothing refused it");
+}
+
 /// Verifies a source dated BEFORE 1970 is cached and revalidated like any other.
 ///
 /// `st_mtime` is signed and php-src records a negative one normally. Reading it as "no

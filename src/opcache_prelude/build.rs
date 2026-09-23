@@ -871,40 +871,6 @@ pub(crate) fn restricted_invalidate_decl(warning: Stmt) -> Stmt {
 
 /// `opcache_compile_file($filename)`: `true` for a manifest member (already compiled into the
 /// binary), `false` otherwise, and an engine-level notice on the disabled path.
-/// The two warnings `opcache_compile_file()` prints for a file it cannot open, as reference
-/// and the eval surface word them; `reason` is the `strerror` text of the failure.
-fn open_failure_warnings(reason: &str) -> Vec<Stmt> {
-    let filename = e_cast(CastType::String, e_var("filename"));
-    vec![
-        s_expr(e_call(
-            "fwrite",
-            vec![
-                e_const("STDERR"),
-                e_binop(
-                    e_binop(e_str("Warning: opcache_compile_file("), BinOp::Concat, filename.clone()),
-                    BinOp::Concat,
-                    e_str(&format!("): Failed to open stream: {reason}\n")),
-                ),
-            ],
-        )),
-        s_expr(e_call(
-            "fwrite",
-            vec![
-                e_const("STDERR"),
-                e_binop(
-                    e_binop(
-                        e_str("Warning: opcache_compile_file(): Failed opening '"),
-                        BinOp::Concat,
-                        filename,
-                    ),
-                    BinOp::Concat,
-                    e_str("' for inclusion\n"),
-                ),
-            ],
-        )),
-    ]
-}
-
 pub(crate) fn compile_file_decl(enabled: bool, manifest_paths: Expr) -> Stmt {
     let mut body = vec![s_if(
         e_binop(e_bool(enabled), BinOp::StrictEq, e_bool(false)),
@@ -921,63 +887,39 @@ pub(crate) fn compile_file_decl(enabled: bool, manifest_paths: Expr) -> Stmt {
         vec![],
         None,
     )];
-    // A FILE THAT CANNOT BE OPENED WARNS, twice, as it does in reference and as the eval
-    // surface's `eval_opcache_compile_file_for_path` already did with this exact wording. The
-    // native wrapper returned `false` in silence, so the two spellings of one call disagreed
-    // about whether anything had gone wrong. MEASURED on a missing path: reference prints
-    // `Failed to open stream` then `Failed opening ... for inclusion`; elephc printed nothing.
+    // BOTH ARMS ASK THE RUNTIME TIER, and the runtime tier owns the warnings.
     //
-    // BUT THE CACHE IS ASKED FIRST. A deleted script can still be a warm entry, and php-src
-    // serves one without reopening the file when `validate_timestamps=0`. MEASURED: compile,
-    // `unlink()`, compile again — reference answers `true, true`; elephc answered `true`, then
-    // warned and answered `false`. The runtime tier applies the validation rule itself, so a
-    // validating configuration still reaches the warnings below, as it does in reference.
-    let mut unresolved = vec![s_if(
-        e_binop(
-            e_call("__elephc_opcache_rt_compile", vec![e_var("filename")]),
-            BinOp::StrictNotEq,
-            e_int(0),
-        ),
-        vec![s_return(e_bool(true))],
-        vec![],
-        None,
-    )];
-    unresolved.extend(open_failure_warnings("No such file or directory"));
-    unresolved.push(s_return(e_bool(false)));
-    body.extend(path_normalization_stmts_with_fallback(unresolved));
+    // An unresolvable path is not necessarily uncached: a deleted script can still be a warm
+    // entry, and php-src serves one without reopening the file when `validate_timestamps=0`.
+    // MEASURED: compile, `unlink()`, compile again — reference answers `true, true`.
+    //
+    // A file that cannot be OPENED warns twice, `Failed to open stream: <strerror>` then
+    // `Failed opening ... for inclusion`, and only the bridge holds the `io::Error` that names
+    // the real reason. This body used to word the warnings itself and could only guess from
+    // `realpath()`: it answered a mode-`0000` file in silence, and called a file under a
+    // directory without search permission missing where reference says `Permission denied`.
+    // MEASURED, both. A file that opens but does not parse still answers `false` quietly — the
+    // pinned divergence where reference throws.
+    //
+    // `$filename`, not `$path`, in both arms: the warning names the path as the caller spelled
+    // it, as reference does, and the bridge canonicalizes it for the cache key itself.
+    body.extend(path_normalization_stmts_with_fallback(vec![s_return(e_binop(
+        e_call("__elephc_opcache_rt_compile", vec![e_var("filename")]),
+        BinOp::StrictNotEq,
+        e_int(0),
+    ))]));
     // OUTSIDE THE MANIFEST IS NOT A REFUSAL. A file the binary did not compile in can still
     // be compiled into the runtime tier, which is exactly what `opcache_compile_file()` is
     // for — reference PHP answers `true` for any file it can read and parse. Refusing every
     // non-manifest path meant the function could only ever succeed for files that needed no
     // compiling at all.
-    //
-    // A FILE THAT RESOLVES BUT CANNOT BE READ WARNS TOO. `realpath()` succeeds for it, so the
-    // arm above never runs, and the runtime tier answered `false` in silence — where
-    // reference prints `Failed to open stream: Permission denied` and the eval surface
-    // warned as well. MEASURED as a non-root user on a mode-`0000` file. A file that reads
-    // but does not parse still answers `false` quietly: that is the pinned divergence where
-    // reference throws.
     body.push(s_if(
         e_not(in_manifest(manifest_paths)),
-        vec![
-            s_if(
-                e_binop(
-                    e_call("__elephc_opcache_rt_compile", vec![e_var("path")]),
-                    BinOp::StrictNotEq,
-                    e_int(0),
-                ),
-                vec![s_return(e_bool(true))],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_not(e_call("is_readable", vec![e_var("path")])),
-                open_failure_warnings("Permission denied"),
-                vec![],
-                None,
-            ),
-            s_return(e_bool(false)),
-        ],
+        vec![s_return(e_binop(
+            e_call("__elephc_opcache_rt_compile", vec![e_var("filename")]),
+            BinOp::StrictNotEq,
+            e_int(0),
+        ))],
         vec![],
         None,
     ));

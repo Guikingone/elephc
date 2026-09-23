@@ -1287,14 +1287,20 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcOpcacheRtIsCached | RuntimeFnId::ElephcOpcacheRtInFileCache => {
                 crate::ir::Effects::from_bits_retain(crate::ir::Effects::READS_GLOBAL.bits())
             }
-            RuntimeFnId::ElephcOpcacheRtDiscard
-            | RuntimeFnId::ElephcOpcacheRtSoftInvalidate
-            | RuntimeFnId::ElephcOpcacheRtCompile => {
+            RuntimeFnId::ElephcOpcacheRtDiscard | RuntimeFnId::ElephcOpcacheRtSoftInvalidate => {
                 crate::ir::Effects::from_bits_retain(
                     crate::ir::Effects::READS_GLOBAL.bits()
                         | crate::ir::Effects::WRITES_GLOBAL.bits(),
                 )
             }
+            // `compile` also READS the source and WARNS when it cannot open it: the bridge
+            // prints `opcache_compile_file()`'s two open-failure warnings itself.
+            RuntimeFnId::ElephcOpcacheRtCompile => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits()
+                    | crate::ir::Effects::WRITES_GLOBAL.bits()
+                    | crate::ir::Effects::READS_FS.bits()
+                    | crate::ir::Effects::MAY_WARN.bits(),
+            ),
             // Same read, plus the owned PHP string copied out of the bridge's buffer.
             RuntimeFnId::ElephcOpcacheRtScriptPath => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::ALLOC_HEAP.bits(),

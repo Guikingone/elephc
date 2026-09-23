@@ -186,30 +186,14 @@ pub(in crate::interpreter) fn eval_opcache_compile_file_for_path(
     // And the warning names the ACTUAL open failure — `strerror` text, as php-src's stream
     // layer prints it — not always "No such file or directory". MEASURED as a non-root user on
     // a mode-`0000` file: reference says `Permission denied`; this said the file was missing.
-    let reason = match std::fs::File::open(path) {
-        Ok(_) => return values.bool_value(false),
-        Err(error) => open_failure_reason(&error),
+    let Some(reason) = crate::script_cache::store::compile_open_failure(path) else {
+        return values.bool_value(false);
     };
-    let display = path.display();
-    values.warning(&format!(
-        "Warning: opcache_compile_file({display}): Failed to open stream: {reason}\n"
-    ))?;
-    values.warning(&format!(
-        "Warning: opcache_compile_file(): Failed opening '{display}' for inclusion\n"
-    ))?;
-    values.bool_value(false)
-}
-
-/// The `strerror` text php-src's stream layer prints for an open failure.
-///
-/// `io::Error`'s `Display` is that text plus ` (os error N)`, which php-src never prints, so
-/// the suffix is dropped. An error with no OS code keeps its own description.
-fn open_failure_reason(error: &std::io::Error) -> String {
-    let text = error.to_string();
-    match text.rfind(" (os error ") {
-        Some(cut) if error.raw_os_error().is_some() => text[..cut].to_string(),
-        _ => text,
+    let display = path.display().to_string();
+    for warning in crate::script_cache::store::compile_open_failure_warnings(&display, &reason) {
+        values.warning(&warning)?;
     }
+    values.bool_value(false)
 }
 
 /// Returns whether a path RESOLVES, which is what `opcache_invalidate()` reports.

@@ -345,6 +345,13 @@ pub unsafe extern "C" fn __elephc_eval_opcache_rt_soft_invalidate(
 /// with a syntax error answers `0`, where reference throws a `ParseError` — see
 /// `store::compile_file` for why the throw is out of reach of this signature.
 ///
+/// A FILE IT CANNOT OPEN WARNS HERE, with the real `strerror` text, because only this side
+/// holds the `io::Error`. The native prelude used to word the warning itself, from
+/// `realpath()` failing, and so could only guess: it said "No such file or directory" for a
+/// file under a directory without search permission, where reference says
+/// `Permission denied`. MEASURED. The eval surface prints the same two lines through
+/// `store::compile_open_failure_warnings`, so both spell them one way.
+///
 /// # Safety
 /// `ptr` must be readable for `len` bytes when `len > 0`.
 #[no_mangle]
@@ -353,9 +360,16 @@ pub unsafe extern "C" fn __elephc_eval_opcache_rt_compile(ptr: *const u8, len: u
     if path.is_empty() {
         return 0;
     }
-    u64::from(crate::script_cache::store::compile_file(
-        std::path::Path::new(&path),
-    ))
+    let file = std::path::Path::new(&path);
+    if crate::script_cache::store::compile_file(file) {
+        return 1;
+    }
+    if let Some(reason) = crate::script_cache::store::compile_open_failure(file) {
+        for warning in crate::script_cache::store::compile_open_failure_warnings(&path, &reason) {
+            eprint!("{warning}");
+        }
+    }
+    0
 }
 
 /// Answers whether the ON-DISK `opcache.file_cache` holds a usable entry for `path`.

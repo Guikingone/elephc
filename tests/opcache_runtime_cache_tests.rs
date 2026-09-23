@@ -963,6 +963,55 @@ echo 'second=', var_export(opcache_compile_file($p), true), "\n";
     assert_eq!(field(&output, "second"), "true", "and still served once deleted:\n{output}");
 }
 
+/// The NATIVE `opcache_compile_file()` names the real failure for a file under a directory
+/// it cannot search.
+///
+/// `realpath()` fails there, so the native body used to take its "missing file" arm and print
+/// `No such file or directory`, where reference says `Permission denied`. The warning now comes
+/// from the bridge, which holds the real `io::Error`. MEASURED as a non-root user.
+///
+/// Skipped when the process can traverse the directory anyway (root).
+#[test]
+fn compile_file_under_an_unsearchable_directory_reports_permission_denied() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = make_test_dir("opcache_rt_compile_locked_parent");
+    let locked = dir.join("locked");
+    fs::create_dir_all(&locked).unwrap();
+    fs::write(locked.join("lib.php"), "<?php\n").unwrap();
+    write_dynamic_fixture(
+        &dir,
+        r#"<?php
+eval('$unrelated = 1;' . str_repeat(' ', count($argv) - 1));
+echo 'r=', var_export(opcache_compile_file(__DIR__ . '/locked/lib.php'), true), "\n";
+"#,
+    );
+    let bin = compile_with_flags(
+        &dir,
+        &["opcache.enable_cli=1", "opcache.file_update_protection=0"],
+        &["--php-version", "8.5"],
+    );
+
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o600)).unwrap();
+    let searchable_anyway = fs::metadata(locked.join("lib.php")).is_ok();
+    let output = Command::new(&bin).output().expect("failed to run binary");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
+    if searchable_anyway {
+        return;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(field(&stdout, "r"), "false", "{stdout}");
+    assert!(
+        stderr.contains("lib.php): Failed to open stream: Permission denied"),
+        "the failure is a permission, not a missing file:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("No such file or directory"),
+        "the file exists; it must not be reported missing:\n{stderr}"
+    );
+}
+
 /// Both `opcache_compile_file()` surfaces warn `Permission denied` for a file that EXISTS but
 /// cannot be read.
 ///

@@ -405,7 +405,15 @@ fn fill_entry(
     // so it was never revalidated and a changed source kept running the stored version.
     // MEASURED, `touch($p, 0)` then include, rewrite, include: reference reports it uncached
     // and runs the new source; elephc cached it and ran the old one.
-    if parsed_here && mtime.unwrap_or(0) == 0 {
+    //
+    // ONLY WHEN THE TIMESTAMP IS READ AT ALL. php-src fetches it for `validate_timestamps`,
+    // `file_update_protection` or `max_file_size`, and with all three off it never asks, so
+    // there is no `0` to refuse. MEASURED with all three off: reference compiles AND caches a
+    // file whose mtime is `0`; with any one of them on, it refuses — four cases, all agreeing.
+    let reads_timestamp = config.validate_timestamps
+        || config.file_update_protection != 0
+        || config.max_file_size != 0;
+    if parsed_here && reads_timestamp && mtime.unwrap_or(0) == 0 {
         return Ok(segments);
     }
     if parsed_here && !config.admits_age(mtime, now) {
@@ -773,6 +781,34 @@ fn is_present(key: &Path) -> bool {
 /// return the entry's footprint to the budget, so the refill would count the same bytes
 /// twice and the entry would be weighed against `max_accelerated_files` as a NEW one.
 pub fn compile_file(path: &Path) -> bool {
+    compile_file_inner(path)
+}
+
+/// Why `opcache_compile_file()` could not OPEN `path`, as the `strerror` text php-src's stream
+/// layer prints — or `None` when it opens, which makes any `false` a parse failure instead.
+///
+/// `compile_file` answers `false` for both, and only an open failure warns: a file that opens
+/// but does not parse is the pinned divergence where reference throws. `io::Error`'s
+/// `Display` is the `strerror` text plus ` (os error N)`, which php-src never prints.
+pub(crate) fn compile_open_failure(path: &Path) -> Option<String> {
+    let error = std::fs::File::open(path).err()?;
+    let text = error.to_string();
+    Some(match text.rfind(" (os error ") {
+        Some(cut) if error.raw_os_error().is_some() => text[..cut].to_string(),
+        _ => text,
+    })
+}
+
+/// The two warnings `opcache_compile_file()` prints for a file it cannot open, worded as
+/// reference words them, with `display` as the caller spelled the path.
+pub(crate) fn compile_open_failure_warnings(display: &str, reason: &str) -> [String; 2] {
+    [
+        format!("Warning: opcache_compile_file({display}): Failed to open stream: {reason}\n"),
+        format!("Warning: opcache_compile_file(): Failed opening '{display}' for inclusion\n"),
+    ]
+}
+
+fn compile_file_inner(path: &Path) -> bool {
     let config = config();
     if !config.enabled {
         return false;
