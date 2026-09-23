@@ -36,6 +36,7 @@ pub(crate) enum MethodAbiPlan {
 }
 
 impl MethodAbiPlan {
+    /// Returns whether the adapter must append an empty variadic collector argument.
     fn appends_collector(self) -> bool {
         matches!(self, Self::AppendEmptyCollector | Self::BoxArgumentsAndAppendEmptyCollector)
     }
@@ -401,6 +402,7 @@ fn same_physical_param_abi(left: &PhpType, right: &PhpType) -> bool {
     left.reference_payload_compatible(right)
 }
 
+/// Returns whether a source parameter can be boxed for a physical Mixed parameter.
 fn can_box_param_as_mixed(source: &PhpType, target: &PhpType) -> bool {
     target.codegen_repr() == PhpType::Mixed
         && source.codegen_repr() != PhpType::Mixed
