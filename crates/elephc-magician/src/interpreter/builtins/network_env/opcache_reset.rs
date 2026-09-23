@@ -42,10 +42,6 @@ mod state;
 
 use state::opcache_cache_enabled;
 
-/// php-src's warning emitted when `opcache.restrict_api` denies this eval-only call.
-const RESTRICT_API_WARNING: &str =
-    "Warning: Zend OPcache API is restricted by \"restrict_api\" configuration directive";
-
 /// Returns whether `name` (already lowercased and unqualified) is the OPcache reset
 /// function, so `function_exists` reports it as existing even though it is not a
 /// PHP-visible eval builtin.
@@ -60,10 +56,6 @@ pub(in crate::interpreter) fn eval_opcache_reset_call(
     _scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if crate::script_cache::config::restrict_api_denied() {
-        values.warning(RESTRICT_API_WARNING)?;
-        return values.bool_value(false);
-    }
     if !args.is_empty() {
         return Err(EvalStatus::RuntimeFatal);
     }
@@ -80,6 +72,9 @@ pub(in crate::interpreter) fn eval_opcache_reset_call(
 pub(in crate::interpreter) fn eval_opcache_reset_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(refused) = super::opcache_file_functions::eval_opcache_api_refusal(values)? {
+        return Ok(refused);
+    }
     if !crate::script_cache::config().enabled {
         let enabled = opcache_cache_enabled(crate::eval_php_profile::eval_php_version_id(), false);
         debug_assert!(!enabled, "an uninstalled configuration means the CLI default");

@@ -57,7 +57,9 @@ mod tests {
     /// into a plausible but wrong tree.
     /// BUMPED TO 4 WITH THIS VALUE: round 12 rewrote `segments.rs`'s close-tag search. The
     /// stored shape did not move, but this guard does not judge that, by design.
-    const RECORDED_FINGERPRINT: u64 = 11344301316066230981;
+    /// BUMPED TO 5 WITH THIS VALUE: round 13 taught the same search to skip `{$...}`
+    /// interpolation. Again no shape change — again the guard's rule.
+    const RECORDED_FINGERPRINT: u64 = 10324431639625042042;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

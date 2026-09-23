@@ -311,18 +311,22 @@ pub(crate) fn configure_eval_opcache(ctx: &mut FunctionContext<'_>) {
         crate::codegen_support::compile_is_web_sapi(),
         &overrides,
     );
-    let restrict_api_denied = crate::opcache_prelude::eval_restrict_api_denies(
-        ctx.module.source_path.as_deref(),
-        version_id,
-        &overrides,
-    );
     let arguments = [
         i64::from(config.enabled),
         i64::from(config.validate_timestamps),
         config.revalidate_freq as i64,
         config.max_file_size as i64,
         config.memory_consumption as i64,
-        config.max_accelerated_files as i64,
+        // THE RUNTIME TIER'S SHARE of the hash: the prime capacity minus the scripts compiled
+        // into this binary, which php-src caches before any dynamic include and which hold a
+        // slot each. MEASURED with `max_accelerated_files=200` (223 slots) and an absolute
+        // entry path: reference admits 222 dynamic scripts beside the entry, 221 beside the
+        // entry and one static `require`; elephc admitted 223 and reported more cached scripts
+        // than `max_cached_keys`. (A RELATIVE entry path costs reference one more key — an
+        // elephc binary has no invocation path, so the resolved form is the model.)
+        config
+            .max_accelerated_files
+            .saturating_sub(crate::codegen_support::opcache_manifest_len() as u64) as i64,
     ];
     for (index, value) in arguments.into_iter().enumerate() {
         let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, index);
@@ -334,19 +338,6 @@ pub(crate) fn configure_eval_opcache(ctx: &mut FunctionContext<'_>) {
         .extern_symbol("__elephc_eval_configure_opcache");
     abi::emit_call_label(ctx.emitter, &symbol);
     configure_eval_opcache_file_cache(ctx, &config);
-
-    // Opaque eval source can call OPcache names the compiler could not see, so carry the
-    // same `restrict_api` decision the native prelude bakes into statically visible calls.
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
-        i64::from(restrict_api_denied),
-    );
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_configure_opcache_restrict_api");
-    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Installs the accelerator diagnostic channel and triggers php-src's startup validation
@@ -443,6 +434,12 @@ fn load_eval_opcache_blacklist(
 /// by number across the C ABI, so it may never be reordered.
 const OPCACHE_DIRECTIVE_FILE_UPDATE_PROTECTION: i64 = 2;
 
+/// Whether `opcache.restrict_api` denies this binary's OPcache API calls, as the bridge's
+/// `swap_directive` addresses it. A compile-time verdict (see
+/// `opcache_prelude::restrict_api_denies`), never an `ini_set()` target — reference makes the
+/// directive `PHP_INI_SYSTEM`, and the prelude only maps the three `PHP_INI_ALL` ones to ids.
+const OPCACHE_DIRECTIVE_API_RESTRICTED: i64 = 3;
+
 /// Carries the settings that did not fit either configure call's argument budget.
 ///
 /// Both calls above spend all six integer argument registers x86_64 SysV provides, so
@@ -455,7 +452,12 @@ fn configure_eval_opcache_swapped_directives(
     emit_opcache_directive_swap(
         ctx,
         OPCACHE_DIRECTIVE_FILE_UPDATE_PROTECTION,
-        config.file_update_protection as i64,
+        config.file_update_protection,
+    );
+    emit_opcache_directive_swap(
+        ctx,
+        OPCACHE_DIRECTIVE_API_RESTRICTED,
+        i64::from(crate::codegen_support::opcache_api_restricted()),
     );
 }
 

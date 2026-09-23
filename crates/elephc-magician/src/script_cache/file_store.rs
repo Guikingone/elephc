@@ -46,7 +46,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// it — the close-tag search, not the `ScriptSegment` shape. The guard's rule is to bump on any
 /// fingerprint change from an IR file rather than judge which ones matter; an unneeded bump
 /// costs one cold parse per cached script.
-pub(crate) const FORMAT_VERSION: u32 = 4;
+///
+/// BUMPED TO 5 for the same reason, one round later: the close-tag search learned to skip
+/// `{$...}` interpolation, which again moved `segments.rs`'s source and so the fingerprint.
+pub(crate) const FORMAT_VERSION: u32 = 5;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

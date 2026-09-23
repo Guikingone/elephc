@@ -253,21 +253,9 @@ pub(super) fn expand_value_include(
 /// is how a file says "nothing more to do here"); under reference PHP that is harmless, so a
 /// preload that truncates the whole program is a divergence with no warning attached to it.
 ///
-/// ONLY A DIRECT TOP-LEVEL `return` IS REWRITTEN, and the limit is worth stating because the
-/// shape left over is the COMMONER one. `if (!defined('APP_READY')) { return; }` at the top of
-/// an included file is the classic include guard, and its `return` is nested inside an `if`,
-/// so this walk does not see it and the inlined body still returns from the caller. MEASURED
-/// at this commit: reference prints `MAIN-START COND-START MAIN-AFTER`, elephc prints the
-/// first two and exits 0. The same gap exists in `rewrite_first_include_return` for the
-/// value-capturing form, where it predates this branch.
-///
-/// Fixing it needs more than a deeper walk: a conditional return cannot be turned into a
-/// static truncation. The shape that would work is wrapping the inlined body in a
-/// `do { … } while (false)` and rewriting each in-scope `return` to `break <n>`, where `n`
-/// counts the loops and switches between it and the wrapper — recursing through control flow
-/// but never into a nested function or class body, whose `return` belongs to them. That is
-/// its own change; this one makes the unconditional case correct and is a strict improvement
-/// on leaving both broken.
+/// A `return` NESTED in control flow is handled by [`confine_nested_returns`], which wraps the
+/// body in `do { … } while (false)` and turns each in-scope `return` into `break <n>`. Only a
+/// body whose returns are all at the top level reaches the static truncation below.
 ///
 /// The value-capturing form (`$x = require F;`) has always done this through
 /// `rewrite_first_include_return`, which assigns the returned value to a temporary. The only
@@ -281,7 +269,7 @@ pub(super) fn discard_first_include_return(wrapped: &mut [Stmt]) -> bool {
     for stmt in wrapped.iter_mut() {
         match &mut stmt.kind {
             StmtKind::NamespaceBlock { body, .. } => {
-                if discard_top_level_return(body) {
+                if confine_nested_returns(body, None) || discard_top_level_return(body) {
                     return true;
                 }
             }
@@ -316,6 +304,186 @@ fn discard_top_level_return(body: &mut Vec<Stmt>) -> bool {
     false
 }
 
+/// Confines every `return` in an included file's OWN scope to that file, when one of them is
+/// nested in control flow. Returns `true` when it rewrote the body.
+///
+/// A `return` inside an `if`, a loop, a `switch` or a `try` still ended the CALLER: the include
+/// body is inlined, and only a direct top-level `return` was rewritten. `if (!defined('X')) {
+/// return; }` is the classic include guard, and a conditional return in `opcache.preload` ended
+/// the whole program before the entry script ran. MEASURED (PR review): with `REVIEW_STOP=1` the
+/// preload `if (getenv(...) === "1") { return; }` made elephc print only `PRELOAD`; reference
+/// prints `PRELOAD` then `MAIN`.
+///
+/// A conditional return cannot become a static truncation, so the body is wrapped in
+/// `do { … } while (false)` and each in-scope `return` becomes `break <n>`, `n` counting the
+/// loops and switches between it and the wrapper. The walk recurses through control flow but
+/// never into a function, class, enum, interface or trait body, whose `return` is its own; a
+/// closure is an expression and is never reached. A nested include was confined when it was
+/// resolved, before this file, so no `return` of its own is left for this walk to take. `break`
+/// through a `finally` runs the `finally`, as the `return` it replaces did.
+///
+/// `temp` is the value form's hidden temporary: `return E;` becomes `<temp> = E; break n;`, and a
+/// bare `return;` assigns NULL. Without it the value is still EVALUATED, because `return f();`
+/// must still call `f()`.
+///
+/// Only a body with a NESTED return is rewritten. One whose only `return` is at the top level
+/// keeps the static truncation, which needs no wrapper.
+fn confine_nested_returns(body: &mut Vec<Stmt>, temp: Option<&str>) -> bool {
+    if !has_nested_return(body) {
+        return false;
+    }
+    rewrite_scoped_returns(body, 1, temp);
+    let span = body.first().map_or_else(Span::dummy, |stmt| stmt.span);
+    let inner = std::mem::take(body);
+    body.push(Stmt::new(
+        StmtKind::DoWhile {
+            body: inner,
+            condition: Expr::new(ExprKind::BoolLiteral(false), span),
+        },
+        span,
+    ));
+    true
+}
+
+/// Whether `stmts` holds a `return` of this file's scope below the top level.
+fn has_nested_return(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(|stmt| {
+        scoped_child_bodies(stmt)
+            .into_iter()
+            .any(|(child, _)| child.iter().any(|s| matches!(s.kind, StmtKind::Return(_))) || has_nested_return(child))
+    })
+}
+
+/// The bodies of `stmt` that belong to the SAME scope, with how many `break` levels each adds.
+/// Function, class and other declaration bodies are excluded: their `return` is their own.
+fn scoped_child_bodies(stmt: &Stmt) -> Vec<(&Vec<Stmt>, usize)> {
+    match &stmt.kind {
+        StmtKind::If {
+            then_body,
+            elseif_clauses,
+            else_body,
+            ..
+        } => {
+            let mut bodies = vec![(then_body, 0)];
+            bodies.extend(elseif_clauses.iter().map(|(_, body)| (body, 0)));
+            bodies.extend(else_body.iter().map(|body| (body, 0)));
+            bodies
+        }
+        StmtKind::IfDef {
+            then_body,
+            else_body,
+            ..
+        } => {
+            let mut bodies = vec![(then_body, 0)];
+            bodies.extend(else_body.iter().map(|body| (body, 0)));
+            bodies
+        }
+        StmtKind::Synthetic(body)
+        | StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. } => vec![(body, 0)],
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            let mut bodies = vec![(try_body, 0)];
+            bodies.extend(catches.iter().map(|clause| (&clause.body, 0)));
+            bodies.extend(finally_body.iter().map(|body| (body, 0)));
+            bodies
+        }
+        StmtKind::While { body, .. }
+        | StmtKind::DoWhile { body, .. }
+        | StmtKind::For { body, .. }
+        | StmtKind::Foreach { body, .. } => vec![(body, 1)],
+        StmtKind::Switch { cases, default, .. } => {
+            let mut bodies: Vec<_> = cases.iter().map(|(_, body)| (body, 1)).collect();
+            bodies.extend(default.iter().map(|body| (body, 1)));
+            bodies
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Rewrites every `return` of this scope in `stmts` into `[<temp> = E; | E;] break <depth>;`,
+/// recursing into the same bodies [`scoped_child_bodies`] names.
+fn rewrite_scoped_returns(stmts: &mut [Stmt], depth: usize, temp: Option<&str>) {
+    for stmt in stmts.iter_mut() {
+        let span = stmt.span;
+        if let StmtKind::Return(value) = &mut stmt.kind {
+            let value = value.take();
+            let mut replacement = Vec::new();
+            match (temp, value) {
+                (Some(temp), Some(value)) => replacement.push(assign_temp(temp, value, span)),
+                (Some(temp), None) => {
+                    replacement.push(assign_temp(temp, Expr::new(ExprKind::Null, span), span));
+                }
+                (None, Some(value)) => replacement.push(Stmt::new(StmtKind::ExprStmt(value), span)),
+                (None, None) => {}
+            }
+            replacement.push(Stmt::new(StmtKind::Break(depth), span));
+            stmt.kind = StmtKind::Synthetic(replacement);
+            continue;
+        }
+        match &mut stmt.kind {
+            StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body,
+                ..
+            } => {
+                rewrite_scoped_returns(then_body, depth, temp);
+                for (_, body) in elseif_clauses.iter_mut() {
+                    rewrite_scoped_returns(body, depth, temp);
+                }
+                if let Some(body) = else_body {
+                    rewrite_scoped_returns(body, depth, temp);
+                }
+            }
+            StmtKind::IfDef {
+                then_body,
+                else_body,
+                ..
+            } => {
+                rewrite_scoped_returns(then_body, depth, temp);
+                if let Some(body) = else_body {
+                    rewrite_scoped_returns(body, depth, temp);
+                }
+            }
+            StmtKind::Synthetic(body)
+            | StmtKind::NamespaceBlock { body, .. }
+            | StmtKind::IncludeOnceGuard { body, .. } => {
+                rewrite_scoped_returns(body, depth, temp);
+            }
+            StmtKind::Try {
+                try_body,
+                catches,
+                finally_body,
+            } => {
+                rewrite_scoped_returns(try_body, depth, temp);
+                for clause in catches.iter_mut() {
+                    rewrite_scoped_returns(&mut clause.body, depth, temp);
+                }
+                if let Some(body) = finally_body {
+                    rewrite_scoped_returns(body, depth, temp);
+                }
+            }
+            StmtKind::While { body, .. }
+            | StmtKind::DoWhile { body, .. }
+            | StmtKind::For { body, .. }
+            | StmtKind::Foreach { body, .. } => rewrite_scoped_returns(body, depth + 1, temp),
+            StmtKind::Switch { cases, default, .. } => {
+                for (_, body) in cases.iter_mut() {
+                    rewrite_scoped_returns(body, depth + 1, temp);
+                }
+                if let Some(body) = default {
+                    rewrite_scoped_returns(body, depth + 1, temp);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Builds a `<temp> = <value>;` assignment statement for the hidden include temporary.
 fn assign_temp(temp: &str, value: Expr, span: Span) -> Stmt {
     Stmt::new(
@@ -336,6 +504,11 @@ fn rewrite_first_include_return(wrapped: &mut [Stmt], temp: &str) -> bool {
     for stmt in wrapped.iter_mut() {
         match &mut stmt.kind {
             StmtKind::NamespaceBlock { body, .. } => {
+                if confine_nested_returns(body, Some(temp)) {
+                    // Every return is now an assignment plus `break`, and none of them is certain
+                    // to run: report no capture, so the caller seeds the default `1` first.
+                    return false;
+                }
                 if rewrite_top_level_return(body, temp) {
                     return true;
                 }
@@ -360,13 +533,13 @@ fn rewrite_top_level_return(body: &mut Vec<Stmt>, temp: &str) -> bool {
             let span = body[i].span;
             let placeholder = Stmt::new(StmtKind::Return(None), span);
             let original = std::mem::replace(&mut body[i], placeholder);
-            if let StmtKind::Return(Some(value)) = original.kind {
-                body[i] = assign_temp(temp, value, span);
-            } else {
-                // Bare `return;` carries no value; leave the temporary at its default and drop the
-                // statement by replacing it with an empty sequence.
-                body[i] = Stmt::new(StmtKind::Synthetic(Vec::new()), span);
-            }
+            let value = match original.kind {
+                StmtKind::Return(Some(value)) => value,
+                // A bare `return;` makes the include evaluate to NULL, not to the default `1`.
+                // MEASURED: `$x = include F;` with F doing `return;` gives `NULL` in reference.
+                _ => Expr::new(ExprKind::Null, span),
+            };
+            body[i] = assign_temp(temp, value, span);
             body.truncate(i + 1);
             return true;
         }

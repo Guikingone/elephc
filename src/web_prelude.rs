@@ -160,19 +160,12 @@ fn lift_preload_to_startup(
     program
 }
 
-/// Extracts the resolver wrapper for the exact preload include, preserving its one-shot return
-/// boundary when the generated `do` loop surrounds the guard.
+/// Extracts the resolver's include-once guard for the exact preload include, searching through
+/// resolver-only wrappers but never into user control flow. A `return` nested in the preload is
+/// already confined INSIDE the guard's body (`resolver::engine_includes::confine_nested_returns`),
+/// so moving the guard moves that confinement with it.
 fn take_preload_boundary(statement: &mut Stmt, label: &str) -> Option<Stmt> {
     let span = statement.span;
-    if span.line == 0
-        && matches!(statement.kind, StmtKind::DoWhile { .. })
-        && preload_guard_is_inside(statement, label)
-    {
-        return Some(std::mem::replace(
-            statement,
-            Stmt::new(StmtKind::Synthetic(Vec::new()), span),
-        ));
-    }
     match &mut statement.kind {
         StmtKind::IncludeOnceGuard { label: found, .. } if found == label => {
             Some(std::mem::replace(
@@ -186,20 +179,6 @@ fn take_preload_boundary(statement: &mut Stmt, label: &str) -> Option<Stmt> {
             .iter_mut()
             .find_map(|nested| take_preload_boundary(nested, label)),
         _ => None,
-    }
-}
-
-/// Tests only resolver wrappers, never user control-flow bodies, for the matching preload guard.
-fn preload_guard_is_inside(statement: &Stmt, label: &str) -> bool {
-    match &statement.kind {
-        StmtKind::IncludeOnceGuard { label: found, .. } if found == label => true,
-        StmtKind::NamespaceBlock { body, .. }
-        | StmtKind::IncludeOnceGuard { body, .. }
-        | StmtKind::Synthetic(body)
-        | StmtKind::DoWhile { body, .. } => body
-            .iter()
-            .any(|nested| preload_guard_is_inside(nested, label)),
-        _ => false,
     }
 }
 

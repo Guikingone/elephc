@@ -19,6 +19,40 @@ thread_local! {
         const { Cell::new((crate::web_prelude::PhpVersion::Php85, false)) };
     /// The compile-time `--ini KEY=VALUE` directive overrides of this compilation.
     static INI_OVERRIDES: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
+    /// Whether `opcache.restrict_api` denies this binary's calls into the OPcache API.
+    static OPCACHE_API_RESTRICTED: Cell<bool> = const { Cell::new(false) };
+    /// How many scripts the compile-time OPcache manifest holds.
+    static OPCACHE_MANIFEST_LEN: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Records how many scripts this binary's compile-time OPcache manifest holds.
+///
+/// They occupy hash slots in php-src like any cached script — the entry script and every static
+/// `require` are compiled into the cache before a dynamic include runs — so the runtime tier's
+/// capacity is the prime MINUS these. Read via [`opcache_manifest_len`].
+pub fn set_opcache_manifest_len(len: usize) {
+    OPCACHE_MANIFEST_LEN.with(|cell| cell.set(len));
+}
+
+/// How many scripts this compilation's OPcache manifest holds.
+pub(crate) fn opcache_manifest_len() -> usize {
+    OPCACHE_MANIFEST_LEN.with(Cell::get)
+}
+
+/// Records whether `opcache.restrict_api` denies this binary's OPcache API calls.
+///
+/// Decided ONCE, in the pipeline, by `opcache_prelude::restrict_api_denies` — the same verdict
+/// the injected native bodies bake. Carried here because the eval bridge needs it too: an
+/// OPcache call the compiler cannot see (a runtime-provided `eval()` source) never gets a
+/// native body, and the interpreter's own handler must refuse it just the same. Read via
+/// [`opcache_api_restricted`].
+pub fn set_opcache_api_restricted(restricted: bool) {
+    OPCACHE_API_RESTRICTED.with(|cell| cell.set(restricted));
+}
+
+/// Whether `opcache.restrict_api` denies this compilation's OPcache API calls.
+pub(crate) fn opcache_api_restricted() -> bool {
+    OPCACHE_API_RESTRICTED.with(Cell::get)
 }
 
 /// Records the PHP language profile and SAPI mode of the current compilation.

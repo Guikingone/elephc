@@ -82,6 +82,31 @@ mod state;
 #[allow(unused_imports)]
 use state::opcache_cache_enabled;
 
+/// `opcache.restrict_api`'s refusal, when it applies: the warning reference prints, then `false`.
+///
+/// php-src's restricted functions call `validate_api_restriction()` FIRST, before any cache or
+/// enable check, and answer `false` after the warning. The injected native bodies bake that
+/// verdict — but an OPcache call the compiler could not see, such as one in a `eval()` source
+/// read at run time, gets no native body and landed here, where nothing checked. It scheduled a
+/// real restart. MEASURED with `restrict_api=/nonexistent` and `eval(getenv(...))` running
+/// `var_dump(opcache_reset());`: reference warns and prints `bool(false)`; elephc printed
+/// `bool(true)` in silence. Reported by the PR review.
+///
+/// Every spelling reaches one of the six handlers that call this — the direct call, the
+/// by-values dispatch behind `call_user_func`, `$f()` and `call_user_func_array` — so the
+/// refusal does not depend on how the name was written.
+pub(in crate::interpreter) fn eval_opcache_api_refusal(
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !crate::script_cache::config().api_restricted {
+        return Ok(None);
+    }
+    values.warning(
+        "Warning: Zend OPcache API is restricted by \"restrict_api\" configuration directive\n",
+    )?;
+    Ok(Some(values.bool_value(false)?))
+}
+
 /// Returns whether the runtime script cache is serving this process.
 ///
 /// Mirrors `opcache_cache_enabled` for the binary that installed it, and defaults to
@@ -245,6 +270,9 @@ pub(in crate::interpreter) fn eval_opcache_is_script_cached_call(
     let [filename] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
+    if let Some(refused) = eval_opcache_api_refusal(values)? {
+        return Ok(refused);
+    }
     if !eval_opcache_cache_enabled() {
         return eval_opcache_file_disabled_result(values);
     }
@@ -263,6 +291,9 @@ pub(in crate::interpreter) fn eval_opcache_invalidate_call(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if args.is_empty() || args.len() > 2 {
         return Err(EvalStatus::RuntimeFatal);
+    }
+    if let Some(refused) = eval_opcache_api_refusal(values)? {
+        return Ok(refused);
     }
     if !eval_opcache_cache_enabled() {
         return eval_opcache_invalidate_result(values);
@@ -347,6 +378,9 @@ pub(in crate::interpreter) fn eval_opcache_is_script_cached_in_file_cache_call(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if args.len() != 1 {
         return Err(EvalStatus::RuntimeFatal);
+    }
+    if let Some(refused) = eval_opcache_api_refusal(values)? {
+        return Ok(refused);
     }
     let path = eval_opcache_path_arg(&args[0], _context, _scope, values)?;
     eval_opcache_is_script_cached_in_file_cache_for_path(&path, values)

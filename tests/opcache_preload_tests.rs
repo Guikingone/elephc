@@ -763,3 +763,40 @@ try {
         "PRELOAD\nTAIL\nFINAL\nFUNCTION\nMAIN\n"
     );
 }
+
+/// A `return` NESTED in the preload file's control flow ends the PRELOAD, not the program.
+///
+/// Only a direct top-level `return` was confined to its file; one inside an `if` survived the
+/// inlining and returned from the combined main function, so the entry script never ran. The
+/// PR review's reproducer, verbatim, with the runtime condition both ways. MEASURED on reference
+/// PHP 8.5: `PRELOAD MAIN` when the condition holds, `PRELOAD TAIL MAIN` when it does not.
+#[test]
+fn a_conditional_return_in_the_preload_ends_only_the_preload() {
+    let dir = make_test_dir("opcache_preload_conditional_return");
+    fs::write(
+        dir.join("preload.php"),
+        "<?php\n echo \"PRELOAD\\n\";\n if (getenv(\"REVIEW_STOP\") === \"1\") { return; }\n echo \"TAIL\\n\";\n",
+    )
+    .unwrap();
+    let bin = compile_source(
+        &dir,
+        "main",
+        "<?php echo \"MAIN\\n\";\n",
+        &[
+            "opcache.enable_cli=1".to_string(),
+            "opcache.file_update_protection=0".to_string(),
+            format!("opcache.preload={}", dir.join("preload.php").display()),
+        ],
+    );
+    let run = |stop: &str| -> String {
+        let output = Command::new(&bin)
+            .env("REVIEW_STOP", stop)
+            .output()
+            .expect("failed to run compiled binary");
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+
+    assert_eq!(run("1"), "PRELOAD\nMAIN\n", "the return ends the preload only");
+    assert_eq!(run("0"), "PRELOAD\nTAIL\nMAIN\n", "without it the preload runs to its end");
+}

@@ -119,12 +119,6 @@ pub extern "C" fn __elephc_eval_configure_opcache(
     crate::script_cache::stamp_request_time_now();
 }
 
-/// Installs the compile-time `opcache.restrict_api` verdict for OPcache calls hidden in eval.
-#[no_mangle]
-pub extern "C" fn __elephc_eval_configure_opcache_restrict_api(denied: u8) {
-    crate::script_cache::config::set_restrict_api_denied(denied != 0);
-}
-
 /// Installs the accelerator diagnostic channel and applies php-src's startup validation
 /// of `opcache.file_cache` / `opcache.file_cache_read_only`.
 ///

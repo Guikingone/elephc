@@ -38,7 +38,8 @@ pub struct RuntimeCacheConfig {
     pub max_file_size: u64,
     /// `opcache.memory_consumption`, in bytes.
     pub memory_consumption: u64,
-    /// `opcache.max_accelerated_files`, as an entry count.
+    /// The runtime cache's entry capacity: `opcache.max_accelerated_files` rounded up to the
+    /// php-src hash prime, as `zend_accel_hash_init` does. See `accel_hash_max_num_entries`.
     pub max_accelerated_files: u64,
     /// `opcache.file_cache`. EMPTY means unset — php-src's C `NULL` default.
     pub file_cache: String,
@@ -49,8 +50,9 @@ pub struct RuntimeCacheConfig {
     pub log_verbosity_level: i64,
     /// `opcache.error_log`. Empty, or the literal `stderr`, means stderr.
     pub error_log: String,
-    /// `opcache.file_update_protection`, in seconds; `0` disables the guard.
-    pub file_update_protection: u64,
+    /// `opcache.file_update_protection`, in seconds; `0` disables the guard. SIGNED, as the
+    /// directive is: php-src accepts a negative value and still evaluates its predicate.
+    pub file_update_protection: i64,
     /// `opcache.blacklist_filename` — a `glob()` naming the files that list the paths to
     /// run but never cache. Empty means unset.
     pub blacklist_filename: String,
@@ -114,8 +116,14 @@ pub fn runtime_cache_config(
         revalidate_freq: count("opcache.revalidate_freq"),
         max_file_size: count("opcache.max_file_size"),
         memory_consumption: count("opcache.memory_consumption"),
-        // Runtime admission uses the prime-rounded table capacity, while the prelude still
-        // reports the raw directive value in `opcache_get_configuration()`.
+        // THE PRIME, NOT THE DIRECTIVE. php-src sizes the hash with the first table prime at or
+        // above the directive, and admits scripts up to that capacity — the same figure
+        // `max_cached_keys` already reports. The raw directive refused the 201st script under
+        // `max_accelerated_files=200`. MEASURED with 210 scripts: reference caches all 210 (223
+        // slots), elephc stopped at 200 and reported `cache_full`. The prelude still reports the
+        // raw directive value in `opcache_get_configuration()`, and the scripts compiled into the
+        // binary are subtracted where the configuration is installed
+        // (`configure_eval_opcache`).
         max_accelerated_files: accel_hash_max_num_entries(
             i64::try_from(count("opcache.max_accelerated_files")).unwrap_or(i64::MAX),
         ) as u64,
@@ -123,7 +131,11 @@ pub fn runtime_cache_config(
         file_cache_read_only: boolean("opcache.file_cache_read_only"),
         log_verbosity_level: signed("opcache.log_verbosity_level"),
         error_log: text("opcache.error_log"),
-        file_update_protection: count("opcache.file_update_protection"),
+        // SIGNED, like the directive. `count` clamps a negative to `0`, which DISABLES the
+        // guard — while php-src evaluates `request_time - protection < mtime` for any non-zero
+        // value, so `-1` still refuses a file dated more than a second ahead. MEASURED with
+        // `-1` and a file dated an hour ahead: reference refuses it, elephc cached it.
+        file_update_protection: signed("opcache.file_update_protection"),
         blacklist_filename: text("opcache.blacklist_filename"),
     }
 }
@@ -166,18 +178,6 @@ mod tests {
         assert!(runtime_cache_config(PHP_85, false, &overrides).enabled);
     }
 
-    /// Runtime admission follows the same prime-rounded capacity reported by OPcache status.
-    #[test]
-    fn max_accelerated_files_uses_the_rounded_runtime_capacity() {
-        let overrides = [
-            ("opcache.enable_cli".to_string(), "1".to_string()),
-            ("opcache.max_accelerated_files".to_string(), "200".to_string()),
-        ];
-
-        let config = runtime_cache_config(PHP_85, false, &overrides);
-        assert_eq!(config.max_accelerated_files, 223);
-    }
-
     /// Verifies `--ini opcache.enable=0` turns a `--web` binary's cache off.
     #[test]
     fn the_master_switch_turns_a_web_binary_off() {
@@ -198,7 +198,23 @@ mod tests {
         assert_eq!(config.revalidate_freq, 2);
         assert_eq!(config.max_file_size, 0);
         assert_eq!(config.memory_consumption, 134_217_728);
-        assert_eq!(config.max_accelerated_files, 10_000);
+        // The DEFAULT directive is 10000, and the runtime capacity is its hash prime.
+        assert_eq!(config.max_accelerated_files, 16_229);
+    }
+
+    /// The runtime capacity is the hash PRIME, and the protection keeps its SIGN.
+    ///
+    /// MEASURED: with `max_accelerated_files=200` reference caches 210 scripts (223 slots);
+    /// with `file_update_protection=-1` it still refuses a file dated an hour ahead.
+    #[test]
+    fn capacity_is_the_prime_and_protection_keeps_its_sign() {
+        let overrides = [
+            ("opcache.max_accelerated_files".to_string(), "200".to_string()),
+            ("opcache.file_update_protection".to_string(), "-1".to_string()),
+        ];
+        let config = runtime_cache_config(80500, false, &overrides);
+        assert_eq!(config.max_accelerated_files, 223);
+        assert_eq!(config.file_update_protection, -1);
     }
 
     /// Verifies the file-cache and diagnostic directives default to php-src's own values.

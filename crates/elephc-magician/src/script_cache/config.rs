@@ -20,7 +20,7 @@
 //!   links this archive directly observes the cache DISABLED, which is the
 //!   pre-existing behaviour.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 
 /// The `opcache.*` subset that governs what the runtime script cache actually does.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,8 +38,13 @@ pub(crate) struct ScriptCacheConfig {
     /// `opcache.max_accelerated_files` — the cache's entry-count ceiling.
     pub(crate) max_accelerated_files: usize,
     /// `opcache.file_update_protection` — refuse to cache a file this many seconds
-    /// young, so a file caught mid-write is never stored. `0` disables the guard.
-    pub(crate) file_update_protection: u64,
+    /// young, so a file caught mid-write is never stored. `0` disables the guard. SIGNED, as
+    /// the directive is: a negative value still refuses a file dated ahead of the clock.
+    pub(crate) file_update_protection: i64,
+    /// Whether `opcache.restrict_api` denies this binary's OPcache API calls — the compiler's
+    /// verdict, installed once. The interpreter's OPcache handlers refuse on it, so a call the
+    /// compiler could not see is refused exactly as the injected native bodies refuse theirs.
+    pub(crate) api_restricted: bool,
 }
 
 impl ScriptCacheConfig {
@@ -57,6 +62,7 @@ impl ScriptCacheConfig {
             memory_consumption: 128 * 1024 * 1024,
             max_accelerated_files: 10_000,
             file_update_protection: 2,
+            api_restricted: false,
         }
     }
 
@@ -87,7 +93,9 @@ impl ScriptCacheConfig {
         };
         // Under a NON-ZERO guard a future-dated file has a negative age and is refused while
         // the clock catches up, which is what php-src's comparison does with the same inputs.
-        now.saturating_sub(mtime) >= self.file_update_protection as i64
+        // php-src spells it `request_time - protection < mtime` → refuse; for a NEGATIVE
+        // protection that refuses only a file dated more than `|protection|` ahead.
+        now.saturating_sub(mtime) >= self.file_update_protection
     }
 
     /// Returns whether a file of `size` bytes may be admitted under `max_file_size`.
@@ -112,24 +120,8 @@ thread_local! {
 pub(crate) fn set_config(config: ScriptCacheConfig) {
     SCRIPT_CACHE_CONFIG.with(|cell| *cell.borrow_mut() = config);
     REQUEST_TIME.with(|cell| cell.set(None));
-    RESTRICT_API_DENIED.with(|cell| cell.set(false));
 }
 
-thread_local! {
-    /// The compile-time `opcache.restrict_api` verdict for opaque eval handlers. It is set by
-    /// generated code beside the runtime-cache configuration and reset with that configuration.
-    static RESTRICT_API_DENIED: Cell<bool> = const { Cell::new(false) };
-}
-
-/// Installs the compile-time restriction verdict used when eval source names OPcache at runtime.
-pub(crate) fn set_restrict_api_denied(denied: bool) {
-    RESTRICT_API_DENIED.with(|cell| cell.set(denied));
-}
-
-/// Returns whether an eval-only OPcache call must be denied for this binary.
-pub(crate) fn restrict_api_denied() -> bool {
-    RESTRICT_API_DENIED.with(Cell::get)
-}
 
 thread_local! {
     /// php-src's `ZCG(request_time)`: the clock every freshness decision reads, FIXED when
@@ -185,7 +177,11 @@ pub(crate) fn config() -> ScriptCacheConfig {
             config.validate_timestamps = value != 0;
         }
         if let Some(value) = overrides[DIRECTIVE_FILE_UPDATE_PROTECTION as usize] {
-            config.file_update_protection = value;
+            // The bridge carries every directive as a 64-bit word; this one is signed.
+            config.file_update_protection = value as i64;
+        }
+        if let Some(value) = overrides[DIRECTIVE_API_RESTRICTED as usize] {
+            config.api_restricted = value != 0;
         }
     });
     config
@@ -197,12 +193,15 @@ pub const DIRECTIVE_REVALIDATE_FREQ: u64 = 0;
 pub const DIRECTIVE_VALIDATE_TIMESTAMPS: u64 = 1;
 /// `opcache.file_update_protection`, as [`swap_directive`] addresses it.
 pub const DIRECTIVE_FILE_UPDATE_PROTECTION: u64 = 2;
+/// The compiler's `opcache.restrict_api` verdict, as [`swap_directive`] addresses it. Installed
+/// by the compiled configuration only; nothing maps an `ini_set()` onto it.
+pub const DIRECTIVE_API_RESTRICTED: u64 = 3;
 
 /// The value [`swap_directive`] answers for an id it does not know.
 pub const DIRECTIVE_UNKNOWN: u64 = u64::MAX;
 
 /// How many ids [`swap_directive`] knows; the override table's width.
-const DIRECTIVE_COUNT: usize = 3;
+const DIRECTIVE_COUNT: usize = 4;
 
 /// Installs one directive's value on the live configuration, returning the previous one.
 ///
@@ -228,7 +227,8 @@ pub fn swap_directive(id: u64, value: u64, as_override: bool) -> u64 {
     let previous = match id {
         DIRECTIVE_REVALIDATE_FREQ => effective.revalidate_freq,
         DIRECTIVE_VALIDATE_TIMESTAMPS => u64::from(effective.validate_timestamps),
-        DIRECTIVE_FILE_UPDATE_PROTECTION => effective.file_update_protection,
+        DIRECTIVE_FILE_UPDATE_PROTECTION => effective.file_update_protection as u64,
+        DIRECTIVE_API_RESTRICTED => u64::from(effective.api_restricted),
         _ => return DIRECTIVE_UNKNOWN,
     };
     if as_override {
@@ -243,7 +243,8 @@ pub fn swap_directive(id: u64, value: u64, as_override: bool) -> u64 {
         match id {
             DIRECTIVE_REVALIDATE_FREQ => config.revalidate_freq = value,
             DIRECTIVE_VALIDATE_TIMESTAMPS => config.validate_timestamps = value != 0,
-            DIRECTIVE_FILE_UPDATE_PROTECTION => config.file_update_protection = value,
+            DIRECTIVE_FILE_UPDATE_PROTECTION => config.file_update_protection = value as i64,
+            DIRECTIVE_API_RESTRICTED => config.api_restricted = value != 0,
             _ => {}
         }
     });
@@ -309,6 +310,23 @@ mod tests {
         assert!(config.admits_size(1023));
         assert!(config.admits_size(1024));
         assert!(!config.admits_size(1025));
+    }
+
+    /// Verifies a NEGATIVE protection still refuses a file dated ahead of the clock.
+    ///
+    /// php-src refuses when `request_time - protection < mtime`, for any non-zero value. With
+    /// `-1` that admits every ordinary file and refuses one dated more than a second ahead.
+    /// MEASURED: reference refuses a file dated an hour ahead under `-1`; elephc read `-1` as
+    /// `0`, which disables the guard, and cached it.
+    #[test]
+    fn a_negative_protection_refuses_a_future_file() {
+        let config = ScriptCacheConfig {
+            file_update_protection: -1,
+            ..ScriptCacheConfig::disabled()
+        };
+        assert!(config.admits_age(Some(1_000), 1_000), "an ordinary file is admitted");
+        assert!(config.admits_age(Some(1_001), 1_000), "one second ahead: `1000 + 1 < 1001` is false");
+        assert!(!config.admits_age(Some(4_600), 1_000), "an hour ahead is refused");
     }
 
     /// Verifies the `file_update_protection` boundary, which is a STRICT `<` on the age.

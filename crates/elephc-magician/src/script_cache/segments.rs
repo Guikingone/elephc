@@ -177,13 +177,53 @@ pub(crate) fn find_php_close_tag(bytes: &[u8], start: usize) -> Option<usize> {
 
 /// Returns the index just past the closing quote of the string opening at `open`, or `None`
 /// when it never closes. A backslash escapes the next byte in all three quote styles.
+///
+/// Double-quoted and backtick strings INTERPOLATE, and a complex interpolation `{$expr}` (or
+/// `${expr}`) may contain a string of the SAME quote style: `"{$a["?>"]}"` is valid PHP. Ending
+/// the outer string at that inner quote left the `?>` inside it looking like code, and the block
+/// was cut there. MEASURED: reference runs `echo "{$a["?>"]}";` and prints the value; elephc
+/// raised a parse error. The interpolation is skipped as a balanced `{...}`, its own strings
+/// included, before the outer string resumes. Found by GLM.
 fn skip_quoted(bytes: &[u8], open: usize) -> Option<usize> {
     let quote = bytes[open];
+    let interpolates = quote != b'\'';
     let mut i = open + 1;
     while i < bytes.len() {
         match bytes[i] {
             b'\\' => i += 2,
+            b'{' if interpolates && bytes.get(i + 1) == Some(&b'$') => {
+                i = skip_interpolation(bytes, i)?;
+            }
+            b'$' if interpolates && bytes.get(i + 1) == Some(&b'{') => {
+                i = skip_interpolation(bytes, i + 1)?;
+            }
             byte if byte == quote => return Some(i + 1),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// Returns the index just past the `}` that balances the `{` at `open`, skipping any string
+/// inside the braces. `None` when it never balances, which leaves the string unterminated —
+/// the parser then reports what is wrong, as PHP does.
+fn skip_interpolation(bytes: &[u8], open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut i = open;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' => {
+                depth += 1;
+                i += 1;
+            }
+            b'}' => {
+                depth -= 1;
+                i += 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            b'\'' | b'"' | b'`' => i = skip_quoted(bytes, i)?,
             _ => i += 1,
         }
     }
@@ -346,6 +386,36 @@ mod tests {
                 String::from_utf8_lossy(source)
             );
         }
+    }
+
+    /// Verifies a `?>` inside a string NESTED in `{$...}` / `${...}` interpolation stays in the
+    /// string.
+    ///
+    /// `"{$a["?>"]}"` is valid PHP: the interpolation holds a string of the same quote style.
+    /// Ending the outer string at that inner quote exposed the `?>` as code. MEASURED:
+    /// reference prints the value; elephc raised a parse error. Found by GLM, whose own input
+    /// `"{$a["k"]}"` happened to balance and worked before — the `?>` is what breaks it.
+    #[test]
+    fn interpolation_hides_a_nested_close_tag() {
+        let sources: [&[u8]; 3] = [
+            b"<?php $a = ['?>' => 1]; echo \"{$a[\"?>\"]}\"; ?>tail",
+            b"<?php $a = ['?>' => 1]; echo \"x{$a[\"?>\"]}y\"; ?>tail",
+            b"<?php $a = ['k' => ['?>' => 1]]; echo \"{$a['k'][\"?>\"]}\"; ?>tail",
+        ];
+        for source in sources {
+            assert_eq!(
+                shape(&segment_script_fresh(source)),
+                ["code", "out(tail)"],
+                "{}",
+                String::from_utf8_lossy(source)
+            );
+        }
+        let dollar_brace: &[u8] = b"<?php echo \"${a[\"?>\"]}\"; ?>tail";
+        assert_eq!(
+            find_php_close_tag(dollar_brace, 5),
+            Some(dollar_brace.len() - 6),
+            "the `${{...}}` form is skipped the same way"
+        );
     }
 
     /// Verifies a `?>` inside a `//` or `#` line comment DOES close PHP mode, as PHP specifies,

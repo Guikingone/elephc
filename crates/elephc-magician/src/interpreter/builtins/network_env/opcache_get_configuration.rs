@@ -59,6 +59,9 @@ pub(in crate::interpreter) fn eval_opcache_get_configuration_call(
 pub(in crate::interpreter) fn eval_opcache_get_configuration_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(refused) = super::opcache_file_functions::eval_opcache_api_refusal(values)? {
+        return Ok(refused);
+    }
     let directives = build_directives(values)?;
     let version = build_version(values)?;
     let blacklist = build_blacklist(values)?;

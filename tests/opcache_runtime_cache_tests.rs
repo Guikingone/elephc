@@ -1197,6 +1197,59 @@ echo 'r=', var_export(eval('return ' . $n . '($p);'), true), "
     }
 }
 
+/// The runtime capacity is php-src's hash prime, less the slots the compiled-in scripts hold.
+///
+/// With `max_accelerated_files=200`, php-src sizes the hash at the prime 223 and admits scripts
+/// until it is full — the entry script included. The runtime tier used the raw 200 and refused
+/// the 201st; it then used the full 223 and reported more scripts than keys. MEASURED on
+/// reference PHP 8.5 with an absolute entry path: 222 dynamic scripts are cached beside the
+/// entry, the 223rd compile finds the cache full, and `max_cached_keys` is 223.
+#[test]
+fn the_runtime_capacity_is_the_prime_less_the_compiled_scripts() {
+    let dir = make_test_dir("opcache_rt_capacity_boundary");
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+$d = __DIR__ . "/many";
+@mkdir($d);
+for ($i = 0; $i < 230; $i++) {
+    $f = "$d/f$i.php";
+    file_put_contents($f, "<?php return 1;\n");
+    touch($f, 1000000);
+}
+clearstatcache();
+$firstFull = -1;
+for ($i = 0; $i < 230; $i++) {
+    opcache_compile_file("$d/f$i.php");
+    if ($firstFull < 0 && opcache_get_status(false)["cache_full"]) { $firstFull = $i; }
+}
+$cached = 0;
+for ($i = 0; $i < 230; $i++) { if (opcache_is_script_cached("$d/f$i.php")) { $cached++; } }
+$s = opcache_get_status(false);
+echo "cached=$cached\n";
+echo "first_full=$firstFull\n";
+echo "scripts=", $s["opcache_statistics"]["num_cached_scripts"], "\n";
+echo "keys=", $s["opcache_statistics"]["max_cached_keys"], "\n";
+"#,
+    )
+    .unwrap();
+
+    let out = run_binary(&compile_with_flags(
+        &dir,
+        &[
+            "opcache.enable_cli=1",
+            "opcache.file_update_protection=0",
+            "opcache.max_accelerated_files=200",
+        ],
+        &["--php-version", "8.5"],
+    ));
+
+    assert_eq!(field(&out, "cached"), "222", "{out}");
+    assert_eq!(field(&out, "first_full"), "222", "{out}");
+    assert_eq!(field(&out, "scripts"), "223", "never more scripts than keys:\n{out}");
+    assert_eq!(field(&out, "keys"), "223", "{out}");
+}
+
 /// The NATIVE `opcache_compile_file()` warns about a file it cannot open, as the eval one does.
 ///
 /// Reference prints `Failed to open stream`, then `Failed opening ... for inclusion`, and

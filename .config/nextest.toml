@@ -194,6 +194,28 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 filter = 'binary(web_tests) and test(=web_eval_superglobal_reload_releases_replaced_owners)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
+# The two `web_session_tests` cases that compile a `--web` program WITH `eval()` — the only way
+# to reach the runtime script cache, which is what they test. Measured with `--timings`: that
+# program is ~3.1M lines of assembly and takes ~34s to compile on a fast unloaded Mac, 61% of it
+# assembling the object file. The volume is the eval bridge, not OPcache: the same `--web`
+# program with `eval()` and no OPcache call is already 3.08M lines. Both terminated at the 60s
+# guard on the macOS runners, on both attempts, in two consecutive runs.
+[[profile.default.overrides]]
+filter = 'binary(web_session_tests) and test(=opcache_reset_is_performed_at_the_next_request_boundary)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'binary(web_session_tests) and test(=opcache_reset_is_performed_at_the_next_request_boundary)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.default.overrides]]
+filter = 'binary(web_session_tests) and test(=the_revalidate_field_is_the_entrys_own_deadline)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'binary(web_session_tests) and test(=the_revalidate_field_is_the_entrys_own_deadline)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
 # PDO_ODBC surface/live fixtures compile the full versioned PDO prelude and may
 # also rebuild the optional system-client archive on a cold local cache.
 [[profile.default.overrides]]

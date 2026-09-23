@@ -431,145 +431,14 @@ pub fn inject_preload_require(
     // `once` and `required` both set: reference preloads a file exactly once and a preload path
     // that stops resolving is fatal, which is `require_once`, not `include`.
     let mut with_preload = Vec::with_capacity(program.len() + 1);
-    let synthetic_span = Span::new(0, 0);
-    let include = Stmt::new(
+    with_preload.push(Stmt::new(
         StmtKind::Include {
-            path: Expr::new(ExprKind::StringLiteral(resolved), synthetic_span),
+            path: Expr::new(ExprKind::StringLiteral(resolved), Span::new(0, 0)),
             once: true,
             required: true,
         },
-        synthetic_span,
-    );
-    // This block gives nested file-level returns a target after the resolver expands the
-    // include. A `do` block does not create a PHP variable scope, so top-level state keeps the
-    // same CLI behavior while return can exit the preload file without exiting the entry script.
-    // The condition is runtime-unknown to the optimizer but necessarily false: environment
-    // values cannot contain NUL, so `getenv(...)` can never equal this one-byte string.
-    let boundary_condition = e_binop(
-        e_call("getenv", vec![e_str("__ELEPHC_PRELOAD_RETURN_BOUNDARY")]),
-        BinOp::StrictEq,
-        e_str("\0"),
-    );
-    with_preload.push(Stmt::new(
-        StmtKind::DoWhile {
-            body: vec![include],
-            condition: boundary_condition,
-        },
-        synthetic_span,
+        Span::new(0, 0),
     ));
     with_preload.extend(program);
     with_preload
-}
-
-/// Rewrites returns from the injected preload file to exit its one-shot include boundary.
-///
-/// The resolver has already replaced direct top-level returns, because it can truncate their
-/// unreachable tails. Returns nested in conditions and loops need a control-flow exit instead;
-/// the injected `do { require_once preload; } while (false)` is their target. Loop and switch
-/// depth is counted so each return exits every nested breakable construct plus that wrapper.
-/// Function and class bodies remain opaque because their returns belong to their declarations.
-#[allow(dead_code)] // The compiler binary calls this after resolver expansion; library-only builds do not.
-pub(crate) fn rewrite_injected_preload_returns(program: &mut [Stmt]) {
-    for statement in program {
-        if rewrite_preload_boundary_in_statement(statement) {
-            return;
-        }
-    }
-}
-
-/// Finds the injected boundary through resolver-only wrappers without entering user control flow.
-fn rewrite_preload_boundary_in_statement(statement: &mut Stmt) -> bool {
-    match &mut statement.kind {
-        StmtKind::DoWhile { body, condition }
-            if statement.span.line == 0
-                && condition.span.line == 0
-                && body
-                    .iter()
-                    .any(|stmt| matches!(stmt.kind, StmtKind::IncludeOnceGuard { .. })) =>
-        {
-            rewrite_preload_returns_in_statements(body, 1);
-            true
-        }
-        StmtKind::NamespaceBlock { body, .. }
-        | StmtKind::IncludeOnceGuard { body, .. }
-        | StmtKind::Synthetic(body) => body
-            .iter_mut()
-            .any(rewrite_preload_boundary_in_statement),
-        _ => false,
-    }
-}
-
-fn rewrite_preload_returns_in_statements(statements: &mut [Stmt], breakable_depth: usize) {
-    for statement in statements {
-        let span = statement.span;
-        match &mut statement.kind {
-            StmtKind::Return(value) => {
-                let mut exit = Vec::with_capacity(2);
-                if let Some(value) = value.take() {
-                    // The value is discarded, but evaluating the expression remains observable.
-                    exit.push(Stmt::new(StmtKind::ExprStmt(value), span));
-                }
-                exit.push(Stmt::new(StmtKind::Break(breakable_depth), span));
-                statement.kind = StmtKind::Synthetic(exit);
-            }
-            StmtKind::If {
-                then_body,
-                elseif_clauses,
-                else_body,
-                ..
-            } => {
-                rewrite_preload_returns_in_statements(then_body, breakable_depth);
-                for (_, body) in elseif_clauses {
-                    rewrite_preload_returns_in_statements(body, breakable_depth);
-                }
-                if let Some(body) = else_body {
-                    rewrite_preload_returns_in_statements(body, breakable_depth);
-                }
-            }
-            StmtKind::IfDef {
-                then_body,
-                else_body,
-                ..
-            } => {
-                rewrite_preload_returns_in_statements(then_body, breakable_depth);
-                if let Some(body) = else_body {
-                    rewrite_preload_returns_in_statements(body, breakable_depth);
-                }
-            }
-            StmtKind::While { body, .. }
-            | StmtKind::DoWhile { body, .. }
-            | StmtKind::Foreach { body, .. }
-            | StmtKind::For { body, .. } => {
-                rewrite_preload_returns_in_statements(body, breakable_depth + 1);
-            }
-            StmtKind::Switch { cases, default, .. } => {
-                for (_, body) in cases {
-                    rewrite_preload_returns_in_statements(body, breakable_depth + 1);
-                }
-                if let Some(body) = default {
-                    rewrite_preload_returns_in_statements(body, breakable_depth + 1);
-                }
-            }
-            StmtKind::Try {
-                try_body,
-                catches,
-                finally_body,
-            } => {
-                rewrite_preload_returns_in_statements(try_body, breakable_depth);
-                for catch in catches {
-                    rewrite_preload_returns_in_statements(&mut catch.body, breakable_depth);
-                }
-                if let Some(body) = finally_body {
-                    rewrite_preload_returns_in_statements(body, breakable_depth);
-                }
-            }
-            StmtKind::NamespaceBlock { body, .. }
-            | StmtKind::IncludeOnceGuard { body, .. }
-            | StmtKind::Synthetic(body) => {
-                rewrite_preload_returns_in_statements(body, breakable_depth);
-            }
-            // Declarations own their return statements. Closure expressions are not walked.
-            _ => {}
-        }
-    }
 }

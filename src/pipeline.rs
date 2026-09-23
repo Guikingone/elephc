@@ -138,7 +138,7 @@ pub(crate) fn compile(config: CliConfig) {
     let phase_started = Instant::now();
     // `resolve_collecting_includes` also hands back the canonical path of every file the
     // resolver statically inlined — group 2 of the OPcache script manifest.
-    let (mut ast, opcache_included_files) =
+    let (ast, opcache_included_files) =
         match resolver::resolve_collecting_includes_with_defines(parsed, parent, &defines) {
         Ok(resolved) => resolved,
         Err(e) => {
@@ -147,9 +147,6 @@ pub(crate) fn compile(config: CliConfig) {
             process::exit(1);
         }
     };
-    // The injected preload include is wrapped in a one-shot `do` boundary. Rewrite nested
-    // file-level returns now that the resolver has inlined its include body.
-    opcache_prelude::rewrite_injected_preload_returns(&mut ast);
     let ast = autoload::collect_aliases(ast);
     timings.record_since("resolve", phase_started);
 
@@ -309,6 +306,13 @@ pub(crate) fn compile(config: CliConfig) {
     // manifest deliberately drops entries it cannot stat, so its first element is not a
     // dependable stand-in. See `opcache_prelude::restrict_api_denies`.
     let opcache_entry_path = opcache_prelude::canonical_entry_path(filename);
+    // The SAME verdict for the eval bridge: an OPcache call hidden in a runtime-provided
+    // `eval()` source gets no native body, so the interpreter must refuse it itself.
+    codegen::set_opcache_api_restricted(opcache_prelude::restrict_api_denies(
+        opcache_entry_path.as_deref(),
+        php_version.version_id(),
+        &ini_overrides,
+    ));
     // `opcache.preload` is a COMPILE-TIME decision, resolved here for the same reason
     // `restrict_api` is: reference PHP preloads during STARTUP, before the script runs, and
     // elephc's INI is fixed when the binary is built. The three outcomes mirror reference exactly
@@ -543,6 +547,8 @@ pub(crate) fn compile(config: CliConfig) {
         &opcache_included_files,
         &opcache_autoloaded_files,
     );
+    // The manifest's scripts hold hash slots, so the runtime tier gets what they leave.
+    codegen::set_opcache_manifest_len(opcache_manifest.len());
     // Re-decide `opcache.preload` against the COMPLETE manifest, which is the set
     // `preload_statistics` reports. Only the `in_manifest` arm can differ from the verdict taken
     // above (the directive, the SAPI gate and the path resolution are all manifest-independent).

@@ -83,6 +83,9 @@ pub(in crate::interpreter) fn eval_builtin_with_values(
     // answered `0`, reference answers `1` to both. The one remaining terminal arm is the
     // `void` `opcache_jit_blacklist`, which yields `NULL`.
     if name == "opcache_is_script_cached" {
+        if let Some(refused) = eval_opcache_api_refusal(values)? {
+            return Ok(Some(refused));
+        }
         let [filename] = evaluated_args else {
             return Err(EvalStatus::RuntimeFatal);
         };
@@ -90,6 +93,9 @@ pub(in crate::interpreter) fn eval_builtin_with_values(
         return Ok(Some(eval_opcache_is_script_cached_for_path(&path, values)?));
     }
     if name == "opcache_invalidate" {
+        if let Some(refused) = eval_opcache_api_refusal(values)? {
+            return Ok(Some(refused));
+        }
         if evaluated_args.is_empty() || evaluated_args.len() > 2 {
             return Err(EvalStatus::RuntimeFatal);
         }
@@ -108,6 +114,9 @@ pub(in crate::interpreter) fn eval_builtin_with_values(
         return Ok(Some(eval_opcache_compile_file_checked(&path, context, values)?));
     }
     if name == "opcache_is_script_cached_in_file_cache" {
+        if let Some(refused) = eval_opcache_api_refusal(values)? {
+            return Ok(Some(refused));
+        }
         let [filename] = evaluated_args else {
             return Err(EvalStatus::RuntimeFatal);
         };
