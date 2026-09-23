@@ -11069,6 +11069,24 @@ return $first . ":" . $items[0] . ":" . $items[1] . ":" . $iterFirst . ":" . $it
     assert_eq!(out, "array:A:B:iter:R:start!:start!!");
 }
 
+/// Eval keeps an object reference alias when an AOT function changes the value type.
+#[test]
+fn test_eval_native_object_reference_can_retype_aliased_local() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalReferenceUser {}
+function change_eval_reference(EvalReferenceUser &$user): void {
+    $user = "changed";
+}
+echo eval('$user = new EvalReferenceUser();
+$alias =& $user;
+change_eval_reference($user);
+return $alias;');
+"#,
+    );
+    assert_eq!(out, "changed");
+}
+
 /// Verifies eval can dispatch generated/AOT variadic functions through the native bridge.
 #[test]
 fn test_eval_fragment_can_call_native_variadic_user_function() {

@@ -145,9 +145,11 @@ fn native_function_raw_ref_kind(param_type: Option<&EvalParameterType>) -> Optio
         return None;
     }
     match param_type.variants().first()? {
+        // AOT object references use Mixed cells even though eval retains the declared
+        // class type for argument validation. A raw object pointer would be read as a box.
         EvalParameterTypeVariant::Class(_)
-        | EvalParameterTypeVariant::Iterable
-        | EvalParameterTypeVariant::Object => Some(NativeFunctionRawRefKind::OwnedHeap),
+        | EvalParameterTypeVariant::Object => None,
+        EvalParameterTypeVariant::Iterable => Some(NativeFunctionRawRefKind::OwnedHeap),
         EvalParameterTypeVariant::Array => None,
         EvalParameterTypeVariant::Bool => Some(NativeFunctionRawRefKind::Scalar { tag: EVAL_TAG_BOOL }),
         EvalParameterTypeVariant::Float => Some(NativeFunctionRawRefKind::Scalar { tag: EVAL_TAG_FLOAT }),
