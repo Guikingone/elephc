@@ -696,7 +696,19 @@ pub(crate) fn is_script_cached_decl(enabled: bool, manifest_paths: Expr) -> Stmt
         vec![],
         None,
     )];
-    body.extend(path_normalization_stmts());
+    // A DELETED FILE CAN STILL BE CACHED, as it can for `opcache_invalidate()` below. php-src
+    // looks the entry up and only then validates, so with `validate_timestamps=0` a script
+    // whose source was unlinked is still reported cached. MEASURED:
+    // `opcache_compile_file($p); unlink($p); opcache_is_script_cached($p)` answers `true` in
+    // reference; elephc answered `false`, because `realpath()` had already failed and the
+    // function never reached the cache. The runtime tier resolves the surviving directory
+    // itself and applies the validation rule, so the arm just asks it. The manifest is not
+    // consulted: its entries are compiled in and have no file to lose.
+    body.extend(path_normalization_stmts_with_fallback(vec![s_return(e_binop(
+        e_call("__elephc_opcache_rt_is_cached", vec![e_var("filename")]),
+        BinOp::StrictNotEq,
+        e_int(0),
+    ))]));
     body.push(s_if(
         e_call(
             "__elephc_opcache_invalidate_state",
@@ -875,7 +887,41 @@ pub(crate) fn compile_file_decl(enabled: bool, manifest_paths: Expr) -> Stmt {
         vec![],
         None,
     )];
-    body.extend(path_normalization_stmts());
+    // A FILE THAT CANNOT BE OPENED WARNS, twice, as it does in reference and as the eval
+    // surface's `eval_opcache_compile_file_for_path` already did with this exact wording. The
+    // native wrapper returned `false` in silence, so the two spellings of one call disagreed
+    // about whether anything had gone wrong. MEASURED on a missing path: reference prints
+    // `Failed to open stream` then `Failed opening ... for inclusion`; elephc printed nothing.
+    let filename = e_cast(CastType::String, e_var("filename"));
+    body.extend(path_normalization_stmts_with_fallback(vec![
+        s_expr(e_call(
+            "fwrite",
+            vec![
+                e_const("STDERR"),
+                e_binop(
+                    e_binop(e_str("Warning: opcache_compile_file("), BinOp::Concat, filename.clone()),
+                    BinOp::Concat,
+                    e_str("): Failed to open stream: No such file or directory\n"),
+                ),
+            ],
+        )),
+        s_expr(e_call(
+            "fwrite",
+            vec![
+                e_const("STDERR"),
+                e_binop(
+                    e_binop(
+                        e_str("Warning: opcache_compile_file(): Failed opening '"),
+                        BinOp::Concat,
+                        filename,
+                    ),
+                    BinOp::Concat,
+                    e_str("' for inclusion\n"),
+                ),
+            ],
+        )),
+        s_return(e_bool(false)),
+    ]));
     // OUTSIDE THE MANIFEST IS NOT A REFUSAL. A file the binary did not compile in can still
     // be compiled into the runtime tier, which is exactly what `opcache_compile_file()` is
     // for — reference PHP answers `true` for any file it can read and parse. Refusing every

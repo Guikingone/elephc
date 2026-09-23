@@ -330,11 +330,11 @@ fn fill_entry(
     // what was stored — so a hit is the same segments a parse would produce, for roughly a
     // quarter of the cost (see `file_store`). A miss, a stale entry or any I/O failure all
     // fall through to the parse below.
-    let from_disk = super::file_store::load(config, key, mtime, file_size);
+    let from_disk = super::file_store::load_entry(config, key, mtime, file_size);
     let parsed_here = from_disk.is_none();
-    let segments: Arc<[ScriptSegment]> = match from_disk {
-        Some(cached) => Arc::from(cached),
-        None => Arc::from(segment_script(&bytes, ParseMode::Fresh)),
+    let (segments, stored_mtime): (Arc<[ScriptSegment]>, Option<i64>) = match from_disk {
+        Some((cached, stored_mtime)) => (Arc::from(cached), stored_mtime),
+        None => (Arc::from(segment_script(&bytes, ParseMode::Fresh)), None),
     };
     let now = request_now();
     let mut cache = lock_script_cache();
@@ -370,7 +370,14 @@ fn fill_entry(
     // size refusal this one DOES count a miss — VERIFIED: with the guard raised, including a
     // fresh file moves `misses` 1 -> 2 and leaves `blacklist_misses` at 0, while
     // `num_cached_scripts` stays put.
-    if !config.admits_age(mtime, now) {
+    //
+    // ONLY FOR A SCRIPT PARSED HERE. The guard protects against caching a file caught
+    // part-written, which a disk hit cannot be: its bytes were admitted by an earlier
+    // compile. php-src loads the file cache BEFORE it reaches the age check, so an existing
+    // disk entry is admitted to memory however young the source looks. MEASURED with the
+    // protection raised to its maximum over an unchanged source: reference reports the
+    // script cached, elephc refused it.
+    if parsed_here && !config.admits_age(mtime, now) {
         return Ok(segments);
     }
     // A PENDING RESTART CLOSES ADMISSION. `opcache_reset()` schedules rather than flushes,
@@ -394,7 +401,14 @@ fn fill_entry(
         // exist to keep out — an age refusal would still have left a part-written file in
         // the on-disk cache, which is precisely what `file_update_protection` is for.
         // Re-writing one that came FROM the cache would be pure I/O for a byte-identical file.
-        super::file_store::store(config, key, mtime, file_size, &segments);
+        //
+        // THE DISK STORES THE RECORDED TIMESTAMP, NOT THE MTIME: `0` under
+        // `validate_timestamps=0`, exactly as the memory entry below does. php-src serializes
+        // the persistent script's own `timestamp`, so a validating reader compares that `0`
+        // with the real mtime and recompiles. MEASURED across two processes over an unchanged
+        // source: reference's reader missed on the library, elephc's hit.
+        let recorded = if config.validate_timestamps { mtime } else { Some(0) };
+        super::file_store::store(config, key, recorded, file_size, &segments);
     }
     let footprint: usize = segments
         .iter()
@@ -411,8 +425,16 @@ fn fill_entry(
         Entry {
             segments: Arc::clone(&segments),
             // Recorded only under validation, as php-src's `cache_script_in_shared_memory`
-            // does. See `is_unrecorded`.
-            timestamp: if config.validate_timestamps { mtime.unwrap_or(0) } else { 0 },
+            // does — see `is_unrecorded` — except that a DISK HIT keeps the timestamp it was
+            // stored with, as the deserialized script does in php-src. See
+            // `file_store::load_entry`.
+            timestamp: if !parsed_here {
+                stored_mtime.unwrap_or(0)
+            } else if config.validate_timestamps {
+                mtime.unwrap_or(0)
+            } else {
+                0
+            },
             footprint,
             hits: 0,
             last_used: now,

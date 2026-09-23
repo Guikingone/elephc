@@ -427,6 +427,112 @@ fn an_entry_admitted_without_validation_has_no_timestamp() {
     assert!(!after, "a non-forced invalidate compares 0 against the mtime and retires it");
 }
 
+/// Points the file cache at a per-test directory and returns it.
+fn with_file_cache(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "elephc-script-cache-fc-{}-{name}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("file-cache directory should be creatable");
+    crate::script_cache::file_cache::set_file_cache_config(
+        crate::script_cache::file_cache::FileCacheConfig {
+            path: dir.to_string_lossy().into_owned(),
+            read_only: false,
+        },
+    );
+    dir
+}
+
+/// Empties the in-memory cache, leaving the disk alone — a new process over the same directory.
+fn forget_memory() {
+    *lock_script_cache() = ScriptCache::default();
+}
+
+/// Verifies a DISK HIT keeps the timestamp it was stored with.
+///
+/// php-src's deserialized script keeps its `timestamp`. Deriving it from the reader's
+/// configuration recorded none under `validate_timestamps=0`, so once validation was turned
+/// back on the entry was never re-checked and a changed source kept running the stored
+/// version. MEASURED across two processes: reference printed `A B-longer`, elephc `A A`.
+#[test]
+fn a_disk_hit_keeps_its_stored_timestamp() {
+    let _guard = test_lock();
+    with_file_cache("disk_timestamp");
+    set_config(enabled_config(0));
+    let path = write_fixture("disk_timestamp", "<?php $x = 1;");
+    set_mtime(&path, 1_000_000);
+    load_script(&path).expect("the writer stores version A on disk");
+    forget_memory();
+
+    std::fs::write(&path, "B<?php $x = 1;").expect("fixture should be rewritable");
+    set_mtime(&path, 900_000);
+    set_config(ScriptCacheConfig {
+        validate_timestamps: false,
+        ..enabled_config(0)
+    });
+    assert_eq!(shape(&load_script(&path).unwrap()), ["code"], "unvalidated: disk A");
+
+    swap_directive(DIRECTIVE_VALIDATE_TIMESTAMPS, 1, true);
+    let second = shape(&load_script(&path).unwrap());
+    clear_directive_overrides();
+    assert_eq!(second, ["out", "code"], "validated against A's timestamp: B is read");
+}
+
+/// Verifies a disk entry written WITHOUT validation is a miss for a validating reader.
+///
+/// php-src serializes the recorded timestamp, which is `0` under `validate_timestamps=0`, so
+/// a reader that validates finds it matching no mtime and recompiles — even over an unchanged
+/// source. MEASURED across two processes: reference's reader missed, elephc's hit, because
+/// the disk carried the real mtime.
+#[test]
+fn an_unvalidated_disk_entry_is_a_miss_for_a_validating_reader() {
+    let _guard = test_lock();
+    with_file_cache("disk_unvalidated");
+    set_config(ScriptCacheConfig {
+        validate_timestamps: false,
+        ..enabled_config(0)
+    });
+    let path = write_fixture("disk_unvalidated", "<?php $x = 1;");
+    set_mtime(&path, 1_000_000);
+    load_script(&path).expect("the writer stores the entry on disk");
+    forget_memory();
+
+    set_config(enabled_config(0));
+    load_script(&path).expect("the reader loads the unchanged source");
+
+    assert_eq!(
+        (stats().hits, stats().misses),
+        (0, 1),
+        "the stored timestamp is 0, which no real mtime matches"
+    );
+}
+
+/// Verifies `file_update_protection` does not refuse an EXISTING disk entry.
+///
+/// The guard keeps a part-written file out of the cache; a disk hit's bytes were admitted by
+/// an earlier compile. php-src loads the file cache before reaching the age check. MEASURED
+/// with the protection at its maximum over an unchanged source: reference reports the script
+/// cached, elephc refused it.
+#[test]
+fn a_disk_hit_is_admitted_whatever_the_protection() {
+    let _guard = test_lock();
+    with_file_cache("disk_protection");
+    set_config(enabled_config(0));
+    let path = write_fixture("disk_protection", "<?php $x = 1;");
+    set_mtime(&path, 1_000_000);
+    load_script(&path).expect("the writer stores the entry on disk");
+    forget_memory();
+
+    set_config(ScriptCacheConfig {
+        file_update_protection: 2_147_483_647,
+        ..enabled_config(0)
+    });
+    load_script(&path).expect("the reader loads it from disk");
+
+    assert!(is_cached(&path), "a disk hit is not a fresh compile; the guard does not apply");
+}
+
 /// Verifies `opcache.validate_timestamps = 0` never re-reads a changed file.
 #[test]
 fn timestamp_validation_off_never_refills() {

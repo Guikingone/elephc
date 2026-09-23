@@ -127,6 +127,23 @@ pub(crate) fn load(
     mtime: Option<i64>,
     size: u64,
 ) -> Option<Vec<ScriptSegment>> {
+    load_entry(config, canonical, mtime, size).map(|(segments, _)| segments)
+}
+
+/// [`load`], also answering the TIMESTAMP THE ENTRY WAS STORED WITH.
+///
+/// A disk hit carries its own validation timestamp into memory, as php-src's does: the
+/// persistent script it deserializes keeps the `timestamp` it was written with. Deriving it
+/// from the reader's configuration instead lost it — a reader running with
+/// `validate_timestamps=0` recorded none, so once validation was turned back on the entry
+/// was never re-checked and a changed source kept running the stored version. MEASURED:
+/// reference printed `A B-longer`, elephc `A A`.
+pub(crate) fn load_entry(
+    config: &ScriptCacheConfig,
+    canonical: &Path,
+    mtime: Option<i64>,
+    size: u64,
+) -> Option<(Vec<ScriptSegment>, Option<i64>)> {
     let dir = cache_dir(config)?;
     let bytes = std::fs::read(entry_path(&dir, canonical)).ok()?;
     // The header is checked on the RAW BYTES, before anything is decoded. The same two fields
@@ -176,7 +193,7 @@ pub(crate) fn load(
     if config.validate_timestamps && cached.mtime != mtime {
         return None;
     }
-    Some(cached.segments)
+    Some((cached.segments, cached.mtime))
 }
 
 /// Writes a script's segments to the file cache, doing nothing when it cannot.
@@ -337,7 +354,16 @@ pub(crate) fn contains(canonical: &Path) -> bool {
 ///
 /// A missing directory, a missing entry and a read-only cache are all "nothing to remove"
 /// rather than errors — the same posture as `store`, which is silent when it cannot write.
+///
+/// READ-ONLY IS THE DIRECTIVE, NOT THE FILESYSTEM. This docblock always said a read-only
+/// cache removes nothing, and the code never checked: a writable directory under
+/// `opcache.file_cache_read_only=1` lost its entry to a forced invalidate. php-src's
+/// `zend_file_cache_invalidate` returns early on the directive. MEASURED across two processes
+/// sharing a cache: reference kept the entry, elephc deleted it.
 pub(crate) fn invalidate(config: &ScriptCacheConfig, canonical: &Path) -> bool {
+    if super::file_cache::file_cache_config().read_only {
+        return false;
+    }
     let Some(dir) = cache_dir(config) else {
         return false;
     };
@@ -470,6 +496,31 @@ mod tests {
 
         let theirs = Path::new("/tmp/elephc-file-store-theirs.php");
         assert!(load(&config, theirs, Some(42), source.len() as u64).is_none());
+    }
+
+    /// Verifies `opcache.file_cache_read_only` also forbids REMOVING an entry.
+    ///
+    /// php-src's `zend_file_cache_invalidate` returns early on the directive, so a forced
+    /// invalidate in a read-only reader keeps the entry a writer left. This deleted it whenever
+    /// the directory itself was writable. MEASURED across two processes: reference kept it.
+    #[test]
+    fn read_only_invalidates_nothing() {
+        let (config, dir) = configure("readonly_invalidate", false);
+        let source = b"<?php $a = 1;";
+        let segments = segment_script(source, ParseMode::Fresh);
+        let path = Path::new("/tmp/elephc-file-store-readonly-invalidate.php");
+        store(&config, path, Some(42), source.len() as u64, &segments);
+
+        set_file_cache_config(FileCacheConfig {
+            path: dir.to_string_lossy().into_owned(),
+            read_only: true,
+        });
+
+        assert!(!invalidate(&config, path), "a read-only cache removes nothing");
+        assert!(
+            load(&config, path, Some(42), source.len() as u64).is_some(),
+            "the writer's entry must survive the read-only reader"
+        );
     }
 
     /// Verifies `opcache.file_cache_read_only` writes nothing.

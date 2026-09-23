@@ -655,6 +655,69 @@ echo 'cuf=', (eval('return call_user_func($n, $lib);') ? '1' : '0'), "\n";
     );
 }
 
+/// KNOWN DIVERGENCE: a binary that never calls `eval()` cannot see another process's disk entry.
+///
+/// Reference answers `true` here: the entry is on disk, and a persistent file cache does not
+/// need this reader to have filled a memory cache first. elephc answers `false`, because the
+/// query folds to a constant in a binary that links no eval bridge. The interpreter is what
+/// reads the disk format, and linking it into every binary that merely NAMES a file-cache
+/// function would overturn the pay-for-use rule every `rt_*` lowering rests on. That trade is
+/// a decision for the project, not a fix, so it is pinned here rather than taken silently.
+///
+/// FLIP THIS TO PARITY if the bridge is ever linked for this case; do not delete it.
+#[test]
+fn a_reader_without_eval_cannot_see_the_disk_cache_as_a_known_divergence() {
+    let root = make_test_dir("opcache_fc_no_eval_reader");
+    let cache = root.join("file-cache");
+    fs::create_dir_all(&cache).unwrap();
+    let lib = root.join("lib.php");
+    fs::write(&lib, "<?php $lib_marker = 1;\n").unwrap();
+    let ini = [
+        "opcache.enable_cli=1".to_string(),
+        "opcache.file_update_protection=0".to_string(),
+        format!("opcache.file_cache={}", cache.display()),
+    ];
+    let ini: Vec<&str> = ini.iter().map(String::as_str).collect();
+
+    let seed = root.join("seed");
+    fs::create_dir_all(&seed).unwrap();
+    fs::write(
+        seed.join("main.php"),
+        format!("<?php\n$lib = '{}';\neval('include $lib;');\n", lib.display()),
+    )
+    .unwrap();
+    run_binary(&compile(&seed, &ini));
+    // THE PREMISE: without an entry on disk `0` is simply right, and this would pin nothing.
+    let entries = fs::read_dir(&cache)
+        .unwrap()
+        .flatten()
+        .filter_map(|build| fs::read_dir(build.path()).ok())
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "bin"))
+        .count();
+    assert_eq!(entries, 1, "the seed process must leave exactly one disk entry");
+
+    let reader = root.join("reader");
+    fs::create_dir_all(&reader).unwrap();
+    fs::write(
+        reader.join("main.php"),
+        format!(
+            "<?php\necho 'r=', (opcache_is_script_cached_in_file_cache('{}') ? '1' : '0'), \"\\n\";\n",
+            lib.display()
+        ),
+    )
+    .unwrap();
+    let out = run_binary(&compile(&reader, &ini));
+
+    assert_eq!(
+        field(&out, "r"),
+        "0",
+        "reference answers `1`; if elephc now does too, this divergence is CLOSED and the test \
+         should be flipped to assert parity rather than removed:\n{out}"
+    );
+}
+
 /// Verifies a FORCED invalidate also removes the entry from disk, not just from memory.
 ///
 /// php-src's `accel_invalidate` calls `zend_file_cache_invalidate` alongside the in-memory

@@ -883,6 +883,83 @@ echo 'still=', (opcache_is_script_cached($p) ? '1' : '0'), "\n";
     );
 }
 
+/// The NATIVE `opcache_compile_file()` warns about a file it cannot open, as the eval one does.
+///
+/// Reference prints `Failed to open stream`, then `Failed opening ... for inclusion`, and
+/// returns `false`. The eval surface already did; the native wrapper returned `false` in
+/// silence, so one call spelled two ways disagreed about whether anything went wrong.
+///
+/// The name is literal on purpose: only a literal spelling injects the native wrapper.
+#[test]
+fn compile_file_warns_about_a_missing_file() {
+    let dir = make_test_dir("opcache_rt_compile_missing_warns");
+    write_dynamic_fixture(
+        &dir,
+        r#"<?php
+$gone = __DIR__ . '/never-existed.php';
+echo 'r=', var_export(opcache_compile_file($gone), true), "\n";
+"#,
+    );
+
+    let bin = compile_with_flags(&dir, &["opcache.enable_cli=1"], &["--php-version", "8.5"]);
+    let output = Command::new(&bin).output().expect("failed to run binary");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let gone = dir.join("never-existed.php");
+
+    assert_eq!(field(&stdout, "r"), "false", "a missing file is not compiled:\n{stdout}");
+    assert!(
+        stderr.contains(&format!(
+            "Warning: opcache_compile_file({}): Failed to open stream: No such file or directory",
+            gone.display()
+        )),
+        "the open failure must be reported:\n{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "Warning: opcache_compile_file(): Failed opening '{}' for inclusion",
+            gone.display()
+        )),
+        "and so must the inclusion failure:\n{stderr}"
+    );
+}
+
+/// The NATIVE `opcache_is_script_cached()` still finds a cached script whose source was deleted.
+///
+/// php-src looks the entry up before validating, so with `validate_timestamps=0` an unlinked
+/// script is still reported cached. The native wrapper normalized the path with `realpath()`
+/// and answered `false` the moment that failed, without reaching the cache.
+///
+/// THE NAMES ARE LITERAL ON PURPOSE: this pins the native wrapper, which only a literal
+/// spelling injects.
+///
+/// MEASURED against reference PHP 8.5: `bool(true)`.
+#[test]
+fn the_native_query_finds_a_cached_script_whose_source_was_deleted() {
+    let dir = make_test_dir("opcache_rt_native_deleted_query");
+    write_dynamic_fixture(
+        &dir,
+        r#"<?php
+$p = realpath(__DIR__ . '/lib.php');
+opcache_compile_file($p);
+unlink($p);
+echo 'r=', (opcache_is_script_cached($p) ? 'true' : 'false'), "\n";
+"#,
+    );
+
+    let output = run_binary(&compile_with_flags(
+        &dir,
+        &[
+            "opcache.enable_cli=1",
+            "opcache.file_update_protection=0",
+            "opcache.validate_timestamps=0",
+        ],
+        &["--php-version", "8.5"],
+    ));
+
+    assert_eq!(field(&output, "r"), "true", "the entry outlives its source:\n{output}");
+}
+
 /// A VARIABLE call and `call_user_func_array` reach the eval OPcache handlers, as
 /// `call_user_func` always did.
 ///
