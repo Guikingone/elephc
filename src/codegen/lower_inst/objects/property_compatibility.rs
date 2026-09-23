@@ -46,6 +46,9 @@ pub(super) fn ensure_property_value_supported(
     if value_ty == &slot.php_type {
         return Ok(());
     }
+    if can_store_assoc_array_with_same_value_type(value_ty, &slot.php_type) {
+        return Ok(());
+    }
     // A runtime-shaped value carries no compile-time type to compare against the declared
     // slot, so the weak-mode guard decides it at run time. Rejecting it here instead is what
     // made the runtime-class dispatch drop a whole class and silently lose the write.
@@ -320,6 +323,18 @@ pub(super) fn can_store_assoc_array_as_mixed_property(value_ty: &PhpType, slot_t
         PhpType::AssocArray { value, .. } => value.codegen_repr() == PhpType::Mixed,
         _ => false,
     }
+}
+
+/// Hash keys carry their own runtime tags, so differing inferred key types need no conversion
+/// when the value payload representation is identical.
+fn can_store_assoc_array_with_same_value_type(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
+    matches!(
+        (value_ty.codegen_repr(), slot_ty.codegen_repr()),
+        (
+            PhpType::AssocArray { value: source, .. },
+            PhpType::AssocArray { value: target, .. }
+        ) if source.codegen_repr() == target.codegen_repr()
+    )
 }
 
 /// Returns true when a value can initialize a pointer-sized slot as null.

@@ -600,10 +600,97 @@ fn refine_object_property_type(
         };
         refined_ty
     };
-    if let Some(class_info) = checker.classes.get_mut(class_name) {
-        if let Some(slot) = class_info.visible_property_index(property) {
-            class_info.properties[slot].1 = refined_ty;
+    update_inherited_property_slot_type(checker, class_name, property, refined_ty);
+}
+
+/// Keeps copies of one inherited property slot in the same storage shape.
+///
+/// Class layouts copy an ancestor's property metadata before method bodies are checked. A
+/// later write can refine the ancestor's `Array(Never)` to an associative array, and codegen
+/// must see that refinement on every subclass that inherited the same physical slot. A child
+/// with a private property of the same name still carries the parent's slot, even though its
+/// name lookup points at a separate slot. A non-private array redeclaration also shares the
+/// slot, even when its default has already given it a different element type. All views of an
+/// associative slot need one hash representation that can hold every redeclared default.
+fn update_inherited_property_slot_type(
+    checker: &mut Checker,
+    class_name: &str,
+    property: &str,
+    ty: PhpType,
+) {
+    let Some(class_info) = checker.classes.get(class_name) else {
+        return;
+    };
+    let Some(slot) = class_info.visible_property_index(property) else {
+        return;
+    };
+    let old_ty = class_info.properties[slot].1.clone();
+    if old_ty == ty && !matches!(ty, PhpType::AssocArray { .. }) {
+        return;
+    }
+    let declaring_class = class_info
+        .property_declaring_classes
+        .get(property)
+        .cloned()
+        .unwrap_or_else(|| class_name.to_string());
+    let inheritors: Vec<String> = checker
+        .classes
+        .iter()
+        .filter(|(name, info)| {
+            (name.as_str() == declaring_class || checker.is_subclass_of(name, &declaring_class))
+                && info.properties.get(slot).is_some_and(|(name, _)| name == property)
+                && (info.visible_property_index(property) != Some(slot)
+                    || info.property_declaring_classes.get(property) == Some(&declaring_class)
+                    || info.properties[slot].1 == old_ty
+                    || matches!(
+                        (&ty, &info.properties[slot].1),
+                        (PhpType::AssocArray { .. }, PhpType::Array(_) | PhpType::AssocArray { .. })
+                    ))
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
+    let shared_ty = if matches!(ty, PhpType::AssocArray { .. }) {
+        inheritors.iter().fold(ty, |shared, name| {
+            checker
+                .classes
+                .get(name)
+                .map(|info| merge_associative_property_slot_type(checker, shared.clone(), &info.properties[slot].1))
+                .unwrap_or(shared)
+        })
+    } else {
+        ty
+    };
+    for name in inheritors {
+        if let Some(info) = checker.classes.get_mut(&name) {
+            info.properties[slot].1 = shared_ty.clone();
         }
+    }
+}
+
+/// Joins a redeclared array default into the hash representation shared by one physical slot.
+fn merge_associative_property_slot_type(
+    checker: &Checker,
+    shared: PhpType,
+    candidate: &PhpType,
+) -> PhpType {
+    let PhpType::AssocArray { key, value } = shared else {
+        return shared;
+    };
+    let (candidate_key, candidate_value) = match candidate {
+        PhpType::Array(element) if matches!(element.as_ref(), PhpType::Never) => {
+            return PhpType::AssocArray { key, value };
+        }
+        PhpType::Array(element) => (PhpType::Int, element.as_ref()),
+        PhpType::AssocArray { key, value } => (*key.clone(), value.as_ref()),
+        _ => return PhpType::AssocArray { key, value },
+    };
+    PhpType::AssocArray {
+        key: Box::new(merge_array_key_types(*key, candidate_key)),
+        value: Box::new(
+            checker
+                .merge_array_element_type(&value, candidate_value)
+                .unwrap_or(PhpType::Mixed),
+        ),
     }
 }
 
@@ -898,18 +985,16 @@ fn update_object_property_type(
     property_has_declared_type: bool,
     updated_prop_ty: PhpType,
 ) {
-    if let Some(class_info) = checker.classes.get_mut(class_name) {
-        if let Some(prop) = class_info
-            .properties
-            .iter_mut()
-            .find(|(name, _)| name == property)
-        {
-            if !property_has_declared_type
-                || declared_generic_array_can_use_assoc_storage(&prop.1, &updated_prop_ty)
-            {
-                prop.1 = updated_prop_ty;
-            }
-        }
+    let Some(class_info) = checker.classes.get(class_name) else {
+        return;
+    };
+    let Some((_, (_, current_ty))) = class_info.visible_property(property) else {
+        return;
+    };
+    if !property_has_declared_type
+        || declared_generic_array_can_use_assoc_storage(current_ty, &updated_prop_ty)
+    {
+        update_inherited_property_slot_type(checker, class_name, property, updated_prop_ty);
     }
 }
 
