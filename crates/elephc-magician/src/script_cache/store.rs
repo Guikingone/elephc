@@ -339,6 +339,26 @@ fn fill_entry(
             lock_script_cache().blacklist_misses += 1;
             return Ok(segments);
         }
+        // THE TIMESTAMP AND AGE REFUSALS COME NEXT, and BEFORE the size refusal. php-src's
+        // compile path reads the timestamp, refuses a `0` one, then applies
+        // `file_update_protection`, and only then `max_file_size`. The first two are counted as
+        // a MISS; the size refusal as a `blacklist_misses`. Checking size first put a file both
+        // rules refuse in the wrong counter. MEASURED with `max_file_size=1`: under a raised
+        // protection, reference counts `misses+1 blacklist_misses+0`, elephc counted the
+        // opposite; the same for an mtime-`0` file; and with the protection off, both agree on
+        // `blacklist_misses+1` — the size refusal alone.
+        //
+        // The refused script still RUNS: its segments are returned, as for every refusal here.
+        let reads_timestamp = config.validate_timestamps
+            || config.file_update_protection != 0
+            || config.max_file_size != 0;
+        let unrecordable = reads_timestamp && mtime.unwrap_or(0) == 0;
+        if unrecordable || !config.admits_age(mtime, request_now()) {
+            let segments: Arc<[ScriptSegment]> =
+                Arc::from(segment_script(&bytes, ParseMode::Fresh));
+            lock_script_cache().misses += 1;
+            return Ok(segments);
+        }
         // The SIZE refusal comes before any accounting, exactly like the blacklist one above
         // and for the same reason: php-src counts an oversized file as a `blacklist_misses`
         // and NOT as a miss. VERIFIED on reference PHP 8.5.10 — `-d opcache.max_file_size=50`
@@ -399,42 +419,10 @@ fn fill_entry(
     // protection raised to its maximum over an unchanged source: reference reports the
     // script cached, elephc refused it.
     //
-    // A SOURCE WITH NO TIMESTAMP IS NOT CACHED AT ALL, and that refusal comes first. php-src's
-    // compile path reads the timestamp before compiling and hands a `0` straight back to the
-    // original compiler — "we can't obtain a timestamp, we won't cache it". Admitting one
-    // stored an entry whose timestamp `0` also means UNRECORDED here (see `is_unrecorded`),
-    // so it was never revalidated and a changed source kept running the stored version.
-    // MEASURED, `touch($p, 0)` then include, rewrite, include: reference reports it uncached
-    // and runs the new source; elephc cached it and ran the old one.
-    //
-    // ONLY WHEN THE TIMESTAMP IS READ AT ALL. php-src fetches it for `validate_timestamps`,
-    // `file_update_protection` or `max_file_size`, and with all three off it never asks, so
-    // there is no `0` to refuse. MEASURED with all three off: reference compiles AND caches a
-    // file whose mtime is `0`; with any one of them on, it refuses — four cases, all agreeing.
-    let reads_timestamp = config.validate_timestamps
-        || config.file_update_protection != 0
-        || config.max_file_size != 0;
-    if parsed_here && reads_timestamp && mtime.unwrap_or(0) == 0 {
-        return Ok(segments);
-    }
-    if parsed_here && !config.admits_age(mtime, now) {
-        return Ok(segments);
-    }
-    // A PENDING RESTART CLOSES ADMISSION. `opcache_reset()` schedules rather than flushes,
-    // and php-src's accelerator refuses to admit anything new to shared memory from the
-    // moment the flag is set — the entries already there keep answering until the restart
-    // lands, but nothing joins them. Without this the script was cached DURING the window
-    // the reset opened, and survived the flush that followed.
-    //
-    // MEASURED, `opcache_reset()` then `opcache_compile_file($p)`: reference reports the
-    // file uncached, elephc reported it cached.
-    //
-    // The script still RUNS — the segments are returned exactly as the two refusals above
-    // return them. The disk write is skipped with the admission, because storing an entry
-    // the cache would not accept only moves the problem into the next process.
-    if cache.restart_pending {
-        return Ok(segments);
-    }
+    // The mtime-`0` and `file_update_protection` refusals for a script parsed here were taken
+    // above, before the size refusal, in php-src's order — see there. A disk hit meets
+    // neither: its bytes were admitted by an earlier compile, and php-src loads the file
+    // cache before it reaches either check.
     if parsed_here {
         // Only a script this process actually parsed is written back, and only once the
         // refusals above have passed. Writing before them persisted files those very rules
@@ -456,6 +444,28 @@ fn fill_entry(
             fresh_revalidate_at(config, now),
             &segments,
         );
+    }
+    // A PENDING RESTART CLOSES ADMISSION. `opcache_reset()` schedules rather than flushes,
+    // and php-src's accelerator refuses to admit anything new to shared memory from the
+    // moment the flag is set — the entries already there keep answering until the restart
+    // lands, but nothing joins them. Without this the script was cached DURING the window
+    // the reset opened, and survived the flush that followed.
+    //
+    // MEASURED, `opcache_reset()` then `opcache_compile_file($p)`: reference reports the
+    // file uncached, elephc reported it cached.
+    //
+    // The script still RUNS — the segments are returned exactly as the refusals above
+    // return them.
+    //
+    // THE DISK IS STILL WRITTEN, which is why this now sits AFTER the disk write. With a
+    // restart pending, php-src's compile falls back to `file_cache_compile_file()`, which
+    // stores the script on disk; only the shared-memory admission is closed. Skipping the
+    // disk write too — this used to say doing so kept the problem out of the next process —
+    // made the file-cache query answer `false` where reference answers `true`. MEASURED:
+    // `opcache_reset(); opcache_compile_file($p);` then the disk query — reference `true`,
+    // elephc `false`; both report the script uncached in memory.
+    if cache.restart_pending {
+        return Ok(segments);
     }
     let footprint: usize = segments
         .iter()

@@ -620,6 +620,89 @@ fn a_disk_hit_counts_its_first_hit() {
     );
 }
 
+/// Verifies the AGE refusal outranks the SIZE refusal, and counts a miss.
+///
+/// php-src applies `file_update_protection` before `max_file_size`; the first is a miss, the
+/// second a `blacklist_misses`. MEASURED with `max_file_size=1` under a raised protection:
+/// reference counts `misses+1 blacklist_misses+0`; elephc counted the opposite.
+#[test]
+fn the_age_refusal_outranks_the_size_refusal() {
+    let _guard = test_lock();
+    set_config(ScriptCacheConfig {
+        max_file_size: 1,
+        file_update_protection: 2_147_483_647,
+        ..enabled_config(0)
+    });
+    let path = write_fixture("age_before_size", "<?php $x = 1;");
+    set_mtime(&path, 1_000_000);
+
+    load_script(&path).expect("the refused script still runs");
+
+    let stats = stats();
+    assert_eq!((stats.misses, stats.blacklist_misses), (1, 0), "age refuses first");
+}
+
+/// Verifies the mtime-`0` refusal outranks the SIZE refusal too. MEASURED the same way.
+#[test]
+fn the_zero_timestamp_refusal_outranks_the_size_refusal() {
+    let _guard = test_lock();
+    set_config(ScriptCacheConfig {
+        max_file_size: 1,
+        ..enabled_config(0)
+    });
+    let path = write_fixture("zero_before_size", "<?php $x = 1;");
+    set_mtime(&path, 0);
+
+    load_script(&path).expect("the refused script still runs");
+
+    let stats = stats();
+    assert_eq!((stats.misses, stats.blacklist_misses), (1, 0), "no timestamp refuses first");
+}
+
+/// Verifies the SIZE refusal alone still counts a `blacklist_misses`, not a miss.
+///
+/// The other half of the two tests above, so reordering cannot silently move this case.
+/// MEASURED: with the protection off, both engines report `blacklist_misses+1`.
+#[test]
+fn the_size_refusal_alone_counts_a_blacklist_miss() {
+    let _guard = test_lock();
+    set_config(ScriptCacheConfig {
+        max_file_size: 1,
+        ..enabled_config(0)
+    });
+    let path = write_fixture("size_alone", "<?php $x = 1;");
+    set_mtime(&path, 1_000_000);
+
+    load_script(&path).expect("the refused script still runs");
+
+    let stats = stats();
+    assert_eq!((stats.misses, stats.blacklist_misses), (0, 1));
+}
+
+/// Verifies a pending restart refuses the MEMORY admission but still writes the DISK.
+///
+/// php-src's compile falls back to `file_cache_compile_file()` while a restart is pending,
+/// which stores on disk. MEASURED: `opcache_reset(); opcache_compile_file($p);` — reference
+/// answers `true` from the disk query and `false` from the memory one; elephc answered `false`
+/// to both.
+#[test]
+fn a_pending_restart_still_writes_the_disk_cache() {
+    let _guard = test_lock();
+    with_file_cache("restart_disk");
+    set_config(enabled_config(0));
+    let path = write_fixture("restart_disk", "<?php $x = 1;");
+    set_mtime(&path, 1_000_000);
+
+    schedule_restart();
+    assert!(compile_file(&path), "the file compiles");
+
+    assert!(!is_cached(&path), "memory admission is closed while the restart is pending");
+    assert!(
+        crate::script_cache::file_store::contains(&path),
+        "but the disk cache is still written"
+    );
+}
+
 /// Verifies `file_update_protection` does not refuse an EXISTING disk entry.
 ///
 /// The guard keeps a part-written file out of the cache; a disk hit's bytes were admitted by

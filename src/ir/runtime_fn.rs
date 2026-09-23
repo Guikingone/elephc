@@ -1284,9 +1284,19 @@ impl RuntimeFnId {
             // `discard` and `compile` MUTATE the process-wide cache, and neither may be
             // folded away or hoisted: two `opcache_compile_file()` calls on one path are
             // not one call, and a discard between two `is_cached` reads changes the answer.
-            RuntimeFnId::ElephcOpcacheRtIsCached | RuntimeFnId::ElephcOpcacheRtInFileCache => {
-                crate::ir::Effects::from_bits_retain(crate::ir::Effects::READS_GLOBAL.bits())
-            }
+            // `is_cached` RENEWS the revalidation window on a successful check (and bumps the
+            // status generation), and it stats the source. `in_file_cache` reads the disk and
+            // REMOVES a stale entry it rejects. Both were declared pure reads.
+            RuntimeFnId::ElephcOpcacheRtIsCached => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits()
+                    | crate::ir::Effects::WRITES_GLOBAL.bits()
+                    | crate::ir::Effects::READS_FS.bits(),
+            ),
+            RuntimeFnId::ElephcOpcacheRtInFileCache => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits()
+                    | crate::ir::Effects::READS_FS.bits()
+                    | crate::ir::Effects::WRITES_FS.bits(),
+            ),
             RuntimeFnId::ElephcOpcacheRtDiscard | RuntimeFnId::ElephcOpcacheRtSoftInvalidate => {
                 crate::ir::Effects::from_bits_retain(
                     crate::ir::Effects::READS_GLOBAL.bits()
