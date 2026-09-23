@@ -176,6 +176,15 @@ pub(in crate::interpreter) fn eval_opcache_compile_file_for_path(
     if crate::script_cache::compile_file(path) {
         return values.bool_value(true);
     }
+    // `compile_file` answers `false` for two different failures, and only one of them is a
+    // missing file. A file that OPENS but does not parse is the pinned divergence —
+    // reference throws a `ParseError` — and printing "No such file or directory" for it named
+    // the wrong failure, on this surface only: the native wrapper warns from its
+    // `realpath()`-failure arm and answers a parse failure in silence. Warn only when the file
+    // really cannot be opened.
+    if std::fs::File::open(path).is_ok() {
+        return values.bool_value(false);
+    }
     let display = path.display();
     values.warning(&format!(
         "Warning: opcache_compile_file({display}): Failed to open stream: No such file or directory\n"

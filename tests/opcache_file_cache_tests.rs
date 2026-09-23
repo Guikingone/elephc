@@ -655,19 +655,20 @@ echo 'cuf=', (eval('return call_user_func($n, $lib);') ? '1' : '0'), "\n";
     );
 }
 
-/// KNOWN DIVERGENCE: a binary that never calls `eval()` cannot see another process's disk entry.
+/// A binary that never calls `eval()` still sees an entry another process left on disk.
 ///
-/// Reference answers `true` here: the entry is on disk, and a persistent file cache does not
-/// need this reader to have filled a memory cache first. elephc answers `false`, because the
-/// query folds to a constant in a binary that links no eval bridge. The interpreter is what
-/// reads the disk format, and linking it into every binary that merely NAMES a file-cache
-/// function would overturn the pay-for-use rule every `rt_*` lowering rests on. That trade is
-/// a decision for the project, not a fix, so it is pinned here rather than taken silently.
+/// Reference answers `true`: a persistent file cache does not need this reader to have filled
+/// a memory cache first. The query folded to a constant `false` in a binary that links no eval
+/// bridge, because the pay-for-use rule assumed nothing could have been cached without a
+/// dynamic tier — which a cache SHARED WITH OTHER PROCESSES makes untrue. Naming a file-cache
+/// operation under a configured `opcache.file_cache` now links the bridge, as
+/// `opcache_compile_file()` already did; a build with no file cache still folds.
 ///
-/// FLIP THIS TO PARITY if the bridge is ever linked for this case; do not delete it.
+/// THE ABSENCE OF `eval` IN THE READER IS THE TEST, and the premise check below that the seed
+/// left an entry is what keeps a `true` from being luck.
 #[test]
-fn a_reader_without_eval_cannot_see_the_disk_cache_as_a_known_divergence() {
-    let root = make_test_dir("opcache_fc_no_eval_reader");
+fn a_reader_without_eval_sees_the_disk_cache() {
+    let root = make_test_dir("opcache_fc_standalone_reader");
     let cache = root.join("file-cache");
     fs::create_dir_all(&cache).unwrap();
     let lib = root.join("lib.php");
@@ -710,11 +711,57 @@ fn a_reader_without_eval_cannot_see_the_disk_cache_as_a_known_divergence() {
     .unwrap();
     let out = run_binary(&compile(&reader, &ini));
 
-    assert_eq!(
-        field(&out, "r"),
-        "0",
-        "reference answers `1`; if elephc now does too, this divergence is CLOSED and the test \
-         should be flipped to assert parity rather than removed:\n{out}"
+    assert!(
+        !fs::read_to_string(reader.join("main.php")).unwrap().contains("eval("),
+        "PREMISE: the reader must not call eval(), or the bridge was linked for another reason"
+    );
+    assert_eq!(field(&out, "r"), "1", "the entry another process left is on disk:\n{out}");
+}
+
+/// The file-cache operations link the eval bridge ONLY when a file cache is configured.
+///
+/// Both sides of the gate are the test. Without `opcache.file_cache` — php-src's default —
+/// the query and `opcache_invalidate()` must keep folding to constants, or every program
+/// that merely names them would carry the interpreter. With it, they must reach the bridge,
+/// or the disk another process shares would be invisible (see
+/// `a_reader_without_eval_sees_the_disk_cache`). Read from the emitted assembly, which names
+/// the configure bridge exactly when the interpreter is linked.
+#[test]
+fn file_cache_operations_link_the_bridge_only_under_a_file_cache() {
+    let emit = |name: &str, with_file_cache: bool| -> String {
+        let dir = make_test_dir(name);
+        let cache = dir.join("file-cache");
+        fs::create_dir_all(&cache).unwrap();
+        fs::write(
+            dir.join("main.php"),
+            "<?php\nvar_dump(opcache_is_script_cached_in_file_cache(__FILE__));\nvar_dump(opcache_invalidate(__FILE__));\n",
+        )
+        .unwrap();
+        let mut cmd = Command::new(elephc_bin());
+        cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+        cmd.current_dir(&dir);
+        cmd.arg(dir.join("main.php")).arg("--emit-asm");
+        cmd.arg("--ini").arg("opcache.enable_cli=1");
+        if with_file_cache {
+            cmd.arg("--ini")
+                .arg(format!("opcache.file_cache={}", cache.display()));
+        }
+        let output = cmd.output().expect("failed to spawn elephc");
+        assert!(
+            output.status.success(),
+            "compilation failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        fs::read_to_string(dir.join("main.s")).expect("--emit-asm writes main.s")
+    };
+
+    assert!(
+        !emit("opcache_fc_gate_off", false).contains("__elephc_eval_configure_opcache"),
+        "with no file cache configured, naming these functions must not link the interpreter"
+    );
+    assert!(
+        emit("opcache_fc_gate_on", true).contains("__elephc_eval_configure_opcache"),
+        "under a configured file cache they must reach the bridge"
     );
 }
 

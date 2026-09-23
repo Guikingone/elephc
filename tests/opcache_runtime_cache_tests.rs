@@ -250,6 +250,52 @@ echo 'broken_cached=', (opcache_is_script_cached(__DIR__ . '/broken.php') ? '1' 
     );
 }
 
+/// The EVAL `opcache_compile_file()` warns about a missing file, and ONLY a missing file.
+///
+/// Its handler printed `Failed to open stream: No such file or directory` whenever the
+/// compile failed — including for a file that exists and merely does not parse. Reference
+/// throws a `ParseError` there (the pinned divergence answers `false`); a "no such file"
+/// warning names a failure that did not happen. Found by one reviewer and recorded as
+/// unsettled by another.
+///
+/// THE MISSING-FILE HALF IS THE PREMISE. It proves the call reaches the eval handler — a
+/// literal name would inject the native wrapper instead — so the silence on the broken file
+/// means the handler stayed quiet, not that it was never asked.
+#[test]
+fn the_eval_compile_file_warns_only_about_a_missing_file() {
+    let dir = make_test_dir("opcache_rt_eval_compile_broken");
+    fs::write(dir.join("broken.php"), "<?php $a = ;\n").unwrap();
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+$n = 'opcache_' . 'compile_file';
+echo 'broken=', var_export(eval('return ' . $n . '(__DIR__ . "/broken.php");'), true), "\n";
+echo 'missing=', var_export(eval('return ' . $n . '(__DIR__ . "/never-existed.php");'), true), "\n";
+"#,
+    )
+    .unwrap();
+
+    let bin = compile_with_flags(
+        &dir,
+        &["opcache.enable_cli=1", "opcache.file_update_protection=0"],
+        &["--php-version", "8.5"],
+    );
+    let output = Command::new(&bin).output().expect("failed to run binary");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(field(&stdout, "broken"), "false", "a parse failure compiles nothing:\n{stdout}");
+    assert_eq!(field(&stdout, "missing"), "false", "neither does a missing file:\n{stdout}");
+    assert!(
+        stderr.contains("never-existed.php): Failed to open stream"),
+        "PREMISE: the missing file must warn, or the eval handler was never reached:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("broken.php): Failed to open stream"),
+        "a file that exists must not be reported missing:\n{stderr}"
+    );
+}
+
 /// Verifies a FORCED `opcache_invalidate()` and `opcache_compile_file()` reach the runtime
 /// tier, not just the manifest.
 ///
@@ -881,6 +927,40 @@ echo 'still=', (opcache_is_script_cached($p) ? '1' : '0'), "\n";
         "1",
         "a size-only rewrite was treated as stale:\n{output}"
     );
+}
+
+/// The NATIVE `opcache_compile_file()` serves a deleted script that is still a warm entry.
+///
+/// php-src serves the cached script without reopening the file when
+/// `validate_timestamps=0`. The native wrapper warned and answered `false` the moment
+/// `realpath()` failed. MEASURED: compile, `unlink()`, compile — reference `true, true`.
+///
+/// The name is literal on purpose: only a literal spelling injects the native wrapper.
+#[test]
+fn the_native_compile_file_serves_a_deleted_cached_script() {
+    let dir = make_test_dir("opcache_rt_native_compile_deleted");
+    write_dynamic_fixture(
+        &dir,
+        r#"<?php
+$p = realpath(__DIR__ . '/lib.php');
+echo 'first=', var_export(opcache_compile_file($p), true), "\n";
+unlink($p);
+echo 'second=', var_export(opcache_compile_file($p), true), "\n";
+"#,
+    );
+
+    let output = run_binary(&compile_with_flags(
+        &dir,
+        &[
+            "opcache.enable_cli=1",
+            "opcache.file_update_protection=0",
+            "opcache.validate_timestamps=0",
+        ],
+        &["--php-version", "8.5"],
+    ));
+
+    assert_eq!(field(&output, "first"), "true", "the file is compiled:\n{output}");
+    assert_eq!(field(&output, "second"), "true", "and still served once deleted:\n{output}");
 }
 
 /// The NATIVE `opcache_compile_file()` warns about a file it cannot open, as the eval one does.

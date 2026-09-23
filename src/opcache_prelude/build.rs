@@ -892,8 +892,24 @@ pub(crate) fn compile_file_decl(enabled: bool, manifest_paths: Expr) -> Stmt {
     // native wrapper returned `false` in silence, so the two spellings of one call disagreed
     // about whether anything had gone wrong. MEASURED on a missing path: reference prints
     // `Failed to open stream` then `Failed opening ... for inclusion`; elephc printed nothing.
+    //
+    // BUT THE CACHE IS ASKED FIRST. A deleted script can still be a warm entry, and php-src
+    // serves one without reopening the file when `validate_timestamps=0`. MEASURED: compile,
+    // `unlink()`, compile again — reference answers `true, true`; elephc answered `true`, then
+    // warned and answered `false`. The runtime tier applies the validation rule itself, so a
+    // validating configuration still reaches the warnings below, as it does in reference.
     let filename = e_cast(CastType::String, e_var("filename"));
     body.extend(path_normalization_stmts_with_fallback(vec![
+        s_if(
+            e_binop(
+                e_call("__elephc_opcache_rt_compile", vec![e_var("filename")]),
+                BinOp::StrictNotEq,
+                e_int(0),
+            ),
+            vec![s_return(e_bool(true))],
+            vec![],
+            None,
+        ),
         s_expr(e_call(
             "fwrite",
             vec![

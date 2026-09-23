@@ -300,38 +300,49 @@ fn fill_entry(
     std::io::Read::read_to_end(&mut file, &mut bytes)?;
     let mtime = metadata.as_ref().and_then(mtime_seconds);
     let file_size = metadata.as_ref().map_or(bytes.len() as u64, |meta| meta.len());
-    // `opcache.blacklist_filename` is decided FIRST, and the ordering is the contract, not
-    // a preference. php-src hands a blacklisted file straight back to the original compiler
-    // before any cache accounting, so such a script: runs normally, is stored NOWHERE — not
-    // in the memory cache and not in `opcache.file_cache` either — and counts as a
-    // `blacklist_misses` INSTEAD of a `misses`. VERIFIED against reference PHP 8.5.10, where
-    // including a blacklisted file left `misses` untouched and moved only `blacklist_misses`,
-    // and where including it twice counted TWO refusals: the counter is of refusals, not of
-    // distinct files.
-    if super::blacklist::blocks(key) {
-        let segments: Arc<[ScriptSegment]> = Arc::from(segment_script(&bytes, ParseMode::Fresh));
-        lock_script_cache().blacklist_misses += 1;
-        return Ok(segments);
-    }
-    let size = file_size;
-    // The SIZE refusal comes before any accounting, exactly like the blacklist one above and
-    // for the same reason: php-src counts an oversized file as a `blacklist_misses` and NOT
-    // as a miss. VERIFIED on reference PHP 8.5.10 — `-d opcache.max_file_size=50` over two
-    // oversized scripts reports `misses=0 blacklist_misses=2`. The counter's name is
-    // php-src's; what it means is "compiled but deliberately not stored", which a size
-    // refusal is. Placing it after `misses += 1` made elephc report BOTH.
-    if !config.admits_size(size) {
-        let segments: Arc<[ScriptSegment]> = Arc::from(segment_script(&bytes, ParseMode::Fresh));
-        lock_script_cache().blacklist_misses += 1;
-        return Ok(segments);
-    }
-    // The FILE CACHE is consulted before the parser. It holds this script already parsed,
-    // and only hands it back when the source's mtime, size and canonical path still match
-    // what was stored — so a hit is the same segments a parse would produce, for roughly a
-    // quarter of the cost (see `file_store`). A miss, a stale entry or any I/O failure all
-    // fall through to the parse below.
+    // The FILE CACHE is consulted FIRST, before the parser and before the two refusals below.
+    // It holds this script already parsed, and only hands it back when the source's canonical
+    // path matches and, under validation, its timestamp — so a hit is the same segments a parse
+    // would produce, for roughly a quarter of the cost (see `file_store`). A miss, a stale
+    // entry or any I/O failure all fall through to the compile path.
+    //
+    // FIRST, because php-src's `persistent_compile_file` loads the second-level cache before
+    // it enters the compile path, and the blacklist and `max_file_size` refusals live INSIDE
+    // that path: they decide whether a script may be COMPILED into the cache, not whether an
+    // entry already stored may be served. MEASURED across two processes, the reader running
+    // `validate_timestamps=0` with `max_file_size=1` — and again with the file blacklisted —
+    // over a source changed since it was stored: reference ran the stored version, elephc
+    // re-read the new one.
     let from_disk = super::file_store::load_entry(config, key, mtime, file_size);
     let parsed_here = from_disk.is_none();
+    if parsed_here {
+        // `opcache.blacklist_filename` is decided before any compile accounting, and the
+        // ordering is the contract, not a preference. php-src hands a blacklisted file
+        // straight back to the original compiler, so such a script: runs normally, is stored
+        // NOWHERE — not in the memory cache and not in `opcache.file_cache` either — and
+        // counts as a `blacklist_misses` INSTEAD of a `misses`. VERIFIED against reference
+        // PHP 8.5.10, where including a blacklisted file left `misses` untouched and moved
+        // only `blacklist_misses`, and where including it twice counted TWO refusals: the
+        // counter is of refusals, not of distinct files.
+        if super::blacklist::blocks(key) {
+            let segments: Arc<[ScriptSegment]> =
+                Arc::from(segment_script(&bytes, ParseMode::Fresh));
+            lock_script_cache().blacklist_misses += 1;
+            return Ok(segments);
+        }
+        // The SIZE refusal comes before any accounting, exactly like the blacklist one above
+        // and for the same reason: php-src counts an oversized file as a `blacklist_misses`
+        // and NOT as a miss. VERIFIED on reference PHP 8.5.10 — `-d opcache.max_file_size=50`
+        // over two oversized scripts reports `misses=0 blacklist_misses=2`. The counter's name
+        // is php-src's; what it means is "compiled but deliberately not stored", which a size
+        // refusal is. Placing it after `misses += 1` made elephc report BOTH.
+        if !config.admits_size(file_size) {
+            let segments: Arc<[ScriptSegment]> =
+                Arc::from(segment_script(&bytes, ParseMode::Fresh));
+            lock_script_cache().blacklist_misses += 1;
+            return Ok(segments);
+        }
+    }
     let (segments, stored_mtime): (Arc<[ScriptSegment]>, Option<i64>) = match from_disk {
         Some((cached, stored_mtime)) => (Arc::from(cached), stored_mtime),
         None => (Arc::from(segment_script(&bytes, ParseMode::Fresh)), None),

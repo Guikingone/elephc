@@ -45,9 +45,36 @@ fn runtime_call_targets_opcache_compile(inst: &crate::ir::Instruction) -> bool {
     )
 }
 
+/// Returns whether this call asks the ON-DISK cache: the file-cache query, or either half of
+/// `opcache_invalidate()`, which removes the disk entry as well as the memory one.
+fn runtime_call_reaches_the_file_cache(inst: &crate::ir::Instruction) -> bool {
+    matches!(
+        inst.immediate,
+        Some(crate::ir::Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+            crate::ir::RuntimeFnId::ElephcOpcacheRtInFileCache
+                | crate::ir::RuntimeFnId::ElephcOpcacheRtDiscard
+                | crate::ir::RuntimeFnId::ElephcOpcacheRtSoftInvalidate
+        )))
+    )
+}
+
+/// Returns whether this compilation has an `opcache.file_cache` that is actually live: OPcache
+/// enabled and a directory configured. Read from the same compile settings the startup
+/// configuration is built from, which the pipeline installs before lowering runs.
+fn compile_configures_a_live_file_cache() -> bool {
+    let config = crate::opcache::runtime_cache::runtime_cache_config(
+        crate::codegen_support::compile_php_version().version_id(),
+        crate::codegen_support::compile_is_web_sapi(),
+        &crate::codegen_support::ini_overrides(),
+    );
+    config.enabled && !config.file_cache.is_empty()
+}
+
 /// Derives optional runtime features from the actual EIR instruction stream.
 pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
     let mut features = RuntimeFeatures::none();
+    // Computed lazily and once: only a program that names a file-cache operation pays for it.
+    let mut live_file_cache: Option<bool> = None;
     for function in all_lowered_functions(module) {
         if function_contains_eval_scope_state(function) {
             features.eval_scope = true;
@@ -72,6 +99,22 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                     // compile time the prelude's own gate short-circuits before this call is
                     // ever emitted, so a disabled build never reaches here and stays small.
                     if runtime_call_targets_opcache_compile(inst) {
+                        features.eval_bridge = true;
+                    }
+                    // THE SAME ARGUMENT, FOR THE DISK. `is_cached` and `discard` may fold
+                    // because nothing can have been cached in a binary with no dynamic tier —
+                    // but a configured `opcache.file_cache` is shared with OTHER processes, so
+                    // an entry can be on disk whatever this binary did. Folding the file-cache
+                    // query to `false` then reported a miss reference never reports, and
+                    // folding `opcache_invalidate()` left another process's entry on disk.
+                    // MEASURED: a reader with no `eval()` asked about an entry a seed process
+                    // left; reference answered `true`, elephc `false`.
+                    //
+                    // Gated on the compile-time configuration, so a build with no file cache —
+                    // php-src's default — still folds and stays small.
+                    if runtime_call_reaches_the_file_cache(inst)
+                        && *live_file_cache.get_or_insert_with(compile_configures_a_live_file_cache)
+                    {
                         features.eval_bridge = true;
                     }
                     if let Some(target) = typed_builtin_target(inst) {

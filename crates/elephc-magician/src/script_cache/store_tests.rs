@@ -508,6 +508,63 @@ fn an_unvalidated_disk_entry_is_a_miss_for_a_validating_reader() {
     );
 }
 
+/// Verifies `max_file_size` refuses a COMPILE, not an entry already on disk.
+///
+/// php-src loads the file cache before it enters the compile path, and the size and
+/// blacklist refusals live inside that path. MEASURED across two processes, the reader
+/// running `validate_timestamps=0` with `max_file_size=1` over a source changed since it was
+/// stored: reference ran the stored version, elephc re-read the new one.
+#[test]
+fn the_size_refusal_does_not_bypass_a_disk_entry() {
+    let _guard = test_lock();
+    with_file_cache("disk_size_refusal");
+    set_config(enabled_config(0));
+    let path = write_fixture("disk_size_refusal", "<?php $x = 1;");
+    set_mtime(&path, 1_000_000);
+    load_script(&path).expect("the writer stores version A on disk");
+    forget_memory();
+
+    std::fs::write(&path, "B<?php $x = 1;").expect("fixture should be rewritable");
+    set_mtime(&path, 900_000);
+    set_config(ScriptCacheConfig {
+        validate_timestamps: false,
+        max_file_size: 1,
+        ..enabled_config(0)
+    });
+
+    assert_eq!(shape(&load_script(&path).unwrap()), ["code"], "the stored A is served");
+}
+
+/// Verifies the blacklist refuses a COMPILE, not an entry already on disk. Same measurement
+/// as the size refusal above, with the file blacklisted instead.
+#[test]
+fn the_blacklist_does_not_bypass_a_disk_entry() {
+    let _guard = test_lock();
+    let cache = with_file_cache("disk_blacklist");
+    set_config(enabled_config(0));
+    let path = write_fixture("disk_blacklist", "<?php $x = 1;");
+    set_mtime(&path, 1_000_000);
+    load_script(&path).expect("the writer stores version A on disk");
+    forget_memory();
+
+    std::fs::write(&path, "B<?php $x = 1;").expect("fixture should be rewritable");
+    set_mtime(&path, 900_000);
+    let list = cache.join("blacklist.txt");
+    let canonical = std::fs::canonicalize(&path).expect("fixture should resolve");
+    std::fs::write(&list, format!("{}\n", canonical.display())).expect("blacklist writable");
+    crate::script_cache::blacklist::load(&list.to_string_lossy());
+    assert!(
+        crate::script_cache::blacklist::blocks(&canonical),
+        "PREMISE: the fixture must actually be blacklisted"
+    );
+    set_config(ScriptCacheConfig {
+        validate_timestamps: false,
+        ..enabled_config(0)
+    });
+
+    assert_eq!(shape(&load_script(&path).unwrap()), ["code"], "the stored A is served");
+}
+
 /// Verifies `file_update_protection` does not refuse an EXISTING disk entry.
 ///
 /// The guard keeps a part-written file out of the cache; a disk hit's bytes were admitted by

@@ -191,6 +191,15 @@ pub(crate) fn load_entry(
     // `size` stays in the stored record but decides nothing here.
     let _ = size;
     if config.validate_timestamps && cached.mtime != mtime {
+        // A STALE ENTRY IS REMOVED, not merely skipped. php-src's
+        // `zend_file_cache_script_load_ex` unlinks it on the timestamp mismatch unless
+        // `file_cache_read_only` is set — and that load is also what a presence query runs.
+        // Skipping it left the entry in place for any later read that does not validate:
+        // MEASURED, a query rejects version A, then `validate_timestamps` is turned off and
+        // the file included — reference runs the new source, elephc resurrected A.
+        if !super::file_cache::file_cache_config().read_only {
+            let _ = std::fs::remove_file(entry_path(&dir, canonical));
+        }
         return None;
     }
     Some((cached.segments, cached.mtime))
@@ -436,6 +445,9 @@ mod tests {
     /// check unconditional, where `opcache.validate_timestamps=0` in fact means the stored
     /// entry is served even when the source has moved on — see
     /// `a_disk_entry_is_served_without_validation_when_timestamps_are_off`.
+    ///
+    /// THE REFUSAL COMES LAST because it is destructive: a read that rejects an entry removes
+    /// it, as php-src's does (see `a_stale_entry_is_removed_by_the_read_that_rejects_it`).
     #[test]
     fn a_moved_source_is_refused() {
         let (config, _dir) = configure("stale", false);
@@ -445,16 +457,16 @@ mod tests {
         store(&config, path, Some(42), source.len() as u64, &segments);
 
         assert!(
-            load(&config, path, Some(43), source.len() as u64).is_none(),
-            "a moved timestamp must refuse the entry"
-        );
-        assert!(
             load(&config, path, Some(42), 999).is_some(),
             "a size change under the same timestamp is fresh to php-src and must be served"
         );
         assert!(
             load(&config, path, Some(42), source.len() as u64).is_some(),
             "unchanged hits"
+        );
+        assert!(
+            load(&config, path, Some(43), source.len() as u64).is_none(),
+            "a moved timestamp must refuse the entry"
         );
     }
 
@@ -496,6 +508,51 @@ mod tests {
 
         let theirs = Path::new("/tmp/elephc-file-store-theirs.php");
         assert!(load(&config, theirs, Some(42), source.len() as u64).is_none());
+    }
+
+    /// Verifies a read that finds a STALE entry removes it, so no later read can serve it.
+    ///
+    /// php-src unlinks the entry on the timestamp mismatch. Skipping it left the entry for any
+    /// later read that does not validate. MEASURED: a query rejects version A, validation is
+    /// turned off, the file is included — reference runs the new source, elephc ran A.
+    #[test]
+    fn a_stale_entry_is_removed_by_the_read_that_rejects_it() {
+        let (config, _dir) = configure("stale_removed", false);
+        let source = b"<?php $a = 1;";
+        let segments = segment_script(source, ParseMode::Fresh);
+        let path = Path::new("/tmp/elephc-file-store-stale-removed.php");
+        store(&config, path, Some(42), source.len() as u64, &segments);
+
+        assert!(load(&config, path, Some(43), source.len() as u64).is_none(), "stale");
+
+        let unvalidated = ScriptCacheConfig {
+            validate_timestamps: false,
+            ..config
+        };
+        assert!(
+            load(&unvalidated, path, Some(43), source.len() as u64).is_none(),
+            "the rejected entry must be gone, not waiting for a read that does not validate"
+        );
+    }
+
+    /// Verifies a READ-ONLY cache keeps a stale entry, as it keeps everything else.
+    #[test]
+    fn a_read_only_cache_keeps_a_stale_entry() {
+        let (config, dir) = configure("stale_read_only", false);
+        let source = b"<?php $a = 1;";
+        let segments = segment_script(source, ParseMode::Fresh);
+        let path = Path::new("/tmp/elephc-file-store-stale-read-only.php");
+        store(&config, path, Some(42), source.len() as u64, &segments);
+        set_file_cache_config(FileCacheConfig {
+            path: dir.to_string_lossy().into_owned(),
+            read_only: true,
+        });
+
+        assert!(load(&config, path, Some(43), source.len() as u64).is_none(), "stale");
+        assert!(
+            load(&config, path, Some(42), source.len() as u64).is_some(),
+            "a read-only cache removes nothing, stale or not"
+        );
     }
 
     /// Verifies `opcache.file_cache_read_only` also forbids REMOVING an entry.
