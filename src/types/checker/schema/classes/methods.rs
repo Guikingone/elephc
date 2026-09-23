@@ -293,6 +293,7 @@ fn apply_instance_method(
     if method_key != "__construct" {
         if let Some(parent_sig) = state.method_sigs.get(&method_key) {
             adopt_ancestor_parameter_storage(&mut sig, parent_sig);
+            adopt_ancestor_return_storage(&mut sig, parent_sig);
         }
     }
     state.method_sigs.insert(method_key.clone(), sig);
@@ -440,6 +441,37 @@ fn missing_override_target(class: &FlattenedClass, method: &ClassMethod) -> Comp
 /// declaration. Only undeclared parameters are touched — an override that declares its own type
 /// has already been checked against the ancestor by `validate_override_signature`, and its
 /// declaration is the one its body was checked against.
+/// Gives an override the RETURN storage of the ancestor its vtable slot belongs to.
+///
+/// The return-side twin of [`adopt_ancestor_parameter_storage`]. A virtual call typed against the
+/// ancestor reads the result in the ancestor's representation, but PHP lets an override NARROW its
+/// return type, and the override's frame returned in its own: `FileLoader::import()` calls
+/// `$loader->load()` on a receiver typed `FileLoader`, whose `load()` comes from
+/// `LoaderInterface::load(): mixed`, and the routing `YamlFileLoader::load(): RouteCollection`
+/// answered with a raw object pointer where a boxed cell belongs -- read back as `null`. Every
+/// route file imported through a glob vanished.
+///
+/// Covariance is what makes the wider storage safe: whatever the override returns satisfies the
+/// ancestor's declaration too. The cost is precision for a caller typed at the override itself,
+/// which now sees the ancestor's type. Only a change of REPRESENTATION is adopted; a narrowing that
+/// keeps the storage (`?Foo` to `Foo`, one object type to another) is left exactly as declared.
+fn adopt_ancestor_return_storage(
+    sig: &mut crate::types::FunctionSig,
+    ancestor: &crate::types::FunctionSig,
+) {
+    if !ancestor.declared_return || sig.by_ref_return != ancestor.by_ref_return {
+        return;
+    }
+    let ancestor_repr = ancestor.return_type.codegen_repr();
+    if !matches!(ancestor_repr, crate::types::PhpType::Mixed | crate::types::PhpType::Union(_)) {
+        return;
+    }
+    if sig.return_type.codegen_repr() == ancestor_repr {
+        return;
+    }
+    sig.return_type = ancestor.return_type.clone();
+}
+
 fn adopt_ancestor_parameter_storage(
     sig: &mut crate::types::FunctionSig,
     ancestor: &crate::types::FunctionSig,

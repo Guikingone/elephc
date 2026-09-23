@@ -82,6 +82,12 @@ pub(in crate::interpreter) fn eval_call(
     if matches!(name, "fsockopen" | "pfsockopen") {
         return eval_builtin_fsockopen_call(args, context, scope, values);
     }
+    // Same shape as `fsockopen` above, and intercepted for the same reason: PHP writes
+    // `$error_code`/`$error_message` through the caller's own cells, and only this path still
+    // holds them.
+    if name == "stream_socket_client" {
+        return eval_builtin_stream_socket_client_call(args, context, scope, values);
+    }
     // `debug_backtrace` and `debug_print_backtrace` describe interpreter frames, which only
     // the interpreter has, so they are dispatched as plain runtime handlers rather than
     // through the PHP-visible builtin registry. See `builtins::core::debug_backtrace`.

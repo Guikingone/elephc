@@ -68,6 +68,18 @@ impl RuntimeValueOps for ElephcRuntimeOps {
     impl_lifecycle_scalar_ops!();
     impl_numeric_string_ops!();
 
+    /// Reads the compiled runtime's heap counters so eval reports the program's real heap.
+    fn memory_usage_bytes(&mut self, peak: bool, real_usage: bool) -> Result<i64, EvalStatus> {
+        let flag = i64::from(real_usage);
+        Ok(unsafe {
+            if peak {
+                __elephc_eval_memory_get_peak_usage(flag)
+            } else {
+                __elephc_eval_memory_get_usage(flag)
+            }
+        })
+    }
+
     /// Retains the original boxed handler stored in the compiled runtime's PCNTL table.
     fn pcntl_aot_signal_handler(
         &mut self,

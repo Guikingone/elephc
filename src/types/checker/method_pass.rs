@@ -300,6 +300,7 @@ impl Checker {
                 bodies_secs += mark.elapsed().as_secs_f64();
                 mark = std::time::Instant::now();
             }
+            self.sync_inherited_method_return_types();
             let stabilized = self.classes == classes_before_pass;
             if trace && !stabilized {
                 // Which signatures actually moved this pass. The loop exits on CYCLE detection,
@@ -384,6 +385,51 @@ impl Checker {
             method_passes_remaining -= 1;
         }
         Ok(())
+    }
+
+    /// Copies each inherited method's return type from the class whose body implements it.
+    ///
+    /// `update_method_return_type` writes the type a body returns into its DECLARING class only,
+    /// yet every subclass carries its own copy of the signature, and a call on a subclass
+    /// receiver reads that copy. A copy taken on an earlier pass keeps whatever the body returned
+    /// then: `class Section extends Out` kept `getStream(): resource` from the pass on which
+    /// `parent::__construct(fopen(...))` had typed the untyped property, while `Out::getStream()`
+    /// had since widened to the boxed Mixed it is emitted with. A caller then re-boxed that box
+    /// pointer as an `int`, and Symfony's `ConsoleOutput::section()` handed `int(4316502720)` to
+    /// `StreamOutput::__construct`, which refused it as "not a stream".
+    ///
+    /// One sweep per pass over every inherited entry: cheaper than a search per updated method,
+    /// and the fixpoint then sees the copies move in the same pass as the body.
+    /// A late-static return (`: static`) is resolved per receiver class, so its copy is skipped.
+    fn sync_inherited_method_return_types(&mut self) {
+        let mut updates: Vec<(String, String, PhpType)> = Vec::new();
+        for (class_name, info) in &self.classes {
+            for (method_key, impl_class) in &info.method_impl_classes {
+                if impl_class == class_name || info.late_static_method_returns.contains_key(method_key) {
+                    continue;
+                }
+                let Some(own) = info.methods.get(method_key) else { continue };
+                let Some(body) = self
+                    .classes
+                    .get(impl_class)
+                    .and_then(|owner| owner.methods.get(method_key))
+                else {
+                    continue;
+                };
+                if own.return_type != body.return_type {
+                    updates.push((class_name.clone(), method_key.clone(), body.return_type.clone()));
+                }
+            }
+        }
+        for (class_name, method_key, return_type) in updates {
+            if let Some(sig) = self
+                .classes
+                .get_mut(&class_name)
+                .and_then(|info| info.methods.get_mut(&method_key))
+            {
+                sig.return_type = return_type;
+            }
+        }
     }
 
     /// Returns the body-checking type for an untyped method parameter.
@@ -643,6 +689,11 @@ impl Checker {
             inferred_return
         };
         if !method.is_static {
+            let effective_return = self.ancestor_return_storage(
+                &class.name,
+                &php_symbol_key(&method.name),
+                effective_return.clone(),
+            );
             if let Some(ci) = self.classes.get_mut(&class.name) {
                 if let Some(sig) = ci.methods.get_mut(&php_symbol_key(&method.name)) {
                     sig.return_type = effective_return.clone();
@@ -660,6 +711,46 @@ impl Checker {
             &callable_return_sigs,
             &callable_array_return_sigs,
         );
+    }
+
+    /// Keeps an override's return in the storage its parent's vtable slot promises.
+    ///
+    /// The schema adopts the ancestor's return storage for an override that narrows it to a
+    /// different representation (`adopt_ancestor_return_storage`); resolving the declared hint
+    /// here would narrow it straight back, and a call through the parent-typed slot would again
+    /// read a raw object where a boxed cell belongs. A parent's PRIVATE method is not overridden,
+    /// and a constructor is never entered through an ancestor's slot.
+    fn ancestor_return_storage(
+        &self,
+        class_name: &str,
+        method_key: &str,
+        effective: PhpType,
+    ) -> PhpType {
+        if method_key == "__construct" {
+            return effective;
+        }
+        let Some(parent) = self.classes.get(class_name).and_then(|info| info.parent.clone()) else {
+            return effective;
+        };
+        let Some(parent_info) = self.classes.get(&parent) else {
+            return effective;
+        };
+        if parent_info.method_visibilities.get(method_key) == Some(&crate::parser::ast::Visibility::Private) {
+            return effective;
+        }
+        let Some(ancestor) = parent_info.methods.get(method_key) else {
+            return effective;
+        };
+        if !ancestor.declared_return {
+            return effective;
+        }
+        let ancestor_repr = ancestor.return_type.codegen_repr();
+        if !matches!(ancestor_repr, PhpType::Mixed | PhpType::Union(_))
+            || effective.codegen_repr() == ancestor_repr
+        {
+            return effective;
+        }
+        ancestor.return_type.clone()
     }
 
     /// Resolves the return type of a method whose body contains `yield`.

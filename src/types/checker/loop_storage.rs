@@ -13,7 +13,7 @@
 
 use std::collections::HashSet;
 
-use crate::parser::ast::{CastType, Expr, ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Stmt, StmtKind};
 use crate::types::{
     merge_array_key_types, normalized_array_key_type, PhpType, TypeEnv,
 };
@@ -200,12 +200,17 @@ fn apply_assignment_evidence(
     whole_representation_sources: &mut HashSet<String>,
 ) {
     for (name, source) in assignments {
-        let incoming = match source {
-            AssignedValue::Expr(expr) => infer_storage_value_type(expr, env, infer_value)
+        // `typed` is false when the value's type is only the `mixed` fallback: that is the
+        // absence of an answer, not evidence of a gradual value (see the ref-binding rule below).
+        let (incoming, typed) = match source {
+            AssignedValue::Expr(expr) => match infer_storage_value_type(expr, env, infer_value)
                 .or_else(|| precise_scalar_expr_type(expr))
-                .unwrap_or(PhpType::Mixed),
-            AssignedValue::Known(ty) => ty.clone(),
-            AssignedValue::Opaque => PhpType::Mixed,
+            {
+                Some(ty) => (ty, true),
+                None => (PhpType::Mixed, false),
+            },
+            AssignedValue::Known(ty) => (ty.clone(), true),
+            AssignedValue::Opaque => (PhpType::Mixed, false),
         };
         let proves_whole_representation_change =
             env.get(*name).is_some_and(|existing| match source {
@@ -213,9 +218,21 @@ fn apply_assignment_evidence(
                 AssignedValue::Expr(_) | AssignedValue::Known(_) if is_array_like(existing) => {
                     matches!(incoming.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
                 }
+                // A scalar local that the body rebinds to a gradual value changes its storage
+                // from a raw word to a boxed cell. Without the contract the loop header kept the
+                // scalar slot, so a read reached around the back edge took the box pointer for the
+                // scalar: symfony/routing's `AttributeFileLoader::findClass()` starts
+                // `$namespace = false`, stores a token's text into it, and then answered
+                // `true === $namespace` for the text and built the class name "1\Kernel".
                 AssignedValue::Expr(_) | AssignedValue::Known(_) => {
-                    matches!(existing, PhpType::Void)
-                        && !matches!(&incoming, PhpType::Void | PhpType::Never)
+                    (matches!(existing, PhpType::Void)
+                        && !matches!(&incoming, PhpType::Void | PhpType::Never))
+                        || (typed
+                            && matches!(
+                                existing.codegen_repr(),
+                                PhpType::Bool | PhpType::Int | PhpType::Float | PhpType::Str
+                            )
+                            && matches!(incoming.codegen_repr(), PhpType::Mixed | PhpType::Union(_)))
                 }
             });
         if proves_whole_representation_change {
@@ -574,11 +591,21 @@ fn representation_contract(
         (entry_repr, PhpType::Mixed)
             if entry_repr != PhpType::Mixed && has_whole_representation_source =>
         {
-            Some(if is_array_like(entry) {
-                PhpType::Mixed
-            } else {
-                fixed.clone()
-            })
+            // A plain scalar entry takes the boxed representation itself: the joined fixed type is
+            // a precise union, and re-typing the local with it made the body's index reads refuse
+            // to compile ("String index must be integer") on values php only knows as mixed.
+            Some(
+                if is_array_like(entry)
+                    || matches!(
+                        entry_repr,
+                        PhpType::Bool | PhpType::Int | PhpType::Float | PhpType::Str
+                    )
+                {
+                    PhpType::Mixed
+                } else {
+                    fixed.clone()
+                },
+            )
         }
         _ => None,
     }
@@ -608,6 +635,10 @@ fn precise_scalar_expr_type(value: &Expr) -> Option<PhpType> {
             CastType::Array | CastType::Object => None,
         },
         ExprKind::ErrorSuppress(inner) => precise_scalar_expr_type(inner),
+        // `.` yields a string whatever its operands are. Left unknown, `$v = $v . $s[$i]` fell
+        // back to `mixed`, which reads as a gradual rebind and boxed a plain string accumulator
+        // for the whole loop.
+        ExprKind::BinaryOp { op: BinOp::Concat, .. } => Some(PhpType::Str),
         _ => None,
     }
 }

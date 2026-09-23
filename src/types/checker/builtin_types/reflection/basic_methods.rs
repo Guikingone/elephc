@@ -194,10 +194,8 @@ pub(super) fn builtin_reflection_method_invoke_method() -> ClassMethod {
         variadic_type: Some(mixed_type()),
         return_type: Some(mixed_type()),
         by_ref_return: false,
-        body: vec![Stmt::new(
-            StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
-            dummy_span,
-        )],
+        // Reached only when the target was not tracked at compile time; it used to answer null.
+        body: reflection_method_dynamic_invoke_body(crate::synthetic_class::e_var("args")),
         span: dummy_span,
         attributes: Vec::new(),
     }
@@ -226,10 +224,7 @@ pub(super) fn builtin_reflection_method_invoke_args_method() -> ClassMethod {
         variadic_type: None,
         return_type: Some(mixed_type()),
         by_ref_return: false,
-        body: vec![Stmt::new(
-            StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
-            dummy_span,
-        )],
+        body: reflection_method_dynamic_invoke_body(crate::synthetic_class::e_var("args")),
         span: dummy_span,
         attributes: Vec::new(),
     }
@@ -251,10 +246,22 @@ pub(super) fn builtin_reflection_get_closure_method(for_method: bool) -> ClassMe
     } else {
         Vec::new()
     };
-    let fallback_result = if for_method {
-        Expr::new(ExprKind::Null, dummy_span)
+    // A method's closure calls `[$object ?? $class, $name]` with whatever it is given. It used to
+    // return null outright, which only a statically tracked target (rewritten in EIR) escaped:
+    // `MicroKernelTrait::loadRoutes()` reaches the private `configureRoutes()` exactly this way,
+    // and the console's route collection came out empty.
+    let (fallback_result, captures, prelude) = if for_method {
+        use crate::synthetic_class::{e_this_prop, e_var, s_assign};
+        (
+            reflection_method_call(e_var("object"), e_var("class"), e_var("name"), e_var("args")),
+            vec!["object".to_string(), "class".to_string(), "name".to_string()],
+            vec![
+                s_assign("class", e_this_prop("__class")),
+                s_assign("name", e_this_prop("__name")),
+            ],
+        )
     } else {
-        reflection_function_dynamic_call(dummy_span)
+        (reflection_function_dynamic_call(dummy_span), Vec::new(), Vec::new())
     };
     let fallback = Expr::new(
         ExprKind::Closure {
@@ -270,11 +277,13 @@ pub(super) fn builtin_reflection_get_closure_method(for_method: bool) -> ClassMe
             is_arrow: false,
             is_static: for_method,
             by_ref_return: false,
-            captures: Vec::new(),
+            captures,
             capture_refs: Vec::new(),
         },
         dummy_span,
     );
+    let mut body = prelude;
+    body.push(Stmt::new(StmtKind::Return(Some(fallback)), dummy_span));
     ClassMethod {
         name: "getClosure".to_string(),
         visibility: Visibility::Public,
@@ -289,7 +298,7 @@ pub(super) fn builtin_reflection_get_closure_method(for_method: bool) -> ClassMe
         variadic_type: None,
         return_type: Some(TypeExpr::Named(Name::unqualified("Closure"))),
         by_ref_return: false,
-        body: vec![Stmt::new(StmtKind::Return(Some(fallback)), dummy_span)],
+        body,
         span: dummy_span,
         attributes: Vec::new(),
     }
@@ -409,6 +418,38 @@ pub(super) fn builtin_reflection_function_invoke_args_method() -> ClassMethod {
         span: dummy_span,
         attributes: Vec::new(),
     }
+}
+
+/// `call_user_func_array($object === null ? [$class, $name] : [$object, $name], $args)`: how a
+/// reflected method is reached when its target was not tracked at compile time.
+///
+/// A null receiver names the static form, which is also what php does with the `$object` a
+/// static method is handed. The callable stays an argument expression rather than a local: this
+/// body is lowered without a checker pass, and a local holding it was typed `array<int>`.
+fn reflection_method_call(object: Expr, class: Expr, name: Expr, args: Expr) -> Expr {
+    use crate::synthetic_class::{e_array, e_binop, e_call, e_null, e_ternary};
+    e_call(
+        "call_user_func_array",
+        vec![
+            e_ternary(
+                e_binop(object.clone(), BinOp::StrictEq, e_null()),
+                e_array(vec![class, name.clone()]),
+                e_array(vec![object, name]),
+            ),
+            args,
+        ],
+    )
+}
+
+/// `return call_user_func_array(...)` for `ReflectionMethod::invoke()` / `invokeArgs()` bodies.
+fn reflection_method_dynamic_invoke_body(args: Expr) -> Vec<Stmt> {
+    use crate::synthetic_class::{e_this_prop, e_var, s_return};
+    vec![s_return(reflection_method_call(
+        e_var("object"),
+        e_this_prop("__class"),
+        e_this_prop("__name"),
+        args,
+    ))]
 }
 
 /// Builds a dynamic invocation of the retained callable or reflected function name.

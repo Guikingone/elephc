@@ -559,7 +559,7 @@ impl EvalDirectHook {
             },
             Self::StringSplitJoin => match name {
                 "explode" => eval_builtin_explode(args, context, scope, values),
-                "implode" => eval_builtin_implode(args, context, scope, values),
+                "implode" | "join" => eval_builtin_implode(args, context, scope, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::StreamBoolPredicate => match name {

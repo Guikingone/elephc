@@ -116,6 +116,10 @@ pub struct IncludedDeclarationSources {
     pub functions: HashMap<String, String>,
     /// Immutable inputs for later compiled file entries, not a list of executed files.
     pub source_units: std::collections::BTreeMap<PathBuf, SourceUnit>,
+    /// Files the compiler read but did NOT take whole, mapped to the names it dropped.
+    pub unbound_conditional_declaration_sources: HashMap<PathBuf, Vec<String>>,
+    /// Names bound through the function-variant mechanism; subtracted from the dropped names.
+    pub bound_conditional_declaration_names: HashSet<String>,
 }
 
 /// Resolves includes while applying the invocation's conditional symbols to every loaded file.
@@ -156,6 +160,10 @@ pub fn resolve_collecting_includes_with_defines_and_sources(
         class_likes: std::mem::take(&mut state.declared_class_files),
         functions: std::mem::take(&mut state.declared_function_files),
         source_units: state.source_units.snapshot(),
+        unbound_conditional_declaration_sources: state
+            .unbound_conditional_declaration_sources
+            .snapshot(),
+        bound_conditional_declaration_names: state.bound_conditional_declaration_names.snapshot(),
     };
     // A function declared inside an include is renamed to a variant symbol
     // (`__elephc_include_variant_<hash>_<name>`), and that renamed symbol is the only name later

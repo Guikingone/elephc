@@ -16,6 +16,31 @@ use crate::errors::CompileWarning;
 use crate::parser::ast::{Stmt, StmtKind};
 use crate::span::Span;
 
+/// Whether Composer's eager `autoload.files` list joins the closed world. ON by default;
+/// `ELEPHC_COMPOSER_EAGER_FILES=off` leaves it out.
+///
+/// ON IS THE ONLY HONEST DEFAULT, and the reason is what the switch is FOR. Those files are
+/// where a framework's bootstrap lives; with them out, the binary still answers every route
+/// byte-identically and merely interprets those includes at runtime instead of running compiled
+/// code — which is precisely the cost this project exists to remove. A route gate cannot tell
+/// the two apart, so a half-compiled binary would quietly pass as the real thing and every
+/// measurement taken from it would describe a program nobody ships. `scratchpad/evaldelta.sh`'s
+/// eval-crossing census is the number that does see the difference.
+///
+/// OFF IS FOR ONE THING: getting a binary to measure something ELSE with, quickly, when the
+/// eager set is what is slow or broken. Whoever turns it off has to say so in what they report.
+///
+/// THE GATE LIVES AT THE CALL SITE, not in `crate::autoload::composer_files`. That reader is
+/// pure I/O with unit tests that pin its order and its path folding; gating inside it would
+/// make those tests exercise this switch instead. `push_eager_file` is the single point where a
+/// path joins the eager set, so one guard here covers every manifest source that ever feeds it.
+fn composer_eager_files_enabled() -> bool {
+    !matches!(
+        std::env::var("ELEPHC_COMPOSER_EAGER_FILES").as_deref(),
+        Ok("off") | Ok("0")
+    )
+}
+
 /// Compiled view of every autoload section found in the project.
 pub struct AutoloadIndex {
     fqn_to_path: HashMap<String, PathBuf>,
@@ -36,6 +61,15 @@ impl AutoloadIndex {
             };
         };
         let mut builder = IndexBuilder::default();
+        // Composer's GENERATED list comes first, because it is the complete, ordered answer and
+        // it already contains the root package's own `files`. The root manifest is still read
+        // afterwards, so a project whose autoloader was never generated keeps working; entries
+        // already claimed here are deduplicated away by `read_files`.
+        if composer_eager_files_enabled() {
+            for path in super::composer_files::generated_eager_files(&project_root) {
+                builder.push_eager_file(path);
+            }
+        }
         for manifest in autoload_manifest_paths(&project_root) {
             builder.load_manifest(&manifest, true);
         }
@@ -203,6 +237,22 @@ impl IndexBuilder {
     /// Nested manifests always contribute mappings. Only the root manifest contributes eager
     /// entries directly; nested eager entries remain owned by the loader source the program
     /// actually includes, avoiding duplicate execution and unrelated graph expansion.
+    ///
+    /// DUPLICATE EXECUTION is no longer the binding half of that reason: a source the compiler
+    /// included is now flagged in the native include table, and an `include`/`require` whose
+    /// value is discarded skips it instead of running the body twice (`emit_prime` in
+    /// `src/codegen/source_units/bridge.rs`, `compiler_included_file` in Magician).
+    ///
+    /// GRAPH EXPANSION still is, and measurably so. The eager files themselves are the opposite
+    /// of unrelated — Composer requires every one of them on every single run — but the CLASS
+    /// GRAPH they reach is not. Splicing Composer's own ordered list
+    /// (`vendor/composer/autoload_files.php`) into the Symfony fixture pulled in
+    /// `polyfill-intl-grapheme/Grapheme.php`, `polyfill-php85/Php85.php` and
+    /// `var-dumper/Server/Connection.php`, and the build then failed on two standard-PHP gaps
+    /// those files depend on: the missing `PCRE_VERSION` constant, and `stream_socket_client()`'s
+    /// by-reference `$error_code`/`$error_message` out-parameters (its contract declares one
+    /// parameter and its lowering rejects more than one argument). Both have to land before the
+    /// eager files can join the closed world.
     fn load_manifest(&mut self, manifest_path: &Path, include_files: bool) {
         let Some(dir) = manifest_path.parent() else {
             return;
@@ -298,11 +348,16 @@ impl IndexBuilder {
             };
             let path = base_dir.join(path_str);
             if path.is_file() {
-                let canonical = path.canonicalize().unwrap_or(path);
-                if !self.files_to_include.contains(&canonical) {
-                    self.files_to_include.push(canonical);
-                }
+                self.push_eager_file(path);
             }
+        }
+    }
+
+    /// Registers one eager source, keeping the FIRST claim on a path so order is stable.
+    fn push_eager_file(&mut self, path: PathBuf) {
+        let canonical = path.canonicalize().unwrap_or(path);
+        if !self.files_to_include.contains(&canonical) {
+            self.files_to_include.push(canonical);
         }
     }
 }

@@ -100,6 +100,12 @@ pub(super) fn lower(
         RuntimeFnId::Localtime => Some({
             crate::codegen::lower_inst::builtins::system::lower_localtime(ctx, inst)
         }),
+        RuntimeFnId::MemoryGetPeakUsage => Some({
+            crate::codegen::lower_inst::builtins::system::lower_memory_get_peak_usage(ctx, inst)
+        }),
+        RuntimeFnId::MemoryGetUsage => Some({
+            crate::codegen::lower_inst::builtins::system::lower_memory_get_usage(ctx, inst)
+        }),
         RuntimeFnId::Microtime => Some({
             crate::codegen::lower_inst::builtins::system::lower_microtime(ctx, inst)
         }),

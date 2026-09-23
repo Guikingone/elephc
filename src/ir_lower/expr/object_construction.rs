@@ -505,7 +505,12 @@ pub(super) fn lower_new_dynamic(
 /// arrive as plain positional arguments. What survives both — a spread whose operand is
 /// only known at runtime, or named arguments the planner could not resolve to a class —
 /// is passed through the runtime argument container rather than dropped on the floor.
-fn lower_new_dynamic_generic(
+///
+/// This is also the planned-dispatch fallback. It once had a positional-only twin in `expr/mod.rs`
+/// that shadowed it there, so a runtime `...$args` reaching an eval-declared class through that
+/// fallback was bound as ONE array argument -- `ReflectionAttribute::newInstance()` on an
+/// attribute class only the autoloader supplied.
+pub(super) fn lower_new_dynamic_generic(
     ctx: &mut LoweringContext<'_, '_>,
     name_value: LoweredValue,
     args: &[Expr],

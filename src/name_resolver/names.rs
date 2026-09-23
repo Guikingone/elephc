@@ -250,13 +250,20 @@ pub(super) fn resolve_function_reference(
     if name.function_fallback().is_some() {
         return resolved.with_function_fallback();
     }
-    if conditional && name.is_unqualified()
+    let unqualified_in_namespace = name.is_unqualified()
         && current_namespace.is_some_and(|namespace| !namespace.is_empty())
-        && !imports.functions.contains_key(&php_symbol_key(name.as_str()))
-    {
+        && !imports.functions.contains_key(&php_symbol_key(name.as_str()));
+    if conditional && unqualified_in_namespace {
         if super::function_fallbacks::global_candidate(symbols, name.as_str()).is_some() {
             return resolved.with_function_fallback();
         }
+    }
+    // Nothing declares the namespaced name: php will call the GLOBAL function of that name, and
+    // a global supplied later -- a prelude injected after this pass, `token_get_all()` for one --
+    // is not in `symbols` yet. Keep the fallback so `optimize::namespace_fallbacks` can rebind it
+    // and prelude detection can see the global name.
+    if unqualified_in_namespace && symbols.canonical_function(resolved.as_str()).is_none() {
+        return resolved.with_function_fallback();
     }
     resolved
 }

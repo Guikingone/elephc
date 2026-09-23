@@ -129,11 +129,25 @@ pub extern "C" fn __elephc_eval_include_request_reset() {
         // request has nothing left to protect once the arena is gone.
         #[cfg(not(test))]
         crate::ffi::context::reset_retained_eval_contexts();
+        // After every context above is finalized: finalization moves each context's constants
+        // into the orphan table, and all of them belong to the request that just ended.
+        #[cfg(not(test))]
+        crate::context::reset_global_eval_constants();
         // Context cleanup may execute PHP destructors, which must still observe
         // the current request's inclusion state until cleanup has completed.
         crate::context::reset_global_eval_included_files();
     });
 }
+
+/// `__elephc_eval_include`'s fifth argument is a FLAGS word, not just `once`.
+///
+/// The x86_64 C ABI passes six integer arguments in registers and this call already uses all
+/// six, so a seventh flag would have to travel on the stack on one target and in a register on
+/// the other. Packing it as a bit keeps one ABI for both. Emitted by `lower_dynamic_include`
+/// in `src/codegen/lower_inst/builtins/eval/calls.rs`; the two must agree.
+const INCLUDE_FLAG_ONCE: u64 = 1;
+/// The include was written as a statement, so nothing reads the value it evaluates to.
+const INCLUDE_FLAG_VALUE_DISCARDED: u64 = 2;
 
 /// Executes one runtime include/require against a materialized caller scope.
 ///
@@ -146,12 +160,20 @@ pub unsafe extern "C" fn __elephc_eval_include(
     scope: *mut ElephcEvalScope,
     path: *mut c_void,
     required: u64,
-    once: u64,
+    flags: u64,
     out: *mut ElephcEvalResult,
 ) -> i32 {
     crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_include");
     std::panic::catch_unwind(|| unsafe {
-        execute_include_inner(ctx, scope, path, required != 0, once != 0, out)
+        execute_include_inner(
+            ctx,
+            scope,
+            path,
+            required != 0,
+            flags & INCLUDE_FLAG_ONCE != 0,
+            flags & INCLUDE_FLAG_VALUE_DISCARDED != 0,
+            out,
+        )
     })
     .unwrap_or_else(|_| {
         if crate::eval_trace::enabled() {
@@ -171,6 +193,7 @@ unsafe fn execute_include_inner(
     path: *mut c_void,
     required: bool,
     once: bool,
+    value_discarded: bool,
     out: *mut ElephcEvalResult,
 ) -> i32 {
     if !ctx.is_null() && (*ctx).abi_version() != ABI_VERSION {
@@ -180,7 +203,15 @@ unsafe fn execute_include_inner(
         return EvalStatus::RuntimeFatal.code();
     }
     clear_result(out);
-    execute_materialized_include(ctx, scope, RuntimeCellHandle::from_raw(path), required, once, out)
+    execute_materialized_include(
+        ctx,
+        scope,
+        RuntimeCellHandle::from_raw(path),
+        required,
+        once,
+        value_discarded,
+        out,
+    )
 }
 
 /// Returns the PHP name of the include form, which is the frame's `function`.
@@ -205,6 +236,7 @@ unsafe fn execute_materialized_include(
     path: RuntimeCellHandle,
     required: bool,
     once: bool,
+    value_discarded: bool,
     out: *mut ElephcEvalResult,
 ) -> i32 {
     let mut fallback_context;
@@ -240,31 +272,54 @@ unsafe fn execute_materialized_include(
         path,
         required,
         once,
+        value_discarded,
         &mut values,
     );
     context.pop_call_frame();
     match outcome {
         Ok(outcome) => {
-            if crate::eval_trace::enabled() {
-                let call_site = context.call_site();
-                eprintln!(
-                    "[elephc-eval-trace] phase=include_ok file={:?} line={}",
-                    call_site.0, call_site.2,
-                );
-            }
+            trace_bridge_include("include_ok", None, context);
             write_outcome(outcome, out).code()
         }
         Err(status) => {
-            if crate::eval_trace::enabled() {
-                let call_site = context.call_site();
-                eprintln!(
-                    "[elephc-eval-trace] phase=include_error status={status:?} file={:?} line={}",
-                    call_site.0,
-                    call_site.2,
-                );
-            }
+            trace_bridge_include("include_error", Some(status), context);
             status.code()
         }
+    }
+}
+
+/// Emits the opt-in trace for an include that crossed from COMPILED code into the interpreter.
+///
+/// Three fields, because the first is the only one that answers "what did this request include?"
+/// and the other two cannot be trusted on their own:
+/// - `path` is the file the include actually resolved to, taken from the slot the interpreter's
+///   include driver filled on its way out. `<unresolved>` means the path expression itself failed,
+///   so no file was ever named.
+/// - `caller_file` is the source the CODEGEN attributed to the compiled function that issued the
+///   include: a class's declaring file, a function's declaring file, or the module entry.
+/// - `caller_span_line` is the line of the include's AST span, which belongs to whichever physical
+///   file CONTRIBUTED that statement. After the autoload and include passes splice hundreds of
+///   files into one program the two stop agreeing, and the disagreement is silent: a `require` in
+///   `vendor/autoload_runtime.php` reports the nine-line entry file and line 9, and Composer's
+///   `include $file;` reports that same entry file and line 576. Neither line exists in the file
+///   named beside it. `path` is what a census must read.
+#[cfg(not(test))]
+fn trace_bridge_include(phase: &str, status: Option<EvalStatus>, context: &ElephcEvalContext) {
+    if !crate::eval_trace::enabled() {
+        return;
+    }
+    let target = crate::eval_trace::take_include_target()
+        .unwrap_or_else(|| std::path::PathBuf::from("<unresolved>"));
+    let call_site = context.call_site();
+    match status {
+        Some(status) => eprintln!(
+            "[elephc-eval-trace] kind=include phase={phase} status={status:?} path={target:?} caller_file={:?} caller_span_line={}",
+            call_site.0, call_site.2,
+        ),
+        None => eprintln!(
+            "[elephc-eval-trace] kind=include phase={phase} path={target:?} caller_file={:?} caller_span_line={}",
+            call_site.0, call_site.2,
+        ),
     }
 }
 
@@ -279,6 +334,7 @@ unsafe fn execute_materialized_include(
     _path: RuntimeCellHandle,
     _required: bool,
     _once: bool,
+    _value_discarded: bool,
     _out: *mut ElephcEvalResult,
 ) -> i32 {
     EvalStatus::UnsupportedConstruct.code()

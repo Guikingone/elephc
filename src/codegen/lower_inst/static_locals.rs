@@ -44,13 +44,36 @@ pub(super) fn lower_load_static_local(ctx: &mut FunctionContext<'_>, inst: &Inst
     ctx.store_result_value(result)
 }
 
+/// Returns the type a value stored into a static local is TAGGED with when the slot boxes it.
+///
+/// A RESOURCE keeps its PHP type; everything else keeps its representation. `codegen_repr()` maps
+/// `Resource` to `Int` — the right representation, since a resource payload is an i64, and the
+/// wrong TAG: 0 instead of 9. A stream boxed as an int makes `is_resource()` answer false for the
+/// rest of its life, which is how `Symfony\Component\Console\Output\ConsoleOutput`'s stream cache
+/// — a static slot written from three returns of disagreeing types, so the slot is Mixed — handed
+/// `StreamOutput` a stream it then rejected as "not a stream".
+///
+/// The exception is deliberately narrow. `codegen_repr()` also maps a closure `Object` to
+/// `Callable` (tag 6 to tag 10) and a `Union` to `Mixed`; the boxing WANTS those, so only the
+/// resource case is lifted out.
+fn static_local_store_type(raw: PhpType, repr: PhpType) -> PhpType {
+    match raw {
+        PhpType::Resource(_) => raw,
+        _ => repr,
+    }
+}
+
 /// Lowers a static-local assignment from one SSA operand into symbol-backed storage.
 pub(super) fn lower_store_static_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     let slot = resolve_static_local_slot(ctx, inst)?;
     ensure_static_local_type_supported(&slot, inst)?;
     ensure_static_local_value_supported(ctx, &slot, value, inst)?;
-    let mut loaded_ty = ctx.load_value_to_result(value)?.codegen_repr();
+    // `load_value_to_result` answers `value_php_type`, which has ALREADY been through
+    // `codegen_repr()` — so the resource is `Int` by the time it gets back here and the old
+    // `.codegen_repr()` on it was a no-op. The raw type is the only place the tag survives.
+    let loaded_repr = ctx.load_value_to_result(value)?;
+    let mut loaded_ty = static_local_store_type(ctx.raw_value_php_type(value)?, loaded_repr);
     // Narrow Mixed to Int when the static local slot is Int-typed
     // (from checked integer arithmetic that may overflow to float).
     if matches!(slot.php_type.codegen_repr(), PhpType::Int)
@@ -103,7 +126,11 @@ pub(super) fn lower_init_static_local(ctx: &mut FunctionContext<'_>, inst: &Inst
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &initialized_label);
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
     abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), &slot.init_symbol, 0);
-    let mut loaded_ty = ctx.load_value_to_result(value)?.codegen_repr();
+    // `load_value_to_result` answers `value_php_type`, which has ALREADY been through
+    // `codegen_repr()` — so the resource is `Int` by the time it gets back here and the old
+    // `.codegen_repr()` on it was a no-op. The raw type is the only place the tag survives.
+    let loaded_repr = ctx.load_value_to_result(value)?;
+    let mut loaded_ty = static_local_store_type(ctx.raw_value_php_type(value)?, loaded_repr);
     // Narrow Mixed to Int when the static local slot is Int-typed.
     if matches!(slot.php_type.codegen_repr(), PhpType::Int)
         && matches!(loaded_ty, PhpType::Mixed)

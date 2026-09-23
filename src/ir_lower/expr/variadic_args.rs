@@ -183,7 +183,7 @@ pub(super) fn lower_variadic_tail_source_value(
 ) -> LoweredValue {
     if by_ref_variadic {
         if let ExprKind::Variable(name) = &expr.kind {
-            return lower_invoker_ref_arg_marker(ctx, name, expr.span);
+            return lower_unbridged_invoker_ref_arg_marker(ctx, name, expr.span);
         }
     }
     let value = prelowered

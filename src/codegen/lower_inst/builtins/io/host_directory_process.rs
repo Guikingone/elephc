@@ -341,7 +341,7 @@ pub(crate) fn lower_fsockopen(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_fsockopen");
-    store_fsockopen_error_outputs(ctx, inst)?;
+    store_socket_error_outputs(ctx, inst, 2, 3)?;
     box_stream_fd_or_false_result(ctx, "fsockopen");
     store_if_result(ctx, inst)
 }

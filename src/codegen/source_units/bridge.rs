@@ -11,8 +11,18 @@ const PRIME: &str = "__rt_source_include_prime";
 /// C-ABI name: Magician calls this one by symbol, so it carries the platform prefix.
 const CLASS_LOOKUP: &str = "__elephc_eval_class_deferred_lookup";
 const CLASS_RESET: &str = "__rt_class_deferred_reset";
+/// C-ABI name: Magician calls it when it skips an include on the compiler's mark, so it carries
+/// the platform prefix too.
+const SOURCE_ACTIVATE: &str = "__elephc_eval_source_activate";
 /// Bytes per table record: path pointer, path length, guard cell, compiler-included flag.
 const RECORD: usize = 32;
+/// Guard-cell value meaning "the COMPILER already included this source", as opposed to the `1` a
+/// RUNTIME include writes. Every reader that only asks "has this been included" still tests for
+/// non-zero, so the distinction costs nothing; what it buys is the interpreter being able to tell
+/// an inclusion the compiler performed at program start from one this request performed itself.
+/// Mirrored by `COMPILER_INCLUDED` in `crates/elephc-magician/src/context/request_includes.rs` —
+/// the two constants are one ABI and must agree.
+const COMPILER_INCLUDED: u64 = 2;
 const FRAME: usize = 64;
 const PATH: usize = 8;
 const LENGTH: usize = 16;
@@ -83,6 +93,7 @@ mod tests {
 typedef unsigned long long u64;
 extern u64 *lookup(const unsigned char *, u64) __asm__("__rt_source_include_lookup");
 extern void reset(void) __asm__("__rt_source_include_reset");
+extern void prime(void) __asm__("__rt_source_include_prime");
 int main(void) {
     const unsigned char a[] = "/sources/0.php";
     const unsigned char b[] = "/sources/1.php";
@@ -96,7 +107,14 @@ int main(void) {
     *first = 1; *second = 1; *third = 1;
     if (lookup(a, sizeof(a)-1) != first || *lookup(a, sizeof(a)-1) != 1) return 4;
     reset();
-    return (*first || *second || *third) ? 5 : 0;
+    if (*first || *second || *third) return 5;
+    /* `/sources/1.php` is the only compiler-included source, and prime must raise ITS cell to
+       the distinguishing value, leaving every runtime-only source at zero. */
+    prime();
+    if (*second != 2) return 6;
+    if (*first || *third) return 7;
+    reset();
+    return (*first || *second || *third) ? 8 : 0;
 }
 "#).unwrap();
         let host = Target::detect_host();
@@ -108,6 +126,7 @@ int main(void) {
             })).unwrap();
             let mut module = Module::with_source_catalog(target, catalog);
             module.required_runtime_features.eval_bridge = true;
+            module.preincluded_sources.insert(std::path::PathBuf::from("/sources/1.php"));
             let mut emitter = Emitter::new(target);
             let mut data = DataSection::new();
             emit_state_helpers(&module, &mut emitter, &mut data);
@@ -132,7 +151,11 @@ pub(in crate::codegen) fn emit_state_helpers(module: &Module, emitter: &mut Emit
         for (_, source) in catalog.iter() {
             let (path, length) = data.add_string(source.canonical_path.as_os_str().as_encoded_bytes());
             let cell = data.add_comm(include_guard_symbol(&source.canonical_path), 8);
-            let preincluded = u64::from(module.preincluded_sources.contains(&source.canonical_path));
+            let preincluded = if module.preincluded_sources.contains(&source.canonical_path) {
+                COMPILER_INCLUDED
+            } else {
+                0
+            };
             words.extend([
                 DataWord::Symbol(path),
                 DataWord::U64(length as u64),
@@ -143,10 +166,100 @@ pub(in crate::codegen) fn emit_state_helpers(module: &Module, emitter: &mut Emit
     }
     let count = words.len() / 4;
     let table = data.add_words(words);
-    emit_lookup(emitter, LOOKUP, "source_lookup", &table, count);
+    emit_lookup(emitter, LOOKUP, "source_lookup", &table, count, OnMatch::Return);
     emit_reset(emitter, RESET, "source_reset", &table, count);
     emit_prime(emitter, &table, count);
     emit_deferred_class_helpers(module, emitter, data);
+    emit_source_activate(module, emitter, data);
+}
+
+/// What a table scan does with a record whose path matches.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OnMatch {
+    /// Return that record's cell address, or null when none matched.
+    Return,
+    /// Write 1 into the cell of EVERY matching record, then return.
+    RaiseAll,
+}
+
+/// Emits `__elephc_eval_source_activate`, which does to class-like LOAD state what including one
+/// compiler-included source does.
+///
+/// The autoload pass splices a file's declarations where the compiled program first names one of
+/// them, and that is where its `ClassLikeActivate` event runs. PHP loads the file earlier whenever
+/// something dynamic asks first -- an interpreted `interface X extends Y`, an `implements`, a
+/// `class_exists()` -- and the autoloader's `include` of it is then skipped on the compiler's
+/// mark. That skip is the moment php declares the file's symbols, so it raises the cells the
+/// spliced event would: each interface's activation cell and each probe-only class's load flag.
+/// The spliced event later finds its cell raised and, for a pre-included source, accepts that.
+fn emit_source_activate(module: &Module, emitter: &mut Emitter, data: &mut DataSection) {
+    let mut words = Vec::new();
+    let mut add = |data: &mut DataSection, path: &std::path::Path, cell: String| {
+        let (label, length) = data.add_string(path.as_os_str().as_encoded_bytes());
+        let cell = data.add_comm(cell, 8);
+        words.extend([
+            DataWord::Symbol(label),
+            DataWord::U64(length as u64),
+            DataWord::Symbol(cell),
+            DataWord::U64(0),
+        ]);
+    };
+    for (path, cell) in preincluded_interface_activation_cells(module) {
+        add(data, &path, cell);
+    }
+    for (name, file) in &module.declared_class_source_files {
+        let folded = name.trim_start_matches('\\').to_ascii_lowercase();
+        if !module.deferred_class_loads.contains(&folded) {
+            continue;
+        }
+        // Same canonicalization as `autoload::record_compile_time_inclusions`, which chose these.
+        let declared = std::path::PathBuf::from(file);
+        let declared = declared.canonicalize().unwrap_or(declared);
+        if module.preincluded_sources.contains(&declared) {
+            add(data, &declared, deferred_class_symbol(&folded));
+        }
+    }
+    let count = words.len() / 4;
+    let table = data.add_words(words);
+    let symbol = emitter.target.extern_symbol(SOURCE_ACTIVATE);
+    emit_lookup(emitter, &symbol, "source_activate", &table, count, OnMatch::RaiseAll);
+}
+
+/// Every interface activation event belonging to a source the autoload pass pre-included, as
+/// (canonical source path, activation cell symbol), deduplicated.
+fn preincluded_interface_activation_cells(module: &Module) -> Vec<(std::path::PathBuf, String)> {
+    let Some(catalog) = module.source_catalog() else { return Vec::new() };
+    let mut cells = std::collections::BTreeSet::new();
+    for function in module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.runtime_callable_invokers.iter())
+    {
+        for instruction in &function.instructions {
+            let Some(crate::ir::Immediate::ClassLikeActivation { source, kind, name, .. }) =
+                &instruction.immediate
+            else {
+                continue;
+            };
+            if *kind != crate::parser::ast::ClassLikeKind::Interface {
+                continue;
+            }
+            let Some(unit) = catalog.get(*source) else { continue };
+            if !module.preincluded_sources.contains(&unit.canonical_path) {
+                continue;
+            }
+            let Some(name) = module.data.strings.get(name.as_raw() as usize) else { continue };
+            cells.insert((
+                unit.canonical_path.clone(),
+                crate::names::classlike_activation_symbol(*kind, name),
+            ));
+        }
+    }
+    cells.into_iter().collect()
 }
 
 /// Emits the load-state table for classes the closed world carries only to answer a probe.
@@ -169,7 +282,7 @@ fn emit_deferred_class_helpers(module: &Module, emitter: &mut Emitter, data: &mu
     let count = words.len() / 4;
     let table = data.add_words(words);
     let lookup_symbol = emitter.target.extern_symbol(CLASS_LOOKUP);
-    emit_lookup(emitter, &lookup_symbol, "class_lookup", &table, count);
+    emit_lookup(emitter, &lookup_symbol, "class_lookup", &table, count, OnMatch::Return);
     emit_reset(emitter, CLASS_RESET, "class_reset", &table, count);
 }
 
@@ -204,7 +317,7 @@ pub(in crate::codegen) fn emit_state_install(ctx: &mut FunctionContext<'_>) {
     abi::emit_call_label(ctx.emitter, PRIME);
 }
 
-fn emit_lookup(emitter: &mut Emitter, symbol: &str, tag: &str, table: &str, count: usize) {
+fn emit_lookup(emitter: &mut Emitter, symbol: &str, tag: &str, table: &str, count: usize, on_match: OnMatch) {
     let prefix = emitter.target.platform.local_label_prefix();
     let again = format!("{prefix}{tag}_again");
     let next = format!("{prefix}{tag}_next");
@@ -252,8 +365,14 @@ fn emit_lookup(emitter: &mut Emitter, symbol: &str, tag: &str, table: &str, coun
         }
     }
     abi::load_at_offset(emitter, result, CURSOR);
-    abi::emit_load_from_address(emitter, result, result, 16);
-    abi::emit_jump(emitter, &done);
+    if on_match == OnMatch::Return {
+        abi::emit_load_from_address(emitter, result, result, 16);
+        abi::emit_jump(emitter, &done);
+    } else {
+        abi::emit_load_from_address(emitter, a2, result, 16);
+        abi::emit_load_int_immediate(emitter, scratch, 1);
+        abi::emit_store_to_address(emitter, scratch, a2, 0);
+    }
     emitter.label(&next);
     abi::load_at_offset(emitter, result, CURSOR);
     match emitter.target.arch {

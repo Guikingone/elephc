@@ -28,7 +28,36 @@ use crate::codegen_support::platform::Arch;
 use crate::codegen_support::runtime::data::ALLOC_OVERFLOW_MSG;
 
 /// Byte capacity of the shared `_concat_buf` scratch buffer declared in `runtime::data::fixed`.
-pub(crate) const CONCAT_BUF_CAPACITY: usize = 65536;
+///
+/// It was 64 KiB, and the serialize family -- which appends straight at `_concat_buf +
+/// _concat_off` through absolute write pointers saved in each recursive frame, so its storage
+/// cannot relocate mid-value -- had no check against it. MEASURED on php 8.5.10 vs elephc,
+/// `serialize(range(1, $n))`: identical bytes up to 39792, right LENGTH but corrupted CONTENT at
+/// 67792, and a SIGBUS at 297794. The overrun wrote into the `.comm` globals that follow the
+/// buffer, including the interpreter callback slots, which is how Symfony's `bin/console`
+/// branched into string data from `__rt_serialize_object`.
+///
+/// The writers are bounded now (they fatal through `__rt_alloc_overflow` instead of running past
+/// the end), so this number is what separates a working program from a fatal rather than a
+/// working program from silent corruption. It is BSS: pages cost nothing until written.
+///
+/// REMAINING WORK: the principled fix is to give the serialize family a growable accumulation
+/// buffer like `__rt_sprintf` already has (`__rt_concat_grow`), which means carrying OFFSETS
+/// instead of absolute pointers through its recursive frames -- about forty sites across both
+/// architectures. Until then this is a ceiling, not a guarantee.
+pub(crate) const CONCAT_BUF_CAPACITY: usize = 8 * 1024 * 1024;
+
+/// Slack declared past `CONCAT_BUF_CAPACITY` so an unchecked short append cannot reach the
+/// neighbouring `.comm` globals.
+///
+/// The serialize family's bulk writers (`__rt_concat_append`, `__rt_serialize_uint`) check the
+/// capacity themselves. Its LITERAL writers do not: `emit_append_literal_*` is inlined at about
+/// fifteen call sites, each of which would need its own local overflow label, and every one of
+/// them writes at most two bytes. The only run of literals with no checked append between them is
+/// the `}` chain that closes nested arrays while the serializer unwinds, which is bounded by
+/// recursion depth. This slack absorbs those bytes so the first bulk append afterwards is what
+/// reports the overflow -- inside the buffer, not on top of `_elephc_eval_serialize_object_fn`.
+pub(crate) const CONCAT_BUF_GUARD: usize = 65536;
 
 /// Uniform heap-header kind stamped on a heap-backed `.` operator result.
 ///

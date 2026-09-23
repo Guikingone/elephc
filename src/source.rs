@@ -117,10 +117,18 @@ pub fn discoverable_source_stem(component: &str) -> String {
 
 /// Reads PHP source without requiring its byte stream to be valid UTF-8.
 ///
-/// PHP identifiers accept bytes in the `0x80..=0xff` range, and third-party source
-/// packages may use that capability. Valid UTF-8 spans remain unchanged; each byte
-/// that cannot participate in UTF-8 maps injectively to the same Latin-1 code
-/// point so matching declarations and string keys stay coherent in Rust-owned ASTs.
+/// PHP identifiers and string literals are BYTE strings: bytes in `0x80..=0xff` are legal in both,
+/// and third-party packages use that. `symfony/cache` declares `class \xA9` -- one non-ASCII byte,
+/// no namespace -- and Composer's generated classmap carries the same byte as a key.
+///
+/// A malformed byte goes through `crate::string_bytes`, the SAME private-use marker range a
+/// `\xNN` escape already uses, so a raw source byte and its escaped spelling produce identical
+/// runtime bytes. Latin-1 was used here before and is not reversible: byte `0xA9` became
+/// `U+00A9`, which re-encodes to TWO bytes, and every byte operation on it was then wrong --
+/// measured against php 8.5.10, `strlen("\xA9")` answered 2 against 1, `ord()` 194 against 169,
+/// `bin2hex()` `c2a9` against `a9`. Internal coherence was preserved, which is why it went
+/// unnoticed: both sides of a comparison were transformed alike, and only the bytes LEAVING the
+/// program differed.
 pub(crate) fn read_physical_source(path: impl AsRef<Path>) -> std::io::Result<String> {
     std::fs::read(path).map(decode_physical_source)
 }
@@ -128,19 +136,57 @@ pub(crate) fn read_physical_source(path: impl AsRef<Path>) -> std::io::Result<St
 /// Converts one physical PHP byte stream into the UTF-8 storage used by the parser.
 fn decode_physical_source(bytes: Vec<u8>) -> String {
     match String::from_utf8(bytes) {
-        Ok(source) => source,
+        // A valid UTF-8 source still needs normalising IF it spells a private-use char in the
+        // marker range itself, or that char would be indistinguishable from the marker a malformed
+        // byte decodes to. The guard keeps the rebuild off the hot path: essentially no real
+        // source contains one, and the check is a scan rather than an allocation.
+        Ok(source) if !holds_byte_marker(&source) => source,
+        Ok(source) => {
+            let mut normalised = String::with_capacity(source.len());
+            push_source_text(&source, &mut normalised);
+            normalised
+        }
         Err(error) => decode_mixed_utf8_and_latin1(error.into_bytes()),
     }
 }
 
-/// Preserves valid UTF-8 spans while mapping each malformed byte through Latin-1.
+/// Whether `source` spells a char in the byte-marker range, which only this decode may produce.
+///
+/// A BYTE scan, not a char walk: every marker in `U+E000..=U+E0FF` encodes as three UTF-8 bytes
+/// beginning `0xEE`, so a source without that byte cannot hold one and pays a memchr-shaped pass
+/// instead of a full decode. This runs on every source file the compiler reads, and the char walk
+/// it replaces was heavy enough to push a cross-process lease test past its timeout.
+fn holds_byte_marker(source: &str) -> bool {
+    source
+        .as_bytes()
+        .contains(&0xee)
+        .then(|| {
+            source
+                .chars()
+                .any(|ch| ('\u{e000}'..='\u{e0ff}').contains(&ch))
+        })
+        .unwrap_or(false)
+}
+
+/// Appends a VALID UTF-8 span, routing it through the byte-marker encoder.
+///
+/// Not optional: a source that genuinely spells a private-use char in `U+E000..=U+E0FF` would
+/// otherwise be indistinguishable from a marker this decode produced, and
+/// `string_bytes::push_literal_char` is exactly the escape hatch for that collision.
+fn push_source_text(text: &str, out: &mut String) {
+    for ch in text.chars() {
+        crate::string_bytes::push_literal_char(ch, out);
+    }
+}
+
+/// Preserves valid UTF-8 spans while mapping each malformed byte to its byte marker.
 fn decode_mixed_utf8_and_latin1(bytes: Vec<u8>) -> String {
     let mut source = String::with_capacity(bytes.len());
     let mut offset = 0;
     while offset < bytes.len() {
         match std::str::from_utf8(&bytes[offset..]) {
             Ok(valid) => {
-                source.push_str(valid);
+                push_source_text(valid, &mut source);
                 break;
             }
             Err(error) => {
@@ -148,12 +194,12 @@ fn decode_mixed_utf8_and_latin1(bytes: Vec<u8>) -> String {
                 if valid_end > offset {
                     let valid = std::str::from_utf8(&bytes[offset..valid_end])
                         .expect("UTF-8 validator reported a valid prefix");
-                    source.push_str(valid);
+                    push_source_text(valid, &mut source);
                 }
                 offset = valid_end;
                 let invalid_len = error.error_len().unwrap_or(bytes.len() - offset);
                 for byte in &bytes[offset..offset + invalid_len] {
-                    source.push(char::from(*byte));
+                    crate::string_bytes::push_escaped_byte(*byte, &mut source);
                 }
                 offset += invalid_len;
             }
@@ -250,10 +296,36 @@ mod tests {
     }
 
     /// Verifies physical source keeps valid Unicode while accepting isolated PHP identifier bytes.
+    ///
+    /// The isolated byte becomes a `string_bytes` MARKER, not the Latin-1 char it used to become.
+    /// That is the whole point: a marker decodes back to ONE byte, while `U+00A9` re-encodes to
+    /// two and made `strlen`, `ord` and `bin2hex` disagree with php on any source holding a raw
+    /// high byte. The valid `é` is untouched, so nothing that was already UTF-8 moves.
     #[test]
     fn decodes_mixed_utf8_and_php_identifier_bytes() {
         let source = decode_physical_source(vec![b'e', 0xc3, 0xa9, b' ', 0xa9, b'!']);
-        assert_eq!(source, "eé ©!");
+        let mut expected = String::from("eé ");
+        crate::string_bytes::push_escaped_byte(0xa9, &mut expected);
+        expected.push('!');
+        assert_eq!(source, expected);
+        assert_eq!(
+            crate::string_bytes::literal_bytes(&source),
+            vec![b'e', 0xc3, 0xa9, b' ', 0xa9, b'!'],
+            "the decode must round-trip to the original bytes"
+        );
+    }
+
+    /// Verifies a source that spells a marker-range char itself cannot be mistaken for a decoded
+    /// raw byte: it is re-encoded, so `literal_bytes` still returns its original UTF-8.
+    #[test]
+    fn a_private_use_source_char_round_trips_instead_of_colliding_with_a_byte_marker() {
+        let original = "x\u{e0a9}y";
+        let source = decode_physical_source(original.as_bytes().to_vec());
+        assert_ne!(source, original, "the marker-range char must be re-encoded");
+        assert_eq!(
+            crate::string_bytes::literal_bytes(&source),
+            original.as_bytes().to_vec()
+        );
     }
 
     /// Verifies a nested file parse starts coercive and cannot leak its `strict_types` state

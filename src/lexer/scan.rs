@@ -30,7 +30,12 @@ pub fn scan_tokens(
     // A leading UTF-8 byte-order mark (U+FEFF) is ignored, matching editors that save PHP
     // files as BOM-prefixed UTF-8; stripping it keeps the `<?php` open tag at the start.
     let source = source.strip_prefix('\u{feff}').unwrap_or(source);
-    let mut cursor = Cursor::new(source);
+    // A leading `#!` line is removed by PHP's CLI SAPI before scanning, in every file it
+    // compiles, and kept by a web SAPI, which echoes it like any other text before `<?php`.
+    // `first_line` carries the numbering across the removal so diagnostics still name the
+    // physical line (`crate::sapi`).
+    let (source, first_line) = crate::sapi::strip_leading_shebang(source);
+    let mut cursor = Cursor::new_at_line(source, first_line);
     let mut tokens = Vec::new();
 
     let span = cursor.span();
@@ -54,7 +59,7 @@ pub fn scan_tokens(
             // included — PHP prints those bytes too. A file whose leading bytes are ONLY
             // whitespace never gets here (the skip above already found the tag), which keeps the
             // indented-open-tag spelling behaving as it always has.
-            cursor = Cursor::new(source);
+            cursor = Cursor::new_at_line(source, first_line);
             tokens.push(spanned(Token::OpenTag, cursor.span()));
             scan_inline_html_text(&mut cursor, &mut tokens);
         } else {

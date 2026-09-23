@@ -29,6 +29,7 @@ mod inet_ntop;
 mod inet_pton;
 mod ip2long;
 mod long2ip;
+mod memory_usage;
 mod opcache_file_functions;
 mod opcache_get_configuration;
 mod opcache_get_status;
@@ -58,6 +59,7 @@ pub(in crate::interpreter) use inet_ntop::*;
 pub(in crate::interpreter) use inet_pton::*;
 pub(in crate::interpreter) use ip2long::*;
 pub(in crate::interpreter) use long2ip::*;
+pub(in crate::interpreter) use memory_usage::*;
 pub(in crate::interpreter) use opcache_file_functions::*;
 pub(in crate::interpreter) use opcache_get_configuration::*;
 pub(in crate::interpreter) use opcache_get_status::*;
@@ -84,7 +86,7 @@ pub(in crate::interpreter) fn eval_builtin_network_env_call(
         "system" => eval_builtin_system(args, context, scope, values),
         "passthru" => eval_builtin_passthru(args, context, scope, values),
         "extension_loaded" => eval_builtin_extension_loaded(args, context, scope, values),
-        "gc_collect_cycles" => eval_builtin_gc_collect_cycles(args, values),
+        "gc_collect_cycles" | "gc_mem_caches" => eval_builtin_gc_collect_cycles(args, values),
         "gc_disable" | "gc_enable" => eval_builtin_gc_switch(args, values),
         "gc_enabled" => eval_builtin_gc_enabled(args, values),
         "get_cfg_var" => eval_builtin_get_cfg_var(args, context, scope, values),
@@ -103,6 +105,10 @@ pub(in crate::interpreter) fn eval_builtin_network_env_call(
         "inet_pton" => eval_builtin_inet_pton(args, context, scope, values),
         "ip2long" => eval_builtin_ip2long(args, context, scope, values),
         "long2ip" => eval_builtin_long2ip(args, context, scope, values),
+        "memory_get_peak_usage" => {
+            eval_builtin_memory_get_peak_usage(args, context, scope, values)
+        }
+        "memory_get_usage" => eval_builtin_memory_get_usage(args, context, scope, values),
         "php_uname" => eval_builtin_php_uname(args, context, scope, values),
         "phpversion" => eval_builtin_phpversion(args, context, scope, values),
         "putenv" => eval_builtin_putenv(args, context, scope, values),
@@ -119,7 +125,7 @@ pub(in crate::interpreter) fn eval_network_env_values_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match name {
-        "gc_collect_cycles" => match evaluated_args {
+        "gc_collect_cycles" | "gc_mem_caches" => match evaluated_args {
             [] => eval_gc_collect_cycles_result(values),
             _ => Err(EvalStatus::RuntimeFatal),
         },
@@ -137,6 +143,16 @@ pub(in crate::interpreter) fn eval_network_env_values_result(
             };
             eval_get_cfg_var_result(*option, values)
         }
+        "memory_get_peak_usage" => match evaluated_args {
+            [] => eval_memory_usage_result(true, None, values),
+            [real_usage] => eval_memory_usage_result(true, Some(*real_usage), values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
+        "memory_get_usage" => match evaluated_args {
+            [] => eval_memory_usage_result(false, None, values),
+            [real_usage] => eval_memory_usage_result(false, Some(*real_usage), values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
         "set_time_limit" => eval_set_time_limit_values(evaluated_args, context, values),
         "php_uname" => match evaluated_args {
             [] => eval_php_uname_result(None, values),

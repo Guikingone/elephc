@@ -5,11 +5,12 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - The golden signature is `first_param_ref(fixed(["array", "callback"]))`: exactly 2
-//!   arguments, the `array` param is by-reference. The `ref` marker drives in-place
-//!   mutation (ir_lower reads `ref_params` from the registry sig).
+//! - The signature is `array` (by reference), `callback`, and an optional `arg` handed to the
+//!   callback as its third argument; it returns `true`. Lowering does not use the native runtime:
+//!   `crate::ir_lower::expr::compat_preludes` redirects every call to the helpers built in
+//!   `crate::array_walk_prelude`, which carry the measurements for why.
 //! - `check` validates the array and callback arguments using the contextual element type.
-//!   Returns `Void`.
+//!   Returns `Bool`.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -27,12 +28,18 @@ builtin! {
 ///
 /// Infers the array and checks the callback contextually against its element type, adding the
 /// array's key type as a second parameter when the callback declares `function ($value, $key)`.
-/// Arity (exactly 2) is pre-validated by the registry. Returns `Ok(PhpType::Void)`.
+/// Arity (2 or 3) is pre-validated by the registry. Returns `Ok(PhpType::Bool)`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    let extra_arg = match cx.args.get(2) {
+        Some(arg) => Some(cx.checker.infer_type(arg, cx.env)?),
+        None => None,
+    };
     let callback_arg_types = crate::types::checker::builtins::array_walk_callback_arg_types(
         &arr_ty,
         &cx.args[1],
+        extra_arg,
+        true,
     );
     crate::types::checker::builtins::check_array_callback_builtin_call(
         cx.checker,
@@ -42,5 +49,6 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         cx.env,
         &format!("{}() callback", cx.name),
     )?;
-    Ok(PhpType::Void)
+    // Both walks always answer `true` in php 8.
+    Ok(PhpType::Bool)
 }

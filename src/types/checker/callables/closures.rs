@@ -45,12 +45,20 @@ impl Checker {
         variadic: &Option<String>,
         variadic_by_ref: bool,
         captures: &[String],
+        capture_refs: &[String],
         span: Span,
         env: &TypeEnv,
         contextual_param_types: &[PhpType],
     ) -> Result<ClosureSignatureContext, CompileError> {
+        // A BY-REFERENCE capture of a name that does not exist yet is legal PHP: `use (&$x)`
+        // creates `$x`, which is how a recursive closure names itself
+        // (`$f = function () use (&$f) { … }`) and what Symfony's `UrlGenerator` writes. The
+        // parser records such a capture in BOTH lists, so the existence check has to consult the
+        // by-reference one or it refuses the whole idiom. A by-VALUE capture of an unknown name
+        // keeps its error: php warns and captures null there, and a typo is far likelier than
+        // the intent.
         for cap in captures {
-            if !env.contains_key(cap) {
+            if !env.contains_key(cap) && !capture_refs.iter().any(|name| name == cap) {
                 return Err(CompileError::new(
                     span,
                     &format!("Undefined variable in use(): ${}", cap),
@@ -59,6 +67,13 @@ impl Checker {
         }
 
         let mut closure_env = env.clone();
+        for cap in capture_refs {
+            // The body may read the new name before anything writes through the reference, and a
+            // PHP reference carries no type, so it enters as `Mixed`.
+            closure_env
+                .entry(cap.clone())
+                .or_insert(crate::types::PhpType::Mixed);
+        }
         let mut param_types = Vec::new();
         let mut param_type_exprs = Vec::new();
         let mut defaults = Vec::new();
@@ -127,6 +142,7 @@ impl Checker {
         return_type: &Option<TypeExpr>,
         body: &[Stmt],
         captures: &[String],
+        capture_refs: &[String],
         by_ref_return: bool,
         span: Span,
         env: &TypeEnv,
@@ -137,6 +153,7 @@ impl Checker {
             variadic,
             variadic_by_ref,
             captures,
+            capture_refs,
             span,
             env,
             param_hints,
@@ -261,7 +278,7 @@ impl Checker {
                 return_type,
                 body,
                 captures,
-                capture_refs: _,
+                capture_refs,
                 by_ref_return,
                 ..
             } => self
@@ -272,6 +289,7 @@ impl Checker {
                     return_type,
                     body,
                     captures,
+                    capture_refs,
                     *by_ref_return,
                     expr.span,
                     env,

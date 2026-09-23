@@ -45,6 +45,8 @@ pub(super) fn lower_positional_spread_args_with_signature(
     // descriptor as an array, and the min-length guard would call `ArrayLen` on it — a
     // callable array is exactly two elements by construction, so there is nothing to check.
     let callable_source = matches!(source_ty, PhpType::Callable);
+    // A packed `array<T>` has integer keys by construction; anything gradual may carry names.
+    let may_carry_names = !matches!(source_ty, PhpType::Array(_));
     let spread = lower_expr(ctx, inner);
     // Box a `callable` source so the narrowing below sees a gradual value, then let that
     // narrowing MATERIALIZE it: `__rt_mixed_spread_array` turns a callable descriptor into a real
@@ -71,21 +73,41 @@ pub(super) fn lower_positional_spread_args_with_signature(
     for param_idx in first_spread_param_idx..regular_param_count {
         let element_idx = param_idx - first_spread_param_idx;
         let default = sig.defaults.get(param_idx).and_then(|default| default.as_ref());
+        // Unpacking is decided PER KEY at runtime: a string key names a parameter, an integer key
+        // fills the next position, in the same array. This module is chosen whenever the source's
+        // type is `array`/`mixed` -- which a function declared `: array` satisfies whatever keys
+        // it returns -- so reading positionally ONLY dropped every name the source carried.
+        //
+        // MEASURED: `new Target(...namedArgs())`, where `namedArgs(): array` returns
+        // `['name' => 'fromCall', 'description' => 'desc']`, left both parameters at their
+        // defaults while php bound both. That is `ReflectionAttribute::newInstance()`'s
+        // `new $this->__name(...$this->__args)`, so every `#[AsCommand(name: 'x')]` was
+        // constructed empty and Symfony's console reported
+        // `AsCommand::__construct(): Argument #1 ($name) must be of type string, array given`.
+        //
+        // The element builders ask for the name first and fall back to the position, so a packed
+        // list still reads exactly as it did.
+        // Only pay for the named probe when the source COULD carry names. A packed `array<T>`
+        // cannot, and asking anyway added an `array_key_exists` call and a ternary to every spread
+        // parameter in the program -- 26 MB of extra assembly on the Symfony build.
+        let param_name = may_carry_names
+            .then(|| sig.params.get(param_idx).map(|(name, _)| name.as_str()))
+            .flatten();
         let expr = if let Some(default) = default {
             if element_idx < required_len {
                 spread_element_expr_for_ir(
                     &spread_expr,
                     element_idx,
-                    None,
-                    false,
+                    param_name,
+                    may_carry_names,
                     args[spread_idx].span,
                 )
             } else {
                 spread_element_or_default_expr_for_ir(
                     &spread_expr,
                     element_idx,
-                    None,
-                    false,
+                    param_name,
+                    may_carry_names,
                     default.clone(),
                     args[spread_idx].span,
                 )
@@ -94,8 +116,8 @@ pub(super) fn lower_positional_spread_args_with_signature(
             spread_element_expr_for_ir(
                 &spread_expr,
                 element_idx,
-                None,
-                false,
+                param_name,
+                may_carry_names,
                 args[spread_idx].span,
             )
         };

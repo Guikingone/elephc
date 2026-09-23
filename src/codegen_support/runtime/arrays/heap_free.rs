@@ -10,6 +10,23 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::sentinels::HEAP_FREE_REFCOUNT_MARK;
+
+/// Materializes [`HEAP_FREE_REFCOUNT_MARK`] into a 32-bit AArch64 register.
+///
+/// It does not fit a single `mov` immediate, so it is built with the usual `movz`/`movk` pair.
+/// Every reader and writer of a parked block's refcount word goes through this so the marker
+/// can never be typed by hand in two places and drift apart.
+pub(crate) fn emit_load_free_mark(emitter: &mut Emitter, reg: &str) {
+    emitter.instruction(&format!(
+        "movz {reg}, #{:#x}",
+        HEAP_FREE_REFCOUNT_MARK & 0xffff
+    ));
+    emitter.instruction(&format!(
+        "movk {reg}, #{:#x}, lsl #16",
+        HEAP_FREE_REFCOUNT_MARK >> 16
+    ));
+}
 
 
 /// Emits `__rt_heap_free` and `__rt_heap_free_safe` runtime helpers.
@@ -111,17 +128,41 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     // owner. Two live values then share one allocation -- which is what the Twig generator crash
     // looks like from the wreckage, a hash whose header is intact while its entry region is
     // interleaved with other blocks. Reading it first names the caller that got it wrong.
+    // -- O(1) double free: a block already parked on a free list carries the free mark --
+    //
+    // This replaces a scan of the whole small-bin chain on EVERY small free. The scan answered
+    // the same question in O(chain), and on a request that frees thousands of small blocks it
+    // was 76.3% of this helper's self time. The mark is written unconditionally below, so the
+    // question costs one compare whether or not a guard is watching.
+    emitter.instruction("ldr w16, [x9, #4]");                                   // load the refcount word the caller is freeing through
+    emit_load_free_mark(emitter, "w15");                                        // materialize the parked-block refcount marker
+    emitter.instruction("cmp w16, w15");                                        // is this block already parked on a free list or in a bin?
+    emitter.instruction("b.ne __rt_heap_free_not_double");                      // no — carry on with the ordinary release
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_heap_debug_enabled");
+    emitter.instruction("ldr x16, [x16]");                                      // load the heap-debug enabled flag
+    emitter.instruction("cbnz x16, __rt_heap_free_report_double");              // heap-debug reports a double free loudly
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_web_heap_guard_enabled");
+    emitter.instruction("ldr x16, [x16]");                                      // load the --web heap-guard flag
+    emitter.instruction("cbnz x16, __rt_heap_free_report_double");              // the --web guard reports it too
+    emitter.instruction("b __rt_heap_free_done");                               // neither guard watching: ignore the repeat release, as the scan used to
+    emitter.label("__rt_heap_free_report_double");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_heap_dbg_double_free_msg");
+    emitter.instruction(&format!("mov x2, #{}", double_free_msg.len()));        // pass the exact double-free debug message length
+    emitter.instruction("b __rt_heap_debug_fail");                              // report the repeat release and terminate immediately
+    emitter.label("__rt_heap_free_not_double");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_heap_debug_enabled");
     emitter.instruction("ldr x16, [x16]");                                      // load the heap-debug enabled flag
     emitter.instruction("cbz x16, __rt_heap_free_live_checked");                // skip the owner check outside heap-debug
     emitter.instruction("ldr w16, [x9, #4]");                                   // load the refcount the caller is freeing through
+    emitter.instruction("and w16, w16, #0x7fffffff");                           // drop the destruction-in-progress flag: a destructor leaves it set over a zero count
     emitter.instruction("cmp w16, #1");                                         // does another owner still hold this block?
     emitter.instruction("b.ls __rt_heap_free_live_checked");                    // 0 or 1 owner is the normal release
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_heap_dbg_live_free_msg");
     emitter.instruction(&format!("mov x2, #{}", live_free_msg.len()));          // pass the exact live-free debug message length
     emitter.instruction("b __rt_heap_debug_fail");                              // report the premature free and terminate immediately
     emitter.label("__rt_heap_free_live_checked");
-    emitter.instruction("str wzr, [x9, #4]");                                   // mark the block header as not live while it is being freed
+    emit_load_free_mark(emitter, "w16");                                        // materialize the parked-block refcount marker
+    emitter.instruction("str w16, [x9, #4]");                                   // mark the block header as parked, not live, while it is being freed
     emitter.instruction("str xzr, [x9, #8]");                                   // clear the heap kind while the block sits on the free list
     crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_heap_buf");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_heap_off");
@@ -178,26 +219,9 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction("mov x12, #24");                                        // the remaining cached case is the <=64-byte bin
     emitter.label("__rt_heap_free_cache_small_ready");
     emitter.instruction("add x10, x10, x12");                                   // x10 = address of the chosen small-bin head slot
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_heap_debug_enabled");
-    emitter.instruction("ldr x16, [x16]");                                      // load the heap-debug enabled flag
-    emitter.instruction("cbnz x16, __rt_heap_free_cache_small_dupscan");        // heap-debug mode active, scan the bin for a double free
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_web_heap_guard_enabled");
-    emitter.instruction("ldr x16, [x16]");                                      // load the web heap-guard enabled flag
-    emitter.instruction("cbz x16, __rt_heap_free_cache_small_insert");          // neither guard active, skip duplicate detection
-    emitter.label("__rt_heap_free_cache_small_dupscan");
-    emitter.instruction("ldr x12, [x10]");                                      // x12 = current cached block while checking for duplicates
-    emitter.label("__rt_heap_free_cache_small_scan");
-    emitter.instruction("cbz x12, __rt_heap_free_cache_small_insert");          // a null next pointer means the block is not already cached
-    emitter.instruction("cmp x12, x9");                                         // is this exact header already present in the small bin?
-    emitter.instruction("b.eq __rt_heap_free_cache_small_duplicate");           // yes — report a double free under heap-debug mode
-    emitter.instruction("ldr x12, [x12, #16]");                                 // advance to the next cached block in this size class
-    emitter.instruction("b __rt_heap_free_cache_small_scan");                   // keep scanning the small-bin chain for duplicates
-
-    emitter.label("__rt_heap_free_cache_small_duplicate");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_heap_dbg_double_free_msg");
-    emitter.instruction(&format!("mov x2, #{}", double_free_msg.len()));        // pass the exact double-free debug message length
-    emitter.instruction("b __rt_heap_debug_fail");                              // report the duplicate cached block and terminate immediately
-
+    // The chain scan that used to stand here is gone: the free mark written into the header at
+    // `__rt_heap_free_live_checked` answers "is this block already parked?" in one compare at
+    // the top of the helper, for every block, not only the ones that land in a small bin.
     emitter.label("__rt_heap_free_cache_small_insert");
     emitter.instruction("ldr x12, [x10]");                                      // x12 = current small-bin head before insertion
     emitter.instruction("str x12, [x9, #16]");                                  // cached_block->next = previous small-bin head
@@ -436,19 +460,42 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [r8]");                             // load the current live-byte count before subtracting the freed block footprint
     emitter.instruction("sub rcx, r10");                                        // subtract this block's payload-plus-header footprint from the live-byte count
     emitter.instruction("mov QWORD PTR [r8], rcx");                             // store the updated live-byte count after freeing the block
+    // -- O(1) double free: a block already parked on a free list carries the free mark --
+    // See the AArch64 arm: this replaces a scan of the whole small-bin chain on every small free.
+    emitter.instruction("mov esi, DWORD PTR [r9 + 4]");                         // load the refcount word the caller is freeing through
+    emitter.instruction(&format!("cmp esi, {:#x}", HEAP_FREE_REFCOUNT_MARK));   // is this block already parked on a free list or in a bin?
+    emitter.instruction("jne __rt_heap_free_not_double");                       // no — carry on with the ordinary release
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rsi", "_heap_debug_enabled");
+    emitter.instruction("mov rsi, QWORD PTR [rsi]");                            // load the heap-debug enabled flag
+    emitter.instruction("test rsi, rsi");                                       // is heap-debug mode active?
+    emitter.instruction("jnz __rt_heap_free_report_double");                    // heap-debug reports a double free loudly
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rsi", "_web_heap_guard_enabled");
+    emitter.instruction("mov rsi, QWORD PTR [rsi]");                            // load the --web heap-guard flag
+    emitter.instruction("test rsi, rsi");                                       // is the --web guard watching?
+    emitter.instruction("jnz __rt_heap_free_report_double");                    // the --web guard reports it too
+    emitter.instruction("jmp __rt_heap_free_done");                             // neither guard watching: ignore the repeat release
+    emitter.label("__rt_heap_free_report_double");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rsi", "_heap_dbg_double_free_msg");
+    emitter.instruction(&format!("mov rdx, {}", double_free_msg.len()));        // pass the exact double-free debug message length
+    emitter.instruction("jmp __rt_heap_debug_fail");                            // report the repeat release and terminate immediately
+    emitter.label("__rt_heap_free_not_double");
     // See the AArch64 arm: freeing a block that still has owners is otherwise silent.
     crate::codegen_support::abi::emit_symbol_address(emitter, "rsi", "_heap_debug_enabled");
     emitter.instruction("mov rsi, QWORD PTR [rsi]");                            // load the heap-debug enabled flag
     emitter.instruction("test rsi, rsi");                                       // is heap-debug mode active?
     emitter.instruction("jz __rt_heap_free_live_checked");                      // skip the owner check outside heap-debug
     emitter.instruction("mov esi, DWORD PTR [r9 + 4]");                         // load the refcount the caller is freeing through
+    emitter.instruction("and esi, 0x7fffffff");                                 // drop the destruction-in-progress flag: a destructor leaves it set over a zero count
     emitter.instruction("cmp esi, 1");                                          // does another owner still hold this block?
     emitter.instruction("jbe __rt_heap_free_live_checked");                     // 0 or 1 owner is the normal release
     crate::codegen_support::abi::emit_symbol_address(emitter, "rsi", "_heap_dbg_live_free_msg");
     emitter.instruction(&format!("mov rdx, {}", live_free_msg.len()));          // pass the exact live-free debug message length
     emitter.instruction("jmp __rt_heap_debug_fail");                            // report the premature free and terminate immediately
     emitter.label("__rt_heap_free_live_checked");
-    emitter.instruction("mov DWORD PTR [r9 + 4], 0");                           // clear the live refcount while this block sits on the free list or in a small bin
+    emitter.instruction(&format!(
+        "mov DWORD PTR [r9 + 4], {:#x}",
+        HEAP_FREE_REFCOUNT_MARK
+    ));                                                                         // mark the block header as parked while it sits on the free list or in a small bin
     emitter.instruction("mov QWORD PTR [r9 + 8], 0");                           // clear the heap kind so free blocks do not look like live typed payloads
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_off");
@@ -505,27 +552,9 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, 24");                                         // remaining cached payloads belong to the <=64-byte bin offset
     emitter.label("__rt_heap_free_cache_small_ready");
     emitter.instruction("add r10, rcx");                                        // r10 = address of the selected small-bin head slot
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
-    emitter.instruction("mov r8, QWORD PTR [r8]");                              // reload the heap-debug enabled flag before checking cached-bin duplicates
-    emitter.instruction("test r8, r8");                                         // is heap-debug duplicate detection enabled?
-    emitter.instruction("jnz __rt_heap_free_cache_small_dupscan");              // heap-debug mode active, scan the bin for a double free
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_web_heap_guard_enabled");
-    emitter.instruction("mov r8, QWORD PTR [r8]");                              // reload the web heap-guard enabled flag
-    emitter.instruction("test r8, r8");                                         // is the web heap-guard double-free detection enabled?
-    emitter.instruction("jz __rt_heap_free_cache_small_insert");                // neither guard active, skip duplicate detection
-    emitter.label("__rt_heap_free_cache_small_dupscan");
-    emitter.instruction("mov rdx, QWORD PTR [r10]");                            // start scanning the cached small-bin chain for duplicate headers
-    emitter.label("__rt_heap_free_cache_small_scan");
-    emitter.instruction("test rdx, rdx");                                       // did the cached small-bin scan reach the tail?
-    emitter.instruction("jz __rt_heap_free_cache_small_insert");                // yes — this block is not already cached in the selected size class
-    emitter.instruction("cmp rdx, r9");                                         // is this exact header already present in the selected cached size class?
-    emitter.instruction("je __rt_heap_free_cache_small_duplicate");             // yes — report the double free while heap-debug mode is enabled
-    emitter.instruction("mov rdx, QWORD PTR [rdx + 16]");                       // advance to the next cached small-bin header while scanning for duplicates
-    emitter.instruction("jmp __rt_heap_free_cache_small_scan");                 // keep scanning the cached small-bin chain for duplicates
-    emitter.label("__rt_heap_free_cache_small_duplicate");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "rsi", "_heap_dbg_double_free_msg");
-    emitter.instruction(&format!("mov edx, {}", double_free_msg.len()));        // pass the exact double-free debug message length to the failure helper
-    emitter.instruction("jmp __rt_heap_debug_fail");                            // report the duplicate cached block and terminate immediately
+    // The chain scan that used to stand here is gone: the free mark written into the header at
+    // `__rt_heap_free_live_checked` answers "is this block already parked?" in one compare at
+    // the top of the helper, for every block, not only the ones that land in a small bin.
     emitter.label("__rt_heap_free_cache_small_insert");
     emitter.instruction("mov rdx, QWORD PTR [r10]");                            // load the previous cached head for this small-bin size class
     emitter.instruction("mov QWORD PTR [r9 + 16], rdx");                        // splice the freed block onto the front of the selected small-bin chain

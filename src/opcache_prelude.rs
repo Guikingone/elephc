@@ -116,7 +116,7 @@ mod preload;
 mod restricted_status;
 mod status_render;
 mod scripts_configuration;
-mod cli_ini;
+pub(crate) mod cli_ini;
 mod env_ini;
 mod injection;
 mod manifest_bake;

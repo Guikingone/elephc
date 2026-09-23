@@ -267,6 +267,12 @@ pub(super) fn assoc_spread_param_expr(
 }
 
 /// Builds an expression that reads one materialized spread element from a hidden temp.
+///
+/// PHP decides per KEY, not per array: `f(...$a)` binds `$a['name']` to the parameter named
+/// `name` and `$a[0]` to the first position, in the SAME unpack. This used to pick one or the
+/// other from `prefer_named_key`, so a source carrying names but classified positional (or the
+/// reverse) silently read the wrong slot. The hybrid asks for the name first and falls back to
+/// the position, which is right for a keyed array, a packed list, and the mixed form alike.
 pub(super) fn spread_element_expr_for_ir(
     spread_expr: &Expr,
     element_idx: usize,
@@ -274,17 +280,34 @@ pub(super) fn spread_element_expr_for_ir(
     prefer_named_key: bool,
     span: crate::span::Span,
 ) -> Expr {
-    let index = if prefer_named_key {
-        param_name
-            .map(|name| Expr::new(ExprKind::StringLiteral(name.to_string()), span))
-            .unwrap_or_else(|| Expr::new(ExprKind::IntLiteral(element_idx as i64), span))
-    } else {
-        Expr::new(ExprKind::IntLiteral(element_idx as i64), span)
-    };
-    Expr::new(
+    let positional = Expr::new(
         ExprKind::ArrayAccess {
             array: Box::new(spread_expr.clone()),
-            index: Box::new(index),
+            index: Box::new(Expr::new(ExprKind::IntLiteral(element_idx as i64), span)),
+        },
+        span,
+    );
+    let Some(param_name) = param_name.filter(|_| prefer_named_key) else {
+        return positional;
+    };
+    let key = Expr::new(ExprKind::StringLiteral(param_name.to_string()), span);
+    Expr::new(
+        ExprKind::Ternary {
+            condition: Box::new(Expr::new(
+                ExprKind::FunctionCall {
+                    name: Name::unqualified("array_key_exists"),
+                    args: vec![key.clone(), spread_expr.clone()],
+                },
+                span,
+            )),
+            then_expr: Box::new(Expr::new(
+                ExprKind::ArrayAccess {
+                    array: Box::new(spread_expr.clone()),
+                    index: Box::new(key),
+                },
+                span,
+            )),
+            else_expr: Box::new(positional),
         },
         span,
     )
@@ -299,57 +322,81 @@ pub(super) fn spread_element_or_default_expr_for_ir(
     default_expr: Expr,
     span: crate::span::Span,
 ) -> Expr {
-    let condition = if prefer_named_key {
-        if let Some(param_name) = param_name {
-            Expr::new(
-                ExprKind::FunctionCall {
-                    name: Name::unqualified("array_key_exists"),
-                    args: vec![
-                        Expr::new(ExprKind::StringLiteral(param_name.to_string()), span),
-                        spread_expr.clone(),
-                    ],
-                },
-                span,
-            )
-        } else {
-            spread_len_gt_expr_for_ir(spread_expr, element_idx, span)
-        }
-    } else {
-        spread_len_gt_expr_for_ir(spread_expr, element_idx, span)
-    };
-    Expr::new(
+    // The slot is present under EITHER spelling, so the two are asked in PHP's own order: the
+    // NAME first, then the position, then the parameter's default. Written as one flat condition
+    // plus a second probe inside the value it cost THREE `array_key_exists` calls per optional
+    // parameter; nested, the same answer costs two. That matters: every spread parameter in the
+    // program pays it, and the flat form added 22% to the Symfony `--web` compile's CPU time.
+    let positional = Expr::new(
         ExprKind::Ternary {
-            condition: Box::new(condition),
+            condition: Box::new(spread_len_gt_expr_for_ir(spread_expr, element_idx, span)),
             then_expr: Box::new(spread_element_expr_for_ir(
                 spread_expr,
                 element_idx,
-                param_name,
-                prefer_named_key,
+                None,
+                false,
                 span,
             )),
             else_expr: Box::new(default_expr),
         },
         span,
+    );
+    let Some(param_name) = param_name.filter(|_| prefer_named_key) else {
+        return positional;
+    };
+    let key = Expr::new(ExprKind::StringLiteral(param_name.to_string()), span);
+    Expr::new(
+        ExprKind::Ternary {
+            condition: Box::new(Expr::new(
+                ExprKind::FunctionCall {
+                    name: Name::unqualified("array_key_exists"),
+                    args: vec![key.clone(), spread_expr.clone()],
+                },
+                span,
+            )),
+            then_expr: Box::new(Expr::new(
+                ExprKind::ArrayAccess {
+                    array: Box::new(spread_expr.clone()),
+                    index: Box::new(key),
+                },
+                span,
+            )),
+            else_expr: Box::new(positional),
+        },
+        span,
     )
 }
 
-/// Builds `count($spread) > element_idx` for optional spread-slot defaults.
+/// Builds `array_key_exists(element_idx, $spread)` for optional spread-slot defaults.
+///
+/// This guard used to be `count($spread) > element_idx`, which is only equivalent for a PACKED
+/// list. Since PHP 8.1 an unpacked array may carry STRING keys — they name parameters — and it
+/// may be sparse, and then the length says nothing about whether slot `element_idx` is there.
+/// `f(...['a', 'name' => 'x', 'methods' => ['GET']])` has `count() === 3`, so the old guard took
+/// the read arm for slots 1 and 2, read two keys that do not exist, and raised
+/// `Undefined array key 1` / `... 2` before handing the parameter a null instead of its default.
+///
+/// That is not a cosmetic difference. Every diagnostic goes through `__elephc_diag_dispatch`,
+/// and a program with a user error handler installed (`set_error_handler`) pays a full
+/// `call_user_func_array` dispatch for each one. Measured on the compiled Symfony `--web`
+/// fixture, where `ReflectionAttribute::newInstance()` unpacks exactly such an
+/// attribute-argument array: **27.3% of the whole request** was spent raising and dispatching
+/// four warnings per request that `php -S` does not raise at all.
+///
+/// Asking whether the key is there is both the cheaper question and the correct one: a slot that
+/// is absent takes the parameter's own default, which is what PHP passes.
 pub(super) fn spread_len_gt_expr_for_ir(
     spread_expr: &Expr,
     element_idx: usize,
     span: crate::span::Span,
 ) -> Expr {
     Expr::new(
-        ExprKind::BinaryOp {
-            left: Box::new(Expr::new(
-                ExprKind::FunctionCall {
-                    name: Name::unqualified("count"),
-                    args: vec![spread_expr.clone()],
-                },
-                span,
-            )),
-            op: BinOp::Gt,
-            right: Box::new(Expr::new(ExprKind::IntLiteral(element_idx as i64), span)),
+        ExprKind::FunctionCall {
+            name: Name::unqualified("array_key_exists"),
+            args: vec![
+                Expr::new(ExprKind::IntLiteral(element_idx as i64), span),
+                spread_expr.clone(),
+            ],
         },
         span,
     )
@@ -366,11 +413,23 @@ pub(super) fn assoc_spread_sources(ctx: &LoweringContext<'_, '_>, args: &[Expr])
         .collect()
 }
 
-/// Returns true when a spread expression should feed named parameters by key.
+/// Returns true when a spread expression may feed named parameters by key.
+///
+/// The question is NOT "is this an associative array" -- PHP answers that per key, at runtime --
+/// but "can this source be ruled out as a packed list". Only a positional array literal, or a
+/// local the checker typed as a packed `array`, can be. Everything else (a call, a property, a
+/// parameter, a `mixed`) takes the hybrid read.
+///
+/// Requiring a statically-known `AssocArray` is what dropped the names whenever the source was a
+/// CALL or a PROPERTY: `new $class(...$this->__args)` -- which is
+/// `ReflectionAttribute::newInstance()`, and how every `#[AsCommand(name: 'x')]` is constructed --
+/// bound nothing and left every parameter at its default, so Symfony's console reported
+/// `AsCommand::__construct(): Argument #1 ($name) must be of type string, array given`.
 pub(super) fn is_assoc_spread_source(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> bool {
-    match &expr.kind {
-        ExprKind::Variable(name) => matches!(ctx.local_types.get(name), Some(PhpType::AssocArray { .. })),
-        ExprKind::ArrayLiteralAssoc(_) => true,
-        _ => matches!(infer_expr_type_syntactic(expr), PhpType::AssocArray { .. }),
-    }
+    // `PhpType::Array(_)` is NOT a proof: a function declared `: array` returning
+    // `['name' => 'x']` carries that type, and ruling its result out is what kept
+    // `new $class(...namedArgs())` from binding anything. A POSITIONAL ARRAY LITERAL written at
+    // the call site is the only source whose keys are known here.
+    let _ = ctx;
+    !matches!(expr.kind, ExprKind::ArrayLiteral(_))
 }

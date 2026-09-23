@@ -86,13 +86,13 @@ pub(in crate::codegen::lower_inst) fn lower_eval_native_object_new_fallback(
     let (name_label, name_len) = ctx.intern_class_name_data(expect_data(inst)?)?;
     let args_offset = EVAL_STACK_BYTES;
     let site_offset = args_offset + inst.operands.len() * 8;
-    let stack_bytes = eval_function_call_stack_bytes(inst.operands.len() + 4);
+    let stack_bytes = eval_function_call_stack_bytes(inst.operands.len() + 5);
     let eval_miss_label = ctx.next_label("eval_native_new_missing_class");
     let done_label = ctx.next_label("eval_native_new_done");
     abi::emit_reserve_temporary_stack(ctx.emitter, stack_bytes);
     let boxed = store_eval_function_call_args(ctx, inst, args_offset)?;
     load_eval_context_or_null(ctx)?;
-    emit_eval_construction_site(ctx, inst, inst.operands.len(), site_offset);
+    emit_eval_construction_site(ctx, inst, inst.operands.len(), site_offset, false);
     load_eval_context_to_arg(ctx, 0);
     let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);

@@ -33231,3 +33231,63 @@ echo json_encode($emptied), ";", json_encode([]), ";", json_encode($seq), ";",
     );
     assert_eq!(out, "[];[];[\"a\",\"b\"];{\"5\":\"a\",\"6\":\"b\"};{\"k\":1}\n");
 }
+
+/// Verifies interpreted `html_entity_decode()` takes php's optional `$flags` and `$encoding`.
+///
+/// The compiled backend and the interpreter have to agree on a builtin's arity or the same
+/// source has two different meanings depending on which side runs it. This one was widened on
+/// the compiled side alone for a while: `html_entity_decode($s, ENT_QUOTES, 'UTF-8')` compiled,
+/// and inside `eval()` it was an UNCATCHABLE `eval() runtime failed: unsupported Call
+/// expression`, the same failure shape `memory_get_usage()` had.
+#[test]
+fn test_interpreted_html_entity_decode_takes_flags_and_encoding() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo html_entity_decode("&lt;b&gt;"), ":";
+echo html_entity_decode("&lt;b&gt;", ENT_QUOTES), ":";
+echo html_entity_decode("&quot;q&quot;&#039;s&#039;&amp;", ENT_QUOTES, "UTF-8");');
+"#,
+    );
+    assert_eq!(out, "<b>:<b>:\"q\"'s'&");
+}
+
+/// Verifies interpreted `str_replace()` implements php's array `$search`/`$replace`/`$subject`.
+///
+/// Every argument reached `string_bytes()` before, so the polyfill-shaped
+/// `str_replace($searches, $replacements, $subjects)` printed "Array to string conversion"
+/// three times and answered the literal string `"Array"`. Measured against php 8.5.10, in order:
+/// array subject keeps its KEYS; a scalar `$replace` is reused for every needle; a `$replace`
+/// shorter than `$search` fills with `''`; the passes are SEQUENTIAL, so `['a','X'] => ['X','Z']`
+/// on `"a"` is `Z`, not `X`; an empty needle leaves the subject alone.
+#[test]
+fn test_interpreted_str_replace_handles_array_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$subjects = str_replace(["a"], ["1"], ["ab", "ba"]);
+echo gettype($subjects), ":", count($subjects), ":", $subjects[0], ":", $subjects[1], ";";
+[$first, $second] = str_replace(["a", "b"], ["1", "2"], ["ab", "ba"]);
+echo $first, "|", $second, ";";
+$keyed = str_replace(["a"], ["X"], ["k" => "aa", "j" => "ba"]);
+echo implode(",", array_keys($keyed)), "=", implode(",", array_values($keyed)), ";";
+echo str_replace("a", "X", ["aa", "ba"])[1], ";";
+echo str_replace(["a", "b"], "X", "aba"), ";";
+echo str_replace(["a", "b"], ["X"], "aba"), ";";
+echo str_replace(["a", "X"], ["X", "Z"], "a"), ";";
+echo str_replace("", "X", "ab"), ";";
+echo gettype(str_replace(["a"], ["1"], "aba"));');
+"#,
+    );
+    assert_eq!(out, "array:2:1b:b1;12|21;k,j=XX,bX;bX;XXX;XX;Z;ab;string");
+}
+
+/// Verifies interpreted `str_ireplace()` shares the array handling, case-insensitively.
+#[test]
+fn test_interpreted_str_ireplace_handles_array_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+eval('[$first, $second] = str_ireplace(["A", "B"], ["x", "y"], ["ab", "BA"]);
+echo $first, "|", $second;');
+"#,
+    );
+    assert_eq!(out, "xy|yx");
+}

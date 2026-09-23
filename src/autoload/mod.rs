@@ -12,6 +12,7 @@
 //!   loaded, which `crate::opcache_prelude` bakes into the OPcache script manifest.
 
 mod alias;
+mod composer_files;
 mod dynamic_contracts;
 mod index;
 mod interpret;
@@ -25,7 +26,7 @@ use std::path::{Path, PathBuf};
 pub use registry::Registry;
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Program, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, Expr, ExprKind, Program, Stmt, StmtKind};
 use crate::span::Span;
 
 use walk::{collect_declared_fqns, collect_reference_points};
@@ -37,6 +38,11 @@ pub struct DeclarationSourceFiles {
     pub functions: HashMap<String, String>,
     /// Parsed source inputs, independent of whether PHP has entered their files.
     pub source_units: std::collections::BTreeMap<PathBuf, crate::resolver::SourceUnit>,
+    /// Files whose conditional declarations were dropped rather than bound, mapped to the names
+    /// they dropped. See `ResolveState::unbound_conditional_declaration_sources`.
+    pub unbound_conditional_declaration_sources: HashMap<PathBuf, Vec<String>>,
+    /// Names bound through the function-variant mechanism; subtracted from the dropped names.
+    pub bound_conditional_declaration_names: HashSet<String>,
 }
 
 impl DeclarationSourceFiles {
@@ -47,6 +53,10 @@ impl DeclarationSourceFiles {
         }
         self.class_likes.extend(other.class_likes);
         self.functions.extend(other.functions);
+        self.unbound_conditional_declaration_sources
+            .extend(other.unbound_conditional_declaration_sources);
+        self.bound_conditional_declaration_names
+            .extend(other.bound_conditional_declaration_names);
         Ok(())
     }
 }
@@ -125,20 +135,130 @@ pub fn run_collecting_included_with_defines_and_sources(
     // Eager source manifests declare files that must always be included. Preserve
     // declaration order so their top-level statements execute before the entry program.
     let mut prefix: Program = Vec::new();
+    // Accumulated from every eager file that was READ, including the ones declined below. A
+    // declined file is not spliced, so reading this off `prefix` afterwards would miss exactly
+    // the polyfills whose functions most need the global fallback — measured: with the two
+    // changes in place and this read from `prefix`, Symfony's console died on
+    // `symfony\component\varexporter\deepclone_to_array()`, a function declared by a declined
+    // eager file that the RUNTIME goes on to declare perfectly well.
+    let mut eager_globals: HashSet<String> = HashSet::new();
     for path in registry.always_included_files() {
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         if included.insert(canonical.clone()) {
             let (loaded, loaded_includes, loaded_sources) =
                 load_autoloaded_file(&canonical, base_dir, defines)?;
+            // TAKE IT WHOLE OR NOT AT ALL. A conditional declaration under this eager file was
+            // dropped instead of bound AND nothing in its subtree bound that name, so splicing
+            // what is left would publish a file the compiler only half-took: the runtime skips
+            // every file the compiler claims, so the function would be declared by nobody and the
+            // first call to it would fail with `Call to undefined function`.
+            //
+            // MEASURED on Symfony `--web`, four builds, two with this rule and two without. The
+            // rule is what makes `GET /` render: without it the route dies on
+            // `twig\extension\mb_strtoupper` and the assembly is ~1 426 109 37x bytes; with it
+            // all eight prod routes answer byte-identically to `php -S` and the assembly is
+            // ~1 426 081 0xx. `polyfill-mbstring/bootstrap.php` is the file in question — it
+            // delegates to a `bootstrap80.php` of nothing but `if (!function_exists('mb_…'))`
+            // declarations, every one of which was dropped while the file was still reported as
+            // included. Leaving it out costs only that it runs interpreted, as php does anyway.
+            //
+            // THE SUBTRACTION IS LOAD-BEARING. A version guard declares the same function in both
+            // branches; only the live one is bound, and condemning a file on the dead branch's
+            // drop alone would be wrong. `tests/eager_file_polyfill_tests.rs` holds both shapes.
+            let bound = &loaded_sources.bound_conditional_declaration_names;
+            // TWO ways the compiler can fail to take an eager file WHOLE, and they need different
+            // questions because they have different causes.
+            //
+            // 1. A conditional declaration under it was dropped and bound nowhere. That is
+            //    `symfony/polyfill-mbstring`, whose `return require …` IS expanded and whose
+            //    `if (!function_exists('mb_…'))` declarations are then stripped out.
+            //
+            // 2. An include in it was never expanded at all, so the subtree was never read and
+            //    reports neither drops nor bindings. That is `symfony/polyfill-deepclone`, whose
+            //    `if (\PHP_VERSION_ID >= 80100) { require __DIR__.'/bootstrap81.php'; }` stays a
+            //    runtime include — measured `dropped=[] bound=0`, and `deepclone_to_array` absent
+            //    from EVERY compile phase while the runtime skipped the parent on its claim, so
+            //    the function was declared by nobody.
+            //
+            // Declining hands the file to the runtime entirely: it is not spliced either, so its
+            // top-level effects run exactly once, as php runs them.
+            let lost = loaded_sources
+                .unbound_conditional_declaration_sources
+                .values()
+                .flatten()
+                .any(|name| !bound.contains(name))
+                || contains_unexpanded_include(&loaded);
+            eager_globals.extend(eager_global_function_keys(&loaded));
+            // The DROPPED names too. A two-hop polyfill (`bootstrap.php` -> `require
+            // bootstrap80.php`) has its declarations stripped out of `loaded` before this point,
+            // so walking the statements finds nothing — and those are precisely the functions the
+            // RUNTIME will declare, which is what the global fallback is for. Measured on
+            // `symfony/polyfill-deepclone`: `deepclone_to_array` is dropped, declared at run time,
+            // and called bare from `namespace Symfony\Component\VarExporter`.
+            eager_globals.extend(
+                loaded_sources
+                    .unbound_conditional_declaration_sources
+                    .values()
+                    .flatten()
+                    .filter(|name| !name.trim_start_matches('\\').contains('\\'))
+                    .map(|name| crate::names::php_symbol_key(name.trim_start_matches('\\'))),
+            );
+            // `ELEPHC_EAGER_TRACE=1` reports what the compiler actually TOOK from each eager
+            // file, which is the only way to tell the three shapes of a half-taken file apart.
+            // Reading it: `dropped` are conditional declarations the gate discarded, `bound` are
+            // the ones the function-variant mechanism kept, `globals` are the global functions
+            // still present at any depth, and `nested` are the includes that were expanded.
+            //
+            //   mbstring   lost=true  dropped=["mb_…"]              -> declined, runtime owns it
+            //   deepclone  lost=false dropped=[] bound=0 globals={} nested=["bootstrap81.php"]
+            //              -> the subtree WAS read and contributed nothing, and nothing was
+            //                 reported as dropped either. That combination is not explained by
+            //                 any of the three known shapes and is why `deepclone_to_array()` is
+            //                 declared by nobody.
+            if std::env::var("ELEPHC_EAGER_TRACE").is_ok() {
+                eprintln!(
+                    "[elephc-eager] file={} lost={lost} dropped={:?} bound={} globals={:?} nested={:?}",
+                    canonical.display(),
+                    loaded_sources
+                        .unbound_conditional_declaration_sources
+                        .values()
+                        .flatten()
+                        .collect::<Vec<_>>(),
+                    loaded_sources.bound_conditional_declaration_names.len(),
+                    eager_global_function_keys(&loaded),
+                    loaded_includes
+                        .iter()
+                        .map(|path| path
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_default())
+                        .collect::<Vec<_>>(),
+                );
+            }
+            if lost {
+                included.remove(&canonical);
+                continue;
+            }
             nested_includes.extend(loaded_includes);
             declaration_sources.extend(loaded_sources)?;
             prefix.extend(loaded);
         }
     }
+    // Published from the statements as READ, not from `declaration_sources.functions`: a
+    // polyfill's declaration sits inside `if (!function_exists(…))`, and the declaration-source
+    // walk records only file-scope ones, so that map is empty for exactly this shape.
+    crate::eager_globals::set(eager_globals);
     if !prefix.is_empty() {
         prefix.extend(program);
         program = prefix;
     }
+    // Every GLOBAL function the eager files just declared, published before a single class file is
+    // resolved. That ordering is what makes PHP's global fallback expressible here: a class file
+    // resolved later calls `trigger_deprecation()` bare from inside its own namespace, and the
+    // resolver can now answer it from a DECLARATION instead of from a hand-maintained allow-list
+    // (`name_resolver::canonical_compat_prelude_function_name`, which has been caught missing a
+    // name three times). A namespaced declaration is excluded: PHP falls back to the global
+    // namespace only, never to another one.
 
     loop {
         let mut declared = collect_declared_fqns(&program);
@@ -190,6 +310,103 @@ pub fn run_collecting_included_with_defines_and_sources(
     let mut loaded_files: Vec<PathBuf> = included.into_iter().collect();
     loaded_files.sort();
     Ok((program, loaded_files, declaration_sources))
+}
+
+
+
+
+
+/// Returns whether any include in these statements is still a RUNTIME include.
+///
+/// The resolver expands what it can reach statically. What it leaves behind is a file the
+/// compiled program will not have read, so an eager entry holding one has not been taken whole —
+/// see the call site for the measurement.
+fn contains_unexpanded_include(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(|stmt| {
+        matches!(stmt.kind, StmtKind::Include { .. })
+            || eager_nested_bodies(stmt)
+                .into_iter()
+                .any(contains_unexpanded_include)
+    })
+}
+
+/// Collects the GLOBAL functions an eager file declares, at any statement depth.
+///
+/// Depth matters: every polyfill writes `if (!function_exists('f')) { function f() {…} }`, so a
+/// file-scope-only walk finds nothing. A namespaced declaration is skipped — PHP's bare-call
+/// fallback reaches the global namespace and no other.
+fn eager_global_function_keys(stmts: &[Stmt]) -> HashSet<String> {
+    fn walk(stmts: &[Stmt], out: &mut HashSet<String>) {
+        for stmt in stmts {
+            if let StmtKind::FunctionDecl { name, .. } = &stmt.kind {
+                let bare = name.trim_start_matches('\\');
+                if !bare.contains('\\') {
+                    out.insert(crate::names::php_symbol_key(bare));
+                }
+            }
+            for nested in eager_nested_bodies(stmt) {
+                walk(nested, out);
+            }
+        }
+    }
+    let mut out = HashSet::new();
+    walk(stmts, &mut out);
+    out
+}
+
+/// Returns the statement lists nested inside one statement, for [`eager_global_function_keys`].
+fn eager_nested_bodies(stmt: &Stmt) -> Vec<&[Stmt]> {
+    let mut bodies: Vec<&[Stmt]> = Vec::new();
+    match &stmt.kind {
+        StmtKind::If {
+            then_body,
+            elseif_clauses,
+            else_body,
+            ..
+        } => {
+            bodies.push(then_body);
+            bodies.extend(elseif_clauses.iter().map(|(_, body)| body.as_slice()));
+            if let Some(body) = else_body {
+                bodies.push(body);
+            }
+        }
+        StmtKind::IfDef {
+            then_body,
+            else_body,
+            ..
+        } => {
+            bodies.push(then_body);
+            if let Some(body) = else_body {
+                bodies.push(body);
+            }
+        }
+        StmtKind::While { body, .. }
+        | StmtKind::DoWhile { body, .. }
+        | StmtKind::For { body, .. }
+        | StmtKind::Foreach { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. }
+        | StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::Synthetic(body) => bodies.push(body),
+        StmtKind::Switch { cases, default, .. } => {
+            bodies.extend(cases.iter().map(|(_, body)| body.as_slice()));
+            if let Some(body) = default {
+                bodies.push(body);
+            }
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            bodies.push(try_body);
+            bodies.extend(catches.iter().map(|catch| catch.body.as_slice()));
+            if let Some(body) = finally_body {
+                bodies.push(body);
+            }
+        }
+        _ => {}
+    }
+    bodies
 }
 
 /// Returns the class-like names the program only ever hands to an existence probe.
@@ -506,12 +723,29 @@ fn load_autoloaded_file(
         )?;
     let resolved = alias::collect_aliases(resolved);
     let canonicalized: Vec<Stmt> = crate::name_resolver::resolve(resolved)?;
+    // A file-scope `if` the LANGUAGE PROFILE already decides picks which declarations this file
+    // contributes, and php resolves it before any of them exist. Folding it here — on the file's
+    // own statement list, while it still IS a file — is what lets the `return` in the taken
+    // branch reach the boundary restoration below. See
+    // [`fold_file_scope_profile_conditions`], whose doc names the one place this must not move to.
+    let canonicalized = fold_file_scope_profile_conditions(canonicalized);
+    // An autoloaded file is included in STATEMENT position, so its own top-level `return` ends
+    // THAT FILE and never the program that included it. These statements are spliced straight
+    // into the entry program, so the boundary has to be restored here or the file's `return`
+    // becomes the PROGRAM's return. See [`discard_autoloaded_file_return`].
+    let canonicalized = discard_autoloaded_file_return(canonicalized);
     let mut declaration_sources = declaration_source_files(&canonicalized, &file_label);
     // Everything this file's own includes declared is attributed to the file that WROTE it, which
     // the walk above cannot know: by now those statements have been spliced in and are
     // indistinguishable from this file's. Per-file attribution therefore overwrites it.
     declaration_sources.class_likes.extend(included_sources.class_likes);
     declaration_sources.functions.extend(included_sources.functions);
+    declaration_sources
+        .unbound_conditional_declaration_sources
+        .extend(included_sources.unbound_conditional_declaration_sources);
+    declaration_sources
+        .bound_conditional_declaration_names
+        .extend(included_sources.bound_conditional_declaration_names);
     for unit in included_sources.source_units.into_values() {
         unit.insert_into(&mut declaration_sources.source_units, Span::dummy())?;
     }
@@ -525,6 +759,358 @@ fn load_autoloaded_file(
     // program.
     let canonicalized = activate_interface_declarations(canonicalized, path, &|_| true);
     Ok((canonicalized, nested_includes, declaration_sources))
+}
+
+/// Restores PHP's include boundary for a file the autoload pass splices into the program.
+///
+/// An autoloaded file is always included in STATEMENT position — Composer's generated
+/// `autoload_real.php` does `require $file;` for every `autoload.files` entry, and its class
+/// loader's `includeFile()` does the same for a class file. PHP's rule for that shape is that a
+/// top-level `return` ends the INCLUDED FILE and hands its value back to the (discarded) include
+/// expression; it does not return from the program that included it. `crate::resolver`'s
+/// `discard_statement_include_return` already restores exactly this for a written-out
+/// `require`/`include`, but the autoload pass does not travel that path: it parses the file on
+/// its own and splices the name-resolved statements straight into the entry program's top level,
+/// where a `Return` node means "return from the program".
+///
+/// MEASURED, and the reason this exists: with Composer's eager `autoload.files` in the closed
+/// world, `vendor/symfony/polyfill-mbstring/bootstrap.php` contributes its last line —
+/// `return require __DIR__.'/bootstrap72.php';` — as top-level statement 160 of a 1,848-statement
+/// Symfony `--web` program. Everything after it, 91% of the program including the web prelude's
+/// whole error-handling surface, sat after a statement that terminates. `optimize::propagate`
+/// then truncated the top level there and the build died in the BACKEND with
+/// `call to unknown function error_log`, because the checker's function table had kept what the
+/// AST had lost. Nothing about that is Symfony-specific: any `autoload.files` entry ending in
+/// `return` does it.
+///
+/// DECLARATIONS AFTER THE `return` ARE KEPT, because php keeps them. An unconditional top-level
+/// `function`/`class` in an included file is bound when the file is COMPILED, not when the
+/// statement is reached, so
+///
+/// ```php
+/// <?php return 1; function after_return_fn() {}
+/// ```
+///
+/// leaves `function_exists('after_return_fn')` TRUE in the includer (verified on php 8.5.10).
+/// Only the unreachable EXECUTABLE tail is dropped.
+///
+/// SCANNING THE TOP LEVEL ONLY IS COMPLETE HERE, and that is a property of the call site rather
+/// than an assumption: `load_autoloaded_file` runs this AFTER `name_resolver::resolve`, which
+/// flattens every `NamespaceBlock` into its parent list (`name_resolver::statements::list`) —
+/// including the wrappers the resolver puts around this file's OWN includes, whose file-scope
+/// returns `crate::resolver`'s `discard_statement_include_return` has already handled.
+fn discard_autoloaded_file_return(mut body: Program) -> Program {
+    let Some((index, guarded)) = body.iter().enumerate().find_map(|(index, stmt)| {
+        match &stmt.kind {
+            StmtKind::Return(_) => Some((index, false)),
+            _ if is_bare_if_ending_in_return(&stmt.kind) => Some((index, true)),
+            _ => None,
+        }
+    }) else {
+        return body;
+    };
+    if guarded {
+        return end_file_under_guard(body, index);
+    }
+    let span = body[index].span;
+    let tail = body.split_off(index + 1);
+    // The returned EXPRESSION still runs — `return require 'x.php';` performs the include — so it
+    // is kept as a statement whose value is discarded, which is what the include site does with it.
+    let returned = std::mem::replace(
+        &mut body[index],
+        Stmt::new(StmtKind::Synthetic(Vec::new()), span),
+    );
+    if let StmtKind::Return(Some(value)) = returned.kind {
+        body[index] = Stmt::new(StmtKind::ExprStmt(value), span);
+    }
+    body.extend(
+        tail.into_iter()
+            .filter(|stmt| is_file_scope_hoisted_declaration(&stmt.kind)),
+    );
+    body
+}
+
+/// Returns whether this file-scope statement is `if (C) { …; return; }` with nothing else in the
+/// chain — a GUARDED END OF FILE, and the second shape a file-scope `return` is written in.
+///
+/// The chain has to be bare (no `elseif`, no `else`) for the rewrite in
+/// [`end_file_under_guard`] to be a rewrite rather than a duplication: with one arm the
+/// statements after the `if` run exactly when the condition is false, which an `else` says
+/// directly. With several arms they run when SEVERAL conditions were false, and saying that
+/// without a flag variable means copying them into every arm.
+fn is_bare_if_ending_in_return(kind: &StmtKind) -> bool {
+    let StmtKind::If {
+        then_body,
+        elseif_clauses,
+        else_body,
+        ..
+    } = kind
+    else {
+        return false;
+    };
+    elseif_clauses.is_empty()
+        && else_body.is_none()
+        && matches!(then_body.last().map(|stmt| &stmt.kind), Some(StmtKind::Return(_)))
+}
+
+/// Restores php's include boundary for `if (C) { …; return; }` followed by more of the file.
+///
+/// php's rule is the same one [`discard_autoloaded_file_return`] documents — the `return` ends
+/// THE FILE — but the statement is not at the top level, so the top-level scan walked past it and
+/// the `return` was left to return from the PROGRAM. MEASURED: `symfony/polyfill-mbstring`'s
+/// `bootstrap80.php` ends with `if (extension_loaded('mbstring')) { return; }`, and
+/// `extension_loaded('mbstring')` is TRUE in a compiled binary, so the second of twelve eager
+/// Composer `files` entries returned from the request program. Every route answered `200` with a
+/// zero-byte body and no diagnostic of any kind.
+///
+/// The rewrite is the identity php already gives us:
+///
+/// ```php
+/// if (C) { A; return; }   REST        ===        if (C) { A; } else { REST }
+/// ```
+///
+/// REST runs exactly when the file did not end, which is what `else` says. DECLARATIONS IN REST
+/// STAY AT FILE SCOPE rather than moving into the `else`, for the same reason the top-level path
+/// keeps them: php binds an unconditional file-scope declaration when the file is COMPILED, so it
+/// is bound whether or not the branch ran.
+///
+/// REST IS PROCESSED BEFORE IT IS NESTED, so a second guarded end-of-file inside it is rewritten
+/// while it is still file scope. That ordering is the whole reason this recurses.
+fn end_file_under_guard(mut body: Program, index: usize) -> Program {
+    let rest = discard_autoloaded_file_return(body.split_off(index + 1));
+    let (declarations, executable): (Program, Program) = rest
+        .into_iter()
+        .partition(|stmt| is_file_scope_hoisted_declaration(&stmt.kind));
+    let span = body[index].span;
+    let StmtKind::If {
+        condition,
+        mut then_body,
+        ..
+    } = std::mem::replace(&mut body[index].kind, StmtKind::Synthetic(Vec::new()))
+    else {
+        unreachable!("end_file_under_guard is only reached for a bare `if`");
+    };
+    // The returned EXPRESSION still runs, exactly as on the top-level path.
+    if let Some(returned) = then_body.pop() {
+        let return_span = returned.span;
+        if let StmtKind::Return(Some(value)) = returned.kind {
+            then_body.push(Stmt::new(StmtKind::ExprStmt(value), return_span));
+        }
+    }
+    body[index] = Stmt::new(
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses: Vec::new(),
+            else_body: (!executable.is_empty()).then_some(executable),
+        },
+        span,
+    );
+    body.extend(declarations);
+    body
+}
+
+/// Resolves a file-scope `if` whose condition the SELECTED LANGUAGE PROFILE already decides,
+/// replacing it with the statements of the branch php would take.
+///
+/// WHY A FILE NEEDS THIS AT ALL. A library that has to work on several PHP versions ships one
+/// entry file that picks the implementation for the running one, and the idiom is a file-scope
+/// `return` under a version test:
+///
+/// ```php
+/// <?php
+/// if (\PHP_VERSION_ID >= 80000) {
+///     return require __DIR__.'/bootstrap80.php';
+/// }
+/// if (!function_exists('thing')) { function thing() { /* pre-8.0 fallback */ } }
+/// ```
+///
+/// php evaluates that condition BEFORE either declaration exists and contributes exactly one of
+/// the two bodies. elephc's profile is fixed at compile time, so the condition is a constant here
+/// too — but the `return` sits inside the `if`, where [`discard_autoloaded_file_return`]'s
+/// top-level scan cannot see it, so the whole file was contributed: the fallback declaration AND
+/// the required file's. MEASURED on the Symfony `--web` build: `symfony/polyfill-php85` and
+/// `symfony/polyfill-intl-grapheme` each contributed a `grapheme_levenshtein` php never declares,
+/// and the assembler refused the program with `symbol '_fn_grapheme_u_levenshtein' is already
+/// defined`. Worse and quieter, the `return` in the taken branch stayed EXECUTABLE at the
+/// program's top level, so the spliced file returned from the PROGRAM: a compiled entry that
+/// eagerly loads such a file printed nothing at all.
+///
+/// THIS MUST RUN HERE, ON ONE FILE, AND NOT IN `optimize::fold`. By the time the optimizer sees
+/// the program every autoloaded file has been spliced into one flat top level, and folding this
+/// `if` there turns the file's `return` into the PROGRAM's: `optimize::propagate` stops at the
+/// first statement that does not fall through and deletes everything after it. That is the
+/// 1,688-of-1,848-statement deletion [`discard_autoloaded_file_return`] documents, and it
+/// surfaced four passes away as `call to unknown function error_log`. Folding while the
+/// statements are still A FILE is what makes the difference: the `return` is then this file's,
+/// and the boundary restoration immediately below degrades it.
+///
+/// WHAT COUNTS AS DECIDED is deliberately narrow — see [`profile_condition`]. Only the
+/// `PHP_*_VERSION*` family is folded, because those are the constants whose values the compiler
+/// FIXES for the whole build and no program can change at runtime. `extension_loaded()`,
+/// `function_exists()` and `defined()` are left alone here even where the closed world could
+/// answer them: each is a call, and a fold that is wrong about one silently deletes a
+/// declaration.
+///
+/// TOP LEVEL ONLY. A `return` at any deeper nesting is inside a function, a loop or a `try`,
+/// where it means what it says; only a file-scope one ends the file. The taken branch's own
+/// statements BECOME file scope, so they are folded in turn.
+fn fold_file_scope_profile_conditions(body: Program) -> Program {
+    let mut folded: Program = Vec::with_capacity(body.len());
+    for stmt in body {
+        let StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } = stmt.kind
+        else {
+            folded.push(stmt);
+            continue;
+        };
+        match decided_branch(condition, then_body, elseif_clauses, else_body, stmt.span) {
+            Ok(taken) => folded.extend(fold_file_scope_profile_conditions(taken)),
+            Err(untouched) => folded.push(untouched),
+        }
+    }
+    folded
+}
+
+/// Picks the branch of an `if`/`elseif`/`else` chain the profile decides, or hands the statement
+/// back unchanged.
+///
+/// Conditions are evaluated in source order and the FIRST decided-true one wins, which is php's
+/// own rule. An undecidable condition stops the walk and returns the whole statement untouched:
+/// a later arm cannot be chosen over a guard whose value is unknown, and an earlier arm was
+/// already known false, so nothing is lost by leaving the chain to run.
+fn decided_branch(
+    condition: Expr,
+    then_body: Program,
+    elseif_clauses: Vec<(Expr, Program)>,
+    else_body: Option<Program>,
+    span: Span,
+) -> Result<Program, Stmt> {
+    let rebuild = |condition, then_body, elseif_clauses, else_body| {
+        Stmt::new(
+            StmtKind::If {
+                condition,
+                then_body,
+                elseif_clauses,
+                else_body,
+            },
+            span,
+        )
+    };
+    match profile_condition(&condition) {
+        Some(true) => return Ok(then_body),
+        None => return Err(rebuild(condition, then_body, elseif_clauses, else_body)),
+        Some(false) => {}
+    }
+    for (index, (guard, _)) in elseif_clauses.iter().enumerate() {
+        match profile_condition(guard) {
+            Some(true) => {
+                let mut clauses = elseif_clauses;
+                return Ok(clauses.swap_remove(index).1);
+            }
+            None => return Err(rebuild(condition, then_body, elseif_clauses, else_body)),
+            Some(false) => {}
+        }
+    }
+    Ok(else_body.unwrap_or_default())
+}
+
+/// Evaluates a condition the compile-time PHP profile decides, or `None` when it does not.
+///
+/// `None` is the answer for everything this cannot prove, including every call and every
+/// variable. Short-circuiting is honoured in the direction that cannot lose a side effect: `A &&
+/// B` is decided only once `A` is, because `f() && false` still calls `f()`.
+fn profile_condition(expr: &Expr) -> Option<bool> {
+    match &expr.kind {
+        ExprKind::BoolLiteral(value) => Some(*value),
+        ExprKind::Not(inner) => profile_condition(inner).map(|value| !value),
+        ExprKind::BinaryOp { left, op, right } => match op {
+            BinOp::And => match profile_condition(left)? {
+                false => Some(false),
+                true => profile_condition(right),
+            },
+            BinOp::Or => match profile_condition(left)? {
+                true => Some(true),
+                false => profile_condition(right),
+            },
+            BinOp::Lt
+            | BinOp::Gt
+            | BinOp::LtEq
+            | BinOp::GtEq
+            | BinOp::Eq
+            | BinOp::NotEq
+            | BinOp::StrictEq
+            | BinOp::StrictNotEq => {
+                let left = profile_int(left)?;
+                let right = profile_int(right)?;
+                Some(match op {
+                    BinOp::Lt => left < right,
+                    BinOp::Gt => left > right,
+                    BinOp::LtEq => left <= right,
+                    BinOp::GtEq => left >= right,
+                    BinOp::Eq | BinOp::StrictEq => left == right,
+                    _ => left != right,
+                })
+            }
+            _ => None,
+        },
+        _ => profile_int(expr).map(|value| value != 0),
+    }
+}
+
+/// Evaluates an integer expression the compile-time PHP profile decides.
+fn profile_int(expr: &Expr) -> Option<i64> {
+    match &expr.kind {
+        ExprKind::IntLiteral(value) => Some(*value),
+        ExprKind::Negate(inner) => profile_int(inner)?.checked_neg(),
+        ExprKind::ConstRef(name) => profile_constant(name),
+        _ => None,
+    }
+}
+
+/// Returns the value of a PHP constant the compiler fixes for the whole build.
+///
+/// The set is the version family and nothing else. Every other compile-time-known constant is
+/// left undecided on purpose: this fold DELETES source, so its inputs are limited to the values
+/// that cannot differ between this compilation and the program it produces.
+///
+/// A PHP global constant is case-sensitive and has no namespace, so `\PHP_VERSION_ID` and
+/// `PHP_VERSION_ID` are the same constant — the last segment is what is compared, as
+/// `crate::opcache_prelude`'s own constant detection already does.
+fn profile_constant(name: &crate::names::Name) -> Option<i64> {
+    let profile = crate::codegen_support::compile_php_version();
+    match name.parts.last()?.as_str() {
+        "PHP_VERSION_ID" => Some(i64::from(profile.version_id())),
+        "PHP_MAJOR_VERSION" => Some(i64::from(profile.major())),
+        "PHP_MINOR_VERSION" => Some(i64::from(profile.minor())),
+        "PHP_RELEASE_VERSION" => Some(i64::from(profile.release())),
+        _ => None,
+    }
+}
+
+/// Returns whether php binds this declaration when the file is COMPILED rather than when the
+/// statement is reached, which is what makes it survive a `return` earlier in the same file.
+///
+/// The list mirrors `crate::resolver`'s `is_discoverable_declaration`, which is the same question
+/// asked at the other include site; the two must agree or one path keeps a declaration the other
+/// drops.
+fn is_file_scope_hoisted_declaration(kind: &StmtKind) -> bool {
+    matches!(
+        kind,
+        StmtKind::FunctionDecl { .. }
+            | StmtKind::ClassDecl { .. }
+            | StmtKind::EnumDecl { .. }
+            | StmtKind::InterfaceDecl { .. }
+            | StmtKind::TraitDecl { .. }
+            | StmtKind::PackedClassDecl { .. }
+            | StmtKind::ExternFunctionDecl { .. }
+            | StmtKind::ExternClassDecl { .. }
+            | StmtKind::ExternGlobalDecl { .. }
+    )
 }
 
 /// Adds the activation events the ENTRY program's own interface declarations need.

@@ -9,6 +9,33 @@
 
 use super::*;
 
+/// Whether a method-call receiver is a reflector whose metadata the eval bridge may be the only
+/// holder of: the same four classes codegen routes to the bridge
+/// (`method_dispatch::reflection_class_runtime_metadata_method`), alone or as a union's arms.
+fn receiver_is_runtime_metadata_reflector(ctx: &LoweringContext<'_, '_>, value: ValueId) -> bool {
+    let is_reflector = |name: &str| {
+        matches!(
+            php_symbol_key(name.trim_start_matches('\\')).as_str(),
+            "reflectionattribute" | "reflectionclass" | "reflectionobject" | "reflectionenum"
+        )
+    };
+    match ctx.builder.value_php_type(value) {
+        PhpType::Object(name) => is_reflector(&name),
+        PhpType::Union(members) => {
+            let mut any = false;
+            for member in members {
+                match member {
+                    PhpType::Object(name) if is_reflector(&name) => any = true,
+                    PhpType::Void | PhpType::False => {}
+                    _ => return false,
+                }
+            }
+            any
+        }
+        _ => false,
+    }
+}
+
 /// Lowers an object method call.
 pub(super) fn lower_method_call(
     ctx: &mut LoweringContext<'_, '_>,
@@ -44,6 +71,15 @@ pub(super) fn lower_method_call(
     };
     let object_expr = object;
     let object = lower_expr(ctx, object_expr);
+    // A reflector's members can live only in the eval bridge: one built from a RUNTIME class name
+    // is materialized there with no member arrays of its own. Codegen routes such calls to the
+    // bridge only in a function that owns an eval context, so a reflector handed to another
+    // function -- symfony/routing's `AttributeClassLoader` passes its `ReflectionClass` around --
+    // listed no methods at all there. The function that CALLS the reflector needs the context as
+    // much as the one that built it.
+    if op == Op::MethodCall && receiver_is_runtime_metadata_reflector(ctx, object.value) {
+        ctx.declare_eval_context_local();
+    }
     if let Some(message) = throw_access_message {
         release_owning_receiver_temporary(ctx, object, expr.span);
         return crate::ir_lower::stmt::lower_throw_access_error_expr(ctx, &message, expr.span);
@@ -398,14 +434,16 @@ pub(super) fn lower_closure_bind_method(
             let call_args = &args[args.len().min(1)..];
             let arg_container =
                 lower_untyped_descriptor_invoker_arg_container(ctx, call_args, expr.span)?;
-            Some(ctx.emit_value(
+            let result = ctx.emit_value(
                 Op::CallableDescriptorInvoke,
                 vec![bound.value, arg_container.value],
                 callable_profile_immediate(),
                 PhpType::Mixed,
                 Op::CallableDescriptorInvoke.default_effects(),
                 Some(expr.span),
-            ))
+            );
+            write_back_ref_bridges_after(ctx, bound.value, expr.span);
+            Some(result)
         }
         _ => None,
     }

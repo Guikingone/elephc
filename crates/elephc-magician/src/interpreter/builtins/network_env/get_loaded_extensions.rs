@@ -12,27 +12,6 @@
 
 use super::*;
 
-/// Regular (non-Zend) extension list returned by `get_loaded_extensions(false)`.
-///
-/// Most entries mirror AOT's `CORE_LOADED_EXTENSIONS`. BCMath deliberately differs: Magician
-/// always implements every `bc*` function, so eval always lists `bcmath`; AOT lists it only when
-/// `elephc_bcmath` is linked through static detection or `--with-bcmath`. Other bridge-linked AOT
-/// extensions remain absent because eval has no AOT link manifest — except `xml` / `xmlwriter`,
-/// which the host's registration of the xml prelude reveals (`XML_BRIDGE_EXTENSIONS`).
-const CORE_LOADED_EXTENSIONS: &[&str] = &[
-    "Core",
-    "standard",
-    "SPL",
-    "bcmath",
-    "json",
-    "pcre",
-    "date",
-    "ctype",
-    "mbstring",
-    "Reflection",
-    "Zend OPcache",
-];
-
 /// Zend extension list returned by `get_loaded_extensions(true)`.
 ///
 /// KEEP IN SYNC with `src/codegen/lower_inst/builtins.rs` (`ZEND_LOADED_EXTENSIONS`).
@@ -89,7 +68,8 @@ pub(in crate::interpreter) fn eval_get_loaded_extensions_result(
     let set = if zend_extensions {
         ZEND_LOADED_EXTENSIONS
     } else {
-        CORE_LOADED_EXTENSIONS
+        // ONE set with `extension_loaded()`: see `extension_loaded::eval_loaded_extension_names`.
+        super::extension_loaded::eval_loaded_extension_names()
     };
     let with_curl = !zend_extensions && cfg!(feature = "curl");
     let with_xml = !zend_extensions && eval_xml_bridge_linked(context);

@@ -611,7 +611,87 @@ pub(super) fn array_literal_element_type_for_ir(
                 .map(ir_array_storage_type)
                 .unwrap_or(PhpType::Mixed)
         }
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            scoped_constant_type_for_ir(ctx, receiver, name, 0)
+                .map(ir_array_storage_type)
+                .unwrap_or(PhpType::Mixed)
+        }
+        // A conditional's element is whichever branch runs, so it is typed from the BRANCHES.
+        // The syntactic pre-pass answers `Int` for all of these, and as a storage stamp that
+        // re-read an object or array branch as its pointer: symfony/console's
+        // `[$row instanceof TableSeparator ? $row : $this->fillCells($row)]` handed every table
+        // row to the renderer as an integer.
+        ExprKind::Ternary { then_expr, else_expr, .. } => merge_ir_indexed_element_type(
+            array_literal_element_type_for_ir(ctx, then_expr),
+            array_literal_element_type_for_ir(ctx, else_expr),
+        ),
+        ExprKind::ShortTernary { value, default } | ExprKind::NullCoalesce { value, default } => {
+            merge_ir_indexed_element_type(
+                array_literal_element_type_for_ir(ctx, value),
+                array_literal_element_type_for_ir(ctx, default),
+            )
+        }
+        ExprKind::Match { arms, default, .. } => arms
+            .iter()
+            .map(|(_, arm)| arm)
+            .chain(default.as_deref())
+            .map(|arm| array_literal_element_type_for_ir(ctx, arm))
+            .reduce(merge_ir_indexed_element_type)
+            .unwrap_or(PhpType::Mixed),
+        ExprKind::ErrorSuppress(inner) => array_literal_element_type_for_ir(ctx, inner),
         _ => ir_array_storage_type(infer_expr_type_syntactic(item)),
+    }
+}
+
+/// Returns the type of `Class::NAME` as an array element, from the constant's own declaration.
+///
+/// The syntactic pre-pass answers `Str` for EVERY scoped constant -- right for `Foo::class`, wrong
+/// for `Foo::BAR = 1` -- and this literal path fell through to it, so `[O::A, O::B]` over integer
+/// constants was stamped `array<string>` and each element converted with `i_to_str`. MEASURED
+/// against php 8.5.10: `var_dump([O::A])` printed `string(1) "1"`, and
+/// `in_array(2, [self::N, self::R], true)` answered false. Symfony's `InputOption::__construct()`
+/// asks exactly that of its mode flags and deprecated every console option on every run.
+///
+/// `static::` is late-bound and a constant whose value is not statically typeable is unknown;
+/// both answer `None`, which the caller turns into `Mixed` -- the representation that holds
+/// whatever arrives.
+fn scoped_constant_type_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &crate::parser::ast::StaticReceiver,
+    name: &str,
+    depth: usize,
+) -> Option<PhpType> {
+    use crate::parser::ast::StaticReceiver;
+    if depth > 8 {
+        return None;
+    }
+    let class_name = match receiver {
+        StaticReceiver::Named(class_name) => class_name.as_str().trim_start_matches('\\').to_string(),
+        StaticReceiver::Self_ => ctx.current_class.clone()?,
+        StaticReceiver::Parent => ctx
+            .current_class
+            .as_deref()
+            .and_then(|current| ctx.classes.get(current))
+            .and_then(|info| info.parent.clone())?,
+        StaticReceiver::Static => return None,
+    };
+    if let Some(enum_info) = ctx.enums.get(&class_name) {
+        if enum_info.cases.iter().any(|case| case.name == name) {
+            return Some(PhpType::Object(class_name));
+        }
+    }
+    let value = ctx.scoped_constant_value(&class_name, name)?;
+    match &value.kind {
+        ExprKind::ScopedConstantAccess {
+            receiver: inner_receiver,
+            name: inner_name,
+        } => scoped_constant_type_for_ir(ctx, inner_receiver, inner_name, depth + 1),
+        ExprKind::IntLiteral(_) => Some(PhpType::Int),
+        ExprKind::FloatLiteral(_) => Some(PhpType::Float),
+        ExprKind::StringLiteral(_) => Some(PhpType::Str),
+        ExprKind::BoolLiteral(_) => Some(PhpType::Bool),
+        ExprKind::ClassConstant { .. } => Some(PhpType::Str),
+        _ => None,
     }
 }
 

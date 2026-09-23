@@ -28,11 +28,20 @@ impl<'a> Cursor<'a> {
     ///
     /// The cursor starts at position 0, line 1, column 1 (one-based spans).
     pub fn new(source: &'a str) -> Self {
+        Self::new_at_line(source, 1)
+    }
+
+    /// Constructs a cursor whose first byte sits on `line` of the physical file.
+    ///
+    /// Bytes removed before scanning must not renumber what follows them: PHP's CLI drops a
+    /// leading `#!` line but still reports a `throw` on physical line 3 as line 3. The scan gets
+    /// the remainder and the line it starts on, so the two stay consistent.
+    pub fn new_at_line(source: &'a str, line: usize) -> Self {
         Self {
             bytes: source.as_bytes(),
             text: Some(source),
             pos: 0,
-            line: 1,
+            line,
             col: 1,
         }
     }

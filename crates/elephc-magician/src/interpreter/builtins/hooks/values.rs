@@ -496,12 +496,12 @@ impl EvalValuesHook {
             },
             Self::Hex2Bin => one_arg(evaluated_args, values, eval_hex2bin_result),
             Self::HtmlEntity => {
-                // htmlspecialchars/htmlentities accept optional flags/encoding args;
-                // like the static runtime they are accepted without effect (ENT_QUOTES).
-                let value = match (name, evaluated_args) {
-                    (_, [value]) => *value,
-                    ("htmlspecialchars" | "htmlentities", [value, _flags]) => *value,
-                    ("htmlspecialchars" | "htmlentities", [value, _flags, _encoding]) => *value,
+                // All three accept the optional flags/encoding args; like the static
+                // runtime they are accepted without effect (ENT_QUOTES). `html_entity_decode`
+                // must be here too: excluded, the ordinary three-argument php call was an
+                // uncatchable eval fatal while the compiled backend accepted it.
+                let value = match evaluated_args {
+                    [value] | [value, _] | [value, _, _] => *value,
                     _ => return Err(EvalStatus::RuntimeFatal),
                 };
                 match name {
@@ -650,7 +650,7 @@ impl EvalValuesHook {
             }),
             Self::StringSplitJoin => match name {
                 "explode" => eval_explode_declared_values_result(evaluated_args, values),
-                "implode" => eval_implode_declared_values_result(evaluated_args, values),
+                "implode" | "join" => eval_implode_declared_values_result(evaluated_args, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::StreamBoolPredicate => one_arg(evaluated_args, values, |stream, values| {

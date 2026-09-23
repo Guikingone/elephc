@@ -526,3 +526,37 @@ echo json_encode($a2), "\n", json_encode($b2), "\n", json_encode($c2), "\n";
         )
     );
 }
+
+/// A `$matches` destination that ALREADY HOLDS A STRING, which php simply overwrites.
+///
+/// The by-reference write never widened the destination's FRAME STORAGE, so the backend refused
+/// the destination outright with `unsupported EIR backend feature: preg_match matches destination
+/// PHP type Str`. `ir_lower`'s `prepare_regex_match_output_local` had the widening for exactly one
+/// prior shape (`$m = []`, i.e. `array<never>`, from Symfony's `UrlMatcher::matchCollection`); a
+/// destination holding any other non-array type reached the backend unwidened.
+///
+/// The SECOND function is the shape that mattered in real code, and it is why the widening cannot
+/// simply re-type the local to the match array: `$s1` is both the SUBJECT and the DESTINATION of
+/// the same call, so it is still read as a string one operand before it is overwritten.
+/// `Symfony\Polyfill\Php85\Php85::grapheme_levenshtein` writes it verbatim as
+/// `preg_match_all('/'.$regex.'/u', $s1, $s1);`.
+///
+/// Oracle: `php 8.5.10` prints `a,b,c` and `x,y,z`.
+#[test]
+fn test_preg_match_all_destination_that_already_holds_a_string() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+function local_dest(string $in): string {
+    $m = "seed";
+    preg_match_all('/[a-z]/', $in, $m);
+    return implode(",", $m[0]);
+}
+function param_dest(string $s1): string {
+    preg_match_all('/[a-z]/', $s1, $s1);
+    return implode(",", $s1[0]);
+}
+echo local_dest("abc"), "\n", param_dest("xyz"), "\n";
+"#,
+    );
+    assert_eq!(out, "a,b,c\nx,y,z\n");
+}

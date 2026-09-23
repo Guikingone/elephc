@@ -335,9 +335,16 @@ pub(in crate::interpreter) fn validate_eval_member_access(
     if visibility == EvalVisibility::Public {
         return Ok(());
     }
+    // `ReflectionMethod::invoke()`, `invokeArgs()` and `getClosure()` reach private and protected
+    // methods by design (php has ignored `setAccessible()` since 8.1). Their compiled bodies call
+    // through the ordinary callable machinery, so the reflection class is the calling scope here;
+    // `MicroKernelTrait::loadRoutes()` invokes the private `configureRoutes()` exactly this way.
     let Some(current_class) = context.current_class_scope() else {
         return Err(EvalStatus::RuntimeFatal);
     };
+    if same_eval_class_name(current_class, "ReflectionMethod") {
+        return Ok(());
+    }
     match visibility {
         EvalVisibility::Public => Ok(()),
         EvalVisibility::Private => same_eval_class_name(current_class, declaring_class)

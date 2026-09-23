@@ -930,6 +930,10 @@ mod tests {
         use crate::builtins::semantics::BuiltinArgumentLowering;
         for (name, expected) in [
             ("count", BuiltinArgumentLowering::Count),
+            (
+                "html_entity_decode",
+                BuiltinArgumentLowering::HtmlEntityDecode,
+            ),
             ("date", BuiltinArgumentLowering::Date),
             ("json_decode", BuiltinArgumentLowering::JsonDecode),
             ("getenv", BuiltinArgumentLowering::Getenv),

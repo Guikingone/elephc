@@ -144,6 +144,48 @@ pub(crate) fn register_spl_autoload_callback_unchecked(
     values.bool_value(true)
 }
 
+/// Removes one AOT-registered autoload callback from whichever eval context retains it.
+///
+/// The generated `spl_autoload_register` lowering registers through
+/// `__elephc_eval_register_spl_autoload`, which creates its OWN request-scoped context when the
+/// caller has none, so the matching unregister cannot be told which context holds the callback.
+/// It asks every context that has autoload callbacks -- the same snapshot the autoload dispatch
+/// itself walks.
+///
+/// Until this existed, the generated `spl_autoload_unregister` was a stub that evaluated its
+/// argument and returned `true` without removing anything. MEASURED on php 8.5.10: a loader
+/// registered, used, then unregistered is called ONCE; elephc called it for every later lookup
+/// too. Symfony's `ClassExistenceResource` installs a THROWING loader and removes it in a
+/// `finally`, so the leftover turned every subsequent `class_exists()` in the process into a
+/// throw -- which is where `bin/console` died.
+///
+/// # Safety
+/// The snapshot holds context pointers the bridge keeps live for the request; a pointer that no
+/// longer resolves is skipped rather than dereferenced blindly.
+#[cfg(not(test))]
+pub(crate) fn unregister_runtime_spl_autoload_callback(
+    callback: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    for owner in crate::context::global_eval_autoload_contexts_snapshot() {
+        let Some(context) = (unsafe { owner.as_mut() }) else {
+            continue;
+        };
+        let Some(index) = eval_autoload_callback_position(callback, context, values)? else {
+            continue;
+        };
+        let Some(removed) = context.remove_autoload_callback_at(index) else {
+            continue;
+        };
+        eval_release_value(context, values, removed)?;
+        if context.has_no_autoload_callbacks() {
+            crate::context::unregister_global_eval_autoload_context(owner);
+        }
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 /// Returns the position of a registered autoload callback equal BY VALUE to this one.
 ///
 /// PHP matches an autoload callback by value: the same `'name'` written at registration and at

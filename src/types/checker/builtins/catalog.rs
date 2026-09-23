@@ -221,6 +221,38 @@ pub(crate) fn builtin_is_available_for_target(
         .unwrap_or(true)
 }
 
+/// Returns whether a builtin's absence from `target` is php's OWN platform rule rather than a gap
+/// in elephc.
+///
+/// MEASURED on php 8.5.10 / macOS aarch64: `extension_loaded('pcntl')` is `true` while
+/// `function_exists('pcntl_unshare')` is `false`, because php-src builds `pcntl_unshare`,
+/// `pcntl_setns`, `pcntl_rfork`, `pcntl_sigtimedwait`, `pcntl_sigwaitinfo` and the two
+/// `pcntl_*cpuaffinity` entries on Linux only — and elephc's macOS surface is missing exactly the
+/// same seven names. An extension's completeness must be judged against what php exports ON THIS
+/// PLATFORM, or elephc would report `pcntl` absent on the one target where its coverage equals
+/// php's exactly.
+///
+/// `HostOnly` is deliberately NOT platform-scoped in this sense: it marks a builtin elephc refuses
+/// on iOS that php would provide, so its absence is a real gap and must keep its extension
+/// unreported there.
+pub(crate) fn builtin_absent_by_php_platform_rule(
+    name: &str,
+    target: crate::codegen_support::platform::Target,
+) -> bool {
+    use crate::builtins::semantics::BuiltinTargetSupport;
+    use crate::codegen_support::platform::Platform;
+
+    crate::builtins::registry::lookup(name)
+        .map(|def| match def.spec.semantics.target_support {
+            BuiltinTargetSupport::Linux => !matches!(target.platform, Platform::Linux),
+            BuiltinTargetSupport::MacOs => {
+                !matches!(target.platform, Platform::MacOS) || target.is_ios()
+            }
+            BuiltinTargetSupport::All | BuiltinTargetSupport::HostOnly => false,
+        })
+        .unwrap_or(false)
+}
+
 /// Returns `true` if the name is a supported builtin function (case-insensitive).
 /// Delegates to `canonical_builtin_function_name` and checks for `Some`.
 pub(crate) fn is_supported_builtin_function(name: &str) -> bool {

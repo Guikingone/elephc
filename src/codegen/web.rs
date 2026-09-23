@@ -63,6 +63,43 @@ mod tests {
         assert!(asm.find(&symbol).unwrap() < asm.find("_heap_off").unwrap());
     }
 
+    /// The request boundary must zero the LIVE-BYTE counter together with the arena it drops.
+    ///
+    /// Nothing frees the abandoned blocks, so without this store `_gc_live` keeps request 1's
+    /// total and every later request adds to it. That was invisible while only `--heap-debug`
+    /// read the counter; `memory_get_usage()` reads it too, and the drift showed up as a
+    /// `--web` worker answering `memory_get_usage(true) >= memory_get_usage(false)` on request 1
+    /// and the opposite on request 2, because the real figure had correctly restarted at zero
+    /// while the live figure had not.
+    ///
+    /// `_gc_peak` is asserted ABSENT on purpose: it is a process high-water mark, which is what
+    /// php's `memory_get_peak_usage()` is too, and clearing it per request would silently turn
+    /// it into something else.
+    #[test]
+    fn heap_arena_reset_clears_the_live_byte_counter_but_not_the_peak() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let catalog = crate::ir::SourceCatalog::from_units([crate::resolver::SourceUnit {
+                canonical_path: "/fixture/entry.php".into(),
+                mode: crate::source::SourceMode::Php,
+                source: "<?php".into(),
+            }])
+            .unwrap();
+            let module = Module::with_source_catalog(target, catalog);
+            let data = DataSection::new();
+            let mut emitter = Emitter::new(target);
+            emit_web_reset(&mut emitter, &module, &data);
+            let asm = emitter.output();
+            let live = asm.find("_gc_live").expect("the boundary must clear _gc_live");
+            let off = asm.find("_heap_off").expect("the boundary must clear _heap_off");
+            // Both belong to the same arena drop, so they are cleared together.
+            assert!(live > off, "_gc_live is cleared with the arena, not before it");
+            assert!(!asm.contains("_gc_peak"), "the process peak must survive the boundary");
+        }
+    }
+
     #[test]
     fn native_include_guards_reset_without_eval_bridge() {
         for target in [
@@ -407,6 +444,22 @@ fn emit_heap_arena_reset(emitter: &mut Emitter) {
     emit_heap_arena_poison(emitter);
     emit_object_handle_index_reset(emitter);
     abi::emit_store_zero_to_symbol(emitter, "_heap_off", 0);
+    // `_gc_live` is the LIVE-BYTE counter, and dropping the arena leaves nothing live. The
+    // boundary frees no block individually, so nothing decrements it: without this store the
+    // counter keeps request 1's total, request 2 adds its own on top, and it climbs forever.
+    //
+    // That was invisible while only `--heap-debug` read it. `memory_get_usage()` reads it too,
+    // and the drift is visible in one measurement: on a `--web` worker, request 1 answered
+    // `memory_get_usage(true) >= memory_get_usage(false)` and request 2 answered the opposite,
+    // because the real figure (`_heap_off`) had correctly restarted at zero while the live
+    // figure had not. Reporting bytes that no longer exist is exactly the fabricated number
+    // these builtins must not produce.
+    //
+    // `_gc_peak` is deliberately NOT cleared: it is a process high-water mark, which is what
+    // php's `memory_get_peak_usage()` is too, and it is only meaningful once `_gc_live` is
+    // honest. `_gc_allocs` / `_gc_frees` are likewise untouched -- they are cumulative and the
+    // leak summary's `live_blocks` is derived from their difference.
+    abi::emit_store_zero_to_symbol(emitter, "_gc_live", 0);
     abi::emit_store_zero_to_symbol(emitter, "_heap_free_list", 0);
     abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 0);
     abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 8);

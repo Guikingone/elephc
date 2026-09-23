@@ -679,6 +679,9 @@ pub(super) fn refined_untyped_property_assignment_type(
                 // the element type stays `Never` and codegen mis-emits later reads.
                 return Some(val_ty.clone());
             }
+            if let Some(widened) = untyped_array_storage_after_gradual_assignment(current, val_ty) {
+                return Some(widened);
+            }
             let refined_ty = Checker::specialize_generic_array_hint(current, val_ty);
             if refined_ty != *current {
                 return Some(refined_ty);
@@ -686,6 +689,42 @@ pub(super) fn refined_untyped_property_assignment_type(
             merge_untyped_property_array_storage(current, val_ty)
         }
     }
+}
+
+/// Widens an UNTYPED array-shaped slot once a whole `Mixed`/union value is assigned to it.
+///
+/// An untyped property's storage shape is only ever a guess from the sites seen so far. An
+/// initializer like `['ASCII', 'UTF-8']` types the slot `array<string>`, and another method then
+/// assigns it the result of `array_map(...)`, which the checker knows only as `Mixed`. The
+/// declared-`array` path already normalizes exactly this case
+/// (`declared_array_storage_after_gradual_assignment`), but it may resolve to a hash because the
+/// declaration GUARANTEES array-ness. An untyped property carries no such guarantee -- `self::$list
+/// = 42;` is legal PHP -- so resolving to a hash would impose a `TypeError` PHP never raises. The
+/// honest widening is `Mixed`, which is what an untyped PHP property actually holds.
+///
+/// Leaving the slot at `array<string>` is not an option either: codegen's store path widens the
+/// assigned container's entries to boxed `Mixed` before the pointer enters the slot, so a slot
+/// still claiming `array<string>` would have those entries read back as raw string pointers. The
+/// refusal that fires today is therefore correct; this removes its cause rather than its message.
+///
+/// MONOTONE ON PURPOSE. `Mixed` is the top of this lattice and the first arm below never fires for
+/// it, so a slot that reaches `Mixed` stays there. A rule that could narrow back is what made the
+/// method-pass fixpoint run its whole budget once before, at 2.0s a pass.
+fn untyped_array_storage_after_gradual_assignment(
+    current: &PhpType,
+    assigned: &PhpType,
+) -> Option<PhpType> {
+    if !matches!(assigned.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return None;
+    }
+    let element_is_already_mixed = match current.codegen_repr() {
+        // An array whose entries are already boxed `Mixed` needs nothing: codegen's existing
+        // unboxing store accepts it, and widening further would drop the array-ness fact for free.
+        PhpType::Array(element) => element.codegen_repr() == PhpType::Mixed,
+        PhpType::AssocArray { value, .. } => value.codegen_repr() == PhpType::Mixed,
+        _ => return None,
+    };
+    (!element_is_already_mixed).then_some(PhpType::Mixed)
 }
 
 /// Widens incompatible array shapes written to one untyped property without inventing a PHP type.

@@ -97,19 +97,37 @@ pub(in crate::interpreter) fn eval_reflection_class_get_members_result(
         return Ok(None);
     };
     if let Some(metadata) = eval_reflection_class_like_attributes(&reflected_name, context) {
-        let names = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
-            metadata.method_names
-        } else {
+        let is_eval_class = context.class(&reflected_name).is_some();
+        let names = if owner_kind != EVAL_REFLECTION_OWNER_METHOD {
             metadata.property_names
+        } else if is_eval_class {
+            context.class_reflection_method_names(&reflected_name)
+        } else {
+            metadata.method_names
         };
-        return eval_reflection_member_object_array_result(
+        let result = eval_reflection_member_object_array_result(
             owner_kind,
             &reflected_name,
             &names,
             filter,
             context,
             values,
-        )
+        );
+        let result = if owner_kind == EVAL_REFLECTION_OWNER_METHOD && is_eval_class {
+            result.and_then(|result| {
+                eval_reflection_append_native_ancestor_methods(
+                    &reflected_name,
+                    &names,
+                    filter,
+                    result,
+                    context,
+                    values,
+                )
+            })
+        } else {
+            result
+        };
+        return result
         .and_then(|result| {
             eval_reflection_object_dynamic_property_array_result(
                 object,
@@ -437,4 +455,55 @@ pub(super) fn eval_reflection_missing_member_message(
             reflected_name, requested_name
         )
     }
+}
+
+/// Appends the methods an eval class inherits from its compiled ancestor to a `getMethods()` list.
+///
+/// An eval class that extends a compiled class inherits that class's methods, but the eval
+/// metadata only knows the eval part of the chain. PHP lists those inherited methods after the
+/// class's own, minus the ones redeclared below and minus privates, which are never inherited.
+fn eval_reflection_append_native_ancestor_methods(
+    reflected_name: &str,
+    listed: &[String],
+    filter: Option<u64>,
+    mut result: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(native_parent) = context.class_native_parent_name(reflected_name) else {
+        return Ok(result);
+    };
+    let mut seen: std::collections::HashSet<String> = listed.iter().map(|name| name.to_ascii_lowercase()).collect();
+    let names = eval_reflection_aot_member_names(EVAL_REFLECTION_OWNER_METHOD, &native_parent, values)?;
+    let mut index = values.array_len(result)? as i64;
+    for name in &names {
+        if !seen.insert(name.to_ascii_lowercase()) {
+            continue;
+        }
+        let Some(member) = eval_reflection_aot_method_metadata_with_signature_if_exists(
+            &native_parent,
+            name,
+            context,
+            values,
+        )?
+        else {
+            continue;
+        };
+        if member.visibility == EvalVisibility::Private
+            || !eval_reflection_member_matches_filter(&member, filter)
+        {
+            continue;
+        }
+        let member_object = eval_reflection_member_object_result(
+            EVAL_REFLECTION_OWNER_METHOD,
+            name,
+            &member,
+            context,
+            values,
+        )?;
+        let key = values.int(index)?;
+        result = eval_reflection_array_set_owned(result, key, member_object, values)?;
+        index += 1;
+    }
+    Ok(result)
 }

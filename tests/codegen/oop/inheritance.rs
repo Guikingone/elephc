@@ -844,3 +844,37 @@ echo $value->childOnly();
     );
     assert_eq!(out, "child");
 }
+
+
+/// A parent's PRIVATE members are reachable from the parent's own scope through a receiver typed
+/// as a subclass: PHP resolves `private` by the lexical scope, not by the receiver's class.
+///
+/// Class flattening does not inherit private METHODS into a subclass's table (private properties
+/// it does inherit), so such a call found nothing and the checker refused it with
+/// `Undefined method: ChildCls::secret` where php prints `Sa`.
+#[test]
+fn test_private_member_resolves_in_the_declaring_scope_through_a_subclass_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentCls {
+    private bool $flag = true;
+
+    private function secret(string $s): string
+    {
+        return 'S' . $s;
+    }
+
+    public function viaSelf(): string
+    {
+        $other = new ChildCls();
+        return $other->secret('a') . ':' . ($other->flag ? 'T' : 'F');
+    }
+}
+
+class ChildCls extends ParentCls {}
+
+echo (new ParentCls())->viaSelf();
+"#,
+    );
+    assert_eq!(out, "Sa:T");
+}

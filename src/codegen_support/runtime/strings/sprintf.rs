@@ -41,7 +41,8 @@ use super::sprintf_x86_64::emit_sprintf_linux_x86_64;
 /// `crate::codegen_support::runtime::data::emit_runtime_data_fixed`. `__rt_sprintf` starts
 /// there and moves its in-progress result to an owned heap block through
 /// `__rt_concat_grow` when that window is exhausted.
-pub(super) const CONCAT_BUF_CAP: u32 = 65536;
+pub(super) const CONCAT_BUF_CAP: u32 =
+    super::concat_scratch::CONCAT_BUF_CAPACITY as u32;
 
 /// Byte capacity of the per-conversion `snprintf` scratch buffer. PHP clamps float
 /// precision to 53 digits, so the widest libc body is `%.53f` of `DBL_MAX`

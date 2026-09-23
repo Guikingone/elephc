@@ -129,12 +129,17 @@ pub(super) fn eval_reflection_method_object_result_if_exists(
         requested_method_name,
         context,
     );
-    let Some(method_name) = method_name else {
-        return Ok(None);
-    };
-    let Some(method) = eval_reflection_method_metadata(&reflected_name, &method_name, context)
-    else {
-        return Ok(None);
+    let method = method_name.as_deref().and_then(|method_name| {
+        eval_reflection_method_metadata(&reflected_name, method_name, context)
+            .map(|method| (method_name.to_string(), method))
+    });
+    let Some((method_name, method)) = method else {
+        return eval_reflection_inherited_aot_method_object_result(
+            &reflected_name,
+            requested_method_name,
+            context,
+            values,
+        );
     };
     eval_reflection_member_object_result(
         EVAL_REFLECTION_OWNER_METHOD,
@@ -144,6 +149,44 @@ pub(super) fn eval_reflection_method_object_result_if_exists(
         values,
     )
     .map(Some)
+}
+
+/// Builds the `ReflectionMethod` for a method an eval-declared class INHERITS from a compiled one.
+///
+/// The eval metadata only knows the eval side of the hierarchy, so a method the class takes from
+/// a compiled ancestor was reported missing, while `method_exists()` on the same object said
+/// true. MEASURED against php 8.5.10:
+///
+///     class Base { public function registerCommands(int $x): void {} }     // compiled
+///     eval('class Child extends Base {}');
+///     new ReflectionMethod(new Child(), 'registerCommands')
+///         php     declaring class Base
+///         elephc  ReflectionException: Method Child::registerCommands() does not exist
+///
+/// Symfony's `FrameworkBundle\Console\Application::registerCommands()` asks exactly that of every
+/// bundle (`new \ReflectionMethod($bundle, 'registerCommands')`), and every console command failed
+/// with it. PHP reports the DECLARING class, which is the compiled ancestor, so the AOT metadata of
+/// the first compiled ancestor that has the method is the whole answer.
+fn eval_reflection_inherited_aot_method_object_result(
+    reflected_name: &str,
+    requested_method_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    for ancestor in context.class_parent_names(reflected_name) {
+        if eval_reflection_class_like_exists(&ancestor, context) {
+            continue;
+        }
+        if let Some(result) = eval_reflection_method_object_result_if_exists(
+            &ancestor,
+            requested_method_name,
+            context,
+            values,
+        )? {
+            return Ok(Some(result));
+        }
+    }
+    Ok(None)
 }
 
 /// Builds a `ReflectionMethod` object or throws PHP's catchable reflection error.

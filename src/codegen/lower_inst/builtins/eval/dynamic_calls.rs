@@ -383,7 +383,10 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_new_dynamic_fa
     })?;
     let args_offset = EVAL_STACK_BYTES;
     let site_offset = args_offset + constructor_args.len() * 8;
-    let stack_bytes = eval_function_call_stack_bytes(constructor_args.len() + 4);
+    let stack_bytes = eval_function_call_stack_bytes(constructor_args.len() + 5);
+    // `DynamicObjectNewMixed` flags a runtime `...$args` container with `Bool(true)`: its one
+    // operand is that array, which only the bridge -- knowing the class -- can bind by name.
+    let spread_container = matches!(inst.immediate, Some(Immediate::Bool(true)));
     let eval_miss_label = ctx.next_label("eval_dynamic_new_missing_class");
     let done_label = ctx.next_label("eval_dynamic_new_done");
     let name_ptr_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
@@ -395,7 +398,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_new_dynamic_fa
     abi::emit_store_to_sp(ctx.emitter, name_len_reg, EVAL_CODE_LEN_OFFSET);
     load_eval_context_or_null(ctx)?;
     let boxed = store_eval_function_call_operands(ctx, constructor_args, args_offset)?;
-    emit_eval_construction_site(ctx, inst, constructor_args.len(), site_offset);
+    emit_eval_construction_site(ctx, inst, constructor_args.len(), site_offset, spread_container);
     load_eval_context_to_arg(ctx, 0);
     let name_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_load_temporary_stack_slot(ctx.emitter, name_ptr_arg, EVAL_CODE_PTR_OFFSET);

@@ -1104,8 +1104,21 @@ fn merge_local_assignment_type(
     // Re-asserting rather than widening is what keeps `--strict-locals` honest: nothing is being
     // discarded here and no decision is being taken, so this must not warn and must not become an
     // error in strict mode. The cell really is `mixed`.
+    // An UNTYPED by-reference parameter is the third holder of the same contract, with no
+    // pre-pass needed: its cell is `mixed` by declaration. What reaches this function with a
+    // narrower type is FLOW NARROWING of that cell, and the merge against it failed for the
+    // ordinary way of writing such a callback -- the widening arm below rightly refuses a by-ref
+    // parameter, whose storage is not this frame's:
+    //
+    //     array_walk_recursive($extra, static function (&$v) {
+    //         if (\is_object($v)) { $v = get_object_vars($v); }   // cannot reassign $v from
+    //     });                                                      // (object) to array<string, mixed>
+    //
+    // That is `Symfony\Component\Routing\Generator\UrlGenerator::doGenerate()`, and php 8.5.10
+    // runs it. Re-asserting `mixed` is not a widening -- the cell already is one.
     if checker.mixed_storage_locals.contains(name)
         || checker.ref_param_is_widened(&checker.current_loop_storage_scope, name)
+        || checker.untyped_ref_params.contains(name)
     {
         // A marked name still needs its binding depth on its FIRST store, for the same reason the
         // fresh-insert branch below records one: it is the name's single authority on whether a

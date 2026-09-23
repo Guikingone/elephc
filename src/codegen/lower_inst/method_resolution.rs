@@ -23,6 +23,21 @@ pub(super) fn class_declares_method(
         .is_some_and(|class_info| class_info.methods.contains_key(&method_key))
 }
 
+/// Returns the class whose private declaration answers this call, when the receiver's own class
+/// has none. See [`crate::types::private_scope`] for the rule and its measurement.
+fn lexical_private_method_scope(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    method_name: &str,
+) -> Option<String> {
+    crate::types::private_scope::lexical_private_method_scope(
+        &ctx.module.class_infos,
+        ctx.function.name.rsplit_once("::").map(|(scope, _)| scope),
+        class_name,
+        &php_symbol_key(method_name),
+    )
+}
+
 /// Resolves method implementation class, canonical key, return type, and ABI arity.
 pub(super) fn resolve_method_call_target(
     ctx: &FunctionContext<'_>,
@@ -30,7 +45,9 @@ pub(super) fn resolve_method_call_target(
     method_name: &str,
     operand_count: usize,
 ) -> Result<MethodCallTarget> {
-    let normalized = class_name.trim_start_matches('\\');
+    let normalized = lexical_private_method_scope(ctx, class_name, method_name)
+        .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
+    let normalized = normalized.as_str();
     let class_info = ctx.module.class_infos.get(normalized).ok_or_else(|| {
         CodegenIrError::unsupported(format!("method call on unknown class {}", normalized))
     })?;
@@ -75,6 +92,17 @@ pub(super) fn resolve_method_call_target(
     } else {
         dynamic_slot
     };
+    // The RESULT is read the way the emitted body returns it. An inherited method's copy in the
+    // receiver class can carry a narrower checker type than the body its ancestor emitted: a
+    // `parent::__construct(fopen(...))` retypes the untyped property in the child's copy to a
+    // resource (raw `int` storage) while `B::get()` still returns the boxed Mixed it was compiled
+    // with, and re-boxing that pointer as an int printed `int(4316502720)`.
+    let return_ty = ctx
+        .module
+        .class_infos
+        .get(&impl_class)
+        .and_then(|info| info.methods.get(&method_key))
+        .map_or_else(|| callee_sig.return_type.clone(), |sig| sig.return_type.clone());
     Ok(MethodCallTarget {
         impl_class,
         method_key,
@@ -85,7 +113,7 @@ pub(super) fn resolve_method_call_target(
             .map(|(_, ty)| ty.codegen_repr())
             .collect(),
         ref_params: callee_sig.ref_params.clone(),
-        return_ty: callee_sig.return_type.clone(),
+        return_ty,
         by_ref_return: callee_sig.by_ref_return,
     })
 }

@@ -230,6 +230,19 @@ fn deferred_class_flag(name: &str) -> Option<*mut u64> {
     (!cell.is_null()).then_some(cell)
 }
 
+/// Performs what including a compiler-included source does to class-like load state.
+///
+/// Called when an include is skipped on the compiler's mark: php would declare the file's symbols
+/// right there, and the compiled program only does so where it first names one of them.
+#[cfg(not(test))]
+pub(crate) fn activate_compiled_source(path: &std::path::Path) {
+    let bytes = path.as_os_str().as_encoded_bytes();
+    unsafe { externs::__elephc_eval_source_activate(bytes.as_ptr(), bytes.len() as u64) };
+}
+
+#[cfg(test)]
+pub(crate) fn activate_compiled_source(_path: &std::path::Path) {}
+
 /// Test builds link no generated table, so every compiled class counts as loaded.
 #[cfg(test)]
 pub(crate) fn compiled_class_is_loaded(_name: &str) -> bool {

@@ -46,6 +46,14 @@ builtin! {
     semantics: folded_semantics(lower_gc_collect_cycles),
 }
 
+// `gc_mem_caches()` returns the bytes the engine's allocator handed back to the system. elephc's
+// allocator keeps no such cache, so there is nothing to reclaim; symfony/routing's
+// `AttributeFileLoader::load()` calls it after every file it reads.
+builtin! {
+    contract: "gc_mem_caches",
+    semantics: folded_semantics(lower_gc_collect_cycles),
+}
+
 /// Builds the shared descriptor for a cycle-collector control that folds to a constant.
 const fn folded_semantics(
     lower: crate::builtins::semantics::BuiltinLowerFn,

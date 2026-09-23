@@ -399,6 +399,122 @@ pub(crate) fn register_global_eval_autoload_context(
 #[cfg(test)]
 pub(crate) fn unregister_global_eval_autoload_context(_context: *mut ElephcEvalContext) {}
 
+/// Returns the process-local map from `define()`d constant name to its owning eval context.
+#[cfg(not(test))]
+fn global_eval_constants() -> &'static Mutex<HashMap<String, usize>> {
+    GLOBAL_EVAL_CONSTANTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Records that `context` defined the constant `key` (already normalized).
+///
+/// PHP constants are request-global, but each eval context keeps its own table: a `define()` run
+/// by a file an autoloader included -- inside the autoloader's owner context -- was invisible to
+/// the context that then ran the class's methods. symfony/polyfill-intl-grapheme's `Grapheme.php`
+/// opens with exactly such a `define('SYMFONY_GRAPHEME_CLUSTER_RX', ...)`, and every console
+/// table died on "undefined constant" once its width computation reached the polyfill.
+///
+/// Answers false when another context already owns the name, which is php's "already defined".
+#[cfg(not(test))]
+pub(super) fn register_global_eval_constant(key: &str, context: *mut ElephcEvalContext) -> bool {
+    if global_eval_orphan_constants()
+        .lock()
+        .map_or(true, |orphans| orphans.contains_key(key))
+    {
+        return false;
+    }
+    let Ok(mut constants) = global_eval_constants().lock() else {
+        return false;
+    };
+    match constants.get(key).copied() {
+        Some(existing) => existing == context as usize,
+        None => {
+            constants.insert(key.to_string(), context as usize);
+            true
+        }
+    }
+}
+
+/// Returns the constants that outlived the context which `define()`d them.
+#[cfg(not(test))]
+fn global_eval_orphan_constants() -> &'static Mutex<HashMap<String, usize>> {
+    GLOBAL_EVAL_ORPHAN_CONSTANTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Answers a constant another context `define()`d (`key` already normalized).
+///
+/// The defining context is often short-lived: the include an autoloader performs from compiled
+/// code runs in a context of its own, freed once the include returns, and the constant has to
+/// stay defined for the rest of the request. [`adopt_dying_context_constants`] moves those values
+/// here before the context goes.
+#[cfg(not(test))]
+pub(super) fn global_eval_constant(
+    key: &str,
+    asking: *const ElephcEvalContext,
+) -> Option<RuntimeCellHandle> {
+    let owner = global_eval_constants()
+        .lock()
+        .ok()
+        .and_then(|constants| constants.get(key).copied());
+    if let Some(owner) = owner {
+        if owner == asking as usize {
+            return None;
+        }
+        let owner = unsafe { (owner as *const ElephcEvalContext).as_ref() }?;
+        return owner.constants.get(key).copied();
+    }
+    global_eval_orphan_constants()
+        .lock()
+        .ok()?
+        .get(key)
+        .map(|handle| RuntimeCellHandle::from_raw(*handle as *mut crate::value::RuntimeCell))
+}
+
+/// Keeps the constants a context defined alive past that context's destruction.
+///
+/// php constants belong to the request, not to whichever eval context ran the `define()`. The
+/// values are not released when a context is dropped, so moving the handles is enough; the web
+/// request reset forgets them together with the arena that holds them.
+#[cfg(not(test))]
+pub(crate) fn adopt_dying_context_constants(context: &mut ElephcEvalContext) {
+    let dying = context as *mut ElephcEvalContext as usize;
+    let owned: Vec<String> = match global_eval_constants().lock() {
+        Ok(mut constants) => {
+            let names = constants
+                .iter()
+                .filter(|(_, owner)| **owner == dying)
+                .map(|(name, _)| name.clone())
+                .collect::<Vec<_>>();
+            for name in &names {
+                constants.remove(name);
+            }
+            names
+        }
+        Err(_) => return,
+    };
+    let Ok(mut orphans) = global_eval_orphan_constants().lock() else {
+        return;
+    };
+    for name in owned {
+        if let Some(handle) = context.constants.remove(&name) {
+            orphans.insert(name, handle.as_ptr() as usize);
+        }
+    }
+}
+
+/// Forgets every request-defined constant at a `--web` request boundary.
+///
+/// Both tables hold addresses in the request arena, which the boundary wipes; a constant that
+/// survived it would also make the next request's `define()` of the same name fail.
+#[cfg(not(test))]
+pub(crate) fn reset_global_eval_constants() {
+    if let Ok(mut constants) = global_eval_constants().lock() {
+        constants.clear();
+    }
+    if let Ok(mut orphans) = global_eval_orphan_constants().lock() {
+        orphans.clear();
+    }
+}
+
 /// Registers a dynamic PHP function name to the context that declared it.
 #[cfg(not(test))]
 pub(super) fn register_global_eval_function(
@@ -519,6 +635,11 @@ pub(crate) fn unregister_global_eval_functions_for_context(context: *mut ElephcE
     let context = context as usize;
     if let Ok(mut functions) = global_eval_functions().lock() {
         functions.retain(|_, owner| *owner != context);
+    }
+    // Constants are moved out before this runs (`adopt_dying_context_constants`); anything
+    // still naming this context is a stale owner entry.
+    if let Ok(mut constants) = global_eval_constants().lock() {
+        constants.retain(|_, owner| *owner != context);
     }
 }
 

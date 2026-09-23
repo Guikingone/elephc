@@ -553,6 +553,8 @@ pub(crate) unsafe fn finalize_eval_context_free(ctx: *mut ElephcEvalContext) {
     unregister_live_eval_context(ctx);
     let owned_global_scope = if let Some(context) = unsafe { ctx.as_mut() } {
         context.unregister_dynamic_object_context();
+        #[cfg(not(test))]
+        crate::context::adopt_dying_context_constants(context);
         context.take_owned_global_scope()
     } else {
         None

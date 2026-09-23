@@ -232,6 +232,54 @@ pub(super) fn lower_backend_gap_builtin_shape(
             expr,
         ));
     }
+    // `preg_match_all()` with `$flags` goes to the prelude helper: the native capture helper
+    // builds pattern order and ignores the flags. `src/preg_match_all_prelude.rs` has the
+    // measurement. A NAMED argument keeps the native path, whose binder places it.
+    if builtin == "preg_match_all"
+        && (4..=5).contains(&args.len())
+        && !args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }))
+    {
+        let mut helper_args = args[..4].to_vec();
+        helper_args.push(match args.get(4) {
+            Some(offset) => offset.clone(),
+            None => Expr::new(ExprKind::IntLiteral(0), expr.span),
+        });
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(
+                crate::preg_match_all_prelude::PREG_MATCH_ALL_FLAGS_NAME,
+            ),
+            &helper_args,
+            expr,
+        ));
+    }
+    // `array_walk()` and `array_walk_recursive()` go to the PHP helpers WHOLESALE, not just for
+    // the shapes the native runtimes refuse. The refusals and the silent divergences come from the
+    // same place -- a native callback pointer, a fixed argument list the callback cannot write
+    // through, and an element read as a raw integer -- and the helpers are defined in terms the
+    // compiler already lowers correctly. `src/array_walk_prelude.rs` carries the measurements.
+    if (builtin == "array_walk" || builtin == "array_walk_recursive")
+        && (2..=3).contains(&args.len())
+    {
+        let has_arg = args.len() == 3;
+        let mut helper_args = vec![args[0].clone(), args[1].clone()];
+        helper_args.push(Expr::new(ExprKind::BoolLiteral(has_arg), expr.span));
+        helper_args.push(match args.get(2) {
+            Some(arg) => arg.clone(),
+            None => Expr::new(ExprKind::Null, expr.span),
+        });
+        let helper = if builtin == "array_walk" {
+            crate::array_walk_prelude::ARRAY_WALK_NAME
+        } else {
+            crate::array_walk_prelude::ARRAY_WALK_RECURSIVE_NAME
+        };
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(helper),
+            &helper_args,
+            expr,
+        ));
+    }
     // A gradual or hash `array_rand()`: the native helper only walks a dense indexed array, and a
     // hash's key is as likely to be a string. The prelude helper collects the keys first.
     if builtin == "array_rand"
@@ -529,6 +577,48 @@ pub(super) fn lower_backend_gap_builtin_shape(
         expr,
     ))
 }
+/// Folds a variadic `array_replace()` into the nested two-argument form it is defined as.
+///
+/// php's `array_replace($a, $b, $c)` is `array_replace(array_replace($a, $b), $c)`: each array
+/// overwrites the keys of the ones before it, left to right. Every lowering below takes exactly
+/// two hash operands, so the fold reuses them all unchanged and needs no new runtime helper and
+/// no new prelude -- it is a pure AST rewrite of the call site.
+///
+/// Symfony's `UrlGenerator` writes the three-argument form
+/// (`array_replace($defaults, $this->context->getParameters(), $parameters)`), and refusing it
+/// with `array_replace() takes exactly 2 arguments` kept the whole routing component out of the
+/// closed world -- which is what made the runtime autoloader re-interpret `UrlMatcher` and
+/// `CompiledUrlMatcher` on every request.
+pub(super) fn lower_variadic_array_replace(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let key = php_symbol_key(name.trim_start_matches('\\'));
+    if key != "array_replace" && key != "array_replace_recursive" {
+        return None;
+    }
+    if args.len() <= 2 || crate::types::call_args::has_named_args(args) {
+        return None;
+    }
+    if args.iter().any(is_spread_arg) {
+        return None;
+    }
+    let callee = crate::names::Name::unqualified(name.trim_start_matches('\\'));
+    let mut folded = args[0].clone();
+    for next in &args[1..] {
+        folded = Expr::new(
+            ExprKind::FunctionCall {
+                name: callee.clone(),
+                args: vec![folded, next.clone()],
+            },
+            expr.span,
+        );
+    }
+    Some(lower_expr(ctx, &folded))
+}
+
 /// Routes `array_merge(...$arrays)` to the elephc-PHP prelude for gradual or keyed operands.
 ///
 /// The six `__rt_array_merge*` helpers copy 8- or 16-byte slots out of INDEXED arrays; none

@@ -37,9 +37,14 @@ pub(in crate::interpreter) fn execute_interface_decl_stmt(
             .iter()
             .any(|ancestor| ancestor.eq_ignore_ascii_case(name))
         {
+            note_eval_runtime_failure(
+                format!("Interface {} cannot extend itself through {}", name, parent),
+                context,
+            );
             return Err(EvalStatus::RuntimeFatal);
         }
         if !context.has_interface(parent) && !eval_runtime_interface_exists(parent, values)? {
+            note_eval_runtime_failure(format!("Interface \"{}\" not found", parent), context);
             return Err(EvalStatus::RuntimeFatal);
         }
     }
@@ -63,6 +68,7 @@ pub(in crate::interpreter) fn execute_interface_decl_stmt(
             values,
         )
     } else {
+        note_eval_runtime_failure(format!("Cannot declare interface {}", name), context);
         Err(EvalStatus::RuntimeFatal)
     }
 }
@@ -85,6 +91,10 @@ fn ensure_eval_interface_parents_available(
         #[cfg(not(test))]
         context.sync_global_eval_classes();
         if !context.has_interface(parent) && !eval_runtime_interface_exists(parent, values)? {
+            // Named, because the generic statement fallback reported this as
+            // `unsupported InterfaceDecl statement` -- a gap in the interpreter rather than the
+            // missing parent PHP itself reports.
+            note_eval_runtime_failure(format!("Interface \"{}\" not found", parent), context);
             return Err(EvalStatus::RuntimeFatal);
         }
     }
@@ -357,6 +367,30 @@ fn ensure_eval_traits_available(
         )?;
         #[cfg(not(test))]
         context.sync_global_eval_classes();
+        if context.trait_decl(trait_name).is_none() {
+            // The autoloader ran and the trait is still not here, which for a compiled program has
+            // ONE ordinary cause: the compiler already included the trait's file, so the include
+            // the autoloader performed was skipped on that mark
+            // (`interpreter::include_exec`, `phase=compiler_included_skip`). The mark is a promise
+            // about the COMPILED world, and a trait does not live there in any form this side can
+            // read: its members are copied into the using class at declaration time, so an
+            // interpreted class needs the trait's own body.
+            //
+            // MEASURED on Symfony's console: `RoutingControllerPass` uses
+            // `PriorityTaggedServiceTrait`, whose file traced as `compiler_included_skip`
+            // immediately before `stage=expand_traits` failed and the whole command died with
+            // `class ... could not be declared`.
+            //
+            // Retry once with the mark ignored. The skip stays in force everywhere else — it is
+            // what keeps a request stat-ing its vendor tree instead of re-reading it.
+            crate::interpreter::include_exec::with_compiler_included_sources_reincluded(|| {
+                crate::interpreter::eval_spl_autoload_classlike_definition(
+                    trait_name, context, values,
+                )
+            })?;
+            #[cfg(not(test))]
+            context.sync_global_eval_classes();
+        }
         if context.trait_decl(trait_name).is_none() {
             return Err(EvalStatus::RuntimeFatal);
         }

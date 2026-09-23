@@ -45,5 +45,17 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             &format!("{}() first argument must be array", cx.name),
         ));
     }
+    // The two-argument form is lowered through `__elephc_array_diff_string`
+    // (`ir_lower::expr::compat_preludes`), which returns a key-preserving HASH of boxed values.
+    // Announcing the input's own type instead hid that change of representation from the loop
+    // storage analysis: `$columns = range(...); foreach (...) { $columns = array_diff($columns,
+    // ...); }` kept its packed slot while the body stored a hash into it, and symfony/console's
+    // `Table::getRowColumns()` read the result back as heap addresses.
+    if cx.args.len() == 2 {
+        return Ok(PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        });
+    }
     Ok(ty1)
 }

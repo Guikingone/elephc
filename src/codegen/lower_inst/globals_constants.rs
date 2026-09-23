@@ -421,35 +421,30 @@ fn lower_global_array_ref_marker(
     data: crate::ir::DataId,
 ) -> Result<()> {
     let name = ctx.global_name_data(data)?.to_string();
-    // `ELEPHC_BROKEN_CLI_SUPERGLOBAL_REF=1` compiles this anyway, and the alias DOES NOT WORK:
-    // `['query' => &$_GET]` then `$box['query']['hit'] = 'x'` leaves `$_GET` untouched where php
-    // writes through. It exists only so the rest of a CLI entry point can be reached and its
-    // other defects found, and it says so on every build that uses it. Do not ship with it.
-    let broken_override =
-        !ctx.module.web && std::env::var_os("ELEPHC_BROKEN_CLI_SUPERGLOBAL_REF").is_some();
-    if broken_override {
-        eprintln!(
-            "warning: ELEPHC_BROKEN_CLI_SUPERGLOBAL_REF: compiling `&${name}` outside --web, \
-             where the reference does not alias the superglobal; writes through it are lost"
-        );
-    }
-    if !(ctx.module.web || broken_override) || !crate::superglobals::is_superglobal(&name) {
-        // DO NOT lift the `web` half of this guard by creating the cell lazily here, the way
-        // `lower_global_ref_cell` does for a plain global. That was tried: it compiles, and the
-        // alias then does not work. `['query' => &$_GET]` followed by
-        // `$box['query']['hit'] = 'x'` leaves `$_GET` untouched, in a function body and at the
-        // top level alike, while php writes through in both. Plain superglobal reads and writes
-        // are fine outside `--web` -- only the reference is not wired -- so the failure is
-        // silent, which is worse than this refusal.
-        //
-        // What is missing is the consuming side: the `ARRAY_GLOBAL_REF_CELL_TAG` marker this
-        // function boxes is only honoured by the request-scoped superglobal storage `--web`
-        // installs. Wiring that for the CLI SAPI is the actual work, and it is what blocks
-        // compiling a console entry point that hands superglobals on by reference
-        // (`GenericRuntime::getArgument` does exactly this with `'session' => &$_SESSION`).
+    if !crate::superglobals::is_superglobal(&name) {
         return Err(CodegenIrError::unsupported(format!(
-            "array reference to non-web global ${name}"
+            "array reference to non-superglobal global ${name}"
         )));
+    }
+    if !ctx.module.web {
+        // Outside `--web` a reference INTO a superglobal is not wired: the CLI stores every
+        // global as a boxed Mixed while the marker's writers expect the bare hash `--web` keeps,
+        // so the alias would compile and silently not write through (`['query' => &$_GET]` then
+        // `$box['query']['hit'] = 'x'` leaves `$_GET` empty where php fills it). A wrong answer
+        // is worse than a refusal, and a refusal at COMPILE time stopped programs that never run
+        // the construct: Symfony's `GenericRuntime::getArgument()` builds
+        // `['session' => &$_SESSION]` only for an `array $request` argument, and the console's
+        // front controller asks for `array $context`. So the construct compiles, and reaching it
+        // throws a catchable `Error` naming the gap -- which replaces the
+        // `ELEPHC_BROKEN_CLI_SUPERGLOBAL_REF` build override that used to be the only way past.
+        super::exceptions::emit_error(
+            ctx,
+            &format!(
+                "A reference to ${name} is not supported outside --web by this compiler"
+            ),
+        );
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        return store_if_result(ctx, inst);
     }
     let symbol = ir_global_symbol(&name);
     ctx.data.add_comm(symbol.clone(), 8);

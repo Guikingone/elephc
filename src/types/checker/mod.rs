@@ -196,6 +196,12 @@ pub(crate) struct Checker {
     pub top_level_env: TypeEnv,
     /// Names that are by-ref parameters in the current function/closure scope.
     pub active_ref_params: HashSet<String>,
+    /// The by-reference PARAMETERS of the current body that carry no type declaration.
+    ///
+    /// Unlike `active_ref_params`, which `$x = &$y` also joins, this names parameters only. Such a
+    /// parameter's cell is `mixed`: its declared type is `mixed`, and the caller boxes its
+    /// argument from the callee's effective parameter type. See `merge_local_assignment_type`.
+    pub untyped_ref_params: HashSet<String>,
     /// Names introduced via `global` declarations in the current local scope.
     pub active_globals: HashSet<String>,
     /// Names ANY function-like body in the program declares `global`, collected once before the

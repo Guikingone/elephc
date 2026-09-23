@@ -252,7 +252,7 @@ pub(in crate::interpreter) fn execute_foreach_stmt(
 /// `release_activation_scope` excludes exactly that handle from the activation's teardown — and
 /// the statement-expression path already releases any expression result on that basis. A read of
 /// existing storage such as `LoadVar` hands back a BORROWED cell and must not be released here.
-fn eval_foreach_owns_subject(expr: &EvalExpr) -> bool {
+pub(in crate::interpreter) fn eval_foreach_owns_subject(expr: &EvalExpr) -> bool {
     eval_expr_is_owning_temporary(expr)
         || matches!(
             expr,

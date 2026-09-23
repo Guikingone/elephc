@@ -1001,6 +1001,24 @@ pub fn s_foreach(array: Expr, key_var: Option<&str>, value_var: &str, body: Vec<
     )
 }
 
+/// `foreach ($array as [$key =>] &$value) { body }`.
+///
+/// A separate builder rather than a flag on [`s_foreach`], for the reason `ClosureBuilder` keeps
+/// `use ($v)` and `use (&$v)` apart: the binding aliases the container's storage for the whole
+/// loop, and writing through it mutates the source. `array_walk()` is defined in those terms.
+pub fn s_foreach_by_ref(array: Expr, key_var: Option<&str>, value_var: &str, body: Vec<Stmt>) -> Stmt {
+    Stmt::new(
+        StmtKind::Foreach {
+            array,
+            key_var: key_var.map(str::to_string),
+            value_var: value_var.to_string(),
+            value_by_ref: true,
+            body,
+        },
+        Span::synthetic(), // a loop span keys `loop_storage_types`; see `s_for`
+    )
+}
+
 /// `try { … } catch (T $e) { … } finally { … }`.
 ///
 /// Each catch names its exception types and, optionally, the variable they bind to — PHP 8

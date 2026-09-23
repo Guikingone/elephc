@@ -125,6 +125,8 @@ pub(crate) struct LoweringSnapshot {
     reflection_arg_array_locals: HashMap<String, Vec<Expr>>,
     fiber_start_sigs: HashMap<String, FunctionSig>,
     ref_bound_locals: HashSet<String>,
+    interior_ref_locals: HashMap<String, PhpType>,
+    pending_ref_bridges: Vec<(crate::ir::ValueId, String, String)>,
     ref_cell_owner_locals: HashMap<String, LocalSlotId>,
     foreach_int_key_locals: HashSet<String>,
     storage_widened_locals: HashSet<String>,
@@ -300,6 +302,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     reflection_arg_array_locals: HashMap<String, Vec<Expr>>,
     fiber_start_sigs: HashMap<String, FunctionSig>,
     ref_bound_locals: HashSet<String>,
+    interior_ref_locals: HashMap<String, PhpType>,
+    pending_ref_bridges: Vec<(crate::ir::ValueId, String, String)>,
     ref_cell_owner_locals: HashMap<String, LocalSlotId>,
     /// foreach loop-key locals whose source is a concretely-indexed array
     /// (`Array` of a non-Mixed element type), so the runtime key is always an
@@ -464,6 +468,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             reflection_arg_array_locals: HashMap::new(),
             fiber_start_sigs: HashMap::new(),
             ref_bound_locals: HashSet::new(),
+            interior_ref_locals: HashMap::new(),
+            pending_ref_bridges: Vec::new(),
             ref_cell_owner_locals: HashMap::new(),
             foreach_int_key_locals: HashSet::new(),
             storage_widened_locals: HashSet::new(),
@@ -518,6 +524,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             reflection_arg_array_locals: self.reflection_arg_array_locals.clone(),
             fiber_start_sigs: self.fiber_start_sigs.clone(),
             ref_bound_locals: self.ref_bound_locals.clone(),
+            interior_ref_locals: self.interior_ref_locals.clone(),
+            pending_ref_bridges: self.pending_ref_bridges.clone(),
             ref_cell_owner_locals: self.ref_cell_owner_locals.clone(),
             foreach_int_key_locals: self.foreach_int_key_locals.clone(),
             storage_widened_locals: self.storage_widened_locals.clone(),
@@ -559,6 +567,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.reflection_arg_array_locals = snapshot.reflection_arg_array_locals;
         self.fiber_start_sigs = snapshot.fiber_start_sigs;
         self.ref_bound_locals = snapshot.ref_bound_locals;
+        self.interior_ref_locals = snapshot.interior_ref_locals;
+        self.pending_ref_bridges = snapshot.pending_ref_bridges;
         self.ref_cell_owner_locals = snapshot.ref_cell_owner_locals;
         self.foreach_int_key_locals = snapshot.foreach_int_key_locals;
         self.storage_widened_locals = snapshot.storage_widened_locals;
@@ -1055,11 +1065,66 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Records that a local currently aliases by-reference storage.
     pub(crate) fn mark_ref_bound_local(&mut self, name: &str) {
         self.ref_bound_locals.insert(name.to_string());
+        // A new binding says nothing yet about WHAT it aliases; `foreach` re-marks an interior
+        // element right after this call, and every other binding aliases a managed cell.
+        self.interior_ref_locals.remove(name);
+    }
+
+    /// Records that a local may hold the address of an ELEMENT inside a container rather than
+    /// a managed reference cell.
+    ///
+    /// A by-reference `foreach` binds its value local that way. The address is interior to the
+    /// array's payload, so it has no heap header of its own -- and a descriptor argument marker
+    /// built from it went through `__rt_mixed_from_value`, which retains tag-11 payloads with
+    /// `__rt_incref`, and was later released through `__rt_decref_any`. Both touched
+    /// `[address - 12]`: the previous element, or for element 0 the array's own capacity word.
+    /// See `crate::ir_lower::expr::descriptor_args::lower_invoker_ref_arg_marker`.
+    ///
+    /// Cleared by `unset()` and by any new reference binding of the name.
+    ///
+    /// `element_type` is the REPRESENTATION of the element the cell points at -- which is not the
+    /// slot's own storage type once the checker boxes the name, nor its flow type once a call has
+    /// widened it -- and is the storage every store through the reference has to honour.
+    pub(crate) fn mark_interior_ref_local(&mut self, name: &str, element_type: PhpType) {
+        self.interior_ref_locals.insert(name.to_string(), element_type);
+    }
+
+    /// Returns true when a local may hold an interior container address; see
+    /// [`Self::mark_interior_ref_local`].
+    pub(crate) fn is_interior_ref_local(&self, name: &str) -> bool {
+        self.interior_ref_locals.contains_key(name)
+    }
+
+    /// Queues a copy-out: after the call consuming `marker`, `temp` is stored back into `var`.
+    pub(crate) fn push_pending_ref_bridge(
+        &mut self,
+        marker: crate::ir::ValueId,
+        var: &str,
+        temp: String,
+    ) {
+        self.pending_ref_bridges.push((marker, var.to_string(), temp));
+    }
+
+    /// Removes and returns every queued copy-out whose marker is NEWER than `callee`.
+    ///
+    /// PHP evaluates the callee before its arguments, so a marker created after the callee value
+    /// belongs to this call; an older one belongs to an enclosing call still being built, as in
+    /// `$outer($v, $inner($w))`, and must wait for it.
+    pub(crate) fn take_ref_bridges_after(
+        &mut self,
+        callee: crate::ir::ValueId,
+    ) -> Vec<(String, String)> {
+        let (mine, theirs): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pending_ref_bridges)
+            .into_iter()
+            .partition(|(marker, _, _)| *marker > callee);
+        self.pending_ref_bridges = theirs;
+        mine.into_iter().map(|(_, var, temp)| (var, temp)).collect()
     }
 
     /// Clears the by-reference alias marker for a local after `unset()`.
     pub(crate) fn unmark_ref_bound_local(&mut self, name: &str) {
         self.ref_bound_locals.remove(name);
+        self.interior_ref_locals.remove(name);
     }
 
     /// Returns true when a local is currently modeled as a by-reference alias.
@@ -1478,8 +1543,25 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             };
         }
         let slot = self.declare_local(name, php_type.clone());
-        let ir_type = value_ir_type(&php_type);
         let is_ref_bound = self.is_ref_bound_local(name) && !uses_global && kind == LocalKind::PhpLocal;
+        // Read a by-reference `callable` through its cell's REPRESENTATION, the same one
+        // `store_local` writes. A closure capturing `use (&$c)` before `$c` is assigned boxes the
+        // cell; loading it back under the flow type `callable` read the box pointer as a
+        // descriptor. A call on the Mixed value dispatches dynamically, as the closure body's own
+        // read of the capture already does.
+        let php_type = if is_ref_bound
+            && !self.is_interior_ref_local(name)
+            && matches!(php_type.codegen_repr(), PhpType::Callable)
+            && matches!(
+                self.ref_cell_storage_type(name, &self.builder.local_php_type(slot))
+                    .codegen_repr(),
+                PhpType::Mixed
+            ) {
+            PhpType::Mixed
+        } else {
+            php_type
+        };
+        let ir_type = value_ir_type(&php_type);
         // A ref-cell load dereferences storage owned by the cell; the backend does not retain
         // the loaded payload. Mark it borrowed so provisional expression cleanup cannot release
         // the property's or caller's live value. Consumers that need an independent owner emit
@@ -1675,6 +1757,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         slot: LocalSlotId,
         span: Option<Span>,
     ) {
+        // Global storage is released by the store itself: `StoreGlobal` drops the symbol's
+        // previous occupant before writing the new one. Releasing it here as well freed it twice
+        // -- `unset($_ENV[$k])` loaded `$_ENV`, released it, then stored the edited copy, whose
+        // store released the same array again. The freed block was then handed out anew while the
+        // second release still wrote into it, and an unrelated live string took its place.
+        let kind = self.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal);
+        if self.uses_global_storage(name, kind) {
+            return;
+        }
         // A by-reference local can retain a narrower logical type after its backing cell was
         // promoted to Mixed storage. Cleanup must use that physical cell contract, just like
         // loads and stores, or it can pass a Mixed box to the callable/object destructor.
@@ -1889,9 +1980,36 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // Int→Mixed mid-function (which would break earlier loads that expect I64).
         // The codegen narrows Mixed→Int at the store point instead.
         let is_ref_bound = self.is_ref_bound_local(name);
-        let ref_cell_storage_type = is_ref_bound
-            .then(|| self.ref_cell_storage_type(name, &previous_type))
-            .unwrap_or_else(|| previous_type.clone());
+        // The cell's REPRESENTATION, not the name's flow type. A local captured `use (&$c)` before
+        // it is assigned has a boxed Mixed cell, and its flow type then says `callable` -- which
+        // made `$c = static function () use (&$c) {…}` store the raw descriptor pointer into the
+        // box. The enclosing function called it fine through the same flow type, and every reader
+        // of the cell as a VALUE read the descriptor's first word as a type tag: inside a function
+        // body, php 8.5.10 answers `object` for `gettype($c)` and `call_user_func($c, …)` works,
+        // elephc answered `string` and `Call to undefined function <dynamic>()`. Symfony's
+        // `UrlGenerator::doGenerate()` passes exactly such a `$caster` on to
+        // `array_walk_recursive()`. At top level the same program worked, because a global's slot
+        // is not ref-bound this way.
+        // NOT for a `foreach` value reference: its slot may be typed Mixed while the cell it holds
+        // points INTO an `array<int>`, whose element is a raw word (`is_interior_ref_local`).
+        let slot_storage_type = self.builder.local_php_type(slot);
+        let ref_cell_fallback = if let Some(element) = self.interior_ref_locals.get(name) {
+            element.clone()
+        } else if matches!(slot_storage_type.codegen_repr(), PhpType::Mixed) {
+            slot_storage_type
+        } else {
+            previous_type.clone()
+        };
+        // An interior reference's element type is authoritative even over a ref-cell OWNER slot:
+        // the owner describes a cell an earlier binding of the same name created, and a later
+        // `foreach ($b as &$v)` rebinds `$v` into a different array's raw element.
+        let ref_cell_storage_type = if let Some(element) = self.interior_ref_locals.get(name) {
+            element.clone()
+        } else if is_ref_bound {
+            self.ref_cell_storage_type(name, &ref_cell_fallback)
+        } else {
+            previous_type.clone()
+        };
         let widen_type = if is_ref_bound || preserve_storage_type {
             previous_type.clone()
         } else if matches!(php_type.codegen_repr(), PhpType::Void) {
@@ -2005,7 +2123,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 PhpType::Mixed
             );
             let target_is_int = matches!(ref_cell_storage_type.codegen_repr(), PhpType::Int);
-            if !(source_is_mixed && target_is_int) {
+            // The narrowing CONSUMES the box it converts, so it must be handed one it owns. An
+            // owned temporary already is; a BORROWED read -- `$v = $tmp` from another local -- is
+            // not, and consuming it freed the box that local still held: the next store to it
+            // released it again. Acquiring first gives the narrowing its own share.
+            if !(source_is_mixed && target_is_int) || !self.value_is_owning_temporary(value) {
                 crate::ir_lower::ownership::acquire_if_refcounted(self, value, span)
             } else {
                 value

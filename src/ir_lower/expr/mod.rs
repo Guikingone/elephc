@@ -1542,31 +1542,6 @@ fn lower_array_internal_pointer(
     Some(result)
 }
 
-/// Emits the generic runtime class-name dispatch for `new $class(...)`.
-///
-/// The class-name operand is already lowered so both the direct path and the
-/// planned-dispatch fallback branch can share it.
-fn lower_new_dynamic_generic(
-    ctx: &mut LoweringContext<'_, '_>,
-    name_value: LoweredValue,
-    args: &[Expr],
-    expr: &Expr,
-) -> LoweredValue {
-    if ctx.web {
-        ctx.declare_eval_context_local();
-    }
-    let mut operands = vec![name_value.value];
-    operands.extend(lower_args(ctx, args));
-    ctx.emit_value(
-        Op::DynamicObjectNewMixed,
-        operands,
-        None,
-        PhpType::Mixed,
-        Op::DynamicObjectNewMixed.default_effects(),
-        Some(expr.span),
-    )
-}
-
 pub(crate) use indexed_array_literals::ir_array_storage_type;
 pub(crate) use assoc_array_literals::merge_ir_assoc_value_type;
 pub(crate) use indexed_array_literals::merge_ir_indexed_element_type;

@@ -13,6 +13,7 @@ mod call_graph;
 mod cli;
 mod cli_entry;
 mod debug_info;
+mod eager_globals;
 mod link_planning;
 mod linker;
 mod monitor;
@@ -38,6 +39,8 @@ pub mod assert_prelude;
 pub(crate) mod append_vivify;
 pub mod ast_usage;
 mod array_filter_prelude;
+mod array_walk_prelude;
+mod preg_match_all_prelude;
 mod is_callable_prelude;
 pub mod opcache_preload_sources;
 /// Narrow PHP-level fallbacks for builtin shapes not handled natively yet.
@@ -55,6 +58,8 @@ pub mod codegen;
 pub mod codegen_support;
 /// Conditional compilation directives.
 pub mod conditional;
+/// Execution-time binding for conditionally declared PHP functions.
+pub mod conditional_functions;
 /// Standard DOM class-surface prelude injection.
 pub mod dom_prelude;
 /// `ext/curl` easy-handle standard-library prelude injection (`CurlHandle` + `curl_*`).
@@ -130,6 +135,8 @@ pub mod php_profile;
 pub(crate) mod prelude_prune;
 /// Resolution of includes.
 pub mod resolver;
+/// The compile-time SAPI, for the front-end behavior that depends on it.
+pub(crate) mod sapi;
 /// Physical source-file classification and per-file language profiles.
 pub mod source;
 /// Source span tracking.

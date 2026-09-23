@@ -422,6 +422,16 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::Expr(expr) => {
+            // `require $file;` written as a STATEMENT throws its value away, which is the one
+            // shape where a source the compiler already included can be skipped outright. The
+            // expression evaluator cannot know that; only the statement does.
+            if let EvalExpr::Include { path, required, once } = expr {
+                let result = super::super::include_exec::eval_discarded_include_expr(
+                    path, *required, *once, context, scope, values,
+                )?;
+                eval_release_value(context, values, result)?;
+                return Ok(EvalControl::None);
+            }
             let result = eval_expr(expr, context, scope, values)?;
             // An expression used as a statement discards its value, but an ASSIGNMENT hands back
             // the very cell it just stored and a variable read hands back the scope's own. The

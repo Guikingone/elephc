@@ -70,6 +70,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_dynamic_include(
     once: bool,
     required: bool,
     strict_php: bool,
+    value_discarded: bool,
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, "dynamic include", 1)?;
     let path = expect_operand(inst, 0)?;
@@ -101,10 +102,15 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_dynamic_include(
         abi::int_arg_reg_name(ctx.emitter.target, 3),
         i64::from(required),
     );
+    // The x86_64 C ABI hands over only six integer arguments in registers, and this call
+    // already uses all six. `value_discarded` therefore travels as a BIT of the `once` word
+    // rather than as a seventh argument that would have to be passed on the stack on one target
+    // and in a register on the other. `INCLUDE_FLAG_*` in
+    // `crates/elephc-magician/src/ffi/include.rs` decodes it; the two must agree.
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 4),
-        i64::from(once),
+        i64::from(once) | (i64::from(value_discarded) << 1),
     );
     let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
     abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);

@@ -305,6 +305,58 @@ fn lower_static_property_parent_fetch_for_write(
     Some(parent)
 }
 
+/// Normalizes an indexed local whose ELEMENTS are concretely-typed containers to boxed `Mixed`
+/// slots, so a nested write can use the parent cell the leaf writer needs.
+///
+/// `lower_nested_array_assign` finishes EVERY nested target through the shared boxed-Mixed
+/// writer (`lower_mixed_array_runtime_set`), which accepts only a `Mixed`/union parent — that is
+/// what lets one writer mutate an aliased container whatever its slot representation is. A local
+/// typed `array<array<int>>` hands that writer a raw `array<int>` parent instead, and the build
+/// stops in the BACKEND with `runtime_call array set with receiver PHP type Array(Int)`. Two
+/// lines of ordinary PHP inside any function reproduce it:
+///
+/// ```php
+/// $dp = [[0, 0], [0, 0]];
+/// $dp[1][0] = 5;
+/// ```
+///
+/// It compiles at TOP LEVEL, where the same local is already boxed, which is why the hole went
+/// unnoticed; `Symfony\Polyfill\Php85\Php85::grapheme_levenshtein`'s Levenshtein matrix
+/// (`array_fill(0, $l1 + 1, array_fill(0, $l2 + 1, 0))`, then `$dp[$i][0] = …`) is what found it.
+///
+/// Normalizing is the same device `prepare_indexed_array_local_set` and `lower_array_unshift_args`
+/// already use when a write would make a typed payload heterogeneous: `Op::ArrayToMixed` rewrites
+/// the container's slots and the local is re-typed to `array<mixed>`, which is a representation
+/// the Mixed fetch-for-write and set helpers both understand. The runtime helper is a no-op on an
+/// already-normalized array, and the re-typed local no longer matches the guard, so a second
+/// nested write to the same name converts nothing.
+fn normalize_concrete_nested_container(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    span: Span,
+) {
+    let PhpType::Array(elem_ty) = ctx.local_type(name).codegen_repr() else {
+        return;
+    };
+    if !matches!(
+        elem_ty.codegen_repr(),
+        PhpType::Array(_) | PhpType::AssocArray { .. }
+    ) {
+        return;
+    }
+    let target = PhpType::Array(Box::new(PhpType::Mixed));
+    let local = ctx.load_local(name, Some(span));
+    let converted = ctx.emit_value(
+        Op::ArrayToMixed,
+        vec![local.value],
+        None,
+        target.clone(),
+        Op::ArrayToMixed.default_effects(),
+        Some(span),
+    );
+    ctx.store_call_normalized_local(name, converted, target, Some(span));
+}
+
 /// Lowers `$local[key]` as the parent of a nested assignment when the local
 /// holds a concrete container (`array<mixed>` or a Mixed-valued assoc array):
 /// `__rt_array_ensure_elem_for_write` autovivifies the element in write
@@ -319,6 +371,7 @@ pub(super) fn lower_local_parent_fetch_for_write(
     parent_expr: &Expr,
 ) -> Option<LoweredValue> {
     let span = parent_expr.span;
+    normalize_concrete_nested_container(ctx, name, span);
     let local_ty = ctx.local_type(name);
     match local_ty.codegen_repr() {
         PhpType::Array(elem_ty)

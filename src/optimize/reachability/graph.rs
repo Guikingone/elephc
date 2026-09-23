@@ -42,6 +42,14 @@ pub(crate) struct DeclarationIndex {
     pub(crate) packed_classes: HashSet<String>,
     pub(crate) extern_classes: HashSet<String>,
     pub(crate) function_variants: HashMap<String, Vec<String>>,
+    /// `class -> {(method, is_static)}` for every method that carries a PHP attribute.
+    ///
+    /// An attribute exists to be read by reflection, and the code that reads it is very often
+    /// not part of the compiled world: symfony/routing's attribute loader runs in the
+    /// interpreter, lists a controller's methods, and builds a route from each `#[Route]`. A
+    /// method nothing calls statically was pruned with its metadata, and the console's route
+    /// collection came out empty. Such methods are kept wherever their class is.
+    pub(crate) attributed_methods: HashMap<String, HashSet<(String, bool)>>,
 }
 
 /// Indexed metadata for one source class, enum, interface, or trait.
@@ -536,6 +544,11 @@ impl GraphState {
                     || has_runtime_owned_parent
                     || matches!(method.as_str(), "__call" | "__callstatic")
                     || self.behavioral.referenced_methods.contains(&probe)
+                    || self
+                        .index
+                        .attributed_methods
+                        .get(class.as_str())
+                        .is_some_and(|methods| methods.contains(&probe))
                 {
                     let key = (class.clone(), method.clone(), *is_static);
                     self.reach.methods.insert(key.clone());

@@ -348,5 +348,6 @@ pub(super) fn emit_callable_descriptor_invoke(
     if ctx.value_is_owning_temporary(arg_container) {
         crate::ir_lower::ownership::release_if_owned(ctx, arg_container, Some(span));
     }
+    write_back_ref_bridges_after(ctx, callback.value, span);
     result
 }

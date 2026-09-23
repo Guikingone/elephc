@@ -13,21 +13,38 @@ impl ElephcEvalContext {
     /// Defines an eval dynamic constant value, failing if the name is invalid or already present.
     pub fn define_constant(&mut self, name: &str, value: RuntimeCellHandle) -> bool {
         let key = normalize_constant_name(name);
-        if key.is_empty() || self.constants.contains_key(&key) {
+        if key.is_empty() || self.has_constant(&key) {
+            return false;
+        }
+        // Constants are request-global in php; see `register_global_eval_constant`.
+        #[cfg(not(test))]
+        if !crate::context::register_global_eval_constant(&key, self as *mut Self) {
             return false;
         }
         self.constants.insert(key, value);
         true
     }
 
-    /// Returns true when this eval context has a dynamic constant with the requested name.
+    /// Returns true when this eval context, or any other live one, defined the constant.
     pub fn has_constant(&self, name: &str) -> bool {
-        self.constants.contains_key(&normalize_constant_name(name))
+        self.constant(name).is_some()
     }
 
     /// Returns an eval dynamic constant value by case-sensitive PHP constant name.
+    ///
+    /// Falls back to the context that `define()`d it when that is another one: an autoloader runs
+    /// the files it includes in its own context, and their constants are the whole request's.
     pub fn constant(&self, name: &str) -> Option<RuntimeCellHandle> {
-        self.constants.get(&normalize_constant_name(name)).copied()
+        let key = normalize_constant_name(name);
+        if let Some(value) = self.constants.get(&key) {
+            return Some(*value);
+        }
+        #[cfg(not(test))]
+        {
+            crate::context::global_eval_constant(&key, self as *const Self)
+        }
+        #[cfg(test)]
+        None
     }
 
     /// Defines a dynamic user function, failing if the name already exists.

@@ -138,6 +138,29 @@ pub fn inject_if_used(program: Program, inventory: &mut PreludeInventory) -> Pro
     // `Call to undefined function __elephc_filter_var_dyn()`. Recording the group is the proof the
     // injection happened, which is what keeps them alive; the pipeline forces the group too.
     inventory.record_program(FILTER_VAR_GROUP, &combined);
+    // RESOLVED — kept because the symptom pointed at this file and the cause is four passes away.
+    //
+    // Both helpers below call `error_log`, which under `--web` is not the registry builtin but a
+    // prelude DECLARATION that shadows it (`error_handling_prelude::declarations`). A Symfony
+    // `--web` build died with
+    //
+    //     EIR backend error: unsupported EIR backend feature:
+    //     call to unknown function error_log (4:9, op call, in __elephc_filter_var_dyn_arr)
+    //
+    // and NOTHING about it was this prelude's doing. `vendor/symfony/polyfill-mbstring/
+    // bootstrap.php` — an eager `autoload.files` entry — ends in `return require
+    // __DIR__.'/bootstrap72.php';`, and `crate::autoload::load_autoloaded_file` spliced that
+    // file-scope `return` into the program's TOP LEVEL as statement 160 of 1,848.
+    // `optimize::propagate`'s `propagate_block` stops at the first statement that does not fall
+    // through, so the whole `--web` error surface — 91% of the program — was deleted from the AST
+    // while `check_result.functions` kept it. `crate::autoload::discard_autoloaded_file_return`
+    // restores php's include boundary, and `tests/autoload_file_return_tests.rs` pins it.
+    //
+    // THE DEAD END, recorded so it is not walked twice: adding `error_log` to this forced group
+    // (`inventory.group_mut(FILTER_VAR_GROUP).functions.insert(php_symbol_key("error_log"))`, the
+    // device `web_prelude::inject_if_web` uses for `__elephc_diag_dispatch`) changes nothing,
+    // because reachability was never what dropped the declaration. `ELEPHC_DECL_TRACE=error_log`
+    // (see `crate::pipeline`) names the pass that did, in one build.
     combined.extend(program);
     combined
 }

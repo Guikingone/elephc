@@ -273,7 +273,8 @@ pub(super) fn lower_foreach(
         ctx.store_local(key_var, key, PhpType::Mixed, Some(array.span));
     }
     if value_by_ref {
-        let slot = ctx.declare_local(value_var, foreach_ref_value_type(&source_ty));
+        let element_type = foreach_ref_value_type(&source_ty);
+        let slot = ctx.declare_local(value_var, element_type.clone());
         ctx.release_ref_cell_owner(value_var, Some(array.span));
         ctx.emit_void(
             Op::IterCurrentValueRef,
@@ -283,6 +284,7 @@ pub(super) fn lower_foreach(
             Some(array.span),
         );
         ctx.mark_ref_bound_local(value_var);
+        ctx.mark_interior_ref_local(value_var, element_type);
         ctx.mark_local_initialized(value_var);
     } else {
         let value_ty = foreach_value_type(&source_ty);

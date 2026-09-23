@@ -130,7 +130,7 @@ pub(super) fn lower_builtin_call_args(
     if canonical == "eval" {
         return lower_eval_args(ctx, sig, args);
     }
-    prepare_regex_match_output_local(ctx, &canonical, args);
+    let regex_output = prepare_regex_match_output_local(ctx, &canonical, args);
     promote_indexed_receiver_for_key_preserving_sort(ctx, &canonical, args);
     let pcntl_outputs = prepare_pcntl_output_locals(ctx, &canonical, sig, args);
     let argument_lowering = crate::builtins::registry::lookup(&canonical)
@@ -225,6 +225,12 @@ pub(super) fn lower_builtin_call_args(
     for (name, ty) in pcntl_outputs {
         ctx.set_local_logical_type(&name, ty);
     }
+    // The match destination's logical type is installed only now, for the reason
+    // `prepare_regex_match_output_local` gives: the same name may be the SUBJECT of this very
+    // call, and that operand had to be lowered while the name still read as what it held.
+    if let Some((name, ty)) = regex_output {
+        ctx.set_local_logical_type(&name, ty);
+    }
     lowered
 }
 
@@ -283,9 +289,27 @@ fn prepare_pcntl_output_locals(
 /// Symfony's `UrlMatcher::matchCollection` opens `$hostMatches = []` exactly like that, which is
 /// what kept the routing component out of the compiled world.
 ///
-/// Only `array<never>` is touched. Any other destination already describes storage the runtime
-/// can fill, and `set_local_type` would REPLACE the logical type rather than join it, so widening
-/// a `Mixed` destination here would narrow it.
+/// A destination that ALREADY HOLDS A NON-ARRAY is the second shape, and it needs the other
+/// treatment. `$m = "seed"; preg_match($re, $s, $m);` and — the one that matters in real code —
+/// a `string` PARAMETER reused as its own matches destination:
+///
+/// ```php
+/// preg_match_all('/'.$regex.'/u', $s1, $s1);   // Symfony\Polyfill\Php85\Php85::grapheme_levenshtein
+/// ```
+///
+/// The local's frame slot is `Str`, which the backend refuses the same way
+/// (`preg_match matches destination PHP type Str`). php has no difficulty here: the by-reference
+/// write simply overwrites whatever the name held. Re-typing the slot to the match ARRAY would
+/// be wrong for exactly the shape above, where the same name is ALSO the subject argument of the
+/// same call and is read as a string one operand earlier, so the slot is widened to boxed `Mixed`
+/// instead — storage that holds either — and the logical type is set to the match array only
+/// AFTER the arguments are lowered. That is the two-phase treatment
+/// [`prepare_pcntl_output_local`] already uses for its own write-only out-parameters, and the
+/// returned pair is applied by the same loop.
+///
+/// The accepted set is read off `codegen::lower_inst::builtins::regex`'s `store_matches_array`,
+/// which is the code that refuses: an `array<string|mixed>`, an assoc array, `Mixed` and a union
+/// are all storage it can fill, and everything else is not.
 ///
 /// The shape comes from [`crate::types::checker::regex_matches_destination_type`], the same
 /// function the checker types the destination with — deciding it again here is how an indexed
@@ -294,26 +318,46 @@ fn prepare_regex_match_output_local(
     ctx: &mut LoweringContext<'_, '_>,
     canonical: &str,
     args: &[Expr],
-) {
+) -> Option<(String, PhpType)> {
     if canonical != "preg_match" && canonical != "preg_match_all" {
-        return;
+        return None;
     }
     let Some(Expr {
         kind: ExprKind::Variable(name),
         ..
     }) = args.get(2)
     else {
-        return;
+        return None;
     };
     // The RAW local type, not `codegen_repr()`: the representation mapping erases `Never` into
     // the element type an array can actually hold, so the empty-literal destination this exists
     // for reads back as an ordinary array and the guard never fires.
-    if !matches!(ctx.local_type(name), PhpType::Array(element) if matches!(*element, PhpType::Never))
+    if matches!(ctx.local_type(name), PhpType::Array(element) if matches!(*element, PhpType::Never))
     {
-        return;
+        let widened = crate::types::checker::regex_matches_destination_type(canonical, args);
+        ctx.set_local_type(name, widened);
+        return None;
+    }
+    if regex_matches_destination_is_storable(&ctx.local_type(name)) {
+        return None;
     }
     let widened = crate::types::checker::regex_matches_destination_type(canonical, args);
-    ctx.set_local_type(name, widened);
+    ctx.set_local_type(name, PhpType::Mixed);
+    Some((name.clone(), widened))
+}
+
+/// Returns whether the backend can store a runtime-built match array into this local's storage.
+///
+/// Mirrors the accepted arms of `store_matches_array`; the two must agree or lowering hands the
+/// backend a destination it refuses, which is a build failure rather than a diagnostic.
+fn regex_matches_destination_is_storable(ty: &PhpType) -> bool {
+    match ty.codegen_repr() {
+        PhpType::Array(element) => {
+            matches!(element.codegen_repr(), PhpType::Str | PhpType::Mixed)
+        }
+        PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_) => true,
+        _ => false,
+    }
 }
 
 /// Widens one direct PCNTL output slot without reinterpreting its pre-call value.

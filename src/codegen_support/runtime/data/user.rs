@@ -583,6 +583,8 @@ pub(crate) fn emit_runtime_data_user(
 
     emit_class_uninitialized_property_marker_tables(&mut out, max_class_id, &class_info_by_id);
 
+    emit_class_owned_reference_property_tables(&mut out, max_class_id, &class_info_by_id);
+
     // _class_serprop_ptrs: dense class_id-indexed table of serialize property-info
     // tables. Entry = _class_serprop_<id> for an existing class, else
     // _class_serprop_missing. __rt_serialize_object / __rt_unserialize_object index
@@ -1294,7 +1296,13 @@ fn emit_class_name_lookup_data(
         for class_id in 0..=max_class_id {
             if let Some(class_name) = class_name_by_id.get(&class_id) {
                 out.push_str(&format!("    .quad _class_name_{}\n", class_id));
-                out.push_str(&format!("    .quad {}\n", class_name.len()));
+                // The PHP byte length, not the Rust one. A class name may hold a non-ASCII byte
+                // (`symfony/cache` declares `class \xA9`), carried here in the private-use marker
+                // form, and `str::len()` would report the marker's three UTF-8 bytes for one.
+                out.push_str(&format!(
+                    "    .quad {}\n",
+                    crate::string_bytes::literal_byte_len(class_name)
+                ));
             } else {
                 out.push_str("    .quad _class_name_missing\n");
                 out.push_str("    .quad 0\n");
@@ -1312,7 +1320,12 @@ fn emit_class_name_lookup_data(
                 ".globl _class_name_{0}\n_class_name_{0}:\n",
                 class_id
             ));
-            out.push_str(&format!("    .ascii \"{}\"\n", escaped_ascii(class_name)));
+            // `escaped_bytes` over the decoded PHP bytes, for the reason the length above gives.
+            let class_name_bytes = crate::string_bytes::literal_bytes(class_name);
+            out.push_str(&format!(
+                "    .ascii \"{}\"\n",
+                super::instanceof::escaped_bytes(&class_name_bytes)
+            ));
         }
     }
     out.push_str("    .p2align 3\n");
@@ -1387,50 +1400,29 @@ fn emit_eval_reflection_method_lookup_data(
         .collect::<HashMap<_, _>>();
     let mut index = 0usize;
     for (class_name, class_info) in sorted_classes {
-        let mut methods = class_info.methods.keys().collect::<Vec<_>>();
-        methods.sort();
-        for method_name in methods {
-            let declaring_class = eval_reflection_instance_method_declaring_class(
-                class_name,
-                class_info,
-                method_name,
-            );
+        for (method_name, is_static) in php_reflection_method_order(class_name, class_info, &class_infos) {
+            let declaring_class = if is_static {
+                eval_reflection_static_method_declaring_class(class_name, class_info, method_name)
+            } else {
+                eval_reflection_instance_method_declaring_class(class_name, class_info, method_name)
+            };
             let declaring_info = class_infos.get(declaring_class).copied().unwrap_or(class_info);
             let flags = eval_reflection_method_flags_with_source_lines(
-                eval_reflection_instance_method_flags(class_info, method_name),
+                if is_static {
+                    eval_reflection_static_method_flags(class_info, method_name)
+                } else {
+                    eval_reflection_instance_method_flags(class_info, method_name)
+                },
                 declaring_info,
                 method_name,
-                false,
+                is_static,
             );
             push_eval_reflection_method_lookup_row(
                 out,
                 &mut entries,
                 &mut index,
                 class_name,
-                declared_method_name(method_name, false, &[declaring_info, class_info]),
-                flags,
-                declaring_class,
-            );
-        }
-
-        let mut static_methods = class_info.static_methods.keys().collect::<Vec<_>>();
-        static_methods.sort();
-        for method_name in static_methods {
-            let declaring_class =
-                eval_reflection_static_method_declaring_class(class_name, class_info, method_name);
-            let declaring_info = class_infos.get(declaring_class).copied().unwrap_or(class_info);
-            let flags = eval_reflection_method_flags_with_source_lines(
-                eval_reflection_static_method_flags(class_info, method_name),
-                declaring_info,
-                method_name,
-                true,
-            );
-            push_eval_reflection_method_lookup_row(
-                out,
-                &mut entries,
-                &mut index,
-                class_name,
-                declared_method_name(method_name, true, &[declaring_info, class_info]),
+                declared_method_name(method_name, is_static, &[declaring_info, class_info]),
                 flags,
                 declaring_class,
             );
@@ -1625,6 +1617,65 @@ fn eval_reflection_method_flags_with_source_lines(
 }
 
 /// Returns the class name that declares one visible instance method.
+/// Lists a class's visible methods in the order php's `ReflectionClass::getMethods()` does.
+///
+/// php walks the method table: the class's own methods in DECLARATION order, instance and static
+/// mixed, then each ancestor's in turn. The signature maps are hashed, and the rows used to be
+/// sorted by name, so `getMethods()` came out alphabetical -- symfony's `debug:router` lists
+/// routes in the order the attribute loader meets the controller's methods, and that order was
+/// wrong. A method whose declaring class is not on the parent chain (a trait's) comes last,
+/// by name, so the table stays stable.
+fn php_reflection_method_order<'a>(
+    class_name: &'a str,
+    class_info: &'a ClassInfo,
+    class_infos: &HashMap<&str, &'a ClassInfo>,
+) -> Vec<(&'a String, bool)> {
+    let mut chain: Vec<(&str, &ClassInfo)> = vec![(class_name, class_info)];
+    while let Some(parent) = chain.last().and_then(|(_, info)| info.parent.as_deref()) {
+        let parent = parent.trim_start_matches('\\');
+        if chain.len() > 256 || chain.iter().any(|(name, _)| name.eq_ignore_ascii_case(parent)) {
+            break;
+        }
+        let Some((&name, &info)) = class_infos.get_key_value(parent) else {
+            break;
+        };
+        chain.push((name, info));
+    }
+    let mut members: Vec<(&'a String, bool, usize, u32, u32)> = Vec::new();
+    for (method_name, is_static) in class_info
+        .methods
+        .keys()
+        .map(|name| (name, false))
+        .chain(class_info.static_methods.keys().map(|name| (name, true)))
+    {
+        let declaring = if is_static {
+            eval_reflection_static_method_declaring_class(class_name, class_info, method_name)
+        } else {
+            eval_reflection_instance_method_declaring_class(class_name, class_info, method_name)
+        };
+        let rank = chain
+            .iter()
+            .position(|(name, _)| name.eq_ignore_ascii_case(declaring))
+            .unwrap_or(chain.len());
+        let (line, col) = chain
+            .get(rank)
+            .and_then(|(_, info)| {
+                info.method_decls
+                    .iter()
+                    .find(|method| method.name.eq_ignore_ascii_case(method_name))
+            })
+            .map_or((u32::MAX, u32::MAX), |method| (method.span.line, method.span.col));
+        members.push((method_name, is_static, rank, line, col));
+    }
+    members.sort_by(|left, right| {
+        (left.2, left.3, left.4, left.0).cmp(&(right.2, right.3, right.4, right.0))
+    });
+    members
+        .into_iter()
+        .map(|(name, is_static, ..)| (name, is_static))
+        .collect()
+}
+
 fn eval_reflection_instance_method_declaring_class<'a>(
     reflected_class: &'a str,
     class_info: &'a ClassInfo,
@@ -2439,7 +2490,7 @@ fn emit_classes_by_name_table(
     out.push_str(&format!("    .quad {}\n", sorted_classes.len()));
     out.push_str(".globl _classes_by_name\n_classes_by_name:\n");
     for (class_name, class_info) in sorted_classes {
-        let obj_size = class_object_payload_size(class_name, class_info);
+        let obj_size = class_by_name_allocation_size(class_name, class_info);
         out.push_str(&format!(
             "    .quad _class_by_name_str_{}\n",
             class_info.class_id
@@ -2451,6 +2502,25 @@ fn emit_classes_by_name_table(
 }
 
 /// Returns the PHP object payload bytes required by one class layout.
+/// Bytes `__rt_new_by_name` allocates (and zeroes) for one class.
+///
+/// `Fiber` and `Generator` are fiber-shaped: `__rt_object_free_deep` releases their coroutine
+/// stack, transfer value, start arguments and yielded key/value at fixed offsets up to
+/// `FIBER_OBJECT_SIZE`, however the object was made -- and skips the property walk, so the
+/// declared-property size (`_class_object_payload_sizes`) stays what it is. Allocated by name at
+/// that declared size -- every interpreter-created generator is -- the object was a few bytes
+/// long, and freeing it read and zeroed the blocks after it: some unrelated live value lost its
+/// storage, and which one depended on heap layout alone. Zeroed at full size, each of those
+/// releases is the no-op it is on a coroutine that never started.
+fn class_by_name_allocation_size(class_name: &str, class_info: &ClassInfo) -> usize {
+    let declared = class_object_payload_size(class_name, class_info);
+    if class_name.eq_ignore_ascii_case("Fiber") || class_name.eq_ignore_ascii_case("Generator") {
+        declared.max(crate::codegen_support::runtime::FIBER_OBJECT_SIZE as usize)
+    } else {
+        declared
+    }
+}
+
 fn class_object_payload_size(class_name: &str, class_info: &ClassInfo) -> usize {
     let dyn_props_slot = if class_uses_dynamic_property_tail(class_name, class_info) {
         8
@@ -2511,6 +2581,89 @@ fn emit_class_uninitialized_property_marker_tables(
             }
         }
     }
+}
+
+/// Emits dense per-class metadata for OBJECT-OWNED REFERENCE property slots.
+///
+/// Such a slot does not hold a value: it holds a pointer to a 16-byte ref-cell the object owns,
+/// because somewhere in the program a reference was taken to the property (`$r = &$this->prop`,
+/// or a by-reference return). Every read and every write of that property therefore dereferences
+/// the slot — including the `$this->prop = <default>` statements in `_class_propinit_<id>`.
+///
+/// The direct EIR allocator (`emit_object_allocation`) allocates one cell per such slot right
+/// after zeroing the layout. `__rt_new_by_name` allocates from a class id chosen at RUN time and
+/// so cannot see that list at its call sites; without this table it left the slot at the zero the
+/// layout wipe put there, and the very first property-default store dereferenced null — a SIGSEGV
+/// inside the property-init thunk, with no PHP-level diagnostic. These offsets let the by-name
+/// allocator reproduce the direct allocator's observable state exactly, the same way
+/// `_class_uninit_prop_offsets_*` does for typed-uninitialized slots.
+///
+/// The predicate MUST stay in step with
+/// `crate::codegen::lower_inst::objects::interface_layout::owned_reference_property_offsets`,
+/// which is what the direct allocator uses; the two are the same rule written twice because they
+/// read different halves of the compiler.
+fn emit_class_owned_reference_property_tables(
+    out: &mut String,
+    max_class_id: Option<u64>,
+    class_info_by_id: &HashMap<u64, &ClassInfo>,
+) {
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let Some(class_info) = class_info_by_id.get(&class_id) else {
+                continue;
+            };
+            let offsets = class_owned_reference_property_offsets(class_info);
+            if offsets.is_empty() {
+                continue;
+            }
+            out.push_str(&format!(
+                ".globl _class_ref_prop_offsets_{0}\n_class_ref_prop_offsets_{0}:\n",
+                class_id
+            ));
+            for offset in offsets {
+                out.push_str(&format!("    .quad {}\n", offset));
+            }
+        }
+    }
+
+    out.push_str(".globl _class_ref_prop_counts\n_class_ref_prop_counts:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let count = class_info_by_id
+                .get(&class_id)
+                .map(|class_info| class_owned_reference_property_offsets(class_info).len())
+                .unwrap_or(0);
+            out.push_str(&format!("    .quad {}\n", count));
+        }
+    }
+
+    out.push_str(".globl _class_ref_prop_offset_ptrs\n_class_ref_prop_offset_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let has_offsets = class_info_by_id.get(&class_id).is_some_and(|class_info| {
+                !class_owned_reference_property_offsets(class_info).is_empty()
+            });
+            if has_offsets {
+                out.push_str(&format!("    .quad _class_ref_prop_offsets_{}\n", class_id));
+            } else {
+                out.push_str("    .quad 0\n");
+            }
+        }
+    }
+}
+
+/// Returns the slot offsets of object-owned reference properties for one class layout.
+fn class_owned_reference_property_offsets(class_info: &ClassInfo) -> Vec<usize> {
+    class_info
+        .properties
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (property, _))| {
+            let is_owned_reference = class_info.owned_reference_properties.contains(property)
+                && class_info.property_slot_is_reference(index, property);
+            is_owned_reference.then_some(8 + index * 16)
+        })
+        .collect()
 }
 
 /// Returns high-word offsets for property slots that require the typed-uninitialized marker.

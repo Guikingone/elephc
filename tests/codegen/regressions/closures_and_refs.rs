@@ -667,3 +667,90 @@ echo count($vals), "\n";
     );
     assert_eq!(out, "1,2,3\nX,Y\n2\n");
 }
+
+
+/// A by-reference `foreach` value passed to a CLOSURE -- by value or by reference, over int,
+/// mixed and associative arrays, with and without the key bound. The marker for that argument
+/// was retained with `__rt_incref` and released with `__rt_decref_any` on an address INSIDE the
+/// array, corrupting a neighbour (for element 0, the capacity word): segfaults, "requested array
+/// size exceeds the maximum", and empty values. Identical on the compiler this was found with.
+#[test]
+fn test_foreach_reference_passed_to_closures() {
+    let out = compile_and_run(
+        r#"<?php
+$p = static function ($v) { echo 'p(', $v, ')'; };
+$two = static function ($v, $k) { echo 't(', $v, ',', $k, ')'; };
+$double = static function (&$x) { $x = $x * 2; };
+$shout = static function (&$x) { $x = $x . '!'; };
+$a = [1, 2];
+foreach ($a as $k => &$v) { $p($v); $two($v, $k); }
+unset($v);
+echo '|';
+$b = [1, 2, 3];
+foreach ($b as &$v) { $double($v); }
+unset($v);
+echo implode(',', $b), '|';
+$c = [1, 'two'];
+foreach ($c as &$v) { $shout($v); }
+unset($v);
+echo implode(',', $c), '|';
+$h = ['k' => 1, 'j' => 'two'];
+foreach ($h as &$v) { $p($v); }
+unset($v);
+"#,
+    );
+    assert_eq!(out, "p(1)t(1,0)p(2)t(2,1)|2,4,6|1!,two!|p(1)p(two)");
+}
+
+/// A by-reference `foreach` over a by-reference PARAMETER that holds a SHARED array. The loop
+/// separates the array before writing, and the separated copy was never put back into the
+/// parameter's cell -- so the writes were lost and the caller read `array(0)`.
+#[test]
+fn test_foreach_reference_over_a_shared_by_reference_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function bump(array &$arr): void { foreach ($arr as &$x) { $x = 7; } unset($x); }
+function run(array $extra): array { $copy = $extra; bump($copy); return $copy; }
+echo json_encode(run([1, 2])), '|';
+function run2(array $extra): array { bump($extra); return $extra; }
+echo json_encode(run2([1, 2]));
+"#,
+    );
+    assert_eq!(out, "[7,7]|[7,7]");
+}
+
+/// A closure capturing ITSELF by reference inside a function body, read back as a VALUE. The
+/// assignment stored the raw descriptor into the boxed cell the capture reads: a direct call
+/// worked, but `call_user_func($c, …)` fatalled and `gettype($c)` answered `string`.
+#[test]
+fn test_self_capturing_closure_in_a_function_is_a_value() {
+    let out = compile_and_run(
+        r#"<?php
+function run(): string {
+    $c = static function ($n) use (&$c) { return $n ? 'x' . call_user_func($c, $n - 1) : 'done'; };
+    return $c(2) . ':' . gettype($c);
+}
+echo run();
+"#,
+    );
+    assert_eq!(out, "xxdone:object");
+}
+
+/// An untyped by-reference parameter re-assigned inside a type guard that narrowed it. Its cell
+/// is `mixed` by declaration, but the merge ran against the narrowed type and refused with
+/// `cannot reassign $v from (object) to array<string, mixed>`.
+#[test]
+fn test_untyped_by_reference_parameter_reassigned_after_narrowing() {
+    let out = compile_and_run(
+        r#"<?php
+class H { public $a = 1; }
+$touch = static function (&$v) {
+    if (is_object($v)) { $v = get_object_vars($v); }
+};
+$x = new H();
+$touch($x);
+echo json_encode($x);
+"#,
+    );
+    assert_eq!(out, r#"{"a":1}"#);
+}

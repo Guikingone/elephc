@@ -201,9 +201,6 @@ fn program_names(usage: &Usage, class_name: &str) -> bool {
 /// and `Generator` is absent from `dynamic_new::supported_dynamic_new_builtin_class_names`, so
 /// `new $c` cannot conjure one either.
 ///
-/// A declared `Generator` RETURN TYPE also makes a function a generator in elephc
-/// (`ir_lower::function::is_generator_return_type`); that spells the class, so it is covered.
-///
 /// `usage.includes_runtime_php` covers the route the doc comment above used to miss: an
 /// `include`/`require` whose path is not a literal hands the included file to the interpreter at
 /// run time, and that file can contain a `yield` no static walk of THIS program ever sees.

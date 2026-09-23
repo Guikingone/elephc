@@ -294,6 +294,10 @@ unsafe extern "C" {
         name_ptr: *const u8,
         name_len: u64,
     ) -> *mut u64;
+    /// Raises the load state of every class-like one compiler-included source declares: its
+    /// interfaces' activation cells and its probe-only classes' load flags. The path must be the
+    /// canonical spelling the generated source table stores.
+    pub(super) fn __elephc_eval_source_activate(path_ptr: *const u8, path_len: u64) -> u64;
     pub(super) fn __elephc_eval_value_array_len(array: *mut RuntimeCell) -> u64;
     pub(super) fn __elephc_eval_value_is_array_like(value: *mut RuntimeCell) -> u64;
     pub(super) fn __elephc_eval_value_is_null(value: *mut RuntimeCell) -> u64;
@@ -462,6 +466,12 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_value_release(value: *mut RuntimeCell);
     pub(super) fn __elephc_eval_value_copy(value: *mut RuntimeCell) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_retain(value: *mut RuntimeCell) -> *mut RuntimeCell;
+    /// Reads the generated runtime's live-heap byte counter (`$real_usage` selects the arena
+    /// bump offset instead). The counters live in generated-runtime storage, so eval has to ask
+    /// the compiled side rather than describe a heap of its own.
+    pub(super) fn __elephc_eval_memory_get_usage(real_usage: i64) -> i64;
+    /// Reads the generated runtime's peak live-heap byte counter, with the same flag.
+    pub(super) fn __elephc_eval_memory_get_peak_usage(real_usage: i64) -> i64;
     /// Retains the original boxed handler value installed by compiled AOT code.
     pub(super) fn __elephc_eval_pcntl_aot_signal_handler(signal: i64) -> *mut RuntimeCell;
     /// Installs the optional eval dynamic object destructor callback.

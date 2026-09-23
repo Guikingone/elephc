@@ -165,6 +165,24 @@ pub(in crate::interpreter) fn eval_expr(
 /// the enum the first time somebody added a variant. Only ever reached on the failure path, which
 /// is terminal, so rendering the node once costs nothing that matters.
 fn eval_expr_kind(expr: &EvalExpr) -> String {
+    // A CALL names the function it could not make. Without this every missing builtin produces
+    // the same sentence -- "unsupported NamespacedCall expression" -- and the name is the whole
+    // diagnostic: it is the difference between "somewhere in this file" and "preg_match".
+    match expr {
+        EvalExpr::NamespacedCall {
+            name,
+            fallback_name,
+            ..
+        } => {
+            return if name.ends_with(fallback_name.as_str()) {
+                format!("NamespacedCall {fallback_name}()")
+            } else {
+                format!("NamespacedCall {name}() (falling back to {fallback_name}())")
+            };
+        }
+        EvalExpr::MethodCall { method, .. } => return format!("MethodCall ->{method}()"),
+        _ => {}
+    }
     let rendered = format!("{expr:?}");
     rendered
         .split(|ch: char| ch == '(' || ch == '{' || ch == ' ')

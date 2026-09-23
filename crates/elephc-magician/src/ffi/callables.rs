@@ -114,6 +114,66 @@ pub unsafe extern "C" fn __elephc_eval_register_spl_autoload(
     .unwrap_or(0)
 }
 
+/// Removes an AOT callback from the persistent SPL autoload table that retains it.
+///
+/// Returns 1 when a callback was removed and 0 otherwise, which is PHP's
+/// `spl_autoload_unregister` boolean. The generated lowering used to answer a hardcoded `true`
+/// without removing anything, so a loader stayed installed for the life of the process. MEASURED
+/// on php 8.5.10: a loader registered, used, then unregistered is called ONCE; elephc called it
+/// for every later class lookup too. Symfony's `ClassExistenceResource` installs a THROWING loader
+/// and removes it in a `finally`, so the leftover turned every subsequent `class_exists()` into a
+/// throw -- which is where `bin/console` died.
+///
+/// `ctx` mirrors `__elephc_eval_register_spl_autoload` and only supplies value operations: a
+/// registration from generated code may have created its own request-scoped context, so the
+/// callback is searched for across every context that holds autoload callbacks.
+///
+/// # Safety
+/// `ctx` must be null or a valid bridge context, and `callback` must be a live boxed runtime cell.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_unregister_spl_autoload(
+    ctx: *mut ElephcEvalContext,
+    callback: *mut RuntimeCell,
+) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_unregister_spl_autoload");
+    std::panic::catch_unwind(|| unsafe {
+        if callback.is_null() {
+            return 0;
+        }
+        let (context, created_context) = if let Some(context) = ctx.as_mut() {
+            (context, false)
+        } else {
+            let context = crate::ffi::context::__elephc_eval_context_new();
+            let Some(context) = context.as_mut() else {
+                return 0;
+            };
+            (context, true)
+        };
+        if context.abi_version() != ABI_VERSION {
+            return 0;
+        }
+        let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+        let removed = crate::interpreter::remove_runtime_spl_autoload_callback(
+            RuntimeCellHandle::from_raw(callback),
+            &mut values,
+        );
+        if crate::eval_trace::enabled() {
+            eprintln!(
+                "[elephc-eval-trace] phase=aot_autoload_unregister callback={callback:p} removed={removed:?}"
+            );
+        }
+        if created_context {
+            let context_ptr = context as *mut ElephcEvalContext;
+            if context.request_retained_context_free() {
+                crate::ffi::context::finalize_eval_context_free(context_ptr);
+            }
+        }
+        removed.map(i32::from).unwrap_or(0)
+    })
+    .unwrap_or(0)
+}
+
 /// Dispatches a callback value with a PHP argument array through the eval context.
 ///
 /// # Safety
@@ -278,6 +338,18 @@ unsafe fn eval_callable_call_array_inner(
             context.push_called_class_scope(called_class_scope.clone());
         }
     }
+    // A compiled frame with no eval context publishes its lexical class instead of forwarding
+    // scopes (`__elephc_eval_push_native_caller_class`), as `__elephc_eval_method_call` already
+    // honours. Without it `call_user_func_array([$this, 'privateMethod'], ...)` from inside the
+    // class was refused "cannot access private method".
+    let native_caller_class = forwarded_scopes
+        .is_none()
+        .then(crate::context::current_native_caller_class)
+        .flatten()
+        .filter(|class_name| !class_name.is_empty());
+    if let Some(class_name) = &native_caller_class {
+        context.push_class_scope(class_name.clone());
+    }
     // Every caller of this ABI is generated native code. Refresh the captured
     // scope before interpreting the callback, then publish its changes before
     // returning either a value or an error to the native caller.
@@ -303,6 +375,9 @@ unsafe fn eval_callable_call_array_inner(
         if class_scope.is_some() {
             context.pop_class_scope();
         }
+    }
+    if native_caller_class.is_some() {
+        context.pop_class_scope();
     }
     if let Some((hooks, scope)) = global_sync {
         (hooks.eval_to_native)(scope);

@@ -104,6 +104,19 @@ impl DeclarationIndex {
                         .or_default();
                 }
             }
+            // Trait-imported and flattened methods carry their attributes here, not in the class
+            // statement `index_class` saw.
+            for (method, names) in &info.method_attribute_names {
+                if names.is_empty() {
+                    continue;
+                }
+                let is_static = info.static_methods.contains_key(method)
+                    && !info.methods.contains_key(method);
+                self.attributed_methods
+                    .entry(class_key.clone())
+                    .or_default()
+                    .insert((php_symbol_key(method), is_static));
+            }
             if let Some(node) = self.classes.get_mut(&class_key) {
                 let attribute_classes: Vec<_> = info
                     .attribute_names
@@ -345,6 +358,12 @@ impl DeclarationIndex {
         call_signatures: &CallSignatureIndex,
     ) {
         let class_key = php_symbol_key(name);
+        for method in methods.iter().filter(|method| !method.attributes.is_empty()) {
+            self.attributed_methods
+                .entry(class_key.clone())
+                .or_default()
+                .insert((php_symbol_key(&method.name), method.is_static));
+        }
         let methods = methods
             .iter()
             .map(|method| {

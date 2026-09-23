@@ -203,6 +203,16 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_retain");
     emitter.instruction("b __rt_incref");                                       // retain one eval-owned boxed Mixed cell
 
+    // The two memory reporters read the `$real_usage` flag from the internal integer result
+    // register, which is x0 here, so each entry point is one unconditional branch. Eval must ask
+    // the compiled side because `_gc_live` / `_gc_peak` / `_heap_off` live in generated-runtime
+    // storage — the same reason `headers_sent` does.
+    label_c_global(emitter, "__elephc_eval_memory_get_usage");
+    emitter.instruction("b __rt_memory_get_usage");                             // report live heap bytes, or arena bytes taken when the flag is set
+
+    label_c_global(emitter, "__elephc_eval_memory_get_peak_usage");
+    emitter.instruction("b __rt_memory_get_peak_usage");                        // report the live-byte high watermark, or arena bytes taken
+
     label_c_global(emitter, "__elephc_eval_pcntl_aot_signal_handler");
     abi::emit_symbol_address(emitter, "x9", "__rt_pcntl_handler_value");
     emitter.instruction("ldr x0, [x9, x0, lsl #3]");                            // load the AOT table's original boxed PHP handler

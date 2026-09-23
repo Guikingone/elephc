@@ -4512,14 +4512,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
                 default: None,
                 by_ref: false,
             },
-            ParamSpec {
-                name: "replacements",
-                ty: TypeSpec::Mixed,
-                default: None,
-                by_ref: false,
-            },
         ],
-        variadic: None,
+        variadic: Some(VariadicSpec::value("replacements")),
         min_args: None,
         max_args: None,
         arity_error: None,
@@ -4548,14 +4542,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
                 default: None,
                 by_ref: false,
             },
-            ParamSpec {
-                name: "replacements",
-                ty: TypeSpec::Mixed,
-                default: None,
-                by_ref: false,
-            },
         ],
-        variadic: None,
+        variadic: Some(VariadicSpec::value("replacements")),
         min_args: None,
         max_args: None,
         arity_error: None,
@@ -4998,12 +4986,18 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
                 default: None,
                 by_ref: false,
             },
+            ParamSpec {
+                name: "arg",
+                ty: TypeSpec::Mixed,
+                default: Some(DefaultSpec::Null),
+                by_ref: false,
+            },
         ],
         variadic: None,
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Void,
+        returns: TypeSpec::Bool,
         by_ref_return: false,
         summary: "Applies a user function to every member of an array.",
         examples: &[
@@ -5034,12 +5028,18 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
                 default: None,
                 by_ref: false,
             },
+            ParamSpec {
+                name: "arg",
+                ty: TypeSpec::Mixed,
+                default: Some(DefaultSpec::Null),
+                by_ref: false,
+            },
         ],
         variadic: None,
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Void,
+        returns: TypeSpec::Bool,
         by_ref_return: false,
         summary: "Applies a user function recursively to every member of an array.",
         examples: &[
@@ -12646,6 +12646,30 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         requirements: &[],
     },
     BuiltinContract {
+        id: BuiltinId::from_canonical_name("gc_mem_caches"),
+        name: "gc_mem_caches",
+        area: Area::System,
+        module: PhpModule::Core,
+        since: None,
+        kind: BuiltinKind::Function,
+        params: &[
+        ],
+        variadic: None,
+        min_args: None,
+        max_args: None,
+        arity_error: None,
+        returns: TypeSpec::Int,
+        by_ref_return: false,
+        summary: "Reclaims memory used by the Zend Engine memory manager and returns the number of bytes freed.",
+        examples: &[
+        ],
+        php_manual: Some("function.gc-mem-caches"),
+        deprecation: None,
+        extension: false,
+        internal: false,
+        requirements: &[],
+    },
+    BuiltinContract {
         id: BuiltinId::from_canonical_name("gd_info"),
         name: "gd_info",
         area: Area::Image,
@@ -14098,6 +14122,25 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
                 name: "string",
                 ty: TypeSpec::Str,
                 default: None,
+                by_ref: false,
+            },
+            // php: `html_entity_decode(string $string, int $flags = ENT_QUOTES|ENT_SUBSTITUTE|
+            // ENT_HTML401, ?string $encoding = null): string`. Measured on 8.5.10:
+            // `ENT_QUOTES|ENT_SUBSTITUTE|ENT_HTML401 == 11`, and an omitted `$encoding` resolves
+            // to the `default_charset` ini (`UTF-8` here) — `html_entity_decode('&eacute;')` and
+            // `html_entity_decode('&eacute;', ENT_QUOTES, 'UTF-8')` both answer `c3a9`.
+            // The declared shape mirrors `htmlspecialchars` above, which already spells the same
+            // default flag set as `11` and the same encoding default as a plain `"UTF-8"`.
+            ParamSpec {
+                name: "flags",
+                ty: TypeSpec::Int,
+                default: Some(DefaultSpec::Int(11)),
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "encoding",
+                ty: TypeSpec::Str,
+                default: Some(DefaultSpec::Str("UTF-8")),
                 by_ref: false,
             },
         ],
@@ -21131,6 +21174,66 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.md5.php"),
+        deprecation: None,
+        extension: false,
+        internal: false,
+        requirements: &[],
+    },
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("memory_get_peak_usage"),
+        name: "memory_get_peak_usage",
+        area: Area::System,
+        module: PhpModule::Standard,
+        since: None,
+        kind: BuiltinKind::Function,
+        params: &[
+            ParamSpec {
+                name: "real_usage",
+                ty: TypeSpec::Bool,
+                default: Some(DefaultSpec::Bool(false)),
+                by_ref: false,
+            },
+        ],
+        variadic: None,
+        min_args: None,
+        max_args: None,
+        arity_error: Some("memory_get_peak_usage() takes 0 or 1 arguments"),
+        returns: TypeSpec::Int,
+        by_ref_return: false,
+        summary: "Returns the high-water mark of the elephc heap in bytes.",
+        examples: &[
+        ],
+        php_manual: Some("https://www.php.net/manual/en/function.memory-get-peak-usage.php"),
+        deprecation: None,
+        extension: false,
+        internal: false,
+        requirements: &[],
+    },
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("memory_get_usage"),
+        name: "memory_get_usage",
+        area: Area::System,
+        module: PhpModule::Standard,
+        since: None,
+        kind: BuiltinKind::Function,
+        params: &[
+            ParamSpec {
+                name: "real_usage",
+                ty: TypeSpec::Bool,
+                default: Some(DefaultSpec::Bool(false)),
+                by_ref: false,
+            },
+        ],
+        variadic: None,
+        min_args: None,
+        max_args: None,
+        arity_error: Some("memory_get_usage() takes 0 or 1 arguments"),
+        returns: TypeSpec::Int,
+        by_ref_return: false,
+        summary: "Returns the bytes currently held by live elephc heap blocks.",
+        examples: &[
+        ],
+        php_manual: Some("https://www.php.net/manual/en/function.memory-get-usage.php"),
         deprecation: None,
         extension: false,
         internal: false,
@@ -30544,6 +30647,46 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
                 name: "address",
                 ty: TypeSpec::Str,
                 default: None,
+                by_ref: false,
+            },
+            // `$error_code` and `$error_message` are php's out-parameters, and php writes BOTH
+            // on every outcome -- `0` and `''` when the connection succeeds, the OS error and
+            // its text when it does not -- so a caller may read them unconditionally. They are
+            // `Mixed` rather than `Int`/`Str` for the same reason `fsockopen`'s are: an omitted
+            // by-reference parameter needs a boxed cell the callee can fill with anything.
+            ParamSpec {
+                name: "error_code",
+                ty: TypeSpec::Mixed,
+                default: Some(DefaultSpec::Null),
+                by_ref: true,
+            },
+            ParamSpec {
+                name: "error_message",
+                ty: TypeSpec::Mixed,
+                default: Some(DefaultSpec::Null),
+                by_ref: true,
+            },
+            ParamSpec {
+                name: "timeout",
+                ty: TypeSpec::Mixed,
+                default: Some(DefaultSpec::Null),
+                by_ref: false,
+            },
+            // `STREAM_CLIENT_CONNECT`, spelled as its value. A `DefaultSpec::Constant` here
+            // PANICS the interpreter the first time eval materializes the default -- only
+            // prelude-provided contracts may name a constant (`eval_default_value` in
+            // `crates/elephc-magician/src/interpreter/builtins/spec.rs`) -- and nothing refuses
+            // it at build time, so the failure surfaces as a fatal in a running program.
+            ParamSpec {
+                name: "flags",
+                ty: TypeSpec::Int,
+                default: Some(DefaultSpec::Int(4)),
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "context",
+                ty: TypeSpec::Mixed,
+                default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
         ],

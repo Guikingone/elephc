@@ -1570,7 +1570,15 @@ impl<'a> FunctionContext<'a> {
             .class_names
             .get(data_id.as_raw() as usize)
             .ok_or_else(|| CodegenIrError::missing_entry("class data", data_id.as_raw()))?;
-        Ok(self.data.add_string(value.as_bytes()))
+        // Through `literal_bytes`, exactly like `intern_string_data` above: a class name is a PHP
+        // BYTE string too. `symfony/cache` declares `class \xA9`, one non-ASCII byte, and
+        // `get_class()` on it must hand back that one byte -- `as_bytes()` emitted the Rust UTF-8
+        // of the byte marker instead, three bytes for one.
+        // Through `literal_bytes`, exactly like `intern_string_data` above: a class name is a PHP
+        // BYTE string too. `symfony/cache` declares `class \xA9`, one non-ASCII byte, and
+        // `get_class()` on it must hand back that one byte.
+        let bytes = crate::string_bytes::literal_bytes(value);
+        Ok(self.data.add_string(&bytes))
     }
 
     /// Returns a module data-pool function name.

@@ -184,8 +184,76 @@ pub(super) fn invoker_ref_arg_storage_compatible(
     value_ir_type(&param_ty.codegen_repr()) == value_ir_type(&ctx.local_type(var_name).codegen_repr())
 }
 
-/// Emits an invoker reference-cell marker for a local variable argument.
+/// Emits an invoker reference-cell marker for a local variable argument of a DESCRIPTOR call.
+///
+/// A local that may hold an address INSIDE a container -- a by-reference `foreach` value -- is
+/// bridged through a boxed stack temporary: `$tmp = $v; call(&$tmp); $v = $tmp;`, the rewrite
+/// `ref_place_args` already uses for places a call cannot take directly. The copy-out runs right
+/// after the call that consumes the marker (`write_back_ref_bridges_after`).
+///
+/// Handing the interior address over directly was wrong twice. The marker's boxing retained it
+/// with `__rt_incref` and its release ran `__rt_decref_any` on it, both writing `[address - 12]`
+/// -- a neighbouring element, or the array's capacity for element 0. And an `array<int>` slot is a
+/// raw word, while an untyped `&$x` callee reads and writes the cell as a boxed Mixed. MEASURED
+/// against php 8.5.10, identical on the pristine HEAD compiler:
+///
+///     $d = [1, 2, 3]; foreach ($d as &$v) { $double($v); }      php 2,4,6   elephc: segfault
+///     $c = [1, 'two', 3]; walk(&$c, static fn ($x) => …);       php 1,two,3 elephc: "requested
+///                                                                array size exceeds the maximum"
+///
+/// A stack temporary is ignored by both refcount helpers' heap-range check, and the copy-out goes
+/// through the ordinary local store, which converts back to the element's representation.
 pub(super) fn lower_invoker_ref_arg_marker(
+    ctx: &mut LoweringContext<'_, '_>,
+    var_name: &str,
+    span: Span,
+) -> LoweredValue {
+    if !ctx.is_interior_ref_local(var_name) {
+        return lower_unbridged_invoker_ref_arg_marker(ctx, var_name, span);
+    }
+    let current = lower_expr(ctx, &Expr::new(ExprKind::Variable(var_name.to_string()), span));
+    let boxed = super::coerce_descriptor_invoker_mixed_value(ctx, current, span);
+    let temp = ctx.declare_synthetic_php_local(PhpType::Mixed);
+    ctx.store_local(&temp, boxed, PhpType::Mixed, Some(span));
+    let marker = lower_unbridged_invoker_ref_arg_marker(ctx, &temp, span);
+    ctx.push_pending_ref_bridge(marker.value, var_name, temp);
+    marker
+}
+
+/// Stores every bridged temporary of the call whose callee value is `callee` back into its local.
+pub(super) fn write_back_ref_bridges_after(
+    ctx: &mut LoweringContext<'_, '_>,
+    callee: crate::ir::ValueId,
+    span: Span,
+) {
+    for (var, temp) in ctx.take_ref_bridges_after(callee) {
+        // Written as the PHP assignment `$v = $tmp;` and lowered by the ordinary assignment path,
+        // not reassembled from `store_local`. The reference slot's flow type (widened to Mixed
+        // once the local was passed to a callee the checker cannot see), its frame storage type
+        // and the representation of the element it aliases can all differ, and the assignment
+        // lowering is the one place that already reconciles them -- `$v = $v * 2` through the
+        // same `foreach` reference is correct. Reassembling it by hand released a raw `int` as a
+        // box, or published a box into an `int` slot.
+        let assignment = Expr::new(
+            ExprKind::Assignment {
+                target: Box::new(Expr::new(ExprKind::Variable(var), span)),
+                value: Box::new(Expr::new(ExprKind::Variable(temp), span)),
+                result_target: None,
+                prelude: Vec::new(),
+                conditional_value_temp: None,
+            },
+            span,
+        );
+        let written = lower_expr(ctx, &assignment);
+        crate::ir_lower::ownership::release_if_owned(ctx, written, Some(span));
+    }
+}
+
+/// Emits the marker itself over `var_name`'s own storage, with no bridge.
+///
+/// Also the entry point for by-reference VARIADIC arguments of direct calls, which never reach
+/// the descriptor invoke that runs the copy-out.
+pub(super) fn lower_unbridged_invoker_ref_arg_marker(
     ctx: &mut LoweringContext<'_, '_>,
     var_name: &str,
     span: Span,

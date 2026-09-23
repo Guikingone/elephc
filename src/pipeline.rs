@@ -85,6 +85,10 @@ pub(crate) fn compile(config: CliConfig) {
     // `codegen_support::prescan::collect_constants` and in the `phpversion()` const-fold.
     codegen::set_compile_profile(php_version, web);
     crate::superglobals::set_compiling_for_web(web);
+    // The SAPI also reaches the LEXER: php's CLI removes a leading `#!` line from every file it
+    // compiles and a web SAPI echoes it (`crate::sapi`). This runs on the dedicated compile
+    // thread that owns the whole front end, which is the thread that will scan those files.
+    crate::sapi::set_web(web);
     // php's `$_SERVER` path keys name the SCRIPT, and a compiled program's script is the entry
     // it was built from. Absolute, because code that re-reads it (`autoload_runtime.php` does
     // `require $_SERVER['SCRIPT_FILENAME']`) may run from any working directory.
@@ -441,6 +445,7 @@ pub(crate) fn compile(config: CliConfig) {
         &mut prelude_inventory,
     );
     timings.record_since("web-prelude", phase_started);
+    decl_trace("after web-prelude", &ast);
 
     // Inject the PHP version-surface functions (`zend_version`, `php_sapi_name`,
     // `ini_restore`) the program actually references. Runs AFTER the web prelude so a
@@ -470,6 +475,7 @@ pub(crate) fn compile(config: CliConfig) {
     let ast =
         autoload::activate_entry_interface_declarations(ast, &entry_source_unit.canonical_path);
     timings.record_since("name-resolve", phase_started);
+    decl_trace("after name-resolve", &ast);
 
     // php preloads at STARTUP, before any request, and what survives is the symbol table it built.
     // A compiled binary has no startup, so the AOT equivalent is to take the preloaded files'
@@ -481,11 +487,15 @@ pub(crate) fn compile(config: CliConfig) {
     // its own pass, already spells it `Composer\\Autoload\\ClassLoader`.
     crate::progress::phase("opcache-preload");
     let phase_started = Instant::now();
-    let ast = match preloaded_declarations(&ini_overrides, parent, &defines) {
+    let mut preload_compiled_whole: Vec<std::path::PathBuf> = Vec::new();
+    let ast = match preloaded_declarations(&ini_overrides, parent, &defines, &autoload_registry) {
         Ok(Some(preloaded)) => {
+            preload_compiled_whole = preloaded.compiled_whole;
             let declared = crate::opcache_preload_sources::declared_names(&ast);
-            let mut combined =
-                crate::opcache_preload_sources::without_redeclarations(preloaded, &declared);
+            let mut combined = crate::opcache_preload_sources::without_redeclarations(
+                preloaded.declarations,
+                &declared,
+            );
             combined.extend(ast);
             combined
         }
@@ -497,6 +507,7 @@ pub(crate) fn compile(config: CliConfig) {
         }
     };
     timings.record_since("opcache-preload", phase_started);
+    decl_trace("after opcache-preload", &ast);
 
     crate::progress::phase("autoload-run");
     let phase_started = Instant::now();
@@ -519,6 +530,7 @@ pub(crate) fn compile(config: CliConfig) {
             }
         };
     timings.record_since("autoload-run", phase_started);
+    decl_trace("after autoload-run", &ast);
 
     // Inject compatibility functions only after autoload expansion has exposed the complete
     // closed-world program. Their EIR routing is type-directed, so the declarations must be
@@ -599,6 +611,7 @@ pub(crate) fn compile(config: CliConfig) {
         forced_groups.insert(crate::backend_gap_prelude::BACKEND_GAP_GROUP.to_string());
     }
     timings.record_since("compat-preludes", phase_started);
+    decl_trace("after compat-preludes", &ast);
 
     // Desugar PHP's argument-introspection constructs (`func_num_args`, `func_get_args`,
     // `func_get_arg`) into plain PHP: every function scope that uses one gains the hidden
@@ -618,6 +631,7 @@ pub(crate) fn compile(config: CliConfig) {
         }
     };
     timings.record_since("func-args", phase_started);
+    decl_trace("after func-args", &ast);
 
     // Complete the OPcache script manifest now that all three groups exist, and re-render the
     // manifest-dependent functions injected above against it. This is a pure substitution of
@@ -658,11 +672,25 @@ pub(crate) fn compile(config: CliConfig) {
         strict_opcache,
     );
     timings.record_since("opcache-manifest-bake", phase_started);
+    decl_trace("after manifest-bake", &ast);
 
     crate::progress::phase("opt-fold");
     let phase_started = Instant::now();
     let ast = optimize::fold_constants_for_target(ast, target);
     timings.record_since("opt-fold", phase_started);
+    decl_trace("after opt-fold", &ast);
+
+    // php binds an unconditional top-level `function f() {}` when the file is COMPILED and one
+    // nested in a conditional statement only when that statement EXECUTES. Every polyfill in PHP
+    // relies on the second rule. Routing those declarations into the existing function-variant
+    // mechanism is what keeps `function_exists()` and the call site telling a program the same
+    // thing. Placed after folding, so a guard the target already decided is never given a group,
+    // and before the checker, which is the first stage that reads the declaration set.
+    crate::progress::phase("conditional-functions");
+    let phase_started = Instant::now();
+    let ast = crate::conditional_functions::bind_conditional_declarations(ast, target);
+    timings.record_since("conditional-functions", phase_started);
+    decl_trace("after conditional-functions", &ast);
 
     crate::progress::phase("typecheck");
     let phase_started = Instant::now();
@@ -693,6 +721,16 @@ pub(crate) fn compile(config: CliConfig) {
         }
     };
     timings.record_since("typecheck", phase_started);
+    decl_trace("after typecheck", &ast);
+    if let Ok(target) = std::env::var("ELEPHC_DECL_TRACE") {
+        let key = crate::names::php_symbol_key(target.trim_start_matches('\\'));
+        let names: Vec<&String> = check_result
+            .functions
+            .keys()
+            .filter(|name| crate::names::php_symbol_key(name.trim_start_matches('\\')) == key)
+            .collect();
+        decl_trace_note("after typecheck", &format!("checker_functions={names:?}"));
+    }
     for warning in &check_result.warnings {
         errors::report_warning(warning);
     }
@@ -716,6 +754,8 @@ pub(crate) fn compile(config: CliConfig) {
         }
     };
     timings.record_since("exports-scan", phase_started);
+    decl_trace("after exports-scan", &ast);
+    decl_trace_truncation("before opt-prop", &ast);
     if matches!(emit, Emit::Executable)
         && !check_only
         && !emit_ir
@@ -748,6 +788,7 @@ pub(crate) fn compile(config: CliConfig) {
     // names those are and refuses to record a fact for them.
     let ast = post_typecheck_optimizer.propagate(ast, check_result.mixed_storage_local_names());
     timings.record_since("opt-prop", phase_started);
+    decl_trace("after opt-prop", &ast);
 
     crate::progress::phase("opt-post");
     let phase_started = Instant::now();
@@ -757,11 +798,13 @@ pub(crate) fn compile(config: CliConfig) {
     // carry one and the rewrite vetoes itself rather than duplicating a decision.
     let ast = post_typecheck_optimizer.prune(ast, check_result.local_binding_decision_spans());
     timings.record_since("opt-post", phase_started);
+    decl_trace("after opt-post", &ast);
 
     crate::progress::phase("opt-norm");
     let phase_started = Instant::now();
     let ast = post_typecheck_optimizer.normalize(ast, check_result.local_binding_decision_spans());
     timings.record_since("opt-norm", phase_started);
+    decl_trace("after opt-norm", &ast);
 
     crate::progress::phase("dce");
     let phase_started = Instant::now();
@@ -770,6 +813,7 @@ pub(crate) fn compile(config: CliConfig) {
     let ast = post_typecheck_optimizer
         .eliminate_dead_code(ast, check_result.local_binding_decision_spans());
     timings.record_since("dce", phase_started);
+    decl_trace("after dce", &ast);
 
     crate::progress::phase("decl-reach");
     let phase_started = Instant::now();
@@ -799,6 +843,32 @@ pub(crate) fn compile(config: CliConfig) {
         },
     );
     timings.record_since("decl-reach", phase_started);
+    decl_trace("after decl-reach", &ast);
+    if let Ok(target) = std::env::var("ELEPHC_DECL_TRACE") {
+        let key = crate::names::php_symbol_key(target.trim_start_matches('\\'));
+        let in_checker = check_result
+            .functions
+            .keys()
+            .filter(|name| crate::names::php_symbol_key(name.trim_start_matches('\\')) == key)
+            .count();
+        let forced = forced_groups
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(",");
+        let groups_holding: Vec<String> = prelude_inventory
+            .groups
+            .values()
+            .filter(|group| group.functions.contains(&key))
+            .map(|group| group.id.clone())
+            .collect();
+        decl_trace_note(
+            "after decl-reach",
+            &format!(
+                "checker_functions={in_checker} inventory_groups_holding={groups_holding:?} forced_groups=[{forced}]"
+            ),
+        );
+    }
     if let (Some(target), Some((interface_before, class_before))) =
         (metadata_trace_target.as_deref(), metadata_trace_before)
     {
@@ -900,16 +970,31 @@ pub(crate) fn compile(config: CliConfig) {
     // declarations into the program. At runtime they are already-included files, and an
     // `include_once` reaching one through a computed path must answer "already included"
     // instead of re-running it into a redeclaration fatal.
+    // The preload graph's fully-declared files belong in the same set: the compiler took each
+    // of them whole, so an `include_once` reaching one at runtime must answer "already included"
+    // rather than re-run a top level whose declarations are already in the binary.
+    let mut compile_time_inclusions = opcache_autoloaded_files.clone();
+    compile_time_inclusions.extend(preload_compiled_whole);
     crate::autoload::record_compile_time_inclusions(
         &mut ir_module,
         &ast,
-        &opcache_autoloaded_files,
+        &compile_time_inclusions,
     );
     ir_module.required_runtime_features.class_introspection |= ir_module
         .interface_infos
         .values()
         .any(|info| info.declaration_span != crate::span::Span::dummy());
     timings.record_since("ir-lower", phase_started);
+    if let Ok(target) = std::env::var("ELEPHC_DECL_TRACE") {
+        let key = crate::names::php_symbol_key(target.trim_start_matches('\\'));
+        let in_module: Vec<&str> = ir_module
+            .functions
+            .iter()
+            .map(|function| function.name.as_str())
+            .filter(|name| crate::names::php_symbol_key(name.trim_start_matches('\\')) == key)
+            .collect();
+        decl_trace_note("after ir-lower", &format!("module_functions={in_module:?}"));
+    }
 
     // EIR owns every backend-visible declaration, signature and source-identity datum now.
     // Keeping the optimized AST and the complete checker graph through assembly doubles the
@@ -1109,7 +1194,8 @@ fn preloaded_declarations(
     ini_overrides: &[(String, String)],
     base_dir: &Path,
     defines: &std::collections::HashSet<String>,
-) -> Result<Option<crate::parser::ast::Program>, errors::CompileError> {
+    autoload: &autoload::Registry,
+) -> Result<Option<crate::opcache_preload_sources::PreloadedDeclarations>, errors::CompileError> {
     let Some((_, directive)) = ini_overrides
         .iter()
         .rev()
@@ -1130,7 +1216,169 @@ fn preloaded_declarations(
             &format!("opcache.preload: '{}' does not exist", path.display()),
         ));
     }
-    crate::opcache_preload_sources::preload_declarations(&path, base_dir, defines).map(Some)
+    crate::opcache_preload_sources::preload_declarations(&path, base_dir, defines, autoload)
+        .map(Some)
+}
+
+// ===== `ELEPHC_DECL_TRACE`: where one function declaration is lost =====
+//
+// The FUNCTION-side twin of `ELEPHC_METADATA_TRACE` above, which answers the same question for a
+// class or an interface. Set `ELEPHC_DECL_TRACE=<function name>` and every phase below prints how
+// many declarations of that name the program still holds, plus whether the checker's function
+// table and the EIR module agree with it.
+//
+// It exists because the disagreement is what a backend error actually reports, four passes late
+// and under another function's name. `call to unknown function error_log` on a Symfony `--web`
+// build meant the AST had lost `error_log` while `check_result.functions` had kept it; the trace
+// named the pass that dropped it (`opt-prop`) in one 60-second run, after two agents had spent a
+// day on the wrong hypothesis. Every line is behind the env lookup, so an unset variable costs one
+// `std::env::var` per phase.
+
+/// Counts the `FunctionDecl`s for one normalized name anywhere in a program.
+fn decl_trace_count(body: &[crate::parser::ast::Stmt], key: &str) -> usize {
+    use crate::parser::ast::StmtKind;
+    let mut total = 0;
+    for stmt in body {
+        match &stmt.kind {
+            StmtKind::FunctionDecl { name, .. } => {
+                if crate::names::php_symbol_key(name.trim_start_matches('\\')) == key {
+                    total += 1;
+                }
+            }
+            StmtKind::NamespaceBlock { body, .. } => total += decl_trace_count(body, key),
+            StmtKind::Synthetic(body) => total += decl_trace_count(body, key),
+            StmtKind::IncludeOnceGuard { body, .. } => total += decl_trace_count(body, key),
+            StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body,
+                ..
+            } => {
+                total += decl_trace_count(then_body, key);
+                for (_, arm) in elseif_clauses {
+                    total += decl_trace_count(arm, key);
+                }
+                if let Some(arm) = else_body {
+                    total += decl_trace_count(arm, key);
+                }
+            }
+            StmtKind::Try {
+                try_body,
+                catches,
+                finally_body,
+            } => {
+                total += decl_trace_count(try_body, key);
+                for catch in catches {
+                    total += decl_trace_count(&catch.body, key);
+                }
+                if let Some(body) = finally_body {
+                    total += decl_trace_count(body, key);
+                }
+            }
+            _ => {}
+        }
+    }
+    total
+}
+
+/// Counts `FunctionVariantGroup` / `FunctionVariantMark` statements naming one key.
+fn decl_trace_variants(body: &[crate::parser::ast::Stmt], key: &str) -> (usize, usize) {
+    use crate::parser::ast::StmtKind;
+    let mut groups = 0;
+    let mut marks = 0;
+    for stmt in body {
+        match &stmt.kind {
+            StmtKind::FunctionVariantGroup { name, .. } => {
+                if crate::names::php_symbol_key(name.trim_start_matches('\\')) == key {
+                    groups += 1;
+                }
+            }
+            StmtKind::FunctionVariantMark { name, .. } => {
+                if crate::names::php_symbol_key(name.trim_start_matches('\\')) == key {
+                    marks += 1;
+                }
+            }
+            StmtKind::NamespaceBlock { body, .. }
+            | StmtKind::Synthetic(body)
+            | StmtKind::IncludeOnceGuard { body, .. } => {
+                let (g, m) = decl_trace_variants(body, key);
+                groups += g;
+                marks += m;
+            }
+            _ => {}
+        }
+    }
+    (groups, marks)
+}
+
+/// Prints how many declarations of `ELEPHC_DECL_TRACE` the program holds at one pipeline point.
+fn decl_trace(label: &str, program: &[crate::parser::ast::Stmt]) {
+    let Ok(target) = std::env::var("ELEPHC_DECL_TRACE") else {
+        return;
+    };
+    let key = crate::names::php_symbol_key(target.trim_start_matches('\\'));
+    let (groups, marks) = decl_trace_variants(program, &key);
+    eprintln!(
+        "[elephc-decl-trace] {label:<22} ast_decls={} variant_groups={groups} variant_marks={marks}",
+        decl_trace_count(program, &key)
+    );
+}
+
+/// Names a statement kind for the trace.
+fn decl_trace_kind(stmt: &crate::parser::ast::Stmt) -> String {
+    use crate::parser::ast::StmtKind;
+    match &stmt.kind {
+        StmtKind::FunctionDecl { name, .. } => format!("FunctionDecl({name})"),
+        StmtKind::ClassDecl { name, .. } => format!("ClassDecl({name})"),
+        StmtKind::Synthetic(body) => format!("Synthetic[{}]", body.len()),
+        StmtKind::NamespaceBlock { name, body } => {
+            format!("NamespaceBlock({name:?})[{}]", body.len())
+        }
+        StmtKind::NamespaceDecl { name } => format!("NamespaceDecl({name:?})"),
+        StmtKind::IncludeOnceGuard { source_path, body } => {
+            format!("IncludeOnceGuard({source_path:?})[{}]", body.len())
+        }
+        StmtKind::ExprStmt(_) => "ExprStmt".to_string(),
+        StmtKind::Return(_) => "Return".to_string(),
+        StmtKind::Throw(_) => "Throw".to_string(),
+        StmtKind::If { .. } => "If".to_string(),
+        StmtKind::Try { .. } => "Try".to_string(),
+        StmtKind::Echo(_) => "Echo".to_string(),
+        other => format!("{other:?}").chars().take(60).collect(),
+    }
+}
+
+/// Reports where the top level first stops falling through, and where the traced name is
+/// declared relative to that point.
+fn decl_trace_truncation(label: &str, program: &[crate::parser::ast::Stmt]) {
+    let Ok(target) = std::env::var("ELEPHC_DECL_TRACE") else {
+        return;
+    };
+    let key = crate::names::php_symbol_key(target.trim_start_matches('\\'));
+    let terminal = program
+        .iter()
+        .position(|stmt| crate::termination::stmt_guarantees_termination(stmt));
+    let declares = program
+        .iter()
+        .position(|stmt| decl_trace_count(std::slice::from_ref(stmt), &key) > 0);
+    let terminal_kind = terminal
+        .map(|index| decl_trace_kind(&program[index]))
+        .unwrap_or_else(|| "none".to_string());
+    let terminal_span = terminal
+        .map(|index| format!("{:?}", program[index].span))
+        .unwrap_or_default();
+    eprintln!(
+        "[elephc-decl-trace] {label:<22} top_level={} first_terminal={terminal:?} kind={terminal_kind} span={terminal_span} declares_at={declares:?}",
+        program.len()
+    );
+}
+
+/// Prints an arbitrary note at one pipeline point, under the same gate.
+fn decl_trace_note(label: &str, note: &str) {
+    if std::env::var("ELEPHC_DECL_TRACE").is_err() {
+        return;
+    }
+    eprintln!("[elephc-decl-trace] {label:<22} {note}");
 }
 
 /// Merges the autoloaded and entry-file declaration maps into one name-to-path lookup.

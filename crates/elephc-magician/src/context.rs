@@ -68,6 +68,10 @@ static GLOBAL_EVAL_CLASSES: OnceLock<Mutex<GlobalEvalClassRegistry>> = OnceLock:
 #[cfg(not(test))]
 static GLOBAL_EVAL_FUNCTIONS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
 #[cfg(not(test))]
+static GLOBAL_EVAL_CONSTANTS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+#[cfg(not(test))]
+static GLOBAL_EVAL_ORPHAN_CONSTANTS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+#[cfg(not(test))]
 static GLOBAL_EVAL_AUTOLOAD_CONTEXTS: OnceLock<Mutex<Vec<usize>>> = OnceLock::new();
 #[cfg(not(test))]
 static GLOBAL_EVAL_AOT_METADATA: OnceLock<Mutex<Option<Arc<GlobalEvalAotMetadata>>>> =

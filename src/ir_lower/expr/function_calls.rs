@@ -38,6 +38,8 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
                 once: *once,
                 required: *required,
                 strict_php: crate::strict_php::is_enabled(),
+                // An include in expression position: its value is the point of writing it.
+                value_discarded: false,
             })),
             PhpType::Mixed,
             effects_lookup::runtime_effects(),
@@ -124,6 +126,11 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         return value;
     }
     if let Some(value) = lower_static_array_push(ctx, canonical, args, expr) {
+        return value;
+    }
+    if let Some(value) =
+        compat_preludes::lower_variadic_array_replace(ctx, canonical, args, expr)
+    {
         return value;
     }
     if let Some(value) =

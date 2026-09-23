@@ -78,7 +78,9 @@ pub(crate) fn lower_spl_autoload_bool(
         "spl_autoload_register" => {
             return super::eval::lower_eval_spl_autoload_register(ctx, inst);
         }
-        "spl_autoload_unregister" => super::ensure_arg_count(inst, name, 1)?,
+        "spl_autoload_unregister" => {
+            return super::eval::lower_eval_spl_autoload_unregister(ctx, inst);
+        }
         _ => return Err(CodegenIrError::unsupported(format!("autoload bool stub {}", name))),
     }
     emit_args_for_side_effects(ctx, inst)?;

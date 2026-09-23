@@ -27,6 +27,7 @@ mod catalog_xml;
 mod catalog_curl;
 mod catalog_surfaces;
 mod eval_profile;
+mod extensions;
 mod id;
 mod module;
 mod php_version;
@@ -43,6 +44,7 @@ pub use aot_profile::{
 pub use eval_profile::{
     eval_signature, eval_signature_profile, EvalSignatureOverrideReason, EvalSignatureProfile,
 };
+pub use extensions::{complete_surface_modules, module_php_functions};
 pub use class_spec::{ClassContract, ClassKind, ClassRoute};
 pub use constant_spec::{ConstType, ConstValue, ConstantContract, ConstantRoute};
 pub use id::BuiltinId;

@@ -545,6 +545,19 @@ pub trait RuntimeValueOps {
     /// Returns the concrete boxed Mixed runtime tag after unwrapping nested Mixed cells.
     fn type_tag(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus>;
 
+    /// Returns the first three words of a runtime cell, for `ELEPHC_EVAL_TRACE` only.
+    ///
+    /// The default answers `None`, which is the ONLY safe answer for an implementation whose
+    /// handles are not real cell pointers — the test harness mints them from indices, so its
+    /// `as_ptr()` yields values like `0x1`: not null, not aligned, and not readable. The trace
+    /// used to read three words straight through the handle, which aborted the process on the
+    /// alignment precondition and, once that was bypassed, segfaulted. Only an implementation
+    /// that OWNS the cell representation may answer, so the peek belongs behind this method
+    /// rather than at the call site.
+    fn trace_result_words(&mut self, _value: RuntimeCellHandle) -> Option<[u64; 3]> {
+        None
+    }
+
     /// Creates an invoker-only by-reference marker for a staged Mixed slot.
     fn invoker_ref_cell(
         &mut self,
@@ -640,6 +653,20 @@ pub trait RuntimeValueOps {
         _signal: i64,
     ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
         Ok(None)
+    }
+
+    /// Reads the target runtime's heap accounting for `memory_get_usage()` and its peak twin.
+    ///
+    /// `peak` selects the high-water counter; `real_usage` selects the bytes the allocator has
+    /// taken from its arena instead of the bytes it currently has handed out — the same two
+    /// quantities php's Zend memory manager reports.
+    ///
+    /// The DEFAULT ANSWERS ZERO, and that is a measurement rather than a placeholder: a test
+    /// adapter has no generated runtime, so no elephc heap block exists to account for. Only the
+    /// runtime adapter has counters, and it overrides this. Reporting an invented plausible
+    /// number here would be worse than reporting the zero bytes that are actually tracked.
+    fn memory_usage_bytes(&mut self, _peak: bool, _real_usage: bool) -> Result<i64, EvalStatus> {
+        Ok(0)
     }
 
     /// Creates a runtime null cell.

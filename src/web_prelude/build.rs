@@ -5383,9 +5383,10 @@ pub(crate) fn web_declarations(
 
         // `__elephc_ini_module_known($m)`: the KNOWN-MODULE predicate `ini_get_all`'s extension
         // filter uses to tell "known module with no INI directives" (`[]`) from "no such module"
-        // (`E_WARNING` + `false`). Derived from `CORE_LOADED_EXTENSIONS`, lowercased, plus
-        // `'session'` (the extra module a `--web` binary registers), so the filter list cannot
-        // drift from the `extension_loaded()`/`get_loaded_extensions()` set.
+        // (`E_WARNING` + `false`). Rendered from `opcache_prelude::cli_ini::INI_KNOWN_MODULES`,
+        // lowercased, plus `'session'` (the extra module a `--web` binary registers). This is
+        // deliberately NOT the `extension_loaded()` set: recognition survives partial function
+        // coverage (`ini_get_all('ctype')` is `[]` in reference PHP), the loaded promise does not.
         declarations.push(opcache_prelude::ini_module_known_declaration(true));
 
         declarations.extend([

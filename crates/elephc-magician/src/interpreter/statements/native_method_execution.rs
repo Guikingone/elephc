@@ -278,16 +278,34 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
         (Ok(()), Ok(())) => {
             if crate::eval_trace::enabled() {
                 let result_ptr = result.as_ptr();
-                let words = unsafe { std::slice::from_raw_parts(result_ptr.cast::<u64>(), 3) };
+                // This block used to read three words straight through the handle and aborted the
+                // whole process — a non-unwinding panic, SIGABRT with no backtrace and no
+                // `test result:` line, so it read as an infrastructure failure rather than as one
+                // bad read. It fired only with the trace ON.
+                //
+                // The handle is not always a cell pointer. `RuntimeValueOps` has two
+                // implementations, and the test harness mints handles from indices, so its
+                // `as_ptr()` yields values like `0x1`: not null, not aligned, not readable. Three
+                // symptoms in that order — a null check alone still aborted on the alignment
+                // precondition, and bypassing that segfaulted. Only the implementation that owns
+                // the representation may look, so the peek is a trait method whose default is
+                // `None`.
+                let words = values.trace_result_words(result);
                 let tag = values.type_tag(result);
                 let object_refs = matches!(tag, Ok(EVAL_TAG_OBJECT)).then(|| {
-                    let object_ptr = words[1] as *const u8;
+                    let object_ptr = words.map_or(std::ptr::null(), |w| w[1] as *const u8);
+                    // Kept as a braceless closure body on purpose: wrapping it in `{ }` makes
+                    // `unsafe { … }` a STATEMENT, and the `&` that follows is then parsed as a
+                    // reference rather than a bitwise and — `expected (), found u32`.
                     (!object_ptr.is_null())
-                        .then(|| unsafe { object_ptr.sub(12).cast::<u32>().read() } & 0x7fff_ffff)
+                        .then(|| unsafe { object_ptr.sub(12).cast::<u32>().read_unaligned() } & 0x7fff_ffff)
                 });
+                let words_text = words.map_or_else(
+                    || "null".to_string(),
+                    |w| format!("[{:#x}, {:#x}, {:#x}]", w[0], w[1], w[2]),
+                );
                 eprintln!(
-                    "[elephc-eval-trace] phase=native_method_return_contract owner={signature_owner:?} class={class_name:?} method={method_name:?} result={result_ptr:p} words=[{:#x}, {:#x}, {:#x}] return_type={return_type:?} tag={tag:?} object_refs={object_refs:?}",
-                    words[0], words[1], words[2],
+                    "[elephc-eval-trace] phase=native_method_return_contract owner={signature_owner:?} class={class_name:?} method={method_name:?} result={result_ptr:p} words={words_text} return_type={return_type:?} tag={tag:?} object_refs={object_refs:?}",
                 );
             }
             eval_declared_native_return_value(

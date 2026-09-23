@@ -200,6 +200,32 @@ fn expr_uses_this(expr: &Expr) -> bool {
         ExprKind::BufferNew { len, .. } => expr_uses_this(len),
         ExprKind::FirstClassCallable(target) => callable_target_uses_this(target),
         ExprKind::Closure { body, .. } => body_uses_this(body),
+        // Every other form that carries a sub-expression. Falling through to `false` for these
+        // left a generator closure's `yield $this->n` uncaptured, so its body read a null `$this`
+        // -- the shape symfony/console's `Table::buildTableRows()` returns its rows through.
+        ExprKind::Yield { key, value } => {
+            key.as_deref().is_some_and(expr_uses_this) || value.as_deref().is_some_and(expr_uses_this)
+        }
+        ExprKind::YieldFrom(inner)
+        | ExprKind::Clone(inner)
+        | ExprKind::ArrayReference(inner) => expr_uses_this(inner),
+        ExprKind::IncludeValue { path, .. } => expr_uses_this(path),
+        ExprKind::Pipe { value, callable } => expr_uses_this(value) || expr_uses_this(callable),
+        ExprKind::Assignment { target, value, prelude, .. } => {
+            expr_uses_this(target) || expr_uses_this(value) || body_uses_this(prelude)
+        }
+        ExprKind::NewDynamic { name_expr, args } => {
+            expr_uses_this(name_expr) || args.iter().any(expr_uses_this)
+        }
+        ExprKind::NewDynamicObject { class_name, args, .. } => {
+            expr_uses_this(class_name) || args.iter().any(expr_uses_this)
+        }
+        ExprKind::NullsafeDynamicMethodCall { object, method, args } => {
+            expr_uses_this(object) || expr_uses_this(method) || args.iter().any(expr_uses_this)
+        }
+        ExprKind::ObjectClassName { object } => expr_uses_this(object),
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => expr_uses_this(property),
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => expr_uses_this(receiver),
         _ => false,
     }
 }

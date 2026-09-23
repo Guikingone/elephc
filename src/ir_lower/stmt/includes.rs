@@ -25,6 +25,9 @@ pub(super) fn lower_include(
             once,
             required,
             strict_php: crate::strict_php::is_enabled(),
+            // An include written as a statement: `release_expr_statement_result` below throws
+            // the value away, which is what lets the runtime skip a compiler-included source.
+            value_discarded: true,
         })),
         PhpType::Mixed,
         effects_lookup::runtime_effects(),

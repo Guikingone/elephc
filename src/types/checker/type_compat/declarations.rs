@@ -436,6 +436,13 @@ impl Checker {
     where
         F: FnOnce(&mut Self) -> Result<T, CompileError>,
     {
+        let untyped_ref_params: std::collections::HashSet<String> = ref_param_names
+            .iter()
+            .filter(|name| !typed_param_names.contains(name))
+            .cloned()
+            .collect();
+        let saved_untyped_ref_params =
+            std::mem::replace(&mut self.untyped_ref_params, untyped_ref_params);
         let saved_local_binding_scope =
             self.enter_local_binding_scope(param_names, typed_param_names);
         let saved_ref_params = self.active_ref_params.clone();
@@ -475,6 +482,7 @@ impl Checker {
         let result = f(self);
 
         self.active_ref_params = saved_ref_params;
+        self.untyped_ref_params = saved_untyped_ref_params;
         self.active_globals = saved_globals;
         self.active_statics = saved_statics;
         self.foreach_key_locals = saved_foreach_keys;

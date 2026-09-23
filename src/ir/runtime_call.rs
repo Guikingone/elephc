@@ -68,6 +68,12 @@ pub enum RuntimeCallTarget {
         required: bool,
         /// Whether strict PHP is active at the physical include call site.
         strict_php: bool,
+        /// Whether the include was written as a STATEMENT, so nothing reads what it evaluates to.
+        ///
+        /// Only then may the runtime skip a source the compiler already included: php hands back
+        /// the file's `return` value, and `if (true === (require_once __DIR__.'/autoload.php'))`
+        /// and `$routes = require $dump;` are both real code that reads it.
+        value_discarded: bool,
     },
     /// Promotes an indexed-array payload stored in a boxed Mixed cell to a
     /// Mixed-entry hash and installs the new payload back into that same cell.

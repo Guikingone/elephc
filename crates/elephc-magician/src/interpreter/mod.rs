@@ -77,6 +77,7 @@ use reflection::*;
 use return_type_compat::*;
 use return_values::*;
 pub use runtime_ops::{aot_member_names_uncached, AotMemberNameKind, RuntimeValueOps};
+pub(crate) use builtins::eval_class_name_is_a_bridge;
 pub(crate) use builtins::eval_spl_autoload_class as eval_spl_autoload_class_bridge;
 pub(crate) use builtins::eval_spl_autoload_classlike_definition;
 use runtime_ops::*;
@@ -110,6 +111,18 @@ pub(crate) fn register_runtime_spl_autoload_callback(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     register_spl_autoload_callback_unchecked(callback, prepend, context, values)
+}
+
+/// Removes one AOT-provided SPL callback from whichever eval context retains it.
+///
+/// The symmetric partner of [`register_runtime_spl_autoload_callback`]. Reports whether a
+/// callback was actually removed, which is PHP's `spl_autoload_unregister` return value.
+#[cfg(not(test))]
+pub(crate) fn remove_runtime_spl_autoload_callback(
+    callback: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    unregister_runtime_spl_autoload_callback(callback, values)
 }
 
 /// Executes an EvalIR program and returns the eval result cell.
@@ -167,9 +180,18 @@ pub fn execute_include_outcome_with_context(
     path: RuntimeCellHandle,
     required: bool,
     once: bool,
+    value_discarded: bool,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
-    match include_exec::eval_include_value(path, required, once, context, scope, values) {
+    match include_exec::eval_include_value_with_use(
+        path,
+        required,
+        once,
+        !value_discarded,
+        context,
+        scope,
+        values,
+    ) {
         Ok(result) => Ok(EvalOutcome::Value(result)),
         Err(EvalStatus::UncaughtThrowable) => context
             .take_pending_throw()
@@ -395,10 +417,44 @@ pub fn execute_context_try_new_object_outcome(
     args: Vec<RuntimeCellHandle>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<EvalOutcome>, EvalStatus> {
+    let args = args.into_iter().map(|value| (None, value)).collect();
+    execute_context_try_new_object_named_outcome(context, name, args, values)
+}
+
+/// Unpacks a compiled `new $class(...$args)` argument container into call arguments.
+///
+/// The container is the array the spread produced: an integer key is a positional argument and a
+/// string key a named one, exactly as PHP binds `...$array`. The cells are borrowed from it.
+pub fn eval_unpack_constructor_arg_container(
+    container: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<(Option<String>, RuntimeCellHandle)>, EvalStatus> {
+    let len = values.array_len(container)?;
+    let mut args = Vec::with_capacity(len);
+    for position in 0..len {
+        let key = values.array_iter_key(container, position)?;
+        let value = values.array_get(container, key)?;
+        let name = if values.type_tag(key)? == EVAL_TAG_STRING {
+            Some(String::from_utf8(values.string_bytes(key)?).map_err(|_| EvalStatus::RuntimeFatal)?)
+        } else {
+            None
+        };
+        args.push((name, value));
+    }
+    Ok(args)
+}
+
+/// Attempts construction with arguments that may carry PHP named-argument names.
+pub fn execute_context_try_new_object_named_outcome(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    args: Vec<(Option<String>, RuntimeCellHandle)>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalOutcome>, EvalStatus> {
     let evaluated_args = args
         .into_iter()
-        .map(|value| EvaluatedCallArg {
-            name: None,
+        .map(|(name, value)| EvaluatedCallArg {
+            name,
             value,
             ref_target: None,
             owned: false,

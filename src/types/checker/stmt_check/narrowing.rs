@@ -515,6 +515,22 @@ impl Checker {
         }))
     }
 
+    /// Returns true when a value already typed `member_class` necessarily passes
+    /// `instanceof target_class`.
+    ///
+    /// `instanceof` is an INTERSECTION, not a replacement: a value that already satisfies the
+    /// guard is still everything it was. Only name equality counted before, so such a guard
+    /// replaced the class with the INTERFACE -- and an interface declares no properties, so the
+    /// very next `$this->prop` read was typed from nothing.
+    fn object_type_satisfies(&self, member_class: &str, target_class: &str) -> bool {
+        crate::types::instanceof_intersection::object_type_satisfies(
+            &self.classes,
+            &self.interfaces,
+            member_class,
+            target_class,
+        )
+    }
+
     /// Narrows `current` to the guard-true type. Inside the branch the guard guarantees the target,
     /// so `Mixed` and incompatible concrete types use the target fallback; a `Union` keeps matching
     /// members; a concrete match is preserved, including its array element or object class type.
@@ -539,6 +555,32 @@ impl Checker {
                 }
             }
             _ if self.guard_matches(current, target) => current.clone(),
+            // `$x instanceof I` is an INTERSECTION with what `$x` already is, and an interface
+            // declares METHODS, never properties. Replacing the class with the interface throws
+            // away every property the value has, and the next `$this->prop` read is then typed
+            // from an empty set -- it came out `Int`, and the backend refused the method call on
+            // it with `method call receiver for PHP type Int`.
+            //
+            // MEASURED on Symfony's `CompiledUrlMatcherTrait::match()`, which guards
+            // `if (!$this instanceof RedirectableUrlMatcherInterface) { throw … }` seven lines
+            // before `$this->context->getScheme()`.
+            //
+            // The closed world knows which classes satisfy both halves, and the IR lowering asks
+            // the same question through the same module -- the two narrowed independently before,
+            // and disagreeing about `$this` is what made the SECOND read of a property fail where
+            // the first had succeeded.
+            PhpType::Object(class_name) => match target {
+                GuardTarget::Exact(PhpType::Object(target_name)) => {
+                    crate::types::instanceof_intersection::narrow_object_to_instanceof(
+                        &self.classes,
+                        &self.interfaces,
+                        class_name,
+                        target_name,
+                    )
+                    .unwrap_or_else(|| target.fallback_type())
+                }
+                _ => target.fallback_type(),
+            },
             _ => target.fallback_type(),
         }
     }
@@ -611,7 +653,8 @@ impl Checker {
             }
             GuardTarget::Exact(PhpType::Object(target_class)) => {
                 matches!(member, PhpType::Object(member_class)
-                    if php_symbol_key(member_class) == php_symbol_key(target_class))
+                    if php_symbol_key(member_class) == php_symbol_key(target_class)
+                        || self.object_type_satisfies(member_class, target_class))
                     || (matches!(member, PhpType::Callable)
                         && target_class
                             .trim_start_matches('\\')

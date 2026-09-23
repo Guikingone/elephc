@@ -406,6 +406,27 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("PATHINFO_DIRNAME", Standard, ConstValue::Int(1)),
     constant!("PATHINFO_EXTENSION", Standard, ConstValue::Int(4)),
     constant!("PATHINFO_FILENAME", Standard, ConstValue::Int(8)),
+    // The three PCRE constants describe the PCRE2 elephc STATICALLY LINKS, which is pinned in
+    // `src/native_deps/catalog.rs` (`PCRE2_VERSIONS`) and recorded in `elephc.lock`. A compiled
+    // binary has no host PCRE to interrogate at run time, so the value has to be baked in, and
+    // the one true answer is what that library's own `pcre2_config(PCRE2_CONFIG_VERSION)`
+    // returns: `"<PCRE2_MAJOR>.<PCRE2_MINOR> <PCRE2_DATE>"` from its `pcre2.h`.
+    //
+    // This DIVERGES from php on a given host, and legitimately so. php's PCRE_VERSION is a
+    // run-time query of whichever shared libpcre2 the process loaded, while its
+    // PCRE_VERSION_MAJOR/_MINOR are compile-time macros from the headers php was BUILT against,
+    // so php's own three can disagree: the Homebrew php 8.5.10 on the machine this was written on
+    // reports PCRE_VERSION "10.48 2026-08-31" beside MAJOR 10 / MINOR 47. elephc's three can
+    // never disagree, because there is exactly one PCRE2 in the binary. A program that branches
+    // on the version -- `symfony/polyfill-intl-grapheme` picks `\X` over a hand-written cluster
+    // regex at `(float) PCRE_VERSION >= 10.44` -- therefore gets an answer that describes the
+    // regex engine that will actually run its pattern, which is the answer it wanted.
+    //
+    // BUMPING PCRE2 MUST BUMP ALL THREE TOGETHER. `pcre_version_constants_match_each_other` in
+    // this file's tests fails when the string and the two integers drift apart, and
+    // `pcre_version_constant_matches_the_pinned_native_dependency` in `src/native_deps/catalog.rs`
+    // fails when they drift from the pinned tarball.
+    constant!("PCRE_VERSION", Pcre, ConstValue::Str("10.47 2025-10-21")),
     constant!("PCRE_VERSION_MAJOR", Pcre, ConstValue::Int(10)),
     constant!("PCRE_VERSION_MINOR", Pcre, ConstValue::Int(47)),
     constant!("PHP_EOL", Core, ConstValue::Str("\n")),
@@ -598,3 +619,71 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("XML_OPTION_TARGET_ENCODING", Xml, ConstValue::Int(2)),
     constant!("XML_SAX_IMPL", Xml, ConstValue::Str("libxml")),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::CONSTANTS;
+    use crate::{ConstValue, PhpModule};
+
+    /// Finds one predefined constant's value in this file's table.
+    fn value(name: &str) -> &'static ConstValue {
+        &CONSTANTS
+            .iter()
+            .find(|constant| constant.name == name)
+            .unwrap_or_else(|| panic!("{name} is not in the constant table"))
+            .value
+    }
+
+    /// The three PCRE constants describe ONE statically linked library, so they cannot disagree.
+    ///
+    /// php's own three can and do (its string is a run-time query of the shared library it
+    /// loaded, its integers are compile-time macros of the headers it was built against), and
+    /// copying php's numbers off a host is exactly how elephc would acquire that inconsistency.
+    /// Bumping the pinned PCRE2 without bumping all three fails here.
+    #[test]
+    fn pcre_version_constants_match_each_other() {
+        let ConstValue::Str(version) = value("PCRE_VERSION") else {
+            panic!("PCRE_VERSION must be a string, as php's is");
+        };
+        let ConstValue::Int(major) = value("PCRE_VERSION_MAJOR") else {
+            panic!("PCRE_VERSION_MAJOR must be an integer");
+        };
+        let ConstValue::Int(minor) = value("PCRE_VERSION_MINOR") else {
+            panic!("PCRE_VERSION_MINOR must be an integer");
+        };
+        // php's shape is "<major>.<minor> <release date>", and `symfony/polyfill-intl-grapheme`
+        // reads it as `(float) PCRE_VERSION`, so the major and minor have to be the leading
+        // number and the date has to stay behind a space.
+        let (number, date) = version
+            .split_once(' ')
+            .unwrap_or_else(|| panic!("PCRE_VERSION {version:?} has no release date"));
+        assert_eq!(
+            number,
+            &format!("{major}.{minor}"),
+            "PCRE_VERSION {version:?} disagrees with PCRE_VERSION_MAJOR/_MINOR {major}.{minor}"
+        );
+        assert_eq!(
+            date.split('-').count(),
+            3,
+            "PCRE_VERSION {version:?} must carry a YYYY-MM-DD release date, as php's does"
+        );
+        assert_eq!(
+            number.parse::<f64>().ok(),
+            Some(*major as f64 + *minor as f64 / 100.0),
+            "(float) PCRE_VERSION must read back as the pinned version number"
+        );
+    }
+
+    /// All three PCRE constants belong to `ext/pcre`, so `--strict-php` and the module-scoped
+    /// documentation treat them alike.
+    #[test]
+    fn pcre_version_constants_share_the_pcre_module() {
+        for name in ["PCRE_VERSION", "PCRE_VERSION_MAJOR", "PCRE_VERSION_MINOR"] {
+            let constant = CONSTANTS
+                .iter()
+                .find(|constant| constant.name == name)
+                .unwrap_or_else(|| panic!("{name} is not in the constant table"));
+            assert_eq!(constant.module, PhpModule::Pcre, "{name}");
+        }
+    }
+}

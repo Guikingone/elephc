@@ -22,6 +22,63 @@ use crate::interpreter::{self, EvalOutcome, RuntimeValueOps};
 use crate::runtime_hooks::ElephcRuntimeOps;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 
+/// A class name handed back to compiled code: `len == 0` means "not an eval-class instance".
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ElephcEvalClassName {
+    pub ptr: *const u8,
+    pub len: u64,
+}
+
+/// Names the eval-declared class of a raw object, for compiled `get_class()`.
+///
+/// An instance of a class the interpreter declared lives in the storage of its nearest COMPILED
+/// ancestor, so the class id compiled code reads names that ancestor: `get_class()` of a
+/// `LazyCommand` said `Command`. The eval side knows the real class. The bytes are interned for
+/// the life of the process -- compiled code treats a class name as static data and may keep the
+/// pointer without copying it. Returns a zero length for any object the interpreter does not own.
+///
+/// # Safety
+/// `object` must be null or a live object payload pointer.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_dynamic_object_class_name(object: *const u8) -> ElephcEvalClassName {
+    let none = ElephcEvalClassName { ptr: std::ptr::null(), len: 0 };
+    if object.is_null() {
+        return none;
+    }
+    std::panic::catch_unwind(|| unsafe {
+        let identity = object as u64;
+        let Some(owner) = crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity) else {
+            return none;
+        };
+        let Some(context) = owner.as_ref() else {
+            return none;
+        };
+        let Some((_, class)) = context.dynamic_object_declaring_class(identity) else {
+            return none;
+        };
+        let name = intern_class_name(class.name().trim_start_matches('\\'));
+        ElephcEvalClassName { ptr: name.as_ptr(), len: name.len() as u64 }
+    })
+    .unwrap_or(none)
+}
+
+/// Returns a process-lifetime copy of a class name (the set of class names is small and bounded).
+#[cfg(not(test))]
+fn intern_class_name(name: &str) -> &'static str {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static NAMES: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+    let mut names = NAMES.get_or_init(|| Mutex::new(HashSet::new())).lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(existing) = names.get(name) {
+        return existing;
+    }
+    let leaked: &'static str = Box::leak(name.to_string().into_boxed_str());
+    names.insert(leaked);
+    leaked
+}
+
 const CLASS_LOOKUP_GET_CLASS: u64 = 0;
 const CLASS_LOOKUP_GET_PARENT_CLASS: u64 = 1;
 const MEMBER_LOOKUP_METHOD_EXISTS: u64 = 0;

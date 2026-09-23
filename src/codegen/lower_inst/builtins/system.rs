@@ -300,6 +300,51 @@ pub(crate) fn lower_hrtime(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `memory_get_usage([$real_usage])` to `__rt_memory_get_usage`.
+///
+/// The `$real_usage` flag (or 0 = false when omitted) goes into the integer RESULT register,
+/// the same place `__rt_hrtime` reads its flag from, and the helper returns the byte count
+/// there too. Both helpers are plain counter reads with no allocation, so nothing is boxed.
+pub(crate) fn lower_memory_get_usage(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_memory_reporter(ctx, inst, "memory_get_usage", "__rt_memory_get_usage")
+}
+
+/// Lowers `memory_get_peak_usage([$real_usage])` to `__rt_memory_get_peak_usage`.
+pub(crate) fn lower_memory_get_peak_usage(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_memory_reporter(ctx, inst, "memory_get_peak_usage", "__rt_memory_get_peak_usage")
+}
+
+/// Shared body for the two memory reporters: one optional truthiness flag, one integer result.
+///
+/// The flag goes through `resolve_integer_arg_to_result`, NOT through a plain integer load:
+/// that helper refuses an argument whose type cannot stand for a PHP bool (an array, a float,
+/// a bare string) instead of reading its payload word as a flag. The first cut here used a
+/// plain load and `memory_get_usage([])` answered `128` — the array's pointer low bits read as
+/// "truthy" — where php raises a `TypeError`. A refusal is not php's exception, but it is the
+/// same refusal `microtime($array)` already gives, and it is never a wrong number.
+fn lower_memory_reporter(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    php_name: &str,
+    helper: &str,
+) -> Result<()> {
+    ensure_arg_count_between(inst, php_name, 0, 1)?;
+    match inst.operands.first().copied() {
+        Some(flag) => {
+            resolve_integer_arg_to_result(ctx, flag, &format!("{php_name} real_usage flag"))?;
+        }
+        None => abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0),
+    }
+    abi::emit_call_label(ctx.emitter, helper);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `http_response_code([$code])` to `__rt_http_response_code`. The code (or
 /// 0 = "read current" when omitted) goes into the first integer argument register;
 /// the routine returns the resulting status as an int. PHP semantics (read vs set,

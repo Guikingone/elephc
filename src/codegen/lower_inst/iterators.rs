@@ -575,10 +575,7 @@ fn ensure_unique_static_iter_source(
     }
     abi::emit_call_label(ctx.emitter, helper);
     ctx.store_result_value(source)?;
-    if let Some(slot) = source_load_local_slot(ctx, source)? {
-        ctx.store_value_to_local(slot, source)?;
-    }
-    Ok(())
+    publish_iter_source_to_origin(ctx, source)
 }
 
 /// Stores a converted dynamic iterator source back to its originating local when possible.
@@ -587,9 +584,9 @@ fn store_iter_source_to_origin_if_local(
     offset: usize,
     source: ValueId,
 ) -> Result<()> {
-    let Some(slot) = source_load_local_slot(ctx, source)? else {
+    if source_origin(ctx, source)?.is_none() {
         return Ok(());
-    };
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::load_at_offset(ctx.emitter, "x0", offset - ITER_SOURCE_OFFSET_DELTA);
@@ -599,14 +596,46 @@ fn store_iter_source_to_origin_if_local(
         }
     }
     ctx.store_result_value(source)?;
-    ctx.store_value_to_local(slot, source)
+    publish_iter_source_to_origin(ctx, source)
 }
 
-/// Resolves a source SSA value back to a local slot when it was produced by `load_local`.
-fn source_load_local_slot(
-    ctx: &FunctionContext<'_>,
-    value: ValueId,
-) -> Result<Option<LocalSlotId>> {
+/// Where an iterator source was read from, so a separated or converted copy can be put back.
+enum IterSourceOrigin {
+    /// A plain frame slot (`load_local`).
+    Local(LocalSlotId),
+    /// A by-reference slot (`load_ref_cell`): the storage is the CALLER's, reached through it.
+    RefCell(LocalSlotId),
+}
+
+/// Writes the (possibly separated or converted) iterator source back to where it was read.
+///
+/// A by-reference `foreach` separates a shared array before it writes into it, so the loop
+/// mutates a NEW array; that array has to replace the one the variable held. Only `load_local`
+/// used to count as an origin, so a source read through a by-reference PARAMETER was separated
+/// and then abandoned -- the loop wrote into a copy nobody kept, and the separation had already
+/// given up the variable's share of the original. MEASURED against php 8.5.10, identical on the
+/// pristine HEAD compiler:
+///
+///     function bump(array &$a) { foreach ($a as &$x) { $x = 7; } }
+///     function run(array $e) { $c = $e; bump($c); return $c; }
+///     var_dump(run([1, 2]));        php [7, 7]      elephc array(0) {}
+///
+/// A fresh local (`$l = [1, 2]; bump($l);`) worked because nothing shared it, so the separation
+/// never ran. The reference case writes through the cell exactly as a relocating builtin does.
+fn publish_iter_source_to_origin(ctx: &mut FunctionContext<'_>, source: ValueId) -> Result<()> {
+    match source_origin(ctx, source)? {
+        Some(IterSourceOrigin::Local(slot)) => ctx.store_value_to_local(slot, source),
+        Some(IterSourceOrigin::RefCell(slot)) => {
+            let source_ty = ctx.value_php_type(source)?;
+            super::local_stores::store_value_through_ref_cell_slot(ctx, slot, source, &source_ty)
+        }
+        None => Ok(()),
+    }
+}
+
+/// Resolves a source SSA value back to the slot it was loaded from, directly or through a
+/// by-reference cell.
+fn source_origin(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<IterSourceOrigin>> {
     let Some(value_ref) = ctx.function.value(value) else {
         return Err(CodegenIrError::missing_entry("value", value.as_raw()));
     };
@@ -617,15 +646,14 @@ fn source_load_local_slot(
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if inst_ref.op != Op::LoadLocal {
-        return Ok(None);
-    }
     let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate else {
-        return Err(CodegenIrError::invalid_module(
-            "load_local iterator source missing local slot",
-        ));
+        return Ok(None);
     };
-    Ok(Some(slot))
+    Ok(match inst_ref.op {
+        Op::LoadLocal => Some(IterSourceOrigin::Local(slot)),
+        Op::LoadRefCell => Some(IterSourceOrigin::RefCell(slot)),
+        _ => None,
+    })
 }
 
 /// Converts the raw dynamic indexed-array iterator source to boxed Mixed slots.

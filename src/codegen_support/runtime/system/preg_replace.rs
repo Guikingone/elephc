@@ -154,6 +154,22 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.instruction("cmp x14, x2");                                         // replacement ended after marker ?
     emitter.instruction("b.ge __rt_preg_replace_repl_literal");                 // yes → keep marker literal
     emitter.instruction("ldrb w15, [x1, x14]");                                 // load potential group digit
+    // -- `\\` and `\$` are escapes: php replaces the backslash with the byte after it, so a
+    //    replacement written `'\\\\'` in PHP source produces ONE backslash (php_pcre_replace_impl).
+    //    Symfony's OutputFormatter::escape() relies on it; without it every escaped `<` gained a
+    //    second backslash and the console printed its style tags literally. --
+    emitter.instruction("cmp w13, #92");                                        // is the marker a backslash?
+    emitter.instruction("b.ne __rt_preg_replace_not_escape");                   // `$` never escapes
+    emitter.instruction("cmp w15, #92");                                        // `\\` escapes a backslash
+    emitter.instruction("b.eq __rt_preg_replace_escape");
+    emitter.instruction("cmp w15, #36");                                        // `\$` escapes a dollar
+    emitter.instruction("b.ne __rt_preg_replace_not_escape");
+    emitter.label("__rt_preg_replace_escape");
+    emitter.instruction("strb w15, [x11]");                                     // write the escaped byte alone
+    emitter.instruction("add x11, x11, #1");                                    // advance output
+    emitter.instruction("add x12, x12, #2");                                    // consume the backslash and the escaped byte
+    emitter.instruction("b __rt_preg_replace_repl_copy");                       // continue scanning
+    emitter.label("__rt_preg_replace_not_escape");
     emitter.instruction("sub w15, w15, #48");                                   // convert ASCII digit to group index
     emitter.instruction("cmp w15, #9");                                         // is it 0..9 ?
     emitter.instruction("b.hi __rt_preg_replace_repl_literal");                 // no → keep marker literal
@@ -386,6 +402,19 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, rdx");                                        // replacement ended after marker ?
     emitter.instruction("jge __rt_preg_replace_repl_literal_linux_x86_64");     // yes → keep marker literal
     emitter.instruction("movzx r9d, BYTE PTR [rax + r10]");                     // load potential group digit
+    // -- `\\` and `\$` are escapes; see the AArch64 variant --
+    emitter.instruction("cmp r8b, 92");                                         // is the marker a backslash?
+    emitter.instruction("jne __rt_preg_replace_not_escape_linux_x86_64");       // `$` never escapes
+    emitter.instruction("cmp r9d, 92");                                         // `\\` escapes a backslash
+    emitter.instruction("je __rt_preg_replace_escape_linux_x86_64");
+    emitter.instruction("cmp r9d, 36");                                         // `\$` escapes a dollar
+    emitter.instruction("jne __rt_preg_replace_not_escape_linux_x86_64");
+    emitter.label("__rt_preg_replace_escape_linux_x86_64");
+    emitter.instruction("mov BYTE PTR [r11], r9b");                             // write the escaped byte alone
+    emitter.instruction("add r11, 1");                                          // advance output
+    emitter.instruction("add rcx, 2");                                          // consume the backslash and the escaped byte
+    emitter.instruction("jmp __rt_preg_replace_repl_copy_linux_x86_64");        // continue scanning
+    emitter.label("__rt_preg_replace_not_escape_linux_x86_64");
     emitter.instruction("sub r9d, 48");                                         // convert ASCII digit to group index
     emitter.instruction("cmp r9d, 9");                                          // is it 0..9 ?
     emitter.instruction("ja __rt_preg_replace_repl_literal_linux_x86_64");      // no → keep marker literal

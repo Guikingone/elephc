@@ -150,6 +150,68 @@ echo $o->n . "|" . $o->s . "|" . $o->f . "|" . ($o->b ? "T" : "F") . "|" . count
     assert_eq!(out, "7|hi|1.5|T|3");
 }
 
+/// Verifies that a by-name allocation gives every object-owned reference property its ref-cell.
+///
+/// A property that has a reference taken to it anywhere in the program (`$r = &$this->second`)
+/// stops holding a value: its slot holds a POINTER to a 16-byte cell the object owns, and every
+/// read and every write dereferences it — including the `$this->second = false` that the
+/// property-default thunk runs. The direct allocator allocates those cells right after zeroing
+/// the layout; `__rt_new_by_name` did not, so the FIRST property default stored through the null
+/// the zero-fill left behind and the process died on SIGSEGV with no PHP-level diagnostic. The
+/// `$direct` half is the matched control: it takes the direct allocator and always worked.
+///
+/// Both defaults are asserted, not just the reference one: the fault was a store through a null
+/// pointer, so a test that only read the reference property back would pass on an object whose
+/// cell was allocated but never given its default.
+#[test]
+fn test_class_dynamic_instantiation_allocates_owned_reference_property_cells() {
+    let out = compile_and_run(
+        r#"<?php
+class RefDefaults {
+    private bool $first = true;
+    private bool $second = false;
+    public function bind(): void { $r = &$this->second; $r = true; }
+    public function show(): string {
+        return ($this->first ? "T" : "F") . ($this->second ? "T" : "F");
+    }
+}
+$direct = new RefDefaults();
+$cls = "RefDefaults";
+$byname = new $cls();
+echo $direct->show() . "|" . $byname->show() . "|";
+$byname->bind();
+echo $byname->show();
+"#,
+    );
+    assert_eq!(out, "TF|TF|TT");
+}
+
+/// Verifies a by-name allocation ZEROES the reference cells it creates, not just allocates them.
+///
+/// A refcounted default goes through `release_previous_referenced_value` first: it loads whatever
+/// the cell currently holds and hands it to `__rt_heap_free_safe`. A cell that exists but carries
+/// the allocator's leftover bytes therefore frees a garbage pointer on the very first store, so
+/// allocating the cell is only half the contract — it must arrive zeroed, exactly as the direct
+/// allocator's `emit_owned_reference_property_cell` leaves it.
+#[test]
+fn test_class_dynamic_instantiation_zeroes_owned_reference_property_cells() {
+    let out = compile_and_run(
+        r#"<?php
+class RefStringDefault {
+    private string $text = "hello";
+    public function bind(): void { $r = &$this->text; $r = "bye"; }
+    public function show(): string { return $this->text; }
+}
+$cls = "RefStringDefault";
+$o = new $cls();
+echo $o->show() . "|";
+$o->bind();
+echo $o->show();
+"#,
+    );
+    assert_eq!(out, "hello|bye");
+}
+
 /// Verifies that dynamic instantiation forwards constructor arguments.
 #[test]
 fn test_class_dynamic_instantiation_runs_constructor_args() {

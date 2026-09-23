@@ -52,6 +52,14 @@ fn lower_eval_callable_call_array_with_context(
     } else {
         false
     };
+    // Without a context to forward, the frame's lexical class is still the calling scope:
+    // `call_user_func_array([$this, 'privateMethod'], ...)` inside its own class was refused
+    // "cannot access private method", and so was every `ReflectionMethod::invoke()` body.
+    let pushed_caller_class = if use_local_context {
+        false
+    } else {
+        push_native_caller_class(ctx)
+    };
     let mut boxed = EvalBoxedOperands::new();
     boxed.extend(store_eval_mixed_operand_at(ctx, callback, EVAL_TEMP_CELL_OFFSET)?);
     boxed.extend(store_eval_mixed_operand_at(
@@ -77,6 +85,7 @@ fn lower_eval_callable_call_array_with_context(
         .extern_symbol("__elephc_eval_callable_call_array");
     abi::emit_call_label(ctx.emitter, &symbol);
     pop_eval_context_class_scope(ctx, pushed_class_scope);
+    pop_native_caller_class(ctx, pushed_caller_class);
     emit_eval_status_check(ctx);
     emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     let result_reg = abi::int_result_reg(ctx.emitter);
@@ -155,6 +164,47 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_spl_autoload_register
         .emitter
         .target
         .extern_symbol("__elephc_eval_register_spl_autoload");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_release_eval_boxed_operands_keeping_int_answer(ctx, &boxed);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    box_eval_bool_result_if_mixed(ctx, inst);
+    store_if_result(ctx, inst)
+}
+
+/// Unregisters an AOT SPL callback from the eval context that retains it.
+///
+/// The mirror of [`lower_eval_spl_autoload_register`]. It used to be a stub that evaluated its
+/// argument for side effects and loaded the immediate `1`: `spl_autoload_unregister()` answered
+/// `true` and removed nothing, so a loader stayed installed for the life of the process.
+///
+/// MEASURED against php 8.5.10 on a loader registered, used through `class_exists()`, then
+/// unregistered: php calls it once, elephc called it for every later lookup as well. Symfony's
+/// `ClassExistenceResource` installs a THROWING loader and removes it in a `finally`, so the
+/// leftover turned every subsequent `class_exists()` in the process into a throw.
+///
+/// The registry released its own reference, so the box this frame made is still this frame's to
+/// release once the call has answered.
+pub(in crate::codegen::lower_inst::builtins) fn lower_eval_spl_autoload_unregister(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, "spl_autoload_unregister", 1)?;
+    let callback = expect_operand(inst, 0)?;
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    if matches!(ctx.value_php_type(callback)?.codegen_repr(), PhpType::Array(element) if element.codegen_repr() != PhpType::Mixed) {
+        crate::codegen::lower_inst::callables::normalize_typed_callable_array_to_mixed(ctx, callback)?;
+    }
+    let mut boxed = EvalBoxedOperands::new();
+    boxed.extend(store_eval_mixed_operand_at(ctx, callback, EVAL_TEMP_CELL_OFFSET)?);
+    let callback_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, callback_arg, EVAL_TEMP_CELL_OFFSET);
+    // A null context is the same request-scoped arrangement registration uses; the callback is
+    // looked up across every context that holds autoload callbacks either way.
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_unregister_spl_autoload");
     abi::emit_call_label(ctx.emitter, &symbol);
     emit_release_eval_boxed_operands_keeping_int_answer(ctx, &boxed);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);

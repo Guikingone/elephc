@@ -266,6 +266,71 @@ echo count(Registry::$items), ':', Registry::$items['next'];
     assert_eq!(out, "1:2");
 }
 
+/// Tests that a `Mixed` value assigned to an UNTYPED static property widens its slot.
+///
+/// The sibling test above covers the DECLARED `array` case. This is the untyped one, and it is a
+/// different code path: the initializer alone typed the slot `array<string>`, and the store of a
+/// value the checker only knows as `Mixed` used to be refused outright
+/// (`store_static_property assigning PHP type Mixed to ... with PHP type Array(Str)`).
+#[test]
+fn test_mixed_value_widens_untyped_list_static_property() {
+    let out = compile_and_run(
+        r#"<?php
+function boxed(mixed $value): mixed { return $value; }
+class Encodings {
+    private static $list = ['ASCII', 'UTF-8'];
+
+    public static function set(mixed $value): void {
+        self::$list = $value;
+    }
+
+    public static function get() {
+        return self::$list;
+    }
+}
+echo implode('|', Encodings::get());
+Encodings::set(boxed(['A', 'B']));
+echo ',', implode('|', Encodings::get());
+"#,
+    );
+    assert_eq!(out, "ASCII|UTF-8,A|B");
+}
+
+/// Tests that widening an untyped array-initialized static property does not impose array-ness.
+///
+/// This is what decided the widening target. An untyped property has no `array` contract, so PHP
+/// accepts a scalar in a slot whose initializer was a list; resolving to a hash the way the
+/// DECLARED path does would raise a `TypeError` PHP never raises. `Mixed` keeps both observable.
+///
+/// The getter declares `: mixed` so the assertion does not ride on an unrelated, pre-existing
+/// refusal: `count()` on the result of an UNTYPED getter that returns a static property is
+/// rejected by the checker whether or not the property was ever widened.
+#[test]
+fn test_untyped_array_static_property_still_accepts_a_scalar() {
+    let out = compile_and_run(
+        r#"<?php
+function boxed(mixed $value): mixed { return $value; }
+class Slot {
+    private static $held = ['a' => 1, 'b' => 2];
+
+    public static function set(mixed $value): void {
+        self::$held = $value;
+    }
+
+    public static function get(): mixed {
+        return self::$held;
+    }
+}
+echo count(Slot::get());
+Slot::set(boxed(42));
+echo ',', Slot::get();
+Slot::set(boxed(['c' => 3]));
+echo ',', count(Slot::get());
+"#,
+    );
+    assert_eq!(out, "2,42,1");
+}
+
 /// Tests `+=` and `*=` compound assignment on an `int` typed static property.
 #[test]
 fn test_static_property_compound_assign() {

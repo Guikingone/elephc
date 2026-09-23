@@ -1027,19 +1027,30 @@ fn eval_rebind_foreign_reflection_target(
     let owner_class = runtime_object_class_name(object, values)?;
     match owner_class.as_str() {
         "ReflectionClass" | "ReflectionObject" | "ReflectionEnum" => {
-            if context.eval_reflection_class_name(identity).is_some() {
-                if crate::eval_trace::enabled() {
-                    eprintln!(
-                        "[elephc-eval-trace] phase=reflection_rebind kind=class identity={identity} stage=already_bound"
-                    );
+            // The registry is keyed by object ADDRESS and lives for the request, while the
+            // reflector it describes can be freed long before. A later reflector allocated at the
+            // same address then found the dead one's target and answered for the wrong class --
+            // and which reflector landed where depended on heap layout, so the failure moved with
+            // anything that allocated (the eval trace included). An entry is trusted only while
+            // the object's own `__name` slot still names it.
+            let slot_name =
+                eval_reflection_slot_string(object, &owner_class, "__name", context, values)?;
+            if let Some(bound) = context.eval_reflection_class_name(identity) {
+                let still_bound = slot_name.as_deref().is_none_or(|name| {
+                    eval_reflection_names_match(bound, name, context)
+                });
+                if still_bound {
+                    if crate::eval_trace::enabled() {
+                        eprintln!(
+                            "[elephc-eval-trace] phase=reflection_rebind kind=class identity={identity} stage=already_bound"
+                        );
+                    }
+                    return Ok(());
                 }
-                return Ok(());
             }
             #[cfg(not(test))]
             context.sync_global_eval_classes();
-            let Some(name) =
-                eval_reflection_slot_string(object, &owner_class, "__name", context, values)?
-            else {
+            let Some(name) = slot_name else {
                 if crate::eval_trace::enabled() {
                     eprintln!(
                         "[elephc-eval-trace] phase=reflection_rebind kind=class identity={identity} stage=missing_name_slot"
@@ -1063,17 +1074,25 @@ fn eval_rebind_foreign_reflection_target(
         }
         "ReflectionMethod" | "ReflectionProperty" => {
             let is_method = owner_class == "ReflectionMethod";
-            let already_bound = if is_method {
-                context.eval_reflection_method(identity).is_some()
+            // Same address-reuse hazard as a class reflector above: trust the entry only while
+            // the object's own slots still name the same member.
+            let slot_target =
+                eval_reflection_member_slot_target(object, &owner_class, context, values)?;
+            let bound = if is_method {
+                context.eval_reflection_method(identity)
             } else {
-                context.eval_reflection_property(identity).is_some()
+                context.eval_reflection_property(identity)
             };
-            if already_bound {
-                return Ok(());
+            if let Some((bound_class, bound_name)) = bound {
+                let still_bound = slot_target.as_ref().is_none_or(|(class, name)| {
+                    name == bound_name
+                        && (class.is_empty() || eval_reflection_names_match(bound_class, class, context))
+                });
+                if still_bound {
+                    return Ok(());
+                }
             }
-            let Some((declaring_class, name)) =
-                eval_reflection_member_slot_target(object, &owner_class, context, values)?
-            else {
+            let Some((declaring_class, name)) = slot_target else {
                 return Ok(());
             };
             let Some(declaring_class) =
@@ -1113,9 +1132,31 @@ fn eval_rebind_foreign_reflection_target(
                 owner_kind,
             );
         }
+        // Not a reflector at all: whatever the registry still files under this address belongs
+        // to a reflector freed from the same block, and must not answer for this object.
+        other if !other.starts_with("Reflection") => {
+            if context.forget_eval_reflection_identity(identity) && crate::eval_trace::enabled() {
+                eprintln!(
+                    "[elephc-eval-trace] phase=reflection_rebind kind=stale identity={identity} runtime_class={other:?} stage=forgotten"
+                );
+            }
+        }
         _ => {}
     }
     Ok(())
+}
+
+/// Returns whether a registered reflection target still names the class a reflector's slot holds.
+///
+/// The registry stores the RESOLVED name (an alias's target), so the slot's own spelling is
+/// compared both as written and resolved, PHP class names being case-insensitive either way.
+fn eval_reflection_names_match(bound: &str, slot: &str, context: &ElephcEvalContext) -> bool {
+    let bound = bound.trim_start_matches('\\');
+    let slot = slot.trim_start_matches('\\');
+    bound.eq_ignore_ascii_case(slot)
+        || context
+            .resolve_class_like_name(slot)
+            .is_some_and(|resolved| bound.eq_ignore_ascii_case(resolved.trim_start_matches('\\')))
 }
 
 /// Returns whether the interpreter itself declared this class-like symbol.

@@ -501,3 +501,117 @@ echo ($value instanceof $target) ? "T" : "F";
         out.stderr
     );
 }
+
+/// A guard whose target the receiver's own class cannot satisfy must keep the receiver's
+/// properties: `instanceof` is an intersection, not a replacement.
+///
+/// Symfony's `CompiledUrlMatcherTrait::match()` is the shape. It guards
+/// `if (!$this instanceof RedirectableUrlMatcherInterface) { throw … }` and then reads
+/// `$this->context->getScheme()`. `CompiledUrlMatcher` does NOT implement that interface -- a
+/// subclass does, which is exactly why the guard is written -- so narrowing `$this` to the
+/// interface threw the inherited property away and the backend refused the call with
+/// `method call receiver for PHP type Int`. The closed world names the subclass that satisfies
+/// both halves instead.
+#[test]
+fn test_sibling_interface_guard_keeps_inherited_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class Ctx {
+    public function getMethod(): string { return 'GET'; }
+    public function getScheme(): string { return 'https'; }
+}
+
+interface Redirectable {
+    public function redirect(string $path, string $route): array;
+}
+
+class Base {
+    public function __construct(protected Ctx $context) {}
+}
+
+trait MatcherTrait {
+    public function match(string $p): string
+    {
+        if (!$this instanceof Redirectable) {
+            throw new RuntimeException('no');
+        }
+        // Two reads, because only the SECOND one failed: the first was served by a type the
+        // checker had recorded for that exact span, and nothing recorded the second.
+        $method = $this->context->getMethod();
+        $scheme = $this->context->getScheme();
+        return $method . ':' . $scheme . ':' . count($this->redirect($p, 'r'));
+    }
+}
+
+class Compiled extends Base {
+    use MatcherTrait;
+}
+
+class RedirectableCompiled extends Compiled implements Redirectable {
+    public function redirect(string $path, string $route): array
+    {
+        return ['_route' => $route, 'path' => $path];
+    }
+}
+
+echo (new RedirectableCompiled(new Ctx()))->match('/x');
+"#,
+    );
+    assert_eq!(out, "GET:https:2");
+}
+
+
+/// The same guard reaching the LEXICAL scope's private method, whose trailing parameters are
+/// optional and by-reference.
+///
+/// Three passes resolve members independently and all three had to agree. The checker refused the
+/// call outright (`unknown method RedirectableCompiled::doMatch`); once it resolved, the IR
+/// lowering still found no signature for it, so the two omitted optional arguments were never
+/// materialized and codegen reported `2 operands for 4 ABI params`. Symfony's
+/// `CompiledUrlMatcherTrait` writes exactly this: `private function doMatch(string $pathinfo,
+/// array &$allow = [], array &$allowSchemes = [])`, called as `$this->doMatch($pathinfo)`.
+#[test]
+fn test_sibling_interface_guard_reaches_the_lexical_scopes_private_method() {
+    let out = compile_and_run(
+        r#"<?php
+interface Redirectable {
+    public function redirect(string $path, string $route): array;
+}
+
+trait MatcherTrait {
+    private bool $matchHost = true;
+
+    private function doMatch(string $p, array &$allow = [], array &$allowSchemes = []): array
+    {
+        $allow[] = 'GET';
+        $allowSchemes[] = 'https';
+        return ['p' => $p, 'n' => count($allow) + count($allowSchemes)];
+    }
+
+    public function match(string $p): string
+    {
+        if (!$this instanceof Redirectable) {
+            throw new RuntimeException('no');
+        }
+        $ret = $this->doMatch($p);
+        $host = $this->matchHost ? 'H' : 'h';
+        return $ret['p'] . '/' . $ret['n'] . ':' . $host . ':' . count($this->redirect($p, 'r'));
+    }
+}
+
+class Compiled {
+    use MatcherTrait;
+}
+
+class RedirectableCompiled extends Compiled implements Redirectable {
+    public function redirect(string $path, string $route): array
+    {
+        return ['_route' => $route, 'path' => $path];
+    }
+}
+
+echo (new RedirectableCompiled())->match('/x');
+"#,
+    );
+    assert_eq!(out, "/x/2:H:2");
+}

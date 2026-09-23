@@ -730,3 +730,76 @@ echo $t->i();
     );
     assert_eq!(out, "i");
 }
+
+/// `define()` creates a GLOBAL constant, and an unqualified use inside the namespace finds it.
+///
+/// php's fallback rule for constants is the same one it has for functions: an UNQUALIFIED name
+/// inside a namespace tries `<namespace>\NAME` first and then the global one. `define()` takes
+/// its name as a string, so it never creates the namespaced form -- which means the fallback is
+/// the only way the file's own uses can resolve.
+///
+/// `symfony/polyfill-intl-grapheme/Grapheme.php` is written exactly this way
+/// (`\define('SYMFONY_GRAPHEME_CLUSTER_RX', ...)` at the top of
+/// `namespace Symfony\Polyfill\Intl\Grapheme;`, then six unqualified uses), and before this the
+/// six uses each failed as `Undefined constant: Symfony\Polyfill\Intl\Grapheme\SYMFONY_...`.
+#[test]
+fn test_namespace_define_creates_a_global_constant_with_fallback() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App\Deep;
+
+\define('DEMO_RX', 'X');
+define('DEMO_PLAIN', 7);
+
+function reads(): string {
+    return DEMO_RX;
+}
+
+echo reads(), "\n";
+echo DEMO_RX, "\n";
+echo \DEMO_RX, "\n";
+echo DEMO_PLAIN, "\n";
+var_dump(defined('DEMO_RX'), defined('App\Deep\DEMO_RX'));
+"#,
+    );
+    assert_eq!(out, "X\nX\nX\n7\nbool(true)\nbool(false)\n");
+}
+
+/// A `define()` whose NAME contains a namespace separator creates that constant, not a global one.
+///
+/// php really does allow it, and the fallback must not rewrite the name: `Other\THING` is
+/// reachable as a qualified constant and NOT as a bare `THING`.
+#[test]
+fn test_namespace_define_with_a_qualified_name_creates_that_constant() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+
+\define('Other\THING', 5);
+
+echo \Other\THING, "\n";
+var_dump(defined('Other\THING'), defined('THING'));
+"#,
+    );
+    assert_eq!(out, "5\nbool(true)\nbool(false)\n");
+}
+
+/// A constant declared with `const` inside the namespace still WINS over a same-named global.
+///
+/// The fallback is a fallback, not a preference: php looks in the namespace first, and this is
+/// what a `define()` collected too eagerly would break.
+#[test]
+fn test_namespace_const_declaration_still_wins_over_a_defined_global() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+
+\define('SHADOWED', 'global');
+const SHADOWED = 'namespaced';
+
+echo SHADOWED, "\n";
+echo \SHADOWED, "\n";
+"#,
+    );
+    assert_eq!(out, "namespaced\nglobal\n");
+}

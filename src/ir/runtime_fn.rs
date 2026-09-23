@@ -667,6 +667,8 @@ pub enum RuntimeFnId {
     JsonLastErrorMsg,
     JsonValidate,
     Localtime,
+    MemoryGetPeakUsage,
+    MemoryGetUsage,
     Microtime,
     Mktime,
     Passthru,
@@ -1224,6 +1226,11 @@ impl RuntimeFnId {
                 crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::MAY_FATAL.bits(),
             ),
             RuntimeFnId::Time => crate::ir::Effects::READS_PROCESS,
+            // The two memory reporters load one allocator counter word and return it as a
+            // plain integer: no allocation, no fallible path, nothing but process state.
+            RuntimeFnId::MemoryGetUsage | RuntimeFnId::MemoryGetPeakUsage => {
+                crate::ir::Effects::READS_PROCESS
+            }
             RuntimeFnId::Microtime | RuntimeFnId::Hrtime => {
                 crate::ir::Effects::from_bits_retain(
                     crate::ir::Effects::READS_PROCESS.bits()
@@ -1637,6 +1644,14 @@ impl RuntimeFnId {
                 | RuntimeFnId::Unlink
                 | RuntimeFnId::Strcspn
                 | RuntimeFnId::Strspn
+                | RuntimeFnId::FileExists
+                | RuntimeFnId::IsDir
+                | RuntimeFnId::IsExecutable
+                | RuntimeFnId::IsFile
+                | RuntimeFnId::IsLink
+                | RuntimeFnId::IsReadable
+                | RuntimeFnId::IsWritable
+                | RuntimeFnId::IsWriteable
         )
     }
 
@@ -1685,7 +1700,17 @@ impl RuntimeFnId {
             // A GRADUAL element is admitted for the same reason the string builtins admit one:
             // `coerce_gradual_wrapper_operands` casts it to the declared parameter type before the
             // lowering sees it, which is what php does at the call.
-            RuntimeFnId::Trim => source.is_none_or(|ty| {
+            // The one-path filesystem predicates are the usual `array_filter($paths, 'is_file')`
+            // callbacks; their path parameter takes a gradual element the same way.
+            RuntimeFnId::Trim
+            | RuntimeFnId::FileExists
+            | RuntimeFnId::IsDir
+            | RuntimeFnId::IsExecutable
+            | RuntimeFnId::IsFile
+            | RuntimeFnId::IsLink
+            | RuntimeFnId::IsReadable
+            | RuntimeFnId::IsWritable
+            | RuntimeFnId::IsWriteable => source.is_none_or(|ty| {
                 matches!(ty, PhpType::Str | PhpType::Mixed | PhpType::Union(_))
             }),
             _ => false,
@@ -2666,6 +2691,8 @@ impl RuntimeFnId {
             RuntimeFnId::JsonLastErrorMsg => "json_last_error_msg",
             RuntimeFnId::JsonValidate => "json_validate",
             RuntimeFnId::Localtime => "localtime",
+            RuntimeFnId::MemoryGetPeakUsage => "memory_get_peak_usage",
+            RuntimeFnId::MemoryGetUsage => "memory_get_usage",
             RuntimeFnId::Microtime => "microtime",
             RuntimeFnId::Mktime => "mktime",
             RuntimeFnId::Passthru => "passthru",

@@ -348,7 +348,9 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             | "rand" | "time" | "fpassthru" | "linkinfo"
             // Listed explicitly rather than left to the `_ => PhpType::Int` fallback, so a
             // future change to that fallback cannot silently retype them.
-            | "substr_compare" | "substr_count" | "strncmp" | "strncasecmp" => PhpType::Int,
+            | "substr_compare" | "substr_count" | "strncmp" | "strncasecmp"
+            // Both memory reporters answer a byte count from one allocator counter word.
+            | "memory_get_usage" | "memory_get_peak_usage" => PhpType::Int,
             "floatval" | "floor" | "ceil" | "round" | "sqrt" | "pow" | "fmod" | "sin" | "cos"
             | "tan" | "asin" | "acos" | "atan" | "atan2" | "sinh" | "cosh" | "tanh" | "log"
             | "log2" | "log10" | "exp" | "hypot" | "pi" | "deg2rad" | "rad2deg" => PhpType::Float,

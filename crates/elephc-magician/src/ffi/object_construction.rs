@@ -80,6 +80,9 @@ pub struct ElephcEvalConstructionSite {
     pub file_ptr: *const u8,
     pub file_len: u64,
     pub line: i64,
+    /// Non-zero when the single argument is the array a `...$args` spread produced, to be
+    /// unpacked here with its string keys bound as named arguments.
+    pub spread_container: u64,
 }
 
 /// Constructs with a source location even when the caller owns no eval context.
@@ -103,11 +106,24 @@ pub unsafe extern "C" fn __elephc_eval_try_new_object_at(
             return EvalStatus::RuntimeFatal.code();
         };
         let source = (file, site.line);
-        eval_try_new_object_inner(ctx, name_ptr, name_len, args, site.arg_count, out, Some(&source))
+        let spread = site.spread_container != 0 && site.arg_count == 1;
+        eval_try_new_object_inner_spread(
+            ctx,
+            name_ptr,
+            name_len,
+            args,
+            site.arg_count,
+            out,
+            Some(&source),
+            spread,
+        )
     }).unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
 
 /// Applies a native call site to the selected context only for this construction.
+///
+/// With `spread`, `args` holds the one array a compiled `new $class(...$args)` produced; it is
+/// unpacked here, string keys becoming named arguments, since only this side knows the class.
 #[cfg(not(test))]
 fn execute_native_new_at(
     context: &mut ElephcEvalContext,
@@ -115,7 +131,12 @@ fn execute_native_new_at(
     args: Vec<RuntimeCellHandle>,
     values: &mut ElephcRuntimeOps,
     source: Option<&(String, i64)>,
+    spread: bool,
 ) -> Result<Option<interpreter::EvalOutcome>, EvalStatus> {
+    let args = match (spread, args.as_slice()) {
+        (true, [container]) => interpreter::eval_unpack_constructor_arg_container(*container, values)?,
+        _ => args.into_iter().map(|value| (None, value)).collect(),
+    };
     let previous = source.map(|(file, line)| {
         let previous = context.call_site();
         let dir = std::path::Path::new(file).parent()
@@ -124,7 +145,7 @@ fn execute_native_new_at(
         context.set_file_magic_override(Some(file.clone()));
         previous
     });
-    let outcome = interpreter::execute_context_try_new_object_outcome(context, name, args, values);
+    let outcome = interpreter::execute_context_try_new_object_named_outcome(context, name, args, values);
     if let Some((file, dir, line, file_override)) = previous {
         context.set_call_site(file, dir, line);
         context.set_file_magic_override(file_override);
@@ -339,6 +360,7 @@ unsafe fn eval_try_new_object_from_global_autoload_contexts(
     args: &[RuntimeCellHandle],
     out: *mut ElephcEvalResult,
     source: Option<&(String, i64)>,
+    spread: bool,
 ) -> i32 {
     for owner in crate::context::global_eval_autoload_contexts_snapshot() {
         let Some(context) = owner.as_mut() else {
@@ -354,6 +376,7 @@ unsafe fn eval_try_new_object_from_global_autoload_contexts(
             args.to_vec(),
             &mut values,
             source,
+            spread,
         ) {
             Ok(Some(outcome)) => {
                 if crate::eval_trace::enabled() {
@@ -386,7 +409,7 @@ unsafe fn eval_try_new_object_from_global_autoload_contexts(
     };
     crate::context::sync_global_eval_aot_metadata(context);
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-    let status = match execute_native_new_at(context, name, args.to_vec(), &mut values, source) {
+    let status = match execute_native_new_at(context, name, args.to_vec(), &mut values, source, spread) {
         Ok(Some(outcome)) => {
             if crate::eval_trace::enabled() {
                 eprintln!("[elephc-eval-trace] phase=try_new_object_ok class={name:?}");
@@ -423,6 +446,21 @@ unsafe fn eval_try_new_object_inner(
     out: *mut ElephcEvalResult,
     source: Option<&(String, i64)>,
 ) -> i32 {
+    eval_try_new_object_inner_spread(ctx, name_ptr, name_len, args, arg_count, out, source, false)
+}
+
+/// `eval_try_new_object_inner`, with `spread` marking a single `...$args` container argument.
+#[cfg(not(test))]
+unsafe fn eval_try_new_object_inner_spread(
+    ctx: *mut ElephcEvalContext,
+    name_ptr: *const u8,
+    name_len: u64,
+    args: *const *mut RuntimeCell,
+    arg_count: u64,
+    out: *mut ElephcEvalResult,
+    source: Option<&(String, i64)>,
+    spread: bool,
+) -> i32 {
     let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
         return EvalStatus::RuntimeFatal.code();
     };
@@ -442,13 +480,13 @@ unsafe fn eval_try_new_object_inner(
     };
     clear_result(out);
     let Some(context) = ctx.as_mut() else {
-        return eval_try_new_object_from_global_autoload_contexts(&name, &args, out, source);
+        return eval_try_new_object_from_global_autoload_contexts(&name, &args, out, source, spread);
     };
     if context.abi_version() != ABI_VERSION {
         return EvalStatus::AbiMismatch.code();
     }
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-    let outcome = execute_native_new_at(context, &name, args, &mut values, source);
+    let outcome = execute_native_new_at(context, &name, args, &mut values, source, spread);
     match outcome {
         Ok(Some(outcome)) => {
             if crate::eval_trace::enabled() {

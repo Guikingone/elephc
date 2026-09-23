@@ -28,6 +28,11 @@ pub(super) struct RequestIncludeState {
     native: Option<NativeIncludeHooks>,
 }
 
+/// Guard-cell value the COMPILER's `__rt_source_include_prime` writes for a source it already
+/// included, as opposed to the `1` a runtime include writes. Mirrored by `COMPILER_INCLUDED` in
+/// `src/codegen/source_units/bridge.rs` — the two constants are one ABI and must agree.
+const COMPILER_INCLUDED: u64 = 2;
+
 impl RequestIncludeState {
     pub(super) fn contains(&self, path: &Path) -> bool {
         if let Some(hooks) = self.native {
@@ -38,11 +43,25 @@ impl RequestIncludeState {
         self.included.contains(path)
     }
 
+    /// Whether the COMPILER performed this inclusion, rather than this request.
+    ///
+    /// Only the native table can answer: the shadow set exists solely for sources the compiled
+    /// program never saw, and by definition the compiler included none of those.
+    pub(super) fn compiler_included(&self, path: &Path) -> bool {
+        let Some(hooks) = self.native else { return false };
+        let cell = unsafe { hooks.cell(path) };
+        !cell.is_null() && unsafe { cell.read() } == COMPILER_INCLUDED
+    }
+
     pub(super) fn mark(&mut self, path: PathBuf) {
         if let Some(hooks) = self.native {
             let cell = unsafe { hooks.cell(&path) };
             if !cell.is_null() {
-                unsafe { cell.write(1); }
+                // A runtime inclusion must never DOWNGRADE the compiler's own mark: the file
+                // stays one the compiler included for the rest of the request, and lowering the
+                // cell to 1 here would make the next include of it re-run a body the program
+                // already executed at startup.
+                if unsafe { cell.read() } == 0 { unsafe { cell.write(1); } }
                 return;
             }
         }
@@ -65,10 +84,16 @@ impl RequestIncludeState {
                 && std::ptr::fn_addr_eq(current.reset, hooks.reset);
         }
         // Transfer only sources already opened dynamically; registration itself
-        // must never mark merely compiled/discovered sources as included.
+        // must never mark merely compiled/discovered sources as included -- and, like `mark`,
+        // must never downgrade a compiler-included cell the prime already raised.
         self.included.retain(|path| {
             let cell = unsafe { hooks.cell(path) };
-            if cell.is_null() { true } else { unsafe { cell.write(1); } false }
+            if cell.is_null() {
+                true
+            } else {
+                if unsafe { cell.read() } == 0 { unsafe { cell.write(1); } }
+                false
+            }
         });
         self.native = Some(hooks);
         true
@@ -134,6 +159,36 @@ mod tests {
         assert!(state.contains(Path::new("/dynamic.php")));
         state.reset();
         assert!(!state.contains(Path::new("/dynamic.php")));
+    }
+
+    /// The compiler's mark and a runtime inclusion are both "included", but only one of them
+    /// means the file's body already ran at program start.
+    #[test]
+    fn compiler_included_is_distinguishable_from_a_runtime_inclusion() {
+        let mut state = RequestIncludeState::default();
+        unsafe { reset_native(); assert!(state.install_native(NativeIncludeHooks { lookup, reset: reset_native })); }
+        let native = Path::new("/native.php");
+        assert!(!state.contains(native));
+        assert!(!state.compiler_included(native));
+
+        state.mark(native.to_path_buf());
+        assert!(state.contains(native), "a runtime inclusion still counts as included");
+        assert!(!state.compiler_included(native), "a runtime inclusion is not a compile-time one");
+
+        // What `__rt_source_include_prime` writes.
+        NATIVE_FLAG.with(|flag| flag.set(COMPILER_INCLUDED));
+        assert!(state.contains(native));
+        assert!(state.compiler_included(native));
+
+        // A later runtime `mark` of the same file must not lower the cell back to 1.
+        state.mark(native.to_path_buf());
+        assert!(state.compiler_included(native), "mark downgraded the compiler's own inclusion");
+
+        // A source the compiled program never saw has no cell, so it can never be compiler-included.
+        state.mark("/dynamic.php".into());
+        assert!(state.contains(Path::new("/dynamic.php")));
+        assert!(!state.compiler_included(Path::new("/dynamic.php")));
+        state.reset();
     }
 
     #[test]

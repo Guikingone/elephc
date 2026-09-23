@@ -1393,6 +1393,8 @@ fn emit_box_loaded_invoker_ref_cell_value_as_mixed(
         Arch::X86_64 => "rdx",
     };
     let string_hi_label = ctx.next_label("invoker_ref_string_hi");
+    let boxed_mixed_label = ctx.next_label("invoker_ref_boxed_mixed");
+    let boxed_mixed_null_label = ctx.next_label("invoker_ref_boxed_mixed_null");
     let box_label = ctx.next_label("invoker_ref_box");
 
     // -- unpack the marker: ref-cell pointer, source value tag, and payload --
@@ -1404,15 +1406,57 @@ fn emit_box_loaded_invoker_ref_cell_value_as_mixed(
         Arch::AArch64 => {
             emitter.instruction(&format!("cmp {}, #1", tag_reg));               // is the referenced value a string (runtime tag 1)?
             emitter.instruction(&format!("b.eq {}", string_hi_label));          // strings also need the high length word loaded
+            emitter.instruction(&format!("cmp {}, #7", tag_reg));               // does the referenced storage already hold a boxed Mixed cell?
+            emitter.instruction(&format!("b.eq {}", boxed_mixed_label));        // its VALUE is what the parameter wants, not another wrapper
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("cmp {}, 1", tag_reg));                // is the referenced value a string (runtime tag 1)?
             emitter.instruction(&format!("je {}", string_hi_label));            // strings also need the high length word loaded
+            emitter.instruction(&format!("cmp {}, 7", tag_reg));                // does the referenced storage already hold a boxed Mixed cell?
+            emitter.instruction(&format!("je {}", boxed_mixed_label));          // its VALUE is what the parameter wants, not another wrapper
         }
     }
     abi::emit_jump(emitter, &box_label);
     emitter.label(&string_hi_label);
     abi::emit_load_from_address(emitter, hi_reg, ref_cell_reg, 8);
+    abi::emit_jump(emitter, &box_label);
+
+    // -- a Mixed-typed slot stores a POINTER to a Mixed cell, so boxing it verbatim boxed the
+    // pointer AGAIN. The parameter then received a tag-7 cell whose payload was another cell, and
+    // every consumer read nothing from it.
+    //
+    // MEASURED against php 8.5.10, and only for a Mixed-element container -- an `array<int>` or
+    // `array<string>` slot holds the value itself and always worked:
+    //
+    //     $p = static function ($v) { echo 'p(', $v, ');'; };
+    //     $a = [1, 'two'];
+    //     foreach ($a as &$v) { $p($v); }
+    //     php     p(1);p(two);
+    //     elephc  p();p();
+    //
+    // Reading the referenced cell's own tag and payload here boxes the VALUE instead, and the
+    // shared boxing path below then retains or persists it exactly as it would any other source.
+    emitter.label(&boxed_mixed_label);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cbz {}, {}", lo_reg, boxed_mixed_null_label)); // an unwritten slot references no cell
+            emitter.instruction(&format!("ldr {}, [{}, #16]", hi_reg, lo_reg));          // high payload word of the referenced cell
+            emitter.instruction(&format!("ldr {}, [{}]", tag_reg, lo_reg));              // its runtime value tag
+            emitter.instruction(&format!("ldr {}, [{}, #8]", lo_reg, lo_reg));           // and its low payload word, read last
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("test {}, {}", lo_reg, lo_reg));                // an unwritten slot references no cell
+            emitter.instruction(&format!("jz {}", boxed_mixed_null_label));
+            emitter.instruction(&format!("mov {}, QWORD PTR [{} + 16]", hi_reg, lo_reg)); // high payload word of the referenced cell
+            emitter.instruction(&format!("mov {}, QWORD PTR [{}]", tag_reg, lo_reg));     // its runtime value tag
+            emitter.instruction(&format!("mov {}, QWORD PTR [{} + 8]", lo_reg, lo_reg));  // and its low payload word, read last
+        }
+    }
+    abi::emit_jump(emitter, &box_label);
+    emitter.label(&boxed_mixed_null_label);
+    abi::emit_load_int_immediate(emitter, tag_reg, 8);                           // runtime tag 8 is the canonical boxed PHP null
+    abi::emit_load_int_immediate(emitter, hi_reg, 0);
+
     emitter.label(&box_label);
     emit_box_runtime_payload_as_mixed(emitter, tag_reg, lo_reg, hi_reg);
 }

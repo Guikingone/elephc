@@ -118,7 +118,26 @@ pub(in crate::ir_lower) fn instanceof_branch_local_type(
     if class_name.trim_start_matches('\\') == "static" {
         return None;
     }
-    Some((name.to_string(), PhpType::Object(class_name)))
+    // `instanceof` is an INTERSECTION: replacing the local's type with the target drops whatever
+    // the other half declared. Taking the target on its own here typed `$this` as the bare
+    // INTERFACE, and an interface has no properties -- the first `$this->context` read survived
+    // only because the checker had recorded a type for that exact span, and the SECOND one, where
+    // the checker's own narrowing had already lapsed, came back `Int` and was refused as a method
+    // receiver. Both sides now ask one module the same question.
+    let current_type = ctx.local_types.get(name).cloned().or_else(|| {
+        (name == "this")
+            .then(|| ctx.current_class.clone().map(PhpType::Object))
+            .flatten()
+    });
+    let narrowed = match current_type {
+        Some(PhpType::Object(current)) => crate::types::instanceof_intersection::
+            narrow_object_to_instanceof(ctx.classes, ctx.interfaces, &current, &class_name),
+        _ => None,
+    };
+    Some((
+        name.to_string(),
+        narrowed.unwrap_or(PhpType::Object(class_name)),
+    ))
 }
 
 /// Extracts a local and named target when the selected branch proves an `instanceof` condition.

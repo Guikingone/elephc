@@ -534,6 +534,16 @@ pub(super) fn lower_array_key_sort(
             };
             lower_hash_link_sort(ctx, inst, helper)
         }
+        // `array<mixed>` promises no storage shape: a keyed write whose key is only known at run
+        // time (`$g[$name] = $c` over a bare `array` parameter's keys) promotes the list to a
+        // hash in place while the static type stays `array<mixed>`. Answering "already sorted"
+        // from the static type left symfony/console's `list` in registration order. The storage
+        // decides: a hash is sorted like any other, a real list keeps the no-op.
+        PhpType::Array(elem)
+            if order == KeySortOrder::Ascending && elem.codegen_repr() == PhpType::Mixed =>
+        {
+            lower_gradual_list_key_sort(ctx, inst, array)
+        }
         PhpType::Array(elem)
             if order == KeySortOrder::Ascending
                 || matches!(elem.codegen_repr(), PhpType::Never | PhpType::Void) =>
@@ -572,6 +582,36 @@ pub(super) fn lower_array_key_sort(
             name, other
         ))),
     }
+}
+
+/// Ascending key sort of an `array<mixed>` value, dispatched on its runtime storage.
+fn lower_gradual_list_key_sort(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+) -> Result<()> {
+    let list = ctx.next_label("ksort_gradual_list");
+    let done = ctx.next_label("ksort_gradual_done");
+    let arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    ctx.load_value_to_reg(array, arg)?;
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #3");                              // heap kind 3 is associative hash storage
+            ctx.emitter.instruction(&format!("b.ne {}", list));                 // a real list is already in key order
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 3");                              // heap kind 3 is associative hash storage
+            ctx.emitter.instruction(&format!("jne {}", list));                  // a real list is already in key order
+        }
+    }
+    lower_hash_link_sort(ctx, inst, "__rt_hash_ksort")?;
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&list);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    store_if_result(ctx, inst)?;
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Sorts an indexed array of boxed `Mixed` cells through `__rt_usort`.

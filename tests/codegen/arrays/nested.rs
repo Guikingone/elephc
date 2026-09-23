@@ -218,3 +218,50 @@ echo $first[1] . "|" . $second[0];
     );
     assert_eq!(out, "5|6");
 }
+
+/// A nested element write inside a FUNCTION, where the container's element type is a concrete
+/// array rather than `mixed`.
+///
+/// `lower_nested_array_assign` finishes every nested target through the shared boxed-Mixed writer,
+/// which accepts only a `Mixed`/union parent. A local typed `array<array<int>>` handed it a raw
+/// `array<int>` parent and the build stopped in the BACKEND with
+/// `unsupported EIR backend feature: runtime_call array set with receiver PHP type Array(Int)`.
+/// The identical two lines COMPILE AT TOP LEVEL, where the same local is already boxed, which is
+/// why the hole survived: every existing nested-write fixture in this file is either top-level or
+/// `mixed`-elemented. `Symfony\Polyfill\Php85\Php85::grapheme_levenshtein`'s Levenshtein matrix is
+/// what found it.
+///
+/// `php 8.5.10` prints `5 7 0` for this program.
+#[test]
+fn test_nested_write_through_concrete_element_type_in_a_function() {
+    let out = compile_and_run(
+        r#"<?php
+function grid(): string {
+    $dp = [[0, 0], [0, 0]];
+    $dp[1][0] = 5;
+    $dp[0][1] = 7;
+    return $dp[1][0] . " " . $dp[0][1] . " " . $dp[0][0];
+}
+echo grid();
+"#,
+    );
+    assert_eq!(out, "5 7 0");
+}
+
+/// The same write with a RUNTIME row index, so the parent fetch cannot be folded to a literal.
+///
+/// `php 8.5.10` prints `9 0`.
+#[test]
+fn test_nested_write_through_concrete_element_type_with_a_dynamic_index() {
+    let out = compile_and_run(
+        r#"<?php
+function put(int $row): string {
+    $dp = [[1, 2], [3, 4]];
+    $dp[$row][0] = 9;
+    return $dp[$row][0] . " " . $dp[0][0];
+}
+echo put(1);
+"#,
+    );
+    assert_eq!(out, "9 1");
+}

@@ -7,9 +7,22 @@
 //! Key details:
 //! - Direct and evaluated-argument dispatch stay in this leaf.
 //! - The current eval implementation supports the two-argument runtime form.
+//! - `join` is php's documented ALIAS of `implode` and shares this implementation. It had an AOT
+//!   contract and no eval binding, which is the `memory_get_usage()` failure shape one step
+//!   removed: `join()` worked in compiled code and was an uncatchable
+//!   `call to undefined function join()` inside an eval fragment. It is called from
+//!   `twig/src/Extension/CoreExtension.php` and `var-dumper/Dumper/HtmlDumper.php`, both of
+//!   which a served request loads.
 
 eval_builtin! {
     contract: "implode",
+    area: String,
+    direct: StringSplitJoin,
+    values: StringSplitJoin,
+}
+
+eval_builtin! {
+    contract: "join",
     area: String,
     direct: StringSplitJoin,
     values: StringSplitJoin,

@@ -226,6 +226,16 @@ pub(crate) fn set_eval_web_sapi(web: bool) {
     EVAL_WEB_SAPI.with(|cell| cell.set(web));
 }
 
+/// Whether a leading `#!` line is removed from every file this binary parses, as PHP's CLI does.
+///
+/// KEEP IN SYNC with `elephc::sapi::skips_leading_shebang` in the compiler. The interpreter
+/// re-parses files the compiler already saw -- Symfony Runtime re-requires the entry script
+/// through `$_SERVER['SCRIPT_FILENAME']` -- so the two answering differently prints a console
+/// entry point's shebang exactly once, which is how this was found.
+pub(crate) fn eval_skips_leading_shebang() -> bool {
+    !EVAL_WEB_SAPI.with(Cell::get)
+}
+
 /// Returns `PHP_SAPI` for the compile mode active on the current thread.
 ///
 /// KEEP IN SYNC with `crate::web_prelude::sapi_name()` in the compiler.

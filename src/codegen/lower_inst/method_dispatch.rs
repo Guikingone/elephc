@@ -571,10 +571,21 @@ fn emit_mixed_method_candidate_object_argument_guard(
     super::builtins::arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
         ctx,
         &wrong_tag_label,
-        &|given| format!("Argument must be of type {}, {} given", target_name, given),
+        &|given| {
+            let expected = if target_name.is_empty() { "object" } else { target_name };
+            format!("Argument must be of type {}, {} given", expected, given)
+        },
     );
 
     ctx.emitter.label(&object_label);
+    // A bare `object` parameter is `Object("")`: it names no class, so ANY object satisfies it.
+    // Classifying the empty name found nothing and fell through to the unconditional TypeError,
+    // which read `Argument must be of type , object given` -- for an object. Symfony's console
+    // passes its commands through such parameters, and every command failed on it.
+    if target_name.is_empty() {
+        ctx.emitter.label(&accepted_label);
+        return Ok(());
+    }
     if let Some((target_id, target_kind)) = objects::classify_named_target(ctx, target_name) {
         match ctx.emitter.target.arch {
             Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),           // matcher takes the unboxed object payload in its first argument register

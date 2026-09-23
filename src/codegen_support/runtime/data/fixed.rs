@@ -63,7 +63,15 @@ pub(crate) const RT_DIAG_BUF_BYTES: usize = 4096;
 pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> String {
     let mut out = String::new();
     out.push_str(".data\n");
-    out.push_str(&comm_directive("_concat_buf", 65536, target));
+    // One source of truth with the capacity every scratch helper bounds itself by: a `.comm`
+    // spelling its own number let the two drift, and a buffer smaller than the constant is
+    // exactly the overrun the bound is there to prevent.
+    out.push_str(&comm_directive(
+        "_concat_buf",
+        crate::codegen_support::runtime::strings::CONCAT_BUF_CAPACITY
+            + crate::codegen_support::runtime::strings::CONCAT_BUF_GUARD,
+        target,
+    ));
     out.push_str(&comm_directive("_concat_off", 8, target));
     out.push_str(&comm_directive("_unser_depth", 8, target));
     out.push_str(".globl _unser_depth_msg\n_unser_depth_msg:\n    .ascii \"Fatal error: maximum unserialize depth exceeded\\n\"\n");

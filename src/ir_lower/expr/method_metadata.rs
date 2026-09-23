@@ -19,6 +19,14 @@ pub(super) fn method_signature(
     let key = php_symbol_key(method);
     if let Some((class_name, _)) = singular_object_class(&object_ty) {
         let normalized = class_name.trim_start_matches('\\');
+        // A bare `object` parameter is `Object("")`: one object type with NO class, so the lookups
+        // below can only miss, and the call then lowered with no signature while codegen still
+        // resolved the callee nominally -- `f(object $o) { $o->m(); }` answered `Call to undefined
+        // method A::m()` for an `m` the runtime class declares. It is a dynamic receiver like any
+        // other, so it takes the dynamic answer.
+        if normalized.is_empty() {
+            return common_dynamic_method_signature(ctx, &key);
+        }
         if ctx.interfaces.contains_key(normalized) {
             if let Some(signature) = narrowed_runtime_method_signature(ctx, normalized, &key) {
                 return Some(signature);
@@ -32,9 +40,76 @@ pub(super) fn method_signature(
         if ctx.has_eval_barrier() {
             return None;
         }
+        // A union names the classes the receiver may hold, so ask THEM before asking the program.
+        if let Some(signature) = union_member_method_signature(ctx, &object_ty, &key) {
+            return Some(signature);
+        }
         return common_dynamic_method_signature(ctx, &key);
     }
     None
+}
+
+/// Returns the common signature across the object members a UNION receiver actually admits.
+///
+/// [`common_dynamic_method_signature`] answers the same question over every class in the program,
+/// so the answer depends on classes the receiver can never hold. Any class anywhere declaring the
+/// same method name with a different signature made it return `None`, the call then lowered with
+/// no signature, and its omitted optional arguments were never materialized -- which codegen meets
+/// as an arity mismatch and reports as `Call to a member function m() on null`.
+///
+/// MEASURED: with `class A` and `class B` both declaring `m(?string $n = null, int $f = 7)`,
+/// `function f(A|B $o) { return $o->m(); }` answers `A:NULL/7` like php. Adding an unrelated
+/// `class Unrelated { public function m(int $onlyOne = 3) {} }` to the same file -- never called,
+/// not in the union -- turns it into `Call to a member function m() on null`; removing it restores
+/// the correct answer. Symfony's console meets the same rule on `AttributeAutoconfigurationPass`,
+/// whose `\ReflectionClass|\ReflectionMethod|\ReflectionParameter|\ReflectionProperty $reflector`
+/// loses `getAttributes()`'s two optional parameters.
+///
+/// Each member contributes its own implementation's signature, or the shared descendant signature
+/// when the member is a base that does not declare the method itself -- the same two sources
+/// [`method_signature`] consults for a singular receiver. A `Mixed` member means the receiver is
+/// not confined to named classes after all, so the program-wide answer is the right one and this
+/// returns `None` to fall back to it.
+fn union_member_method_signature(
+    ctx: &LoweringContext<'_, '_>,
+    object_ty: &PhpType,
+    method_key: &str,
+) -> Option<FunctionSig> {
+    let PhpType::Union(members) = object_ty else {
+        return None;
+    };
+    let mut common: Option<FunctionSig> = None;
+    for member in members {
+        match member {
+            PhpType::Object(class_name) => {
+                let normalized = class_name.trim_start_matches('\\');
+                if normalized.is_empty() {
+                    return None;
+                }
+                // A member that does not declare the method can never be the callee -- PHP
+                // fatals on the receiver at runtime if it turns out to hold one -- so it does
+                // not constrain the signature. Returning `None` here instead made
+                // `ReflectionClass|Subject` lose `getAttributes`'s defaults because `Subject`
+                // has no such method.
+                let Some(signature) = class_method_signature(ctx, normalized, method_key)
+                    .cloned()
+                    .or_else(|| narrowed_runtime_method_signature(ctx, normalized, method_key))
+                else {
+                    continue;
+                };
+                match &common {
+                    Some(existing) if *existing != signature => return None,
+                    Some(_) => {}
+                    None => common = Some(signature),
+                }
+            }
+            // `null`, `false` and friends can hold no method; PHP fatals on the receiver before
+            // the signature matters, so they do not constrain it.
+            PhpType::Void | PhpType::Bool | PhpType::Int | PhpType::Float | PhpType::Str => {}
+            _ => return None,
+        }
+    }
+    common
 }
 
 /// Returns a shared concrete-subtype signature when a nominal base lacks the requested method.
@@ -222,7 +297,18 @@ pub(super) fn class_method_signature<'a>(
     class_name: &str,
     method_key: &str,
 ) -> Option<&'a FunctionSig> {
-    let normalized = class_name.trim_start_matches('\\');
+    // A private method belongs to the scope that declared it, not to the receiver's class. Without
+    // this the signature was missing for such a call, its DEFAULTED parameters were never
+    // materialized, and codegen met the result as `2 operands for 4 ABI params`.
+    let normalized = crate::types::private_scope::lexical_private_method_scope(
+        ctx.classes,
+        ctx.current_class.as_deref(),
+        class_name,
+        method_key,
+    );
+    let normalized = normalized
+        .as_deref()
+        .unwrap_or_else(|| class_name.trim_start_matches('\\'));
     if let Some(class_info) = ctx.classes.get(normalized) {
         let impl_class = class_info
             .method_impl_classes

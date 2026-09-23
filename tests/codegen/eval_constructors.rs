@@ -370,6 +370,36 @@ echo "bad";');
     }
 }
 
+/// Verifies an eval-side `new` of an AOT class allocates its object-owned reference cells.
+///
+/// The interpreter has no layout of its own: `new C()` inside eval allocates through
+/// `__rt_new_by_name`, which picks the layout from a class id known only at run time. A property
+/// with a reference taken to it holds a POINTER to an object-owned cell rather than a value, and
+/// the property-default thunk that allocator calls stores THROUGH that pointer — so a missing
+/// cell is a null store inside compiled code, a SIGSEGV with no catchable error and no eval
+/// diagnostic. This is the shape a compiled framework container hits: the factory is interpreted,
+/// the class it constructs is compiled.
+#[test]
+fn test_eval_new_allocates_owned_reference_property_cells() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalRefDefaults {
+    private bool $first = true;
+    private bool $second = false;
+    public function bind(): void { $r = &$this->second; $r = true; }
+    public function show(): string {
+        return ($this->first ? "T" : "F") . ($this->second ? "T" : "F");
+    }
+}
+$object = eval('return new EvalRefDefaults();');
+echo $object->show() . "|";
+$object->bind();
+echo $object->show();
+"#,
+    );
+    assert_eq!(out, "TF|TT");
+}
+
 /// Verifies eval-declared constructor by-reference args write back to lvalue targets.
 #[test]
 fn test_eval_declared_constructor_by_ref_writes_back_to_lvalue_targets() {

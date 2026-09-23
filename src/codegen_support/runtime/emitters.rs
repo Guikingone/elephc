@@ -177,6 +177,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_getdate(emitter);
     system::emit_localtime(emitter);
     system::emit_hrtime(emitter);
+    system::emit_memory_get_usage(emitter);
+    system::emit_memory_get_peak_usage(emitter);
     system::emit_mktime(emitter);
     system::emit_strtotime(emitter);
     system::emit_pcntl_rusage_array(emitter);
@@ -249,6 +251,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     exceptions::emit_exception_cleanup_frames(emitter);
     exceptions::emit_class_implements_interface(emitter);
     exceptions::emit_dynamic_instanceof(emitter);
+    exceptions::emit_class_name_is_a(emitter);
     exceptions::emit_exception_matches(emitter);
     exceptions::emit_report_uncaught_exception(emitter);
     exceptions::emit_throw_current(emitter);

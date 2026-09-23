@@ -38,7 +38,7 @@ use state::Parser;
 /// diagnostic needs no offset.
 pub fn parse_source_file(code: &[u8]) -> Result<EvalProgram, EvalParseDiagnostic> {
     let mut tokens: Vec<Token> = Vec::new();
-    let mut cursor = 0;
+    let mut cursor = leading_shebang_end(code);
     while let Some(open) = find_php_open_tag(code, cursor) {
         push_inline_html_token(&mut tokens, code, cursor, open.tag_start);
         if open.echoes {
@@ -64,6 +64,22 @@ pub fn parse_source_file(code: &[u8]) -> Result<EvalProgram, EvalParseDiagnostic
     Parser::new(tokens, code.len())
                 .tracking_source_lines()
                 .parse_program()
+}
+
+/// Byte offset of the first byte PHP compiles, skipping a leading `#!` line under the CLI SAPI.
+///
+/// PHP's CLI removes that line from EVERY file it compiles, the primary script and an include
+/// alike, and a web SAPI emits it as inline HTML like any other text before `<?php` (measured on
+/// 8.5.10). Advancing the cursor rather than slicing keeps `source_line` counting PHYSICAL lines,
+/// which is what php reports: a `throw` on line 3 of a shebang file is reported on line 3.
+fn leading_shebang_end(code: &[u8]) -> usize {
+    if !code.starts_with(b"#!") || !crate::eval_php_profile::eval_skips_leading_shebang() {
+        return 0;
+    }
+    match code.iter().position(|byte| *byte == b'\n') {
+        Some(end) => end + 1,
+        None => code.len(),
+    }
 }
 
 /// One PHP opening tag: where it starts, where its code starts, and whether it echoes.

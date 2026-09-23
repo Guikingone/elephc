@@ -142,6 +142,9 @@ pub use atoi::emit_atoi;
 pub use strcopy::emit_strcopy;
 /// Emit string copy helper.
 pub use concat_scratch::emit_concat_scratch;
+/// Byte capacity of `_concat_buf`, re-exported so the `.comm` that declares the buffer and the
+/// helpers that bound themselves by it can never spell two different numbers.
+pub(crate) use concat_scratch::{CONCAT_BUF_CAPACITY, CONCAT_BUF_GUARD};
 pub use str_persist::emit_str_persist;
 /// Emit string persistence helper.
 pub use str_inc_dec::{emit_mixed_inc_dec, emit_str_inc_dec};

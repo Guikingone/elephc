@@ -107,7 +107,35 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
             let _ = eval_spl_autoload_class(interface, context, values)?;
         }
         if !context.has_interface(interface) && !eval_runtime_interface_exists(interface, values)? {
-            return Err(EvalStatus::RuntimeFatal);
+            // The autoloader ran and the interface is still absent. For a compiled program that
+            // has one ordinary cause: the compiler already included the interface's file, so the
+            // include the autoloader performed was skipped on that mark
+            // (`interpreter::include_exec`, `phase=compiler_included_skip`). The mark promises the
+            // COMPILED world performed the inclusion, and an interface's CONTRACT is not readable
+            // from there — it has to be validated against this pending class.
+            //
+            // Same shape, same retry as `ensure_eval_traits_available`: once, with the mark
+            // ignored, and only after the ordinary path has failed. Bypassing it up front would
+            // re-interpret files the compiled world already has, and a class declared twice hits
+            // the duplicate guard at the top of this function.
+            //
+            // MEASURED on Symfony's console: `RoutingControllerPass implements CompilerPassInterface`,
+            // whose file traced `compiler_included_skip` immediately before this return.
+            crate::interpreter::include_exec::with_compiler_included_sources_reincluded(|| {
+                eval_spl_autoload_class(interface, context, values)
+            })?;
+            #[cfg(not(test))]
+            context.sync_global_eval_classes();
+        }
+        if !context.has_interface(interface) && !eval_runtime_interface_exists(interface, values)? {
+            // Traced, unlike the bare `return Err` this replaces: an untraced refusal here is what
+            // made the failure carry NO `class_decl_*` line at all and look like it happened
+            // outside every stage.
+            trace_class_decl_result::<()>(
+                class,
+                "interface_unavailable",
+                Err(EvalStatus::RuntimeFatal),
+            )?;
         }
     }
     trace_class_decl_result(

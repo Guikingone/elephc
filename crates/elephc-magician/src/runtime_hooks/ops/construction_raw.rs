@@ -170,6 +170,22 @@ macro_rules! impl_construction_raw_ops {
         Ok(unsafe { __elephc_eval_value_type_tag(value.as_ptr()) })
     }
 
+    /// Returns the first three words of a real runtime cell, for `ELEPHC_EVAL_TRACE` only.
+    ///
+    /// This adapter owns the cell representation, so it is the one implementation that may look.
+    /// Read UNALIGNED: the handle is a `*mut c_void` and nothing promises it is 8-aligned, and
+    /// building a `&[u64]` over it aborts the process on that precondition rather than returning.
+    fn trace_result_words(&mut self, value: RuntimeCellHandle) -> Option<[u64; 3]> {
+        let base = value.as_ptr().cast::<u64>();
+        (!base.is_null()).then(|| unsafe {
+            [
+                base.read_unaligned(),
+                base.add(1).read_unaligned(),
+                base.add(2).read_unaligned(),
+            ]
+        })
+    }
+
     /// Creates an invoker-only by-reference marker for a staged Mixed slot.
     fn invoker_ref_cell(
         &mut self,

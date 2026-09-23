@@ -265,6 +265,30 @@ pub(super) fn eval_reflection_owner_object_with_members(
         has_return_type_release?;
         return_type_release?;
     }
+    // PHP's public `$method->class` / `$property->class` is the DECLARING class, read from
+    // `__class`. The compiled constructor fills it; an object built here never ran that
+    // constructor, so it has to be written, or every eval-built member reports an empty class.
+    if matches!(
+        owner_kind,
+        EVAL_REFLECTION_OWNER_METHOD | EVAL_REFLECTION_OWNER_PROPERTY
+    ) {
+        if let Some(declaring_class) = parent_class_name {
+            let class_value = values.string(declaring_class.trim_start_matches('\\'))?;
+            let owner_class = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+                "ReflectionMethod"
+            } else {
+                "ReflectionProperty"
+            };
+            let configured = eval_reflection_with_declaring_class_scope(
+                owner_class,
+                context,
+                |_| -> Result<(), EvalStatus> { values.property_set(object, "__class", class_value) },
+            );
+            let class_value_release = values.release(class_value);
+            configured?;
+            class_value_release?;
+        }
+    }
     if owner_kind == EVAL_REFLECTION_OWNER_CLASS_CONSTANT {
         let has_type = values.bool_value(type_metadata.is_some())?;
         let type_value = match type_metadata {

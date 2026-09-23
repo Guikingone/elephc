@@ -16,7 +16,11 @@
 //!   observable behaviour exactly what reading the environment every time gave.
 //! - Two questions are cached in one slot because they are answered by one lookup: whether the
 //!   variable is set at all, and whether its value selects the FFI-entry trace.
+//! - It also carries the one-slot hand-off that lets `phase=include_ok` name the file an include
+//!   actually reached; see [`note_include_target`].
 
+use std::cell::RefCell;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, Ordering};
 
 /// The cached verdict has not been computed since the last invalidation.
@@ -38,6 +42,76 @@ pub(crate) fn enabled() -> bool {
 /// Returns whether the per-FFI-entry trace is enabled, which needs `ffi` or `all` specifically.
 pub(crate) fn ffi_enabled() -> bool {
     state() == TRACE_ON_FFI
+}
+
+thread_local! {
+    /// The resolved target of the include that most recently finished on this thread.
+    static INCLUDE_TARGET: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
+
+/// Records the file an include actually reached, for the trace line emitted after it returns.
+///
+/// The two halves of an include live in different crates' worth of frames. The bridge entry point
+/// `__elephc_eval_include` is the only place that knows the include CROSSED from compiled code, so
+/// it owns `phase=include_ok` — but all it has is the caller's position. Turning `$file` into a
+/// path happens in the interpreter's include driver, several frames down, and that resolution is
+/// the whole answer to "what did this request include?". Passing it back through the return type
+/// would change a public signature for a facility that is off in every real run, so it travels in
+/// this slot instead.
+///
+/// Written LAST, after the include's body has finished, so a nested include cannot leave its own
+/// target behind for the enclosing one: the inner call writes and the bridge takes it, then the
+/// outer call overwrites with its own. Nothing is allocated when the trace is off.
+pub(crate) fn note_include_target(path: &Path) {
+    if !recording_include_targets() {
+        return;
+    }
+    INCLUDE_TARGET.with(|slot| {
+        slot.replace(Some(path.to_path_buf()));
+    });
+}
+
+/// Removes and returns the target recorded by the include that just finished.
+///
+/// Taking rather than peeking is deliberate: an emission site that finds the slot empty must print
+/// that it does not know, never a target left over from an earlier include.
+pub(crate) fn take_include_target() -> Option<PathBuf> {
+    if !recording_include_targets() {
+        return None;
+    }
+    INCLUDE_TARGET.with(|slot| slot.borrow_mut().take())
+}
+
+/// Answers whether the include target slot is live: exactly `enabled()` outside tests.
+#[cfg(not(test))]
+#[inline]
+fn recording_include_targets() -> bool {
+    enabled()
+}
+
+/// In tests the slot can also be armed for ONE THREAD, without switching the whole trace on.
+///
+/// Switching `TRACE_STATE` on is process-wide, and the test binary runs many tests at once, so it
+/// turns every other trace site on underneath whatever else is running. That is not merely noisy:
+/// `interpreter::statements::native_method_execution` reads three words from the result cell
+/// through `slice::from_raw_parts` behind `enabled()`, with no null check, so a concurrent test
+/// whose native method returns a null cell aborts the whole binary with an unsafe-precondition
+/// violation. Arming one thread keeps this test's blast radius to this test.
+#[cfg(test)]
+fn recording_include_targets() -> bool {
+    enabled() || INCLUDE_TARGET_ARMED.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Set by [`arm_include_target_for_test`] for the duration of one test.
+    static INCLUDE_TARGET_ARMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Arms the include target slot on THIS THREAD for a test, leaving the process-wide verdict alone.
+#[cfg(test)]
+pub(crate) fn arm_include_target_for_test(armed: bool) {
+    INCLUDE_TARGET_ARMED.with(|cell| cell.set(armed));
 }
 
 /// Forgets the cached verdict, so the next question re-reads the environment.

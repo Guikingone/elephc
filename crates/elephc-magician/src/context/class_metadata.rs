@@ -451,6 +451,30 @@ impl ElephcEvalContext {
         names
     }
 
+    /// Returns the method names `ReflectionClass::getMethods()` lists, in PHP's order.
+    ///
+    /// PHP builds a class's method table from its own declarations first and appends what it
+    /// inherits, so the reflected class leads and each ancestor follows with the methods nobody
+    /// below it redeclared. A private method is not inherited at all: it is listed only when the
+    /// reflected class itself declares it. (`class_method_names` walks root-first and keeps
+    /// ancestor privates, which is the right set for name lookups but not for this list.)
+    pub fn class_reflection_method_names(&self, class_name: &str) -> Vec<String> {
+        if self.enum_decl(class_name).is_some() {
+            return self.class_method_names(class_name);
+        }
+        let mut names = Vec::new();
+        let mut seen = HashSet::new();
+        for (depth, class) in self.class_chain(class_name).into_iter().rev().enumerate() {
+            for method in class.methods() {
+                if depth > 0 && method.visibility() == EvalVisibility::Private {
+                    continue;
+                }
+                push_unique_method_name(method.name(), &mut names, &mut seen);
+            }
+        }
+        names
+    }
+
     /// Returns PHP case-sensitive property names visible to `ReflectionClass::hasProperty()`.
     pub fn class_property_names(&self, class_name: &str) -> Vec<String> {
         let reflected_name = self

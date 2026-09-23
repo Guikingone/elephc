@@ -73,6 +73,9 @@ pub(in crate::interpreter) use is_callable::{
     eval_is_callable_value,
 };
 pub(in crate::interpreter) use method_exists::eval_member_exists_result;
+pub(crate) use is_a::eval_class_name_is_a_bridge;
 pub(crate) use spl_autoload::eval_spl_autoload_class;
 pub(crate) use spl_autoload::eval_spl_autoload_classlike_definition;
 pub(crate) use spl_autoload_register::register_spl_autoload_callback_unchecked;
+#[cfg(not(test))]
+pub(crate) use spl_autoload_register::unregister_runtime_spl_autoload_callback;

@@ -505,7 +505,14 @@ fn eval_generator_execute_value_step(
             EvalGeneratorFlow::Finished
         }
         EvalGeneratorStep::ForeachInit { subject, slot } => {
+            // The slot OWNS what it iterates: `eval_generator_release_frame` releases it. A
+            // subject read from existing storage (`foreach ($items as ...)`) comes back BORROWED
+            // from the scope, which releases it too, so it takes a reference of its own here --
+            // the same ownership rule the plain `foreach` applies. Without it the array was
+            // released twice when the generator was destroyed.
+            let owned = eval_foreach_owns_subject(&subject);
             let subject = eval_expr(&subject, context, &mut frame.scope, values)?;
+            let subject = if owned { subject } else { values.retain(subject)? };
             frame.foreach_slots[slot] = Some((subject, 0));
             EvalGeneratorFlow::Continue
         }

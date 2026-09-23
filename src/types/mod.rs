@@ -40,6 +40,10 @@ mod return_alias;
 mod result;
 /// Class, interface, enum, and FFI schema definitions.
 mod schema;
+
+pub(crate) mod instanceof_intersection;
+
+pub(crate) mod private_scope;
 /// Function signature representation and builtin signature helpers.
 mod signatures;
 /// Target-dependent values of `ICONV_IMPL` / `ICONV_VERSION`.

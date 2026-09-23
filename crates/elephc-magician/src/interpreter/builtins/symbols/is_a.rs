@@ -98,6 +98,24 @@ pub(in crate::interpreter) fn eval_is_a_relation_result(
         let resolved_source_class = context
             .resolve_class_like_name(&source_class)
             .unwrap_or_else(|| source_class.trim_start_matches('\\').to_string());
+        // `is_a($name, $target, true)` LOADS the class it names, as php's `zend_lookup_class`
+        // does. Answering from what happened to be declared already made
+        // `getAttributes(Route::class, IS_INSTANCEOF)` drop every attribute whose class only the
+        // autoloader could supply -- symfony/routing's own `#[Route]`, in the interpreter.
+        if context.class(&resolved_source_class).is_none()
+            && context.interface(&resolved_source_class).is_none()
+            && context.trait_decl(&resolved_source_class).is_none()
+            && !values.class_exists(&resolved_source_class)?
+            && !values.interface_exists(&resolved_source_class)?
+        {
+            let _ = crate::interpreter::eval_spl_autoload_class(
+                &resolved_source_class,
+                context,
+                values,
+            )?;
+            #[cfg(not(test))]
+            context.sync_global_eval_classes();
+        }
         if context.class(&resolved_source_class).is_some() {
             eval_class_string_is_a(
                 &resolved_source_class,
@@ -315,4 +333,49 @@ pub(in crate::interpreter) fn dynamic_object_is_a(
     values
         .object_is_a(object, target_class, exclude_self)
         .map(Some)
+}
+
+/// Answers `is_a($source, $target, true)` / `is_subclass_of()` for two class-name strings on
+/// behalf of compiled code.
+///
+/// Compiled code settles a class-name relation from its own class table first and asks here only
+/// when that table said no, which is exactly the case of a class the interpreter declared (an
+/// autoloaded file the compiler never saw). It takes the path an interpreted `is_a()` takes,
+/// autoload included.
+pub(crate) fn eval_class_name_is_a_bridge(
+    source_class: &str,
+    target_class: &str,
+    exclude_self: bool,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let source = values.string(source_class)?;
+    let target = match values.string(target_class) {
+        Ok(target) => target,
+        Err(status) => {
+            let _ = values.release(source);
+            return Err(status);
+        }
+    };
+    let allow_string = match values.bool_value(true) {
+        Ok(flag) => flag,
+        Err(status) => {
+            let _ = values.release(source);
+            let _ = values.release(target);
+            return Err(status);
+        }
+    };
+    let name = if exclude_self { "is_subclass_of" } else { "is_a" };
+    let result = eval_is_a_relation_result(name, &[source, target, allow_string], context, values)
+        .and_then(|cell| {
+            let truthy = values.truthy(cell);
+            let released = values.release(cell);
+            let truthy = truthy?;
+            released?;
+            Ok(truthy)
+        });
+    let _ = values.release(source);
+    let _ = values.release(target);
+    let _ = values.release(allow_string);
+    result
 }

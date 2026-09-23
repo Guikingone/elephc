@@ -197,11 +197,25 @@ pub fn store_at_offset_scratch(emitter: &mut Emitter, reg: &str, offset: usize, 
     }
 }
 
-/// Loads the local frame slot at `offset` from the frame pointer into `reg`, using x9 as scratch.
+/// Loads the local frame slot at `offset` from the frame pointer into `reg`.
 /// On AArch64: uses `ldur` for offsets ≤ 255, otherwise computes the address first.
 /// On x86_64: loads via `[rbp - offset]` with a mov instruction; float registers use movsd.
+///
+/// The address is computed INTO THE DESTINATION, which the load is about to overwrite anyway, so
+/// a deep frame cannot disturb a register the caller is still holding. It used to borrow x9
+/// unconditionally, and that made correct-looking code fail once a frame grew past the 255-byte
+/// `ldur` immediate -- a caller holding a value in x9 across this call lost it, with no diagnostic
+/// and no change to its own source.
+///
+/// MEASURED: `foreach ($a as &$v) { $p($v); }` printed the values, and adding the unused KEY
+/// (`as $k => &$v`) pushed the slot past the immediate range and printed nothing, because
+/// `lower_invoker_ref_arg` keeps the marker's SOURCE TAG in x9 across the address materialization.
+/// php 8.5.10 prints `p(1);p(2);` for both spellings.
+///
+/// A float destination cannot hold an address, so it keeps a general-purpose scratch.
 pub fn load_at_offset(emitter: &mut Emitter, reg: &str, offset: usize) {
-    load_at_offset_scratch(emitter, reg, offset, "x9");
+    let scratch = if is_float_register(reg) { "x9" } else { reg };
+    load_at_offset_scratch(emitter, reg, offset, scratch);
 }
 
 /// Loads the local frame slot at `offset` from the frame pointer into `reg`, using `scratch` as scratch.

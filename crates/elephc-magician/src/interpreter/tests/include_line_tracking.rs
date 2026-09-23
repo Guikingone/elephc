@@ -138,3 +138,96 @@ include "caller.php";"#,
     );
     assert_eq!(output, "f0:caller.php;l0:5;");
 }
+
+/// Runs a caller fragment with the include target slot armed, and returns what it recorded.
+///
+/// Armed for THIS THREAD only. Switching the whole trace on would be process-wide -- through the
+/// environment, which other test threads are reading, or through the cached verdict, which every
+/// other trace site consults -- and one of those sites dereferences a result cell without a null
+/// check, so arming the process aborts the binary from an unrelated test.
+fn run_traced_include_fixture(
+    tag: &str,
+    files: &[(&str, &str)],
+    fragment: &[u8],
+) -> (
+    std::path::PathBuf,
+    Option<std::path::PathBuf>,
+    Option<std::path::PathBuf>,
+) {
+    let dir = std::env::temp_dir().join(format!(
+        "elephc-magician-include-target-{}-{}",
+        std::process::id(),
+        tag
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create include target fixture directory");
+    for (name, contents) in files {
+        std::fs::write(dir.join(name), contents).expect("write include target fixture");
+    }
+    let program = parse_fragment(fragment).expect("parse include target caller fragment");
+    let mut context = ElephcEvalContext::new();
+    context.set_call_site(
+        dir.join("main.php").to_string_lossy().into_owned(),
+        dir.to_string_lossy().into_owned(),
+        1,
+    );
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    crate::eval_trace::arm_include_target_for_test(true);
+    let _ = crate::eval_trace::take_include_target();
+    let outcome = execute_program_with_context(&mut context, &program, &mut scope, &mut values);
+    let recorded = crate::eval_trace::take_include_target();
+    // Taken a second time while the slot is still armed, because after the disarm below it answers
+    // `None` for the trivial reason that nothing is recording.
+    let after_take = crate::eval_trace::take_include_target();
+    crate::eval_trace::arm_include_target_for_test(false);
+    let _ = std::fs::remove_dir_all(&dir);
+    outcome.expect("execute include target caller fragment");
+    (dir, recorded, after_take)
+}
+
+/// Verifies an include hands the trace the RESOLVED file it reached, not the text that was written.
+///
+/// `phase=include_ok` is printed by the bridge entry point after the include returns, and the only
+/// thing it knows by itself is the caller's position -- which after include splicing names a file
+/// that does not contain the line it prints beside it. Naming the target is therefore the one
+/// field a per-request include census can read, and this pins all three ways it could be useless:
+/// missing, still relative, or -- the subtle one -- the target of a NESTED include rather than the
+/// one that just finished. `outer.php` includes `inner.php`, so recording at resolution time
+/// instead of on the way out would answer `inner.php` here.
+#[test]
+fn an_include_records_the_resolved_target_of_the_include_that_finished() {
+    let (dir, recorded, after_take) = run_traced_include_fixture(
+        "nested",
+        &[
+            ("inner.php", "<?php\necho \"in;\";\n"),
+            ("outer.php", "<?php\ninclude \"inner.php\";\necho \"out;\";\n"),
+        ],
+        br#"include "outer.php";"#,
+    );
+    assert_eq!(
+        recorded.as_deref(),
+        Some(dir.join("outer.php").as_path()),
+        "the trace must name the resolved target of the include that finished",
+    );
+    assert_eq!(
+        after_take, None,
+        "taking the target must empty the slot, so a later include cannot print a stale one",
+    );
+}
+
+/// Verifies the target is recorded even when the file does not exist, so a miss is still named.
+///
+/// An `include` of a missing file warns and returns false; without this the census would show a
+/// crossing whose target field said nothing at all, which is the exact failure the field exists
+/// to end.
+#[test]
+fn a_missing_include_still_records_the_path_it_tried() {
+    let (_dir, recorded, _after_take) =
+        run_traced_include_fixture("missing", &[], br#"include "absent_probe.php";"#);
+    assert_eq!(
+        recorded.as_deref(),
+        Some(std::path::Path::new("absent_probe.php")),
+        "an unresolvable include must still report the path it tried",
+    );
+}

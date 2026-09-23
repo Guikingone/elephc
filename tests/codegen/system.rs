@@ -3827,6 +3827,78 @@ echo count($a), "|",
     assert_eq!(out, "2|1|1|1");
 }
 
+/// Verifies `memory_get_usage()` / `memory_get_peak_usage()` report elephc's OWN allocator, and
+/// report it consistently: a live allocation raises the live figure by at least its own size,
+/// releasing it lowers the live figure again, the peak never falls back, and the `$real_usage`
+/// figure (arena bytes carved out) is never below the live figure it contains.
+///
+/// These are relationships, not magnitudes, because the magnitudes are elephc's and differ from
+/// php's by design -- php's Zend MM reports ~481 KB in use and a 2 MB system chunk for the same
+/// trivial program where elephc honestly reports under a kilobyte of live heap. What a caller
+/// can rely on is the SHAPE, and that is what breaks if the two counters are ever swapped.
+#[test]
+fn test_memory_reporters_track_the_heap_consistently() {
+    let out = compile_and_run(
+        r#"<?php
+$before = memory_get_usage();
+$s = str_repeat("x", 1000000);
+$during = memory_get_usage();
+$peak = memory_get_peak_usage();
+unset($s);
+$after = memory_get_usage();
+echo (is_int($before) && is_int($during) && is_int($peak)) ? "1" : "0", "|",
+     ($during - $before >= 1000000) ? "1" : "0", "|",
+     ($after < $during) ? "1" : "0", "|",
+     ($peak >= $during) ? "1" : "0", "|",
+     (memory_get_peak_usage() >= $peak) ? "1" : "0", "|",
+     (memory_get_usage(true) >= memory_get_usage(false)) ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, "1|1|1|1|1|1");
+}
+
+/// Verifies the COMPILED and the INTERPRETED path answer from the same heap.
+///
+/// This is the property that broke: `memory_get_usage()` existed in neither, and an eval
+/// fragment calling it was an uncatchable fatal that killed a `--web` worker before it could
+/// flush. An eval-local implementation would fix the fatal and still be wrong -- it would
+/// describe a different heap. The assertion is that a large allocation made in COMPILED code is
+/// visible to a reading made INSIDE eval, and that the peak eval sees is at least the peak the
+/// compiled side saw.
+#[test]
+fn test_memory_reporters_agree_across_the_eval_boundary() {
+    let out = compile_and_run(
+        r#"<?php
+$base = memory_get_usage();
+$s = str_repeat("x", 1000000);
+$compiled = memory_get_usage();
+$compiled_peak = memory_get_peak_usage();
+eval('
+$seen = memory_get_usage();
+echo ($seen >= $compiled) ? "1" : "0", "|";
+echo (memory_get_peak_usage() >= $compiled_peak) ? "1" : "0", "|";
+echo is_int($seen) ? "1" : "0", "|";
+echo (memory_get_usage(true) >= memory_get_usage(false) - 4096) ? "1" : "0";
+');
+"#,
+    );
+    assert_eq!(out, "1|1|1|1");
+}
+
+/// Verifies `memory_get_usage(...)` survives as a first-class callable, like its `hrtime`
+/// neighbour, and that the stored callable still honors `$real_usage`.
+#[test]
+fn test_first_class_callable_memory_get_usage() {
+    let out = compile_and_run(
+        r#"<?php
+$m = memory_get_usage(...);
+$p = memory_get_peak_usage(...);
+echo ($m(false) > 0 && $p(false) >= $m(false) - 4096) ? "y" : "n";
+"#,
+    );
+    assert_eq!(out, "y");
+}
+
 /// Verifies `function_exists()` returns `true` for the procedural date/time aliases that the
 /// name resolver rewrites into OOP/built-in expressions (e.g. `date_create`, `idate`,
 /// `gmstrftime`). PHP's introspection must recognize the same surface that the resolver sees.

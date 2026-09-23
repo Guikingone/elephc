@@ -20,6 +20,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::runtime::strings::CONCAT_BUF_CAPACITY;
 use crate::codegen_support::sentinels::{emit_branch_if_null_container, emit_resolve_prop_desc_tag};
 
 /// Emits `__rt_serialize_value`, the tag-dispatching serializer, and the
@@ -375,6 +376,10 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save the value across the itoa call
     emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [x9]");                                       // load the current write offset
+    emitter.instruction("add x13, x10, #24");                                   // the widest decimal rendering plus its sign
+    emitter.instruction(&format!("mov x14, #{}", CONCAT_BUF_CAPACITY));         // load the concat scratch capacity in bytes
+    emitter.instruction("cmp x13, x14");                                        // would the digits write past the end of the scratch buffer?
+    emitter.instruction("b.hi __rt_serialize_uint_overflow");                   // report an allocation overflow instead of writing into the neighbouring globals
     emit_symbol_address(emitter, "x11", "_concat_buf");
     emitter.instruction("add x12, x11, x10");                                   // compute the write target pointer
     emitter.instruction("str x12, [sp, #8]");                                   // save the write target across the itoa call
@@ -398,6 +403,8 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // deallocate the digit-helper frame
     emitter.instruction("ret");                                                 // return with digits appended
+    emitter.label("__rt_serialize_uint_overflow");
+    emitter.instruction("b __rt_alloc_overflow");                               // unconditional branch keeps the fatal trampoline cross-atom safe
 
     // -- __rt_serialize_indexed_array: append a:n:{ i:K;<v>... } for a tag-4 array --
     emitter.blank();
@@ -537,6 +544,10 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_concat_append");
     emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [x9]");                                       // current write offset
+    emitter.instruction("add x12, x10, x1");                                    // the scratch tail this run would reach
+    emitter.instruction(&format!("mov x13, #{}", CONCAT_BUF_CAPACITY));         // load the concat scratch capacity in bytes
+    emitter.instruction("cmp x12, x13");                                        // would the run write past the end of the scratch buffer?
+    emitter.instruction("b.hi __rt_concat_append_overflow");                    // report an allocation overflow instead of writing into the neighbouring globals
     emit_symbol_address(emitter, "x11", "_concat_buf");
     emitter.instruction("add x11, x11, x10");                                   // write target pointer
     emitter.instruction("mov x12, #0");                                         // byte cursor = 0
@@ -551,6 +562,8 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x10, x10, x1");                                    // advance the write offset by the run
     emitter.instruction("str x10, [x9]");                                       // persist the new write offset
     emitter.instruction("ret");                                                 // return with the bytes appended
+    emitter.label("__rt_concat_append_overflow");
+    emitter.instruction("b __rt_alloc_overflow");                               // unconditional branch keeps the fatal trampoline cross-atom safe
 
     // -- __rt_serialize_pstr: append a serialized string s:len:"bytes"; (x0=ptr, x1=len) --
     emitter.label_global("__rt_serialize_pstr");
@@ -1284,6 +1297,10 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the value across the itoa call
     emit_symbol_address(emitter, "r10", "_concat_off");
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the current write offset
+    emitter.instruction("mov r9, r10");                                         // copy the offset to compute the rendering's tail
+    emitter.instruction("add r9, 24");                                          // the widest decimal rendering plus its sign
+    emitter.instruction(&format!("cmp r9, {}", CONCAT_BUF_CAPACITY));           // would the digits write past the end of the scratch buffer?
+    emitter.instruction("ja __rt_serialize_uint_overflow");                     // report an allocation overflow instead of writing into the neighbouring globals
     emit_symbol_address(emitter, "r11", "_concat_buf");
     emitter.instruction("add r11, r10");                                        // compute the write target pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], r11");                       // save the write target across the itoa call
@@ -1310,6 +1327,8 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 32");                                         // deallocate the digit-helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return with digits appended
+    emitter.label("__rt_serialize_uint_overflow");
+    emitter.instruction("jmp __rt_alloc_overflow");                             // unconditional branch keeps the fatal trampoline cross-atom safe
 
     // -- __rt_serialize_indexed_array: append a:n:{ i:K;<v>... } for a tag-4 array --
     emitter.blank();
@@ -1448,6 +1467,10 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_concat_append");
     emit_symbol_address(emitter, "r10", "_concat_off");
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // current write offset
+    emitter.instruction("mov rcx, r10");                                        // copy the offset to compute the run's tail
+    emitter.instruction("add rcx, rsi");                                        // the scratch tail this run would reach
+    emitter.instruction(&format!("cmp rcx, {}", CONCAT_BUF_CAPACITY));          // would the run write past the end of the scratch buffer?
+    emitter.instruction("ja __rt_concat_append_overflow");                      // report an allocation overflow instead of writing into the neighbouring globals
     emit_symbol_address(emitter, "r11", "_concat_buf");
     emitter.instruction("add r11, r10");                                        // write target pointer
     emitter.instruction("xor rcx, rcx");                                        // byte cursor = 0
@@ -1463,6 +1486,8 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emit_symbol_address(emitter, "r9", "_concat_off");
     emitter.instruction("mov QWORD PTR [r9], r10");                             // persist the new write offset
     emitter.instruction("ret");                                                 // return with the bytes appended
+    emitter.label("__rt_concat_append_overflow");
+    emitter.instruction("jmp __rt_alloc_overflow");                             // unconditional branch keeps the fatal trampoline cross-atom safe
 
     // -- __rt_serialize_pstr: append a serialized string s:len:"bytes"; (rdi=ptr, rsi=len) --
     emitter.label_global("__rt_serialize_pstr");

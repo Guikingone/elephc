@@ -155,6 +155,23 @@ pub enum BuiltinArgumentLowering {
     Standard,
     /// Drop the unsupported statically-default count mode after shared planning.
     Count,
+    /// Keep only the subject operand of `html_entity_decode`; drop `$flags`/`$encoding`.
+    ///
+    /// The declared contract is php's full `(string, int, ?string)`, but the backend target is
+    /// `RuntimeCallTarget::UnaryString`, whose EIR signature is a validated one-operand
+    /// `Str -> Str`. The two optional arguments are still LOWERED — an effectful one keeps its
+    /// instruction and its source-order position, exactly as php evaluates it — and then dropped
+    /// from the call's operand list, where pure constants are reclaimed by DCE. Same shape as
+    /// `Count` above, but applied in `lower_registry_call` rather than in `ir_lower`'s argument
+    /// planning, because the eval bridge's synthetic callable wrapper reaches the runtime target
+    /// WITHOUT going through argument planning and has to be trimmed by the same rule.
+    ///
+    /// The runtime decodes the ENT_QUOTES set, which is what php's own default flag value
+    /// (`ENT_QUOTES|ENT_SUBSTITUTE|ENT_HTML401 == 11`) and the overwhelmingly common explicit
+    /// `ENT_QUOTES` call both ask for; `htmlspecialchars`, its inverse, accepts and ignores the
+    /// same two arguments for the same reason. A flag-aware runtime — `ENT_NOQUOTES` leaving
+    /// `&quot;` alone, `ENT_HTML5` decoding `&apos;` — is a follow-up.
+    HtmlEntityDecode,
     /// Preserve date's literal-format specialization inputs.
     Date,
     /// Preserve JSON decode's source-sensitive option handling.
@@ -670,6 +687,21 @@ pub fn lower_registry_call(
         BuiltinResultType::Checked => result_type.clone(),
         BuiltinResultType::Declared => def.return_type.clone(),
         BuiltinResultType::Shared(resolve) => resolve(&semantic_input),
+    };
+    // A builtin whose DECLARED contract is wider than the operand list its runtime target
+    // accepts drops the surplus here, after the result type and the effects have both seen the
+    // full argument list. This is the one funnel every registry call passes through — the
+    // ordinary `ir_lower` path AND the PHP-ABI callable wrapper the eval bridge synthesizes —
+    // so trimming anywhere else fixes only one of them: `html_entity_decode($s, ENT_QUOTES,
+    // 'UTF-8')` compiled fine from source and still failed the EIR validator inside the
+    // wrapper with "typed runtime string.html_entity_decode expected 1 operand, got 3".
+    //
+    // The arguments were already LOWERED by the caller, in source order, so an effectful one
+    // keeps its instruction and its position; only the operand reference goes, and DCE reclaims
+    // whatever was pure.
+    let operands = match def.spec.semantics.argument_lowering {
+        BuiltinArgumentLowering::HtmlEntityDecode => &operands[..operands.len().min(1)],
+        _ => operands,
     };
     let normalized = NormalizedBuiltinCall {
         name: def.name,

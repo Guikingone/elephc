@@ -193,6 +193,16 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         // a `bool` property refused the store. Symfony's `DebugHandlersListener::__construct`
         // writes exactly that.
         ExprKind::Not(_) | ExprKind::InstanceOf { .. } => PhpType::Bool,
+        // A literal is typed from its items, the same way its own lowering will type it. The
+        // syntactic fallback answered `array<int>` for `[$class, $name]`, and a ternary whose arms
+        // were two such literals re-read every string and object as a heap address:
+        // `$o === null ? [$c, $n] : [$o, $n]` printed `int(4351153472)` for the class name.
+        ExprKind::ArrayLiteral(items) if !items.iter().any(|item| matches!(item.kind, ExprKind::Spread(_))) => {
+            super::array_literal_type_for_ir(ctx, items, expr).codegen_repr()
+        }
+        ExprKind::ArrayLiteralAssoc(pairs) => {
+            super::assoc_array_literal_type_for_ir(ctx, pairs, expr).codegen_repr()
+        }
         _ => fallback_expr_type(expr),
     }
 }

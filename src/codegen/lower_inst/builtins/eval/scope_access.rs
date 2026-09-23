@@ -250,14 +250,20 @@ pub(super) fn set_eval_call_site(ctx: &mut FunctionContext<'_>, inst: &Instructi
     emit_eval_status_check(ctx);
 }
 
-/// Writes the four-word ElephcEvalConstructionSite borrowed by the native-new ABI.
+/// Writes the five-word ElephcEvalConstructionSite borrowed by the native-new ABI.
+///
+/// `spread_container` marks a single argument that is the array a `...$args` spread produced;
+/// the bridge unpacks it, binding string keys as named arguments.
 pub(super) fn emit_eval_construction_site(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     arg_count: usize,
     offset: usize,
+    spread_container: bool,
 ) {
     let reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, reg, i64::from(spread_container));
+    abi::emit_store_to_sp(ctx.emitter, reg, offset + 32);
     abi::emit_load_int_immediate(ctx.emitter, reg, arg_count as i64);
     abi::emit_store_to_sp(ctx.emitter, reg, offset);
     let source = super::eval_source_path_for_function(ctx.module, ctx.function).unwrap_or("");

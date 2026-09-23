@@ -115,8 +115,27 @@ pub(super) fn resolve_include_stmt(
 
     include_chain.pop();
 
-    let mut executable =
-        strip_discoverable_declarations(resolved_stmts, Some(&canonical), function_variants);
+    let mut outcome = super::declarations::ConditionalDeclarationOutcome::default();
+    let mut executable = strip_discoverable_declarations(
+        resolved_stmts,
+        Some(&canonical),
+        function_variants,
+        &mut outcome,
+    );
+    // Both halves go into the same subtree-wide state, and only their DIFFERENCE means anything:
+    // a name bound by one file answers for the same name dropped by another, which is exactly
+    // what a polyfill's two version branches do.
+    state
+        .bound_conditional_declaration_names
+        .extend(outcome.bound.iter().cloned());
+    if !outcome.dropped.is_empty() {
+        // `include_chain` was popped just above, so it now holds exactly the ancestors.
+        for path in std::iter::once(canonical.clone()).chain(include_chain.iter().cloned()) {
+            state
+                .unbound_conditional_declaration_sources
+                .record(path, outcome.dropped.iter().cloned());
+        }
+    }
     if !preserve_return {
         discard_statement_include_return(&mut executable);
     }
@@ -220,10 +239,39 @@ pub(super) fn expand_value_include(
         }
         Some(mut wrapped) => {
             let captured_return = rewrite_first_include_return(&mut wrapped, &tmp);
-            // Pre-seed the default include value of `1` when the included body cannot set the
-            // temporary itself: either it has no top-level `return`, or it is an `_once` include
-            // whose guarded body may be skipped on a repeat include.
-            if !captured_return || once {
+            // Two different php answers used to share one pre-seed of `1`, and only one of them
+            // is `1`. php gives an include that RAN but reached no top-level `return` the value
+            // `1`; it gives a repeat `include_once`/`require_once` -- one that ran NOTHING -- the
+            // literal `true`. Seeding `1` for both made `$x = require_once F;` come out as `1` on
+            // a repeat inclusion where php says `true`, so the `true === $x` test that
+            // Symfony Runtime's generated bootstrap uses to decide whether to run the application
+            // silently flipped. Measured against php 8.5.10:
+            //
+            //     $a = require_once 'ret.php';  var_dump($a === true);   // bool(false)
+            //     $b = require_once 'ret.php';  var_dump($b === true);   // bool(true)
+            //
+            // The two answers are told apart by whether the body ran, and the only place that is
+            // already decided is the `IncludeOnceGuard`. `true` therefore goes OUTSIDE it, where
+            // it survives exactly when the body is skipped, and `1` goes INSIDE it as the body's
+            // first statement, where it is reached exactly when the body runs.
+            //
+            // A non-`once` include always runs its body, so it has no "skipped" answer and keeps
+            // the pre-seed it had. Both seeds stay conditional on `captured_return` for the same
+            // reason as before: an unconditional top-level `return` assigns the temporary itself,
+            // and an extra dead store would only widen the temporary's inferred type.
+            if once {
+                out.push(assign_temp(
+                    &tmp,
+                    Expr::new(ExprKind::BoolLiteral(true), span),
+                    span,
+                ));
+                if !captured_return {
+                    seed_guarded_include_body(
+                        &mut wrapped,
+                        assign_temp(&tmp, Expr::new(ExprKind::IntLiteral(1), span), span),
+                    );
+                }
+            } else if !captured_return {
                 out.push(assign_temp(
                     &tmp,
                     Expr::new(ExprKind::IntLiteral(1), span),
@@ -246,6 +294,26 @@ pub(super) fn expand_value_include(
     Ok(out)
 }
 
+/// Makes `seed` the first thing an `_once` include's GUARDED body runs.
+///
+/// The distinction the caller needs is "did the body run", and the only place that is already
+/// decided is inside the guard: `resolve_include_stmt` wraps an `_once` inclusion in exactly one
+/// `IncludeOnceGuard`, whose body runs on a first inclusion and is skipped on a repeat one. A
+/// statement placed there is therefore reached under precisely the condition php uses to choose
+/// between the file's own value and `true`.
+///
+/// Falls back to prepending in front of `body` when there is no guard to reach into, which keeps
+/// the temporary assigned no matter what shape the resolver produced.
+fn seed_guarded_include_body(body: &mut Vec<Stmt>, seed: Stmt) {
+    for stmt in body.iter_mut() {
+        if let StmtKind::IncludeOnceGuard { body: guarded, .. } = &mut stmt.kind {
+            guarded.insert(0, seed);
+            return;
+        }
+    }
+    body.insert(0, seed);
+}
+
 /// Converts a top-level included-file return into its side-effecting expression.
 ///
 /// A statement-position include discards its value: `return E` stops the included
@@ -254,6 +322,10 @@ pub(super) fn expand_value_include(
 /// before lowerings see the caller's statements.
 fn discard_statement_include_return(body: &mut Vec<Stmt>) {
     for index in 0..body.len() {
+        if is_guarded_end_of_file(&body[index].kind) {
+            end_included_file_under_guard(body, index);
+            return;
+        }
         if !matches!(body[index].kind, StmtKind::Return(_)) {
             continue;
         }
@@ -266,6 +338,74 @@ fn discard_statement_include_return(body: &mut Vec<Stmt>) {
         body.truncate(index + 1);
         return;
     }
+}
+
+/// Returns whether this file-scope statement is `if (C) { …; return; }` with nothing else in the
+/// chain — the second shape a file-scope `return` is written in, and the one the scan above walks
+/// straight past.
+///
+/// The chain has to be bare so that the rewrite in [`end_included_file_under_guard`] is a
+/// rewrite: with one arm, "the rest of the file" runs exactly when the condition is false, which
+/// an `else` says directly. `crate::autoload`'s `is_bare_if_ending_in_return` asks the same
+/// question at the other include site and must keep the same answer.
+fn is_guarded_end_of_file(kind: &StmtKind) -> bool {
+    let StmtKind::If {
+        then_body,
+        elseif_clauses,
+        else_body,
+        ..
+    } = kind
+    else {
+        return false;
+    };
+    elseif_clauses.is_empty()
+        && else_body.is_none()
+        && matches!(
+            then_body.last().map(|stmt| &stmt.kind),
+            Some(StmtKind::Return(_))
+        )
+}
+
+/// Ends the INCLUDED FILE, not the caller, at `if (C) { …; return; }`.
+///
+/// `if (C) { A; return; } REST` is `if (C) { A; } else { REST }`: REST runs exactly when the file
+/// did not end. Rewriting it that way is what keeps the `return` from reaching the caller, which
+/// is where the top-level scan above leaves it.
+///
+/// MEASURED, and the shape this exists for: `symfony/polyfill-mbstring/bootstrap80.php` ends with
+/// `if (extension_loaded('mbstring')) { return; }`, and `extension_loaded('mbstring')` is TRUE in
+/// a compiled binary. Included from a Composer eager `files` entry, that `return` returned from
+/// the REQUEST PROGRAM: every route answered 200 with a zero-byte body, with no diagnostic.
+///
+/// REST IS PROCESSED FIRST so that a second guarded end-of-file inside it is rewritten while it
+/// is still this file's scope.
+fn end_included_file_under_guard(body: &mut Vec<Stmt>, index: usize) {
+    let mut rest: Vec<Stmt> = body.split_off(index + 1);
+    discard_statement_include_return(&mut rest);
+    let span = body[index].span;
+    let StmtKind::If {
+        condition,
+        mut then_body,
+        ..
+    } = std::mem::replace(&mut body[index].kind, StmtKind::Synthetic(Vec::new()))
+    else {
+        unreachable!("end_included_file_under_guard is only reached for a bare `if`");
+    };
+    if let Some(returned) = then_body.pop() {
+        let return_span = returned.span;
+        if let StmtKind::Return(Some(value)) = returned.kind {
+            then_body.push(Stmt::new(StmtKind::ExprStmt(value), return_span));
+        }
+    }
+    body[index] = Stmt::new(
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses: Vec::new(),
+            else_body: (!rest.is_empty()).then_some(rest),
+        },
+        span,
+    );
 }
 
 /// Builds a `<temp> = <value>;` assignment statement for the hidden include temporary.

@@ -502,6 +502,7 @@ impl Checker {
             variadic,
             variadic_by_ref,
             captures,
+            capture_refs,
             expr.span,
             env,
             param_hints,
@@ -1221,7 +1222,15 @@ impl Checker {
             ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) | ExprKind::Variable(_) => {
                 false
             }
-            ExprKind::Assignment { value, .. } => self.expr_produces_captured_callable(value),
+            // An assignment whose value is a CLOSURE LITERAL is exactly as statically known as
+            // the closure written on its own: the assignment only also stores it. Refusing it
+            // rejected ordinary PHP -- `array_walk_recursive($a, $f = static function (&$v) use
+            // (&$f) { … })` is how a recursive closure names itself, and Symfony's `UrlGenerator`
+            // writes it -- for being "complex".
+            ExprKind::Assignment { value, .. } => match &value.kind {
+                ExprKind::Closure { .. } => false,
+                _ => self.expr_produces_captured_callable(value),
+            },
             ExprKind::Ternary {
                 then_expr,
                 else_expr,

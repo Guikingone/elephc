@@ -661,9 +661,106 @@ pub(crate) fn lower_is_a_relation(
             return super::lower_eval_object_is_a(ctx, inst, object, &target_class, exclude_self);
         }
     }
-    let result = static_relation_holds(ctx, object, target, exclude_self)?;
-    emit_bool_result(ctx, result);
+    // PHP takes a CLASS NAME here as readily as an object. `is_subclass_of()` allows the string
+    // form by DEFAULT (`bool $allow_string = true`); `is_a()` requires it to be asked for
+    // (`$allow_string = false`). A non-constant flag cannot be folded, so the relation is computed
+    // as if the string were allowed and the answer is the flag itself -- true only when both hold.
+    let allows_string_by_default = name == "is_subclass_of";
+    let flag = inst.operands.get(2).copied();
+    let constant_flag = match flag {
+        Some(value) => const_bool_operand(ctx, value)?,
+        None => Some(allows_string_by_default),
+    };
+    let object_is_object = matches!(ctx.value_php_type(object)?, PhpType::Object(_));
+    // Two class NAMES, one of them only known at run time: the static walk below can only answer
+    // for literals and said false for every other pair -- including `is_a($attribute->getName(),
+    // Route::class, true)`, the filter `ReflectionMethod::getAttributes(..., IS_INSTANCEOF)` runs.
+    if constant_flag == Some(true)
+        && ctx.value_php_type(object)?.codegen_repr() == PhpType::Str
+        && ctx.value_php_type(target)?.codegen_repr() == PhpType::Str
+        && (optional_const_string_operand(ctx, object)?.is_none()
+            || optional_const_string_operand(ctx, target)?.is_none())
+    {
+        emit_runtime_class_name_is_a(ctx, object, target, exclude_self)?;
+        return store_if_result(ctx, inst);
+    }
+    let result = static_relation_holds(
+        ctx,
+        object,
+        target,
+        exclude_self,
+        object_is_object || constant_flag.unwrap_or(true),
+    )?;
+    match (result, object_is_object, constant_flag, flag) {
+        // A relation that does not hold is false however the flag lands, and an object operand
+        // never consults the flag at all.
+        (false, _, _, _) | (_, true, _, _) | (_, _, Some(_), _) => emit_bool_result(ctx, result),
+        // The relation holds and only a runtime flag decides: the answer IS that flag.
+        (true, false, None, Some(value)) => {
+            let flag_ty = ctx.load_value_to_result(value)?.codegen_repr();
+            if flag_ty != PhpType::Bool {
+                return Err(CodegenIrError::unsupported(format!(
+                    "{}() $allow_string lowering for PHP type {:?}",
+                    name, flag_ty
+                )));
+            }
+        }
+        (true, false, None, None) => unreachable!("a missing flag always folds to its default"),
+    }
     store_if_result(ctx, inst)
+}
+
+/// Calls `__rt_class_name_is_a` with two runtime class-name strings.
+fn emit_runtime_class_name_is_a(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    target: ValueId,
+    exclude_self: bool,
+) -> Result<()> {
+    load_class_name_is_a_args(ctx, object, target, exclude_self)?;
+    abi::emit_call_label(ctx.emitter, "__rt_class_name_is_a");
+    // `__rt_class_name_is_a` knows the COMPILED class table only. A class the interpreter declared
+    // (an autoloaded file the compiler never saw) is absent from it, so a "no" is not final while
+    // the eval bridge is linked: the bridge knows both worlds and settles it.
+    if ctx.module.required_runtime_features.eval_bridge {
+        let done = ctx.next_label("class_name_is_a_done");
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &done);
+        load_class_name_is_a_args(ctx, object, target, exclude_self)?;
+        let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_class_name_is_a");
+        abi::emit_call_label(ctx.emitter, &symbol);
+        ctx.emitter.label(&done);
+    }
+    Ok(())
+}
+
+/// Loads `(source ptr, source len, target ptr, target len, exclude_self)` into the first five
+/// integer argument registers, the ABI `__rt_class_name_is_a` and its eval twin share.
+fn load_class_name_is_a_args(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    target: ValueId,
+    exclude_self: bool,
+) -> Result<()> {
+    let (ptr, len) = abi::string_result_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(object, ptr, len)?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr, len);
+    ctx.load_string_value_to_regs(target, ptr, len)?;
+    let exclude = i64::from(exclude_self);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x3, x2");                              // target name length -> fourth helper argument
+            ctx.emitter.instruction("mov x2, x1");                              // target name pointer -> third helper argument
+            abi::emit_pop_reg_pair(ctx.emitter, "x0", "x1");
+            abi::emit_load_int_immediate(ctx.emitter, "x4", exclude);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rcx, rdx");                            // target name length -> fourth helper argument
+            ctx.emitter.instruction("mov rdx, rax");                            // target name pointer -> third helper argument
+            abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
+            abi::emit_load_int_immediate(ctx.emitter, "r8", exclude);
+        }
+    }
+    Ok(())
 }
 
 /// Lowers `get_declared_classes/interfaces/traits()` using the shared declaration registry.
@@ -701,7 +798,8 @@ pub(crate) fn lower_get_loaded_extensions(
     };
     match (constant_flag, flag) {
         (Some(zend_extensions), _) => {
-            emit_string_array(ctx, &loaded_extension_names(zend_extensions))?
+            let names = loaded_extension_names(ctx, zend_extensions);
+            emit_string_array(ctx, &names)?
         }
         (None, Some(value)) => lower_dynamic_get_loaded_extensions(ctx, value)?,
         (None, None) => unreachable!("a missing flag always folds to false"),
@@ -712,24 +810,17 @@ pub(crate) fn lower_get_loaded_extensions(
 /// Returns the extension-name list `get_loaded_extensions($zend_extensions)` reports.
 ///
 /// Single source of truth for the const-folded and the runtime-selected forms, so they can never
-/// report different sets.
-fn loaded_extension_names(zend_extensions: bool) -> Vec<String> {
+/// report different sets — and the SAME set `extension_loaded()` answers from, through the shared
+/// [`super::dynamic_extension_loaded_candidates`], so `in_array($e, get_loaded_extensions())` and
+/// `extension_loaded($e)` cannot disagree about any name.
+fn loaded_extension_names(ctx: &FunctionContext<'_>, zend_extensions: bool) -> Vec<String> {
     if zend_extensions {
         return super::ZEND_LOADED_EXTENSIONS
             .iter()
             .map(|name| (*name).to_string())
             .collect();
     }
-    let mut names: Vec<String> = super::CORE_LOADED_EXTENSIONS
-        .iter()
-        .map(|name| (*name).to_string())
-        .collect();
-    for extension in crate::codegen::linked_extensions() {
-        if !names.iter().any(|name| name.eq_ignore_ascii_case(&extension)) {
-            names.push(extension);
-        }
-    }
-    names
+    super::dynamic_extension_loaded_candidates(ctx)
 }
 
 /// Lowers `get_loaded_extensions($flag)` for a flag that is only known at runtime.
@@ -765,11 +856,13 @@ fn lower_dynamic_get_loaded_extensions(
             ctx.emitter.instruction(&format!("jne {}", zend_label));            // a truthy flag selects the Zend list
         }
     }
-    emit_string_array(ctx, &loaded_extension_names(false))?;
+    let regular = loaded_extension_names(ctx, false);
+    emit_string_array(ctx, &regular)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&zend_label);
-    emit_string_array(ctx, &loaded_extension_names(true))?;
+    let zend = loaded_extension_names(ctx, true);
+    emit_string_array(ctx, &zend)?;
 
     ctx.emitter.label(&done_label);
     Ok(())
@@ -972,6 +1065,9 @@ pub(in crate::codegen::lower_inst) fn emit_dynamic_object_class_name(
 ) {
     let empty_label = ctx.next_label("get_class_empty");
     let done_label = ctx.next_label("get_class_done");
+    if name == "get_class" && ctx.module.required_runtime_features.eval_bridge {
+        emit_eval_dynamic_object_class_name(ctx, &done_label);
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => emit_dynamic_object_class_name_aarch64(ctx, name, &empty_label, &done_label),
         Arch::X86_64 => emit_dynamic_object_class_name_x86_64(ctx, name, &empty_label, &done_label),
@@ -1049,6 +1145,43 @@ pub(super) fn emit_mixed_object_class_name_from_value(
 }
 
 /// Emits AArch64 runtime object class-name lookup for `get_class()` and `get_parent_class()`.
+/// Answers `get_class()` for an instance of a class the interpreter declared.
+///
+/// Such an object lives in the storage of its nearest compiled ancestor, so its class id names
+/// that ancestor. The bridge knows the real class; a zero length back means the object is not the
+/// interpreter's and the class-id lookup that follows stands. Expects the object pointer in the
+/// integer result register and leaves it there on the fallback path.
+fn emit_eval_dynamic_object_class_name(ctx: &mut FunctionContext<'_>, done_label: &str) {
+    let native = ctx.next_label("get_class_native");
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_dynamic_object_class_name");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // keep the object pointer for the class-id fallback
+            ctx.emitter.instruction(&format!("bl {}", symbol));                 // x0/x1 = eval class name, or length 0 when not eval-owned
+            ctx.emitter.instruction(&format!("cbz x1, {}", native));            // not an interpreter-declared instance: use the class id
+            ctx.emitter.instruction("add sp, sp, #16");                         // drop the saved object pointer
+            ctx.emitter.instruction("mov x2, x1");                              // class-name length into the string result pair
+            ctx.emitter.instruction("mov x1, x0");                              // class-name pointer into the string result pair
+            ctx.emitter.instruction(&format!("b {}", done_label));              // the eval class name is the answer
+            ctx.emitter.label(&native);
+            ctx.emitter.instruction("ldr x0, [sp], #16");                       // restore the object pointer for the class-id lookup
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 16");                             // keep the object pointer, preserving 16-byte alignment
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // save the object pointer for the class-id fallback
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the object pointer
+            ctx.emitter.instruction(&format!("call {}", symbol));               // rax/rdx = eval class name, or length 0 when not eval-owned
+            ctx.emitter.instruction("test rdx, rdx");                           // did the bridge name an interpreter-declared class?
+            ctx.emitter.instruction(&format!("jz {}", native));                 // no: use the class id
+            ctx.emitter.instruction("add rsp, 16");                             // drop the saved object pointer; rax/rdx already hold the name
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // the eval class name is the answer
+            ctx.emitter.label(&native);
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // restore the object pointer for the class-id lookup
+            ctx.emitter.instruction("add rsp, 16");                             // release the saved slot
+        }
+    }
+}
+
 fn emit_dynamic_object_class_name_aarch64(
     ctx: &mut FunctionContext<'_>,
     name: &str,
@@ -1180,9 +1313,20 @@ fn static_relation_holds(
     object: ValueId,
     target: ValueId,
     exclude_self: bool,
+    allow_string: bool,
 ) -> Result<bool> {
-    let PhpType::Object(object_class) = ctx.value_php_type(object)? else {
-        return Ok(false);
+    // A STRING first argument names the class directly, which is how php's own signature reads
+    // (`object|string $object_or_class`). Only an object operand used to be answered, so
+    // `is_subclass_of(Child::class, Base::class)` -- ordinary PHP, and what Symfony's
+    // `AddConsoleCommandPass` and `ServiceLocatorTagPass` write -- silently answered false while
+    // `$reflection->isSubclassOf()` and `instanceof` on the same pair answered true.
+    let object_class = match ctx.value_php_type(object)? {
+        PhpType::Object(name) => name,
+        _ if allow_string => match optional_const_string_operand(ctx, object)? {
+            Some(name) => name,
+            None => return Ok(false),
+        },
+        _ => return Ok(false),
     };
     let Some(target_class) = optional_const_string_operand(ctx, target)? else {
         return Ok(false);
@@ -1379,6 +1523,22 @@ fn optional_const_string_operand(
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    // `Foo::class` is a compile-time string in PHP, but EIR gives it its own opcode and its own
+    // data pool. Reading only `ConstStr` made every `is_subclass_of(Foo::class, Bar::class)`
+    // answer false while the literal spelling `is_subclass_of("Foo", "Bar")` answered true.
+    if inst_ref.op == Op::ConstClassName {
+        let Some(Immediate::Data(data)) = inst_ref.immediate else {
+            return Err(CodegenIrError::invalid_module(
+                "class-name literal operand has no data id",
+            ));
+        };
+        return Ok(ctx
+            .module
+            .data
+            .class_names
+            .get(data.as_raw() as usize)
+            .cloned());
+    }
     if inst_ref.op != Op::ConstStr {
         return Ok(None);
     }

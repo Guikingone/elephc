@@ -49,7 +49,8 @@ pub fn preload_declarations(
     preload_path: &Path,
     base_dir: &Path,
     defines: &HashSet<String>,
-) -> Result<Program, CompileError> {
+    autoload: &crate::autoload::Registry,
+) -> Result<PreloadedDeclarations, CompileError> {
     let content = crate::source::read_physical_source(preload_path).map_err(|error| {
         CompileError::new(
             Span::dummy(),
@@ -72,15 +73,204 @@ pub fn preload_declarations(
         crate::source::finalize_physical_program(parsed, preload_path, source_mode, defines)?;
     let requires = include_statements(&parsed);
     if requires.is_empty() {
-        return Ok(Vec::new());
+        return Ok(PreloadedDeclarations::default());
     }
+    let preload_dir = preload_path.parent().unwrap_or(base_dir);
     let (resolved, _, _) = crate::resolver::resolve_collecting_includes_with_defines_and_sources(
         requires,
-        preload_path.parent().unwrap_or(base_dir),
+        preload_dir,
         defines,
     )?;
+    // The classes are named INSIDE the graph, not in the entry script: elephc's own preload file
+    // requires Symfony's generated one, and that is where the 121 `$classes[] = '…';` lines live.
+    // So the search runs over the RESOLVED program, and whatever it finds is resolved in a second
+    // pass whose declarations are de-duplicated against the first.
+    let named = named_class_requires(&resolved, autoload);
+    let resolved = if named.is_empty() {
+        resolved
+    } else {
+        let (extra, _, _) = crate::resolver::resolve_collecting_includes_with_defines_and_sources(
+            named,
+            preload_dir,
+            defines,
+        )?;
+        let already = declared_names(&resolved);
+        let mut merged = resolved;
+        merged.extend(without_redeclarations(extra, &already));
+        merged
+    };
     let resolved = crate::name_resolver::resolve(resolved)?;
-    Ok(retain_declarations(resolved))
+    let mut compiled_whole = Vec::new();
+    collect_fully_declared_sources(&resolved, &mut compiled_whole);
+    Ok(PreloadedDeclarations {
+        declarations: retain_declarations(resolved),
+        compiled_whole,
+    })
+}
+
+/// What the `opcache.preload` graph contributed to the compilation.
+#[derive(Default)]
+pub struct PreloadedDeclarations {
+    /// The declarations the graph supplies, to be prepended to the entry program.
+    pub declarations: Program,
+    /// The graph files whose WHOLE content became those declarations.
+    ///
+    /// [`retain_declarations`] keeps a file's declarations and drops everything else, so a file
+    /// that also has executable statements is only half-compiled and must still run at runtime --
+    /// `vendor/autoload.php` registers the Composer autoloader that way, and marking it
+    /// already-included would lose the registration. A file that is NOTHING BUT declarations has
+    /// been compiled whole, and re-executing its top level once per request only rebuilds class
+    /// records the binary already carries: MEASURED on the Symfony `--web` fixture, 44.5% of a
+    /// warm request is the interpreter re-executing included top levels, and
+    /// `App_KernelProdContainer.php` is in that set with its 1,186 symbols already compiled in.
+    pub compiled_whole: Vec<std::path::PathBuf>,
+}
+
+/// Appends the path of every include guard whose body is entirely declarations.
+fn collect_fully_declared_sources(body: &[Stmt], out: &mut Vec<std::path::PathBuf>) {
+    for stmt in body {
+        match &stmt.kind {
+            StmtKind::IncludeOnceGuard { source_path, body } => {
+                if is_entirely_declarations(body) {
+                    out.push(source_path.clone());
+                }
+                collect_fully_declared_sources(body, out);
+            }
+            StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body) => {
+                collect_fully_declared_sources(body, out)
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Returns true when nothing in this statement list survives to run at runtime.
+///
+/// A nested include guard counts: its own file is judged separately by the walk above, and an
+/// `IncludeOnceMark` is the resolver's note that a repeated include hits an already-spliced file,
+/// which does nothing on its own.
+fn is_entirely_declarations(body: &[Stmt]) -> bool {
+    body.iter().all(|stmt| match &stmt.kind {
+        StmtKind::ClassDecl { .. }
+        | StmtKind::InterfaceDecl { .. }
+        | StmtKind::TraitDecl { .. }
+        | StmtKind::EnumDecl { .. }
+        | StmtKind::FunctionDecl { .. }
+        | StmtKind::ConstDecl { .. }
+        | StmtKind::IncludeOnceMark { .. } => true,
+        StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::Synthetic(body)
+        | StmtKind::IncludeOnceGuard { body, .. } => is_entirely_declarations(body),
+        _ => false,
+    })
+}
+
+/// Turns every class the preload script NAMES into a require of the file that declares it.
+///
+/// php's `opcache.preload` contract is that the script names what to preload, and a class name is
+/// resolved through the autoloader exactly as `Preloader::preload()` does. Reading only the
+/// script's `require` statements sees half of it: Symfony's generated preload file lists **121**
+/// classes as `$classes[] = 'Some\Class';` after its requires, and those never entered the closed
+/// world.
+///
+/// MEASURED on the Symfony `--web` fixture, ONE warm request re-executed the top level of 24 files
+/// through the interpreter, six of them class-only files named in exactly that list --
+/// `CompiledUrlMatcher`, `UrlMatcher`, `RedirectableUrlMatcherInterface`,
+/// `CompiledUrlMatcherTrait`, `RedirectableCompiledUrlMatcher`, `TwigBundle`. They are reached at
+/// runtime through `new $this->options['matcher_class']` and `bundles.php`'s `new $class()`, which
+/// no static walk follows, so the compiler never saw them from the entry point.
+///
+/// Only a literal that the autoloader can resolve becomes a require; anything else is left alone,
+/// so a preload script full of ordinary strings costs nothing.
+fn named_class_requires(program: &[Stmt], autoload: &crate::autoload::Registry) -> Program {
+    let mut names = Vec::new();
+    collect_string_literals(program, &mut names);
+    let mut seen = HashSet::new();
+    let mut requires = Vec::new();
+    for name in names {
+        let trimmed = name.trim_start_matches('\\');
+        if trimmed.is_empty() || !trimmed.contains('\\') {
+            continue;
+        }
+        let Some(path) = autoload.psr4().lookup(trimmed) else {
+            continue;
+        };
+        let path = path.display().to_string();
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        requires.push(Stmt::new(
+            StmtKind::Include {
+                path: Expr::new(ExprKind::StringLiteral(path), Span::dummy()),
+                once: true,
+                required: true,
+            },
+            Span::dummy(),
+        ));
+    }
+    requires
+}
+
+/// Appends every string literal reachable in one statement list.
+fn collect_string_literals(body: &[Stmt], out: &mut Vec<String>) {
+    for stmt in body {
+        match &stmt.kind {
+            StmtKind::ExprStmt(expr) => collect_string_literals_in_expr(expr, out),
+            StmtKind::ArrayPush { value, .. } => collect_string_literals_in_expr(value, out),
+            StmtKind::Assign { value, .. } => collect_string_literals_in_expr(value, out),
+            StmtKind::NamespaceBlock { body, .. }
+            | StmtKind::Synthetic(body)
+            | StmtKind::IncludeOnceGuard { body, .. } => collect_string_literals(body, out),
+            StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body,
+                ..
+            } => {
+                collect_string_literals(then_body, out);
+                for (_, body) in elseif_clauses {
+                    collect_string_literals(body, out);
+                }
+                if let Some(body) = else_body {
+                    collect_string_literals(body, out);
+                }
+            }
+            StmtKind::Foreach { body, .. } | StmtKind::While { body, .. } => {
+                collect_string_literals(body, out)
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Appends every string literal inside one expression.
+fn collect_string_literals_in_expr(expr: &Expr, out: &mut Vec<String>) {
+    match &expr.kind {
+        ExprKind::StringLiteral(value) => out.push(value.clone()),
+        ExprKind::ArrayLiteral(items) => {
+            for item in items {
+                collect_string_literals_in_expr(item, out);
+            }
+        }
+        ExprKind::ArrayLiteralAssoc(pairs) => {
+            for (key, value) in pairs {
+                collect_string_literals_in_expr(key, out);
+                collect_string_literals_in_expr(value, out);
+            }
+        }
+        ExprKind::FunctionCall { args, .. } => {
+            for arg in args {
+                collect_string_literals_in_expr(arg, out);
+            }
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            collect_string_literals_in_expr(object, out);
+            for arg in args {
+                collect_string_literals_in_expr(arg, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Keeps the declarations of one resolved program and drops everything else.

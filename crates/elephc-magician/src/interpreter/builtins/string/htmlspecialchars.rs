@@ -26,8 +26,14 @@ pub(in crate::interpreter) fn eval_builtin_htmlspecialchars(
 }
 
 /// Evaluates a named HTML entity encode/decode builtin over one string expression.
-/// The encoders accept optional flags/encoding arguments; like the static
+/// All three accept the optional flags/encoding arguments; like the static
 /// runtime they are evaluated but have no effect (ENT_QUOTES behaviour).
+///
+/// `html_entity_decode` used to be excluded here, which made the ordinary php call
+/// `html_entity_decode($s, ENT_QUOTES, 'UTF-8')` an UNCATCHABLE
+/// `eval() runtime failed: unsupported Call expression` inside an eval fragment while the same
+/// source compiled fine once the AOT contract accepted three arguments. A builtin widened on one
+/// side only is that failure shape, so the arities are kept identical on both.
 pub(in crate::interpreter) fn eval_builtin_html_entity_named(
     name: &str,
     args: &[EvalExpr],
@@ -35,10 +41,8 @@ pub(in crate::interpreter) fn eval_builtin_html_entity_named(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let accepts_options = matches!(name, "htmlspecialchars" | "htmlentities");
     let value = match args {
-        [value] => value,
-        [value, _] | [value, _, _] if accepts_options => value,
+        [value] | [value, _] | [value, _, _] => value,
         _ => return Err(EvalStatus::RuntimeFatal),
     };
     let value = eval_expr(value, context, scope, values)?;

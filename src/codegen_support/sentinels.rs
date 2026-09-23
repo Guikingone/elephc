@@ -309,6 +309,25 @@ pub(crate) fn emit_float_result_bits_to_int_result(emitter: &mut Emitter) {
 /// through [`x86_64_heap_kind_word`] instead of hand-typing the concatenated immediate.
 pub(crate) const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
+/// Value written into a heap block's REFCOUNT word while the block sits on the ordered free
+/// list or in a small bin, on every target.
+///
+/// A parked block used to be marked by a refcount of ZERO, which a live block being released
+/// also carries — so nothing could tell "this block is already free" from "this block is being
+/// freed now". Detecting a double free therefore meant SCANNING the bin chain for the block on
+/// every small free, and that scan is what `--web`'s heap guard does. Measured on the compiled
+/// Symfony fixture it was **76.3% of `__rt_heap_free`'s self time and ~13% of the whole
+/// request**, because the chain grows with every small block the request frees.
+///
+/// An explicit mark answers the same question with one compare. It is also a STRONGER
+/// validation than `refcount == 0` for the allocator's reuse check: arbitrary bytes that happen
+/// to land inside the arena are far less likely to spell this value than to be zero.
+///
+/// The value must not be reachable as a real refcount. Refcounts are small and bit 31 is the
+/// destruction-in-progress flag, so a count near 0x72EE_F2EE is unreachable in a 8 MB arena
+/// where every live block needs at least 16 bytes.
+pub(crate) const HEAP_FREE_REFCOUNT_MARK: u32 = 0xF2EE_F2EE;
+
 /// Builds the full x86_64 heap-header kind word: magic in the high 32 bits and `low_bits`
 /// in the low 32 bits. `low_bits` is the packed kind/COW/value_type field (plain kinds such
 /// as `1`/`4`/`5`/`6`, or wider encodings such as `0x8003` / `0x80ff` / `0x8702`). Pass `0`

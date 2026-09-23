@@ -16,7 +16,7 @@
 //!   `_elephc_eval_dynamic_object_destruct_fn` and `_elephc_eval_generator_protocol_fn` use.
 
 use crate::ffi::util::abi_name_to_string;
-use crate::interpreter::eval_spl_autoload_class_bridge;
+use crate::interpreter::{eval_class_name_is_a_bridge, eval_spl_autoload_class_bridge};
 use crate::interpreter::RuntimeValueOps;
 use crate::runtime_hooks::{self, ElephcRuntimeOps};
 
@@ -41,6 +41,50 @@ pub(crate) fn install_class_autoload_hook() {
 pub unsafe extern "C" fn __elephc_eval_class_autoload(name_ptr: *const u8, name_len: u64) -> u64 {
     crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_class_autoload");
     std::panic::catch_unwind(|| unsafe { class_autoload_inner(name_ptr, name_len) }).unwrap_or(0)
+}
+
+/// Answers a class-name `is_a()` / `is_subclass_of()` the compiled class table said no to.
+///
+/// Compiled `is_a($name, $target, true)` over two runtime strings consults
+/// `__rt_class_name_is_a`, which knows the compiled classes only; a class the interpreter
+/// declared -- an autoloaded file the compiler never saw -- reads as "no" there. Compiled code
+/// calls this for that "no" only when the bridge is linked. Returns 1 or 0, and 0 on an
+/// unreadable name or a failure, so the compiled answer stands.
+///
+/// # Safety
+/// Each pointer must be readable for its length when the length is non-zero.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_class_name_is_a(
+    source_ptr: *const u8,
+    source_len: u64,
+    target_ptr: *const u8,
+    target_len: u64,
+    exclude_self: u64,
+) -> u64 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_class_name_is_a");
+    std::panic::catch_unwind(|| unsafe {
+        let (Ok(source), Ok(target)) = (
+            abi_name_to_string(source_ptr, source_len),
+            abi_name_to_string(target_ptr, target_len),
+        ) else {
+            return 0;
+        };
+        if source.is_empty() || target.is_empty() {
+            return 0;
+        }
+        // Same reasoning as the autoload hook below: no context handle reaches here, and the
+        // shared null-handle context is the one holding the request's declarations.
+        let context = crate::ffi::context::shared_null_handle_context();
+        let context_ptr = context as *mut crate::abi::ElephcEvalContext;
+        context.sync_global_eval_classes();
+        let mut values = ElephcRuntimeOps::with_context(context_ptr);
+        let context = &mut *context_ptr;
+        let result =
+            eval_class_name_is_a_bridge(&source, &target, exclude_self != 0, context, &mut values)
+                .unwrap_or(false);
+        u64::from(result)
+    })
+    .unwrap_or(0)
 }
 
 /// Executes the callback body after the exported ABI shim has installed a panic boundary.

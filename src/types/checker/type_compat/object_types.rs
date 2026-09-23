@@ -144,6 +144,21 @@ impl Checker {
         false
     }
 
+    /// Returns the class whose private declaration answers a call to `method_key` on a receiver
+    /// typed `class_name`. See [`crate::types::private_scope`] for the rule and its measurement.
+    pub(crate) fn lexical_private_method_scope(
+        &self,
+        class_name: &str,
+        method_key: &str,
+    ) -> Option<String> {
+        crate::types::private_scope::lexical_private_method_scope(
+            &self.classes,
+            self.current_class.as_deref(),
+            class_name,
+            method_key,
+        )
+    }
+
     /// Returns true if `class_name` directly implements `interface_name` (not via inheritance).
     pub(crate) fn class_implements_interface(&self, class_name: &str, interface_name: &str) -> bool {
         self.classes

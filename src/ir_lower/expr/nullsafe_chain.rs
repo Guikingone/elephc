@@ -418,7 +418,20 @@ fn guard_nullsafe_chain_receiver(
         branch_to(ctx, null_block);
         return false;
     }
-    if !value_is_nullable(ctx, current.value) {
+    // An object or callable is a POINTER, and a pointer holds null whatever the static type says.
+    // `$typed[0] ?? null` over an `array<Foo>` comes out typed `Foo` -- the merge folds the null
+    // default into the object representation -- and trusting that type deleted the very test the
+    // `?->` was written for. MEASURED against php 8.5.10:
+    //     $arr = [new U()]; array_pop($arr); ($arr[0] ?? null)?->foo();
+    //     php NULL     elephc Error: Call to a member function foo() on null
+    // Symfony's console reads every command's `#[AsCommand]` as
+    // `($r->getAttributes(AsCommand::class)[0] ?? null)?->newInstance()`, and every command
+    // without the attribute failed that way. The test costs one comparison, and only on `?->`.
+    let pointer_may_be_null = matches!(
+        ctx.builder.value_php_type(current.value).codegen_repr(),
+        PhpType::Object(_) | PhpType::Callable
+    );
+    if !value_is_nullable(ctx, current.value) && !pointer_may_be_null {
         return true;
     }
     let is_null = ctx.emit_value(

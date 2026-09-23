@@ -952,3 +952,89 @@ echo str_replace(searches("a", 2), ["x", "y"], "a2");
     );
     assert_eq!(out, "xy");
 }
+
+/// Verifies php's three-argument `html_entity_decode()` compiles and decodes the ENT_QUOTES set.
+///
+/// php 8.5.10 declares `html_entity_decode(string $string, int $flags = ENT_QUOTES|
+/// ENT_SUBSTITUTE|ENT_HTML401, ?string $encoding = null): string` and answers `<b>`, `<b>` and
+/// `"q"'s'&` for the three calls below. elephc's contract used to declare one parameter, so the
+/// second and third were `html_entity_decode() takes exactly 1 argument` — which is what stopped
+/// `vendor/symfony/polyfill-mbstring/Mbstring.php` from compiling at all.
+///
+/// No `function_exists()` guard here on purpose: `opt-fold` folds one away before the later
+/// passes run, and a test written that way asserts nothing.
+#[test]
+fn test_html_entity_decode_accepts_php_flags_and_encoding() {
+    let out = compile_and_run(
+        r#"<?php
+echo html_entity_decode("&lt;b&gt;"), ':';
+echo html_entity_decode("&lt;b&gt;", ENT_QUOTES), ':';
+echo html_entity_decode("&quot;q&quot;&#039;s&#039;&amp;", ENT_QUOTES, 'UTF-8');
+"#,
+    );
+    assert_eq!(out, "<b>:<b>:\"q\"'s'&");
+}
+
+/// Verifies an ARRAY `$subject` answers an array, the shape php documents and elephc printed wrong.
+///
+/// php: "if `$subject` is an array, then the search and replace is performed with every entry of
+/// `$subject`, and the return value is an array as well." Measured on 8.5.10,
+/// `str_replace(["a"], ["1"], ["ab", "ba"])` is `array(0 => '1b', 1 => 'b1')`.
+///
+/// The backend has had an array-subject path for a while; the contract still declared
+/// `returns: string` and the semantics took it verbatim, so `var_dump()` of that call printed
+/// `string(2) "b1"` — a silent wrong answer with no diagnostic anywhere.
+#[test]
+fn test_str_replace_array_subject_answers_an_array() {
+    let out = compile_and_run(
+        r#"<?php
+$replaced = str_replace(["a"], ["1"], ["ab", "ba"]);
+echo gettype($replaced), ':', count($replaced), ':', $replaced[0], ':', $replaced[1];
+"#,
+    );
+    assert_eq!(out, "array:2:1b:b1");
+}
+
+/// Verifies list unpacking accepts `str_replace()`'s array-subject result.
+///
+/// This is `Mbstring::mb_stripos()` line 710 reduced to ordinary PHP. The checker refused it
+/// with "List unpacking requires an array on the right-hand side" for one reason: it had been
+/// told the right-hand side was a string.
+#[test]
+fn test_str_replace_array_subject_list_unpacks() {
+    let out = compile_and_run(
+        r#"<?php
+[$first, $second] = str_replace(["a", "b"], ["1", "2"], ["ab", "ba"]);
+echo $first, '|', $second;
+"#,
+    );
+    assert_eq!(out, "12|21");
+}
+
+/// Verifies a STRING `$subject` still answers a string, and `str_ireplace()` follows the same rule.
+#[test]
+fn test_str_replace_string_subject_keeps_its_string_result() {
+    let out = compile_and_run(
+        r#"<?php
+$scalar = str_replace(["a"], ["1"], "aba");
+echo gettype($scalar), ':', $scalar, ':';
+[$first, $second] = str_ireplace(["A", "B"], ["x", "y"], ["ab", "BA"]);
+echo $first, '|', $second;
+"#,
+    );
+    assert_eq!(out, "string:1b1:xy|yx");
+}
+
+
+/// `implode()` over integers keeps its glue. `__rt_itoa` reserves its digits at the concat offset,
+/// and this helper built its result past that offset without publishing it, so each conversion
+/// landed on the separator it had just written: `12233333` for `[1, 22, 333]`.
+#[test]
+fn test_implode_int_keeps_the_glue() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode(',', [1, 22, 333]), '|', implode('--', [10, 20]), '|', implode(',', [7]);
+"#,
+    );
+    assert_eq!(out, "1,22,333|10--20|7");
+}

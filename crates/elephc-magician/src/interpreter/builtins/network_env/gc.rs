@@ -45,6 +45,15 @@ eval_builtin! {
     values: NetworkEnv,
 }
 
+// `gc_mem_caches()` reports the bytes an allocator cache gave back; there is none, so `0`, and it
+// shares `gc_collect_cycles()`'s implementation.
+eval_builtin! {
+    contract: "gc_mem_caches",
+    area: NetworkEnv,
+    direct: NetworkEnv,
+    values: NetworkEnv,
+}
+
 /// Evaluates PHP `gc_enabled()`, which is always `false` without a cycle collector.
 pub(in crate::interpreter) fn eval_builtin_gc_enabled(
     args: &[EvalExpr],

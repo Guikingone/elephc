@@ -10,6 +10,25 @@
 use super::*;
 
 impl ElephcEvalContext {
+    /// Drops every reflection registration held under one object identity.
+    ///
+    /// The registry is keyed by object ADDRESS and outlives the reflector: a compiled free never
+    /// reaches it. Once that address holds an object that is not a reflector at all, each entry
+    /// still filed under it is a dead reflector's, and left in place it answers that object's
+    /// calls -- a console command reported the name of a `ReflectionMethod` freed from the same
+    /// block. Returns whether anything was dropped.
+    pub fn forget_eval_reflection_identity(&mut self, identity: u64) -> bool {
+        let mut dropped = self.eval_reflection_attributes.remove(&identity).is_some();
+        dropped |= self.eval_reflection_classes.remove(&identity).is_some();
+        dropped |= self.eval_reflection_functions.remove(&identity).is_some();
+        dropped |= self.eval_reflection_function_closure_targets.remove(&identity).is_some();
+        dropped |= self.eval_reflection_methods.remove(&identity).is_some();
+        dropped |= self.eval_reflection_properties.remove(&identity).is_some();
+        dropped |= self.eval_dynamic_reflection_properties.remove(&identity);
+        dropped |= self.eval_reflection_class_constants.remove(&identity).is_some();
+        dropped
+    }
+
     /// Records eval-declared attribute metadata for one synthetic ReflectionAttribute object.
     pub fn register_eval_reflection_attribute(
         &mut self,

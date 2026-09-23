@@ -16,8 +16,9 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_include(
     once: bool,
     required: bool,
     strict_php: bool,
+    value_discarded: bool,
 ) -> Result<()> {
-    eval::lower_dynamic_include(ctx, inst, once, required, strict_php)
+    eval::lower_dynamic_include(ctx, inst, once, required, strict_php, value_discarded)
 }
 
 /// Lowers a statically-known eval fragment through the current bridge fallback path.

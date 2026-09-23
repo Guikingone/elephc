@@ -24,7 +24,8 @@ use crate::types::{PhpType, TypeEnv};
 use super::Checker;
 
 pub(crate) use catalog::{
-    all_supported_builtin_function_names, canonical_builtin_function_name,
+    all_supported_builtin_function_names, builtin_absent_by_php_platform_rule,
+    canonical_builtin_function_name,
     is_php_visible_builtin_function_for_profile, is_php_visible_builtin_function_for_target,
     is_supported_builtin_function, strict_php_hidden_builtin,
     supported_builtin_function_names_for_profile, supported_builtin_function_names_for_target,

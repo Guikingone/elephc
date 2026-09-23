@@ -142,6 +142,22 @@ pub(crate) fn array_key_type(arr_ty: &PhpType) -> PhpType {
     }
 }
 
+/// Returns the `(value, key)` types `array_walk_recursive()` hands its callback: the LEAVES.
+///
+/// php never passes a nested array to the callback -- it descends into it -- so the direct
+/// element type is wrong for any nested container. Checking a named callback against it made
+/// `array_walk_recursive(['g' => ['a' => 1]], 'f')` contradict `array_walk([1], 'f')` in the same
+/// program: the first bound `f`'s parameter to an array, the second to an int. Keys of a nested
+/// walk come from several arrays at once, so they are `Mixed`.
+pub(crate) fn array_walk_recursive_leaf_types(arr_ty: &PhpType) -> (PhpType, PhpType) {
+    let element = array_element_type(arr_ty);
+    if matches!(element, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        let (leaf, _) = array_walk_recursive_leaf_types(&element);
+        return (leaf, PhpType::Mixed);
+    }
+    (element, array_key_type(arr_ty))
+}
+
 /// Returns the argument positions whose callback operand is type-checked *contextually* by
 /// the builtin's own `check` hook, with parameter types derived from the array element/key.
 ///
@@ -202,23 +218,20 @@ pub(crate) fn callback_dummy_arg_for_type(
     span: crate::span::Span,
     env: &mut TypeEnv,
 ) -> Expr {
-    match ty {
-        PhpType::Int => Expr::new(ExprKind::IntLiteral(0), span),
-        PhpType::Float => Expr::new(ExprKind::FloatLiteral(0.0), span),
-        PhpType::Str => Expr::new(ExprKind::StringLiteral(String::new()), span),
-        PhpType::Bool | PhpType::False => Expr::new(ExprKind::BoolLiteral(false), span),
-        PhpType::Void => Expr::new(ExprKind::Null, span),
-        _ => {
-            let name = format!("{}_{}", CALLBACK_ARG_PLACEHOLDER_PREFIX, index);
-            let binding_ty = if matches!(ty, PhpType::Mixed | PhpType::Never) {
-                PhpType::Never
-            } else {
-                ty.clone()
-            };
-            env.insert(name.clone(), binding_ty);
-            Expr::new(ExprKind::Variable(name), span)
-        }
-    }
+    // Always a BINDING, never a literal. The engine passes an array SLOT, so a callback may
+    // declare the parameter by reference -- `array_walk($a, static function (&$v) { $v *= 2; })`
+    // is the ordinary spelling and the whole point of the builtin -- and a literal is not an
+    // l-value, so the by-reference argument check refused it with
+    // `array_walk() callback parameter $v must be passed a variable` for every scalar element
+    // type. php 8.5.10 prints `2,4,6`. A placeholder typed `ty` says everything the literal said.
+    let name = format!("{}_{}", CALLBACK_ARG_PLACEHOLDER_PREFIX, index);
+    let binding_ty = if matches!(ty, PhpType::Mixed | PhpType::Never) {
+        PhpType::Never
+    } else {
+        ty.clone()
+    };
+    env.insert(name.clone(), binding_ty);
+    Expr::new(ExprKind::Variable(name), span)
 }
 
 /// Validates an array-callback builtin using real element types or opaque argument slots.
@@ -298,6 +311,7 @@ fn check_array_callback_builtin_call_in_engine_frame(
             return_type,
             body,
             captures,
+            capture_refs,
             *by_ref_return,
             callback.span,
             env,
@@ -1037,6 +1051,9 @@ fn callback_builtin_allows_runtime_string_descriptor(label: &str) -> bool {
             | "array_filter() callback"
             | "array_reduce() callback"
             | "array_walk() callback"
+            // Both walks go to `crate::array_walk_prelude`, which calls the callback the way
+            // php does, so a callable known only at run time needs no static binding.
+            | "array_walk_recursive() callback"
             | "preg_replace_callback() callback"
             | "usort() callback"
             | "uksort() callback"
@@ -1052,6 +1069,9 @@ fn callback_builtin_allows_runtime_callable_array(label: &str) -> bool {
             | "array_filter() callback"
             | "array_reduce() callback"
             | "array_walk() callback"
+            // Both walks go to `crate::array_walk_prelude`, which calls the callback the way
+            // php does, so a callable known only at run time needs no static binding.
+            | "array_walk_recursive() callback"
             | "preg_replace_callback() callback"
             | "usort() callback"
             | "uksort() callback"
@@ -1508,10 +1528,25 @@ pub(crate) fn array_filter_callback_arg_types(
 /// parameter is legal and common. The key slot is therefore added only when the callback is a
 /// closure literal that declares at least two parameters, so a one-parameter callback keeps
 /// passing arity validation while `function ($v, $k)` gets its key typed from the array.
-pub(crate) fn array_walk_callback_arg_types(arr_ty: &PhpType, callback: &Expr) -> Vec<PhpType> {
-    let elem_ty = array_element_type(arr_ty);
+///
+/// `extra_arg` is the type of the optional third argument. When the caller supplies one, php
+/// passes the callback THREE arguments -- value, key, extra -- whatever the callback declares.
+pub(crate) fn array_walk_callback_arg_types(
+    arr_ty: &PhpType,
+    callback: &Expr,
+    extra_arg: Option<PhpType>,
+    recursive: bool,
+) -> Vec<PhpType> {
+    let (elem_ty, key_ty) = if recursive {
+        array_walk_recursive_leaf_types(arr_ty)
+    } else {
+        (array_element_type(arr_ty), array_key_type(arr_ty))
+    };
+    if let Some(extra) = extra_arg {
+        return vec![elem_ty, key_ty, extra];
+    }
     if callback_declares_at_least_two_params(callback) {
-        vec![elem_ty, array_key_type(arr_ty)]
+        vec![elem_ty, key_ty]
     } else {
         vec![elem_ty]
     }

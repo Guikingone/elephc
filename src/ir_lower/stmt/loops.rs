@@ -50,11 +50,13 @@ pub(super) fn lower_while(
         source_pin: None,
     });
     lower_block(ctx, body);
+    let body_exit_types = ctx.local_types_snapshot();
     ctx.loop_stack.pop();
     ctx.try_handler_stack = surrounding_try_handler_stack;
     branch_to(ctx, header);
     ctx.builder.position_at_end(exit);
     ctx.restore_local_types(condition_exit_types);
+    keep_arrays_the_body_filled(ctx, &body_exit_types);
     // …but a store in the BODY that widened a slot to boxed storage is not a body-only narrowing
     // to be undone: the exit is reached from iterations where that store ran, so the restored
     // narrow fact would be a claim about the slot's content that no longer holds on every incoming
@@ -63,6 +65,43 @@ pub(super) fn lower_while(
     ctx.reassert_widened_local_storage_types();
     ctx.restore_initialized_slots(condition_exit_initialized);
     ctx.clear_static_callable_locals();
+}
+
+/// Keeps the element type a loop body gave an array that was EMPTY when the condition ran.
+///
+/// The `while` exit restores the condition's types so a body-only narrowing does not leak past a
+/// false condition. For an array that was `[]` before the loop that restore is wrong: `[]` is typed
+/// `array<never>` -- "no element seen yet" -- and the body is exactly what adds elements. Restoring
+/// it made every read after the loop use a `never` element type, so the elements the loop pushed
+/// read back as null. MEASURED against php 8.5.10:
+///
+///     $sets = []; $pos = 0;
+///     while ($pos <= 1) { $sets[] = [$pos]; $pos++; }
+///     foreach ($sets as $s) { $out[] = $s; }        php [[0],[1]]    elephc [null,null]
+///
+/// A `for` loop was right all along: it is lowered at a representation fixed point. The body's type
+/// is always sound for such an array -- an empty array has no element to contradict it -- so only
+/// that bottom element type is replaced, and every other fact keeps the condition's view.
+fn keep_arrays_the_body_filled(ctx: &mut LoweringContext<'_, '_>, body_exit_types: &crate::types::TypeEnv) {
+    let empty_at_condition: Vec<String> = ctx
+        .local_types_snapshot()
+        .iter()
+        .filter(|(_, ty)| matches!(ty, PhpType::Array(element) if matches!(element.as_ref(), PhpType::Never)))
+        .map(|(name, _)| name.clone())
+        .collect();
+    for name in empty_at_condition {
+        let Some(body_ty) = body_exit_types.get(&name) else {
+            continue;
+        };
+        let filled = match body_ty {
+            PhpType::Array(element) => !matches!(element.as_ref(), PhpType::Never),
+            PhpType::AssocArray { .. } => true,
+            _ => false,
+        };
+        if filled {
+            ctx.set_local_logical_type(&name, body_ty.clone());
+        }
+    }
 }
 
 /// Lowers a `do while` loop.

@@ -437,12 +437,13 @@ pub(in crate::codegen::lower_inst) fn emit_reported_php_version(ctx: &mut Functi
 /// `string|false` keeps the single decision point here, where the set is truthful.
 pub(crate) fn lower_phpversion(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "phpversion", 0, 1)?;
+    let strict_php = super::instruction_strict_php_profile(inst);
     let Some(value) = inst.operands.first().copied() else {
         emit_reported_php_version(ctx);
         return store_if_result(ctx, inst);
     };
     if let Some(extension_name) = maybe_const_string_operand(ctx, value)? {
-        if extension_is_loaded(&extension_name) {
+        if extension_is_loaded(ctx, &extension_name, strict_php) {
             emit_reported_php_version(ctx);
             crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
         } else {
@@ -473,7 +474,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_phpversion(ctx: &mut Functio
             "phpversion with non-string dynamic extension name",
         ));
     }
-    let candidates = dynamic_extension_loaded_candidates();
+    let candidates = dynamic_extension_loaded_candidates(ctx);
     if candidates.is_empty() {
         emit_static_bool(ctx, false);
         crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
@@ -565,31 +566,91 @@ fn emit_registry_string_lookup(
     Ok(())
 }
 
-/// Compile-time-known set of "loaded" PHP extensions for `extension_loaded()` and the regular
-/// (non-Zend) list returned by `get_loaded_extensions(false)`.
+/// Returns the always-available extensions `extension_loaded()` and `get_loaded_extensions(false)`
+/// report, derived from the shared catalog rather than listed by hand.
 ///
-/// KEEP IN SYNC with `crates/elephc-magician/src/interpreter/builtins/network_env/extension_loaded.rs`.
-/// This is only the always-present core set. Extensions this compilation actually provides
-/// (e.g. `hash`, `openssl` from linked bridges, and the injected PHP surfaces `PDO` / `mysqli`
-/// riding the shared `elephc_pdo` archive) are added on top per-compilation via
-/// `crate::codegen::linked_extensions()` — see [`extension_is_loaded`] and
-/// `lower_get_loaded_extensions`. Magician mirrors this set but always adds `bcmath`, which it
-/// implements directly; AOT adds `bcmath` only when `elephc_bcmath` is linked. Other bridge-linked
-/// extensions and injected surfaces such as `PDO` and `mysqli` remain absent in eval because it
-/// has no AOT link manifest (documented divergence: `extension_loaded('PDO')` and
-/// `extension_loaded('mysqli')` are `false` in eval).
-pub(crate) const CORE_LOADED_EXTENSIONS: &[&str] = &[
-    "Core",
-    "standard",
-    "SPL",
-    "json",
-    "pcre",
-    "date",
-    "ctype",
-    "mbstring",
-    "Reflection",
-    "Zend OPcache",
-];
+/// WHAT "LOADED" MEANS HERE. It is what ELEPHC CAN PROVIDE for this compilation — its target, its
+/// language profile, and the PHP surfaces injected into it — not what the emitted binary happens to
+/// reach. That is the same source `function_exists()` answers from
+/// ([`literal_function_exists`]), and the two have to share one source or a program can be told
+/// "the extension is there" and "the function is not" about the same call. It is also the only
+/// non-circular reading: a reachability-derived answer would say `mbstring` is absent because
+/// nothing calls `mb_strtoupper`, when whether anything CAN call it is precisely what the caller
+/// is asking in order to decide whether to declare it.
+///
+/// WHAT MAKES ONE REPORTABLE. Two facts, both derived:
+///
+/// 1. `PhpModule::covers_php_function_surface()` — elephc's catalog declares php-src's ENTIRE
+///    function list for the extension. `extension_loaded()` is a promise that all of an
+///    extension's functions are callable, so partial coverage must answer `false`. This is the
+///    measured defect this function exists to remove: the old hand-written list claimed `mbstring`
+///    while declaring 2 of php's 65 `mb_*` functions.
+/// 2. Every one of those functions passes [`literal_function_exists`] in THIS compilation, which
+///    is how an injected-prelude surface (`session`, `PDO`, the `xml` family) reports itself only
+///    where its prelude was actually injected, and how a builtin unavailable on the selected target
+///    removes its extension instead of being silently claimed.
+///
+/// `PhpModule::is_engine_surface()` (`Core`, `standard`, `pcre`) bypasses both: php-src cannot be
+/// built without them, nothing polyfills them, and reporting them ABSENT describes a PHP process
+/// that does not exist. That exception is deliberate and carries its argument on the predicate.
+///
+/// Bridge-linked extensions stay on top of this through `crate::codegen::linked_extensions()` —
+/// see [`extension_is_loaded`]. That path is NOT filtered by fact 1 yet: `openssl` (4 of php's 64
+/// functions), `hash` (9/20), `mysqli` (84/106), `gd` (83/106), `zlib` (4/30), `posix` (2/41) and
+/// `curl` (34/35 — only `curl_file_create` is missing) still report loaded when their bridge is
+/// linked, which is the same over-claim in a different place. It is left as measured, named work
+/// rather than changed here because each is pinned by its own end-to-end test that specifies the
+/// link-set reading.
+pub(in crate::codegen::lower_inst) fn always_loaded_extension_names(
+    ctx: &FunctionContext<'_>,
+    strict_php: bool,
+) -> Vec<String> {
+    // The Zend extensions elephc emulates are compiled into EVERY binary, so they are reported
+    // before the catalog walk rather than through it. Their `opcache_*` surface is prelude
+    // declarations the pipeline injects on demand, and demand-driven injection is a code-size
+    // decision, not an absence: without this, `extension_loaded('Zend OPcache')` would answer
+    // `false` in the same program where `get_loaded_extensions(true)` lists it — MEASURED, and the
+    // first thing the widened gate caught.
+    let mut names: Vec<String> = ZEND_LOADED_EXTENSIONS
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect();
+    for module in elephc_builtin_contract::complete_surface_modules() {
+        let name = module.display_name();
+        if names.iter().any(|existing| existing.eq_ignore_ascii_case(name)) {
+            continue;
+        }
+        if module.is_engine_surface() || module_functions_all_exist(ctx, module, strict_php) {
+            names.push(name.to_string());
+        }
+    }
+    names
+}
+
+/// Returns whether every PHP function the module owns exists in this compilation.
+///
+/// The predicate is `function_exists()`'s own, applied name by name, so `extension_loaded('X')`
+/// and `function_exists()` on any of X's functions cannot disagree by construction.
+///
+/// The one exclusion is a builtin php itself only ships on another platform
+/// ([`builtin_absent_by_php_platform_rule`]): php reports `pcntl` loaded on macOS while
+/// `pcntl_unshare` does not exist there, so counting a Linux-only name against the macOS build
+/// would report the extension absent on the one target where elephc's coverage matches php's
+/// exactly — MEASURED, both sides missing the same seven names.
+fn module_functions_all_exist(
+    ctx: &FunctionContext<'_>,
+    module: elephc_builtin_contract::PhpModule,
+    strict_php: bool,
+) -> bool {
+    let target = ctx.emitter.target;
+    elephc_builtin_contract::module_php_functions(module).all(|contract| {
+        literal_function_exists(ctx, contract.name, strict_php)
+            || crate::types::checker::builtins::builtin_absent_by_php_platform_rule(
+                contract.name,
+                target,
+            )
+    })
+}
 
 /// Compile-time-known set of loaded Zend extensions returned by `get_loaded_extensions(true)`.
 ///
@@ -597,35 +658,59 @@ pub(crate) const CORE_LOADED_EXTENSIONS: &[&str] = &[
 /// KEEP IN SYNC with `crates/elephc-magician/src/interpreter/builtins/network_env/get_loaded_extensions.rs`.
 pub(crate) const ZEND_LOADED_EXTENSIONS: &[&str] = &["Zend OPcache"];
 
-/// Returns true when `name` matches an always-present core extension OR an extension
-/// this compilation actually provides (`crate::codegen::linked_extensions()`),
-/// compared case-insensitively.
+/// Returns true when `name` names an extension this compilation provides, compared
+/// case-insensitively.
+///
+/// Two sources, in the order php itself would rank them:
+///
+/// - the bridges and injected PHP surfaces this particular compilation links
+///   (`crate::codegen::linked_extensions()`): `hash` when a program uses `hash()`, `openssl` under
+///   `--with-tls`, `PDO` / `mysqli` for the injected surfaces that ride the shared `elephc_pdo`
+///   archive (so the archive alone identifies neither);
+/// - the extensions elephc can always provide, derived from the shared catalog by
+///   [`always_loaded_extension_names`].
 ///
 /// Mirrors PHP's case-insensitive extension-name comparison: only the canonical names match
-/// (e.g. "opcache" is not an alias for "Zend OPcache"). The linked set is populated by the
-/// pipeline before codegen from the bridges this program links (e.g. `hash` when a program
-/// uses `hash()`) plus the injected PHP surfaces (`PDO` under `--with-pdo` or detected PDO
-/// usage, `mysqli` for the mysqli surface — both ride the same `elephc_pdo` archive, so the
-/// archive alone identifies neither), so a bridge-free program reports only the core set.
-pub(in crate::codegen::lower_inst) fn extension_is_loaded(name: &str) -> bool {
-    CORE_LOADED_EXTENSIONS
+/// (e.g. "opcache" is not an alias for "Zend OPcache").
+pub(in crate::codegen::lower_inst) fn extension_is_loaded(
+    ctx: &FunctionContext<'_>,
+    name: &str,
+    strict_php: bool,
+) -> bool {
+    if crate::codegen::linked_extensions()
         .iter()
         .any(|candidate| candidate.eq_ignore_ascii_case(name))
-        || crate::codegen::linked_extensions()
+        || ZEND_LOADED_EXTENSIONS
             .iter()
             .any(|candidate| candidate.eq_ignore_ascii_case(name))
+    {
+        return true;
+    }
+    elephc_builtin_contract::PhpModule::parse(name).is_some_and(|module| {
+        if !module.is_php() {
+            return false;
+        }
+        if module.is_engine_surface() {
+            return true;
+        }
+        module.covers_php_function_surface()
+            && module_functions_all_exist(ctx, module, strict_php)
+    })
 }
 
 /// Lowers `extension_loaded($extension)` over the effective extension set.
 ///
 /// A literal name const-folds to a static boolean (no runtime cost). A dynamic name is lowered
-/// to a case-insensitive membership test against the same effective set (core ∪ linked bridges),
-/// which is baked into the binary at compile time — see [`lower_dynamic_extension_loaded`].
+/// to a case-insensitive membership test against the same effective set (linked bridges ∪ the
+/// complete catalog surfaces), which is baked into the binary at compile time — see
+/// [`lower_dynamic_extension_loaded`].
 pub(crate) fn lower_extension_loaded(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "extension_loaded", 1)?;
+    let strict_php = super::instruction_strict_php_profile(inst);
     let value = expect_operand(inst, 0)?;
     if let Some(extension_name) = maybe_const_string_operand(ctx, value)? {
-        emit_static_bool(ctx, extension_is_loaded(&extension_name));
+        let loaded = extension_is_loaded(ctx, &extension_name, strict_php);
+        emit_static_bool(ctx, loaded);
     } else {
         lower_dynamic_extension_loaded(ctx, value)?;
     }
@@ -649,7 +734,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_extension_loaded(ctx: &mut F
             "extension_loaded with non-string dynamic name",
         ));
     }
-    let candidates = dynamic_extension_loaded_candidates();
+    let candidates = dynamic_extension_loaded_candidates(ctx);
     if candidates.is_empty() {
         emit_static_bool(ctx, false);
         return Ok(());
@@ -678,14 +763,19 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_extension_loaded(ctx: &mut F
 /// Returns the effective extension set a dynamic `extension_loaded()` test compares against.
 ///
 /// This is exactly the set [`extension_is_loaded`] folds against for a literal name: the
-/// always-present core extensions plus the canonical names of the bridges actually linked into
-/// this compilation, de-duplicated case-insensitively so a bridge that shadows a core name is not
-/// compared twice.
-pub(in crate::codegen::lower_inst) fn dynamic_extension_loaded_candidates() -> Vec<String> {
-    let mut candidates: Vec<String> = CORE_LOADED_EXTENSIONS
-        .iter()
-        .map(|name| (*name).to_string())
-        .collect();
+/// extensions elephc can always provide plus the canonical names of the bridges actually linked
+/// into this compilation, de-duplicated case-insensitively so a bridge that shadows a derived name
+/// is not compared twice.
+///
+/// The strict-PHP profile is read from the thread's compilation state rather than from a call
+/// site: this list is baked once per program, and every extension it can name is a PHP extension
+/// that `--strict-php` never hides (strict mode hides elephc's OWN extension builtins, which
+/// belong to the `elephc` pseudo-module and can never make a PHP module complete).
+pub(in crate::codegen::lower_inst) fn dynamic_extension_loaded_candidates(
+    ctx: &FunctionContext<'_>,
+) -> Vec<String> {
+    let mut candidates: Vec<String> =
+        always_loaded_extension_names(ctx, crate::strict_php::is_enabled());
     for extension in crate::codegen::linked_extensions() {
         if !candidates
             .iter()

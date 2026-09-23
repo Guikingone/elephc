@@ -1111,6 +1111,12 @@ pub fn inject_if_used(
         usage.references("token_get_all") || usage.references("token_name");
     // So is `array_filter()`'s callback form.
     let needs_array_filter_callback = usage.references("array_filter");
+    // And so is the `array_walk()` family, whose native runtimes answer neither the by-reference
+    // callback `array_walk()` is FOR nor a nested array in `array_walk_recursive()`.
+    let needs_array_walk =
+        usage.references("array_walk") || usage.references("array_walk_recursive");
+    // And so is `preg_match_all()` with `$flags`, which the native helper ignores.
+    let needs_preg_match_all_flags = usage.references("preg_match_all");
     // And so are `is_callable()`'s second and third parameters: the backend predicate takes the
     // value alone, and `$syntax_only` asks a different question than "can this be called".
     let needs_is_callable_ext = usage.references("is_callable");
@@ -1124,6 +1130,8 @@ pub fn inject_if_used(
         && !needs_tokenizer
         && !needs_parse_str
         && !needs_array_filter_callback
+        && !needs_array_walk
+        && !needs_preg_match_all_flags
         && !needs_is_callable_ext
     {
         return program;
@@ -1141,6 +1149,16 @@ pub fn inject_if_used(
     }
     if needs_array_filter_callback {
         let declarations = crate::array_filter_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_preg_match_all_flags {
+        let declarations = crate::preg_match_all_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_array_walk {
+        let declarations = crate::array_walk_prelude::declarations();
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);
         combined.extend(declarations);
     }

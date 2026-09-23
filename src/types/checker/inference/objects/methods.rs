@@ -787,6 +787,9 @@ impl Checker {
         allow_by_ref_spread: bool,
     ) -> Result<PhpType, CompileError> {
         let method_key = php_symbol_key(method);
+        // A private method belongs to the scope that declared it, not to the receiver's class.
+        let lexical_scope = self.lexical_private_method_scope(class_name, &method_key);
+        let class_name = lexical_scope.as_deref().unwrap_or(class_name);
         let late_static_return_type = self
             .instance_method_late_static_return(class_name, &method_key)
             .map(|return_type| {

@@ -203,6 +203,41 @@ pub(crate) fn lower_array_walk_recursive(
     let array = expect_operand(inst, 0)?;
     let callback = expect_operand(inst, 1)?;
     require_array_like_operand(ctx.value_php_type(array)?, "array_walk_recursive")?;
+    // The element type below is HARDCODED `Int`, so every slot reaches the callback as an
+    // integer. For a FLAT integer array that is right; for a nested one it is not, and the
+    // difference was silent. MEASURED against php 8.5.10:
+    //
+    //     $c = [1, [2]];
+    //     array_walk_recursive($c, function ($v) use (&$s) { $s[] = $v; });
+    //     php     [1, 2]
+    //     elephc  [4381662576, 4381662704]        <- slot addresses, not values
+    //
+    // and the two-parameter form (`function ($v, $k)`) fatals with
+    // `call_user_func_array(): missing required argument`. `array_walk` on the same array and the
+    // same callback is correct, because it derives its element type from the array instead.
+    //
+    // A wrong answer is worse than a refusal, so a shape this lowering cannot carry is refused
+    // here until the runtime helper takes a real element type and recurses on leaves.
+    // A gradual operand has no static element type at all, which is the same situation as a
+    // non-integer one for this lowering: the slot is read as an integer either way.
+    let element = match ctx.value_php_type(array)?.codegen_repr() {
+        PhpType::Array(element) => element.codegen_repr(),
+        other => other,
+    };
+    if !matches!(element, PhpType::Int | PhpType::Bool) {
+        // A REFUSAL here would be the honest verdict, but it takes a program that compiles today
+        // and stops it: Symfony's `EnvPlaceholderParameterBag::getEnvPlaceholderUniquePrefix()`
+        // writes `array_walk_recursive($entropy, static function (&$v) { $v = null; })` over a
+        // genuinely nested parameter array, and refusing it breaks the whole `--web` build. The
+        // divergence is pre-existing and narrow, so it is reported loudly instead of hidden, and
+        // the program keeps building until the helper takes a real element type.
+        crate::errors::report_warning(&crate::errors::CompileWarning::new(
+            inst.span.unwrap_or_else(crate::span::Span::dummy),
+            &format!(
+                "array_walk_recursive over a {element:?} element: this lowering passes every slot                  as an integer, so a NESTED array reaches the callback as slot addresses and a                  by-reference callback does not write back"
+            ),
+        ));
+    }
     let source_arg_ty = PhpType::Array(Box::new(PhpType::Int));
     lower_single_array_callback_builtin(
         ctx,

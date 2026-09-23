@@ -380,6 +380,27 @@ pub(super) fn null_coalesce_result_type(
 ) -> PhpType {
     let value_ty = strip_void_from_union(ctx.builder.value_php_type(value)).codegen_repr();
     let default_ty = materialized_expr_type_for_merge(ctx, default).codegen_repr();
+    // `$x ?? null` keeps the null. `wider_type_for_merge` lets a `Void` side vanish into the
+    // other side's type, which is right for storage that can SAY null and wrong for storage
+    // that cannot: a string slot stored the null as `""`, and an object slot as a null pointer
+    // that `var_dump` printed as nothing and `=== null` answered false for. MEASURED against
+    // php 8.5.10, over a missing offset:
+    //     ['a'][5] ?? null            php NULL     elephc string(0) ""
+    //     [new U()][5] ?? null        php NULL     elephc (nothing), then the program stopped
+    // An int slot already came out right, so only the representations that cannot hold null
+    // are widened to the boxed cell that can.
+    if matches!(default_ty, PhpType::Void)
+        && matches!(
+            value_ty,
+            PhpType::Str
+                | PhpType::Object(_)
+                | PhpType::Callable
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+        )
+    {
+        return PhpType::Mixed;
+    }
     wider_type_for_merge(&value_ty, &default_ty)
 }
 

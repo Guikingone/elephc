@@ -184,6 +184,7 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
     let argument_lowering = match semantics.argument_lowering {
         BuiltinArgumentLowering::Standard => "standard",
         BuiltinArgumentLowering::Count => "count",
+        BuiltinArgumentLowering::HtmlEntityDecode => "html_entity_decode",
         BuiltinArgumentLowering::Date => "date",
         BuiltinArgumentLowering::JsonDecode => "json_decode",
         BuiltinArgumentLowering::Getenv => "getenv",

@@ -31,8 +31,8 @@ builtin! {
 /// Statically known arrays keep their precise merged hash type. Gradual inputs return `Mixed` so
 /// lowering can validate their runtime array shapes.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    let ty1 = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    let ty2 = cx.checker.infer_type(&cx.args[1], cx.env)?;
+    // php's signature is `array_replace_recursive(array $array, array ...$replacements)`; reading
+    // exactly two refused ordinary PHP. See `array_replace` for the measurement that found it.
     let accepted = |t: &PhpType| {
         matches!(
             t,
@@ -42,15 +42,24 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
                 | PhpType::Union(_)
         )
     };
-    if !accepted(&ty1) || !accepted(&ty2) {
-        return Err(CompileError::new(
-            cx.span,
-            &format!("{}() arguments must be arrays", cx.name),
-        ));
+    let mut types = Vec::with_capacity(cx.args.len());
+    for arg in cx.args {
+        let ty = cx.checker.infer_type(arg, cx.env)?;
+        if !accepted(&ty) {
+            return Err(CompileError::new(
+                cx.span,
+                &format!("{}() arguments must be arrays", cx.name),
+            ));
+        }
+        types.push(ty);
     }
     let requires_gradual = |t: &PhpType| matches!(t, PhpType::Mixed | PhpType::Union(_));
-    if requires_gradual(&ty1) || requires_gradual(&ty2) {
+    if types.iter().any(requires_gradual) {
         return Ok(PhpType::Mixed);
     }
-    Ok(PhpType::two_input_hash_result(&ty1, &ty2))
+    let mut result = types.first().cloned().unwrap_or(PhpType::Mixed);
+    for ty in types.iter().skip(1) {
+        result = PhpType::two_input_hash_result(&result, ty);
+    }
+    Ok(result)
 }

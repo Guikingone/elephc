@@ -456,6 +456,15 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             scan_expr(path, usage);
         }
         ExprKind::FunctionCall { name, args } => {
+            // An unqualified call inside a namespace resolves to its GLOBAL name at run time when
+            // the namespace has no such function. Recording only the namespaced spelling hid it
+            // from every prelude that is injected on use: symfony/routing's
+            // `AttributeFileLoader::findClass()` calls `token_get_all()` from
+            // `Symfony\Component\Routing\Loader`, the tokenizer prelude was never built, and the
+            // call fell through to an interpreter that has no tokenizer.
+            if let Some(global) = name.function_fallback() {
+                record_name(usage, global);
+            }
             let name = php_symbol_key(name.as_str().trim_start_matches('\\'));
             record_name(usage, &name);
             match name.as_str() {

@@ -1501,9 +1501,12 @@ fn attach_generator_source_if_needed(
     body: &[Stmt],
     visible_param_count: usize,
 ) {
-    if !crate::types::checker::yield_validation::body_contains_yield(body)
-        && !is_generator_return_type(&function.return_php_type)
-    {
+    // Only a `yield` makes a body a generator. A function that merely RETURNS a `Generator` --
+    // declared `: Generator`, or inferred from `return (function () { yield 1; })();` -- is an
+    // ordinary function: lowering it as a coroutine resumed a body with no yield in it, and every
+    // `foreach` over its result spun forever on `NULL`. symfony/console's `TableRows` hands back
+    // exactly such a closure-built generator.
+    if !crate::types::checker::yield_validation::body_contains_yield(body) {
         return;
     }
     function.flags.is_generator = true;
@@ -1513,21 +1516,14 @@ fn attach_generator_source_if_needed(
     });
 }
 
-/// Returns true when checked function metadata already identifies a generator return.
-fn is_generator_return_type(ty: &PhpType) -> bool {
-    matches!(ty, PhpType::Object(name) if name.trim_start_matches('\\') == "Generator")
-}
-
 /// Returns the EIR return type to lower a function body with.
 ///
-/// For a generator (body contains `yield`, or the declared return type is
-/// `Generator`) the compiled body is a coroutine whose `return` produces the
-/// value later read by `Generator::getReturn()`, so the body return type is
-/// `Mixed`. For every other function it is the declared signature return type.
+/// For a generator (its body contains `yield`) the compiled body is a coroutine whose `return`
+/// produces the value later read by `Generator::getReturn()`, so the body return type is `Mixed`.
+/// For every other function -- one that returns a `Generator` built elsewhere included -- it is
+/// the signature return type.
 fn generator_body_return_type(body: &[Stmt], signature_return: &PhpType) -> PhpType {
-    if crate::types::checker::yield_validation::body_contains_yield(body)
-        || is_generator_return_type(signature_return)
-    {
+    if crate::types::checker::yield_validation::body_contains_yield(body) {
         PhpType::Mixed
     } else {
         signature_return.clone()

@@ -323,24 +323,30 @@ pub(super) fn class_has_builtin_interface_method(
         })
 }
 
-/// Returns whether a class or its eval parents satisfy one generated/AOT interface method.
+/// Returns whether a class, its eval parents, or its native ancestry satisfy one generated/AOT
+/// interface method.
+///
+/// The native fallback is the one [`class_has_interface_method`] already takes, for the same
+/// reason: `class E extends \\RuntimeException implements I` where the compiled `I extends
+/// \\Throwable` requires `getMessage()`, which only the native parent declares.
 pub(super) fn class_has_aot_interface_method(
     class: &EvalClass,
     requirement: &EvalAotInterfaceMethodRequirement,
     context: &ElephcEvalContext,
-) -> bool {
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
     if let Some((declaring_class, method)) = pending_class_method(class, &requirement.name, context)
     {
-        return class_method_satisfies_aot_interface_requirement(
+        return Ok(class_method_satisfies_aot_interface_requirement(
             &method,
             &declaring_class,
             requirement,
             Some(class),
             context,
             true,
-        );
+        ));
     }
-    false
+    native_ancestor_provides_method(class, &requirement.name, requirement.is_static, context, values)
 }
 
 /// Returns whether a class or its eval parents satisfy one interface method signature.
@@ -383,7 +389,13 @@ pub(super) fn class_has_interface_method(
     if inherited {
         return Ok(true);
     }
-    aot_ancestor_provides_interface_method(class, requirement, context, values)
+    native_ancestor_provides_method(
+        class,
+        requirement.name(),
+        requirement.is_static(),
+        context,
+        values,
+    )
 }
 
 /// Returns whether a generated/AOT ancestor concretely provides one interface method.
@@ -400,22 +412,23 @@ pub(super) fn class_has_interface_method(
 /// AOT ancestor's own declaration was validated when it was compiled, and the eval side holds no
 /// full type metadata for a native method — refusing a valid class is the worse failure of the
 /// two.
-fn aot_ancestor_provides_interface_method(
+fn native_ancestor_provides_method(
     class: &EvalClass,
-    requirement: &EvalInterfaceMethod,
+    method_name: &str,
+    is_static: bool,
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     let Some(ancestor) = eval_ancestry_native_root(class, context) else {
         return Ok(false);
     };
-    let Some(flags) = values.reflection_method_flags(&ancestor, requirement.name())? else {
+    let Some(flags) = values.reflection_method_flags(&ancestor, method_name)? else {
         return Ok(false);
     };
     Ok(flags & EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT == 0
         && flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE == 0
         && flags & EVAL_REFLECTION_MEMBER_FLAG_PROTECTED == 0
-        && (flags & EVAL_REFLECTION_MEMBER_FLAG_STATIC != 0) == requirement.is_static())
+        && (flags & EVAL_REFLECTION_MEMBER_FLAG_STATIC != 0) == is_static)
 }
 
 /// Returns the first ancestor of `class` that is not an eval-declared class.

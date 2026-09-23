@@ -2028,3 +2028,89 @@ foreach ($sorted as $value) { echo $value, ','; }
     );
     assert_eq!(out, "1,2,3,");
 }
+
+
+/// `array_walk()` with a BY-REFERENCE callback writes back, whether the callback is written inline
+/// or held in a variable. The native runtime refused both with `array_walk() callback parameter $v
+/// must be passed a variable`; php 8.5.10 prints `2,4,6` for each.
+#[test]
+fn test_array_walk_by_reference_callback_writes_back() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2, 3];
+array_walk($a, static function (&$v) { $v *= 2; });
+echo implode(',', $a), '|';
+$double = static function (&$v) { $v *= 2; };
+$b = [1, 2, 3];
+array_walk($b, $double);
+echo implode(',', $b);
+"#,
+    );
+    assert_eq!(out, "2,4,6|2,4,6");
+}
+
+/// `array_walk_recursive()` hands the callback the LEAF values and writes a by-reference callback
+/// back into the nested arrays. The native runtime read every slot as an integer: the by-value
+/// walk printed two box addresses, and the by-reference one left the array untouched.
+#[test]
+fn test_array_walk_recursive_visits_leaves_and_writes_back() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, [2, 3]];
+array_walk_recursive($a, static function ($v) { echo $v; });
+echo '|';
+$b = [1, [2, 3]];
+array_walk_recursive($b, static function (&$v) { $v *= 2; });
+echo json_encode($b), '|';
+$c = ['x' => 1, 'y' => ['z' => 3]];
+array_walk_recursive($c, static function ($v, $k) { echo $k, '=', $v, ';'; });
+"#,
+    );
+    assert_eq!(out, "123|[2,[4,6]]|x=1;z=3;");
+}
+
+/// The optional third argument reaches the callback as its third parameter, and both walks
+/// answer `true`. The contract used to allow exactly two arguments and return `void`.
+#[test]
+fn test_array_walk_passes_the_extra_argument_and_returns_true() {
+    let out = compile_and_run(
+        r#"<?php
+function withArg($v, $k, $prefix) { echo $prefix, $k, '=', $v, ' '; }
+$e = ['x' => 1, 'y' => 2];
+array_walk($e, 'withArg', '>');
+$n = ['g' => ['a' => 1]];
+array_walk_recursive($n, 'withArg', '#');
+var_dump(array_walk($e, static function ($v) {}));
+"#,
+    );
+    assert_eq!(out, ">x=1 >y=2 #a=1 bool(true)\n");
+}
+
+/// Symfony's `UrlGenerator::doGenerate()` shape: a self-capturing by-reference closure, defined in
+/// a FUNCTION, that recurses into objects with a second `array_walk_recursive()` over a local.
+/// It exercises three fixes at once -- the walk helper, the untyped by-reference parameter that
+/// a narrowing guard re-assigns, and the self-capture read as a value (it used to fatal with
+/// `Call to undefined function <dynamic>()`).
+#[test]
+fn test_array_walk_recursive_self_capturing_caster_in_a_function() {
+    let out = compile_and_run(
+        r#"<?php
+class Holder { public string $a = 'x'; public int $b = 2; }
+function run(array $extra): array {
+    $out = [];
+    $caster = static function (&$v) use (&$caster, &$out) {
+        if (\is_object($v)) {
+            $vars = get_object_vars($v);
+            array_walk_recursive($vars, $caster);
+            $v = $vars;
+        }
+        $out[] = $v;
+    };
+    array_walk_recursive($extra, $caster);
+    return $out;
+}
+echo json_encode(run(['k' => 'v', 'o' => new Holder()]));
+"#,
+    );
+    assert_eq!(out, r#"["v","x",2,{"a":"x","b":2}]"#);
+}

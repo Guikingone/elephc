@@ -82,6 +82,7 @@ pub(super) fn strip_discoverable_declarations(
     stmts: Vec<Stmt>,
     canonical: Option<&Path>,
     function_variants: &FunctionVariantRegistry,
+    outcome: &mut ConditionalDeclarationOutcome,
 ) -> Vec<Stmt> {
     let mut early_bindings = Vec::new();
     let body = strip_stmts(
@@ -91,6 +92,7 @@ pub(super) fn strip_discoverable_declarations(
         None,
         &mut early_bindings,
         true,
+        outcome,
     );
     early_bindings.extend(body);
     early_bindings
@@ -106,6 +108,7 @@ fn strip_stmts(
     namespace: Option<String>,
     early_bindings: &mut Vec<Stmt>,
     allow_early_bindings: bool,
+    outcome: &mut ConditionalDeclarationOutcome,
 ) -> Vec<Stmt> {
     let mut stripped = Vec::new();
     let mut namespace = namespace;
@@ -127,6 +130,7 @@ fn strip_stmts(
             &mut namespace,
             early_bindings,
             allow_early_bindings,
+            outcome,
         ) {
             if allow_early_bindings && (is_function || is_early_interface) {
                 push_early_binding(early_bindings, stmt, stmt_namespace.as_deref());
@@ -136,6 +140,46 @@ fn strip_stmts(
         }
     }
     stripped
+}
+
+/// What a strip did with the conditional declarations it walked past.
+///
+/// Both halves are needed, and one without the other misleads. A polyfill's version guard has two
+/// branches declaring the SAME function; only the live one is bound, and reading the dead branch's
+/// drop alone says the function was lost when it was not.
+#[derive(Default)]
+pub(super) struct ConditionalDeclarationOutcome {
+    /// Names whose conditional declaration was dropped instead of bound.
+    pub(super) dropped: Vec<String>,
+    /// Names bound through the function-variant mechanism.
+    pub(super) bound: Vec<String>,
+}
+
+/// Returns whether an INCLUDED file's conditionally declared functions are kept for binding.
+///
+/// OFF BY DEFAULT, and this is a temporary gate, not a design. Keeping those bodies is what makes
+/// `if (!function_exists('f')) { function f() {…} }` in an included file behave as php does — the
+/// shape every polyfill uses — but it also widens the closed world to every class those bodies
+/// name. That is correct and is the point; php reaches the same code. It is gated only because
+/// one such body currently reaches PHP that elephc cannot yet compile: a reference stored in an
+/// array element. Both spellings the widened world runs into,
+///
+///     $pool[] = [&$refs[$k], $value, &$value];   // refused: reference element in an array literal
+///     $value[$k] = &$refs[$rid];                 // refused: complex reference target
+///
+/// are ordinary PHP, and the forms elephc does accept are silently wrong rather than refused
+/// (`$arr[0] = &$a;` and `$x = &$src[0];` both drop the alias). Array-element references are a
+/// missing runtime representation, not a parser restriction, so this stays off until that lands.
+/// Everything in `crate::conditional_functions` that does NOT widen the parse — every conditional
+/// declaration in a file the build already reads whole — is unaffected by this gate and is always
+/// on.
+///
+/// Set `ELEPHC_BIND_CONDITIONAL_INCLUDE_DECLARATIONS=1` to turn it on.
+fn conditional_include_declarations_are_bound() -> bool {
+    matches!(
+        std::env::var("ELEPHC_BIND_CONDITIONAL_INCLUDE_DECLARATIONS").as_deref(),
+        Ok("1") | Ok("on") | Ok("true")
+    )
 }
 
 /// Processes a single statement, removing discoverable declarations while
@@ -151,27 +195,52 @@ fn strip_stmt(
     current_namespace: &mut Option<String>,
     early_bindings: &mut Vec<Stmt>,
     allow_early_bindings: bool,
+    outcome: &mut ConditionalDeclarationOutcome,
 ) -> Option<Stmt> {
     let span = stmt.span;
     match stmt.kind {
-        StmtKind::FunctionDecl { name, .. } => {
-            let public_name = canonical_name_for_decl(namespace, &name);
-            canonical
-                .and_then(|canonical| {
-                    function_variants.get(&FunctionVariantKey::new(
-                        canonical,
-                        &public_name,
-                    ))
-                })
-                .map(|variant| {
-                    Stmt::new(
-                        StmtKind::FunctionVariantMark {
-                            name: variant.public_name.clone(),
-                            variant: variant.variant_name.clone(),
-                        },
-                        span,
-                    )
-                })
+        StmtKind::FunctionDecl { .. } => {
+            let name = match &stmt.kind {
+                StmtKind::FunctionDecl { name, .. } => name.as_str(),
+                _ => unreachable!("matched FunctionDecl"),
+            };
+            let public_name = canonical_name_for_decl(namespace, name);
+            let variant = canonical.and_then(|canonical| {
+                function_variants.get(&FunctionVariantKey::new(canonical, &public_name))
+            });
+            match variant {
+                Some(variant) => {
+                    // Recorded beside the drops: a name bound HERE answers for the same name
+                    // dropped in a sibling file, which is what a version guard's two branches do.
+                    outcome.bound.push(public_name.clone());
+                    Some(Stmt::new(
+                    StmtKind::FunctionVariantMark {
+                        name: variant.public_name.clone(),
+                        variant: variant.variant_name.clone(),
+                    },
+                    span,
+                ))
+                }
+                // A declaration in an unconditional position was already hoisted by
+                // `extract_discoverable_declarations`, so removing it here is what keeps the
+                // file from declaring it twice. One nested in a conditional statement was NOT
+                // hoisted — php binds it only when that statement executes — so removing it
+                // would lose the body outright and the including file would be told the
+                // function does not exist. It stays where it is; `crate::conditional_functions`
+                // gives it its execution-time binding once the program is whole.
+                None if !allow_early_bindings && conditional_include_declarations_are_bound() => {
+                    Some(stmt)
+                }
+                None => {
+                    // Dropping it is what the gate above costs, and the cost can be invisible:
+                    // the file still reports as one the compiler included, the runtime skips it
+                    // on that word, and the function ends up declared by nobody.
+                    if !allow_early_bindings {
+                        outcome.dropped.push(public_name.clone());
+                    }
+                    None
+                }
+            }
         }
         StmtKind::InterfaceDecl { name, .. } => canonical.map(|canonical| {
             Stmt::new(
@@ -197,6 +266,7 @@ fn strip_stmt(
                 nested_namespace.clone(),
                 early_bindings,
                 false,
+                &mut *outcome,
             );
             let elseif_clauses = elseif_clauses
                 .into_iter()
@@ -210,6 +280,7 @@ fn strip_stmt(
                             nested_namespace.clone(),
                             early_bindings,
                             false,
+                            &mut *outcome,
                         ),
                     )
                 })
@@ -222,6 +293,7 @@ fn strip_stmt(
                     nested_namespace,
                     early_bindings,
                     false,
+                    &mut *outcome,
                 )
             });
             Some(Stmt::new(
@@ -243,7 +315,8 @@ fn strip_stmt(
                     function_variants,
                     namespace,
                     early_bindings,
-                ),
+                                &mut *outcome,
+                            ),
             },
             span,
         )),
@@ -255,7 +328,8 @@ fn strip_stmt(
                     function_variants,
                     namespace,
                     early_bindings,
-                ),
+                                &mut *outcome,
+                            ),
                 condition,
             },
             span,
@@ -276,7 +350,8 @@ fn strip_stmt(
                     function_variants,
                     namespace,
                     early_bindings,
-                ),
+                                &mut *outcome,
+                            ),
             },
             span,
         )),
@@ -298,7 +373,8 @@ fn strip_stmt(
                     function_variants,
                     namespace,
                     early_bindings,
-                ),
+                                &mut *outcome,
+                            ),
             },
             span,
         )),
@@ -320,7 +396,8 @@ fn strip_stmt(
                                 function_variants,
                                 namespace,
                                 early_bindings,
-                            ),
+                                                        &mut *outcome,
+                                                    ),
                         )
                     })
                     .collect(),
@@ -331,7 +408,8 @@ fn strip_stmt(
                         function_variants,
                         namespace,
                         early_bindings,
-                    )
+                                        &mut *outcome,
+                                    )
                 }),
             },
             span,
@@ -348,7 +426,8 @@ fn strip_stmt(
                     function_variants,
                     namespace,
                     early_bindings,
-                ),
+                                &mut *outcome,
+                            ),
                 catches: catches
                     .into_iter()
                     .map(|mut catch| {
@@ -358,7 +437,8 @@ fn strip_stmt(
                             function_variants,
                             namespace,
                             early_bindings,
-                        );
+                                                &mut *outcome,
+                                            );
                         catch
                     })
                     .collect(),
@@ -369,7 +449,8 @@ fn strip_stmt(
                         function_variants,
                         namespace,
                         early_bindings,
-                    )
+                                        &mut *outcome,
+                                    )
                 }),
             },
             span,
@@ -388,6 +469,7 @@ fn strip_stmt(
                     Some(namespace_string(&name)),
                     early_bindings,
                     true,
+                    &mut *outcome,
                 ),
                 name,
             },
@@ -401,6 +483,7 @@ fn strip_stmt(
                 current_namespace.clone(),
                 early_bindings,
                 allow_early_bindings,
+                &mut *outcome,
             );
             if body.is_empty() {
                 None
@@ -420,6 +503,7 @@ fn strip_deferred_body(
     function_variants: &FunctionVariantRegistry,
     namespace: Option<&str>,
     early_bindings: &mut Vec<Stmt>,
+    outcome: &mut ConditionalDeclarationOutcome,
 ) -> Vec<Stmt> {
     strip_stmts(
         body,
@@ -428,6 +512,7 @@ fn strip_deferred_body(
         namespace.map(str::to_string),
         early_bindings,
         false,
+        outcome,
     )
 }
 

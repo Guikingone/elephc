@@ -10,6 +10,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::sentinels::HEAP_FREE_REFCOUNT_MARK;
 
 
 /// Emits the `__rt_heap_alloc` runtime helper: a free-list allocator with size-segregated
@@ -93,9 +94,11 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("add x14, x12, x14");                                   // x14 = current live heap end
     emitter.instruction("cmp x10, x14");                                        // does the cached block point at or beyond the live heap end?
     emitter.instruction("b.hs __rt_heap_alloc_small_bin_drop_tail");            // wild pointer: truncate the chain past the live heap window
-    // -- a parked cached block must be free: refcount 0 and no retained heap kind --
+    // -- a parked cached block must carry the free mark and no retained heap kind --
     emitter.instruction("ldr w15, [x10, #4]");                                  // load the cached block refcount from its header
-    emitter.instruction("cbnz w15, __rt_heap_alloc_small_bin_unlink_invalid");  // a live refcount marks a poisoned entry, unlink it
+    super::heap_free::emit_load_free_mark(emitter, "w11");                      // materialize the parked-block refcount marker
+    emitter.instruction("cmp w15, w11");                                        // does this entry still claim to be parked on a free list?
+    emitter.instruction("b.ne __rt_heap_alloc_small_bin_unlink_invalid");       // anything else marks a poisoned entry, unlink it
     emitter.instruction("ldr x15, [x10, #8]");                                  // load the cached block heap kind from its header
     emitter.instruction("cbnz x15, __rt_heap_alloc_small_bin_unlink_invalid");  // a retained live kind marks a poisoned entry, unlink it
     emitter.instruction("ldr w11, [x10]");                                      // load the cached block payload size before reusing it
@@ -154,7 +157,9 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("cmp x11, #8");                                         // is the free block large enough to carry allocator metadata?
     emitter.instruction("b.lo __rt_heap_alloc_fl_unlink_invalid");              // unlink in-heap nodes with impossible payload sizes
     emitter.instruction("ldr w14, [x10, #4]");                                  // load the candidate refcount from the free block header
-    emitter.instruction("cbnz w14, __rt_heap_alloc_fl_unlink_invalid");         // live blocks must never be reused through the free list
+    super::heap_free::emit_load_free_mark(emitter, "w15");                      // materialize the parked-block refcount marker
+    emitter.instruction("cmp w14, w15");                                        // does this node still claim to be parked on the free list?
+    emitter.instruction("b.ne __rt_heap_alloc_fl_unlink_invalid");              // live or corrupt blocks must never be reused through the free list
     emitter.instruction("ldr x14, [x10, #8]");                                  // load the candidate heap kind from the free block header
     emitter.instruction("cbnz x14, __rt_heap_alloc_fl_unlink_invalid");         // free-list blocks must not retain a live heap kind
     emitter.instruction("add x14, x10, #16");                                   // compute the start of this candidate payload
@@ -191,7 +196,8 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("add x13, x13, #16");                                   // x13 = split remainder header address
     emitter.instruction("sub x12, x12, #16");                                   // x12 = remainder payload size after carving out a new header
     emitter.instruction("str w12, [x13]");                                      // write split remainder size into its header
-    emitter.instruction("str wzr, [x13, #4]");                                  // free remainder keeps refcount cleared while on the free list
+    super::heap_free::emit_load_free_mark(emitter, "w15");                      // materialize the parked-block refcount marker
+    emitter.instruction("str w15, [x13, #4]");                                  // the split remainder stays parked, so it carries the free mark
     emitter.instruction("str xzr, [x13, #8]");                                  // free remainder has no heap kind while on the free list
     emitter.instruction("ldr x14, [x10, #16]");                                 // x14 = current->next before splitting
     emitter.instruction("str x14, [x13, #16]");                                 // remainder->next = current->next
@@ -369,10 +375,10 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsi, rdx");                                        // rsi = current live heap end
     emitter.instruction("cmp r10, rsi");                                        // does the cached block point at or beyond the live heap end?
     emitter.instruction("jae __rt_heap_alloc_small_bin_drop_tail");             // wild pointer: truncate the chain past the live heap window
-    // -- a parked cached block must be free: refcount 0 and no retained heap kind --
+    // -- a parked cached block must carry the free mark and no retained heap kind --
     emitter.instruction("mov edx, DWORD PTR [r10 + 4]");                        // load the cached block refcount from its header
-    emitter.instruction("test edx, edx");                                       // is the cached block still marked live rather than free?
-    emitter.instruction("jnz __rt_heap_alloc_small_bin_unlink_invalid");        // a live refcount marks a poisoned entry, unlink it
+    emitter.instruction(&format!("cmp edx, {:#x}", HEAP_FREE_REFCOUNT_MARK));   // does the cached block still claim to be parked?
+    emitter.instruction("jne __rt_heap_alloc_small_bin_unlink_invalid");        // anything else marks a poisoned entry, unlink it
     emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // load the cached block heap kind from its header
     emitter.instruction("test rdx, rdx");                                       // does the cached block retain a live heap kind?
     emitter.instruction("jnz __rt_heap_alloc_small_bin_unlink_invalid");        // a retained live kind marks a poisoned entry, unlink it
@@ -429,8 +435,8 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r11, 8");                                          // is the free block large enough to carry allocator metadata?
     emitter.instruction("jb __rt_heap_alloc_fl_unlink_invalid");                // unlink in-heap nodes with impossible payload sizes
     emitter.instruction("mov edx, DWORD PTR [r10 + 4]");                        // load the candidate refcount from the free block header
-    emitter.instruction("test edx, edx");                                       // is the candidate still marked live rather than free?
-    emitter.instruction("jnz __rt_heap_alloc_fl_unlink_invalid");               // live blocks must never be reused through the free list
+    emitter.instruction(&format!("cmp edx, {:#x}", HEAP_FREE_REFCOUNT_MARK));   // does the candidate still claim to be parked on the free list?
+    emitter.instruction("jne __rt_heap_alloc_fl_unlink_invalid");               // live or corrupt blocks must never be reused through the free list
     emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // load the candidate heap kind from the free block header
     emitter.instruction("test rdx, rdx");                                       // does this free-list node retain a live heap kind?
     emitter.instruction("jnz __rt_heap_alloc_fl_unlink_invalid");               // free-list blocks must not retain live heap kind metadata
@@ -465,7 +471,10 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea r8, [r10 + rax + 16]");                            // compute the header address for the split remainder block
     emitter.instruction("sub rcx, 16");                                         // remove the new header size so rcx becomes the remainder payload size
     emitter.instruction("mov DWORD PTR [r8], ecx");                             // write the split remainder payload size into its free-block header
-    emitter.instruction("mov DWORD PTR [r8 + 4], 0");                           // free-list blocks keep refcount zero while they remain unowned
+    emitter.instruction(&format!(
+        "mov DWORD PTR [r8 + 4], {:#x}",
+        HEAP_FREE_REFCOUNT_MARK
+    ));                                                                         // the split remainder stays parked, so it carries the free mark
     emitter.instruction("mov QWORD PTR [r8 + 8], 0");                           // free-list blocks clear the heap kind until a typed allocation reuses them
     emitter.instruction("mov rdx, QWORD PTR [r10 + 16]");                       // preserve the original successor before rewriting the free-list links
     emitter.instruction("mov QWORD PTR [r8 + 16], rdx");                        // splice the split remainder to the original successor

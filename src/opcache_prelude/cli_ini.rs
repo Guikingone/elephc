@@ -10,19 +10,42 @@
 #[allow(unused_imports)]
 use super::*;
 
-/// The KNOWN-MODULE predicate the `ini_get_all` extension filter uses to tell "known module with
+/// The module names `ini_get_all`'s extension filter RECOGNIZES, used to tell "known module with
 /// no INI directives" (`[]`) from "no such module" (`E_WARNING` + `false`).
 ///
-/// The list is derived from [`CORE_LOADED_EXTENSIONS`] — the same compile-time set that backs
-/// `extension_loaded()` / `get_loaded_extensions()` — LOWERCASED here, so the two cannot drift and
-/// the comparison is verbatim against lowercase registry keys (reference PHP does NOT case-fold
-/// this argument; do not share a comparison helper with `extension_loaded`, which does). `web`
-/// adds `'session'`, the extra module a `--web` binary registers.
+/// LOWERCASED, and compared verbatim against lowercase registry keys: reference PHP does NOT
+/// case-fold this argument, so this must not share a comparison helper with `extension_loaded`,
+/// which does.
+///
+/// THIS IS DELIBERATELY NOT THE `extension_loaded()` SET, and it used to be. `extension_loaded()`
+/// answers "can every function of this extension be called", which elephc now derives from the
+/// shared catalog's php-src coverage — so `mbstring` (2 of php's 65 functions) and `ctype` (4 of
+/// 11) dropped out of it. `ini_get_all($module)` asks a different question: reference PHP 8.5
+/// returns `[]` for `json`, `spl`, `ctype`, `reflection` and `standard` because it RECOGNIZES the
+/// module and it simply declares no INI directives. Recognition survives partial function
+/// coverage; the promise `extension_loaded()` makes does not. Keeping them one set would have made
+/// `ini_get_all('ctype')` start warning about a module elephc plainly knows.
 ///
 /// Bridge-linked extensions (`PDO`, `hash`, …) are deliberately NOT included: they are a
 /// per-compilation link-set decision made in codegen, while this prelude is built before codegen.
+pub(crate) const INI_KNOWN_MODULES: &[&str] = &[
+    "Core",
+    "standard",
+    "SPL",
+    "json",
+    "pcre",
+    "date",
+    "ctype",
+    "mbstring",
+    "Reflection",
+    "Zend OPcache",
+];
+
+/// Builds the `__elephc_ini_module_known($m)` declaration over [`INI_KNOWN_MODULES`].
+///
+/// `web` adds `'session'`, the extra module a `--web` binary registers.
 pub(crate) fn ini_module_known_declaration(web: bool) -> Stmt {
-    let mut names: Vec<String> = crate::codegen::lower_inst::builtins::CORE_LOADED_EXTENSIONS
+    let mut names: Vec<String> = INI_KNOWN_MODULES
         .iter()
         .map(|name| name.to_ascii_lowercase())
         .collect();

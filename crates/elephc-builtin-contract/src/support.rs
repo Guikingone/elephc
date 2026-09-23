@@ -351,6 +351,19 @@ fn is_eval_only_reflection(id: BuiltinId) -> bool {
 }
 
 /// PHP-visible AOT contracts that do not yet have a Magician implementation binding.
+///
+/// EVERY NAME HERE IS A LATENT WORKER-KILLER, not a cosmetic gap. A call that compiles and runs
+/// in AOT code is an UNCATCHABLE `call to undefined function` the moment the same call is reached
+/// through an `eval()` fragment — which under `--web` means the worker dies before it flushes and
+/// the client sees an empty reply, not an error page. That is exactly how `memory_get_usage()`
+/// blanked every route of the Symfony example in its default environment.
+///
+/// Measured against the Symfony example's `vendor/` (call sites intersected with the files a real
+/// request actually loads, via `get_included_files()`), these are reached on the served request
+/// path: `array_is_list` (12 sites), `unpack` (11), `array_key_first` (7), `array_key_last` (5),
+/// `header_remove` (2); and on the dev/debug path: `setlocale` (4), `dechex` (2). `join` was on
+/// that list too and is now bound, because it is php's documented alias of `implode` and the
+/// implementation already existed.
 const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "array_all",
     "array_any",
@@ -372,7 +385,6 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "decoct",
     "header_remove",
     "hexdec",
-    "join",
     "octdec",
     "preg_grep",
     "setlocale",

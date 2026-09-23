@@ -394,6 +394,17 @@ pub(in crate::interpreter) fn eval_class_constant_fetch_result(
     if let Some(value) = values.class_constant_get(&class_name, constant_name)? {
         return Ok(value);
     }
+    // A class-like nobody declared yet is loaded first, as php does for `Foo::BAR`: the
+    // `int $referenceType = UrlGeneratorInterface::ABSOLUTE_PATH` default of symfony's
+    // `AbstractController::generateUrl()` names an interface only that default ever touches.
+    if !eval_class_like_is_known(&class_name, context, values)? {
+        let _ = crate::interpreter::eval_spl_autoload_class(&class_name, context, values)?;
+        #[cfg(not(test))]
+        context.sync_global_eval_classes();
+        if eval_class_like_is_known(&class_name, context, values)? {
+            return eval_class_constant_fetch_result(&class_name, constant_name, context, values);
+        }
+    }
     eval_throw_error(
         &format!(
             "Undefined constant {}::{}",
@@ -403,6 +414,21 @@ pub(in crate::interpreter) fn eval_class_constant_fetch_result(
         context,
         values,
     )
+}
+
+/// Whether any context or the compiled program already declares this class-like name.
+fn eval_class_like_is_known(
+    class_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    Ok(context.class(class_name).is_some()
+        || context.has_interface(class_name)
+        || context.has_trait(class_name)
+        || context.has_enum(class_name)
+        || values.class_exists(class_name)?
+        || values.interface_exists(class_name)?
+        || values.enum_exists(class_name)?)
 }
 
 /// Resolves eval-visible built-in Reflection class constants.

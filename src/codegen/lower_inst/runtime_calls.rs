@@ -31,9 +31,15 @@ pub(super) fn lower(
             once,
             required,
             strict_php,
-        } => {
-            super::builtins::lower_dynamic_include(ctx, inst, once, required, strict_php)
-        }
+            value_discarded,
+        } => super::builtins::lower_dynamic_include(
+            ctx,
+            inst,
+            once,
+            required,
+            strict_php,
+            value_discarded,
+        ),
         RuntimeCallTarget::MixedCellPromoteToHash(sort)
         | RuntimeCallTarget::MixedCellPromoteAttachedToHash(sort) => {
             lower_mixed_cell_promote_to_hash(ctx, inst, sort)

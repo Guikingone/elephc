@@ -253,6 +253,17 @@ impl ElephcEvalContext {
             .contains(path.as_ref())
     }
 
+    /// Whether the COMPILER already performed this inclusion, splicing the file into the program.
+    ///
+    /// Distinct from [`Self::has_included_file`], which is also true for a file THIS request
+    /// opened. An `include`/`require` whose value is discarded can be skipped for the first but
+    /// not for the second: the compiler ran the file's top-level statements at program start, so
+    /// running them again is duplicate execution, not PHP's re-inclusion semantics.
+    pub fn compiler_included_file(&self, path: impl AsRef<std::path::Path>) -> bool {
+        self.include_state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+            .compiler_included(path.as_ref())
+    }
+
     /// Registers an opened source once, without a context-local shadow copy.
     pub fn mark_included_file(&mut self, path: impl Into<std::path::PathBuf>) {
         self.include_state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
