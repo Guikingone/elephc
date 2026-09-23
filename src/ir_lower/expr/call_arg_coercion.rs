@@ -70,7 +70,17 @@ fn guard_boxed_object_reference_argument(
     if !sig.ref_params.get(index).copied().unwrap_or(false) {
         return;
     }
-    let Some((_, PhpType::Object(class_name))) = sig.params.get(index) else {
+    let declared_object = match sig.params.get(index).map(|(_, ty)| ty) {
+        Some(PhpType::Object(class_name)) => Some(class_name.as_str()),
+        Some(PhpType::Mixed) => match sig.param_type_exprs.get(index).and_then(Option::as_ref) {
+            Some(TypeExpr::Named(name)) if !name.as_str().eq_ignore_ascii_case("mixed") => {
+                Some(name.as_str())
+            }
+            _ => None,
+        },
+        _ => None,
+    };
+    let Some(class_name) = declared_object else {
         return;
     };
     let ExprKind::Variable(name) = &arg.kind else {
@@ -79,12 +89,28 @@ fn guard_boxed_object_reference_argument(
     if ctx.local_type(name).codegen_repr() != PhpType::Mixed {
         return;
     }
-    let condition = lower_instanceof(
-        ctx,
-        arg,
-        &InstanceOfTarget::Name(Name::from(class_name.clone())),
-        arg,
-    );
+    let condition = if class_name.is_empty() || class_name.eq_ignore_ascii_case("object") {
+        let value = lower_expr(ctx, arg);
+        let condition = ctx.emit_value(
+            Op::TypePredicate,
+            vec![value.value],
+            Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object)),
+            PhpType::Bool,
+            Op::TypePredicate.default_effects(),
+            Some(arg.span),
+        );
+        if ctx.value_needs_release_after_use(value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(arg.span));
+        }
+        condition
+    } else {
+        lower_instanceof(
+            ctx,
+            arg,
+            &InstanceOfTarget::Name(Name::from(class_name)),
+            arg,
+        )
+    };
     let accepted = ctx.builder.create_named_block("object.ref.accepted", Vec::new());
     let rejected = ctx.builder.create_named_block("object.ref.rejected", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {

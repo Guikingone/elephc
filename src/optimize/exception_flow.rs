@@ -51,6 +51,10 @@ pub(super) struct ExceptionFlowAnalysis {
     function_throws: HashMap<String, ThrownTypes>,
     static_method_throws: HashMap<String, ThrownTypes>,
     instance_method_throws: HashMap<String, ThrownTypes>,
+    /// Declared object references can reject a cell retyped by an earlier call at entry.
+    function_object_ref_checks: HashSet<String>,
+    static_method_object_ref_checks: HashMap<String, bool>,
+    instance_method_object_ref_checks: HashMap<String, bool>,
     function_returns: HashMap<String, PhpType>,
     static_method_returns: HashMap<String, PhpType>,
     instance_method_returns: HashMap<String, PhpType>,
@@ -67,6 +71,15 @@ pub(super) struct ExceptionFlowAnalysis {
     /// program that also contains an unrelated throwing destructor; absence is the
     /// conservative answer and reproduces the previous behavior.
     scalar_frame_callables: HashSet<String>,
+}
+
+/// Returns whether argument binding can throw before entering an otherwise clean body.
+fn declared_object_reference_can_throw(signature: &FunctionSig) -> bool {
+    signature.params.iter().enumerate().any(|(index, (_, ty))| {
+        signature.ref_params.get(index).copied().unwrap_or(false)
+            && signature.declared_params.get(index).copied().unwrap_or(false)
+            && matches!(ty, PhpType::Object(_))
+    })
 }
 
 /// Installs exception summaries for one optimizer pass and restores the previous analysis.
@@ -242,6 +255,49 @@ impl ExceptionFlowAnalysis {
                     .collect()
             })
             .unwrap_or_default();
+        let mut function_object_ref_checks = type_metadata
+            .map(|(functions, _, _)| {
+                functions.iter()
+                    .filter(|(_, signature)| declared_object_reference_can_throw(signature))
+                    .map(|(name, _)| name.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut static_method_object_ref_checks = type_metadata
+            .map(|(_, classes, _)| {
+                classes.iter()
+                    .flat_map(|(class_name, class)| {
+                        class.static_methods.iter()
+                            .filter(|(_, signature)| declared_object_reference_can_throw(signature))
+                            .map(move |(method, _)| (method_effect_key(class_name, method), true))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut instance_method_object_ref_checks = type_metadata
+            .map(|(_, classes, interfaces)| {
+                classes.iter()
+                    .flat_map(|(class_name, class)| {
+                        class.methods.iter()
+                            .filter(|(_, signature)| declared_object_reference_can_throw(signature))
+                            .map(move |(method, _)| (method_effect_key(class_name, method), true))
+                    })
+                    .chain(interfaces.iter().flat_map(|(interface_name, interface)| {
+                        interface.methods.iter()
+                            .filter(|(_, signature)| declared_object_reference_can_throw(signature))
+                            .map(move |(method, _)| (method_effect_key(interface_name, method), true))
+                    }))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if type_metadata.is_none() {
+            callables::collect_object_reference_entry_checks(
+                program,
+                &mut function_object_ref_checks,
+                &mut static_method_object_ref_checks,
+                &mut instance_method_object_ref_checks,
+            );
+        }
         let static_method_returns = type_metadata
             .map(|(_, classes, _)| {
                 classes
@@ -287,6 +343,9 @@ impl ExceptionFlowAnalysis {
             function_throws: empty_summaries(function_bodies.keys()),
             static_method_throws: empty_summaries(static_method_bodies.keys()),
             instance_method_throws: empty_summaries(instance_method_bodies.keys()),
+            function_object_ref_checks,
+            static_method_object_ref_checks,
+            instance_method_object_ref_checks,
             function_returns,
             static_method_returns,
             instance_method_returns,
@@ -683,6 +742,9 @@ impl ExceptionFlowAnalysis {
                 if name.as_str().eq_ignore_ascii_case("unset") {
                     return thrown.combined(self.overwrite_cleanup_throws());
                 }
+                if self.function_object_ref_checks.contains(name.as_str()) {
+                    thrown = thrown.combined(ThrownTypes::exact("TypeError"));
+                }
                 if let Some(summary) = self.function_throws.get(name.as_str()) {
                     return thrown.combined(summary.clone());
                 }
@@ -715,6 +777,13 @@ impl ExceptionFlowAnalysis {
                     .expr_list_throws(args, bindings, class_context)
                     .combined(self.operand_cleanup_throws(args, class_context));
                 if let Some(class_name) = resolve_exception_receiver(receiver, class_context) {
+                    if self.resolve_method_value(
+                        &class_name,
+                        method,
+                        &self.static_method_object_ref_checks,
+                    ) == Some(true) {
+                        thrown = thrown.combined(ThrownTypes::exact("TypeError"));
+                    }
                     if let Some(summary) = self.resolve_method_value(
                         &class_name,
                         method,
@@ -745,6 +814,13 @@ impl ExceptionFlowAnalysis {
                     // A `(new C())->m()` receiver temporary is retired by this call site.
                     .combined(self.temporary_destruction_throws(object, class_context));
                 if let Some(class_name) = exact_receiver_class(object, class_context) {
+                    if self.resolve_method_value(
+                        &class_name,
+                        method,
+                        &self.instance_method_object_ref_checks,
+                    ) == Some(true) {
+                        thrown = thrown.combined(ThrownTypes::exact("TypeError"));
+                    }
                     if let Some(summary) = self.resolve_method_value(
                         &class_name,
                         method,
@@ -909,12 +985,21 @@ impl ExceptionFlowAnalysis {
 
     /// Resolves constructor-body throws or conservatively classifies external builtin constructors.
     fn constructor_throws(&self, class_name: &str) -> ThrownTypes {
+        let entry_check = if self.resolve_method_value(
+            class_name,
+            "__construct",
+            &self.instance_method_object_ref_checks,
+        ) == Some(true) {
+            ThrownTypes::exact("TypeError")
+        } else {
+            ThrownTypes::default()
+        };
         if let Some(summary) = self.resolve_method_value(
             class_name,
             "__construct",
             &self.instance_method_throws,
         ) {
-            return summary;
+            return entry_check.combined(summary);
         }
         if self
             .hierarchy
@@ -922,9 +1007,9 @@ impl ExceptionFlowAnalysis {
             && (self.hierarchy.is_declared_class(class_name)
                 || self.hierarchy.is_subtype(class_name, "Throwable"))
         {
-            ThrownTypes::default()
+            entry_check
         } else {
-            ThrownTypes::unknown()
+            entry_check.combined(ThrownTypes::unknown())
         }
     }
 

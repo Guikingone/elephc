@@ -132,6 +132,99 @@ dispatch($box);
     assert_eq!(out, "caught");
 }
 
+/// A concrete method checks its declared object type after a reference changes type.
+#[test]
+fn test_concrete_object_reference_rechecks_after_mixed_write() {
+    let out = compile_and_run(
+        r#"<?php
+class User { public string $name = "user"; }
+class Admin extends User { public string $name = "admin"; }
+function change(User &$user) { $user = "changed"; }
+class Exact {
+    public function take(User &$user) { echo $user->name; }
+}
+$exact = new Exact();
+$valid = new Admin();
+$exact->take($valid);
+$user = new User();
+change($user);
+try { $exact->take($user); } catch (TypeError $error) { echo ":caught"; }
+"#,
+    );
+    assert_eq!(out, "admin:caught");
+}
+
+/// Static calls retain the declared object check after physical ABI boxing.
+#[test]
+fn test_concrete_static_object_reference_rechecks_after_mixed_write() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+function change(User &$user) { $user = "changed"; }
+class Exact {
+    public static function take(User &$user) { echo "entered"; }
+}
+$user = new User();
+change($user);
+try { Exact::take($user); } catch (TypeError $error) { echo "caught"; }
+"#,
+    );
+    assert_eq!(out, "caught");
+}
+
+/// A typed function's entry check stays catchable when its body cannot throw.
+#[test]
+fn test_object_reference_function_entry_type_error_remains_catchable() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+function change(User &$user) { $user = "changed"; }
+function take(User &$user) { echo "entered"; }
+$user = new User();
+change($user);
+try { take($user); } catch (TypeError $error) { echo "caught"; }
+"#,
+    );
+    assert_eq!(out, "caught");
+}
+
+/// Constructor entry checks remain visible to catch analysis for a pure body.
+#[test]
+fn test_object_reference_constructor_entry_type_error_remains_catchable() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+function change(User &$user) { $user = "changed"; }
+class Exact {
+    public function __construct(User &$user) { echo "entered"; }
+}
+$user = new User();
+change($user);
+try { new Exact($user); } catch (TypeError $error) { echo "caught"; }
+"#,
+    );
+    assert_eq!(out, "caught");
+}
+
+/// The generic object hint checks its boxed reference payload on a later call.
+#[test]
+fn test_concrete_object_hint_reference_rechecks_after_type_change() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+function change(object &$value) { $value = "changed"; }
+class Exact {
+    public function take(object &$value) { echo "entered"; }
+}
+$value = new User();
+change($value);
+$exact = new Exact();
+try { $exact->take($value); } catch (TypeError $error) { echo "caught"; }
+"#,
+    );
+    assert_eq!(out, "caught");
+}
+
 /// A typed implementation shares the canonical reference cell used by interface dispatch.
 #[test]
 fn test_interface_exact_object_reference_uses_shared_cell() {
