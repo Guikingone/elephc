@@ -32,7 +32,7 @@ jobs:
       # pull_request_target has a write-capable token. Check out only the trusted
       # base commit and never execute code from the pull request head.
       - name: Check out trusted label configuration
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false

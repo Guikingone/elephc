@@ -68,13 +68,13 @@ jobs:
       ELEPHC_MY_TLS_DSN: 'mysql:host=127.0.0.1;port=3306;dbname=testdb;user=test;password=test'
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
 
       - name: Cache Rust build state
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/git
@@ -328,7 +328,7 @@ jobs:
       ELEPHC_CUBRID_DSN: 'cubrid:host=127.0.0.1;port=33000;dbname=cubdb'
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Oracle Instant Client 23.26 Basic Light
         if: matrix.suite == 'sqlsrv-oci'
@@ -353,7 +353,7 @@ jobs:
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
 
       - name: Cache Rust build state
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/git

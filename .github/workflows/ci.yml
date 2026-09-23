@@ -44,13 +44,13 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
 
       - name: Cache Rust build state
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/git
@@ -135,7 +135,7 @@ jobs:
         # curl jobs, keyed on the committed lock plus the recipe sources that decide
         # what gets built; the codegen shards below restore the same key, so the
         # from-source build happens here once and never in a shard.
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
           key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
@@ -167,7 +167,7 @@ jobs:
         # Materialize the complete curl chain once in this prerequisite job. The
         # cross-run cache avoids repeated cold downloads, while the workflow
         # artifact below provides the same-run handoff to the four curl shards.
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
           key: curl-native-macos-aarch64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
@@ -186,7 +186,7 @@ jobs:
             "$RUNNER_TEMP/managed-native-curl-macos-aarch64.tar.gz" native
 
       - name: Upload managed native curl cache
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: managed-native-curl-macos-aarch64
           path: ${{ runner.temp }}/managed-native-curl-macos-aarch64.tar.gz
@@ -195,7 +195,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload test archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nextest-archive-macos-aarch64
           path: |
@@ -219,10 +219,10 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Cache Rust build state
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           # The toolchain lives at /usr/local/cargo (CARGO_HOME) inside the CI
           # image, not under $HOME.
@@ -301,7 +301,7 @@ jobs:
         # curl jobs, keyed on the committed lock plus the recipe sources that decide
         # what gets built; the codegen shards below restore the same key, so the
         # from-source build happens here once and never in a shard.
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
           key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
@@ -332,7 +332,7 @@ jobs:
       - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
         # Seed the cross-run cache before packaging the same-run artifact below,
         # so a cold key causes one source build instead of four concurrent ones.
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
           key: curl-native-linux-x86_64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
@@ -351,7 +351,7 @@ jobs:
             "$RUNNER_TEMP/managed-native-curl-linux-x86_64.tar.gz" native
 
       - name: Upload managed native curl cache
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: managed-native-curl-linux-x86_64
           path: ${{ runner.temp }}/managed-native-curl-linux-x86_64.tar.gz
@@ -360,7 +360,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload test archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nextest-archive-linux-x86_64
           path: ${{ runner.temp }}/nextest-archive.tar.zst
@@ -377,10 +377,10 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Cache Rust build state
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           # The toolchain lives at /usr/local/cargo (CARGO_HOME) inside the CI
           # image, not under $HOME.
@@ -459,7 +459,7 @@ jobs:
         # curl jobs, keyed on the committed lock plus the recipe sources that decide
         # what gets built; the codegen shards below restore the same key, so the
         # from-source build happens here once and never in a shard.
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
           key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
@@ -490,7 +490,7 @@ jobs:
       - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
         # Seed the cross-run cache before packaging the same-run artifact below,
         # so a cold key causes one source build instead of four concurrent ones.
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
           key: curl-native-linux-aarch64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
@@ -509,7 +509,7 @@ jobs:
             "$RUNNER_TEMP/managed-native-curl-linux-aarch64.tar.gz" native
 
       - name: Upload managed native curl cache
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: managed-native-curl-linux-aarch64
           path: ${{ runner.temp }}/managed-native-curl-linux-aarch64.tar.gz
@@ -518,7 +518,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload test archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nextest-archive-linux-aarch64
           path: ${{ runner.temp }}/nextest-archive.tar.zst
@@ -538,7 +538,7 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install test-only native providers
         run: brew install pcre2
@@ -578,7 +578,7 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
@@ -612,7 +612,7 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
@@ -641,7 +641,7 @@ jobs:
       matrix:
         shard: [1, 2]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install native test dependencies
         run: brew install pcre2
@@ -680,7 +680,7 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
@@ -713,7 +713,7 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
@@ -741,7 +741,7 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install test-only native providers
         run: brew install pcre2
@@ -759,7 +759,7 @@ jobs:
         # tests/codegen/xml fixtures link the elephc_xml bridge against the managed
         # libxml2 artifact (see tests/codegen/support/xml_native.rs). Same key as the
         # build-archive job that already materialized it, so this is a restore.
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
           key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
@@ -818,7 +818,7 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
@@ -830,7 +830,7 @@ jobs:
         # tests/codegen/xml fixtures link the elephc_xml bridge against the managed
         # libxml2 artifact (see tests/codegen/support/xml_native.rs). Same key as the
         # build-archive job that already materialized it, so this is a restore.
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
           key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
@@ -889,7 +889,7 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
@@ -901,7 +901,7 @@ jobs:
         # tests/codegen/xml fixtures link the elephc_xml bridge against the managed
         # libxml2 artifact (see tests/codegen/support/xml_native.rs). Same key as the
         # build-archive job that already materialized it, so this is a restore.
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
           key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
@@ -958,7 +958,7 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install test-only native providers
         run: brew install pcre2
@@ -1005,7 +1005,7 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
@@ -1046,7 +1046,7 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
@@ -1091,7 +1091,7 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install test-only native providers
         run: brew install pcre2
@@ -1174,7 +1174,7 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download managed native curl cache
         uses: ./.github/actions/download-test-archive
@@ -1251,7 +1251,7 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download managed native curl cache
         uses: ./.github/actions/download-test-archive
@@ -1336,7 +1336,7 @@ jobs:
             sdk: iphonesimulator
             clang_target: arm64-apple-ios13.0-simulator
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust with the iOS standard library
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
@@ -1344,7 +1344,7 @@ jobs:
           targets: ${{ matrix.rust_target }}
 
       - name: Cache Rust build state
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/git
@@ -1355,7 +1355,7 @@ jobs:
             rust-curl-${{ matrix.elephc_target }}-
 
       - name: Cache managed native curl for iOS
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/elephc-native
           key: curl-native-${{ matrix.elephc_target }}-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
@@ -1396,7 +1396,7 @@ jobs:
             sdk: iphonesimulator
             clang_target: arm64-apple-ios13.0-simulator
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust with the iOS standard library
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
@@ -1404,7 +1404,7 @@ jobs:
           targets: ${{ matrix.rust_target }}
 
       - name: Cache Rust build state
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/git
@@ -1415,7 +1415,7 @@ jobs:
             rust-xml-${{ matrix.elephc_target }}-
 
       - name: Cache managed native libxml2 for iOS
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/elephc-native
           key: xml-native-${{ matrix.elephc_target }}-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
@@ -1446,7 +1446,7 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install native test dependencies
         run: brew install pcre2
@@ -1501,7 +1501,7 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
@@ -1547,7 +1547,7 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download test archive
         uses: ./.github/actions/download-test-archive
@@ -1582,7 +1582,7 @@ jobs:
     name: Image API stubs in sync
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Regenerate image API stubs
         # Re-run the generator from its pinned spec; the committed prelude stubs and
@@ -1604,13 +1604,13 @@ jobs:
     name: RustSec advisory audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         # The exact toolchain `.github/docker/ci.Dockerfile` pins (RUST_VERSION), not
         # floating `stable`: an unchanged commit must not start failing because a new
         # compiler shipped.
-        uses: dtolnay/rust-toolchain@46817827a5bfabe028bf34e1cce71fd40e2ff697 # 1.95.0, 2026-09-03
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # 1.95.0, 2026-09-03
 
       - name: Install cargo-audit
         # Pinned for the same reason, and `--locked` so its own dependency tree is the
@@ -1630,7 +1630,7 @@ jobs:
     name: Third-party Action pins
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Test Action pin checker
         run: python3 -m unittest discover -s .github/scripts -p 'test_check_action_pins.py' -v
@@ -1642,13 +1642,13 @@ jobs:
     name: Builtins docs in sync
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
 
       - name: Cache Rust build state
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/git
@@ -1721,13 +1721,13 @@ jobs:
     name: Curl feature contract coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
 
       - name: Cache Rust build state
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/git
@@ -1786,7 +1786,7 @@ jobs:
           - target: linux-aarch64
             runner: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Configure isolated native cache
         # `runner.temp` is unavailable while GitHub validates job-level `env`;
@@ -1798,7 +1798,7 @@ jobs:
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
 
       - name: Cache Rust build state
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/git
@@ -2040,7 +2040,7 @@ jobs:
     # runs on pushes to main rather than on every pull request.
     if: github.ref == 'refs/heads/main'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
@@ -2061,7 +2061,7 @@ jobs:
           cat magician-benchmark-results.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload benchmark results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: benchmark-results
           path: |
