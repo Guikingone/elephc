@@ -162,7 +162,7 @@ pub unsafe extern "C" fn __elephc_eval_configure_opcache_file_cache(
         path: file_cache,
         read_only: file_cache_read_only != 0,
     };
-    crate::script_cache::validate_file_cache_directives(
+    crate::script_cache::validate_file_cache_directives_at_startup(
         &file_cache,
         crate::script_cache::config().enabled,
     );

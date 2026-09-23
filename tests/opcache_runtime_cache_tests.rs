@@ -963,6 +963,83 @@ echo 'second=', var_export(opcache_compile_file($p), true), "\n";
     assert_eq!(field(&output, "second"), "true", "and still served once deleted:\n{output}");
 }
 
+/// Both `opcache_compile_file()` surfaces warn `Permission denied` for a file that EXISTS but
+/// cannot be read.
+///
+/// `realpath()` succeeds for it, so the native wrapper's unresolved-path warnings never ran
+/// and it answered `false` in silence; the eval handler warned, but always "No such file or
+/// directory". MEASURED as a non-root user on a mode-`0000` file: reference prints
+/// `Failed to open stream: Permission denied` on both surfaces.
+///
+/// TWO PROGRAMS, because one cannot reach both: a literal `opcache_compile_file` injects the
+/// native declaration, and every eval'd spelling in that program then resolves to it. The
+/// eval program never spells the name.
+///
+/// Skipped when the process can read the file anyway (root), which would make it meaningless.
+#[test]
+fn compile_file_reports_permission_denied_on_both_surfaces() {
+    use std::os::unix::fs::PermissionsExt;
+    let run = |name: &str, probe: &str| -> (String, String) {
+        let dir = make_test_dir(name);
+        write_dynamic_fixture(&dir, probe);
+        let bin = compile_with_flags(
+            &dir,
+            &["opcache.enable_cli=1", "opcache.file_update_protection=0"],
+            &["--php-version", "8.5"],
+        );
+        fs::set_permissions(dir.join("lib.php"), fs::Permissions::from_mode(0)).unwrap();
+        let output = Command::new(&bin).output().expect("failed to run binary");
+        fs::set_permissions(dir.join("lib.php"), fs::Permissions::from_mode(0o644)).unwrap();
+        (
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    };
+    let probe_dir = make_test_dir("opcache_rt_compile_denied_probe");
+    let probe_file = probe_dir.join("probe.php");
+    fs::write(&probe_file, "<?php
+").unwrap();
+    fs::set_permissions(&probe_file, fs::Permissions::from_mode(0)).unwrap();
+    let readable_anyway = fs::read(&probe_file).is_ok();
+    fs::set_permissions(&probe_file, fs::Permissions::from_mode(0o644)).unwrap();
+    if readable_anyway {
+        return;
+    }
+
+    let (native_out, native_err) = run(
+        "opcache_rt_compile_denied_native",
+        r#"<?php
+eval('$unrelated = 1;' . str_repeat(' ', count($argv) - 1));
+echo 'r=', var_export(opcache_compile_file(__DIR__ . '/lib.php'), true), "
+";
+"#,
+    );
+    let (eval_out, eval_err) = run(
+        "opcache_rt_compile_denied_eval",
+        r#"<?php
+$p = __DIR__ . '/lib.php';
+$n = 'opcache_' . 'compile_file';
+echo 'r=', var_export(eval('return ' . $n . '($p);'), true), "
+";
+"#,
+    );
+
+    for (surface, out, err) in [("native", &native_out, &native_err), ("eval", &eval_out, &eval_err)] {
+        assert_eq!(field(out, "r"), "false", "{surface}:
+{out}");
+        assert!(
+            err.contains("lib.php): Failed to open stream: Permission denied"),
+            "{surface} must name the real failure:
+{err}"
+        );
+        assert!(
+            !err.contains("No such file or directory"),
+            "{surface}: the file exists; it must not be reported missing:
+{err}"
+        );
+    }
+}
+
 /// The NATIVE `opcache_compile_file()` warns about a file it cannot open, as the eval one does.
 ///
 /// Reference prints `Failed to open stream`, then `Failed opening ... for inclusion`, and

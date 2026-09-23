@@ -765,6 +765,97 @@ fn file_cache_operations_link_the_bridge_only_under_a_file_cache() {
     );
 }
 
+/// A `--web` worker keeps serving after its `opcache.file_cache` directory is removed.
+///
+/// The directory is validated at STARTUP in php-src, once. The configure bridge also runs at
+/// the top of every request, and it re-ran that validation: removing the directory after the
+/// first request made the next one exit the worker with the startup fatal, and the server
+/// stopped accepting connections. MEASURED — `LIB OK`, then an empty reply, then a refused
+/// connection.
+#[test]
+fn a_web_worker_survives_its_file_cache_directory_being_removed() {
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::time::{Duration, Instant};
+
+    let dir = make_test_dir("opcache_fc_web_rmdir");
+    let cache = dir.join("file-cache");
+    fs::create_dir_all(&cache).unwrap();
+    fs::write(dir.join("lib.php"), "<?php echo \"LIB\\n\";\n").unwrap();
+    fs::write(
+        dir.join("main.php"),
+        "<?php\n$p = __DIR__ . '/lib.php';\neval('include $p;');\necho \"OK\\n\";\n",
+    )
+    .unwrap();
+    let mut cmd = Command::new(elephc_bin());
+    cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.current_dir(&dir);
+    cmd.arg(dir.join("main.php")).arg("--web");
+    for assignment in [
+        "opcache.enable_cli=1".to_string(),
+        "opcache.file_update_protection=0".to_string(),
+        format!("opcache.file_cache={}", cache.display()),
+    ] {
+        cmd.arg("--ini").arg(assignment);
+    }
+    let output = cmd.output().expect("failed to spawn elephc");
+    assert!(
+        output.status.success(),
+        "compilation failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let port = TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut server = Command::new(dir.join("main"))
+        .arg("--listen")
+        .arg(&addr)
+        .arg("--workers")
+        .arg("1")
+        .current_dir(&dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("failed to spawn web server");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while TcpStream::connect(&addr).is_err() {
+        assert!(Instant::now() < deadline, "server did not start listening on {addr}");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let get = || -> String {
+        let Ok(mut stream) = TcpStream::connect(&addr) else {
+            return "<refused>".to_string();
+        };
+        stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        let request = format!("GET / HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+        if stream.write_all(request.as_bytes()).is_err() {
+            return "<write failed>".to_string();
+        }
+        let mut response = Vec::new();
+        let _ = stream.read_to_end(&mut response);
+        String::from_utf8_lossy(&response).into_owned()
+    };
+
+    let first = get();
+    fs::remove_dir_all(&cache).unwrap();
+    let second = get();
+    let third = get();
+    let _ = server.kill();
+    let _ = server.wait();
+    let _ = Command::new("pkill").arg("-f").arg(format!("listen {addr}")).status();
+
+    assert!(first.contains("OK"), "PREMISE: the first request is served:\n{first}");
+    assert!(
+        second.contains("OK"),
+        "the request after the directory vanished must still run:\n{second}"
+    );
+    assert!(third.contains("OK"), "and the server must keep accepting:\n{third}");
+}
+
 /// Verifies a FORCED invalidate also removes the entry from disk, not just from memory.
 ///
 /// php-src's `accel_invalidate` calls `zend_file_cache_invalidate` alongside the in-memory

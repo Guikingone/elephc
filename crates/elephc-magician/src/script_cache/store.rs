@@ -190,13 +190,22 @@ fn revalidation_due(config: &ScriptCacheConfig, revalidate_at: i64, now: i64) ->
 }
 
 /// Returns a file's mtime in whole seconds since the Unix epoch, if it has one.
+///
+/// SIGNED, as `st_mtime` is. A file dated before 1970 has a NEGATIVE timestamp, and php-src
+/// records and compares it like any other. Answering `None` there made the entry's timestamp
+/// `0`, which here also means "unrecorded" (see `is_unrecorded`), so such a file was never
+/// revalidated — and since `0` now refuses admission outright, it would not have been cached
+/// at all. Floored like `st_mtime`: half a second before the epoch is `-1`, not `0`.
 pub(super) fn mtime_seconds(metadata: &std::fs::Metadata) -> Option<i64> {
-    metadata
-        .modified()
-        .ok()?
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .map(|elapsed| elapsed.as_secs() as i64)
+    let modified = metadata.modified().ok()?;
+    match modified.duration_since(UNIX_EPOCH) {
+        Ok(elapsed) => i64::try_from(elapsed.as_secs()).ok(),
+        Err(before) => {
+            let before = before.duration();
+            let whole = i64::try_from(before.as_secs()).ok()?;
+            Some(-whole - i64::from(before.subsec_nanos() > 0))
+        }
+    }
 }
 
 /// Loads a script's replayable segments, serving the cache when it is warm.
@@ -388,6 +397,17 @@ fn fill_entry(
     // disk entry is admitted to memory however young the source looks. MEASURED with the
     // protection raised to its maximum over an unchanged source: reference reports the
     // script cached, elephc refused it.
+    //
+    // A SOURCE WITH NO TIMESTAMP IS NOT CACHED AT ALL, and that refusal comes first. php-src's
+    // compile path reads the timestamp before compiling and hands a `0` straight back to the
+    // original compiler — "we can't obtain a timestamp, we won't cache it". Admitting one
+    // stored an entry whose timestamp `0` also means UNRECORDED here (see `is_unrecorded`),
+    // so it was never revalidated and a changed source kept running the stored version.
+    // MEASURED, `touch($p, 0)` then include, rewrite, include: reference reports it uncached
+    // and runs the new source; elephc cached it and ran the old one.
+    if parsed_here && mtime.unwrap_or(0) == 0 {
+        return Ok(segments);
+    }
     if parsed_here && !config.admits_age(mtime, now) {
         return Ok(segments);
     }

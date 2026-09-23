@@ -15,19 +15,19 @@
 //! - `opcache_is_script_cached` → `false` when disabled; when enabled, whether the path has
 //!   a live (present, non-discarded) entry in the runtime script cache.
 //! - `opcache_invalidate` → `false` when disabled (reference PHP returns `false` for any
-//!   path when OPcache is off, even an existing file); when enabled, whether the path
-//!   RESOLVES, and `$force` additionally discards the entry. php-src's
-//!   `zend_accel_invalidate()` returns "cached OR resolvable", which reduces to the
-//!   right-hand side because a cached path was canonicalized when it was stored.
+//!   path when OPcache is off, even an existing file); when enabled, php-src's
+//!   `zend_accel_invalidate()` answer, "cached OR resolvable" — both halves, because a cached
+//!   file that has since been DELETED no longer resolves and must still answer `true`.
 //! - `opcache_compile_file` → `false` when disabled (reference also emits an `E_NOTICE`,
 //!   which the eval const-folder has no channel for — see below); when enabled it reads,
 //!   segments and caches the file WITHOUT executing it, as php-src compiles and stores
-//!   without running.
-//! - `opcache_is_script_cached_in_file_cache` → `false` (php-src gates the whole body on
-//!   `opcache.file_cache` being set, and that directive is registered with a C NULL
-//!   default, so an unconfigured reference PHP returns `false` for every path — VERIFIED
-//!   on PHP 8.5.6. Elephc has no file cache at all, so `false` is also its terminal
-//!   answer, and it is the same disabled result the three siblings produce).
+//!   without running. Only a file that cannot be OPENED warns, and with the real
+//!   `strerror` text; one that opens but does not parse answers `false` quietly (reference
+//!   throws a `ParseError`, the pinned divergence).
+//! - `opcache_is_script_cached_in_file_cache` → whether a usable entry for the path is on
+//!   disk under `opcache.file_cache` (`script_cache::file_store::contains`). php-src gates the
+//!   whole body on that directive, which has a C NULL default, so an unconfigured build
+//!   answers `false` for every path — VERIFIED on PHP 8.5.6.
 //! - `opcache_jit_blacklist` → `NULL` (a `void` function; php-src's body only mutates the
 //!   JIT blacklist behind `#ifdef HAVE_JIT`, so a no-op returning null is the whole
 //!   observable behavior — VERIFIED on PHP 8.5.6).
@@ -182,17 +182,34 @@ pub(in crate::interpreter) fn eval_opcache_compile_file_for_path(
     // the wrong failure, on this surface only: the native wrapper warns from its
     // `realpath()`-failure arm and answers a parse failure in silence. Warn only when the file
     // really cannot be opened.
-    if std::fs::File::open(path).is_ok() {
-        return values.bool_value(false);
-    }
+    //
+    // And the warning names the ACTUAL open failure — `strerror` text, as php-src's stream
+    // layer prints it — not always "No such file or directory". MEASURED as a non-root user on
+    // a mode-`0000` file: reference says `Permission denied`; this said the file was missing.
+    let reason = match std::fs::File::open(path) {
+        Ok(_) => return values.bool_value(false),
+        Err(error) => open_failure_reason(&error),
+    };
     let display = path.display();
     values.warning(&format!(
-        "Warning: opcache_compile_file({display}): Failed to open stream: No such file or directory\n"
+        "Warning: opcache_compile_file({display}): Failed to open stream: {reason}\n"
     ))?;
     values.warning(&format!(
         "Warning: opcache_compile_file(): Failed opening '{display}' for inclusion\n"
     ))?;
     values.bool_value(false)
+}
+
+/// The `strerror` text php-src's stream layer prints for an open failure.
+///
+/// `io::Error`'s `Display` is that text plus ` (os error N)`, which php-src never prints, so
+/// the suffix is dropped. An error with no OS code keeps its own description.
+fn open_failure_reason(error: &std::io::Error) -> String {
+    let text = error.to_string();
+    match text.rfind(" (os error ") {
+        Some(cut) if error.raw_os_error().is_some() => text[..cut].to_string(),
+        _ => text,
+    }
 }
 
 /// Returns whether a path RESOLVES, which is what `opcache_invalidate()` reports.

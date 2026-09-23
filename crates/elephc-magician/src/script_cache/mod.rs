@@ -51,7 +51,7 @@ pub use config::{
 };
 pub(crate) use file_store::contains as file_cache_contains;
 pub(crate) use file_cache::{
-    set_file_cache_config, validate_file_cache_directives, FileCacheConfig,
+    set_file_cache_config, validate_file_cache_directives_at_startup, FileCacheConfig,
 };
 pub(crate) use segments::ScriptSegment;
 pub(crate) use store::generation as script_cache_generation;

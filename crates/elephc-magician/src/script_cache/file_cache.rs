@@ -28,6 +28,7 @@
 use super::accel_log::{accel_error, AccelLogLevel};
 use std::cell::RefCell;
 use std::ffi::CString;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::Path;
 
 /// The `opcache.*` pair that describes the on-disk file cache php-src validates.
@@ -95,6 +96,32 @@ pub(crate) fn validate_file_cache_directives(config: &FileCacheConfig, cache_ena
     }
 }
 
+/// Set once this process has run the startup validation. A `--web` master sets it before it
+/// forks, so every worker inherits it; see `validate_file_cache_directives_at_startup`.
+static STARTUP_VALIDATED: AtomicBool = AtomicBool::new(false);
+
+/// [`validate_file_cache_directives`], ONCE per process — at startup, as php-src does it.
+///
+/// The configure bridge runs in the CLI prologue and, under `--web`, in the master before it
+/// forks AND at the top of every request, which is how a recycled worker starts configured.
+/// Validating there on every request re-ran a STARTUP check against a directory that may
+/// legitimately change afterwards: removing the cache directory after the first request made
+/// the next one exit the worker with the startup fatal, and the server stopped accepting
+/// connections. MEASURED. php-src validates in `zend_accel_startup`, once, and keeps serving.
+///
+/// Returns whether this call performed the validation, so the guard itself can be tested
+/// without reaching the fatal.
+pub(crate) fn validate_file_cache_directives_at_startup(
+    config: &FileCacheConfig,
+    cache_enabled: bool,
+) -> bool {
+    if STARTUP_VALIDATED.swap(true, Ordering::SeqCst) {
+        return false;
+    }
+    validate_file_cache_directives(config, cache_enabled);
+    true
+}
+
 /// Returns whether `path` satisfies every condition php-src's `zend_accel_startup` tests.
 ///
 /// All four are required, in php-src's own order: an ABSOLUTE path (a bare `.` is
@@ -113,10 +140,15 @@ fn is_usable_cache_directory(path: &str, read_only: bool) -> bool {
     let Ok(c_path) = CString::new(path) else {
         return false;
     };
+    // SEARCH PERMISSION IN BOTH MODES. Entries live INSIDE the directory, so a directory that
+    // can be read and written but not traversed holds nothing usable, and php-src asks
+    // `access()` for `X_OK` alongside the rest. MEASURED as a non-root user: a `0600`
+    // directory is a startup fatal in reference and was accepted here; under
+    // `file_cache_read_only=1`, `0400` is fatal and `0500` runs.
     let mode = if read_only {
-        libc::R_OK
+        libc::R_OK | libc::X_OK
     } else {
-        libc::R_OK | libc::W_OK
+        libc::R_OK | libc::W_OK | libc::X_OK
     };
     // SAFETY: `c_path` is a live NUL-terminated C string for the duration of the call
     // and `mode` is a valid `access(2)` mode mask.
@@ -157,6 +189,71 @@ mod tests {
     #[test]
     fn an_empty_path_is_accepted() {
         validate_file_cache_directives(&FileCacheConfig::default(), true);
+    }
+
+    /// Verifies the startup validation runs ONCE per process, whatever follows.
+    ///
+    /// Under `--web` the configure bridge runs again at the top of every request. The second
+    /// call here is handed a directory that does not exist with the cache ENABLED: if the guard
+    /// let it through, the process would exit with the startup fatal and take this test binary
+    /// with it. MEASURED end to end: removing the cache directory after one request made the
+    /// next one kill the worker, and the server stopped accepting connections.
+    #[test]
+    fn startup_validation_runs_once_per_process() {
+        validate_file_cache_directives_at_startup(&FileCacheConfig::default(), true);
+        let again = validate_file_cache_directives_at_startup(
+            &FileCacheConfig {
+                path: "/no/such/directory".to_string(),
+                read_only: false,
+            },
+            true,
+        );
+
+        assert!(!again, "a second configure call must not re-run the startup validation");
+    }
+
+    /// Returns whether this process bypasses permission checks, which makes the mode fixtures
+    /// below meaningless: root reads and writes a `0600` directory regardless.
+    fn bypasses_permission_checks() -> bool {
+        // SAFETY: `geteuid` has no preconditions.
+        unsafe { libc::geteuid() == 0 }
+    }
+
+    /// Verifies a directory without SEARCH permission is refused, in both access modes.
+    ///
+    /// Entries live inside the directory, so one that can be read and written but not
+    /// traversed holds nothing usable; php-src asks `access()` for `X_OK` as well. MEASURED as
+    /// a non-root user: `0600` is fatal in reference, and under `file_cache_read_only=1`,
+    /// `0400` is fatal while `0500` runs.
+    #[test]
+    fn a_directory_without_search_permission_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        if bypasses_permission_checks() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "elephc-file-cache-modes-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).expect("fixture directory");
+        let path = dir.to_string_lossy().into_owned();
+        let set_mode = |mode: u32| {
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode))
+                .expect("mode should be settable");
+        };
+
+        set_mode(0o600);
+        let writable_without_search = is_usable_cache_directory(&path, false);
+        set_mode(0o400);
+        let read_only_without_search = is_usable_cache_directory(&path, true);
+        set_mode(0o500);
+        let read_only_with_search = is_usable_cache_directory(&path, true);
+        set_mode(0o700);
+
+        assert!(!writable_without_search, "0600 cannot be traversed");
+        assert!(!read_only_without_search, "0400 cannot be traversed either");
+        assert!(read_only_with_search, "0500 is readable and traversable");
     }
 
     /// Verifies a relative path is refused even when it exists and is a directory.

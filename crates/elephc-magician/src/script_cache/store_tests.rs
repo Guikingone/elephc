@@ -590,6 +590,57 @@ fn a_disk_hit_is_admitted_whatever_the_protection() {
     assert!(is_cached(&path), "a disk hit is not a fresh compile; the guard does not apply");
 }
 
+/// Verifies a source whose mtime is `0` is run but never cached.
+///
+/// php-src reads the timestamp before compiling and does not cache a script without one.
+/// Admitting it stored timestamp `0`, which also means "unrecorded" here, so it was never
+/// revalidated. MEASURED: `touch($p, 0)`, include, rewrite, include — reference reports it
+/// uncached and runs the new source; elephc cached it and ran the old one.
+#[test]
+fn a_source_with_no_timestamp_is_not_cached() {
+    let _guard = test_lock();
+    set_config(enabled_config(0));
+    let path = write_fixture("zero_mtime", "<?php $x = 1;");
+    set_mtime(&path, 0);
+
+    load_script(&path).expect("the script still runs");
+
+    assert!(!is_cached(&path), "a script with no timestamp must not be cached");
+    assert_eq!(stats().num_cached_scripts, 0);
+}
+
+/// Verifies a source dated BEFORE 1970 is cached and revalidated like any other.
+///
+/// `st_mtime` is signed and php-src records a negative one normally. Reading it as "no
+/// timestamp" first made the entry unrecorded, then — once a `0` timestamp refused admission
+/// — made the file uncacheable. MEASURED with `touch($p, -60)`: reference reports it cached,
+/// then runs the rewritten source once its mtime moves.
+#[test]
+fn a_source_dated_before_the_epoch_is_cached_and_revalidated() {
+    let _guard = test_lock();
+    set_config(enabled_config(0));
+    let path = write_fixture("pre_epoch", "<?php $x = 1;");
+    let set_before_epoch = |seconds: u64| {
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .expect("fixture should reopen")
+            .set_modified(std::time::UNIX_EPOCH - std::time::Duration::from_secs(seconds))
+            .expect("mtime should be settable");
+    };
+    set_before_epoch(60);
+    load_script(&path).expect("fixture should load");
+    assert!(is_cached(&path), "a negative timestamp is still a timestamp");
+
+    std::fs::write(&path, "B<?php $x = 1;").expect("fixture should be rewritable");
+    set_before_epoch(30);
+    assert_eq!(
+        shape(&load_script(&path).unwrap()),
+        ["out", "code"],
+        "the moved timestamp is seen and the new source runs"
+    );
+}
+
 /// Verifies `opcache.validate_timestamps = 0` never re-reads a changed file.
 #[test]
 fn timestamp_validation_off_never_refills() {
