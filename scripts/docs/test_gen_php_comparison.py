@@ -304,6 +304,22 @@ class ValidationTests(unittest.TestCase):
 
 
 class RenderTests(unittest.TestCase):
+    def test_registry_prelude_and_rewrite_routes_all_count_as_compiled_functions(self):
+        """#768: AOT coverage counts all three routes, but eval counts only its binding."""
+        baseline = dict(BASELINE, functions={
+            "registry_fn": "standard", "prelude_fn": "standard", "rewrite_fn": "standard",
+        })
+        reg = [
+            public("registry_fn", aot_kind="registry"),
+            public("prelude_fn", aot_kind="prelude", eval_supported=False),
+            public("rewrite_fn", aot_kind="name-resolver-rewrite", eval_supported=False),
+        ]
+        code, out = run_gen(registry=reg, baseline=baseline)
+        self.assertEqual(code, 0)
+        self.assertIn("| `standard` | 3 / 3 · 100% |", out)
+        self.assertIn("- `standard` functions: 3 / 1", out)
+        self.assertNotIn("Most of that is one gap rather than several.", out)
+
     def test_counts_and_determinism(self):
         reg = [public("strlen"), public("strrev", eval_supported=False)]
         symbols = {

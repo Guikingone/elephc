@@ -1626,6 +1626,18 @@ jobs:
         # no fixed version to move to and would otherwise make the gate unactionable.
         run: cargo audit
 
+  action-pins:
+    name: Third-party Action pins
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test Action pin checker
+        run: python3 -m unittest discover -s .github/scripts -p 'test_check_action_pins.py' -v
+
+      - name: Check workflow and composite Action refs
+        run: ruby .github/scripts/check_action_pins.rb
+
   builtins-docs-sync:
     name: Builtins docs in sync
     runs-on: ubuntu-latest
@@ -1986,6 +1998,7 @@ jobs:
       - managed-native-smoke
       - curl-feature-contract
       - security-audit
+      - action-pins
     if: always()
     steps:
       - name: Verify test jobs
@@ -2018,6 +2031,7 @@ jobs:
           test "${{ needs.managed-native-smoke.result }}" = "success"
           test "${{ needs.curl-feature-contract.result }}" = "success"
           test "${{ needs.security-audit.result }}" = "success"
+          test "${{ needs.action-pins.result }}" = "success"
 
   benchmark:
     name: Benchmark Suite
