@@ -618,7 +618,7 @@ pub(super) fn array_literal_element_type_for_ir(
         ExprKind::FunctionCall { name, .. } => {
             let canonical = name.as_str();
             if let Some(sig) = ctx.functions.get(canonical) {
-                return ir_array_storage_type(sig.return_type.clone());
+                return ir_array_storage_type(eir_user_function_return_type(sig));
             }
             if let Some(sig) = ctx.extern_functions.get(canonical) {
                 return ir_array_storage_type(sig.return_type.clone());
