@@ -219,6 +219,15 @@ selection and troubleshooting.
 brew install illegalstudio/tap/elephc
 ```
 
+### mise (alternative)
+
+```bash
+mise use -g github:illegalstudio/elephc@latest
+```
+
+See the [installation guide](docs/getting-started/installation.md#mise-alternative)
+for per-project pinning with `mise.toml`.
+
 ### Nightly builds
 
 `main` is built nightly and published as a pre-release under the rolling

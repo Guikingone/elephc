@@ -118,6 +118,30 @@ This prints `ok` and confirms `elephc` can produce and run a native binary.
 brew install illegalstudio/tap/elephc
 ```
 
+## mise (alternative)
+
+[mise](https://mise.jdx.dev) can install elephc straight from the GitHub
+release tarballs through its `github:` backend, with no plugin to add:
+
+```bash
+mise use -g github:illegalstudio/elephc@latest
+```
+
+Without `-g`, `mise use` writes the version into the project's `mise.toml`
+instead, which pins the compiler per project:
+
+```toml
+[tools]
+"github:illegalstudio/elephc" = "0.27.0"
+```
+
+mise picks the tarball for the current platform and keeps the bridge static
+libraries next to the `elephc` binary, a layout elephc already searches, so no
+further setup is needed. Only the platforms listed under
+[GitHub releases](#from-github-releases-alternative) are available, and
+`latest` resolves to the newest numbered release; nightly builds are not
+installed through mise.
+
 ## From source (alternative)
 
 If you prefer to build from source, you'll also need the Rust toolchain (`cargo`).
