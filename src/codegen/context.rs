@@ -72,6 +72,8 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) backtrace_activation: bool,
     pub(super) backtrace_enabled: bool,
     pub(super) epilogue_emitted: bool,
+    /// Bytes already staged above an eval bridge's fixed scratch frame.
+    pub(super) eval_native_staged_bytes: usize,
     /// `--instrument` id assigned to this function in its prologue, consumed by
     /// its epilogue's `elephc_instr_exit(id)`. `None` outside `--instrument`.
     pub(super) instr_id: Option<usize>,
@@ -161,6 +163,7 @@ impl<'a> FunctionContext<'a> {
             backtrace_activation: layout.backtrace_activation,
             backtrace_enabled: super::frame::module_uses_backtrace(module),
             epilogue_emitted: false,
+            eval_native_staged_bytes: 0,
             instr_id: None,
             is_main,
             web: false,

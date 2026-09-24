@@ -22,6 +22,11 @@ pub(in crate::codegen::lower_inst::builtins) fn emit_eval_native_c_abi_call(
     symbol_name: &str,
     argument_types: &[PhpType],
 ) {
+    debug_assert_eq!(
+        ctx.eval_native_staged_bytes,
+        argument_types.len() * 16,
+        "each staged eval C argument occupies one temporary 16-byte slot",
+    );
     let assignments = abi::build_c_abi_outgoing_arg_assignments_for_target(
         ctx.emitter.target,
         argument_types,
@@ -33,6 +38,7 @@ pub(in crate::codegen::lower_inst::builtins) fn emit_eval_native_c_abi_call(
     abi::emit_call_label(ctx.emitter, &symbol);
     abi::emit_release_temporary_stack(ctx.emitter, call_pad);
     abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
+    ctx.eval_native_staged_bytes = 0;
 }
 
 /// Invokes a staged callback that is retained in the caller's current temporary frame.
@@ -45,6 +51,11 @@ pub(in crate::codegen::lower_inst::builtins) fn emit_eval_native_c_abi_call_reg_
     callback_offset: usize,
     argument_types: &[PhpType],
 ) {
+    debug_assert_eq!(
+        ctx.eval_native_staged_bytes,
+        argument_types.len() * 16,
+        "each staged eval C argument occupies one temporary 16-byte slot",
+    );
     let assignments = abi::build_c_abi_outgoing_arg_assignments_for_target(
         ctx.emitter.target,
         argument_types,
@@ -60,11 +71,14 @@ pub(in crate::codegen::lower_inst::builtins) fn emit_eval_native_c_abi_call_reg_
     abi::emit_call_reg(ctx.emitter, callback_reg);
     abi::emit_release_temporary_stack(ctx.emitter, call_pad);
     abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
+    ctx.eval_native_staged_bytes = 0;
 }
 
 /// Stages the current result-register word for an eval bridge C ABI call.
 pub(in crate::codegen::lower_inst::builtins) fn stage_eval_native_word(ctx: &mut FunctionContext<'_>, ty: PhpType) {
+    debug_assert!(!matches!(ty.codegen_repr(), PhpType::Void | PhpType::Never));
     abi::emit_push_result_value(ctx.emitter, &ty);
+    ctx.eval_native_staged_bytes += 16;
 }
 
 /// Stages one pointer-sized local-frame word for an eval bridge C ABI call.
@@ -110,11 +124,16 @@ pub(super) fn stage_eval_native_loaded_word(
 ) {
     debug_assert_eq!(ty.register_count(), 1);
     abi::emit_push_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, index));
+    ctx.eval_native_staged_bytes += 16;
 }
 
 /// Stages an eval scratch-frame pointer argument at `offset`.
 pub(in crate::codegen::lower_inst::builtins) fn stage_eval_native_stack_address(ctx: &mut FunctionContext<'_>, offset: usize) {
-    abi::emit_temporary_stack_address(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+    abi::emit_temporary_stack_address(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        ctx.eval_native_staged_bytes + offset,
+    );
     stage_eval_native_word(ctx, PhpType::Pointer(None));
 }
 
@@ -129,7 +148,11 @@ pub(in crate::codegen::lower_inst::builtins) fn stage_eval_native_stack_word_as(
     offset: usize,
     ty: PhpType,
 ) {
-    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        ctx.eval_native_staged_bytes + offset,
+    );
     stage_eval_native_word(ctx, ty);
 }
 
