@@ -146,18 +146,61 @@ fn lift_preload_to_startup(
         return program;
     };
     let label = crate::resolver::include_once_label(path);
-    let Some(index) = program.iter().position(|stmt| {
-        matches!(&stmt.kind, StmtKind::IncludeOnceGuard { label: found, .. } if *found == label)
-    }) else {
+    let mut program = program;
+    let preload = program
+        .iter_mut()
+        .find_map(|statement| take_preload_boundary(statement, &label));
+    let Some(preload) = preload else {
         return program;
     };
-    let mut program = program;
-    let guard = program.remove(index);
     let wrapper = crate::synthetic_class::function(PRELOAD_STARTUP_FN)
-        .body(vec![guard])
+        .body(vec![preload])
         .build();
     program.insert(0, wrapper);
     program
+}
+
+/// Extracts the resolver wrapper for the exact preload include, preserving its one-shot return
+/// boundary when the generated `do` loop surrounds the guard.
+fn take_preload_boundary(statement: &mut Stmt, label: &str) -> Option<Stmt> {
+    let span = statement.span;
+    if span.line == 0
+        && matches!(statement.kind, StmtKind::DoWhile { .. })
+        && preload_guard_is_inside(statement, label)
+    {
+        return Some(std::mem::replace(
+            statement,
+            Stmt::new(StmtKind::Synthetic(Vec::new()), span),
+        ));
+    }
+    match &mut statement.kind {
+        StmtKind::IncludeOnceGuard { label: found, .. } if found == label => {
+            Some(std::mem::replace(
+                statement,
+                Stmt::new(StmtKind::Synthetic(Vec::new()), span),
+            ))
+        }
+        StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. }
+        | StmtKind::Synthetic(body) => body
+            .iter_mut()
+            .find_map(|nested| take_preload_boundary(nested, label)),
+        _ => None,
+    }
+}
+
+/// Tests only resolver wrappers, never user control-flow bodies, for the matching preload guard.
+fn preload_guard_is_inside(statement: &Stmt, label: &str) -> bool {
+    match &statement.kind {
+        StmtKind::IncludeOnceGuard { label: found, .. } if found == label => true,
+        StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. }
+        | StmtKind::Synthetic(body)
+        | StmtKind::DoWhile { body, .. } => body
+            .iter()
+            .any(|nested| preload_guard_is_inside(nested, label)),
+        _ => false,
+    }
 }
 
 pub fn inject_if_web(
