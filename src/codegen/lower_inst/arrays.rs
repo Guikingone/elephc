@@ -570,7 +570,7 @@ fn lower_hash_elem_ref_cell_aarch64(
         receiver.reprepare_consuming_storeback(ctx, hash)?;
         crate::codegen::literal_defaults::emit_boxed_null_literal_to_result(ctx);
         abi::emit_push_reg(ctx.emitter, "x0");
-        super::hashes::materialize_hash_key_aarch64(ctx, key)?;
+        super::hashes::materialize_hash_key_aarch64_after_first(ctx, key)?;
         abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
         ctx.load_value_to_reg(hash, "x0")?;
         abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
@@ -580,7 +580,7 @@ fn lower_hash_elem_ref_cell_aarch64(
         abi::emit_call_label(ctx.emitter, "__rt_hash_set");
         ctx.store_result_value(hash)?;
         receiver.store_back_container_writeback(ctx, hash)?;
-        super::hashes::materialize_hash_key_aarch64(ctx, key)?;
+        super::hashes::materialize_hash_key_aarch64_after_first(ctx, key)?;
         ctx.load_value_to_reg(hash, "x0")?;
         abi::emit_call_label(ctx.emitter, "__rt_hash_get");
     } else {
@@ -621,7 +621,7 @@ fn lower_hash_elem_ref_cell_x86_64(
         receiver.reprepare_consuming_storeback(ctx, hash)?;
         crate::codegen::literal_defaults::emit_boxed_null_literal_to_result(ctx);
         abi::emit_push_reg(ctx.emitter, "rax");
-        super::hashes::materialize_hash_key_x86_64(ctx, key)?;
+        super::hashes::materialize_hash_key_x86_64_after_first(ctx, key)?;
         abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
         ctx.load_value_to_reg(hash, "rdi")?;
         abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
@@ -631,7 +631,7 @@ fn lower_hash_elem_ref_cell_x86_64(
         abi::emit_call_label(ctx.emitter, "__rt_hash_set");
         ctx.store_result_value(hash)?;
         receiver.store_back_container_writeback(ctx, hash)?;
-        super::hashes::materialize_hash_key_x86_64(ctx, key)?;
+        super::hashes::materialize_hash_key_x86_64_after_first(ctx, key)?;
         ctx.load_value_to_reg(hash, "rdi")?;
         abi::emit_call_label(ctx.emitter, "__rt_hash_get");
     } else {
@@ -818,7 +818,7 @@ fn lower_load_mixed_array_elem_ref_cell_aarch64(
         abi::emit_push_reg(ctx.emitter, "x0");
         crate::codegen::literal_defaults::emit_boxed_null_literal_to_result(ctx);
         abi::emit_push_reg(ctx.emitter, "x0");
-        super::hashes::materialize_hash_key_aarch64(ctx, index)?;
+        super::hashes::materialize_hash_key_aarch64_after_first(ctx, index)?;
         abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
         abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
         abi::emit_pop_reg(ctx.emitter, "x3");
@@ -829,7 +829,7 @@ fn lower_load_mixed_array_elem_ref_cell_aarch64(
         ctx.emitter.instruction("ldr x9, [sp]");                                // republish a hash pointer changed by insertion growth
         ctx.emitter.instruction("str x0, [x9, #8]");                            // keep the owning Mixed cell synchronized
         abi::emit_push_reg(ctx.emitter, "x0");
-        super::hashes::materialize_hash_key_aarch64(ctx, index)?;
+        super::hashes::materialize_hash_key_aarch64_after_first(ctx, index)?;
         abi::emit_pop_reg(ctx.emitter, "x0");
         abi::emit_call_label(ctx.emitter, "__rt_hash_get");
         ctx.emitter.instruction("add x0, x4, #24");                             // address the newly inserted entry payload
@@ -903,7 +903,7 @@ fn lower_load_mixed_array_elem_ref_cell_x86_64(
         abi::emit_push_reg(ctx.emitter, "rax");
         crate::codegen::literal_defaults::emit_boxed_null_literal_to_result(ctx);
         abi::emit_push_reg(ctx.emitter, "rax");
-        super::hashes::materialize_hash_key_x86_64(ctx, index)?;
+        super::hashes::materialize_hash_key_x86_64_after_first(ctx, index)?;
         abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
         abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
         abi::emit_pop_reg(ctx.emitter, "rcx");
@@ -914,7 +914,7 @@ fn lower_load_mixed_array_elem_ref_cell_x86_64(
         ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                    // republish a hash pointer changed by insertion growth
         ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");                // keep the owning Mixed cell synchronized
         abi::emit_push_reg(ctx.emitter, "rax");
-        super::hashes::materialize_hash_key_x86_64(ctx, index)?;
+        super::hashes::materialize_hash_key_x86_64_after_first(ctx, index)?;
         abi::emit_pop_reg(ctx.emitter, "rdi");
         abi::emit_call_label(ctx.emitter, "__rt_hash_get");
         ctx.emitter.instruction("lea rdi, [r8 + 24]");                          // address the newly inserted entry payload

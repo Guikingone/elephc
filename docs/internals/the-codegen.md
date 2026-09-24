@@ -68,6 +68,14 @@ and link the resulting user object against the cached runtime object.
 The active backend must remain target-aware. New lowering paths should use the
 ABI helpers instead of hardcoding AArch64 or x86_64 register and stack details.
 
+For a nested write into an associative array, `ArrayFetchForWrite` ensures the
+parent entry exists and diagnoses a float key while normalizing it. The
+following `HashGetForWrite` carries a boolean EIR marker indicating that the
+same key was already diagnosed. Its target lowering rebuilds the normalized
+key for the read without emitting the deprecation again. Missing ordinary
+hash reads likewise avoid repeating the float diagnostic while formatting
+their undefined-key warning.
+
 ## Runtime Split
 
 Codegen always produces two compiler-owned artifacts:

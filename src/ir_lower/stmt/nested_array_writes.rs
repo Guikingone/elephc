@@ -243,7 +243,7 @@ pub(super) fn lower_hash_parent_fetch_for_write(
     ctx.emit_value(
         Op::HashGetForWrite,
         vec![ensured.value, key.value],
-        None,
+        Some(Immediate::Bool(true)),
         PhpType::Mixed,
         Op::HashGetForWrite.default_effects(),
         Some(span),

@@ -18,6 +18,38 @@ fn test_float_array_key_fractional_read_and_write_warn() {
     assert!(out.stderr.contains("Implicit conversion from float -0.9 to int loses precision"), "{}", out.stderr);
 }
 
+/// A missing hash read reports one float-key deprecation before the undefined-key warning.
+#[test]
+fn test_float_array_key_missing_hash_read_warns_once() {
+    let out = compile_and_run_capture("<?php $a = ['name' => 'x']; var_dump($a[1.9]);");
+    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+    assert_eq!(out.stderr.matches("Undefined array key 1").count(), 1, "{}", out.stderr);
+}
+
+/// A boxed float key on a missing hash read emits one deprecation and one warning.
+#[test]
+fn test_float_array_key_mixed_missing_hash_read_warns_once() {
+    let out = compile_and_run_capture("<?php $key = $argc > 0 ? 1.9 : 'one'; $a = ['name' => 'x']; var_dump($a[$key]);");
+    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+    assert_eq!(out.stderr.matches("Undefined array key 1").count(), 1, "{}", out.stderr);
+}
+
+/// A missing hash entry inserted through a reference normalizes its float key once.
+#[test]
+fn test_float_array_key_missing_reference_warns_once() {
+    let out = compile_and_run_capture("<?php $a = ['name' => 'x']; $r =& $a[1.9]; $r = 'y'; echo $a[1];");
+    assert_eq!(out.stdout, "y");
+    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+}
+
+/// A nested write does not rediagnose the key while promoting its hash entry.
+#[test]
+fn test_float_array_key_nested_write_warns_once() {
+    let out = compile_and_run_capture("<?php $a = [1 => ['name' => 1], 'other' => 's']; $a[1.9]['x'] = 2; echo $a[1]['x'];");
+    assert_eq!(out.stdout, "2");
+    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+}
+
 /// Checks array-literal insertion reports the float key before later reads.
 #[test]
 fn test_float_array_literal_key_warns() {
