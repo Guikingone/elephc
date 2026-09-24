@@ -81,7 +81,8 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, #2");                                          // float mixed keys are cast to integer keys like PHP
     emitter.instruction("b.ne __rt_array_set_mixed_key_int_ready");             // integer/bool keys are already valid indexed indexes
     emitter.instruction("fmov d0, x1");                                         // load the float key payload into the FP register
-    abi::emit_php_float_to_int(emitter, "x1");                                  // cast the float key to an integer index with PHP float->int rules
+    abi::emit_call_label(emitter, "__rt_float_key_to_int");
+    emitter.instruction("mov x1, x0");                                          // use the diagnosed PHP integer as the index
     emitter.label("__rt_array_set_mixed_key_int_ready");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the indexed-array pointer
     emitter.instruction("cmp x1, #0");                                          // negative int keys cannot live in packed indexed storage
@@ -167,7 +168,8 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, #2");                                          // float mixed keys are cast to integer keys like PHP
     emitter.instruction("b.ne __rt_array_set_mixed_key_hash_int");              // integer/bool keys become scalar integer hash keys
     emitter.instruction("fmov d0, x1");                                         // load the float key payload into the FP register
-    abi::emit_php_float_to_int(emitter, "x1");                                  // cast the float key to an integer hash key with PHP float->int rules
+    abi::emit_call_label(emitter, "__rt_float_key_to_int");
+    emitter.instruction("mov x1, x0");                                          // use the diagnosed PHP integer as the hash key
     emitter.label("__rt_array_set_mixed_key_hash_int");
     emitter.instruction("mov x2, #-1");                                         // key_hi sentinel marks scalar integer hash keys
     emitter.instruction("b __rt_array_set_mixed_key_hash_set");                 // proceed to the hash insert with an integer key
@@ -230,7 +232,8 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, 2");                                          // float mixed keys are cast to integer keys like PHP
     emitter.instruction("jne __rt_array_set_mixed_key_int_ready");              // integer/bool keys are already valid indexed indexes
     emitter.instruction("movq xmm0, rdi");                                      // load the float key payload into the FP register
-    abi::emit_php_float_to_int(emitter, "rdi");                                 // cast the float key to an integer index with PHP float->int rules
+    abi::emit_call_label(emitter, "__rt_float_key_to_int");
+    emitter.instruction("mov rdi, rax");                                        // use the diagnosed PHP integer as the index
     emitter.label("__rt_array_set_mixed_key_int_ready");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the indexed-array pointer
     emitter.instruction("cmp rdi, 0");                                          // negative int keys cannot live in packed indexed storage
@@ -315,7 +318,8 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, 2");                                          // float mixed keys are cast to integer keys like PHP
     emitter.instruction("jne __rt_array_set_mixed_key_hash_int");               // integer/bool keys become scalar integer hash keys
     emitter.instruction("movq xmm0, rdi");                                      // load the float key payload into the FP register
-    abi::emit_php_float_to_int(emitter, "rdi");                                 // cast the float key to an integer hash key with PHP float->int rules
+    abi::emit_call_label(emitter, "__rt_float_key_to_int");
+    emitter.instruction("mov rdi, rax");                                        // use the diagnosed PHP integer as the hash key
     emitter.label("__rt_array_set_mixed_key_hash_int");
     emitter.instruction("mov rsi, rdi");                                        // publish the integer key payload as the hash key low word
     emitter.instruction("mov rdx, -1");                                         // key_hi sentinel marks scalar integer hash keys

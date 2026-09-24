@@ -170,6 +170,7 @@ mod object_free_deep;
 mod range;
 mod incref;
 mod foreach_non_iterable_warning;
+mod float_key_to_int;
 mod nan_bool_coercion_warning;
 mod iterable_unsupported_kind;
 mod iterable_write_stdout;
@@ -552,6 +553,7 @@ pub use sort_int::emit_sort_int;
 pub use sort_str::emit_sort_str;
 /// Emit undefined integer array key warning helper.
 pub use undefined_array_key_warning::emit_undefined_array_key_warning;
+pub use float_key_to_int::emit_float_key_to_int;
 /// Emit user-defined sort helper.
 pub use php_compare_slots::emit_php_compare_slots;
 pub use usort::emit_usort;

@@ -550,6 +550,13 @@ fn validate_instruction_immediate(
         IterEnd => require_immediate(inst_id, inst, "iterator-state local slot", |imm| {
             matches!(imm, Imm::LocalSlot(_))
         }),
+        StrCharAt => {
+            if matches!(inst.immediate, None | Some(Imm::Bool(_))) {
+                Ok(())
+            } else {
+                Err(ValidationError::UnexpectedImmediate(inst_id))
+            }
+        }
         Nop => {
             if matches!(inst.immediate, None | Some(Imm::Data(_))) {
                 Ok(())

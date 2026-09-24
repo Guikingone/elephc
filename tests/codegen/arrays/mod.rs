@@ -37,3 +37,4 @@ mod assoc_set_ops;
 mod assoc_spread;
 mod widened_signatures;
 mod write_evaluation_order;
+mod float_key_diagnostics;

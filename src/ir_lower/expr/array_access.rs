@@ -168,7 +168,7 @@ fn subscript_chain_is_variable_rooted(expr: &Expr) -> bool {
 }
 
 /// Lowers array, hash, string, or ArrayAccess indexing with configurable
-/// undefined-offset warning behavior for native indexed-array reads. Suppressed
+/// undefined-offset warning behavior for array and string reads. Suppressed
 /// warnings propagate through the whole subscript chain: PHP's `isset()` and `??`
 /// are silent for every level of `$a[1][2][3]`, not just the outermost read.
 pub(super) fn lower_array_access_with_missing_warning(
@@ -266,7 +266,7 @@ pub(super) fn lower_array_access_from_value(
     let result = ctx.emit_value(
         op,
         operands,
-        None,
+        (op == Op::StrCharAt).then_some(Immediate::Bool(warn_on_missing)),
         result_type,
         op.default_effects(),
         Some(expr.span),

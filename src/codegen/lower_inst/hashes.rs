@@ -925,7 +925,8 @@ pub(super) fn materialize_hash_key_aarch64_with(
         }
         PhpType::Float => {
             ctx.load_value_to_reg(key, "d0")?;
-            abi::emit_php_float_to_int(ctx.emitter, "x1");
+            abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");
+            ctx.emitter.instruction("mov x1, x0");                              // use the diagnosed PHP integer as the hash key
             abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
             Ok(())
         }
@@ -986,7 +987,8 @@ pub(super) fn materialize_hash_key_x86_64_with(
         }
         PhpType::Float => {
             ctx.load_value_to_reg(key, "xmm0")?;
-            abi::emit_php_float_to_int(ctx.emitter, "rsi");
+            abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");
+            ctx.emitter.instruction("mov rsi, rax");                            // use the diagnosed PHP integer as the hash key
             abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
             Ok(())
         }
@@ -1073,7 +1075,8 @@ fn materialize_mixed_hash_key_aarch64(
     ctx.emitter.instruction(&format!("b {}", scalar_key));                      // the float arm sits between here and the scalar path
     ctx.emitter.label(&float_key);
     ctx.emitter.instruction("fmov d0, x1");                                     // move the raw IEEE-754 payload bits into an FP register
-    ctx.emitter.instruction("fcvtzs x1, d0");                                   // truncate toward zero: PHP casts a float array key to int
+    abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");
+    ctx.emitter.instruction("mov x1, x0");                                      // use the diagnosed PHP integer key
     ctx.emitter.label(&scalar_key);
     ctx.emitter.instruction("mov x2, #-1");                                     // key_hi sentinel marks scalar mixed keys as integers
     ctx.emitter.instruction(&format!("b {}", done));                            // skip string-key normalization after scalar selection
@@ -1116,7 +1119,8 @@ fn materialize_mixed_hash_key_x86_64(
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip string-key normalization after fallback selection
     ctx.emitter.label(&float_key);
     ctx.emitter.instruction("movq xmm0, rdi");                                  // move the raw IEEE-754 payload bits into an FP register
-    ctx.emitter.instruction("cvttsd2si rsi, xmm0");                             // truncate toward zero: PHP casts a float array key to int
+    abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");
+    ctx.emitter.instruction("mov rsi, rax");                                    // use the diagnosed PHP integer key
     ctx.emitter.instruction("mov rdx, -1");                                     // key_hi sentinel marks the truncated float as an integer key
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip string-key normalization after the float conversion
     ctx.emitter.label(&null_key);

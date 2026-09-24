@@ -818,6 +818,7 @@ pub enum Op {
     StrConcat,
     StrLen,
     StrPersist,
+    /// Reads a string offset; an optional Bool immediate controls missing-offset warnings.
     StrCharAt,
     StrInterpolate,
     ConcatReset,
@@ -1216,8 +1217,9 @@ impl Op {
             | TryPushHandler
             | TryPopHandler => E::WRITES_GLOBAL,
             IncludeOnceGuard => E::READS_GLOBAL | E::WRITES_GLOBAL,
-            IToStr | FToStr | ResourceToStr | StrConcat | StrCharAt | StrInterpolate
+            IToStr | FToStr | ResourceToStr | StrConcat | StrInterpolate
             | MixedCastString | VarDump | PrintR => E::ALLOC_CONCAT,
+            StrCharAt => E::ALLOC_CONCAT | E::MAY_WARN,
             ConcatReset => E::WRITES_GLOBAL,
             Cast => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL
