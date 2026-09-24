@@ -2120,7 +2120,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
 
       - name: Add x86_64-pc-windows-gnu Rust target
         run: rustup target add x86_64-pc-windows-gnu
@@ -2291,7 +2291,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
 
       - name: Cache Rust build state
         uses: actions/cache@v4
@@ -2410,13 +2410,13 @@ jobs:
           }
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
         with:
           components: llvm-tools-preview
 
       - name: Install the native MinGW toolchain and libraries
         id: msys2_bridge
-        uses: msys2/setup-msys2@v2
+        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2.32.0, 2026-06-12
         with:
           msystem: MINGW64
           update: true
@@ -2559,7 +2559,7 @@ jobs:
           }
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
 
       - name: Add the MinGW Rust target
         run: rustup target add x86_64-pc-windows-gnu
@@ -2580,13 +2580,13 @@ jobs:
           "home=$curlHome" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@e88e69ecdb9658bd172693dcdc2c84e7f0ab6a11 # nextest, 2026-09-20
         env:
           CURL_HOME: ${{ steps.nextest_curl.outputs.home }}
 
       - name: Install the native MinGW toolchain and libraries
         id: msys2_codegen
-        uses: msys2/setup-msys2@v2
+        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2.32.0, 2026-06-12
         with:
           msystem: MINGW64
           update: true
