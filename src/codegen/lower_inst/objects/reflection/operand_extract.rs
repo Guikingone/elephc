@@ -41,6 +41,7 @@ pub(super) fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
         required_parameter_count: 0,
         is_deprecated: false,
         is_generator: false,
+        returns_reference: false,
         prototype_member: None,
         is_final: false,
         is_abstract: false,

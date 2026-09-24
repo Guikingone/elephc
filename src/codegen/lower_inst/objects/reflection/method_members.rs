@@ -150,6 +150,7 @@ pub(super) fn reflection_class_method_member(
         type_metadata: type_metadata.clone(),
         is_deprecated: sig.deprecation.is_some(),
         is_generator,
+        returns_reference: sig.by_ref_return,
     };
     let source_defaults = declaring_class_name
         .as_deref()
@@ -187,6 +188,7 @@ pub(super) fn reflection_class_method_member(
         required_parameter_count,
         is_deprecated: sig.deprecation.is_some(),
         is_generator,
+        returns_reference: sig.by_ref_return,
         prototype_member,
         parameters,
     }))
@@ -255,6 +257,7 @@ pub(super) fn reflection_interface_method_member(
         type_metadata: type_metadata.clone(),
         is_deprecated: sig.deprecation.is_some(),
         is_generator: false,
+        returns_reference: sig.by_ref_return,
     };
     let source_defaults = reflection_source_method_defaults(
         ctx,
@@ -288,6 +291,7 @@ pub(super) fn reflection_interface_method_member(
         required_parameter_count,
         is_deprecated: sig.deprecation.is_some(),
         is_generator: false,
+        returns_reference: sig.by_ref_return,
         prototype_member: None,
         parameters,
     }))
@@ -342,6 +346,7 @@ pub(super) fn reflection_trait_method_member(
         type_metadata: type_metadata.clone(),
         is_deprecated: info.signature.deprecation.is_some(),
         is_generator,
+        returns_reference: info.signature.by_ref_return,
     };
     let parameters = reflection_parameter_members_with_declaring_class(
         ctx,
@@ -369,6 +374,7 @@ pub(super) fn reflection_trait_method_member(
         required_parameter_count,
         is_deprecated: info.signature.deprecation.is_some(),
         is_generator,
+        returns_reference: info.signature.by_ref_return,
         prototype_member: None,
         parameters,
     }))
