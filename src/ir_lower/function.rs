@@ -2304,6 +2304,7 @@ fn direct_closure_return_expr_type(
             captures,
             params,
             classes,
+            functions,
             builtin_call_types,
         );
     }
@@ -2403,8 +2404,15 @@ fn direct_closure_return_array_type(
     for item in items {
         if let ExprKind::Spread(inner) = &item.kind {
             has_hash_spread |= matches!(
-                direct_closure_return_expr_type(inner, captures, params, classes, builtin_call_types)
-                    .codegen_repr(),
+                direct_closure_return_expr_type(
+                    inner,
+                    captures,
+                    params,
+                    classes,
+                    functions,
+                    builtin_call_types,
+                )
+                .codegen_repr(),
                 PhpType::AssocArray { .. } | PhpType::Mixed
             );
         }
@@ -2500,6 +2508,7 @@ fn direct_closure_return_assoc_literal_type(
             captures,
             params,
             classes,
+            functions,
             builtin_call_types,
         );
         key_ty = if matches!(key_ty, PhpType::Never) {
@@ -2525,6 +2534,7 @@ fn direct_closure_return_mixed_literal_type(
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    functions: &std::collections::HashMap<String, FunctionSig>,
     builtin_call_types: &std::collections::HashMap<Span, PhpType>,
 ) -> PhpType {
     let mut value_ty = PhpType::Never;
@@ -2536,6 +2546,7 @@ fn direct_closure_return_mixed_literal_type(
                     captures,
                     params,
                     classes,
+                    functions,
                     builtin_call_types,
                 )
                 .1
@@ -2568,10 +2579,17 @@ fn direct_closure_return_assoc_spread_entry_types(
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    functions: &std::collections::HashMap<String, FunctionSig>,
     builtin_call_types: &std::collections::HashMap<Span, PhpType>,
 ) -> (PhpType, PhpType) {
-    let source =
-        direct_closure_return_array_item_type(inner, captures, params, classes, builtin_call_types);
+    let source = direct_closure_return_array_item_type(
+        inner,
+        captures,
+        params,
+        classes,
+        functions,
+        builtin_call_types,
+    );
     match source.codegen_repr() {
         PhpType::Array(elem) => (PhpType::Int, elem.codegen_repr()),
         PhpType::AssocArray { key, value } => (key.codegen_repr(), value.codegen_repr()),
