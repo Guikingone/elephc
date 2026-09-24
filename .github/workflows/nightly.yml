@@ -50,7 +50,7 @@ jobs:
       version: ${{ steps.pick.outputs.version }}
       dated_tag: ${{ steps.pick.outputs.dated_tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: main
@@ -148,7 +148,7 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-22.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.gate.outputs.sha }}
 
@@ -235,7 +235,7 @@ jobs:
           tar tzf "$TARBALL"
 
       - name: Upload nightly artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nightly-${{ matrix.target }}
           path: |
@@ -272,7 +272,7 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-22.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.gate.outputs.sha }}
 
@@ -301,7 +301,7 @@ jobs:
       # openssl/libcurl/libxml2 rebuild. The compiler itself stays
       # fail-closed for real projects.
       - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib/libxml2
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
           key: verify-native-${{ matrix.target }}-${{ hashFiles('examples/curl-get/elephc.lock', 'examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
@@ -309,7 +309,7 @@ jobs:
             verify-native-${{ matrix.target }}-
 
       - name: Download the built tarball
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: nightly-${{ matrix.target }}
           path: dist
@@ -331,7 +331,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download nightly artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: nightly-*
           merge-multiple: true
@@ -379,7 +379,7 @@ jobs:
         # code authorised to rewrite this repository's releases, tags and
         # published artifacts without any diff to review here. Both publish
         # paths pin the same SHA; bump them together.
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
           tag_name: ${{ needs.gate.outputs.dated_tag }}
           target_commitish: ${{ needs.gate.outputs.sha }}
@@ -432,7 +432,7 @@ jobs:
         # code authorised to rewrite this repository's releases, tags and
         # published artifacts without any diff to review here. Both publish
         # paths pin the same SHA; bump them together.
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
           tag_name: nightly
           target_commitish: ${{ needs.gate.outputs.sha }}
