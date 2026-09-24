@@ -10,9 +10,8 @@
 //! - `end_line`/`end_col` are the EXCLUSIVE end position (the character after the
 //!   spanned text). A span whose end equals its start is a point span: the extent
 //!   is unknown and only the start position is meaningful.
-//! - Coordinates and source identities are `u32`; the source identity distinguishes equal
-//!   line/column positions in separate included files. This 20-byte span is embedded in every
-//!   token and AST node, so its size contributes directly to parser stack and AST memory use.
+//! - Spans stay 16 bytes: included-file identity is packed into unused high bits of `end_col`,
+//!   preserving the AST and parser-frame size while distinguishing equal source coordinates.
 
 /// The first line number handed out to synthetically built nodes.
 ///
@@ -24,7 +23,13 @@ const SYNTHETIC_LINE_BASE: u32 = 1_000_000;
 /// program always gets the same numbering.
 static NEXT_SYNTHETIC_LINE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 /// Assigns an in-process identity to each separately parsed included source file.
-static NEXT_SOURCE_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+const PACKED_SOURCE_SPAN: u32 = 1 << 31;
+const SOURCE_ID_MASK: u32 = 0x7fff;
+const PACKED_END_COL_MASK: u32 = 0xffff;
+
+std::thread_local! {
+    static NEXT_SOURCE_ID: std::cell::Cell<u32> = const { std::cell::Cell::new(1) };
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 /// Source position span for AST nodes.
@@ -32,9 +37,9 @@ pub struct Span {
     pub line: u32,
     pub col: u32,
     pub end_line: u32,
+    /// The upper bits carry source identity for included files; use [`Span::end_column`]
+    /// to read the coordinate without the packed identity.
     pub end_col: u32,
-    /// Distinguishes coordinates from separately parsed source files after include expansion.
-    pub source_id: u32,
 }
 
 impl Span {
@@ -46,7 +51,6 @@ impl Span {
             col,
             end_line: line,
             end_col: col,
-            source_id: 0,
         }
     }
 
@@ -56,37 +60,67 @@ impl Span {
             line,
             col,
             end_line: line,
-            end_col: col,
-            source_id,
+            end_col: Self::pack_end_column(col, source_id),
         }
     }
 
     /// Creates a default-source span from one-based start and exclusive end positions.
-    #[cfg(test)]
     pub fn with_end(line: u32, col: u32, end_line: u32, end_col: u32) -> Self {
         Self {
             line,
             col,
             end_line,
             end_col,
-            source_id: 0,
         }
     }
 
     /// Creates a span extent while preserving the identity attached to its token start.
     pub fn with_end_from(start: Span, end: Span) -> Self {
-        Self {
-            line: start.line,
-            col: start.col,
-            end_line: end.end_line,
-            end_col: end.end_col,
-            source_id: start.source_id,
-        }
+        let mut span = Self::with_end(start.line, start.col, end.end_line, end.end_column());
+        span.end_col = Self::pack_end_column(end.end_column(), start.source_id());
+        span
     }
 
     /// Returns a fresh source identity for a separately parsed included file.
     pub fn fresh_source_id() -> u32 {
-        NEXT_SOURCE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        NEXT_SOURCE_ID.with(|next| {
+            let id = next.get();
+            assert!(id <= SOURCE_ID_MASK, "too many included source files in one compile");
+            next.set(id + 1);
+            id
+        })
+    }
+
+    /// Resets source identities at the beginning of a new include-resolution unit.
+    pub fn reset_source_ids() {
+        NEXT_SOURCE_ID.with(|next| next.set(1));
+    }
+
+    /// Returns the source end column without the included-file identity bits.
+    pub fn end_column(self) -> u32 {
+        if self.end_col & PACKED_SOURCE_SPAN == 0 {
+            self.end_col
+        } else {
+            self.end_col & PACKED_END_COL_MASK
+        }
+    }
+
+    /// Returns the included-file identity, or zero for the root/default source.
+    pub fn source_id(self) -> u32 {
+        if self.end_col & PACKED_SOURCE_SPAN == 0 {
+            0
+        } else {
+            (self.end_col >> 16) & SOURCE_ID_MASK
+        }
+    }
+
+    fn pack_end_column(end_col: u32, source_id: u32) -> u32 {
+        if source_id == 0 {
+            return end_col;
+        }
+        assert!(source_id <= SOURCE_ID_MASK, "source identity exceeds packed span range");
+        assert!(end_col <= PACKED_END_COL_MASK, "included-source column exceeds packed span range");
+        PACKED_SOURCE_SPAN | (source_id << 16) | end_col
     }
 
     /// Creates a dummy span at line 0, column 0.
@@ -97,7 +131,6 @@ impl Span {
             col: 0,
             end_line: 0,
             end_col: 0,
-            source_id: 0,
         }
     }
 
@@ -130,7 +163,6 @@ impl Span {
             col: 1,
             end_line: line,
             end_col: 1,
-            source_id: 0,
         }
     }
 
@@ -157,7 +189,7 @@ impl Span {
     /// Returns true when the span covers a real extent (an end position past
     /// the start), as opposed to a point span or a dummy.
     pub fn has_extent(self) -> bool {
-        self.end_line > self.line || (self.end_line == self.line && self.end_col > self.col)
+        self.end_line > self.line || (self.end_line == self.line && self.end_column() > self.col)
     }
 
     /// Returns the union of two spans: the earlier start and the later end.
@@ -175,22 +207,22 @@ impl Span {
         } else {
             (self.line, self.col)
         };
+        let start_source_id = if (other.line, other.col) < (self.line, self.col) {
+            other.source_id()
+        } else {
+            self.source_id()
+        };
         let (end_line, end_col) =
-            if (other.end_line, other.end_col) > (self.end_line, self.end_col) {
-                (other.end_line, other.end_col)
+            if (other.end_line, other.end_column()) > (self.end_line, self.end_column()) {
+                (other.end_line, other.end_column())
             } else {
-                (self.end_line, self.end_col)
+                (self.end_line, self.end_column())
             };
         Span {
             line,
             col,
             end_line,
-            end_col,
-            source_id: if (other.line, other.col) < (self.line, self.col) {
-                other.source_id
-            } else {
-                self.source_id
-            },
+            end_col: Self::pack_end_column(end_col, start_source_id),
         }
     }
 }
@@ -206,6 +238,21 @@ mod tests {
     #[test]
     fn span_stays_16_bytes() {
         assert_eq!(std::mem::size_of::<Span>(), 16);
+    }
+
+    /// Equal source coordinates from included files remain distinct map keys.
+    #[test]
+    fn included_source_identity_is_packed_without_changing_coordinates() {
+        let first = Span::new_in_source(4, 10, 7);
+        let second = Span::new_in_source(4, 10, 8);
+        assert_ne!(first, second);
+        assert_eq!(first.source_id(), 7);
+        assert_eq!(first.end_column(), 10);
+
+        let extended = Span::with_end_from(first, Span::new_in_source(4, 20, 7));
+        assert_eq!(extended.source_id(), 7);
+        assert_eq!(extended.end_column(), 20);
+        assert!(extended.has_extent());
     }
 
     /// Verifies merge takes the earlier start and later end across lines.
