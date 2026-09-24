@@ -281,6 +281,8 @@ fn validate_instruction_effects(
 ) -> Result<(), ValidationError> {
     let expected = if inst.op == Op::MixedUnbox {
         Op::mixed_unbox_effects(&inst.result_php_type)
+    } else if inst.op == Op::FToI && matches!(inst.immediate, Some(Immediate::Bool(true))) {
+        Op::FToI.default_effects() | Effects::MAY_WARN
     } else if matches!(inst.op, Op::PropSet | Op::PropUnset)
         && matches!(inst.immediate, Some(Immediate::PropertyRef { .. }))
     {
@@ -557,7 +559,14 @@ fn validate_instruction_immediate(
                 Err(ValidationError::UnexpectedImmediate(inst_id))
             }
         }
-        HashGetForWrite => {
+        FToI => {
+            if matches!(inst.immediate, None | Some(Imm::Bool(true))) {
+                Ok(())
+            } else {
+                Err(ValidationError::UnexpectedImmediate(inst_id))
+            }
+        }
+        HashGetForWrite | HashSet => {
             if matches!(inst.immediate, None | Some(Imm::Bool(true))) {
                 Ok(())
             } else {

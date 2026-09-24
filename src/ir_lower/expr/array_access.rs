@@ -252,7 +252,18 @@ pub(super) fn lower_array_access_from_value(
             Op::BufferGet
         }
         IrType::Str => {
-            index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+            index_value = if index_value.ir_type == IrType::F64 {
+                ctx.emit_value(
+                    Op::FToI,
+                    vec![index_value.value],
+                    Some(Immediate::Bool(true)),
+                    PhpType::Int,
+                    Op::FToI.default_effects() | Effects::MAY_WARN,
+                    Some(index.span),
+                )
+            } else {
+                coerce_to_int_at_span(ctx, index_value, Some(index.span))
+            };
             Op::StrCharAt
         }
         _ => Op::RuntimeCall,

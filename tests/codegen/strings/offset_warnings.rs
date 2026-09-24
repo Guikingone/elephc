@@ -45,3 +45,44 @@ fn test_string_offset_silent_probes() {
     assert_eq!(out.stdout, "ok");
     assert_eq!(out.stderr, "");
 }
+
+/// Null coalescing an out-of-bounds string offset selects the fallback silently.
+#[test]
+fn test_string_offset_null_coalesce_missing_is_silent() {
+    let out = compile_and_run_capture("<?php $s = 'ab'; echo $s[99] ?? 'coalesce';");
+    assert_eq!(out.stdout, "coalesce");
+    assert_eq!(out.stderr, "");
+}
+
+/// An in-bounds string offset keeps its byte under null coalescing.
+#[test]
+fn test_string_offset_null_coalesce_present() {
+    let out = compile_and_run_capture("<?php $s = 'ab'; echo $s[1] ?? 'coalesce';");
+    assert_eq!(out.stdout, "b");
+    assert_eq!(out.stderr, "");
+}
+
+/// Empty probes a missing string offset without reporting an ordinary-read warning.
+#[test]
+fn test_string_offset_empty_missing_is_silent() {
+    let out = compile_and_run_capture("<?php $s = 'ab'; echo empty($s[99]) ? 'empty' : 'present';");
+    assert_eq!(out.stdout, "empty");
+    assert_eq!(out.stderr, "");
+}
+
+/// A float string offset truncates to an integer and reports PHP's offset-cast warning.
+#[test]
+fn test_string_offset_float_read_warns_once() {
+    let out = compile_and_run_capture("<?php $offset = 1.9; echo 'abc'[$offset];");
+    assert_eq!(out.stdout, "b");
+    assert_eq!(out.stderr.matches("Warning: String offset cast occurred").count(), 1, "{}", out.stderr);
+    assert!(!out.stderr.contains("Implicit conversion from float"), "{}", out.stderr);
+}
+
+/// Even an integral-valued float triggers PHP's string offset cast warning.
+#[test]
+fn test_string_offset_integral_float_read_warns_once() {
+    let out = compile_and_run_capture("<?php echo 'abc'[1.0];");
+    assert_eq!(out.stdout, "b");
+    assert_eq!(out.stderr.matches("Warning: String offset cast occurred").count(), 1, "{}", out.stderr);
+}

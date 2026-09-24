@@ -10,7 +10,7 @@
 
 use std::collections::HashSet;
 
-use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
 use crate::parser::stmt::{can_replay_assignment_target, lower_postfix_incdec_assignment};
 use crate::span::Span;
 
@@ -50,8 +50,40 @@ pub(super) fn desugar_lvalue_incdec(
     if !can_replay_assignment_target(&target) {
         return None;
     }
-    let write = lower_postfix_incdec_assignment(target.clone(), increment, span).ok()?;
     let mut prelude = lowerer.finish();
+    if let ExprKind::ArrayAccess { array, .. } = &target.kind {
+        if matches!(&array.kind, ExprKind::Variable(_)) {
+            let old_name = crate::names::generated_local_name(&format!(
+                "__elephc_incdec_old_{}_{}", span.line, span.col
+            ));
+            let new_name = crate::names::generated_local_name(&format!(
+                "__elephc_incdec_new_{}_{}", span.line, span.col
+            ));
+            prelude.push(Stmt::new(StmtKind::Assign {
+                name: old_name.clone(),
+                value: target.clone(),
+            }, span));
+            let old_value = Expr::new(ExprKind::Variable(old_name.clone()), span);
+            let next_value = Expr::new(ExprKind::BinaryOp {
+                left: Box::new(old_value),
+                op: if increment { BinOp::Add } else { BinOp::Sub },
+                right: Box::new(Expr::new(ExprKind::IntLiteral(1), span)),
+            }, span);
+            prelude.push(Stmt::new(StmtKind::Assign {
+                name: new_name.clone(),
+                value: next_value,
+            }, span));
+            let result_name = if prefix { new_name.clone() } else { old_name };
+            return Some(Expr::new(ExprKind::Assignment {
+                target: Box::new(target),
+                value: Box::new(Expr::new(ExprKind::Variable(new_name), span)),
+                result_target: Some(Box::new(Expr::new(ExprKind::Variable(result_name), span))),
+                prelude,
+                conditional_value_temp: None,
+            }, span));
+        }
+    }
+    let write = lower_postfix_incdec_assignment(target.clone(), increment, span).ok()?;
     let value = if prefix {
         // `++$p` evaluates to the NEW value, which re-reading the target after the write gives.
         prelude.push(write);

@@ -285,8 +285,10 @@ pub(super) fn lower_str_char_at(ctx: &mut FunctionContext<'_>, inst: &Instructio
                 abi::emit_push_reg(ctx.emitter, "x1");
                 abi::emit_call_label(ctx.emitter, "__rt_warn_string_offset");
                 abi::emit_pop_reg(ctx.emitter, "x1");
+            } else {
+                abi::emit_load_int_immediate(ctx.emitter, "x1", crate::codegen::NULL_SENTINEL);
             }
-            ctx.emitter.instruction("mov x2, #0");                              // out-of-bounds string indexing returns an empty string
+            ctx.emitter.instruction("mov x2, #0");                              // a missing offset has no string bytes
             ctx.emitter.label(&end);
         }
         Arch::X86_64 => {
@@ -313,9 +315,9 @@ pub(super) fn lower_str_char_at(ctx: &mut FunctionContext<'_>, inst: &Instructio
                 abi::emit_call_label(ctx.emitter, "__rt_warn_string_offset");
                 abi::emit_pop_reg(ctx.emitter, "rax");
             } else {
-                ctx.emitter.instruction("mov rax, r8");                         // return a valid empty-string pointer for a silent probe
+                abi::emit_load_int_immediate(ctx.emitter, "rax", crate::codegen::NULL_SENTINEL);
             }
-            ctx.emitter.instruction("mov rdx, 0");                              // out-of-bounds string indexing returns an empty string
+            ctx.emitter.instruction("mov rdx, 0");                              // a missing offset has no string bytes
             ctx.emitter.label(&end);
         }
     }

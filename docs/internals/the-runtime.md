@@ -125,9 +125,11 @@ use `__rt_php_float_to_int` to obtain the same integer key without repeating the
 message. This applies to typed float keys and float values inside `Mixed` cells.
 
 Out-of-bounds string reads use `__rt_warn_string_offset` to report
-the missing offset. Silent existence probes such as `isset()` do not call that
-warning helper. Both warnings follow `@` suppression and the registered PHP
-error handler through the shared diagnostic dispatcher.
+the missing offset. Silent existence probes such as `isset()` and `??` do not
+call that warning helper. A float string offset instead reports `String offset
+cast occurred` before truncating the offset, including for integral-valued
+floats. These warnings follow `@` suppression and the registered PHP error
+handler through the shared diagnostic dispatcher.
 
 ## String routines
 

@@ -18,6 +18,62 @@ fn test_float_array_key_fractional_read_and_write_warn() {
     assert!(out.stderr.contains("Implicit conversion from float -0.9 to int loses precision"), "{}", out.stderr);
 }
 
+/// A compound hash assignment diagnoses its float key once across the read and write.
+#[test]
+fn test_float_array_key_compound_add_warns_once() {
+    let out = compile_and_run_capture("<?php $a = [1 => 10]; $a[1.9] += 1; echo $a[1];");
+    assert_eq!(out.stdout, "11");
+    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+}
+
+/// Post-increment diagnoses a float hash key once across its read and write.
+#[test]
+fn test_float_array_key_post_increment_warns_once() {
+    let out = compile_and_run_capture("<?php $a = [1 => 10]; $a[1.9]++; echo $a[1];");
+    assert_eq!(out.stdout, "11");
+    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+}
+
+/// Compound assignment used as an expression diagnoses the shared key once.
+#[test]
+fn test_float_array_key_compound_expression_warns_once() {
+    let out = compile_and_run_capture("<?php $a = [1 => 10]; echo ($a[1.9] += 1), ':', $a[1];");
+    assert_eq!(out.stdout, "11:11");
+    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+}
+
+/// Post-increment used as an expression returns the old value with one key diagnostic.
+#[test]
+fn test_float_array_key_post_increment_expression_warns_once() {
+    let out = compile_and_run_capture("<?php $a = [1 => 10]; echo $a[1.9]++, ':', $a[1];");
+    assert_eq!(out.stdout, "10:11");
+    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+}
+
+/// Prefix decrement returns the new value and diagnoses its shared key once.
+#[test]
+fn test_float_array_key_pre_decrement_expression_warns_once() {
+    let out = compile_and_run_capture("<?php $a = [1 => 10]; echo --$a[1.9], ':', $a[1];");
+    assert_eq!(out.stdout, "9:9");
+    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+}
+
+/// Null-coalesce assignment shares its float-key diagnosis between lookup and insertion.
+#[test]
+fn test_float_array_key_null_coalesce_assignment_warns_once() {
+    let out = compile_and_run_capture("<?php $a = ['other' => 1]; echo ($a[1.9] ??= 5), ':', $a[1];");
+    assert_eq!(out.stdout, "5:5");
+    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+}
+
+/// Separate source-level read and write operations each diagnose the same float key.
+#[test]
+fn test_float_array_key_separate_accesses_warn_twice() {
+    let out = compile_and_run_capture("<?php $a = [1 => 10]; echo $a[1.9]; $a[1.9] = 12; echo $a[1];");
+    assert_eq!(out.stdout, "1012");
+    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 2, "{}", out.stderr);
+}
+
 /// A missing hash read reports one float-key deprecation before the undefined-key warning.
 #[test]
 fn test_float_array_key_missing_hash_read_warns_once() {
@@ -125,6 +181,18 @@ fn test_float_array_key_nan_and_infinity_diagnostics() {
     assert_eq!(out.stderr.matches("The float NAN is not representable as an int, cast occurred").count(), 1, "{}", out.stderr);
     assert_eq!(out.stderr.matches("Implicit conversion from float NAN to int loses precision").count(), 1, "{}", out.stderr);
     assert_eq!(out.stderr.matches("The float INF is not representable as an int, cast occurred").count(), 1, "{}", out.stderr);
+}
+
+/// Checks range diagnostics retain PHP's full float representation on the active profile.
+#[test]
+fn test_float_array_key_range_warning_text() {
+    let out = compile_and_run_capture(
+        "<?php $a = [0 => 'z']; echo $a[1e20] ?? '?'; echo $a[-INF]; echo $a[9223372036854775808.0] ?? '?';",
+    );
+    assert_eq!(out.stdout, "?z?");
+    assert_eq!(out.stderr.matches("The float 1.0E+20 is not representable as an int, cast occurred").count(), 1, "{}", out.stderr);
+    assert_eq!(out.stderr.matches("The float -INF is not representable as an int, cast occurred").count(), 1, "{}", out.stderr);
+    assert_eq!(out.stderr.matches("The float 9.223372036854776E+18 is not representable as an int, cast occurred").count(), 1, "{}", out.stderr);
 }
 
 /// Checks an existence probe diagnoses a float key even without a value read.

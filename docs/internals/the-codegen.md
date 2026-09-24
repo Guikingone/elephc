@@ -75,6 +75,16 @@ same key was already diagnosed. Its target lowering rebuilds the normalized
 key for the read without emitting the deprecation again. Missing ordinary
 hash reads likewise avoid repeating the float diagnostic while formatting
 their undefined-key warning.
+Compound hash updates carry the same diagnosed-key marker from the read half
+to `HashSet`. Increment and decrement expressions capture the old element once,
+then calculate and write the new value, so one source operation reports one
+float-key diagnostic.
+
+String indexing returns a null sentinel for a missing offset when lowered for
+`isset()`, `empty()`, or `??`, allowing null coalescing to select its fallback
+without an out-of-bounds warning. Ordinary reads still return an empty string
+and warn. A float string offset is converted to an integer by a warning-marked
+`FToI` instruction before `StrCharAt`.
 
 ## Runtime Split
 

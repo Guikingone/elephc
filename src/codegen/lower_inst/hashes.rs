@@ -331,9 +331,14 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     let value_ty = require_supported_hash_value(ctx.value_php_type(value)?, &storage_value_ty, inst)?;
     let receiver = ReceiverPlace::resolve(ctx, hash)?;
     receiver.prepare_consuming_storeback(ctx, hash)?;
+    let normalization = if matches!(inst.immediate, Some(Immediate::Bool(true))) {
+        HashKeyNormalization::PhpAlreadyDiagnosed
+    } else {
+        HashKeyNormalization::Php
+    };
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_hash_set_aarch64(ctx, hash, key, value, &value_ty, &storage_value_ty)?,
-        Arch::X86_64 => lower_hash_set_x86_64(ctx, hash, key, value, &value_ty, &storage_value_ty)?,
+        Arch::AArch64 => lower_hash_set_aarch64_with(ctx, hash, key, value, &value_ty, &storage_value_ty, normalization)?,
+        Arch::X86_64 => lower_hash_set_x86_64_with(ctx, hash, key, value, &value_ty, &storage_value_ty, normalization)?,
     }
     ctx.store_result_value(hash)?;
     receiver.store_back_container_writeback(ctx, hash)?;
