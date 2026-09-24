@@ -13,11 +13,9 @@
 //! - The cell is the caller variable's storage and OWNS the box it holds, so a write-back
 //!   replaces a live value and must release it. Before issue #1062 was fixed the transfer was
 //!   a bare store, orphaning the previous box and the payload it pinned on every call.
-//! - Each fixture therefore asserts a live-block count that does NOT grow with the call count:
-//!   a single live block is the variable's current value at exit, not a leak, so the four-call
-//!   and twelve-call shapes have to report the same number. That is what separates the two —
-//!   asserting one count in isolation would pass on a leak of one block per call as readily as
-//!   on a correct release.
+//! - Each fixture asserts a clean heap after the caller's local leaves scope. In particular,
+//!   repeated write-backs must release every replaced box and its payload rather than leaking
+//!   storage in proportion to the number of calls.
 //! - The fixtures use a first-class callable rather than a direct call, and no loop. A direct
 //!   call trips a pre-existing over-release of the invoker argument array under `--heap-debug`,
 //!   and a by-reference variadic driven from a loop segfaults on `main` as well; both are
@@ -30,22 +28,18 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
-/// Asserts the program printed `expected` and left exactly `live_blocks` blocks live.
-fn assert_live_blocks(out: crate::support::ProgramOutput, expected: &str, live_blocks: usize) {
+/// Asserts the program printed `expected` and left no heap allocations behind.
+fn assert_heap_clean(out: crate::support::ProgramOutput, expected: &str) {
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, expected, "stderr: {}", out.stderr);
-    let marker = format!("HEAP DEBUG: leak summary: live_blocks={}", live_blocks);
     assert!(
-        out.stderr.contains(&marker),
-        "expected `{}`, got: {}",
-        marker,
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
         out.stderr
     );
 }
 
-/// Four write-backs, each replacing a heap string, leave one live block: the variable's
-/// current value. Without the release this reported nine — two per call, the orphaned box
-/// and the string it pinned, plus the one that is genuinely live.
+/// Four write-backs, each replacing a heap string, release both the old box and its payload.
 #[test]
 fn test_by_ref_variadic_writeback_releases_the_replaced_box() {
     let out = compile_and_run_with_heap_debug(
@@ -60,13 +54,11 @@ $c($p);
 echo $p, "\n";
 "#,
     );
-    assert_live_blocks(out, "axxxx\n", 1);
+    assert_heap_clean(out, "axxxx\n");
 }
 
-/// The same shape with three times the calls reports the same one live block. This is the half
-/// of the pair that pins the leak down to a per-call one: without the release the four-call
-/// fixture above reported nine blocks and this one reported twenty-five, which is two per call
-/// in both cases rather than a fixed overhead either count could be explained by.
+/// Three times as many writes also leave a clean heap, pinning repeated replacement rather
+/// than only the first write.
 #[test]
 fn test_by_ref_variadic_writeback_does_not_grow_with_the_call_count() {
     let out = compile_and_run_with_heap_debug(
@@ -89,7 +81,7 @@ $c($p);
 echo $p, "\n";
 "#,
     );
-    assert_live_blocks(out, "axxxxxxxxxxxx\n", 1);
+    assert_heap_clean(out, "axxxxxxxxxxxx\n");
 }
 
 /// A write-back that RETYPES the caller's local -- the issue #1062 miscompile -- is still
