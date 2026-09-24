@@ -1377,17 +1377,18 @@ echo 'write=';
 echo fwrite($pipes[0], "socket-ok\r\n");
 echo '|';
 fclose($pipes[0]);
-stream_set_blocking($pipes[1], true);
+$blockingOut = stream_set_blocking($pipes[1], true);
+$blockingErr = stream_set_blocking($pipes[2], true);
+echo 'blocking=' . (int)$blockingOut . '/' . (int)$blockingErr . '|';
 echo fread($pipes[1], 64);
 fclose($pipes[1]);
-stream_set_blocking($pipes[2], true);
 echo '|err=' . fread($pipes[2], 64);
 fclose($pipes[2]);
 echo ':' . proc_close($process);
 echo '|start=' . (file_exists('proc-socket-start.txt') ? file_get_contents('proc-socket-start.txt') : 'missing');
 echo '|file=' . file_get_contents('proc-socket-debug.txt');
 "#,
-        "raw=4|write=11|child|raw|fbpxrg-bx\r\n|err=child=raw|fbpxrg-bx\r\n:0|start=started|file=ran=15:raw|fbpxrg-bx\r\n;out=21;err=21",
+        "raw=4|write=11|blocking=1/1|child|raw|fbpxrg-bx\r\n|err=child=raw|fbpxrg-bx\r\n:0|start=started|file=ran=15:raw|fbpxrg-bx\r\n;out=21;err=21",
         0,
         &[("proc-socket-helper", "<?php file_put_contents('proc-socket-start.txt', 'started'); $input=fread(STDIN,64); $out=fwrite(STDOUT, 'child|' . $input); $err=fwrite(STDERR, 'child=' . $input); file_put_contents('proc-socket-debug.txt', 'ran=' . strlen($input) . ':' . $input . ';out=' . $out . ';err=' . $err);")],
     );
@@ -1413,17 +1414,18 @@ echo 'write=';
 echo fwrite($pipes[0], "pipe-input\r\n");
 echo '|';
 fclose($pipes[0]);
-stream_set_blocking($pipes[1], true);
+$blockingOut = stream_set_blocking($pipes[1], true);
+$blockingErr = stream_set_blocking($pipes[2], true);
+echo 'blocking=' . (int)$blockingOut . '/' . (int)$blockingErr . '|';
 echo fread($pipes[1], 64);
 fclose($pipes[1]);
-stream_set_blocking($pipes[2], true);
 echo '|err=' . fread($pipes[2], 64);
 fclose($pipes[2]);
 echo ':' . proc_close($process);
 echo '|start=' . (file_exists('proc-pipe-start.txt') ? file_get_contents('proc-pipe-start.txt') : 'missing');
 echo '|file=' . file_get_contents('proc-pipe-debug.txt');
 "#,
-        "write=12|child|pipe-input\r\n|err=child=pipe-input\r\n:0|start=started|file=ran=12:pipe-input\r\n;out=18;err=18",
+        "write=12|blocking=1/1|child|pipe-input\r\n|err=child=pipe-input\r\n:0|start=started|file=ran=12:pipe-input\r\n;out=18;err=18",
         0,
         &[("proc-pipe-stdin", "<?php file_put_contents('proc-pipe-start.txt', 'started'); $input=fread(STDIN,64); $out=fwrite(STDOUT, 'child|' . $input); $err=fwrite(STDERR, 'child=' . $input); file_put_contents('proc-pipe-debug.txt', 'ran=' . strlen($input) . ':' . $input . ';out=' . $out . ';err=' . $err);")],
     );
