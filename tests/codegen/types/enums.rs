@@ -1218,6 +1218,26 @@ foreach (class_implements("Suit") as $name => $_) { echo $name, ","; }
     assert_eq!(out, "HasColor,UnitEnum,BackedEnum,Colorful,");
 }
 
+/// Verifies transitive parents stay in the declaration order of multiple enum interfaces.
+#[test]
+fn test_enum_interface_closure_preserves_multiple_declaration_orders() {
+    let out = compile_and_run(
+        r#"<?php
+interface GetterRootA {}
+interface GetterRootB {}
+interface GetterLeftA extends GetterRootA {}
+interface GetterLeftB extends GetterRootB {}
+enum OrderedBackedEnum: string implements GetterLeftA, GetterLeftB { case One = "1"; }
+foreach (class_implements("OrderedBackedEnum") as $name) { echo $name, ","; }
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "GetterLeftA,GetterLeftB,UnitEnum,BackedEnum,GetterRootA,GetterRootB,"
+    );
+}
+
 /// Verifies the relation predicates see that closure through an enum CASE.
 ///
 /// `UnitEnum` and `BackedEnum` had to be registered as builtin interfaces for this: naming an
