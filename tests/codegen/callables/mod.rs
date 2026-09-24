@@ -10,6 +10,7 @@
 mod boxed_calls;
 mod callable_strings;
 mod closure_array_returns;
+mod closure_call_returns;
 mod closures;
 mod property_callable_metadata;
 mod expr_calls;
