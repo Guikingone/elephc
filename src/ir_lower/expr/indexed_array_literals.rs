@@ -564,7 +564,7 @@ pub(crate) fn array_literal_type_for_ir(
     }
     if items.iter().any(|item| {
         matches!(&item.kind, ExprKind::Spread(inner) if matches!(
-            array_literal_element_type_for_ir(ctx, inner).codegen_repr(),
+            array_literal_spread_source_type_for_ir(ctx, inner).codegen_repr(),
             PhpType::AssocArray { .. } | PhpType::Mixed
         ))
     }) {
@@ -590,7 +590,7 @@ pub(super) fn array_literal_element_type_for_ir(
     }
     match &item.kind {
         ExprKind::Null => PhpType::Mixed,
-        ExprKind::Spread(inner) => match array_literal_element_type_for_ir(ctx, inner).codegen_repr() {
+        ExprKind::Spread(inner) => match array_literal_spread_source_type_for_ir(ctx, inner).codegen_repr() {
             // A spread of an empty/unknown array (`array<never>`, e.g. a `$x = []` local or a
             // bare-`array`-returning method) contributes no element constraint, so widen its
             // Void/Never element to Mixed rather than collapsing the outer literal to
@@ -654,6 +654,40 @@ pub(super) fn array_literal_element_type_for_ir(
         .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
         _ => ir_array_storage_type(infer_expr_type_syntactic(item)),
     }
+}
+
+/// Returns the full storage type of a spread source, rather than the element type contributed
+/// by a call when it appears as an ordinary literal value.
+///
+/// Desugared argument-introspection calls can synthesize `array_slice()` nodes that share the
+/// source call's span. The builtin element-type helper therefore sees the checker's type for
+/// `func_get_args()` at that span and mistakes the spread container for an element. Resolve the
+/// builtin's own contract without a checker span here so static spread classification agrees
+/// with the runtime value lowered below.
+fn array_literal_spread_source_type_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    source: &Expr,
+) -> PhpType {
+    if let ExprKind::FunctionCall { name, args } = &source.kind {
+        let canonical = name.as_str();
+        if let Some(sig) = ctx.functions.get(canonical) {
+            return ir_array_storage_type(eir_user_function_return_type(sig));
+        }
+        if let Some(sig) = ctx.extern_functions.get(canonical) {
+            return ir_array_storage_type(sig.return_type.clone());
+        }
+        if let Some(result) = super::function_calls::resolve_registry_builtin_result_type(
+            ctx,
+            canonical,
+            args,
+            &[],
+            Span::dummy(),
+            None,
+        ) {
+            return ir_array_storage_type(result);
+        }
+    }
+    array_literal_element_type_for_ir(ctx, source)
 }
 
 /// Returns the EIR array storage type for a resolved element type, or `None` when the type

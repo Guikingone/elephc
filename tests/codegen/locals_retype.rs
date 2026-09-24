@@ -1210,16 +1210,12 @@ fn test_stripped_retype_decision_still_compiles_and_runs() {
     assert_eq!(out, "5|2");
 }
 
-/// The counter has to walk TRAIT bodies: a trait's methods are checked and lowered exactly like a
-/// class's, so a decision recorded inside one is consulted inside one.
-///
-/// Measured before the declaration arms were made exhaustive: the trait body was not counted, the
-/// collision went undetected, and the program compiled with one warning and printed `|5` instead
-/// of `a1|5`. Replacing `trait T` with `class C` in the identical pair DID error, which is what
-/// isolated the cause to the uncounted region.
+/// Equal coordinates in the root file and an included trait remain distinct source locations.
+/// A span now carries the physical source identity, so the trait method's `$q` must not be
+/// mistaken for a second node at the top-level assignment's span.
 #[test]
-fn test_collision_inside_a_trait_body_is_a_compile_error() {
-    let error = compile_files_error_message(
+fn test_same_coordinates_included_trait_body_do_not_collide_with_main() {
+    let out = compile_and_run_files(
         &[
             (
                 "main.php",
@@ -1231,12 +1227,8 @@ fn test_collision_inside_a_trait_body_is_a_compile_error() {
             ),
         ],
         "main.php",
-    )
-    .expect("a collision inside a trait body must not compile");
-    assert!(
-        error.contains("Cannot re-bind $q here"),
-        "expected the ambiguity diagnostic, got: {error}"
     );
+    assert_eq!(out, "|5");
 }
 
 /// The same for ENUM method bodies, which the declaration arm also used to skip.
