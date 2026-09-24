@@ -385,12 +385,24 @@ pub struct ClassInfo {
     pub final_methods: HashSet<String>,
     pub method_declaring_classes: HashMap<String, String>,
     pub method_impl_classes: HashMap<String, String>,
+    /// Instance methods visible on this class that carry no implementation because they
+    /// were *declared* abstract, keyed by PHP's case-insensitive method key.
+    ///
+    /// `method_impl_classes` cannot answer this on its own: codegen trims that map down to
+    /// the methods whose body symbol the backend actually emitted, so a concrete method
+    /// nothing calls loses its entry. Abstractness is a property of the declaration, so it
+    /// is recorded once here and never narrowed by emission.
+    pub abstract_methods: HashSet<String>,
     pub vtable_methods: Vec<String>,
     pub vtable_slots: HashMap<String, usize>,
     pub static_method_visibilities: HashMap<String, Visibility>,
     pub final_static_methods: HashSet<String>,
     pub static_method_declaring_classes: HashMap<String, String>,
     pub static_method_impl_classes: HashMap<String, String>,
+    /// Static methods visible on this class declared abstract, keyed by PHP's
+    /// case-insensitive method key. The instance counterpart documents why this is
+    /// tracked separately from `static_method_impl_classes`.
+    pub abstract_static_methods: HashSet<String>,
     pub static_vtable_methods: Vec<String>,
     pub static_vtable_slots: HashMap<String, usize>,
     pub interfaces: Vec<String>,

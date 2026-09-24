@@ -57,12 +57,14 @@ pub(super) struct ClassBuildState {
     pub(super) final_methods: HashSet<String>,
     pub(super) method_declaring_classes: HashMap<String, String>,
     pub(super) method_impl_classes: HashMap<String, String>,
+    pub(super) abstract_methods: HashSet<String>,
     pub(super) vtable_methods: Vec<String>,
     pub(super) vtable_slots: HashMap<String, usize>,
     pub(super) static_method_visibilities: HashMap<String, Visibility>,
     pub(super) final_static_methods: HashSet<String>,
     pub(super) static_method_declaring_classes: HashMap<String, String>,
     pub(super) static_method_impl_classes: HashMap<String, String>,
+    pub(super) abstract_static_methods: HashSet<String>,
     pub(super) static_vtable_methods: Vec<String>,
     pub(super) static_vtable_slots: HashMap<String, usize>,
     pub(super) interfaces: Vec<String>,
@@ -224,12 +226,14 @@ impl ClassBuildState {
             final_methods: self.final_methods,
             method_declaring_classes: self.method_declaring_classes,
             method_impl_classes: self.method_impl_classes,
+            abstract_methods: self.abstract_methods,
             vtable_methods: self.vtable_methods,
             vtable_slots: self.vtable_slots,
             static_method_visibilities: self.static_method_visibilities,
             final_static_methods: self.final_static_methods,
             static_method_declaring_classes: self.static_method_declaring_classes,
             static_method_impl_classes: self.static_method_impl_classes,
+            abstract_static_methods: self.abstract_static_methods,
             static_vtable_methods: self.static_vtable_methods,
             static_vtable_slots: self.static_vtable_slots,
             interfaces: self.interfaces,
@@ -536,6 +540,9 @@ impl ClassBuildState {
                 self.method_impl_classes
                     .insert(name.clone(), impl_class.clone());
             }
+            if parent.abstract_methods.contains(name) {
+                self.abstract_methods.insert(name.clone());
+            }
             if let Some(names) = parent.method_attribute_names.get(name) {
                 self.method_attribute_names
                     .insert(name.clone(), names.clone());
@@ -576,6 +583,9 @@ impl ClassBuildState {
             if let Some(impl_class) = parent.static_method_impl_classes.get(name) {
                 self.static_method_impl_classes
                     .insert(name.clone(), impl_class.clone());
+            }
+            if parent.abstract_static_methods.contains(name) {
+                self.abstract_static_methods.insert(name.clone());
             }
             if let Some(names) = parent.method_attribute_names.get(name) {
                 self.method_attribute_names
