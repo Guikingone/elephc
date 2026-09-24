@@ -2070,12 +2070,11 @@ fn test_two_different_names_retyped_at_one_position_both_take_effect() {
     assert_eq!(out, "400005|s");
 }
 
-/// Control: the same-NAME collision keeps its current outcome — the hard ambiguity error, not a
-/// silently merged pair of decisions. A set of names per span must not turn two genuinely
-/// indistinguishable sites into two accepted ones.
+/// Equal names and source coordinates in separate files stay independent even after another
+/// same-position retype decision has been recorded for a different local.
 #[test]
-fn test_same_name_collision_stays_ambiguous_with_multi_name_spans() {
-    let error = compile_files_error_message(
+fn test_same_name_multi_name_spans_across_files_keep_bindings_distinct() {
+    let out = compile_and_run_files(
         &[
             (
                 "main.php",
@@ -2087,12 +2086,8 @@ fn test_same_name_collision_stays_ambiguous_with_multi_name_spans() {
             ),
         ],
         "main.php",
-    )
-    .expect("a same-name (span, name) collision must still be rejected");
-    assert!(
-        error.contains("Cannot re-bind $q here"),
-        "expected the ambiguity diagnostic, got: {error}"
     );
+    assert_eq!(out, "a1|5");
 }
 
 /// `unset` then READ, where the only `global` naming the local sits in a CLOSURE body: an honest
