@@ -7,16 +7,13 @@
 //!
 //! Key details:
 //! - Binding kills, reference detaches, retypes and mixed-storage stores are
-//!   keyed by `(Span, local name)` and EIR lowering consults them by that key. Included physical
-//!   files carry distinct source identities in their spans, so equal line/column positions in
-//!   `main.php` and `lib.php` no longer alias. This pass still rejects a key that names multiple
-//!   AST nodes within the same physical source.
-//! - Abandoning a binding is not a no-op: it releases the old value and re-binds the name to a
-//!   fresh frame slot. Firing that at a site the checker never approved produces a wrong answer
-//!   with no diagnostic — measured on a two-file fixture as printing `|s` where PHP prints `a1|s`,
-//!   and that program was a plain compile error before this feature existed.
-//! - Physical file identity is part of `Span`; this pass enforces the remaining per-source
-//!   multiplicity invariant as a hard compile error, so the checker and lowering stay in lock-step.
+//!   keyed by `(Span, local name)` and EIR lowering consults them by that key. Every parsed
+//!   inclusion instance receives a distinct source identity, so equal coordinates in the root and
+//!   an include — or in two executions of the same `require` — do not alias. This pass still
+//!   rejects a key that names multiple AST nodes within one parsed source instance.
+//! - Abandoning a binding releases the old value and re-binds the name to a fresh frame slot.
+//!   Firing that at a site the checker never approved can change the program's answer, so any
+//!   ambiguity that remains within one parsed source instance is a hard compile error.
 //! - The scan counts MATCHING NODES, not decisions. One decision matching two nodes is the hazard;
 //!   one node visited by several checker walks is not (the walks re-decide one AST node).
 //! - The scan covers `program` ONLY. An `eval` fragment is parsed from a string literal into its
