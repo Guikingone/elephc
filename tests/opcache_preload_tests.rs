@@ -159,6 +159,21 @@ fn run_binary(bin: &Path) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+/// Runs a compiled preload fixture with one runtime environment condition.
+fn run_binary_with_env(bin: &Path, name: &str, value: &str) -> String {
+    let output = Command::new(bin)
+        .env(name, value)
+        .output()
+        .expect("failed to run compiled binary");
+    assert!(
+        output.status.success(),
+        "compiled binary exited non-zero ({:?}):\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
 /// Writes `source` into `dir` and compiles it, asserting success. The preload-usage tests need
 /// their own program rather than `PROBE`, because what they check is what the ENTRY script can
 /// see — not what `opcache_get_status()` reports about it.
@@ -701,5 +716,50 @@ fn a_preload_global_reaches_the_cli_entry_script_as_a_known_divergence() {
         "SURVIVED\n",
         "reference prints `absent` here; if elephc now does too, this divergence is CLOSED and \
          the test should be flipped to assert parity rather than removed"
+    );
+}
+
+/// A conditional return exits the preloaded file and preserves nested function/finally behavior.
+#[test]
+fn a_conditional_preload_return_does_not_exit_the_entry_script() {
+    let dir = make_test_dir("opcache_preload_conditional_return");
+    fs::write(
+        dir.join("lib.php"),
+        r#"<?php
+echo "PRELOAD\n";
+function preload_nested_return_helper() {
+    if (true) { return "FUNCTION"; }
+    return "WRONG";
+}
+try {
+    if (getenv("REVIEW_STOP") === "1") {
+        for ($i = 0; $i < 1; $i++) { return; }
+    }
+    echo "TAIL\n";
+} finally {
+    echo "FINAL\n";
+}
+"#,
+    )
+    .unwrap();
+    let source = r#"<?php echo preload_nested_return_helper(), "\n"; echo "MAIN\n";"#;
+    let bin = compile_source(
+        &dir,
+        "conditional",
+        source,
+        &[
+            "opcache.enable_cli=1".to_string(),
+            "opcache.file_update_protection=0".to_string(),
+            format!("opcache.preload={}", dir.join("lib.php").display()),
+        ],
+    );
+
+    assert_eq!(
+        run_binary_with_env(&bin, "REVIEW_STOP", "1"),
+        "PRELOAD\nFINAL\nFUNCTION\nMAIN\n"
+    );
+    assert_eq!(
+        run_binary_with_env(&bin, "REVIEW_STOP", "0"),
+        "PRELOAD\nTAIL\nFINAL\nFUNCTION\nMAIN\n"
     );
 }

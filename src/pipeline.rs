@@ -138,7 +138,7 @@ pub(crate) fn compile(config: CliConfig) {
     let phase_started = Instant::now();
     // `resolve_collecting_includes` also hands back the canonical path of every file the
     // resolver statically inlined — group 2 of the OPcache script manifest.
-    let (ast, opcache_included_files) =
+    let (mut ast, opcache_included_files) =
         match resolver::resolve_collecting_includes_with_defines(parsed, parent, &defines) {
         Ok(resolved) => resolved,
         Err(e) => {
@@ -147,6 +147,9 @@ pub(crate) fn compile(config: CliConfig) {
             process::exit(1);
         }
     };
+    // The injected preload include is wrapped in a one-shot `do` boundary. Rewrite nested
+    // file-level returns now that the resolver has inlined its include body.
+    opcache_prelude::rewrite_injected_preload_returns(&mut ast);
     let ast = autoload::collect_aliases(ast);
     timings.record_since("resolve", phase_started);
 

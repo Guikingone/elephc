@@ -17,7 +17,9 @@
 //! - Values are the NORMALIZED ones (`opcache.memory_consumption` in bytes, not the
 //!   raw `"128"` that `ini_get()` reports), because they are consumed as quantities.
 
-use super::directives::{effective_opcache_directives, DirectiveValue};
+use super::directives::{
+    accel_hash_max_num_entries, effective_opcache_directives, DirectiveValue,
+};
 use super::state::opcache_cache_enabled_with_overrides;
 
 /// The directive values the runtime script cache needs, resolved for one compilation.
@@ -112,7 +114,11 @@ pub fn runtime_cache_config(
         revalidate_freq: count("opcache.revalidate_freq"),
         max_file_size: count("opcache.max_file_size"),
         memory_consumption: count("opcache.memory_consumption"),
-        max_accelerated_files: count("opcache.max_accelerated_files"),
+        // Runtime admission uses the prime-rounded table capacity, while the prelude still
+        // reports the raw directive value in `opcache_get_configuration()`.
+        max_accelerated_files: accel_hash_max_num_entries(
+            i64::try_from(count("opcache.max_accelerated_files")).unwrap_or(i64::MAX),
+        ) as u64,
         file_cache: text("opcache.file_cache"),
         file_cache_read_only: boolean("opcache.file_cache_read_only"),
         log_verbosity_level: signed("opcache.log_verbosity_level"),
@@ -158,6 +164,18 @@ mod tests {
         let overrides = [("opcache.enable_cli".to_string(), "1".to_string())];
 
         assert!(runtime_cache_config(PHP_85, false, &overrides).enabled);
+    }
+
+    /// Runtime admission follows the same prime-rounded capacity reported by OPcache status.
+    #[test]
+    fn max_accelerated_files_uses_the_rounded_runtime_capacity() {
+        let overrides = [
+            ("opcache.enable_cli".to_string(), "1".to_string()),
+            ("opcache.max_accelerated_files".to_string(), "200".to_string()),
+        ];
+
+        let config = runtime_cache_config(PHP_85, false, &overrides);
+        assert_eq!(config.max_accelerated_files, 223);
     }
 
     /// Verifies `--ini opcache.enable=0` turns a `--web` binary's cache off.

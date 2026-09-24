@@ -153,6 +153,19 @@ pub use preload::{
     collect_preload_symbols, inject_preload_require, preload_statistics, preload_verdict,
     PreloadStatistics, PreloadSymbols, PreloadVerdict,
 };
+#[allow(unused_imports)]
+pub(crate) use preload::rewrite_injected_preload_returns;
 pub use state_restriction::canonical_entry_path;
+
+/// Whether an opaque eval call from the compiled entry script is denied by `restrict_api`.
+pub(crate) fn eval_restrict_api_denies(
+    entry_path: Option<&str>,
+    version_id: u32,
+    overrides: &[(String, String)],
+) -> bool {
+    let canonical = entry_path.and_then(canonical_entry_path);
+    restrict_api_denies(canonical.as_deref(), version_id, overrides)
+}
+
 pub(crate) use cli_ini::ini_module_known_declaration;
 pub(crate) use env_ini::{env_override_declarations, ini_helper_declarations};

@@ -304,10 +304,17 @@ pub(super) fn eval_native_global_constant_abi_value(
 /// configures OPcache at startup, before a line of user code runs, and
 /// `crate::codegen::frame` now does the same.
 pub(crate) fn configure_eval_opcache(ctx: &mut FunctionContext<'_>) {
+    let version_id = crate::codegen::compile_php_version().version_id();
+    let overrides = crate::codegen_support::ini_overrides();
     let config = crate::opcache::runtime_cache::runtime_cache_config(
-        crate::codegen::compile_php_version().version_id(),
+        version_id,
         crate::codegen_support::compile_is_web_sapi(),
-        &crate::codegen_support::ini_overrides(),
+        &overrides,
+    );
+    let restrict_api_denied = crate::opcache_prelude::eval_restrict_api_denies(
+        ctx.module.source_path.as_deref(),
+        version_id,
+        &overrides,
     );
     let arguments = [
         i64::from(config.enabled),
@@ -327,6 +334,19 @@ pub(crate) fn configure_eval_opcache(ctx: &mut FunctionContext<'_>) {
         .extern_symbol("__elephc_eval_configure_opcache");
     abi::emit_call_label(ctx.emitter, &symbol);
     configure_eval_opcache_file_cache(ctx, &config);
+
+    // Opaque eval source can call OPcache names the compiler could not see, so carry the
+    // same `restrict_api` decision the native prelude bakes into statically visible calls.
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        i64::from(restrict_api_denied),
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_configure_opcache_restrict_api");
+    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Installs the accelerator diagnostic channel and triggers php-src's startup validation

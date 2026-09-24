@@ -20,7 +20,7 @@
 //!   links this archive directly observes the cache DISABLED, which is the
 //!   pre-existing behaviour.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 /// The `opcache.*` subset that governs what the runtime script cache actually does.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,6 +112,23 @@ thread_local! {
 pub(crate) fn set_config(config: ScriptCacheConfig) {
     SCRIPT_CACHE_CONFIG.with(|cell| *cell.borrow_mut() = config);
     REQUEST_TIME.with(|cell| cell.set(None));
+    RESTRICT_API_DENIED.with(|cell| cell.set(false));
+}
+
+thread_local! {
+    /// The compile-time `opcache.restrict_api` verdict for opaque eval handlers. It is set by
+    /// generated code beside the runtime-cache configuration and reset with that configuration.
+    static RESTRICT_API_DENIED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Installs the compile-time restriction verdict used when eval source names OPcache at runtime.
+pub(crate) fn set_restrict_api_denied(denied: bool) {
+    RESTRICT_API_DENIED.with(|cell| cell.set(denied));
+}
+
+/// Returns whether an eval-only OPcache call must be denied for this binary.
+pub(crate) fn restrict_api_denied() -> bool {
+    RESTRICT_API_DENIED.with(Cell::get)
 }
 
 thread_local! {

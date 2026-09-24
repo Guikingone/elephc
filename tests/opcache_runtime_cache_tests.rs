@@ -101,6 +101,24 @@ fn run_binary(bin: &Path) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+/// Runs a compiled binary with runtime-provided eval source and returns stdout/stderr.
+fn run_binary_with_env(bin: &Path, name: &str, value: &str) -> (String, String) {
+    let output = Command::new(bin)
+        .env(name, value)
+        .output()
+        .expect("failed to run binary");
+    assert!(
+        output.status.success(),
+        "binary failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    (
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
 /// Returns the value of a `key=value` line the probe printed.
 fn field<'a>(output: &'a str, key: &str) -> &'a str {
     output
@@ -1458,4 +1476,74 @@ fn zero_file_update_protection_caches_a_fresh_file() {
         "the second include must hit; probe said:\n{output}"
     );
     assert_eq!(field(&output, "misses"), "1", "only the first include misses");
+}
+
+/// Runtime admission accepts the full prime-rounded table capacity, not the raw directive.
+#[test]
+fn runtime_cache_admits_the_rounded_accelerated_file_capacity() {
+    let dir = make_test_dir("opcache_capacity_rounded");
+    for index in 0..210 {
+        fs::write(
+            dir.join(format!("script-{index}.php")),
+            format!("<?php return {index};\n"),
+        )
+        .unwrap();
+    }
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+$cached = 0;
+for ($i = 0; $i < 210; $i++) {
+    $path = __DIR__ . "/script-" . $i . ".php";
+    opcache_compile_file($path);
+    if (opcache_is_script_cached($path)) { $cached++; }
+}
+$status = opcache_get_status();
+echo "cached=", $cached, "\n";
+echo "num=", $status["opcache_statistics"]["num_cached_scripts"], "\n";
+echo "max=", $status["opcache_statistics"]["max_cached_keys"], "\n";
+echo "full=", $status["cache_full"] ? "1" : "0", "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = run_binary(&compile(
+        &dir,
+        &[
+            "opcache.enable_cli=1",
+            "opcache.file_update_protection=0",
+            "opcache.max_accelerated_files=200",
+        ],
+    ));
+    assert_eq!(field(&output, "cached"), "210", "output:\n{output}");
+    assert_eq!(field(&output, "num"), "211", "output:\n{output}");
+    assert_eq!(field(&output, "max"), "223", "output:\n{output}");
+    assert_eq!(field(&output, "full"), "0", "output:\n{output}");
+}
+
+/// Runtime-provided eval source cannot bypass `opcache.restrict_api` when no static call is visible.
+#[test]
+fn runtime_only_eval_opcache_reset_obeys_restrict_api() {
+    let dir = make_test_dir("opcache_restrict_eval_only");
+    fs::write(
+        dir.join("main.php"),
+        "<?php $code = getenv('REVIEW_CODE'); eval($code);\n",
+    )
+    .unwrap();
+    let bin = compile(
+        &dir,
+        &[
+            "opcache.enable_cli=1",
+            "opcache.file_update_protection=0",
+            "opcache.restrict_api=/nonexistent",
+        ],
+    );
+    let (stdout, stderr) =
+        run_binary_with_env(&bin, "REVIEW_CODE", "var_dump(opcache_reset());");
+
+    assert_eq!(stdout, "bool(false)\n");
+    assert!(
+        stderr.contains("Zend OPcache API is restricted by \"restrict_api\" configuration directive"),
+        "restricted eval call emitted no OPcache warning: {stderr}"
+    );
 }
