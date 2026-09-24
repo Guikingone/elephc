@@ -7,7 +7,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Every expected value is verbatim `LC_ALL=C php` output from PHP 8.4.20.
+//! - Expected values match `php` output from PHP 8.4.20 and PHP 8.5.10.
 //! - The closure return-type inference in `src/ir_lower/function.rs` and the literal typing in
 //!   `src/ir_lower/expr` (`array_literal_type_for_ir` / `assoc_array_literal_type_for_ir`) type
 //!   the same literal and must agree: `lower_return_expr` feeds the inferred return element type
@@ -18,6 +18,8 @@
 //!   back as a raw pointer-sized integer.
 //! - The spread fixture pins the caller-side stamp: the body already built `array<mixed>`
 //!   through the spread lowering while the signature still advertised `array<int>`.
+//! - Spreads of untyped user-call results must use their widened EIR element type, including
+//!   when a closure returns the resulting literal directly.
 
 use crate::support::*;
 
@@ -86,4 +88,56 @@ var_dump($f([1, 2], "s"));
         out,
         "array(3) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n  [2]=>\n  string(1) \"s\"\n}\n"
     );
+}
+
+/// Verifies a closure spreading a user call with an untyped parameter retains a string cell.
+#[test]
+fn test_closure_returns_spread_user_call_with_string() {
+    let out = compile_and_run(
+        r#"<?php
+function values($v) { return [$v]; }
+$f = fn($v) => [...values($v)];
+var_dump($f("x"));
+"#,
+    );
+    assert_eq!(out, "array(1) {\n  [0]=>\n  string(1) \"x\"\n}\n");
+}
+
+/// Verifies a closure spreading a user call with an untyped parameter retains a float cell.
+#[test]
+fn test_closure_returns_spread_user_call_with_float() {
+    let out = compile_and_run(
+        r#"<?php
+function values($v) { return [$v]; }
+$f = fn($v) => [...values($v)];
+var_dump($f(2.5));
+"#,
+    );
+    assert_eq!(out, "array(1) {\n  [0]=>\n  float(2.5)\n}\n");
+}
+
+/// Verifies a top-level spread of the same call keeps its dynamic element type.
+#[test]
+fn test_top_level_spread_user_call_with_string() {
+    let out = compile_and_run(
+        r#"<?php
+function values($v) { return [$v]; }
+$result = [...values("x")];
+var_dump($result);
+"#,
+    );
+    assert_eq!(out, "array(1) {\n  [0]=>\n  string(1) \"x\"\n}\n");
+}
+
+/// Verifies a closure spreading a hash-returning user call retains its boxed value.
+#[test]
+fn test_closure_returns_assoc_spread_user_call_with_string() {
+    let out = compile_and_run(
+        r#"<?php
+function keyed($v) { return ["k" => $v]; }
+$f = fn($v) => [...keyed($v)];
+var_dump($f("x"));
+"#,
+    );
+    assert_eq!(out, "array(1) {\n  [\"k\"]=>\n  string(1) \"x\"\n}\n");
 }
