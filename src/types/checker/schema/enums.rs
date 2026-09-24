@@ -636,7 +636,7 @@ fn enum_interface_closure(
     // PHP's order, measured on 8.5.10 for `enum Suit: string implements HasColor` where
     // `HasColor extends Colorful`: `HasColor,UnitEnum,BackedEnum,Colorful`. The declared clause
     // first, then the implicit set, then what the clause transitively brings in.
-    let mut push = |name: String, collected: &mut Vec<String>, seen: &mut HashSet<String>| {
+    let push = |name: String, collected: &mut Vec<String>, seen: &mut HashSet<String>| {
         if seen.insert(name.clone()) {
             collected.push(name);
         }
@@ -650,8 +650,13 @@ fn enum_interface_closure(
         push("BackedEnum".to_string(), &mut collected, &mut seen);
     }
 
-    let mut queue: Vec<String> = collected.clone();
-    while let Some(interface_name) = queue.pop() {
+    // Walk the worklist in declaration order. The enum's explicitly declared interfaces come
+    // first, followed by their parents in the same order PHP's class interface collector uses.
+    let mut queue = collected.clone();
+    let mut cursor = 0;
+    while cursor < queue.len() {
+        let interface_name = queue[cursor].clone();
+        cursor += 1;
         let Some(info) = checker.interfaces.get(&interface_name) else {
             continue;
         };
