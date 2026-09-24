@@ -10,8 +10,7 @@
 use super::*;
 
 use crate::codegen::lower_inst::builtins::arrays::values::{
-    emit_loaded_assoc_array_values, emit_loaded_boxed_array_values,
-    emit_loaded_dynamic_mixed_array_values,
+    emit_loaded_assoc_array_values, emit_loaded_dynamic_mixed_array_values,
 };
 
 /// Stack cleanup slots for split builtin string coercions that allocate owned temporaries.
