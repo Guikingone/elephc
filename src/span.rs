@@ -1,6 +1,6 @@
 //! Purpose:
 //! Defines the source-position value threaded through tokens, AST nodes, diagnostics, and rewrites.
-//! Carries one-based line and column coordinates from lexer output into later passes.
+//! Carries one-based line/column coordinates and a source identity from lexer output into later passes.
 //!
 //! Called from:
 //! - `crate::lexer`, `crate::parser`, and diagnostic-producing compiler passes.
@@ -10,9 +10,9 @@
 //! - `end_line`/`end_col` are the EXCLUSIVE end position (the character after the
 //!   spanned text). A span whose end equals its start is a point span: the extent
 //!   is unknown and only the start position is meaningful.
-//! - Coordinates are `u32` to keep `Span` at 16 bytes: it is embedded in every
-//!   token and AST node, so its size directly sets the recursive parser's stack
-//!   frame growth (a 32-byte span overflowed 2 MiB test-thread stacks).
+//! - Coordinates and source identities are `u32`; the source identity distinguishes equal
+//!   line/column positions in separate included files. This 20-byte span is embedded in every
+//!   token and AST node, so its size contributes directly to parser stack and AST memory use.
 
 /// The first line number handed out to synthetically built nodes.
 ///
@@ -23,6 +23,8 @@ const SYNTHETIC_LINE_BASE: u32 = 1_000_000;
 /// Counts synthetic lines handed out this process. A compile is one process, so a given
 /// program always gets the same numbering.
 static NEXT_SYNTHETIC_LINE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// Assigns an in-process identity to each separately parsed included source file.
+static NEXT_SOURCE_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 /// Source position span for AST nodes.
@@ -31,6 +33,8 @@ pub struct Span {
     pub col: u32,
     pub end_line: u32,
     pub end_col: u32,
+    /// Distinguishes coordinates from separately parsed source files after include expansion.
+    pub source_id: u32,
 }
 
 impl Span {
@@ -42,17 +46,47 @@ impl Span {
             col,
             end_line: line,
             end_col: col,
+            source_id: 0,
         }
     }
 
-    /// Creates a span from a one-based start position and exclusive end position.
+    /// Creates a point span associated with one physical source file.
+    pub fn new_in_source(line: u32, col: u32, source_id: u32) -> Self {
+        Self {
+            line,
+            col,
+            end_line: line,
+            end_col: col,
+            source_id,
+        }
+    }
+
+    /// Creates a default-source span from one-based start and exclusive end positions.
+    #[cfg(test)]
     pub fn with_end(line: u32, col: u32, end_line: u32, end_col: u32) -> Self {
         Self {
             line,
             col,
             end_line,
             end_col,
+            source_id: 0,
         }
+    }
+
+    /// Creates a span extent while preserving the identity attached to its token start.
+    pub fn with_end_from(start: Span, end: Span) -> Self {
+        Self {
+            line: start.line,
+            col: start.col,
+            end_line: end.end_line,
+            end_col: end.end_col,
+            source_id: start.source_id,
+        }
+    }
+
+    /// Returns a fresh source identity for a separately parsed included file.
+    pub fn fresh_source_id() -> u32 {
+        NEXT_SOURCE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Creates a dummy span at line 0, column 0.
@@ -63,6 +97,7 @@ impl Span {
             col: 0,
             end_line: 0,
             end_col: 0,
+            source_id: 0,
         }
     }
 
@@ -95,6 +130,7 @@ impl Span {
             col: 1,
             end_line: line,
             end_col: 1,
+            source_id: 0,
         }
     }
 
@@ -150,6 +186,11 @@ impl Span {
             col,
             end_line,
             end_col,
+            source_id: if (other.line, other.col) < (self.line, self.col) {
+                other.source_id
+            } else {
+                self.source_id
+            },
         }
     }
 }

@@ -494,6 +494,7 @@ fn span_at_line(line: u32) -> Span {
         col: 1,
         end_line: line,
         end_col: 1,
+        source_id: 0,
     }
 }
 
