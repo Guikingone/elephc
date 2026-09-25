@@ -433,6 +433,7 @@ impl Checker {
                 let mut switch_exit_envs = Vec::new();
                 let mut fallthrough_env = None;
                 self.break_continue_depth += 1;
+                self.loop_break_envs.push(Vec::new());
                 for (_, body) in cases {
                     let mut entry_envs = vec![direct_entry_env.clone()];
                     if let Some(previous) = fallthrough_env.take() {
@@ -474,6 +475,9 @@ impl Checker {
                         switch_exit_envs.push(previous);
                     }
                 }
+                // A case whose LAST statement breaks is already an exit above; a `break` nested
+                // deeper in a case (inside an `if`) is only seen here.
+                switch_exit_envs.extend(self.loop_break_envs.pop().unwrap_or_default());
                 self.break_continue_depth -= 1;
                 if let Some(joined) = join_fallthrough_type_envs(self, &switch_exit_envs) {
                     *env = joined;
@@ -922,8 +926,20 @@ impl Checker {
         // loop cannot be trusted inside it.
         Self::purge_property_narrowings(env);
         self.break_continue_depth += 1;
+        self.loop_break_envs.push(Vec::new());
         let errors = self.check_body(body, env);
+        let breaks = self.loop_break_envs.pop().unwrap_or_default();
         self.break_continue_depth -= 1;
+        // The loop is left by its own condition (the environment the body ends with, which is
+        // also what the next condition check sees) and by every `break` that targets it.
+        if !breaks.is_empty() {
+            let mut exits = Vec::with_capacity(breaks.len() + 1);
+            exits.push(env.clone());
+            exits.extend(breaks);
+            if let Some(joined) = join_fallthrough_type_envs(self, &exits) {
+                *env = joined;
+            }
+        }
         errors
     }
 

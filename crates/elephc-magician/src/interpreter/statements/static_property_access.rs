@@ -9,6 +9,23 @@
 
 use super::*;
 
+/// Answers a read of an uninitialized typed static property.
+///
+/// A plain read throws PHP's `Error`. A QUIET read -- the left side of `??`, the target of `??=`,
+/// `isset()` -- finds the property absent and gets `null`: `self::$sentinel ??= new \stdClass()`
+/// is how `DeepClone` initializes its sentinel, and it died on the first call.
+fn eval_uninitialized_static_property_read(
+    declaring_class: &str,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if context.quiet_property_fetch() {
+        return values.null();
+    }
+    eval_throw_uninitialized_static_property_error(declaring_class, property_name, context, values)
+}
+
 /// Reads one eval-declared static property after resolving the class-like receiver.
 pub(in crate::interpreter) fn eval_static_property_get_result(
     class_name: &str,
@@ -56,7 +73,7 @@ pub(in crate::interpreter) fn eval_static_property_get_result(
                 property.name(),
             );
         }
-        return eval_throw_uninitialized_static_property_error(
+        return eval_uninitialized_static_property_read(
             &declaring_class,
             property.name(),
             context,
@@ -99,7 +116,7 @@ pub(in crate::interpreter) fn eval_static_property_get_result(
                 if !eval_with_native_bridge_scope(&declaring_class, context, || {
                     values.static_property_is_initialized(&declaring_class, property_name)
                 })? {
-                    return eval_throw_uninitialized_static_property_error(
+                    return eval_uninitialized_static_property_read(
                         &declaring_class,
                         property_name,
                         context,
@@ -147,7 +164,7 @@ pub(in crate::interpreter) fn eval_static_property_get_result(
                 return eval_reference_target_value(&target, context, values);
             }
             if !values.static_property_is_initialized(&declaring_class, property_name)? {
-                return eval_throw_uninitialized_static_property_error(
+                return eval_uninitialized_static_property_read(
                     &declaring_class,
                     property_name,
                     context,
@@ -725,7 +742,7 @@ pub(super) fn eval_static_property_reference_target(
         values.release(replaced)?;
     }
     Ok(EvalReferenceTarget::Variable {
-        scope: scope as *mut ElephcEvalScope,
+        scope: crate::scope::EvalScopeRef::new(scope),
         name: alias_name,
     })
 }

@@ -18,6 +18,9 @@ pub(in crate::interpreter) fn eval_array_declared_values_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match name {
         "array_sum" => super::array_sum::eval_array_sum_declared_values_result(evaluated_args, context, values),
+        "array_is_list" => super::array_is_list::eval_array_is_list_declared_values_result(evaluated_args, context, values),
+        "array_key_first" => super::array_key_first::eval_array_key_first_declared_values_result(evaluated_args, context, values),
+        "array_key_last" => super::array_key_last::eval_array_key_last_declared_values_result(evaluated_args, context, values),
         "array_product" => super::array_product::eval_array_product_declared_values_result(evaluated_args, context, values),
         "array_chunk" => super::array_chunk::eval_array_chunk_declared_values_result(evaluated_args, context, values),
         "array_column" => super::array_column::eval_array_column_declared_values_result(evaluated_args, context, values),

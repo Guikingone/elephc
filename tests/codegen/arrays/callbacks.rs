@@ -113,6 +113,24 @@ echo $out[0] . ":" . $out[1];
     let _ = fs::remove_dir_all(dir);
 }
 
+/// Verifies `array_map('strval', ...)` casts gradual values at each callback invocation.
+#[test]
+fn test_array_map_strval_callback_accepts_gradual_values() {
+    let out = compile_and_run(
+        r#"<?php
+function stringify_all($items): array {
+    return array_map('strval', $items);
+}
+
+echo implode('|', stringify_all(['alpha', 12, false, null])), ':';
+foreach (stringify_all(['x' => 24, 'y' => false]) as $value) {
+    echo $value, ',';
+}
+"#,
+    );
+    assert_eq!(out, "alpha|12||:24,,");
+}
+
 /// Verifies runtime string user callbacks can produce mixed array_map result shapes.
 #[test]
 fn test_array_map_dynamic_string_user_callback_mixed_results() {

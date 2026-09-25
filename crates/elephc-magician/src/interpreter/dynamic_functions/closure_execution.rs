@@ -502,7 +502,7 @@ fn eval_closure_with_optional_binding(
         }
     };
     let mut function_scope = ElephcEvalScope::new();
-    bind_closure_captures(&mut function_scope, closure.captures());
+    bind_closure_captures(&mut function_scope, closure.captures(), context);
     if let Some(object) = binding.and_then(|binding| binding.this_object) {
         function_scope.set("this", object, ScopeCellOwnership::Borrowed);
     }
@@ -561,7 +561,8 @@ fn eval_closure_with_optional_binding(
         values,
     );
     let capture_writeback_result =
-        write_back_closure_ref_captures(closure.captures(), &function_scope, context, values);
+        write_back_closure_ref_captures(closure.captures(), &function_scope, context, values)
+            .and_then(|()| keep_closure_ref_capture_cells(closure, &function_scope, context, values));
     let arg_writeback_result = write_back_method_ref_args(
         function.params(),
         &evaluated_args,
@@ -655,16 +656,23 @@ pub(in crate::interpreter) fn eval_closure_bound_object_class_name(
 }
 
 /// Seeds one closure activation scope with values captured when the closure was created.
+///
+/// A by-reference capture reads what its variable holds NOW while the defining activation is
+/// still alive: that activation may have reassigned it since the closure was created (`$n = 5`
+/// after `use (&$n)`), releasing the cell the capture started with. Once the activation has
+/// returned, the closure's own cell -- kept current after every call -- is the value.
 fn bind_closure_captures(
     function_scope: &mut ElephcEvalScope,
     captures: &[EvalClosureCaptureBinding],
+    context: &ElephcEvalContext,
 ) {
     for capture in captures {
         if let Some(target) = capture.by_ref_target().cloned() {
+            let cell = live_variable_capture_cell(&target, context).unwrap_or(capture.value());
             function_scope.set_reference(
                 capture.name().to_string(),
                 capture.name().to_string(),
-                capture.value(),
+                cell,
                 ScopeCellOwnership::Borrowed,
             );
             function_scope.set_reference_target(capture.name().to_string(), target);
@@ -676,6 +684,45 @@ fn bind_closure_captures(
             );
         }
     }
+}
+
+/// Returns the cell a by-reference capture's variable holds, while its activation is alive.
+fn live_variable_capture_cell(
+    target: &EvalReferenceTarget,
+    context: &ElephcEvalContext,
+) -> Option<RuntimeCellHandle> {
+    let EvalReferenceTarget::Variable { scope, name } = target else {
+        return None;
+    };
+    let scope = unsafe { scope.live_mut() }?;
+    visible_scope_cell(context, scope, name)
+}
+
+/// Stores each by-reference capture's final cell back on the registered closure.
+///
+/// The write-back above updates the DEFINING variable, which is gone once that activation
+/// returns; the closure's own binding is then the only place the value survives, so the next
+/// call of `function () use (&$n) { return ++$n; }` must start from what this one left.
+fn keep_closure_ref_capture_cells(
+    closure: &EvalClosure,
+    function_scope: &ElephcEvalScope,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for capture in closure.captures() {
+        if capture.by_ref_target().is_none() {
+            continue;
+        }
+        let Some(cell) = function_scope.visible_cell(capture.name()) else {
+            continue;
+        };
+        let retained = values.retain(cell)?;
+        let released = context
+            .replace_closure_capture_value(closure.slot_key(), capture.name(), retained)
+            .unwrap_or(retained);
+        eval_release_value(context, values, released)?;
+    }
+    Ok(())
 }
 
 /// Writes modified by-reference closure captures back to their defining caller targets.

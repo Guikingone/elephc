@@ -106,7 +106,10 @@ pub(super) fn starts_doc_commented_declaration(token: &TokenKind) -> bool {
             if ident_eq(name, "abstract")
                 || ident_eq(name, "final")
                 || ident_eq(name, "readonly")
-                || ident_eq(name, "class"))
+                || ident_eq(name, "class")
+                // An interface's comment is reflected as well; Symfony describes autowirable
+                // service interfaces from it (`debug:autowiring`).
+                || ident_eq(name, "interface"))
 }
 
 /// Returns true when the current token closes or starts a switch case arm.

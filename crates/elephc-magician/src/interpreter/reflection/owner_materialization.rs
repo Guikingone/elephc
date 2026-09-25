@@ -219,6 +219,13 @@ pub(super) fn eval_reflection_owner_object_with_members(
         Some(value) => (value, false),
         None => (values.null()?, true),
     };
+    if crate::eval_trace::enabled()
+        && matches!(owner_kind, EVAL_REFLECTION_OWNER_CLASS | EVAL_REFLECTION_OWNER_OBJECT)
+    {
+        eprintln!(
+            "[elephc-eval-trace] phase=reflection_owner_materialize name={reflected_name:?} flags={flags:#x}"
+        );
+    }
     let object = values.reflection_owner_new(
         owner_kind,
         reflected_name,
@@ -494,6 +501,18 @@ pub(super) fn eval_reflection_shallow_class_object_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    // `Closure` is neither eval nor AOT metadata; `Closure::__invoke()` is the member that
+    // declares it (`new ReflectionMethod($closure, '__invoke')`).
+    if class_name
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case("Closure")
+    {
+        return eval_reflection_builtin_closure_class_object_result(
+            EVAL_REFLECTION_OWNER_CLASS,
+            context,
+            values,
+        );
+    }
     let Some(metadata) = eval_reflection_class_like_attributes(class_name, context) else {
         let Some((flags, modifiers)) = eval_reflection_aot_class_flags(class_name, values)? else {
             return values.bool_value(false);

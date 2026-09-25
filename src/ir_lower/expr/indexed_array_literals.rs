@@ -209,9 +209,10 @@ pub(super) fn lower_array_literal_as_hash_from_lowered(
 }
 
 /// Lowers a single already-lowered spread operand into a hash destination, handling both
-/// associative and indexed source storage. Associative sources flatten directly through
-/// `__rt_hash_spread`; indexed sources are first promoted to hash storage so the same
-/// reindexing path applies.
+/// associative and indexed source storage. PHP array mutators can reindex an associative
+/// runtime value without changing the caller's static array contract, so every array operand
+/// passes through `ArrayToHash`; codegen reuses an actual hash or promotes an indexed value
+/// according to its runtime heap kind.
 pub(super) fn lower_hash_spread_into_hash_from_value(
     ctx: &mut LoweringContext<'_, '_>,
     hash: LoweredValue,
@@ -223,25 +224,20 @@ pub(super) fn lower_hash_spread_into_hash_from_value(
         lower_iterable_spread_into_hash(ctx, hash, source, span);
         return;
     }
-    let source_is_hash = matches!(source_ty, PhpType::AssocArray { .. });
-    let spread_source = if source_is_hash {
-        source
-    } else {
-        let promoted = ctx.emit_value(
-            Op::ArrayToHash,
-            vec![source.value],
-            None,
-            PhpType::AssocArray {
-                key: Box::new(PhpType::Int),
-                value: Box::new(PhpType::Mixed),
-            },
-            Op::ArrayToHash.default_effects(),
-            Some(span),
-        );
-        LoweredValue {
-            value: promoted.value,
-            ir_type: IrType::Heap(IrHeapKind::Hash),
-        }
+    let promoted = ctx.emit_value(
+        Op::ArrayToHash,
+        vec![source.value],
+        None,
+        PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value: Box::new(PhpType::Mixed),
+        },
+        Op::ArrayToHash.default_effects(),
+        Some(span),
+    );
+    let spread_source = LoweredValue {
+        value: promoted.value,
+        ir_type: IrType::Heap(IrHeapKind::Hash),
     };
     ctx.emit_void(
         Op::HashSpread,

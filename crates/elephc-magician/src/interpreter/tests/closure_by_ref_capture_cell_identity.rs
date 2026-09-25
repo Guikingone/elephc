@@ -176,3 +176,44 @@ echo "call2=", $boxes["bucket"][0]("y");"#
         "call1=first:x\ncall2=later:y",
     );
 }
+
+/// Verifies a by-reference capture sees the defining variable's CURRENT value: a reassignment
+/// made after the closure was created, and every write from earlier calls.
+///
+/// `php -n` 8.5.6 prints `5 3 2,3,3 10`. elephc bound the cell captured at creation on every
+/// call, so later calls restarted from it (`2`, `2,2,2`), and a reassignment in the defining
+/// function released that cell underneath the closure.
+#[test]
+fn a_by_ref_capture_reads_the_defining_variable_as_it_is_now() {
+    assert_eq!(
+        out(
+            br#"function rebind() { $n = 1; $c = function () use (&$n) { return $n; }; $n = 5; return $c(); }
+function inc() { $n = 1; $c = function () use (&$n) { $n++; }; $c(); $c(); return $n; }
+function incread() { $n = 1; $c = function () use (&$n) { return ++$n; }; $a = $c(); $b = $c(); return "$a,$b,$n"; }
+function two() { $n = 0; $a = function () use (&$n) { $n += 10; }; $b = function () use (&$n) { return $n; }; $a(); return $b(); }
+echo rebind(), " ", inc(), " ", incread(), " ", two();"#
+        ),
+        "5 3 2,3,3 10",
+    );
+}
+
+/// Verifies a by-reference capture outlives the function that declared the variable, keeping
+/// its own value across calls -- `LazyString::fromCallable()`'s `use (&$callback, &$arguments)`.
+///
+/// `php -n` 8.5.6 prints `123 string:abc x!`. elephc kept a raw pointer to the returned
+/// function's scope and wrote back through it after every call.
+#[test]
+fn a_by_ref_capture_outlives_its_defining_function() {
+    assert_eq!(
+        out(
+            br#"function counter() { $n = 0; return function () use (&$n) { return ++$n; }; }
+function peek($s) { return static function () use (&$s) { return gettype($s) . ":" . (is_string($s) ? $s : "?"); }; }
+function holder($cb, ...$args) { return static function () use (&$cb, &$args) { $r = $cb(...$args); $cb = "done"; $args = null; return $r; }; }
+$c = counter();
+$p = peek("abc");
+$h = holder(fn($a) => $a . "!", "x");
+echo $c(), $c(), $c(), " ", $p(), " ", $h();"#
+        ),
+        "123 string:abc x!",
+    );
+}

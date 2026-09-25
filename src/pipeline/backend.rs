@@ -130,8 +130,10 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
 
     // Bridge-backed `--with-<name>` values force-link their staticlib
     // (whole-archived via `forced_bridge_libs`) regardless of feature
-    // auto-detection. Runtime-only capabilities such as regex have already
-    // updated `runtime_features` and intentionally do not map to a bridge.
+    // auto-detection. `--web` separately whole-archives the web bridge because it
+    // owns the process entry point; CLI session calls use its referenced archive
+    // members without pulling in that entry point. Runtime-only capabilities such
+    // as regex have already updated `runtime_features` and do not map to a bridge.
     let mut forced_bridge_libs: Vec<String> = Vec::new();
     let mut sorted_with_crates: Vec<&String> = with_crates.iter().collect();
     sorted_with_crates.sort();
@@ -140,6 +142,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             forced_bridge_libs.push(lib.to_string());
         }
     }
+    let forced_whole_archive_bridges = whole_archive_bridges(&forced_bridge_libs, web);
 
     // Collect the named libraries that the typed link planner will consider.
     // This preserves codegen-time bridge feature reporting without flattening
@@ -395,7 +398,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             extra_objects,
             &runtime_object.path,
             &link_plan,
-            &forced_bridge_libs,
+            &forced_whole_archive_bridges,
         ) {
             eprintln!("Linker error: {error}");
             process::exit(1);
@@ -470,4 +473,27 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         &format!("Compiled '{}' -> '{}'", filename, output_paths.bin.display()),
         timings.elapsed(),
     );
+}
+
+/// Adds the web entrypoint bridge to the whole-archive set only in server mode.
+fn whole_archive_bridges(forced: &[String], web: bool) -> Vec<String> {
+    let mut bridges = forced.to_vec();
+    if web && !bridges.iter().any(|name| name == "elephc_web") {
+        bridges.push("elephc_web".to_string());
+    }
+    bridges
+}
+
+#[cfg(test)]
+mod tests {
+    use super::whole_archive_bridges;
+
+    #[test]
+    fn web_mode_whole_archives_only_its_entrypoint_in_addition_to_explicit_bridges() {
+        assert_eq!(
+            whole_archive_bridges(&["elephc_crypto".to_string()], true),
+            ["elephc_crypto", "elephc_web"]
+        );
+        assert_eq!(whole_archive_bridges(&[], false), []);
+    }
 }

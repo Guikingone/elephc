@@ -132,6 +132,8 @@ pub(crate) struct Checker {
     pub reflection_class_targets: HashMap<String, String>,
     /// Interface definitions collected during the first pass, keyed by canonical name.
     pub interfaces: HashMap<String, InterfaceInfo>,
+    /// Doc comments of user interface declarations, by declared name, for `InterfaceInfo`.
+    pub interface_doc_comments: HashMap<String, String>,
     /// Class definitions collected during the first pass, keyed by canonical name.
     pub classes: crate::fast_hash::FastMap<String, ClassInfo>,
     /// Canonical class names declared in the program, available for forward references
@@ -293,6 +295,17 @@ pub(crate) struct Checker {
     pub null_probe_depth: usize,
     /// Active break/continue target depth in the current function or closure body.
     pub break_continue_depth: usize,
+    /// One frame per enclosing `break` target (loop or `switch`), innermost last, holding the
+    /// environment every `break` that leaves THAT construct carried out of it.
+    ///
+    /// A `break` is an exit edge of its target, and the environment after the construct has to
+    /// join it: `$n = count($m); foreach ($m as $v) { if ($v) { $n = $m; break; } }` leaves
+    /// `$n` an `int` OR an `array`, but the `if` join drops the arm that breaks (it does not fall
+    /// through) and the loop resumed from the fallthrough environment alone -- `int`. Every
+    /// caller was then compiled against a return type that claimed `int` for what was a boxed
+    /// array; Symfony's DeepClone polyfill does exactly this, and each container rebuild read a
+    /// pointer as `array_fill()`'s count.
+    pub loop_break_envs: Vec<Vec<TypeEnv>>,
     /// Stacks of break/continue depths at each enclosing `finally` block boundary,
     /// used to restore correct depth when branching through `finally`.
     pub finally_break_continue_bases: Vec<usize>,
@@ -565,6 +578,16 @@ pub(crate) struct SavedLocalBindingScope {
 }
 
 impl Checker {
+    /// Returns whether a reflected class name the checker cannot see may still exist at run time.
+    ///
+    /// [`Checker::program_defers_unknown_classes`] covers a runtime include or an autoloader,
+    /// wherever they sit; `eval_barrier_active` covers a literal `eval()` already passed, whose
+    /// text can declare the class (`eval('class Signer {...}'); new ReflectionClass('Signer')`
+    /// was a compile error where `php -n` runs it).
+    pub(crate) fn reflection_defers_unknown_classes(&self) -> bool {
+        self.program_defers_unknown_classes || self.eval_barrier_active
+    }
+
     /// Returns whether unresolved class names may be deferred to PHP's runtime `Error` path.
     ///
     /// Function, method, and closure bodies can contain optional-extension code that is never

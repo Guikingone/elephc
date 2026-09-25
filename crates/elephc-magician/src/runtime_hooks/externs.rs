@@ -187,6 +187,10 @@ unsafe extern "C" {
         class_len: u64,
     ) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_reflection_source_file() -> *mut RuntimeCell;
+    pub(super) fn __elephc_eval_reflection_class_source_file(
+        class_name_ptr: *const u8,
+        class_name_len: u64,
+    ) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_reflection_class_flags(
         class_ptr: *const u8,
         class_len: u64,

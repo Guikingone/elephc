@@ -294,7 +294,7 @@ pub(super) fn eval_reflection_class_like_attributes(
             resolved_name: interface.name().trim_start_matches('\\').to_string(),
             source_location: interface.source_location(),
             attributes: interface.attributes().to_vec(),
-            doc_comment: None,
+            doc_comment: interface.doc_comment().map(str::to_string),
             interface_names: context.interface_parent_names(interface.name()),
             trait_names: Vec::new(),
             method_names: context.interface_method_names(interface.name()),

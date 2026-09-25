@@ -211,7 +211,16 @@ fn finish_if_type_join(
     }
 
     let joined = join_arm_types(ctx, &arms);
-    let saved_types = ctx.local_types_snapshot();
+    // The merge resumes from a REACHABLE arm's facts, overlaid with the joins. The types current
+    // here belong to whichever branch was lowered last, and when that branch ended in a `throw`
+    // they are the pre-branch split: `$t = []; if (…) { foreach (…) { $t[] = …; } } elseif (…)
+    // { $t[] = …; } else { throw …; }` left `$t` typed `array<never>` after the chain -- both
+    // arms agreed on `array<string>`, so `join_arm_types` recorded no join -- and every later
+    // `in_array()` on it was compiled for an array that is always empty.
+    let saved_types = arms
+        .last()
+        .map(|arm| arm.types.clone())
+        .unwrap_or_else(|| ctx.local_types_snapshot());
     for arm in &arms {
         ctx.restore_local_types(arm.types.clone());
         let conversions = arm_conversions(arm, &joined);

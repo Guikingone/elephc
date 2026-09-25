@@ -358,7 +358,11 @@ pub(super) fn is_reflection_class_construction_receiver(
     object: ValueId,
 ) -> bool {
     let object_ty = ctx.builder.value_php_type(object);
-    let Some((class_name, false)) = singular_object_class(&object_ty) else {
+    // Nullable ordinary method calls reach this predicate only after their null-fatal branch has
+    // split off. Keep the ReflectionClass specialization on that non-null edge: otherwise the
+    // generic variadic lowering materializes its empty tail as one actual array argument, which
+    // `ReflectionClass::newInstance()` forwards as a constructor argument.
+    let Some((class_name, _)) = singular_object_class(&object_ty) else {
         return false;
     };
     matches!(
@@ -366,4 +370,3 @@ pub(super) fn is_reflection_class_construction_receiver(
         "reflectionclass" | "reflectionobject"
     )
 }
-

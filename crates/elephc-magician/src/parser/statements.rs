@@ -119,6 +119,13 @@ impl Parser {
             self.advance();
             return if matches!(self.current(), TokenKind::AttributeStart) {
                 self.parse_attributed_stmt_with_doc_comment(Some(doc_comment))
+            } else if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "interface")) {
+                // An interface's comment is reflected too (`getDocComment()`); it used to be
+                // consumed here and dropped.
+                self.parse_interface_decl_stmt_with_attributes_and_doc_comment(
+                    Vec::new(),
+                    Some(doc_comment),
+                )
             } else if starts_doc_commented_declaration(self.current()) {
                 self.parse_class_decl_stmt_with_doc_comment(Some(doc_comment))
             } else {
@@ -359,7 +366,7 @@ impl Parser {
                 self.parse_enum_decl_stmt_with_attributes(attributes)
             }
             TokenKind::Ident(name) if ident_eq(name, "interface") => {
-                self.parse_interface_decl_stmt_with_attributes(attributes)
+                self.parse_interface_decl_stmt_with_attributes_and_doc_comment(attributes, doc_comment)
             }
             TokenKind::Ident(name) if ident_eq(name, "trait") => {
                 self.parse_trait_decl_stmt_with_attributes(attributes)

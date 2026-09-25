@@ -378,8 +378,17 @@ pub(super) fn null_coalesce_result_type(
     value: ValueId,
     default: &Expr,
 ) -> PhpType {
-    let value_ty = strip_void_from_union(ctx.builder.value_php_type(value)).codegen_repr();
-    let default_ty = materialized_expr_type_for_merge(ctx, default).codegen_repr();
+    let value_php_type = strip_void_from_union(ctx.builder.value_php_type(value));
+    let default_php_type = materialized_expr_type_for_merge(ctx, default);
+    let value_ty = value_php_type.codegen_repr();
+    let default_ty = default_php_type.codegen_repr();
+    // `PhpType::Callable` hides two runtime representations: AOT callables are descriptor
+    // pointers, while eval-created Closure values can still be object cells. A `?Closure ??
+    // static fn (...) => ...` merge must preserve the selected runtime tag instead of storing
+    // both shapes in one untagged callable slot.
+    if matches!(&value_ty, PhpType::Callable) && matches!(&default_ty, PhpType::Callable) {
+        return PhpType::Mixed;
+    }
     // `$x ?? null` keeps the null. `wider_type_for_merge` lets a `Void` side vanish into the
     // other side's type, which is right for storage that can SAY null and wrong for storage
     // that cannot: a string slot stored the null as `""`, and an object slot as a null pointer

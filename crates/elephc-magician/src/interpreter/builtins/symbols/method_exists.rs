@@ -112,6 +112,18 @@ fn eval_method_exists_target(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     match values.type_tag(target)? {
+        // A compiled closure or first-class callable crosses the ABI as a descriptor, and an eval
+        // closure is a registered stand-in object; php sees a `Closure` instance either way.
+        super::super::super::runtime_ops::EVAL_TAG_CALLABLE => {
+            Ok(eval_closure_method_exists(method_name))
+        }
+        EVAL_TAG_OBJECT
+            if context
+                .closure_object_target(values.object_identity(target)?)
+                .is_some() =>
+        {
+            Ok(eval_closure_method_exists(method_name))
+        }
         EVAL_TAG_OBJECT => {
             let class_name = eval_object_class_metadata_name(target, context, values)?;
             eval_method_exists_on_class(&class_name, method_name, true, context, values)
@@ -386,4 +398,14 @@ fn eval_current_scope_private_property_exists_on_object(
     Ok(visibility == EvalVisibility::Private
         && !is_static
         && eval_same_class_metadata_name(&declaring_class, current_class))
+}
+
+/// Returns whether `Closure` declares `method_name`: `__invoke()` plus its binding API.
+///
+/// `method_exists($closure, '__invoke')` is how callers tell an invocable object from other
+/// callables (Twig's `debug:twig` reflects a first-class callable's parameters this way).
+fn eval_closure_method_exists(method_name: &str) -> bool {
+    ["__invoke", "bind", "bindTo", "call", "fromCallable"]
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case(method_name))
 }

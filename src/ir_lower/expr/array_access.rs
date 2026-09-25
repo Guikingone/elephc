@@ -167,6 +167,22 @@ fn subscript_chain_is_variable_rooted(expr: &Expr) -> bool {
     }
 }
 
+/// Lowers `$container[$key]` without the undefined-key warning, when `expr` is a subscript.
+///
+/// Returns `None` for any other expression. This is the read a WRITE context does: the bucket of
+/// a nested append (`$a[$k][] = $v`) is fetched before it is appended to, and php vivifies a
+/// missing `$k` silently. The fused lowering in `stmt::nested_append` does that itself; the
+/// ordinary desugar it falls back to (a gradual container) read the bucket with the warning.
+pub(crate) fn lower_array_access_quietly(
+    ctx: &mut LoweringContext<'_, '_>,
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let ExprKind::ArrayAccess { array, index } = &expr.kind else {
+        return None;
+    };
+    Some(lower_array_access_with_missing_warning(ctx, array, index, expr, false))
+}
+
 /// Lowers array, hash, string, or ArrayAccess indexing with configurable
 /// undefined-offset warning behavior for native indexed-array reads. Suppressed
 /// warnings propagate through the whole subscript chain: PHP's `isset()` and `??`

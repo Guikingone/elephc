@@ -348,11 +348,13 @@ pub(in crate::codegen::lower_inst) fn lower_closure_bind(ctx: &mut FunctionConte
     let new_this = expect_operand(inst, 1)?;
     // `__rt_closure_bind` takes the new receiver as a RAW object pointer — it stores it straight
     // into the descriptor's capture slot, boxing it there when the capture is a Mixed one. A
-    // gradual receiver arrives already boxed, so passing it through handed the helper a Mixed cell
-    // where an object belongs and it boxed the box: `Closure::bind(fn () => $this->n, $gradual)`
-    // then answered `Warning: Undefined property: ::$n` and `0` where PHP prints `7` — a wrong
-    // ANSWER, not a refusal. Unbox first, and dispatch on what the box actually holds.
-    if matches!(ctx.raw_value_php_type(new_this)?, PhpType::Mixed) {
+    // gradual receiver, including a nullable object union, arrives already boxed, so passing it
+    // through hands the helper a Mixed cell where an object belongs and it boxes the box. Unbox
+    // first, and dispatch on the value actually held by the cell.
+    if matches!(
+        ctx.raw_value_php_type(new_this)?,
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
         return lower_closure_bind_gradual_receiver(ctx, inst, descriptor, new_this);
     }
     match ctx.emitter.target.arch {

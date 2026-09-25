@@ -20,6 +20,15 @@ impl Parser {
         &mut self,
         attributes: Vec<EvalAttribute>,
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.parse_interface_decl_stmt_with_attributes_and_doc_comment(attributes, None)
+    }
+
+    /// Parses an interface declaration with its attributes and the doc comment written before it.
+    pub(in crate::parser) fn parse_interface_decl_stmt_with_attributes_and_doc_comment(
+        &mut self,
+        attributes: Vec<EvalAttribute>,
+        doc_comment: Option<String>,
+    ) -> Result<Vec<EvalStmt>, EvalParseError> {
         let source_start_line = self.current_line();
         self.advance();
         let name = self.parse_class_like_decl_name()?;
@@ -49,7 +58,8 @@ impl Parser {
                 name, parents, constants, properties, methods,
             )
             .with_source_location(EvalSourceLocation::new(source_start_line, source_end_line))
-            .with_attributes(attributes),
+            .with_attributes(attributes)
+            .with_doc_comment_option(doc_comment),
         )])
     }
 

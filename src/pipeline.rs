@@ -156,7 +156,7 @@ pub(crate) fn compile(config: CliConfig) {
     let phase_started = Instant::now();
     // `resolve_collecting_includes` also hands back the canonical path of every file the
     // resolver statically inlined — group 2 of the OPcache script manifest.
-    let (ast, opcache_included_files, entry_included_sources) =
+    let (ast, opcache_included_files, mut entry_included_sources) =
         match resolver::resolve_collecting_includes_with_defines_and_sources(
             parsed, parent, &defines,
         ) {
@@ -446,6 +446,32 @@ pub(crate) fn compile(config: CliConfig) {
     );
     timings.record_since("web-prelude", phase_started);
     decl_trace("after web-prelude", &ast);
+
+    // The PHP CLI SAPI ships `ext/session` independently of the built-in web server.
+    // Share its PHP-level implementation and state bridge without importing HTTP request
+    // setup or the `elephc_web_run` entry point into a one-shot CLI executable.
+    crate::progress::phase("session-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::session_prelude::inject_cli_session_surface(
+        ast,
+        web,
+        php_version,
+        &ini_overrides,
+        Path::new(filename),
+        &mut prelude_inventory,
+    );
+    if !web {
+        // Session APIs are callable from source loaded dynamically as well as statically visible
+        // code; preserve their implementation as PHP's built-in extension surface does.
+        forced_groups.insert(crate::session_prelude::SESSION_PRELUDE_GROUP.to_string());
+        if !linked_php_surfaces
+            .iter()
+            .any(|surface| surface.eq_ignore_ascii_case("session"))
+        {
+            linked_php_surfaces.push("session".to_string());
+        }
+    }
+    timings.record_since("session-prelude", phase_started);
 
     // Inject the PHP version-surface functions (`zend_version`, `php_sapi_name`,
     // `ini_restore`) the program actually references. Runs AFTER the web prelude so a
@@ -964,8 +990,16 @@ pub(crate) fn compile(config: CliConfig) {
             process::exit(1);
         }
     };
-    ir_module.declared_class_source_files = declaration_source_files.class_likes;
-    ir_module.declared_function_source_files = declaration_source_files.functions;
+    ir_module.declared_class_source_files =
+        std::mem::take(&mut entry_included_sources.class_likes);
+    ir_module
+        .declared_class_source_files
+        .extend(declaration_source_files.class_likes);
+    ir_module.declared_function_source_files =
+        std::mem::take(&mut entry_included_sources.functions);
+    ir_module
+        .declared_function_source_files
+        .extend(declaration_source_files.functions);
     // The autoload pass PERFORMED these inclusions: it opened each file and spliced its
     // declarations into the program. At runtime they are already-included files, and an
     // `include_once` reaching one through a computed path must answer "already included"

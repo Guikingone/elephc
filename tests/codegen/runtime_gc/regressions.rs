@@ -1244,6 +1244,50 @@ echo count($b);
     );
 }
 
+/// Spreading a packed array returned from a function must walk its indexed storage, not pass it
+/// to the hash-table iterator used for associative arrays.
+#[test]
+fn test_regression_spread_array_literal_from_packed_array_return() {
+    let out = compile_and_run(
+        r#"<?php
+function normalizedTypes(): array { return ['array', 'any']; }
+$arrayShape = 'list<string>';
+echo implode('|', [...normalizedTypes(), $arrayShape]);
+"#,
+    );
+    assert_eq!(out, "array|any|list<string>");
+}
+
+/// A builtin may return a packed PHP array through a gradual storage contract; spreading that
+/// result must inspect its runtime representation rather than assuming hash storage.
+#[test]
+fn test_regression_spread_array_literal_from_array_diff_result() {
+    let out = compile_and_run(
+        r#"<?php
+$normalizedTypes = array_diff(['string', 'array', 'any'], ['array', 'any']);
+echo implode('|', [...$normalizedTypes, 'list<string>']);
+"#,
+    );
+    assert_eq!(out, "string|list<string>");
+}
+
+/// Filtering and sorting an array before spreading it exercises the packed result produced by
+/// key-preserving builtins followed by reindexing mutators.
+#[test]
+fn test_regression_spread_array_literal_from_sorted_filtered_result() {
+    let out = compile_and_run(
+        r#"<?php
+function normalizedTypes(): array {
+    $types = array_diff(['z', 'array', 'any', 'a'], ['array', 'any']);
+    sort($types);
+    return $types;
+}
+echo implode('|', [...normalizedTypes(), 'list<string>']);
+"#,
+    );
+    assert_eq!(out, "a|z|list<string>");
+}
+
 /// Regression test: `foreach ($items as &$value)` on a non-empty array where the
 /// by-ref loop variable is reassigned after the loop. Verifies that the by-ref
 /// loop does not leak the local ref cell, and that reassigning `$value = 99`

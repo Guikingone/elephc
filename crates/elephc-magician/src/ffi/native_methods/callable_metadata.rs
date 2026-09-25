@@ -170,6 +170,22 @@ pub(in crate::ffi) fn native_callable_type_from_abi(
     native_callable_type_from_spec(&type_spec, position)
 }
 
+/// Decodes one generated PARAMETER type-spec string, for readers outside the FFI layer.
+///
+/// A callable descriptor's signature record carries the same spec per declared parameter, so the
+/// reflection of a compiled closure or first-class callable reports the declared type -- a union,
+/// an intersection, a class -- instead of the representation tag its ABI slot needs.
+pub(crate) fn native_callable_param_type_from_abi(
+    type_spec_ptr: *const u8,
+    type_spec_len: u64,
+) -> Option<EvalParameterType> {
+    native_callable_type_from_abi(
+        type_spec_ptr,
+        type_spec_len,
+        NativeCallableTypePosition::Parameter,
+    )
+}
+
 /// Parses the compact generated type syntax used by native signature registration.
 fn native_callable_type_from_spec(
     type_spec: &str,

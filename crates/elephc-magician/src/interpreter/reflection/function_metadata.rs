@@ -494,11 +494,11 @@ pub(super) fn eval_reflection_source_location_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     eval_reflection_bind_no_args(evaluated_args)?;
-    let Some(source_location) = source_location else {
-        return values.bool_value(false).map(Some);
-    };
     match method_key {
         "getfilename" => {
+            if source_file.is_none() && source_location.is_none() {
+                return values.bool_value(false).map(Some);
+            }
             let eval_file;
             let file = if let Some(source_file) = source_file {
                 source_file
@@ -508,8 +508,14 @@ pub(super) fn eval_reflection_source_location_result(
             };
             values.string(file).map(Some)
         }
-        "getstartline" => values.int(source_location.start_line()).map(Some),
-        "getendline" => values.int(source_location.end_line()).map(Some),
+        "getstartline" => match source_location {
+            Some(source_location) => values.int(source_location.start_line()).map(Some),
+            None => values.bool_value(false).map(Some),
+        },
+        "getendline" => match source_location {
+            Some(source_location) => values.int(source_location.end_line()).map(Some),
+            None => values.bool_value(false).map(Some),
+        },
         _ => Ok(None),
     }
 }

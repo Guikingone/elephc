@@ -59,6 +59,18 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
     }
     let source_php_ty = ctx.builder.value_php_type(value.value).clone();
     let source_ty = source_php_ty.codegen_repr();
+    if bindable
+        && !ctx.php_strict_types
+        && is_nullable_string_param(declared_param_ty)
+        && matches!(source_ty, PhpType::Mixed | PhpType::Union(_))
+    {
+        return coerce_gradual_nullable_string_param(
+            ctx,
+            value,
+            declared_param_ty,
+            Some(arg.span),
+        );
+    }
     // A `callable` parameter's storage is a DESCRIPTOR, and an `[$object, 'method']` pair is a
     // hash pointer: handing one straight over type-checks and then faults on the first call
     // through it. `Op::NormalizeCallable` is the conversion the callable-array path already uses,
@@ -154,11 +166,36 @@ fn guard_gradual_union_param(
     ctx.emit_value(
         Op::RuntimeCall,
         vec![value.value],
-        Some(Immediate::TypeName(type_name)),
+        Some(Immediate::ParameterType {
+            name: type_name,
+            strict_types: ctx.php_strict_types,
+        }),
         expected.clone(),
         effects_lookup::runtime_effects(),
         span,
     )
+}
+
+/// Returns whether a declared union is exactly PHP's nullable-string parameter type.
+fn is_nullable_string_param(ty: &PhpType) -> bool {
+    let PhpType::Union(members) = ty else {
+        return false;
+    };
+    members.len() == 2
+        && members.iter().any(|member| matches!(member, PhpType::Str))
+        && members.iter().any(|member| matches!(member, PhpType::Void))
+}
+
+/// Applies weak scalar string conversion to a boxed nullable-string argument after a runtime
+/// guard has rejected values PHP cannot bind to this declaration.
+fn coerce_gradual_nullable_string_param(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    declared_param_ty: &PhpType,
+    span: Option<crate::span::Span>,
+) -> LoweredValue {
+    let guarded = guard_gradual_union_param(ctx, value, declared_param_ty, span);
+    apply_nullable_string_param_cast(ctx, guarded, declared_param_ty, span)
 }
 
 /// Checks a compact nullable integer before passing it to a declared `int` parameter.
@@ -460,6 +497,24 @@ pub(super) fn coerce_operands_to_params(
         } else {
             value
         };
+        if sig.declared_params.get(index).copied().unwrap_or(false)
+            && !ctx.php_strict_types
+            && is_nullable_string_param(declared_param_ty)
+            && ctx.builder.value_php_type(value.value) != *declared_param_ty
+            && matches!(
+                ctx.builder.value_php_type(value.value).codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
+            )
+        {
+            operands[index] = coerce_gradual_nullable_string_param(
+                ctx,
+                value,
+                declared_param_ty,
+                None,
+            )
+            .value;
+            continue;
+        }
         operands[index] = value.value;
         let value = value.value;
         let operand_php_ty = ctx.builder.value_php_type(value).clone();

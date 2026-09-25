@@ -387,6 +387,14 @@ pub trait RuntimeValueOps {
         Ok(None)
     }
 
+    /// Returns the generated source file that declared one AOT class-like.
+    fn reflection_class_source_file(
+        &mut self,
+        _class_name: &str,
+    ) -> Result<Option<String>, EvalStatus> {
+        Ok(None)
+    }
+
     /// Returns generated AOT ReflectionClass modifier flags for one class.
     fn reflection_class_flags(&mut self, class_name: &str) -> Result<Option<u64>, EvalStatus>;
 

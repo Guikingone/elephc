@@ -67,6 +67,7 @@ fn lower_late_static_class_name_arm64(ctx: &mut FunctionContext<'_>) -> Result<(
     let missing = ctx.next_label("static_class_missing");
     let done = ctx.next_label("static_class_done");
     emit_eval_native_frame_called_class_override_probe(ctx, &done);
+    emit_eval_this_dynamic_class_name_probe(ctx, &done)?;
     emit_late_static_class_id_to_reg(ctx, "x12")?;
     abi::emit_load_symbol_to_reg(ctx.emitter, "x10", "_class_name_count", 0);
     ctx.emitter.instruction("cmp x12, x10");                                    // reject called-class ids outside the emitted class-name table
@@ -89,6 +90,7 @@ fn lower_late_static_class_name_x86_64(ctx: &mut FunctionContext<'_>) -> Result<
     let missing = ctx.next_label("static_class_missing");
     let done = ctx.next_label("static_class_done");
     emit_eval_native_frame_called_class_override_probe(ctx, &done);
+    emit_eval_this_dynamic_class_name_probe(ctx, &done)?;
     emit_late_static_class_id_to_reg(ctx, "r8")?;
     abi::emit_load_symbol_to_reg(ctx.emitter, "r9", "_class_name_count", 0);
     ctx.emitter.instruction("cmp r8, r9");                                      // reject called-class ids outside the emitted class-name table
@@ -103,6 +105,45 @@ fn lower_late_static_class_name_x86_64(ctx: &mut FunctionContext<'_>) -> Result<
     abi::emit_symbol_address(ctx.emitter, "rax", "_class_name_missing");
     ctx.emitter.instruction("mov rdx, 0");                                      // missing metadata stringifies to an empty class name
     ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Answers `static::class` inside an instance method from `$this`'s interpreter-declared class.
+///
+/// In an instance method the called class IS the class of `$this`. An object of a class the
+/// interpreter declared lives in its nearest compiled ancestor's storage, so the class id names
+/// that ancestor. The frame override only covers the method the bridge entered: a method it
+/// calls from a class further up (`AbstractBundle::getName()` reached from `Bundle`) found no
+/// override, read the class id, and a Twig bundle called itself `Bundle`, which lost its
+/// container extension. A zero length back means `$this` is not the interpreter's.
+fn emit_eval_this_dynamic_class_name_probe(ctx: &mut FunctionContext<'_>, done_label: &str) -> Result<()> {
+    if !ctx.module.required_runtime_features.eval_bridge {
+        return Ok(());
+    }
+    let Some(slot) = ctx.local_slot_by_name("this") else {
+        return Ok(());
+    };
+    let offset = ctx.local_offset(slot)?;
+    let native = ctx.next_label("static_class_this_native");
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_dynamic_object_class_name");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::load_at_offset(ctx.emitter, "x0", offset);
+            ctx.emitter.instruction(&format!("bl {}", symbol));                 // x0/x1 = $this's eval class name, or length 0
+            ctx.emitter.instruction(&format!("cbz x1, {}", native));            // not an interpreter-declared instance
+            ctx.emitter.instruction("mov x2, x1");                              // class-name length into the string result pair
+            ctx.emitter.instruction("mov x1, x0");                              // class-name pointer into the string result pair
+            ctx.emitter.instruction(&format!("b {}", done_label));              // the eval class is the called class
+        }
+        Arch::X86_64 => {
+            abi::load_at_offset(ctx.emitter, "rdi", offset);
+            ctx.emitter.instruction(&format!("call {}", symbol));               // rax/rdx = $this's eval class name, or length 0
+            ctx.emitter.instruction("test rdx, rdx");                           // did the bridge name an interpreter-declared class?
+            ctx.emitter.instruction(&format!("jz {}", native));                 // no: fall back to the class id
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // rax/rdx already hold the called class name
+        }
+    }
+    ctx.emitter.label(&native);
     Ok(())
 }
 

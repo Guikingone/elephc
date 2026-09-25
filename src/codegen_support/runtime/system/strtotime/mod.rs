@@ -21,6 +21,7 @@
 mod data;
 mod epoch;
 mod first_last_day;
+mod first_last_time;
 mod iso_date;
 mod keywords;
 mod slash_date;

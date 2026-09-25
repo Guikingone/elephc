@@ -125,7 +125,7 @@ pub(super) fn signature_param_is_variadic(signature: &FunctionSig, index: usize,
 }
 
 /// Returns generated type specs for declared native callable parameters.
-pub(super) fn eval_native_callable_param_type_specs(signature: &FunctionSig) -> Vec<Option<String>> {
+pub(crate) fn eval_native_callable_param_type_specs(signature: &FunctionSig) -> Vec<Option<String>> {
     signature
         .params
         .iter()

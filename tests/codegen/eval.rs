@@ -21730,7 +21730,7 @@ echo $enum->getStartLine(); echo ":"; echo $enum->getEndLine();');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "F:2:2:F:5:5:F:6:6:F:7:7");
+    assert_eq!(out.stdout, "F:2:4:F:5:5:F:6:6:F:7:7");
 }
 
 /// Verifies eval ReflectionMethod exposes generated/AOT source-location metadata.
@@ -32471,6 +32471,62 @@ try {
     assert_eq!(
         out,
         "bool(false)\nReflectionException:Interface \"RuntimeMissingInterface\" does not exist\n"
+    );
+}
+
+/// ReflectionClass::isSubclassOf autoloads a class-like name supplied at runtime.
+#[test]
+fn test_eval_reflection_is_subclass_of_autoloads_target() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "runner.php",
+                r#"<?php
+function inspectRuntimeInterface(mixed $reflection): bool {
+    return $reflection->isSubclassOf('RuntimeLoadedInterface');
+}
+
+function inspectMissingRuntimeInterface(mixed $reflection): bool {
+    return $reflection->isSubclassOf('RuntimeMissingInterface');
+}
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+class RuntimeReflectedClass {}
+class RuntimeInterfaceLoader
+{
+    public function __construct(private string $path) {}
+
+    public function load(string $class): void {
+        if ($class === 'RuntimeLoadedInterface') {
+            include $this->path;
+        }
+    }
+}
+
+$interfacePath = __DIR__ . '/runtime-interface.php';
+file_put_contents($interfacePath, '<?php interface RuntimeLoadedInterface {}');
+$loader = new RuntimeInterfaceLoader($interfacePath);
+spl_autoload_register([$loader, 'load']);
+$reflection = new ReflectionClass(RuntimeReflectedClass::class);
+$runner = 'runner';
+include __DIR__ . '/' . $runner . '.php';
+var_dump(inspectRuntimeInterface($reflection));
+try {
+    inspectMissingRuntimeInterface($reflection);
+} catch (ReflectionException $exception) {
+    echo get_class($exception), ':', $exception->getMessage(), "\n";
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nReflectionException:Class \"RuntimeMissingInterface\" does not exist\n"
     );
 }
 

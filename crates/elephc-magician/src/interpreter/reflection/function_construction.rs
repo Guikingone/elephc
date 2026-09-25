@@ -25,6 +25,40 @@ pub(super) fn eval_reflection_function_new(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    eval_reflection_callable_new(evaluated_args, false, context, values)
+}
+
+/// Builds the `ReflectionMethod` php returns for `new ReflectionMethod($closure, '__invoke')`.
+///
+/// `Closure::__invoke()` has the closure's own signature, so the parameters are exactly the ones
+/// `new ReflectionFunction($closure)` reports -- for an eval closure, a compiled closure or a
+/// first-class callable alike -- under the method name `__invoke` of class `Closure`. Callers
+/// reflect an invocable this way to describe it: Twig's `debug:twig` prints every function whose
+/// callable is a first-class callable (`$this->generateAbsoluteUrl(...)`) from it, and reported
+/// "Unsupported callback type" instead.
+pub(super) fn eval_reflection_closure_invoke_method_new(
+    closure: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let argument = EvaluatedCallArg {
+        name: None,
+        value: closure,
+        ref_target: None,
+        owned: false,
+    };
+    eval_reflection_callable_new(vec![argument], true, context, values)
+}
+
+/// Shared body of [`eval_reflection_function_new`] and
+/// [`eval_reflection_closure_invoke_method_new`]: resolves the callable's signature once, then
+/// materializes it as a function or as `Closure::__invoke()`.
+fn eval_reflection_callable_new(
+    evaluated_args: Vec<EvaluatedCallArg>,
+    invoke_method: bool,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let args = bind_evaluated_function_args(&[String::from("function")], evaluated_args)?;
     let callable_target =
         eval_reflection_function_callable_target_arg(args[0], context, values)?;
@@ -60,7 +94,8 @@ pub(super) fn eval_reflection_function_new(
         let return_type_metadata = function
             .return_type()
             .and_then(eval_reflection_parameter_type_metadata);
-        return eval_reflection_function_object_result(
+        return eval_reflection_callable_object_result(
+            invoke_method,
             &requested_name,
             function.attributes(),
             &parameters,
@@ -70,7 +105,8 @@ pub(super) fn eval_reflection_function_new(
             values,
         )
         .and_then(|object| {
-            eval_reflection_attach_function_callable_target(
+            eval_reflection_attach_callable_target(
+                    invoke_method,
                 object,
                 closure_target,
                 args[0],
@@ -98,7 +134,8 @@ pub(super) fn eval_reflection_function_new(
         let return_type_metadata = function
             .return_type()
             .and_then(eval_reflection_parameter_type_metadata);
-        return eval_reflection_function_object_result(
+        return eval_reflection_callable_object_result(
+            invoke_method,
             function.name(),
             function.attributes(),
             &parameters,
@@ -108,7 +145,8 @@ pub(super) fn eval_reflection_function_new(
             values,
         )
         .and_then(|object| {
-            eval_reflection_attach_function_callable_target(
+            eval_reflection_attach_callable_target(
+                    invoke_method,
                 object,
                 closure_target,
                 args[0],
@@ -125,7 +163,8 @@ pub(super) fn eval_reflection_function_new(
         let return_type_metadata = function
             .return_type()
             .and_then(eval_reflection_parameter_type_metadata);
-        return eval_reflection_function_object_result(
+        return eval_reflection_callable_object_result(
+            invoke_method,
             reflected_name,
             &[],
             &parameters,
@@ -135,7 +174,8 @@ pub(super) fn eval_reflection_function_new(
             values,
         )
         .and_then(|object| {
-            eval_reflection_attach_function_callable_target(
+            eval_reflection_attach_callable_target(
+                    invoke_method,
                 object,
                 closure_target,
                 args[0],
@@ -167,7 +207,8 @@ pub(super) fn eval_reflection_function_new(
                 )?,
             };
         if let Some(method) = method_metadata {
-            return eval_reflection_function_object_result(
+            return eval_reflection_callable_object_result(
+            invoke_method,
                 &requested_name,
                 &method.attributes,
                 &method.parameters,
@@ -177,7 +218,8 @@ pub(super) fn eval_reflection_function_new(
                 values,
             )
             .and_then(|object| {
-                eval_reflection_attach_function_callable_target(
+                eval_reflection_attach_callable_target(
+                    invoke_method,
                     object,
                     closure_target,
                     args[0],
@@ -189,7 +231,8 @@ pub(super) fn eval_reflection_function_new(
         }
     }
     if closure_target.is_some() {
-        return eval_reflection_function_object_result(
+        return eval_reflection_callable_object_result(
+            invoke_method,
             &requested_name,
             &[],
             &[],
@@ -199,7 +242,8 @@ pub(super) fn eval_reflection_function_new(
             values,
         )
         .and_then(|object| {
-            eval_reflection_attach_function_callable_target(
+            eval_reflection_attach_callable_target(
+                    invoke_method,
                 object,
                 closure_target,
                 args[0],
@@ -209,7 +253,131 @@ pub(super) fn eval_reflection_function_new(
         })
         .map(Some);
     }
+    if closure_target.is_none() {
+        if let Some(contract) = elephc_builtin_contract::lookup(&lookup_name) {
+            return eval_reflection_builtin_function_object_result(
+                invoke_method,
+                contract,
+                context,
+                values,
+            )
+            .map(Some);
+        }
+    }
     Ok(None)
+}
+
+/// Builds `new ReflectionFunction('<builtin>')` from the shared builtin contract.
+///
+/// A php builtin has no eval or AOT function record, so every lookup above missed it and the
+/// construction failed outright -- Twig's `debug:twig` reflects `max`/`min`, which it registers as
+/// plain string callables, to print their parameters. The contract carries exactly what
+/// Reflection reports for an internal function: names, types, defaults, by-reference and
+/// variadic parameters.
+fn eval_reflection_builtin_function_object_result(
+    invoke_method: bool,
+    contract: &'static elephc_builtin_contract::BuiltinContract,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut names = Vec::new();
+    let mut types = Vec::new();
+    let mut defaults = Vec::new();
+    let mut by_ref = Vec::new();
+    let mut variadic = Vec::new();
+    for param in contract.params {
+        names.push(param.name.to_string());
+        types.push(eval_reflection_builtin_param_type(&param.ty));
+        defaults.push(param.default.as_ref().and_then(eval_reflection_builtin_default));
+        by_ref.push(param.by_ref);
+        variadic.push(false);
+    }
+    if let Some(spec) = contract.variadic {
+        names.push(spec.name.to_string());
+        types.push(None);
+        defaults.push(None);
+        by_ref.push(matches!(spec.passing, elephc_builtin_contract::PassingMode::ByReference));
+        variadic.push(true);
+    }
+    let attribute_lists = vec![Vec::new(); names.len()];
+    let parameters = eval_reflection_function_parameters(
+        contract.name,
+        &names,
+        Vec::new(),
+        &attribute_lists,
+        &types,
+        &defaults,
+        &by_ref,
+        &variadic,
+    );
+    let required = eval_reflection_required_parameter_count(&defaults, &variadic);
+    eval_reflection_callable_object_result(
+        invoke_method,
+        contract.name,
+        &[],
+        &parameters,
+        None,
+        required,
+        context,
+        values,
+    )
+}
+
+/// Maps one contract parameter type to reflection type metadata, when php declares one.
+fn eval_reflection_builtin_param_type(
+    ty: &elephc_builtin_contract::TypeSpec,
+) -> Option<EvalParameterType> {
+    let spec = eval_reflection_builtin_type_spec(ty)?;
+    crate::ffi::native_methods::native_callable_param_type_from_abi(spec.as_ptr(), spec.len() as u64)
+}
+
+/// Spells a contract type the way generated native signature registration does.
+fn eval_reflection_builtin_type_spec(ty: &elephc_builtin_contract::TypeSpec) -> Option<String> {
+    use elephc_builtin_contract::TypeSpec;
+    Some(match ty {
+        TypeSpec::Int => "int".to_string(),
+        TypeSpec::NullableInt => "?int".to_string(),
+        TypeSpec::Float => "float".to_string(),
+        TypeSpec::Str => "string".to_string(),
+        TypeSpec::Bool => "bool".to_string(),
+        TypeSpec::Mixed => "mixed".to_string(),
+        TypeSpec::Array => "array".to_string(),
+        TypeSpec::Callable => "callable".to_string(),
+        TypeSpec::Nullable(inner) => format!("?{}", eval_reflection_builtin_type_spec(inner)?),
+        TypeSpec::Void | TypeSpec::Ptr => return None,
+    })
+}
+
+/// Maps one contract default to the literal expression Reflection evaluates for it.
+fn eval_reflection_builtin_default(default: &elephc_builtin_contract::DefaultSpec) -> Option<EvalExpr> {
+    use elephc_builtin_contract::DefaultSpec;
+    Some(match default {
+        DefaultSpec::Null => EvalExpr::Const(EvalConst::Null),
+        DefaultSpec::Int(value) => EvalExpr::Const(EvalConst::Int(*value)),
+        DefaultSpec::Bool(value) => EvalExpr::Const(EvalConst::Bool(*value)),
+        DefaultSpec::Float(value) => EvalExpr::Const(EvalConst::Float(*value)),
+        DefaultSpec::Str(value) => EvalExpr::Const(EvalConst::String((*value).to_string())),
+        DefaultSpec::IntMax => EvalExpr::Const(EvalConst::Int(i64::MAX)),
+        DefaultSpec::EmptyArray => EvalExpr::Array(Vec::new()),
+        DefaultSpec::Constant(name) => EvalExpr::ConstFetch((*name).to_string()),
+        DefaultSpec::Expr(_) | DefaultSpec::ClassConstant { .. } => return None,
+    })
+}
+
+/// Attaches the reflected callable to a `ReflectionFunction`; the `Closure::__invoke()`
+/// `ReflectionMethod` carries its parameters already and has no `__callable` slot to fill.
+fn eval_reflection_attach_callable_target(
+    invoke_method: bool,
+    object: RuntimeCellHandle,
+    closure_target: Option<EvalClosureObjectTarget>,
+    source: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if invoke_method {
+        return Ok(object);
+    }
+    eval_reflection_attach_function_callable_target(object, closure_target, source, context, values)
 }
 
 /// Returns the retained callable target for a Closure object or descriptor value.
@@ -474,6 +642,71 @@ pub(super) fn eval_reflection_function_object_result(
         0,
         None,
         None,
+        context,
+        values,
+    )
+}
+
+/// Materializes one resolved callable signature as a `ReflectionFunction`, or, for
+/// `invoke_method`, as the `ReflectionMethod` of `Closure::__invoke()`.
+fn eval_reflection_callable_object_result(
+    invoke_method: bool,
+    function_name: &str,
+    attributes: &[EvalAttribute],
+    parameters: &[EvalReflectionParameterMetadata],
+    return_type_metadata: Option<&EvalReflectionParameterTypeMetadata>,
+    required_parameter_count: usize,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !invoke_method {
+        return eval_reflection_function_object_result(
+            function_name,
+            attributes,
+            parameters,
+            return_type_metadata,
+            required_parameter_count,
+            context,
+            values,
+        );
+    }
+    let member = EvalReflectionMemberMetadata {
+        declaring_class_name: Some("Closure".to_string()),
+        source_file: None,
+        source_location: None,
+        attributes: attributes.to_vec(),
+        visibility: EvalVisibility::Public,
+        is_static: false,
+        is_final: false,
+        is_abstract: false,
+        is_readonly: false,
+        is_promoted: false,
+        is_dynamic: false,
+        modifiers: eval_reflection_method_modifiers(EvalVisibility::Public, false, false, false),
+        type_metadata: None,
+        settable_type_metadata: None,
+        return_type_metadata: return_type_metadata.cloned(),
+        default_value: None,
+        default_value_trait_origin: None,
+        required_parameter_count,
+        // `Closure::__invoke()` reflects the internal method's argument info: a parameter stays
+        // optional, but php reports no default value for it (`isDefaultValueAvailable()` is false
+        // where `new ReflectionFunction($closure)` has one). Twig's `debug:twig` prints
+        // `path(name, parameters, relative)` from exactly that.
+        parameters: parameters
+            .iter()
+            .cloned()
+            .map(|mut parameter| {
+                parameter.default_value = None;
+                parameter.default_value_constant_name = None;
+                parameter
+            })
+            .collect(),
+    };
+    eval_reflection_member_object_result(
+        EVAL_REFLECTION_OWNER_METHOD,
+        "__invoke",
+        &member,
         context,
         values,
     )

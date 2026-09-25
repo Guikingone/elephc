@@ -263,6 +263,8 @@ pub(in crate::interpreter) fn eval_property_get_result(
     let Ok(identity) = values.object_identity(object) else {
         return values.property_get(object, property_name);
     };
+    // Any property access is what php initializes a lazy ghost on.
+    eval_initialize_lazy_ghost(identity, object, context, values)?;
     let Some(class) = context.dynamic_object_class(identity) else {
         let class_name = eval_runtime_object_class_name(object, values)?;
         if let Some(storage_property_name) =
@@ -549,6 +551,8 @@ pub(in crate::interpreter) fn eval_property_set_result(
     let Ok(identity) = values.object_identity(object) else {
         return values.property_set(object, property_name, value);
     };
+    // Any property access is what php initializes a lazy ghost on.
+    eval_initialize_lazy_ghost(identity, object, context, values)?;
     let Some(class) = context.dynamic_object_class(identity) else {
         let class_name = eval_runtime_object_class_name(object, values)?;
         if eval_reflection_public_property_storage_name(&class_name, property_name).is_some() {
@@ -966,7 +970,7 @@ pub(super) fn eval_property_reference_target(
         values.release(replaced)?;
     }
     Ok(EvalReferenceTarget::Variable {
-        scope: scope as *mut ElephcEvalScope,
+        scope: crate::scope::EvalScopeRef::new(scope),
         name: alias_name,
     })
 }
@@ -984,7 +988,7 @@ pub(in crate::interpreter) fn eval_reference_target_value(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match target {
         EvalReferenceTarget::Variable { scope, name } => {
-            let Some(scope) = (unsafe { scope.as_mut() }) else {
+            let Some(scope) = (unsafe { scope.live_mut() }) else {
                 return Err(EvalStatus::RuntimeFatal);
             };
             visible_scope_cell(context, scope, name).map_or_else(|| values.null(), Ok)
@@ -994,7 +998,7 @@ pub(in crate::interpreter) fn eval_reference_target_value(
             array_name,
             index,
         } => {
-            let Some(scope) = (unsafe { scope.as_mut() }) else {
+            let Some(scope) = (unsafe { scope.live_mut() }) else {
                 return Err(EvalStatus::RuntimeFatal);
             };
             let array =
@@ -1076,6 +1080,7 @@ pub(in crate::interpreter) fn eval_property_isset_result(
         let value = values.property_get(object, property_name)?;
         return Ok(!values.is_null(value)?);
     };
+    eval_initialize_lazy_ghost(identity, object, context, values)?;
     let Some(class) = context.dynamic_object_class(identity) else {
         let value = values.property_get(object, property_name)?;
         return Ok(!values.is_null(value)?);
@@ -1158,6 +1163,7 @@ pub(in crate::interpreter) fn eval_property_unset_result(
     let Ok(identity) = values.object_identity(object) else {
         return Ok(());
     };
+    eval_initialize_lazy_ghost(identity, object, context, values)?;
     let Some(class) = context.dynamic_object_class(identity) else {
         return Ok(());
     };

@@ -101,8 +101,74 @@ pub(super) fn eval_null_coalesce_assign(
         }
     }
     let assigned = eval_expr(default, context, scope, values)?;
-    write_location(location, assigned, true, context, scope, values)?;
+    // The default ran AFTER the target's containers were observed, and it may have written to
+    // them: `self::$hydrators[$scope] ??= self::getHydrator($scope)` where `getHydrator()`
+    // stores `self::$hydrators['stdClass']`. The observed array was released by that store, so
+    // writing through it wrote into a reused cell -- "Cannot use object of type stdClass as
+    // array" -- and would have dropped the default's own entry besides. PHP fetches the
+    // containers for the write only now; so do we, reusing the indexes already evaluated so no
+    // index expression runs twice.
+    context.push_quiet_property_fetch();
+    let location = refresh_element_containers(location, context, scope, values);
+    context.pop_quiet_property_fetch();
+    write_location(location?, assigned, true, context, scope, values)?;
     Ok(assigned)
+}
+
+/// Re-reads the containers of an array-element location, keeping its evaluated indexes.
+fn refresh_element_containers(
+    location: EvaluatedLocation,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvaluatedLocation, EvalStatus> {
+    match location {
+        EvaluatedLocation::ArrayElement { parent, index, current } => Ok(EvaluatedLocation::ArrayElement {
+            parent: Box::new(refresh_container(*parent, context, scope, values)?),
+            index,
+            current,
+        }),
+        other => Ok(other),
+    }
+}
+
+/// Re-reads one container level (and every level above it) for a pending element write.
+fn refresh_container(
+    location: EvaluatedLocation,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvaluatedLocation, EvalStatus> {
+    match location {
+        EvaluatedLocation::StaticProperty { class_name, property, .. } => {
+            let current = eval_static_property_get_result(&class_name, &property, context, values)?;
+            Ok(EvaluatedLocation::StaticProperty { class_name, property, current: Some(current) })
+        }
+        EvaluatedLocation::Property { object, property, .. } => {
+            let current = eval_property_array_target_get_result(object, &property, context, values)?;
+            Ok(EvaluatedLocation::Property { object, property, current: Some(current) })
+        }
+        EvaluatedLocation::GlobalVariable { name, .. } => {
+            let current = read_global_value(&name, true, context, scope, values)?;
+            Ok(EvaluatedLocation::GlobalVariable { name, current: Some(current) })
+        }
+        EvaluatedLocation::Variable { name, .. } => {
+            let entry = scope_entry(context, scope, &name).filter(|entry| entry.flags().is_visible());
+            let current_is_borrowed = entry.is_some();
+            let ownership = entry
+                .as_ref()
+                .map(|entry| entry.flags().ownership)
+                .unwrap_or(ScopeCellOwnership::Owned);
+            let current = entry.map_or_else(|| values.null(), |entry| Ok(entry.cell()))?;
+            Ok(EvaluatedLocation::Variable { name, current: Some(current), current_is_borrowed, ownership })
+        }
+        EvaluatedLocation::ArrayElement { parent, index, .. } => {
+            let parent = refresh_container(*parent, context, scope, values)?;
+            let current = eval_array_get_result(parent.current(), index, context, values)?;
+            Ok(EvaluatedLocation::ArrayElement { parent: Box::new(parent), index, current: Some(current) })
+        }
+        other @ EvaluatedLocation::ArrayAccessElement { .. } => Ok(other),
+    }
 }
 
 /// Evaluates a compound assignment expression and writes its computed result back to the target.

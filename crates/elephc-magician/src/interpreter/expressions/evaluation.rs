@@ -36,6 +36,12 @@ pub(in crate::interpreter) fn eval_binary_result(
         EvalBinOp::Div => values.div(left, right),
         EvalBinOp::Mod => values.modulo(left, right),
         EvalBinOp::Pow => values.pow(left, right),
+        EvalBinOp::BitAnd | EvalBinOp::BitOr | EvalBinOp::BitXor
+            if values.type_tag(left)? == EVAL_TAG_STRING
+                && values.type_tag(right)? == EVAL_TAG_STRING =>
+        {
+            eval_string_bitwise_result(op, left, right, values)
+        }
         EvalBinOp::BitAnd
         | EvalBinOp::BitOr
         | EvalBinOp::BitXor
@@ -62,6 +68,34 @@ pub(in crate::interpreter) fn eval_binary_result(
         EvalBinOp::Spaceship => values.spaceship(left, right),
         EvalBinOp::LogicalAnd | EvalBinOp::LogicalOr => Err(EvalStatus::UnsupportedConstruct),
     }
+}
+
+/// PHP's `&`, `|` and `^` on two STRINGS: byte by byte, never through integers.
+///
+/// `&` and `^` keep the shorter length; `|` keeps the longer, the missing bytes of the shorter
+/// operand counting as zero. Routed through the integer operator instead, `"\xE2" & "\xF0"` was
+/// `0 & 0`, the string "0": the mbstring polyfill's UTF-8 walker looked up the lead-byte class
+/// with exactly that expression, found nothing, advanced by null, and spun forever on the first
+/// multi-byte character (every `✓` a Symfony console listing prints).
+fn eval_string_bitwise_result(
+    op: EvalBinOp,
+    left: RuntimeCellHandle,
+    right: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let left = values.string_bytes(left)?;
+    let right = values.string_bytes(right)?;
+    let bytes: Vec<u8> = match op {
+        EvalBinOp::BitAnd => left.iter().zip(right.iter()).map(|(a, b)| a & b).collect(),
+        EvalBinOp::BitXor => left.iter().zip(right.iter()).map(|(a, b)| a ^ b).collect(),
+        _ => {
+            let len = left.len().max(right.len());
+            (0..len)
+                .map(|i| left.get(i).copied().unwrap_or(0) | right.get(i).copied().unwrap_or(0))
+                .collect()
+        }
+    };
+    values.string_bytes_value(&bytes)
 }
 
 /// Builds PHP's left-biased array union while preserving insertion order.
@@ -688,6 +722,11 @@ fn eval_closure_capture(
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalClosureCaptureBinding, EvalStatus> {
     if capture.by_ref() {
+        // The closure OWNS one reference to the captured cell, as a by-value capture does. It
+        // routinely outlives the defining activation (`return function () use (&$x) {...};`),
+        // and that activation releases its own reference when it returns. An undefined
+        // variable comes back as a fresh null, which is already owned.
+        let defined = visible_scope_cell(context, scope, capture.name()).is_some();
         let expr = EvalExpr::LoadVar(capture.name().to_string());
         let (value, target) = eval_call_arg_value(&expr, context, scope, values).map_err(|status| {
             if crate::eval_trace::enabled() {
@@ -698,6 +737,7 @@ fn eval_closure_capture(
             }
             status
         })?;
+        let value = if defined { values.retain(value)? } else { value };
         return Ok(EvalClosureCaptureBinding::new(
             capture.name(),
             value,

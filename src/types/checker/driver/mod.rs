@@ -182,6 +182,9 @@ pub(super) fn check_types_impl(
             }
             // An interface has no single parent class, so `self`/`static` resolve to the interface
             // itself; `parent` is left untouched (it is meaningless in an interface contract).
+            if let Some(doc_comment) = crate::parser::classlike_doc_comment(stmt.span, name) {
+                checker.interface_doc_comments.insert(name.clone(), doc_comment);
+            }
             let mut interface_methods = methods.clone();
             let mut interface_constants = constants.clone();
             substitute_relative_class_types_in_methods(&mut interface_methods, name, None);

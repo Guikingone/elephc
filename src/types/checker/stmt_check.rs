@@ -123,7 +123,11 @@ impl Checker {
                 Ok(())
             }
             StmtKind::PackedClassDecl { .. } => Ok(()),
-            StmtKind::Break(levels) => self.check_loop_exit(stmt.span, "break", *levels),
+            StmtKind::Break(levels) => {
+                self.check_loop_exit(stmt.span, "break", *levels)?;
+                self.record_break_env(*levels, env);
+                Ok(())
+            }
             StmtKind::Continue(levels) => self.check_loop_exit(stmt.span, "continue", *levels),
             StmtKind::ExprStmt(expr) => {
                 // The one position an `unset(...)` may end a local binding from. elephc's parser
@@ -223,6 +227,15 @@ impl Checker {
         let result = f(self, env);
         self.local_conditional_depth -= 1;
         result
+    }
+
+    /// Files the environment a `break` carries out of the construct it targets.
+    fn record_break_env(&mut self, levels: usize, env: &TypeEnv) {
+        let frames = self.loop_break_envs.len();
+        if levels == 0 || levels > frames {
+            return;
+        }
+        self.loop_break_envs[frames - levels].push(env.clone());
     }
 
     /// Validates a `break` or `continue` statement against the current loop depth.

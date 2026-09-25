@@ -19,6 +19,7 @@ pub mod expr;
 /// Maps tokens that may legally appear as bareword names (identifiers and semi-reserved keywords).
 mod keyword_name;
 mod stmt;
+pub(crate) use stmt::classlike_doc_comment;
 mod terminal_goto;
 
 pub(crate) use attributes::{consume_attribute_lists, parse_attribute_lists};

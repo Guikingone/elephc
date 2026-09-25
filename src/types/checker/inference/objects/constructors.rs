@@ -867,7 +867,7 @@ impl Checker {
         // the WRITTEN name is carried through unresolved. The downstream validators accept it on
         // the same flag, and the reflection itself resolves through the eval bridge at run time,
         // where a name nothing supplies raises PHP's own `ReflectionException`.
-        if self.program_defers_unknown_classes {
+        if self.reflection_defers_unknown_classes() {
             return Ok(raw_class_name.trim_start_matches('\\').to_string());
         }
         Err(CompileError::new(

@@ -101,6 +101,21 @@ fn test_linux_x86_64_runtime_uses_shared_surface() {
     }
 }
 
+/// AOT ReflectionClass source-file lookup has matching AArch64 and x86_64 runtime bridges.
+#[test]
+fn reflection_class_source_file_bridge_is_emitted_for_both_architectures() {
+    for target in [
+        Target::new(Platform::MacOS, Arch::AArch64),
+        Target::new(Platform::Linux, Arch::AArch64),
+        Target::new(Platform::Linux, Arch::X86_64),
+    ] {
+        let mut emitter = Emitter::new(target);
+        emit_runtime(&mut emitter, RuntimeFeatures::all());
+        let asm = emitter.output();
+        assert!(asm.contains("__elephc_eval_reflection_class_source_file"));
+    }
+}
+
 /// Every process-fatal buffer, pointer-null, and container-capacity helper named by
 /// cdylib safety review must unwind an active boundary on all supported targets.
 #[test]

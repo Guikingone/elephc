@@ -374,6 +374,7 @@ fn signature_record(data: &mut DataSection, sig: &FunctionSig) -> String {
     let defaults = optional_symbol(default_table(data, &sig.defaults));
     let ref_flags = optional_symbol(flag_table(data, &sig.ref_params));
     let declared_flags = optional_symbol(flag_table(data, &sig.declared_params));
+    let param_type_specs = optional_symbol(param_type_spec_table(data, sig));
 
     data.add_words(vec![
         DataWord::U64(visible_param_count as u64),
@@ -388,7 +389,38 @@ fn signature_record(data: &mut DataSection, sig: &FunctionSig) -> String {
         defaults,
         ref_flags,
         declared_flags,
+        param_type_specs,
     ])
+}
+
+/// Builds the `(pointer, length)` table of each declared parameter's type-spec string.
+///
+/// The type table above holds representation TAGS, which is all the ABI needs and too little for
+/// reflection: `\ReflectionClass|\ReflectionMethod` is a boxed slot, tag `Mixed`, and
+/// `(new \ReflectionFunction($closure))->getParameters()[0]->getType()` answered `mixed` for it.
+/// Symfony's `AttributeAutoconfigurationPass` reads exactly that type to decide which reflectors
+/// an attribute autoconfigurator applies to. The spec is the one native function registration
+/// already sends the bridge, so both paths parse the same text.
+fn param_type_spec_table(data: &mut DataSection, sig: &FunctionSig) -> Option<String> {
+    let specs = crate::codegen::lower_inst::builtins::eval::eval_native_callable_param_type_specs(sig);
+    if specs.iter().all(Option::is_none) {
+        return None;
+    }
+    let mut words = Vec::with_capacity(specs.len() * 2);
+    for spec in specs {
+        match spec {
+            Some(spec) if !spec.is_empty() => {
+                let (label, len) = data.add_string(spec.as_bytes());
+                words.push(DataWord::Symbol(label));
+                words.push(DataWord::U64(len as u64));
+            }
+            _ => {
+                words.push(DataWord::U64(0));
+                words.push(DataWord::U64(0));
+            }
+        }
+    }
+    Some(data.add_words(words))
 }
 
 /// Builds the descriptor environment record for captures and hidden wrapper params.

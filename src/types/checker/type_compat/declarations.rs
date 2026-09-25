@@ -451,6 +451,7 @@ impl Checker {
         let saved_foreach_keys = self.foreach_key_locals.clone();
         let saved_eval_barrier_active = self.eval_barrier_active;
         let saved_break_continue_depth = self.break_continue_depth;
+        let saved_loop_break_envs = std::mem::take(&mut self.loop_break_envs);
         let saved_finally_break_continue_bases = self.finally_break_continue_bases.clone();
         let saved_null_probe_scope_is_top_level = self.null_probe_scope_is_top_level;
 
@@ -488,6 +489,7 @@ impl Checker {
         self.foreach_key_locals = saved_foreach_keys;
         self.eval_barrier_active = saved_eval_barrier_active;
         self.break_continue_depth = saved_break_continue_depth;
+        self.loop_break_envs = saved_loop_break_envs;
         self.finally_break_continue_bases = saved_finally_break_continue_bases;
         self.null_probe_scope_is_top_level = saved_null_probe_scope_is_top_level;
         self.exit_local_binding_scope(saved_local_binding_scope);

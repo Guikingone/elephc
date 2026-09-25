@@ -176,6 +176,35 @@ macro_rules! impl_reflection_ops {
             .map_err(|_| EvalStatus::RuntimeFatal)
     }
 
+    /// Returns the declaration source file for one AOT class-like, when it has a user source.
+    fn reflection_class_source_file(
+        &mut self,
+        class_name: &str,
+    ) -> Result<Option<String>, EvalStatus> {
+        aot_memo::memoized(
+            &aot_memo::CLASS_SOURCE_FILE,
+            class_name,
+            "",
+            || {
+                let ptr = unsafe {
+                    __elephc_eval_reflection_class_source_file(
+                        class_name.as_ptr(),
+                        class_name.len() as u64,
+                    )
+                };
+                if ptr.is_null() {
+                    return Ok(None);
+                }
+                let handle = RuntimeCellHandle::from_raw(ptr);
+                let bytes = self.string_bytes(handle)?;
+                self.release(handle)?;
+                String::from_utf8(bytes)
+                    .map(Some)
+                    .map_err(|_| EvalStatus::RuntimeFatal)
+            },
+        )
+    }
+
     /// Returns generated AOT ReflectionClass modifier flags, or `None` when no row matches.
     fn reflection_class_flags(&mut self, class_name: &str) -> Result<Option<u64>, EvalStatus> {
         aot_memo::memoized(

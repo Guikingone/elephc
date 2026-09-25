@@ -466,10 +466,43 @@ pub(super) fn builtin_reflection_class_is_uninitialized_lazy_object_method() -> 
     }
 }
 
+/// Returns `ReflectionClass::initializeLazyObject()` or `markLazyObjectAsInitialized()`, which
+/// both hand back the object they were given.
+///
+/// Exact, not approximate, for the same reason `isUninitializedLazyObject()` answers false: the
+/// compiled lazy objects are initialized before `newLazyGhost()`/`newLazyProxy()` return, so
+/// there is nothing left to initialize or to mark. Ghosts of interpreter-declared classes are
+/// genuinely lazy, and the interpreter answers these methods for them before this body is reached.
+pub(super) fn builtin_reflection_class_lazy_object_identity_method(name: &str) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("object".to_string(), Some(object_type()), None, false)],
+        param_attributes: vec![Vec::new()],
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(object_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(variable_expr("object", dummy_span))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns a public `ReflectionClass::newLazyProxy()` method backed by eager initialization.
 ///
-/// The AOT object model has no deferred proxy boundary. Calling the supplied factory immediately
-/// preserves its object-producing contract and returns the ordinary object representation that
+/// The AOT object model has no deferred proxy boundary. Calling the supplied factory immediately,
+/// with an uninitialized instance standing in for the proxy PHP would pass, preserves its
+/// object-producing contract and returns the ordinary object representation that
 /// subsequent property and method operations already understand.
 pub(super) fn builtin_reflection_class_new_lazy_proxy_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
@@ -504,7 +537,14 @@ pub(super) fn builtin_reflection_class_new_lazy_proxy_method() -> ClassMethod {
             StmtKind::Return(Some(Expr::new(
                 ExprKind::ExprCall {
                     callee: Box::new(variable_expr("factory", dummy_span)),
-                    args: Vec::new(),
+                    // PHP hands the factory the (still uninitialized) proxy; factories declare
+                    // that parameter, so an uninitialized instance stands in for it here.
+                    args: vec![method_call_expr(
+                        Expr::new(ExprKind::This, dummy_span),
+                        "newInstanceWithoutConstructor",
+                        Vec::new(),
+                        dummy_span,
+                    )],
                 },
                 dummy_span,
             ))),

@@ -24,6 +24,7 @@ use super::instanceof::{escaped_ascii, escaped_bytes};
 
 const EVAL_REFLECTION_CLASS_FLAG_FINAL: u64 = 1;
 const EVAL_REFLECTION_CLASS_FLAG_ABSTRACT: u64 = 2;
+const EVAL_REFLECTION_CLASS_FLAG_INTERFACE: u64 = 4;
 const EVAL_REFLECTION_CLASS_FLAG_READONLY: u64 = 32;
 const EVAL_REFLECTION_CLASS_FLAG_INSTANTIABLE: u64 = 64;
 const EVAL_REFLECTION_CLASS_FLAG_INTERNAL: u64 = 256;
@@ -63,6 +64,7 @@ pub(crate) fn emit_runtime_data_user(
     trait_names: &[String],
     declared_trait_uses: &HashMap<String, Vec<String>>,
     declared_trait_source_lines: &HashMap<String, u32>,
+    declared_class_source_files: &HashMap<String, String>,
     classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     enums: &HashMap<String, EnumInfo>,
     allowed_class_names: Option<&HashSet<String>>,
@@ -737,6 +739,7 @@ pub(crate) fn emit_runtime_data_user(
             &sorted_classes,
             &sorted_interfaces,
             declared_trait_source_lines,
+            declared_class_source_files,
         );
         out.push_str(".p2align 3\n");
         emit_eval_reflection_class_interface_lookup_data(&mut out, &sorted_classes, interfaces);
@@ -1919,19 +1922,21 @@ fn eval_reflection_static_property_declaring_class<'a>(
 
 /// Emits AOT class rows consumed by eval ReflectionClass metadata probes.
 ///
-/// Each row stores the canonical name, class flags, and an optional class doc comment. The
-/// shared row keeps all eval bridge lookups keyed identically and avoids a second class scan.
+/// Each row stores the canonical name, class flags, an optional doc comment, and an optional
+/// declaration file. The shared row keeps eval bridge lookups keyed identically.
 fn emit_eval_reflection_class_lookup_data(
     out: &mut String,
     sorted_classes: &[(&String, &ClassInfo)],
     sorted_interfaces: &[(&String, &InterfaceInfo)],
     declared_trait_source_lines: &HashMap<String, u32>,
+    declared_class_source_files: &HashMap<String, String>,
 ) {
     let mut entries = Vec::new();
     let mut index = 0usize;
     for (class_name, class_info) in sorted_classes {
         let flags = eval_reflection_class_flags(class_info);
-        if flags == 0 {
+        let source_file = declared_class_source_file(declared_class_source_files, class_name);
+        if flags == 0 && source_file.is_none() {
             continue;
         }
         let class_label = format!("_eval_reflection_class_name_{}", index);
@@ -1949,18 +1954,29 @@ fn emit_eval_reflection_class_lookup_data(
                 escaped_ascii(doc_comment)
             ));
         }
+        let source_file_label = source_file.map(|_| format!("_eval_reflection_class_file_{}", index));
+        if let (Some(source_file_label), Some(source_file)) = (&source_file_label, source_file) {
+            out.push_str(&format!(
+                "{0}:\n    .ascii \"{1}\"\n",
+                source_file_label,
+                escaped_ascii(source_file)
+            ));
+        }
         entries.push((
             class_label,
             class_name.len(),
             flags,
             doc_label,
             doc_comment.map_or(0, str::len),
+            source_file_label,
+            source_file.map_or(0, str::len),
         ));
         index += 1;
     }
     for (interface_name, interface_info) in sorted_interfaces {
         let flags = eval_reflection_interface_flags(interface_info);
-        if flags == 0 {
+        let source_file = declared_class_source_file(declared_class_source_files, interface_name);
+        if flags == 0 && source_file.is_none() {
             continue;
         }
         let class_label = format!("_eval_reflection_class_name_{}", index);
@@ -1969,7 +1985,32 @@ fn emit_eval_reflection_class_lookup_data(
             class_label,
             escaped_ascii(interface_name)
         ));
-        entries.push((class_label, interface_name.len(), flags, None, 0));
+        let doc_comment = interface_info.doc_comment.as_deref();
+        let doc_label = doc_comment.map(|_| format!("_eval_reflection_class_doc_{}", index));
+        if let (Some(doc_label), Some(doc_comment)) = (&doc_label, doc_comment) {
+            out.push_str(&format!(
+                "{0}:\n    .ascii \"{1}\"\n",
+                doc_label,
+                escaped_ascii(doc_comment)
+            ));
+        }
+        let source_file_label = source_file.map(|_| format!("_eval_reflection_class_file_{}", index));
+        if let (Some(source_file_label), Some(source_file)) = (&source_file_label, source_file) {
+            out.push_str(&format!(
+                "{0}:\n    .ascii \"{1}\"\n",
+                source_file_label,
+                escaped_ascii(source_file)
+            ));
+        }
+        entries.push((
+            class_label,
+            interface_name.len(),
+            flags,
+            doc_label,
+            doc_comment.map_or(0, str::len),
+            source_file_label,
+            source_file.map_or(0, str::len),
+        ));
         index += 1;
     }
     let mut sorted_trait_lines = declared_trait_source_lines.iter().collect::<Vec<_>>();
@@ -1977,7 +2018,8 @@ fn emit_eval_reflection_class_lookup_data(
         .sort_by(|(left_name, _), (right_name, _)| left_name.cmp(right_name));
     for (trait_name, line) in sorted_trait_lines {
         let flags = eval_reflection_trait_flags(*line);
-        if flags == 0 {
+        let source_file = declared_class_source_file(declared_class_source_files, trait_name);
+        if flags == 0 && source_file.is_none() {
             continue;
         }
         let class_label = format!("_eval_reflection_class_name_{}", index);
@@ -1986,7 +2028,23 @@ fn emit_eval_reflection_class_lookup_data(
             class_label,
             escaped_ascii(trait_name)
         ));
-        entries.push((class_label, trait_name.len(), flags, None, 0));
+        let source_file_label = source_file.map(|_| format!("_eval_reflection_class_file_{}", index));
+        if let (Some(source_file_label), Some(source_file)) = (&source_file_label, source_file) {
+            out.push_str(&format!(
+                "{0}:\n    .ascii \"{1}\"\n",
+                source_file_label,
+                escaped_ascii(source_file)
+            ));
+        }
+        entries.push((
+            class_label,
+            trait_name.len(),
+            flags,
+            None,
+            0,
+            source_file_label,
+            source_file.map_or(0, str::len),
+        ));
         index += 1;
     }
 
@@ -1994,13 +2052,36 @@ fn emit_eval_reflection_class_lookup_data(
     out.push_str(".globl _eval_reflection_class_count\n_eval_reflection_class_count:\n");
     out.push_str(&format!("    .quad {}\n", entries.len()));
     out.push_str(".globl _eval_reflection_classes\n_eval_reflection_classes:\n");
-    for (class_label, class_len, flags, doc_label, doc_len) in entries {
+    for (class_label, class_len, flags, doc_label, doc_len, source_file_label, source_file_len) in entries {
         out.push_str(&format!("    .quad {}\n", class_label));
         out.push_str(&format!("    .quad {}\n", class_len));
         out.push_str(&format!("    .quad {}\n", flags));
         out.push_str(&format!("    .quad {}\n", doc_label.unwrap_or_else(|| "0".to_string())));
         out.push_str(&format!("    .quad {}\n", doc_len));
+        out.push_str(&format!("    .quad {}\n", source_file_label.unwrap_or_else(|| "0".to_string())));
+        out.push_str(&format!("    .quad {}\n", source_file_len));
     }
+}
+
+/// Finds one declaration source path with PHP's case-insensitive class-name rules.
+fn declared_class_source_file<'a>(
+    source_files: &'a HashMap<String, String>,
+    class_name: &str,
+) -> Option<&'a str> {
+    let class_name = class_name.trim_start_matches('\\');
+    source_files
+        .get(&php_symbol_key(class_name))
+        .map(String::as_str)
+        .or_else(|| {
+            source_files
+                .iter()
+                .find(|(candidate, _)| {
+                    candidate
+                        .trim_start_matches('\\')
+                        .eq_ignore_ascii_case(class_name)
+                })
+                .map(|(_, source_file)| source_file.as_str())
+        })
 }
 
 /// Returns eval ReflectionClass flag bits retained for one generated/AOT class.
@@ -2050,10 +2131,11 @@ fn eval_reflection_class_is_instantiable(class_info: &ClassInfo) -> bool {
 
 /// Returns eval ReflectionClass source-location bits retained for one generated/AOT interface.
 fn eval_reflection_interface_flags(interface_info: &InterfaceInfo) -> u64 {
-    eval_reflection_source_line_flags(
-        interface_info.declaration_span.line,
-        interface_info.declaration_span.end_line,
-    )
+    EVAL_REFLECTION_CLASS_FLAG_INTERFACE
+        | eval_reflection_source_line_flags(
+            interface_info.declaration_span.line,
+            interface_info.declaration_span.end_line,
+        )
 }
 
 /// Returns eval ReflectionClass source-location bits retained for one generated/AOT trait.
@@ -3564,7 +3646,7 @@ mod tests {
     use crate::parser::ast::Visibility;
     use crate::types::{ClassInfo, PhpType};
 
-    use super::emit_runtime_data_user;
+    use super::{emit_eval_reflection_class_lookup_data, emit_runtime_data_user};
 
     /// Provides the Empty class info helper used by the user module.
     pub(super) fn empty_class_info(class_id: u64, method_name: &str) -> ClassInfo {
@@ -3674,6 +3756,7 @@ mod tests {
             &[],
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
             &classes,
             &HashMap::new(),
             Some(&allowed_class_names),
@@ -3710,6 +3793,7 @@ mod tests {
             &HashMap::new(),
             &[],
             &[],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &classes,
@@ -3751,6 +3835,7 @@ mod tests {
             &[],
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
             &classes,
             &HashMap::new(),
             None,
@@ -3760,5 +3845,31 @@ mod tests {
         );
 
         assert!(asm.contains("_class_gc_desc_1:\n    .byte 10\n"));
+    }
+
+    /// Reflection lookup rows retain the source file for the AOT class they name.
+    #[test]
+    fn eval_reflection_class_rows_include_declaration_source_files() {
+        let class_name = "ReflectionSourceTarget".to_string();
+        let class_info = empty_class_info(1, "run");
+        let sorted_classes = [(&class_name, &class_info)];
+        let source_files = HashMap::from([(
+            "reflectionsourcetarget".to_string(),
+            "/project/src/ReflectionSourceTarget.php".to_string(),
+        )]);
+        let mut asm = String::new();
+
+        emit_eval_reflection_class_lookup_data(
+            &mut asm,
+            &sorted_classes,
+            &[],
+            &HashMap::new(),
+            &source_files,
+        );
+
+        assert!(asm.contains(
+            "_eval_reflection_class_file_0:\n    .ascii \"/project/src/ReflectionSourceTarget.php\"\n"
+        ));
+        assert!(asm.contains("    .quad _eval_reflection_class_file_0\n    .quad 39\n"));
     }
 }

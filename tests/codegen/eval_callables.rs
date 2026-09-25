@@ -1915,6 +1915,117 @@ return implode("|", $out);');
     );
 }
 
+/// An eval closure with a boolean result can be retained by an AOT object property and invoked
+/// after the eval frame returns, covering callable descriptor metadata across that ownership edge.
+#[test]
+fn test_eval_bool_closure_stored_in_aot_property_invokes_after_eval_returns() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalBoolValidator {
+    private ?\Closure $validator = null;
+    public function setValidator(?\Closure $validator): void { $this->validator = $validator; }
+    public function validate(array $values): bool { return ($this->validator)($values); }
+}
+$validator = new EvalBoolValidator();
+eval('class EvalBoolValidatorFactory { public function register(EvalBoolValidator $validator): void { $validator->setValidator(static fn (array $values): bool => !in_array("blocked", $values, true)); } }');
+$factory = eval('return new EvalBoolValidatorFactory();');
+$factory->register($validator);
+echo $validator->validate(['ready']) ? 'yes' : 'no';
+"#,
+    );
+
+    assert_eq!(out, "yes");
+}
+
+/// Multiple Eval closures with different return types remain callable after an AOT builder stores
+/// them in separate Closure-typed properties and the declaring eval frame has returned.
+#[test]
+fn test_eval_bool_and_array_closures_survive_aot_builder_storage() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalClosureBuilder {
+    private ?\Closure $predicate = null;
+    private ?\Closure $normalizer = null;
+    public function setCallbacks(\Closure $predicate, \Closure $normalizer): void {
+        $this->predicate = $predicate;
+        $this->normalizer = $normalizer;
+    }
+    public function normalize(array $values): array {
+        if (!($this->predicate)($values)) {
+            return [];
+        }
+        return ($this->normalizer)($values);
+    }
+}
+$builder = new EvalClosureBuilder();
+eval('class EvalClosureBuilderFactory { public function configure(EvalClosureBuilder $builder): void { $builder->setCallbacks(static fn (array $values): bool => !in_array("blocked", $values, true), static fn (array $values): array => array_merge(["default"], $values)); } }');
+$factory = eval('return new EvalClosureBuilderFactory();');
+$factory->configure($builder);
+echo implode(",", $builder->normalize(["ready"]));
+"#,
+    );
+
+    assert_eq!(out, "default,ready");
+}
+
+/// Eval closures returned from a builder method and stored in an AOT array remain callable during
+/// later array traversal, covering the callback-array path used by normalizers and validators.
+#[test]
+fn test_eval_closures_stored_in_aot_array_invoke_after_eval_returns() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalClosureList {
+    private array $callbacks = [];
+    public function add(\Closure $callback): void { $this->callbacks[] = $callback; }
+    public function validate(array $values): bool {
+        foreach ($this->callbacks as $callback) {
+            if (!$callback($values)) {
+                return false;
+            }
+        }
+        return true;
+    }
+}
+$list = new EvalClosureList();
+eval('class EvalClosureListFactory { public function configure(EvalClosureList $list): void { $list->add(static fn (array $values): bool => !in_array("blocked", $values, true)); $list->add(static fn (array $values): bool => is_array($values)); } }');
+$factory = eval('return new EvalClosureListFactory();');
+$factory->configure($list);
+echo $list->validate(['ready']) ? 'yes' : 'no';
+"#,
+    );
+
+    assert_eq!(out, "yes");
+}
+
+/// Mirrors the nullable Closure parameter and stored-predicate flow of a generic fluent builder.
+#[test]
+fn test_eval_closure_through_nullable_aot_builder_parameter_invokes_after_eval_returns() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalNullableClosureBuilder {
+    public ?\Closure $ifPart = null;
+    public string $allowedTypes = '';
+    public function ifTrue(?\Closure $closure = null): static {
+        $this->ifPart = $closure ?? static fn ($value) => true === $value;
+        $this->allowedTypes = $closure ? '*' : 'bool';
+        return $this;
+    }
+    public function evaluate(mixed $value): bool { return ($this->ifPart)($value); }
+}
+$builder = new EvalNullableClosureBuilder();
+eval('class EvalNullableClosureFactory { public function configure(EvalNullableClosureBuilder $builder): void { $builder->ifTrue(static fn (array $values): bool => !in_array("blocked", $values, true)); } }');
+$factory = eval('return new EvalNullableClosureFactory();');
+$factory->configure($builder);
+echo ($builder->evaluate(['ready']) ? 'yes' : 'no') . ':';
+$defaultBuilder = new EvalNullableClosureBuilder();
+$defaultBuilder->ifTrue(null);
+echo $defaultBuilder->evaluate(true) ? 'yes' : 'no';
+"#,
+    );
+
+    assert_eq!(out, "yes:yes");
+}
+
 /// Verifies eval dynamic callable descriptors preserve AOT caller by-ref variables.
 #[test]
 fn test_eval_dynamic_callable_params_write_back_aot_by_ref_args() {

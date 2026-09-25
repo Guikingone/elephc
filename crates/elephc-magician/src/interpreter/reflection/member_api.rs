@@ -688,11 +688,32 @@ fn eval_reflection_attribute_matches_filter(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     let identity = values.object_identity(element)?;
-    let Some(attribute_name) = context
+    let attribute_name = match context
         .eval_reflection_attribute(identity)
         .map(|metadata| metadata.attribute().name().to_string())
-    else {
-        return Ok(false);
+    {
+        Some(name) => name,
+        // An attribute the COMPILED side materialized -- the `__attrs` of a reflection owner
+        // built for an AOT class -- was never registered here, and matching nothing made
+        // `getAttributes(AsCommand::class)` empty for every compiled command reflected by a
+        // runtime name (`ContainerBuilder::getReflectionClass()`): no command name, so every
+        // command lost its lazy definition. Its `__name` slot is the same answer both
+        // materializers fill.
+        None => {
+            let name = eval_reflection_with_declaring_class_scope("ReflectionAttribute", context, |_| {
+                values.property_get(element, "__name")
+            })?;
+            let text = if values.type_tag(name)? == EVAL_TAG_STRING {
+                Some(String::from_utf8_lossy(&values.string_bytes(name)?).into_owned())
+            } else {
+                None
+            };
+            values.release(name)?;
+            let Some(text) = text else {
+                return Ok(false);
+            };
+            text
+        }
     };
     if flags & EVAL_REFLECTION_ATTRIBUTE_IS_INSTANCEOF != 0 {
         return eval_class_like_name_is_instance_of(&attribute_name, name_filter, context, values);

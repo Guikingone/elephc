@@ -474,6 +474,7 @@ fn finalize_user_asm(
         &module.trait_table.names,
         &module.declared_trait_uses,
         &module.declared_trait_source_lines,
+        &module.declared_class_source_files,
         &runtime_classes,
         &module.enum_infos,
         Some(&allowed_class_names),

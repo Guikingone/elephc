@@ -24,6 +24,7 @@ use crate::eval_ir::{
 
 mod attribute_decoder;
 mod callable_metadata;
+pub(crate) use callable_metadata::native_callable_param_type_from_abi;
 mod constructor_registration;
 mod method_registration;
 mod property_registration;

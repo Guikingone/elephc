@@ -80,6 +80,29 @@ fn compile(dir: &Path, source: &str, stem: &str) -> PathBuf {
     compile_with_flags(dir, source, stem, &[])
 }
 
+/// Compiles `source` with an INCLUDED file's conditional declarations bound at execution time.
+///
+/// That behaviour is gated off by default — see `conditional_include_declarations_are_bound` in
+/// `src/resolver/declarations.rs` for the reason and for what has to land before the gate can go.
+/// These tests are what will show the gate can be removed.
+fn compile_binding_conditional_includes(dir: &Path, source: &str, stem: &str) -> PathBuf {
+    let php = dir.join(format!("{}.php", stem));
+    fs::write(&php, source).unwrap();
+    let output = Command::new(elephc_bin())
+        .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .env("ELEPHC_BIND_CONDITIONAL_INCLUDE_DECLARATIONS", "1")
+        .current_dir(dir)
+        .arg(&php)
+        .output()
+        .expect("failed to spawn elephc");
+    assert!(
+        output.status.success(),
+        "elephc compile failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    dir.join(stem)
+}
+
 /// Runs a compiled executable and returns its stdout as a string.
 fn run_binary(bin: &Path) -> String {
     let output = Command::new(bin).output().expect("failed to run compiled binary");
@@ -543,5 +566,198 @@ fn date_procedural_aliases_visible_through_variable() {
         "1111110|1111110\n",
         "date/time procedural aliases resolve identically through a variable and a literal, \
          and a qualified spelling is false on both"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Conditionally declared functions.
+//
+// php binds an unconditional top-level `function f() {}` when the file is COMPILED and one nested
+// in a conditional statement only when that statement EXECUTES. Every polyfill in PHP is written
+// against the second rule, and the two halves of the compiler must agree about it: a program must
+// never be told a function exists and then fatal on calling it, nor be told it does not exist when
+// it does. Each expectation below was taken from php 8.5.10 running the same source.
+// ---------------------------------------------------------------------------------------------
+
+/// Verifies the guarded-declaration shape every PHP polyfill uses: a name this build does not
+/// provide, declared inside `if (!function_exists(...))`, is reported as existing AND is callable.
+///
+/// php 8.5.10 prints "bool(true)\nPHI\n". Before conditional declarations were bound at execution
+/// time, `function_exists()` answered true here and the very next call raised
+/// `Call to undefined function` — the two halves disagreeing about one name in one program.
+#[test]
+fn guarded_declaration_of_an_unprovided_name_is_callable() {
+    let dir = make_test_dir("fnexists_guarded");
+    let src = "<?php \
+        if (!function_exists('elephc_probe_upper')) { \
+            function elephc_probe_upper(string $s): string { return 'P' . strtoupper($s); } \
+        } \
+        var_dump(function_exists('elephc_probe_upper')); \
+        echo elephc_probe_upper('hi'), \"\\n\";";
+    let bin = compile(&dir, src, "app");
+    assert_eq!(
+        run_binary(&bin),
+        "bool(true)\nPHI\n",
+        "a function declared behind a function_exists() guard must be callable"
+    );
+}
+
+/// Verifies `function_exists()` answers false BEFORE the declaring statement runs and true after,
+/// which is the difference between php's compile-time and execution-time binding.
+///
+/// php 8.5.10 prints "bool(false)\nbool(true)\nL\n".
+#[test]
+fn conditional_declaration_is_invisible_until_its_statement_runs() {
+    let dir = make_test_dir("fnexists_beforeafter");
+    let src = "<?php \
+        var_dump(function_exists('elephc_probe_later')); \
+        if (count([1]) === 1) { \
+            function elephc_probe_later(): string { return 'L'; } \
+        } \
+        var_dump(function_exists('elephc_probe_later')); \
+        echo elephc_probe_later(), \"\\n\";";
+    let bin = compile(&dir, src, "app");
+    assert_eq!(
+        run_binary(&bin),
+        "bool(false)\nbool(true)\nL\n",
+        "a conditional declaration must not exist before its statement executes"
+    );
+}
+
+/// Verifies a declaration whose branch never runs does not exist, and that calling it raises a
+/// CATCHABLE `Error` rather than a process-level fatal.
+///
+/// php 8.5.10 prints "bool(false)\ncaught: Call to undefined function elephc_probe_never()\n".
+/// The guard reads the process environment so no constant folder can decide it.
+#[test]
+fn an_unexecuted_conditional_declaration_does_not_exist() {
+    let dir = make_test_dir("fnexists_never");
+    let src = "<?php \
+        $argc = count($_SERVER['argv'] ?? []); \
+        if ($argc > 100) { \
+            function elephc_probe_never(): string { return 'N'; } \
+        } \
+        var_dump(function_exists('elephc_probe_never')); \
+        try { elephc_probe_never(); } catch (Error $e) { echo 'caught: ', $e->getMessage(), \"\\n\"; }";
+    let bin = compile(&dir, src, "app");
+    assert_eq!(
+        run_binary(&bin),
+        "bool(false)\ncaught: Call to undefined function elephc_probe_never()\n",
+        "an unexecuted conditional declaration must be absent and its call must throw"
+    );
+}
+
+/// Verifies two mutually exclusive branches may declare the SAME name, which php allows because
+/// only one of them ever binds.
+///
+/// php 8.5.10 prints "bool(true)\nFIRST\n". Before this was modelled, both bodies were emitted
+/// under one symbol and the build failed in the assembler with `symbol '_fn_...' is already
+/// defined`.
+#[test]
+fn two_branches_may_declare_the_same_name() {
+    let dir = make_test_dir("fnexists_branches");
+    let src = "<?php \
+        if (count([1]) === 1) { \
+            function elephc_probe_pick(): string { return 'FIRST'; } \
+        } else { \
+            function elephc_probe_pick(): string { return 'SECOND'; } \
+        } \
+        var_dump(function_exists('elephc_probe_pick')); \
+        echo elephc_probe_pick(), \"\\n\";";
+    let bin = compile(&dir, src, "app");
+    assert_eq!(
+        run_binary(&bin),
+        "bool(true)\nFIRST\n",
+        "only the branch that runs may bind, and the build must not see a duplicate symbol"
+    );
+}
+
+/// Verifies two separate files each guarding the SAME name link together and the first one wins.
+///
+/// This is the shape two packages polyfilling one function produce, and the specific hazard a
+/// naive fix creates: one symbol defined twice is a link failure. php 8.5.10 prints
+/// "bool(true)\nA\n" — the second file's guard is false by the time it runs, so its body is skipped.
+#[test]
+fn two_files_guarding_one_name_link_and_the_first_wins() {
+    let dir = make_test_dir("fnexists_twofiles");
+    fs::write(
+        dir.join("poly_a.php"),
+        "<?php if (!function_exists('elephc_probe_shared')) { \
+            function elephc_probe_shared(): string { return 'A'; } }",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("poly_b.php"),
+        "<?php if (!function_exists('elephc_probe_shared')) { \
+            function elephc_probe_shared(): string { return 'B'; } }",
+    )
+    .unwrap();
+    let src = "<?php \
+        require __DIR__ . '/poly_a.php'; \
+        require __DIR__ . '/poly_b.php'; \
+        var_dump(function_exists('elephc_probe_shared')); \
+        echo elephc_probe_shared(), \"\\n\";";
+    let bin = compile_binding_conditional_includes(&dir, src, "app");
+    assert_eq!(
+        run_binary(&bin),
+        "bool(true)\nA\n",
+        "two files guarding one name must link, and the first declaration must win"
+    );
+}
+
+/// Verifies a guarded declaration inside an INCLUDED file binds when the include executes.
+///
+/// php 8.5.10 prints "bool(false)\nbool(true)\nPHI\n": the name does not exist before the require
+/// and does after. The included file's conditional declaration used to be dropped outright, so
+/// `function_exists()` answered false on both sides and the call raised `Call to undefined
+/// function`.
+#[test]
+fn a_guarded_declaration_in_an_included_file_binds_at_the_include() {
+    let dir = make_test_dir("fnexists_include");
+    fs::create_dir_all(dir.join("lib")).unwrap();
+    fs::write(
+        dir.join("lib/bootstrap.php"),
+        "<?php if (!function_exists('elephc_probe_included')) { \
+            function elephc_probe_included(string $s): string { return 'P' . strtoupper($s); } }",
+    )
+    .unwrap();
+    let src = "<?php \
+        var_dump(function_exists('elephc_probe_included')); \
+        require __DIR__ . '/lib/bootstrap.php'; \
+        var_dump(function_exists('elephc_probe_included')); \
+        echo elephc_probe_included('hi'), \"\\n\";";
+    let bin = compile_binding_conditional_includes(&dir, src, "app");
+    assert_eq!(
+        run_binary(&bin),
+        "bool(false)\nbool(true)\nPHI\n",
+        "a conditional declaration in an included file must bind when the include runs"
+    );
+}
+
+/// Verifies a conditional declaration of a name this build PROVIDES as a builtin is left alone:
+/// the builtin keeps answering and the build does not refuse the program.
+///
+/// The guard reads the process environment, so the body survives constant folding and the pass has
+/// to decide about it for real. Turning such a declaration into a variant group would put a user
+/// symbol in front of the builtin at every call site — and the checker refuses a group over a
+/// builtin name outright with `Cannot redeclare built-in function`.
+///
+/// php 8.5.10 prints "bool(true)\n3\n": it has `strlen` too, and the branch does not run there
+/// either.
+#[test]
+fn a_guarded_declaration_of_a_builtin_name_leaves_the_builtin_in_place() {
+    let dir = make_test_dir("fnexists_builtin_guard");
+    let src = "<?php \
+        $argc = count($_SERVER['argv'] ?? []); \
+        if ($argc > 100) { \
+            function strlen($s) { return 99; } \
+        } \
+        var_dump(function_exists('strlen')); \
+        echo strlen('abc'), \"\\n\";";
+    let bin = compile(&dir, src, "app");
+    assert_eq!(
+        run_binary(&bin),
+        "bool(true)\n3\n",
+        "a builtin this build provides must keep answering past a conditional redeclaration"
     );
 }

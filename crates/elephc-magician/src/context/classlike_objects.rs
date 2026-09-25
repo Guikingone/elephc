@@ -315,6 +315,28 @@ impl ElephcEvalContext {
         }
     }
 
+    /// Records the (retained) initializer of a lazy ghost, returning one it replaces.
+    pub fn register_lazy_ghost(
+        &mut self,
+        identity: u64,
+        initializer: RuntimeCellHandle,
+    ) -> Option<RuntimeCellHandle> {
+        self.lazy_ghost_initializers.insert(identity, initializer)
+    }
+
+    /// Removes and returns a pending lazy-ghost initializer, marking the object initialized.
+    pub fn take_lazy_ghost_initializer(&mut self, identity: u64) -> Option<RuntimeCellHandle> {
+        if self.lazy_ghost_initializers.is_empty() {
+            return None;
+        }
+        self.lazy_ghost_initializers.remove(&identity)
+    }
+
+    /// Returns whether an object is a lazy ghost whose initializer has not run yet.
+    pub fn is_uninitialized_lazy_ghost(&self, identity: u64) -> bool {
+        self.lazy_ghost_initializers.contains_key(&identity)
+    }
+
     /// Removes one dynamic object and returns its owned properties plus deferred-free state.
     pub fn forget_dynamic_object(&mut self, identity: u64) -> (Vec<RuntimeCellHandle>, bool) {
         let removed_dynamic_object = self.dynamic_objects.remove(&identity).is_some();
@@ -336,6 +358,11 @@ impl ElephcEvalContext {
         let mut property_values: Vec<RuntimeCellHandle> = property_values;
         if let Some(state) = self.array_iterators.remove(&identity) {
             property_values.push(state.storage);
+        }
+        // A ghost released before anything touched it never runs its initializer; the entry must
+        // still go, or the next object allocated at this address would inherit it.
+        if let Some(initializer) = self.lazy_ghost_initializers.remove(&identity) {
+            property_values.push(initializer);
         }
         let should_finalize = removed_dynamic_object && self.forget_dynamic_object_owner();
         (property_values, should_finalize)

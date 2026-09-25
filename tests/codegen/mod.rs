@@ -21,6 +21,7 @@ mod benchmarks;
 mod echo_vars;
 mod inline_html;
 mod eval;
+mod eval_cross_context_types;
 mod symbol_catalog;
 mod eval_builtin_parity;
 mod eval_filter_var;

@@ -288,6 +288,11 @@ fn lower_nested_append_assignment(
     span: Span,
 ) -> Result<Stmt, CompileError> {
     let mut lowerer = EffectfulTargetLowerer::new(span);
+    let (target, dynamic_root) = lowerer.hoist_dynamic_property_root(target);
+    // The fused-append recognizer (`ir_lower::stmt::nested_append::recognize`) matches the
+    // read/push/write-back triple at the END of its own `Synthetic` group, so a hoisted root's
+    // extra write-back must sit outside it.
+    let group_start = lowerer.stmts.len();
     let target = lowerer.stabilize_array_target(target);
     let temp = lowerer.next_nested_append_temp_name();
     lowerer.stmts.push(Stmt::new(
@@ -306,7 +311,42 @@ fn lower_nested_append_assignment(
     ));
     let write_back =
         assignment_target_store_stmt(target, Expr::new(ExprKind::Variable(temp), span), span)?;
+    if let Some(root) = dynamic_root {
+        let mut group = lowerer.stmts.split_off(group_start);
+        group.push(Stmt::new(write_back, span));
+        lowerer.stmts.push(Stmt::new(StmtKind::Synthetic(group), span));
+        return Ok(lowerer.finish(root.write_back(span)));
+    }
     Ok(lowerer.finish(write_back))
+}
+
+/// A `$object->{$name}` chain root the nested-write desugar read into a temporary.
+struct HoistedDynamicPropertyRoot {
+    object: Expr,
+    name: Expr,
+    temp: String,
+}
+
+impl HoistedDynamicPropertyRoot {
+    /// Stores the (modified) temporary back through the same object and property name.
+    fn write_back(self, span: Span) -> StmtKind {
+        StmtKind::ExprStmt(Expr::new(
+            ExprKind::Assignment {
+                target: Box::new(Expr::new(
+                    ExprKind::DynamicPropertyAccess {
+                        object: Box::new(self.object),
+                        property: Box::new(self.name),
+                    },
+                    span,
+                )),
+                value: Box::new(Expr::new(ExprKind::Variable(self.temp), span)),
+                result_target: None,
+                prelude: Vec::new(),
+                conditional_value_temp: None,
+            },
+            span,
+        ))
+    }
 }
 
 /// Builds the statement that writes `value` back into an already-stabilized
@@ -1057,6 +1097,59 @@ impl EffectfulTargetLowerer {
         );
         self.next_temp += 1;
         name
+    }
+
+    /// Reads the `$object->{$name}` root of an array-access chain into a temporary and returns
+    /// the chain rooted at that temporary, plus what the caller must write back.
+    ///
+    /// Such a root has no store statement of its own for a nested write to target, so the
+    /// generic desugar stabilized it like any expression: the append landed in a copy that was
+    /// never written back. `$this->{lcfirst($symbol) . 'AttributeConfigurators'}[$name][] =
+    /// $callable` -- Symfony's attribute autoconfiguration -- registered nothing. The object and
+    /// the name are each evaluated once, before the read, as php does.
+    fn hoist_dynamic_property_root(
+        &mut self,
+        target: Expr,
+    ) -> (Expr, Option<HoistedDynamicPropertyRoot>) {
+        let span = target.span;
+        match target.kind {
+            ExprKind::ArrayAccess { array, index } => {
+                let (array, root) = self.hoist_dynamic_property_root(*array);
+                (
+                    Expr::new(
+                        ExprKind::ArrayAccess {
+                            array: Box::new(array),
+                            index,
+                        },
+                        span,
+                    ),
+                    root,
+                )
+            }
+            ExprKind::DynamicPropertyAccess { object, property } => {
+                let object = self.stabilize(*object);
+                let name = self.stabilize(*property);
+                let temp = self.next_temp_name();
+                self.stmts.push(Stmt::new(
+                    StmtKind::Assign {
+                        name: temp.clone(),
+                        value: Expr::new(
+                            ExprKind::DynamicPropertyAccess {
+                                object: Box::new(object.clone()),
+                                property: Box::new(name.clone()),
+                            },
+                            span,
+                        ),
+                    },
+                    self.span,
+                ));
+                (
+                    Expr::new(ExprKind::Variable(temp.clone()), span),
+                    Some(HoistedDynamicPropertyRoot { object, name, temp }),
+                )
+            }
+            kind => (Expr::new(kind, span), None),
+        }
     }
 
     /// Stabilizes an array-access target, recursively stabilizing both the array base

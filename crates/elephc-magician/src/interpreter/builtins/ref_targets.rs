@@ -22,7 +22,7 @@ pub(in crate::interpreter) fn eval_write_direct_ref_target(
 ) -> Result<(), EvalStatus> {
     match target {
         EvalReferenceTarget::Variable { scope, name } => {
-            let Some(scope) = (unsafe { scope.as_mut() }) else {
+            let Some(scope) = (unsafe { scope.live_mut() }) else {
                 return Err(EvalStatus::RuntimeFatal);
             };
             let ownership = variable_ownership.unwrap_or_else(|| {

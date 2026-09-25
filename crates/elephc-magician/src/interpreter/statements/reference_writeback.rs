@@ -298,8 +298,11 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
 ) -> Result<(), EvalStatus> {
     match target {
         EvalReferenceTarget::Variable { scope, name } => {
-            let Some(scope) = (unsafe { scope.as_mut() }) else {
-                return Err(EvalStatus::RuntimeFatal);
+            // The defining activation has returned -- a closure's `use (&$x)` outliving the
+            // function that declared `$x`. No variable is left to update; the closure's own
+            // binding is the only holder of the value now.
+            let Some(scope) = (unsafe { scope.live_mut() }) else {
+                return Ok(());
             };
             if visible_scope_cell(context, scope, name) == Some(value) {
                 // Native writeback can mutate the existing cell in place. Do
@@ -343,8 +346,8 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
             array_name,
             index,
         } => {
-            let Some(scope) = (unsafe { scope.as_mut() }) else {
-                return Err(EvalStatus::RuntimeFatal);
+            let Some(scope) = (unsafe { scope.live_mut() }) else {
+                return Ok(());
             };
             write_back_method_array_element_ref_target(
                 scope, array_name, index, value, context, values,

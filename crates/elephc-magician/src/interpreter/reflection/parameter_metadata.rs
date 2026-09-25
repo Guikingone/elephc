@@ -266,12 +266,36 @@ pub(super) fn eval_reflection_parameter_type_metadata(
             ),
         });
     }
+    // php orders a union's members canonically, whatever order the declaration used: class names
+    // as written, then the built-ins in `zend_type_to_string()`'s fixed order, `null` last. Both
+    // `getTypes()` and the string form follow it (`int|string` reflects as `string|int`).
+    types.sort_by_key(|member| eval_reflection_union_member_rank(&member.name));
     Some(EvalReflectionParameterTypeMetadata {
         kind: EvalReflectionParameterTypeKind::Union(EvalReflectionUnionTypeMetadata {
             types,
             allows_null,
         }),
     })
+}
+
+/// Returns one union member's position in php's canonical union order (stable within a rank).
+fn eval_reflection_union_member_rank(name: &str) -> u8 {
+    match name.to_ascii_lowercase().as_str() {
+        "static" => 1,
+        "callable" => 2,
+        "object" => 3,
+        "array" | "iterable" => 4,
+        "string" => 5,
+        "int" => 6,
+        "float" => 7,
+        "bool" => 8,
+        "false" => 9,
+        "true" => 10,
+        "void" => 11,
+        "never" => 12,
+        "null" => 13,
+        _ => 0,
+    }
 }
 
 /// Returns PHP's `ReflectionParameter::allowsNull()` value for retained metadata.

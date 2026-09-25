@@ -332,6 +332,11 @@ pub(super) fn eval_reflection_aot_class_flags(
     let is_interface = eval_runtime_interface_exists(runtime_class_name, values)?;
     let is_trait = values.trait_exists(runtime_class_name)?;
     let is_enum = values.enum_exists(runtime_class_name)?;
+    if crate::eval_trace::enabled() {
+        eprintln!(
+            "[elephc-eval-trace] phase=reflection_aot_class_flags name={runtime_class_name:?} class={is_class} interface={is_interface} trait={is_trait} enum={is_enum}"
+        );
+    }
     if !(is_class || is_interface || is_trait || is_enum) {
         return Ok(None);
     }

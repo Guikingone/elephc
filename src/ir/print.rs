@@ -287,6 +287,14 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::TypeName(id) => {
             let _ = write!(out, " type_name[{}]", id.as_raw());
         }
+        Immediate::ParameterType { name, strict_types } => {
+            let _ = write!(
+                out,
+                " parameter_type[{}] strict_types={}",
+                name.as_raw(),
+                strict_types
+            );
+        }
         Immediate::Capacity(capacity) => {
             let _ = write!(out, " capacity={}", capacity);
         }

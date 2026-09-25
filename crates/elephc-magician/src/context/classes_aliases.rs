@@ -101,6 +101,7 @@ impl ElephcEvalContext {
         self.static_slot_keys.clear();
         self.closures.clear();
         self.closure_objects.clear();
+        self.lazy_ghost_initializers.clear();
         self.next_closure_id = 0;
         self.dynamic_objects.clear();
         self.dynamic_destructing_objects.clear();

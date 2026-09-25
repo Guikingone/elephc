@@ -148,6 +148,7 @@ pub(in crate::interpreter) fn eval_reflection_class_is_subclass_of_result(
     };
     let args = bind_evaluated_function_args(&[String::from("class")], evaluated_args)?;
     let target_name = eval_reflection_string_arg(args[0], values)?;
+    let _ = crate::interpreter::eval_spl_autoload_class(&target_name, context, values)?;
     if !eval_reflection_class_like_exists(&target_name, context)
         && !values.class_exists(&target_name)?
         && !eval_runtime_interface_exists(&target_name, values)?
@@ -226,23 +227,19 @@ pub(in crate::interpreter) fn eval_reflection_class_source_location_result(
     let Some(reflected_name) = context.eval_reflection_class_name(identity) else {
         return Ok(None);
     };
-    if eval_reflection_class_like_attributes(reflected_name, context).is_none() {
-        // Native getters retain per-declaration paths and lines in the reflector's slots.
-        // The eval fallback below only has a global AOT source path, not that declaration path.
-        return Ok(None);
-    }
     let (aot_source_file, aot_source_location) =
         eval_reflection_aot_class_source_metadata(reflected_name, values)?;
-    // The generated program has ONE source file, the entry point, and answering with it named the
-    // wrong file for every class interpreted code declared: a class from an included file reported
-    // the entry file rather than the include's own path. The declaring path is recorded when the
-    // declaration runs -- already in php's spelling, `FILE(LINE) : eval()'d code` for an eval
-    // fragment and the included file's own path for an include -- so it only has to be preferred.
-    let source_file = context
-        .class_source_file(reflected_name)
-        .map(str::to_string)
-        .or(aot_source_file);
-    let source_location = eval_reflection_class_like_attributes(reflected_name, context)
+    // Interpreted declarations record their own file when they execute. AOT declarations use the
+    // class-name keyed source table; the module entry path is not a substitute for a declaration
+    // path (for example, a bundle's getPath() reflects on its concrete class).
+    let eval_metadata = eval_reflection_class_like_attributes(reflected_name, context);
+    let eval_source_file = eval_metadata
+        .as_ref()
+        .and_then(|_| context.class_source_file(reflected_name))
+        .map(str::to_string);
+    let source_file = eval_source_file.or(aot_source_file);
+    let source_location = eval_metadata
+        .as_ref()
         .and_then(|metadata| metadata.source_location)
         .or(aot_source_location);
     eval_reflection_source_location_result(
@@ -256,17 +253,24 @@ pub(in crate::interpreter) fn eval_reflection_class_source_location_result(
 }
 
 /// Returns AOT source-file and line metadata for a generated ReflectionClass.
-fn eval_reflection_aot_class_source_metadata(
+pub(super) fn eval_reflection_aot_class_source_metadata(
     class_name: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(Option<String>, Option<EvalSourceLocation>), EvalStatus> {
-    // The generated script path remains useful to `getFileName()` even when a dynamic
-    // ReflectionObject target has no class-specific source-line flags. Do not couple the file
-    // result to line metadata: consumers such as project-root discovery only require the path.
-    let source_file = values.reflection_source_file()?;
-    let source_location = values
-        .reflection_class_flags(class_name.trim_start_matches('\\'))?
-        .and_then(eval_reflection_aot_class_source_location_from_flags);
+    let class_name = class_name.trim_start_matches('\\');
+    let class_flags = values.reflection_class_flags(class_name)?;
+    let source_file = match values.reflection_class_source_file(class_name)? {
+        Some(source_file) => Some(source_file),
+        None
+            if class_flags.is_some_and(|flags| {
+                flags & EVAL_REFLECTION_CLASS_FLAG_INTERNAL == 0
+            }) =>
+        {
+            values.reflection_source_file()?
+        }
+        None => None,
+    };
+    let source_location = class_flags.and_then(eval_reflection_aot_class_source_location_from_flags);
     Ok((source_file, source_location))
 }
 
@@ -608,14 +612,12 @@ pub(in crate::interpreter) fn eval_reflection_class_has_method_result(
         if declared {
             true
         } else if let Some(parent) = context.class_native_parent_name(&reflected_name) {
-            eval_reflection_aot_method_metadata_if_exists(&parent, &requested_name, values)?
-                .is_some()
+            eval_reflection_aot_method_exists_in_ancestry(&parent, &requested_name, values)?
         } else {
             false
         }
     } else {
-        eval_reflection_aot_method_metadata_if_exists(&reflected_name, &requested_name, values)?
-            .is_some()
+        eval_reflection_aot_method_exists_in_ancestry(&reflected_name, &requested_name, values)?
     };
     if crate::eval_trace::enabled() {
         eprintln!(
@@ -623,6 +625,25 @@ pub(in crate::interpreter) fn eval_reflection_class_has_method_result(
         );
     }
     values.bool_value(exists).map(Some)
+}
+
+/// Returns whether a compiled class or one of its compiled ancestors declares a method.
+///
+/// A class's AOT method table omits the PRIVATE methods its ancestors declare, which php still
+/// reports: `hasMethod()` is true for them, as `new ReflectionMethod()` finds them.
+fn eval_reflection_aot_method_exists_in_ancestry(
+    class_name: &str,
+    method_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let mut owner = Some(class_name.to_string());
+    while let Some(current) = owner {
+        if eval_reflection_aot_method_metadata_if_exists(&current, method_name, values)?.is_some() {
+            return Ok(true);
+        }
+        owner = eval_reflection_aot_parent_class_name(&current, values)?;
+    }
+    Ok(false)
 }
 
 /// Handles eval-backed `ReflectionClass::hasProperty()` and inherited `ReflectionObject` calls.
@@ -811,6 +832,12 @@ pub(in crate::interpreter) fn eval_reflection_class_get_relation_objects_result(
     } else {
         return Ok(None);
     };
+    if crate::eval_trace::enabled() {
+        eprintln!(
+            "[elephc-eval-trace] phase=reflection_class_relations_start method={method_name:?} identity={identity} args={}",
+            evaluated_args.len()
+        );
+    }
     if !evaluated_args.is_empty() {
         return Err(EvalStatus::RuntimeFatal);
     }
@@ -832,6 +859,11 @@ pub(in crate::interpreter) fn eval_reflection_class_get_relation_objects_result(
         } else {
             eval_reflection_aot_class_trait_names(&reflected_name, values)?
         };
+    if crate::eval_trace::enabled() {
+        eprintln!(
+            "[elephc-eval-trace] phase=reflection_class_relations reflected={reflected_name:?} kind={relation_kind} names={names:?}"
+        );
+    }
     eval_reflection_class_object_map_result(&names, context, values).map(Some)
 }
 

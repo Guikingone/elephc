@@ -233,10 +233,22 @@ pub(super) fn lower_reflection_method_constructor_operands(
 pub(super) fn lower_clone(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let object = lower_expr(ctx, inner);
     let object_ty = ctx.builder.value_php_type(object.value);
-    let (object, class_name, gradual_result_ty) = if let Some((class_name, false)) =
+    let (object, class_name, gradual_result_ty, result_ty) = if let Some((class_name, false)) =
         singular_object_class(&object_ty)
     {
-        (object, class_name.to_string(), None)
+        // PHP's generic `object` type is represented as `PhpType::Object("")`. It does not name
+        // a concrete layout: dispatch clone by the runtime class just like an interface-typed
+        // receiver, while preserving the generic object result type for later lowering.
+        if class_name.is_empty() {
+            (
+                object,
+                "object".to_string(),
+                None,
+                Some(object_ty.clone()),
+            )
+        } else {
+            (object, class_name.to_string(), None, None)
+        }
     } else if matches!(object_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
         && crate::types::checker::type_is_gradual_object_family(&object_ty)
     {
@@ -252,6 +264,7 @@ pub(super) fn lower_clone(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr:
             unboxed,
             "object".to_string(),
             Some(object_ty.clone()),
+            None,
         )
     } else {
         unreachable!(
@@ -260,7 +273,7 @@ pub(super) fn lower_clone(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr:
         );
     };
     let data = ctx.intern_class_name(&class_name);
-    let result_ty = PhpType::Object(class_name.clone());
+    let result_ty = result_ty.unwrap_or_else(|| PhpType::Object(class_name.clone()));
     let cloned = ctx.emit_value(
         Op::ObjectCloneShallow,
         vec![object.value],

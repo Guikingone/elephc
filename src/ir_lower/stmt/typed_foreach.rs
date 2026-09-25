@@ -303,6 +303,13 @@ pub(super) fn lower_foreach(
     ctx.try_handler_stack = surrounding_try_handler_stack;
     branch_to(ctx, header);
     ctx.builder.position_at_end(exit);
+    // A `break` leaves the loop without passing through any `if` join, so a store that widened
+    // a slot to boxed storage just before it (`$n = count($m); foreach ($m as $v) { if ($v) {
+    // $n = $m; break; } }`) never reached the flow facts this exit resumes from, and the read
+    // below the loop loaded the boxed slot as a raw `int` -- a pointer where php has an array.
+    // Symfony's DeepClone polyfill returns exactly that `$n`; every container rebuild then asked
+    // `array_fill()` for a pointer-sized count. Same rule as the `while` exit.
+    ctx.reassert_widened_local_storage_types();
     ctx.clear_static_callable_locals();
     // Release the source when it is a fresh owning temporary (e.g. `foreach
     // (explode(...) as $p)` or a literal array): the iterator borrows it for the

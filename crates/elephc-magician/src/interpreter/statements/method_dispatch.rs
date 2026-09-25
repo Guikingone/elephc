@@ -77,6 +77,9 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         );
     }
     eval_rebind_foreign_reflection_target(object, identity, context, values)?;
+    if crate::eval_trace::enabled() && method_name.eq_ignore_ascii_case("getInterfaces") {
+        eprintln!("[elephc-eval-trace] phase=reflection_get_interfaces_dispatch stage=after_rebind");
+    }
     if eval_object_is_array_iterator(identity, context) {
         let positional = positional_evaluated_arg_values(evaluated_args.clone())?;
         if let Some(result) = eval_array_iterator_method_result(
@@ -222,13 +225,24 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
     )? {
         return Ok(result);
     }
-    if let Some(result) = eval_reflection_class_basic_metadata_result(
+    let basic_metadata_result = eval_reflection_class_basic_metadata_result(
         identity,
         method_name,
         evaluated_args.clone(),
         context,
         values,
-    )? {
+    );
+    if crate::eval_trace::enabled() && method_name.eq_ignore_ascii_case("getInterfaces") {
+        let outcome = match &basic_metadata_result {
+            Ok(Some(_)) => "handled",
+            Ok(None) => "unhandled",
+            Err(_) => "error",
+        };
+        eprintln!(
+            "[elephc-eval-trace] phase=reflection_get_interfaces_dispatch stage=basic_metadata result={outcome}"
+        );
+    }
+    if let Some(result) = basic_metadata_result? {
         return Ok(result);
     }
     if let Some(result) = eval_reflection_class_has_method_result(
@@ -259,14 +273,25 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
     )? {
         return Ok(result);
     }
-    if let Some(result) = eval_reflection_enum_methods_result(
+    let enum_result = eval_reflection_enum_methods_result(
         object,
         identity,
         method_name,
         evaluated_args.clone(),
         context,
         values,
-    )? {
+    );
+    if crate::eval_trace::enabled() && method_name.eq_ignore_ascii_case("getInterfaces") {
+        let outcome = match &enum_result {
+            Ok(Some(_)) => "handled",
+            Ok(None) => "unhandled",
+            Err(_) => "error",
+        };
+        eprintln!(
+            "[elephc-eval-trace] phase=reflection_get_interfaces_dispatch stage=enum result={outcome}"
+        );
+    }
+    if let Some(result) = enum_result? {
         return Ok(result);
     }
     if let Some(result) = eval_reflection_class_get_relation_objects_result(
@@ -551,6 +576,15 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         return Ok(instance);
     }
     if let Some(instance) = eval_reflection_class_new_instance_without_constructor_result(
+        identity,
+        method_name,
+        evaluated_args.clone(),
+        context,
+        values,
+    )? {
+        return Ok(instance);
+    }
+    if let Some(instance) = eval_reflection_class_new_lazy_object_result(
         identity,
         method_name,
         evaluated_args.clone(),
@@ -1033,8 +1067,15 @@ fn eval_rebind_foreign_reflection_target(
             // and which reflector landed where depended on heap layout, so the failure moved with
             // anything that allocated (the eval trace included). An entry is trusted only while
             // the object's own `__name` slot still names it.
-            let slot_name =
-                eval_reflection_slot_string(object, &owner_class, "__name", context, values)?;
+            let slot_name_result =
+                eval_reflection_slot_string(object, &owner_class, "__name", context, values);
+            if crate::eval_trace::enabled() && owner_class == "ReflectionClass" {
+                let outcome = if slot_name_result.is_ok() { "ok" } else { "error" };
+                eprintln!(
+                    "[elephc-eval-trace] phase=reflection_rebind kind=class identity={identity} stage=read_name_slot result={outcome}"
+                );
+            }
+            let slot_name = slot_name_result?;
             if let Some(bound) = context.eval_reflection_class_name(identity) {
                 let still_bound = slot_name.as_deref().is_none_or(|name| {
                     eval_reflection_names_match(bound, name, context)
@@ -1223,16 +1264,58 @@ fn eval_reflection_slot_string(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<String>, EvalStatus> {
-    let value = eval_with_native_bridge_scope(owner_class, context, || {
+    let value_result = eval_with_native_bridge_scope(owner_class, context, || {
         values.property_get(object, slot)
-    })?;
-    if values.type_tag(value)? != EVAL_TAG_STRING {
+    });
+    let trace_slot = crate::eval_trace::enabled()
+        && owner_class == "ReflectionClass"
+        && slot == "__name";
+    if trace_slot {
+        eprintln!(
+            "[elephc-eval-trace] phase=reflection_rebind kind=class stage=property_get result={}",
+            if value_result.is_ok() { "ok" } else { "error" }
+        );
+    }
+    let value = value_result?;
+    let type_result = values.type_tag(value);
+    if trace_slot {
+        eprintln!(
+            "[elephc-eval-trace] phase=reflection_rebind kind=class stage=name_slot_type result={}",
+            if type_result.is_ok() { "ok" } else { "error" }
+        );
+    }
+    if type_result? != EVAL_TAG_STRING {
         values.release(value)?;
         return Ok(None);
     }
-    let bytes = values.string_bytes(value);
+    let bytes_result = values.string_bytes(value);
+    if trace_slot {
+        eprintln!(
+            "[elephc-eval-trace] phase=reflection_rebind kind=class stage=name_slot_bytes result={}",
+            if bytes_result.is_ok() { "ok" } else { "error" }
+        );
+    }
+    let bytes = bytes_result;
     values.release(value)?;
-    let text = String::from_utf8(bytes?).map_err(|_| EvalStatus::RuntimeFatal)?;
+    let bytes = bytes?;
+    let text = match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(error) => {
+            if trace_slot {
+                let raw = error.as_bytes();
+                let preview = raw
+                    .iter()
+                    .take(64)
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>();
+                eprintln!(
+                    "[elephc-eval-trace] phase=reflection_rebind kind=class stage=invalid_name_utf8 len={} hex={preview}",
+                    raw.len()
+                );
+            }
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    };
     if text.is_empty() {
         return Ok(None);
     }

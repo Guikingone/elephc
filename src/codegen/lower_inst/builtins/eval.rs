@@ -312,6 +312,7 @@ mod context_registration;
 mod registration_collection;
 mod member_collection;
 mod signature_metadata;
+pub(crate) use signature_metadata::eval_native_callable_param_type_specs;
 mod default_expressions;
 mod default_constants;
 mod function_registration;

@@ -24,7 +24,12 @@ pub(super) fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
             return Ok(());
         }
     }
-    if inst.operands.len() == 1 && matches!(inst.immediate, Some(Immediate::TypeName(_))) {
+    if inst.operands.len() == 1
+        && matches!(
+            inst.immediate,
+            Some(Immediate::TypeName(_) | Immediate::ParameterType { .. })
+        )
+    {
         return lower_gradual_union_param_guard(ctx, inst);
     }
     if let Some(()) = try_lower_callable_array_runtime_get(ctx, inst)? {
@@ -395,10 +400,14 @@ fn lower_gradual_union_param_guard(
     inst: &Instruction,
 ) -> Result<()> {
     let value = expect_operand(inst, 0)?;
-    let Some(Immediate::TypeName(type_name)) = inst.immediate else {
-        return Err(CodegenIrError::invalid_module(
-            "gradual union parameter guard is missing its declared type name",
-        ));
+    let (type_name, strict_types) = match inst.immediate {
+        Some(Immediate::TypeName(type_name)) => (type_name, true),
+        Some(Immediate::ParameterType { name, strict_types }) => (name, strict_types),
+        _ => {
+            return Err(CodegenIrError::invalid_module(
+                "gradual union parameter guard is missing its declared type name",
+            ));
+        }
     };
     let declared_name = ctx
         .module
@@ -407,7 +416,7 @@ fn lower_gradual_union_param_guard(
         .get(type_name.as_raw() as usize)
         .cloned()
         .ok_or_else(|| CodegenIrError::missing_entry("type-name data", type_name.as_raw()))?;
-    let accepted_tags = gradual_union_param_tags(&inst.result_php_type).ok_or_else(|| {
+    let accepted_tags = gradual_union_param_tags(&inst.result_php_type, strict_types).ok_or_else(|| {
         CodegenIrError::invalid_module(format!(
             "unsupported gradual union parameter guard for PHP type {:?}",
             inst.result_php_type
@@ -441,10 +450,20 @@ fn lower_gradual_union_param_guard(
 }
 
 /// Returns the stable Mixed tags accepted by a scalar/null/array union parameter.
-fn gradual_union_param_tags(ty: &PhpType) -> Option<Vec<i64>> {
+fn gradual_union_param_tags(ty: &PhpType, strict_types: bool) -> Option<Vec<i64>> {
     let PhpType::Union(members) = ty else {
         return None;
     };
+    if !strict_types
+        && members.len() == 2
+        && members.iter().any(|member| matches!(member, PhpType::Str))
+        && members.iter().any(|member| matches!(member, PhpType::Void))
+    {
+        // In coercive mode PHP accepts scalar values and Stringable objects for ?string.
+        // Resources and arrays remain a TypeError; the subsequent Mixed string cast handles
+        // accepted runtime forms and preserves null on its own branch.
+        return Some(vec![0, 1, 2, 3, 6, 8]);
+    }
     let mut tags = Vec::new();
     for member in members {
         let member_tags: &[i64] = match member {

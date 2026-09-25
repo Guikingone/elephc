@@ -302,6 +302,90 @@ take(choose(true));
     assert_eq!(out, "ok");
 }
 
+/// Verifies a weak call coerces an integer read from a mixed array into a nullable string
+/// parameter, matching PHP's scalar argument rules at a method boundary.
+#[test]
+fn test_nullable_string_parameter_coerces_integer_from_array() {
+    let out = compile_and_run(
+        r#"<?php
+class StringWidth {
+    public static function of(?string $value): int {
+        return strlen($value ?? '');
+    }
+}
+class TableLike {
+    public function firstWidth(array $row): int {
+        return StringWidth::of($row[0]);
+    }
+    public function namedWidth(array $row): int {
+        return StringWidth::of(value: $row[0]);
+    }
+}
+class Displayable {
+    public function __toString(): string { return 'wide'; }
+}
+$table = new TableLike();
+echo $table->firstWidth([42]), ':', $table->namedWidth([43]), ':';
+echo $table->firstWidth([false]), ':', $table->firstWidth([null]), ':';
+echo $table->firstWidth([new Displayable()]);
+"#,
+    );
+    assert_eq!(out, "2:2:0:0:4");
+}
+
+/// Verifies a gradual value keeps strict call-site semantics for a nullable string union.
+#[test]
+fn test_nullable_string_parameter_rejects_integer_from_array_in_strict_mode() {
+    let out = compile_and_run(
+        r#"<?php
+declare(strict_types=1);
+class StringWidth {
+    public static function of(?string $value): int {
+        return strlen($value ?? '');
+    }
+}
+class TableLike {
+    public function firstWidth(array $row): string {
+        try {
+            StringWidth::of($row[0]);
+            return 'accepted';
+        } catch (TypeError $error) {
+            return 'rejected';
+        }
+    }
+}
+echo (new TableLike())->firstWidth([42]);
+"#,
+    );
+    assert_eq!(out, "rejected");
+}
+
+/// Verifies weak scalar binding does not turn an array into the string "Array".
+#[test]
+fn test_nullable_string_parameter_rejects_array_from_array_in_weak_mode() {
+    let out = compile_and_run(
+        r#"<?php
+class StringWidth {
+    public static function of(?string $value): int {
+        return strlen($value ?? '');
+    }
+}
+class TableLike {
+    public function firstWidth(array $row): string {
+        try {
+            StringWidth::of($row[0]);
+            return 'accepted';
+        } catch (TypeError $error) {
+            return 'rejected';
+        }
+    }
+}
+echo (new TableLike())->firstWidth([['not a scalar']]);
+"#,
+    );
+    assert_eq!(out, "rejected");
+}
+
 /// Verifies an empty first argument does not freeze a declared generic array parameter to the
 /// empty-literal placeholder and reject later populated arrays.
 #[test]

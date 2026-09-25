@@ -49,6 +49,11 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
                 .then(|| crate::ir_lower::expr::lower_bound_closure_for_assignment(ctx, value))
                 .flatten()
         })
+        .or_else(|| {
+            name.starts_with(crate::parser::ast::NESTED_APPEND_TEMP_PREFIX)
+                .then(|| crate::ir_lower::expr::lower_array_access_quietly(ctx, value))
+                .flatten()
+        })
         .unwrap_or_else(|| lower_expr(ctx, value));
     if ctx.builder.insertion_block_is_terminated() {
         return;

@@ -38,18 +38,21 @@ pub(crate) const INI_KNOWN_MODULES: &[&str] = &[
     "ctype",
     "mbstring",
     "Reflection",
+    // PHP ships ext/session in both the CLI and built-in server SAPIs.
+    "session",
     "Zend OPcache",
 ];
 
 /// Builds the `__elephc_ini_module_known($m)` declaration over [`INI_KNOWN_MODULES`].
 ///
-/// `web` adds `'session'`, the extra module a `--web` binary registers.
+/// `web` is retained for callers compiled against the older API; `session` is now part of
+/// the normal CLI module set as well as the web set.
 pub(crate) fn ini_module_known_declaration(web: bool) -> Stmt {
     let mut names: Vec<String> = INI_KNOWN_MODULES
         .iter()
         .map(|name| name.to_ascii_lowercase())
         .collect();
-    if web {
+    if web && !names.iter().any(|name| name == "session") {
         names.push("session".to_string());
     }
     build::ini_module_known_decl(&names)

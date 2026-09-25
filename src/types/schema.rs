@@ -211,6 +211,8 @@ impl PartialEq for PropertyHookContract {
 #[derive(Debug, Clone)]
 pub struct InterfaceInfo {
     pub interface_id: u64,
+    /// The declaration's `/** ... */` block, for `ReflectionClass::getDocComment()`.
+    pub doc_comment: Option<String>,
     /// Source span of the interface declaration, or `Span::dummy()` for compiler-injected interfaces.
     pub declaration_span: crate::span::Span,
     pub parents: Vec<String>,

@@ -201,6 +201,54 @@ echo $source->name . '|' . $clone->name;
     assert_eq!(out, "source|clone");
 }
 
+/// Verifies an `object`-typed receiver can clone a runtime anonymous class and run its hook.
+#[test]
+fn test_clone_object_typed_receiver_dispatches_anonymous_runtime_class() {
+    let out = compile_and_run(
+        r#"<?php
+function duplicate_object(object $value): object {
+    return clone $value;
+}
+
+$value = new class {
+    public function __clone(): void {
+        echo 'cloned;';
+    }
+};
+$copy = duplicate_object($value);
+echo 'done';
+"#,
+    );
+    assert_eq!(out, "cloned;done");
+}
+
+/// Verifies cloning an anonymous class created in a method preserves its runtime layout.
+#[test]
+fn test_clone_object_typed_receiver_dispatches_method_local_anonymous_class() {
+    let out = compile_and_run(
+        r#"<?php
+class AnonymousCloneHolder
+{
+    private object $value;
+
+    public function __construct()
+    {
+        $this->value = new class {
+            public function __clone(): void { echo 'cloned;'; }
+        };
+    }
+
+    public function duplicate(): object { return clone $this->value; }
+}
+
+$holder = new AnonymousCloneHolder();
+$copy = $holder->duplicate();
+echo 'done';
+"#,
+    );
+    assert_eq!(out, "cloned;done");
+}
+
 /// Verifies a clone whose source is untyped remains gradual when passed to a concrete object parameter.
 #[test]
 fn test_clone_mixed_result_can_flow_to_concrete_object_parameter() {
@@ -380,6 +428,80 @@ echo get_class($copy) . '|' . $copy->label() . '|' . $copy->tag;
 "#,
     );
     assert_eq!(out, "ChildBox|child:kept|base");
+}
+
+/// Verifies a self-clone can be stored in a nullable typed self property and read back.
+#[test]
+fn test_clone_self_stored_in_nullable_self_property_keeps_runtime_class() {
+    let out = compile_and_run(
+        r#"<?php
+class ClonePropertyPass
+{
+    private ?self $copy = null;
+    public string $name = 'source';
+
+    public function cloneIntoProperty(): string
+    {
+        $this->copy = clone $this;
+        $this->copy->name = 'clone';
+        return $this->copy->name;
+    }
+}
+
+echo (new ClonePropertyPass())->cloneIntoProperty();
+"#,
+    );
+    assert_eq!(out, "clone");
+}
+
+/// Verifies a closure rebound to a self-clone observes the clone's runtime class as `$this`.
+#[test]
+fn test_closure_bindto_self_clone_keeps_bound_object() {
+    let out = compile_and_run(
+        r#"<?php
+class CloneBindBase {}
+
+class CloneBindPass extends CloneBindBase
+{
+    public string $name = 'source';
+
+    public function callback(): Closure
+    {
+        $clone = clone $this;
+        $clone->name = 'clone';
+        return (fn (): string => $this->name)->bindTo($clone);
+    }
+}
+
+$callback = (new CloneBindPass())->callback();
+echo $callback();
+"#,
+    );
+    assert_eq!(out, "clone");
+}
+
+/// Verifies `Closure::bindTo()` unboxes a non-null receiver stored in a nullable object property.
+#[test]
+fn test_closure_bindto_nullable_self_property_uses_runtime_object() {
+    let out = compile_and_run(
+        r#"<?php
+class NullableBindPass
+{
+    private ?self $copy = null;
+    public string $name = 'source';
+
+    public function callback(): Closure
+    {
+        $this->copy = new self();
+        $this->copy->name = 'bound';
+        return (fn (): string => $this->name)->bindTo($this->copy);
+    }
+}
+
+echo ((new NullableBindPass())->callback())();
+"#,
+    );
+    assert_eq!(out, "bound");
 }
 
 /// Verifies a subclass-only `__clone()` runs exactly once for a clone taken through the base.

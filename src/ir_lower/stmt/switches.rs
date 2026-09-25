@@ -247,6 +247,8 @@ pub(super) fn lower_switch_bodies(
     ctx.try_handler_stack = switch_try_handler_stack;
     ctx.builder.position_at_end(exit);
     restore_switch_exit_state(ctx, &exits, &direct_entry);
+    // A `break` out of a nested `if` inside a case records no exit state; see the loop exits.
+    ctx.reassert_widened_local_storage_types();
     ctx.clear_static_callable_locals();
 }
 

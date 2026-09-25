@@ -92,7 +92,7 @@ impl Checker {
         // cannot materialize, and there is no metadata to inspect for a class the compiler has
         // never seen. The reflection itself resolves at run time through the bridge, and a name
         // nothing supplies still raises PHP's own `ReflectionException` there.
-        if self.program_defers_unknown_classes {
+        if self.reflection_defers_unknown_classes() {
             return Ok(());
         }
         Err(CompileError::new(
@@ -199,7 +199,7 @@ impl Checker {
         // Same reasoning as `validate_reflection_class_attrs`: a class a runtime include or an
         // autoloader supplies is not a class that does not exist, and its METHOD set is unknown
         // for the same reason its attributes are. Refusing here would reject a program PHP runs.
-        if self.program_defers_unknown_classes {
+        if self.reflection_defers_unknown_classes() {
             return Ok(());
         }
         Err(CompileError::new(
@@ -225,7 +225,7 @@ impl Checker {
             // Same reasoning as the two validators above: a class a runtime include or an
             // autoloader supplies has no property set this walk can read, and refusing here would
             // reject a program PHP runs to completion.
-            if self.program_defers_unknown_classes {
+            if self.reflection_defers_unknown_classes() {
                 return Ok(());
             }
             return Err(CompileError::new(

@@ -37,6 +37,8 @@ const SIGNATURE_PARAM_TYPES_WORD: usize = 8;
 const SIGNATURE_DEFAULTS_WORD: usize = 9;
 const SIGNATURE_REF_FLAGS_WORD: usize = 10;
 const SIGNATURE_DECLARED_FLAGS_WORD: usize = 11;
+/// `(pointer, length)` of each declared parameter's type-spec string, or `(0, 0)`.
+const SIGNATURE_PARAM_TYPE_SPECS_WORD: usize = 12;
 
 const SIGNATURE_FLAG_DECLARED_RETURN: u64 = 1;
 const VARIADIC_INDEX_NONE: u64 = u64::MAX;
@@ -227,14 +229,32 @@ unsafe fn decode_parameter_types(
         if read_word(declared, index)? == 0 {
             continue;
         }
-        let type_word = read_word(types, index.checked_mul(3)?)?;
-        if let Some(param_type) = callable_type_from_tag(type_word, false) {
+        // The declared type as written wins; the representation tag is the fallback for a
+        // record without one (a union of classes has only the `Mixed` tag of its slot).
+        let param_type = declared_param_type_spec(signature, index)
+            .or_else(|| callable_type_from_tag(read_word(types, index.checked_mul(3)?)?, false));
+        if let Some(param_type) = param_type {
             if !function.set_param_type(index, param_type) {
                 return None;
             }
         }
     }
     Some(())
+}
+
+/// Reads one parameter's declared type-spec string from the signature record, when present.
+unsafe fn declared_param_type_spec(signature: *const u64, index: usize) -> Option<EvalParameterType> {
+    let specs = read_word(signature, SIGNATURE_PARAM_TYPE_SPECS_WORD)? as *const u64;
+    if specs.is_null() {
+        return None;
+    }
+    let base = index.checked_mul(2)?;
+    let ptr = read_word(specs, base)? as *const u8;
+    let len = read_word(specs, base.checked_add(1)?)?;
+    if ptr.is_null() || len == 0 {
+        return None;
+    }
+    crate::ffi::native_methods::native_callable_param_type_from_abi(ptr, len)
 }
 
 /// Copies scalar and empty-array defaults from the descriptor table.

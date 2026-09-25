@@ -3746,13 +3746,13 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "start_index",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Int,
                 default: None,
                 by_ref: false,
             },
             ParamSpec {
                 name: "count",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Int,
                 default: None,
                 by_ref: false,
             },

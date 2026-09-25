@@ -160,6 +160,7 @@ struct EvalReflectionMemberMetadata {
 }
 
 /// Eval metadata needed to materialize one `ReflectionParameter` object.
+#[derive(Clone)]
 struct EvalReflectionParameterMetadata {
     name: String,
     declaring_class_name: Option<String>,

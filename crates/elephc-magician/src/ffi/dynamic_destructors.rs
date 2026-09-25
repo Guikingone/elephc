@@ -132,6 +132,15 @@ unsafe fn dynamic_object_destruct_inner(object: *mut RuntimeCell) -> u64 {
         return 0;
     }
     let identity = object as u64;
+    if crate::eval_trace::enabled() {
+        let owner_class = dynamic_object_owner_context(identity)
+            .and_then(|owner| unsafe { owner.as_ref() })
+            .and_then(|context| context.dynamic_object_class(identity))
+            .map(|class| class.name().to_string());
+        eprintln!(
+            "[elephc-eval-trace] phase=dynamic_object_destruct_begin object={object:p} identity={identity} class={owner_class:?}"
+        );
+    }
     let Some(context) = dynamic_object_owner_context(identity) else {
         return 0;
     };

@@ -175,7 +175,7 @@ pub(in crate::interpreter) fn eval_call_arg_value(
                 .reference_target(name)
                 .cloned()
                 .unwrap_or_else(|| EvalReferenceTarget::Variable {
-                    scope: caller_scope as *mut ElephcEvalScope,
+                    scope: crate::scope::EvalScopeRef::new(caller_scope),
                     name: name.clone(),
                 });
             Ok((value, Some(target)))
@@ -201,7 +201,7 @@ pub(in crate::interpreter) fn eval_call_arg_value(
             Ok((
                 value,
                 Some(EvalReferenceTarget::ArrayElement {
-                    scope: caller_scope as *mut ElephcEvalScope,
+                    scope: crate::scope::EvalScopeRef::new(caller_scope),
                     array_name: array_name.clone(),
                     index,
                 }),

@@ -132,6 +132,7 @@ pub(crate) struct LoweringSnapshot {
     storage_widened_locals: HashSet<String>,
     array_conversions: HashMap<String, PhpType>,
     speculating: bool,
+    php_strict_types: bool,
     closure_count: usize,
     bound_closure_this_class: Option<String>,
     bound_closure_this_gradual: bool,
@@ -321,6 +322,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     array_conversions: HashMap<String, PhpType>,
     /// Whether the current statement lowering is a disposable discovery pass.
     speculating: bool,
+    /// PHP scalar-parameter coercion mode at the current call site.
+    pub(crate) php_strict_types: bool,
     pub return_type: IrType,
     pub return_php_type: PhpType,
     /// `true` when the function SOURCE declares a return type, as opposed to one inferred
@@ -475,6 +478,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             storage_widened_locals: HashSet::new(),
             array_conversions: HashMap::new(),
             speculating: false,
+            php_strict_types: false,
             return_type,
             return_php_type,
             return_type_is_declared: false,
@@ -531,6 +535,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             storage_widened_locals: self.storage_widened_locals.clone(),
             array_conversions: self.array_conversions.clone(),
             speculating: self.speculating,
+            php_strict_types: self.php_strict_types,
             closure_count: self.closures.len(),
             bound_closure_this_class: self.bound_closure_this_class.clone(),
             bound_closure_this_gradual: self.bound_closure_this_gradual,
@@ -574,6 +579,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.storage_widened_locals = snapshot.storage_widened_locals;
         self.array_conversions = snapshot.array_conversions;
         self.speculating = snapshot.speculating;
+        self.php_strict_types = snapshot.php_strict_types;
         self.closures.truncate(snapshot.closure_count);
         self.bound_closure_this_class = snapshot.bound_closure_this_class;
         self.bound_closure_this_gradual = snapshot.bound_closure_this_gradual;
@@ -3001,6 +3007,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.clear_static_callable_local(target);
         self.clear_fiber_start_sig(target);
         self.release_replaced_local_before_ref_alias(target, span);
+        self.abandon_slot_of_another_representation(target, &value_type);
         let target_slot = self.declare_local(target, value_type.clone());
         self.set_local_type(target, value_type.clone());
         self.builder.emit_with_effects(
@@ -3015,6 +3022,41 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         );
         self.mark_ref_bound_local(target);
         self.initialized_slots.insert(target_slot);
+    }
+
+    /// Gives `name` a fresh slot when its current one stores a different representation than the
+    /// cell it is about to alias.
+    ///
+    /// A cell holds its value in ONE representation, the one its owner writes: an object's
+    /// reference property keeps its declared type's (a `Hash` for an `array` property). Binding a
+    /// local whose slot was declared at another one -- a by-reference `array $x` parameter is an
+    /// `Array` slot -- joined the two into boxed `Mixed` storage, so later accesses through the
+    /// alias read and wrote the cell as a box while the property kept reading it raw.
+    /// `$this->instanceof = &$instanceof; $instanceof = [];` (Symfony's `ServicesConfigurator`)
+    /// released the property's hash as a box and then stored a box into the property, and every
+    /// service definition built from it later carried a boxed array into an `array` parameter.
+    ///
+    /// Only the NAME moves: the old slot keeps its own storage type and cleanup, exactly as for
+    /// an `unset`. A name eval can address, or one backed by global storage, keeps its slot.
+    fn abandon_slot_of_another_representation(&mut self, name: &str, value_type: &PhpType) {
+        let Some(slot) = self.local_slots.get(name).copied() else {
+            return;
+        };
+        if self.builder.local_php_type(slot).codegen_repr() == value_type.codegen_repr() {
+            return;
+        }
+        let Some(kind) = self.local_kinds.get(name).copied() else {
+            return;
+        };
+        if kind != LocalKind::PhpLocal
+            || self.uses_global_storage(name, kind)
+            || self.extern_globals.contains_key(name)
+            || self.eval_barrier_active
+            || self.eval_scope_read_param.is_some()
+        {
+            return;
+        }
+        self.abandon_local_binding(name);
     }
 
     /// Releases storage currently owned by a local before rebinding it as a ref alias.
@@ -3501,7 +3543,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     fn gradual_union_param_guard_source(&self, value: ValueId) -> Option<ValueId> {
         let inst = self.builder.value_defining_instruction(value)?;
         if inst.op != Op::RuntimeCall
-            || !matches!(inst.immediate, Some(Immediate::TypeName(_)))
+            || !matches!(
+                inst.immediate,
+                Some(Immediate::TypeName(_) | Immediate::ParameterType { .. })
+            )
             || inst.operands.len() != 1
         {
             return None;

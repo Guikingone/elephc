@@ -28,6 +28,7 @@ memo_table!(METHOD_DECLARING_CLASS, Option<String>);
 memo_table!(PROPERTY_FLAGS, Option<u64>);
 memo_table!(PROPERTY_DECLARING_CLASS, Option<String>);
 memo_table!(CLASS_FLAGS, Option<u64>);
+memo_table!(CLASS_SOURCE_FILE, Option<String>);
 memo_table!(CANONICAL_CLASS_NAME, Option<String>);
 // Whole member-name lists, keyed by class and an `AotMemberNameKind` tag. The value is owned Rust
 // strings copied out of the generated array: no runtime handle and no arena pointer survives here,

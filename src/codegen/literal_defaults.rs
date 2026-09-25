@@ -16,6 +16,11 @@
 //!   generic `Mixed`/`Union(_)` boxing arms. A null-capable int slot (`?int` under
 //!   `NullRepr::Tagged`) is an inline two-word `{payload, tag}` TaggedScalar, so it takes
 //!   `TaggedInt`/`TaggedNull` and never a boxed Mixed pointer.
+//! - Every string (value or key) is emitted through `string_bytes::literal_bytes`, never
+//!   `str::as_bytes`: a byte above 0x7F travels through the AST in its private-use marker form,
+//!   and its UTF-8 spelling is three different bytes. The intl-normalizer polyfill keys a static
+//!   property with `"\xC0"`..`"\xF0"`; emitted as markers, no UTF-8 lead byte found its entry and
+//!   its decompose loop advanced by nothing, forever.
 
 use crate::codegen::platform::Arch;
 use crate::codegen::{
@@ -417,7 +422,7 @@ pub(crate) fn emit_string_literal_default_to_result(
     ctx: &mut FunctionContext<'_>,
     value: &str,
 ) {
-    let (label, len) = ctx.data.add_string(value.as_bytes());
+    let (label, len) = ctx.data.add_string(&crate::string_bytes::literal_bytes(value));
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
     abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
@@ -584,7 +589,7 @@ fn materialize_assoc_literal_key_aarch64(ctx: &mut FunctionContext<'_>, key: &Li
             abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
         }
         LiteralArrayKey::Str(value) => {
-            let (label, len) = ctx.data.add_string(value.as_bytes());
+            let (label, len) = ctx.data.add_string(&crate::string_bytes::literal_bytes(value));
             abi::emit_symbol_address(ctx.emitter, "x1", &label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
@@ -603,7 +608,7 @@ fn materialize_assoc_literal_key_x86_64(ctx: &mut FunctionContext<'_>, key: &Lit
             abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
         }
         LiteralArrayKey::Str(value) => {
-            let (label, len) = ctx.data.add_string(value.as_bytes());
+            let (label, len) = ctx.data.add_string(&crate::string_bytes::literal_bytes(value));
             abi::emit_symbol_address(ctx.emitter, "rax", &label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
@@ -830,7 +835,7 @@ fn emit_array_element_value(
             Ok(PhpType::Float)
         }
         LiteralArrayElement::Str(value) => {
-            let (label, len) = ctx.data.add_string(value.as_bytes());
+            let (label, len) = ctx.data.add_string(&crate::string_bytes::literal_bytes(value));
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
             abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);

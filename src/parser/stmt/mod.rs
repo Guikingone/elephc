@@ -49,6 +49,38 @@ pub(crate) use assign::{
 pub(crate) use recovery::recover_to_statement_boundary;
 pub(in crate::parser) use simple::try_parse_value_include;
 
+/// Doc comments of interface, trait and enum declarations, keyed by declaration span and SHORT
+/// name.
+///
+/// `ClassDecl` keeps its `/** ... */` block in the node; the other class-like kinds have no slot
+/// for one, and giving them one touches every construction and pattern of those nodes. Without it
+/// `ReflectionClass::getDocComment()` answered `false` for every interface, and Symfony's
+/// `debug:autowiring` describes each service interface from exactly that comment. The short name
+/// survives namespace resolution; with the span it is unique across the files one build parses.
+/// A mutex rather than a thread-local: included files can be parsed on worker threads.
+static CLASSLIKE_DOC_COMMENTS: std::sync::Mutex<
+    Option<std::collections::HashMap<(crate::span::Span, String), String>>,
+> = std::sync::Mutex::new(None);
+
+/// Records the doc comment written before one interface, trait or enum declaration.
+fn record_classlike_doc_comment(span: crate::span::Span, name: &str, doc_comment: String) {
+    let short = name.rsplit('\\').next().unwrap_or(name).to_ascii_lowercase();
+    if let Ok(mut table) = CLASSLIKE_DOC_COMMENTS.lock() {
+        table.get_or_insert_with(Default::default).insert((span, short), doc_comment);
+    }
+}
+
+/// Returns the doc comment recorded for a declaration, given its span and (qualified) name.
+pub(crate) fn classlike_doc_comment(span: crate::span::Span, name: &str) -> Option<String> {
+    let short = name.rsplit('\\').next().unwrap_or(name).to_ascii_lowercase();
+    CLASSLIKE_DOC_COMMENTS
+        .lock()
+        .ok()?
+        .as_ref()?
+        .get(&(span, short))
+        .cloned()
+}
+
 /// Parses a single PHP statement, including optional PHP 8 attribute groups.
 pub fn parse_stmt(tokens: &[SpannedToken], pos: &mut usize) -> Result<Stmt, CompileError> {
     let doc_comment = match tokens.get(*pos).map(|(token, _)| token) {
@@ -73,8 +105,16 @@ pub fn parse_stmt(tokens: &[SpannedToken], pos: &mut usize) -> Result<Stmt, Comp
     let span = tokens[*pos].1.span;
 
     let mut stmt = attach_attributes_to_stmt(parse_stmt_dispatch(tokens, pos, span)?, attributes, span)?;
-    if let StmtKind::ClassDecl { doc_comment: slot, .. } = &mut stmt.kind {
-        *slot = doc_comment;
+    match &mut stmt.kind {
+        StmtKind::ClassDecl { doc_comment: slot, .. } => *slot = doc_comment,
+        StmtKind::InterfaceDecl { name, .. }
+        | StmtKind::TraitDecl { name, .. }
+        | StmtKind::EnumDecl { name, .. } => {
+            if let Some(doc_comment) = doc_comment {
+                record_classlike_doc_comment(stmt.span, name, doc_comment);
+            }
+        }
+        _ => {}
     }
     Ok(stmt)
 }

@@ -22,6 +22,7 @@ mod pipeline;
 mod pprof_encode;
 mod probe_key;
 mod runtime_cache;
+mod session_prelude;
 mod source_map;
 mod timings;
 

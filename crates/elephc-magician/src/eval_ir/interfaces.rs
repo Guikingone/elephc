@@ -19,6 +19,8 @@ pub struct EvalInterface {
     constants: Vec<EvalClassConstant>,
     properties: Vec<EvalInterfaceProperty>,
     methods: Vec<EvalInterfaceMethod>,
+    /// The `/** ... */` block written before the declaration, for `getDocComment()`.
+    doc_comment: Option<String>,
 }
 
 impl PartialEq for EvalInterface {
@@ -69,6 +71,7 @@ impl EvalInterface {
             constants,
             properties,
             methods,
+            doc_comment: None,
         }
     }
 
@@ -82,6 +85,17 @@ impl EvalInterface {
     pub fn with_attributes(mut self, attributes: Vec<EvalAttribute>) -> Self {
         self.attributes = attributes;
         self
+    }
+
+    /// Returns a copy of this interface with its declaration doc comment attached.
+    pub fn with_doc_comment_option(mut self, doc_comment: Option<String>) -> Self {
+        self.doc_comment = doc_comment;
+        self
+    }
+
+    /// Returns the doc comment written before this interface's declaration, when present.
+    pub fn doc_comment(&self) -> Option<&str> {
+        self.doc_comment.as_deref()
     }
 
     /// Returns the original source spelling of this eval-declared interface name.

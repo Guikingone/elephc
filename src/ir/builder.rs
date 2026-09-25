@@ -356,8 +356,17 @@ impl<'f> Builder<'f> {
                 | None => {}
             }
         }
+        // Where each instruction sits, so a release can be checked against what follows it.
+        let mut position = vec![None; self.func.instructions.len()];
+        for (block_index, block) in self.func.blocks.iter().enumerate() {
+            for (offset, inst) in block.instructions.iter().enumerate() {
+                if let Some(slot) = position.get_mut(inst.as_raw() as usize) {
+                    *slot = Some((block_index, offset));
+                }
+            }
+        }
         let mut retype = Vec::new();
-        for inst in &self.func.instructions {
+        for (release_index, inst) in self.func.instructions.iter().enumerate() {
             if inst.op != Op::Release {
                 continue;
             }
@@ -394,6 +403,14 @@ impl<'f> Builder<'f> {
             if !local_load_requires_owned_mixed_unbox(&local.php_type, &value.php_type) {
                 continue;
             }
+            // Only an OCCUPANT release is retyped: one that names the value a store to the same
+            // slot is about to overwrite. A load released for any other reason -- an expression
+            // statement discarding `$this->{$name} = $temp`'s result -- was lowered as an owned
+            // unbox, and retyping it to the borrowed storage read left its release unbalanced:
+            // the slot's own box was freed while the slot still held it.
+            if !self.slot_store_follows(&position, release_index, slot) {
+                continue;
+            }
             retype.push((source, source_inst, local.php_type.clone()));
         }
         for (value, load_inst, storage_type) in retype {
@@ -405,6 +422,27 @@ impl<'f> Builder<'f> {
             load.result_php_type = storage_type;
             load.result_type = ir_type;
         }
+    }
+
+    /// Returns whether a store to `slot` follows instruction `inst_index` in its own block.
+    fn slot_store_follows(
+        &self,
+        position: &[Option<(usize, usize)>],
+        inst_index: usize,
+        slot: LocalSlotId,
+    ) -> bool {
+        let Some(Some((block_index, offset))) = position.get(inst_index).copied() else {
+            return false;
+        };
+        self.func.blocks[block_index].instructions[offset + 1..]
+            .iter()
+            .filter_map(|inst| self.func.instructions.get(inst.as_raw() as usize))
+            .any(|inst| {
+                matches!(
+                    inst.op,
+                    Op::StoreLocal | Op::StoreStaticLocal | Op::StoreRefCell
+                ) && inst.immediate == Some(Immediate::LocalSlot(slot))
+            })
     }
 
     /// Returns the semantic role of a local slot.

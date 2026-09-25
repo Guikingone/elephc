@@ -753,6 +753,41 @@ fn test_reflection_get_file_name_reports_the_declaring_file() {
     assert_eq!(out, "Widget.php|same");
 }
 
+/// ReflectionClass created in an inherited method reports the concrete runtime class's file,
+/// even when the base method and subclass were compiled from different source units.
+#[test]
+fn test_reflection_aot_runtime_class_uses_its_declaring_file() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "main.php",
+                r#"<?php
+require __DIR__ . '/Base.php';
+require __DIR__ . '/foreign.php';
+$target = new ForeignReflectionTarget();
+echo basename($target->ownSourceFile()), '|', basename($target->reflectedSourceFile());
+"#,
+            ),
+            (
+                "Base.php",
+                r#"<?php
+abstract class ReflectionSourceBase {
+    public function reflectedSourceFile() {
+        return (new ReflectionClass($this))->getFileName();
+    }
+}
+"#,
+            ),
+            (
+                "foreign.php",
+                "<?php\nclass ForeignReflectionTarget extends ReflectionSourceBase { public function ownSourceFile(): string { return __FILE__; } }\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "foreign.php|foreign.php");
+}
+
 /// Verifies the deprecated `ReflectionParameter::getClass()` still reports the parameter's class
 /// when the program actually calls it.
 ///

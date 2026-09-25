@@ -65,6 +65,25 @@ impl ElephcEvalContext {
         Ok(())
     }
 
+    /// Replaces the cell one capture of a registered closure holds, returning the one it held.
+    ///
+    /// Returns `None` when the closure or the capture is unknown, and hands `cell` back when it
+    /// is already the one held, so the caller always releases exactly what it gets.
+    pub fn replace_closure_capture_value(
+        &mut self,
+        closure_name: &str,
+        capture_name: &str,
+        cell: RuntimeCellHandle,
+    ) -> Option<RuntimeCellHandle> {
+        let capture = self
+            .closures
+            .get_mut(closure_name)?
+            .captures
+            .iter_mut()
+            .find(|capture| capture.name == capture_name)?;
+        Some(std::mem::replace(&mut capture.value, cell))
+    }
+
     /// Stores one eval closure instance under a context-local synthetic callable name.
     pub fn define_closure(&mut self, closure: EvalClosure) -> String {
         let name = format!("{{closure:eval:{}}}", self.next_closure_id);

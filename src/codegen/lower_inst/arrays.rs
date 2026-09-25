@@ -148,7 +148,7 @@ pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruc
     store_if_result(ctx, inst)
 }
 
-/// Lowers indexed-array promotion to associative hash storage.
+/// Normalizes either supported PHP array storage kind to associative hash storage.
 pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() != 1 {
         return Err(CodegenIrError::invalid_module(format!(
@@ -157,7 +157,7 @@ pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
         )));
     }
     let array = expect_operand(inst, 0)?;
-    require_indexed_array(ctx.value_php_type(array)?.codegen_repr(), inst)?;
+    require_php_array(ctx.value_php_type(array)?.codegen_repr(), inst)?;
     let result_value_ty = require_array_to_hash_result(&inst.result_php_type.codegen_repr(), inst)?;
     let release_source = ctx.value_can_transfer_ownership_to_consumer(array)?;
     match ctx.emitter.target.arch {
@@ -2687,6 +2687,18 @@ fn require_array_to_hash_result(result_ty: &PhpType, inst: &Instruction) -> Resu
             other
         ))),
     }
+}
+
+/// Verifies that `array_to_hash` can normalize either runtime PHP array representation.
+fn require_php_array(ty: PhpType, inst: &Instruction) -> Result<()> {
+    if matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        return Ok(());
+    }
+    Err(CodegenIrError::unsupported(format!(
+        "{} for PHP type {:?}",
+        inst.op.name(),
+        ty
+    )))
 }
 
 /// Verifies that a cross-array union operand uses associative hash storage.

@@ -42,12 +42,40 @@ pub(super) fn eval_reflection_class_new_instance_result(
     else {
         return Ok(None);
     };
+    if crate::eval_trace::enabled() {
+        eprintln!(
+            "[elephc-eval-trace] phase=reflection_new_instance stage=target identity={identity} class={reflected_name:?} eval_class={}",
+            context.class(&reflected_name).is_some(),
+        );
+    }
     if let Some(message) =
         eval_reflection_eval_instantiation_error_message(&reflected_name, context)
     {
         return eval_throw_error(&message, context, values);
     }
     if let Some(class) = context.class(&reflected_name).cloned() {
+        if crate::eval_trace::enabled() {
+            let argument_shapes = constructor_args
+                .iter()
+                .map(|arg| {
+                    (
+                        arg.name.clone(),
+                        values.type_tag(arg.value).ok(),
+                        values.array_len(arg.value).ok(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            eprintln!(
+                "[elephc-eval-trace] phase=reflection_new_instance stage=eval_class_metadata class={:?} abstract={} constructor={} args={} argument_shapes={argument_shapes:?} enum={} trait={} native_parent={:?}",
+                class.name(),
+                class.is_abstract(),
+                context.class_method(class.name(), "__construct").is_some(),
+                constructor_args.len(),
+                context.has_enum(class.name()),
+                context.has_trait(class.name()),
+                context.class_native_parent_name(class.name()),
+            );
+        }
         if let Some((_, constructor)) = context.class_method(class.name(), "__construct") {
             if constructor.visibility() != EvalVisibility::Public {
                 return eval_throw_reflection_exception(
@@ -60,7 +88,7 @@ pub(super) fn eval_reflection_class_new_instance_result(
                 );
             }
         }
-        return eval_reflection_public_constructor_scope(context, values, |context, values| {
+        let result = eval_reflection_public_constructor_scope(context, values, |context, values| {
             let constructor_name =
                 format!("{}::__construct", class.name().trim_start_matches('\\'));
             let by_ref_mode = EvalByRefBindingMode::WarnByValue {
@@ -75,14 +103,38 @@ pub(super) fn eval_reflection_class_new_instance_result(
                 &mut scope,
                 values,
             )
-            .map(Some)
         });
+        return match result {
+            Ok(instance) => Ok(Some(instance)),
+            Err(status) => {
+                if crate::eval_trace::enabled() {
+                    eprintln!(
+                        "[elephc-eval-trace] phase=reflection_new_instance stage=eval_class_instantiation class={:?} status={status:?}",
+                        class.name(),
+                    );
+                }
+                Err(status)
+            }
+        };
     }
     let class_name = context
         .resolve_class_name(&reflected_name)
         .unwrap_or(reflected_name);
-    if let Some(error) = eval_reflection_aot_class_public_instantiation_error(&class_name, values)?
-    {
+    let instantiation_error = match eval_reflection_aot_class_public_instantiation_error(
+        &class_name,
+        values,
+    ) {
+        Ok(error) => error,
+        Err(status) => {
+            if crate::eval_trace::enabled() {
+                eprintln!(
+                    "[elephc-eval-trace] phase=reflection_new_instance stage=aot_class_flags class={class_name:?} status={status:?}"
+                );
+            }
+            return Err(status);
+        }
+    };
+    if let Some(error) = instantiation_error {
         return eval_throw_reflection_instantiation_error(error, context, values);
     }
     eval_reflection_public_constructor_scope(context, values, |context, values| {
@@ -90,15 +142,33 @@ pub(super) fn eval_reflection_class_new_instance_result(
         let by_ref_mode = EvalByRefBindingMode::WarnByValue {
             callable_name: &constructor_name,
         };
-        let instance = values.new_object(&class_name)?;
-        eval_native_constructor_with_evaluated_args_and_ref_mode(
+        let instance = match values.new_object(&class_name) {
+            Ok(instance) => instance,
+            Err(status) => {
+                if crate::eval_trace::enabled() {
+                    eprintln!(
+                        "[elephc-eval-trace] phase=reflection_new_instance stage=aot_allocation class={class_name:?} status={status:?}"
+                    );
+                }
+                return Err(status);
+            }
+        };
+        let constructor_result = eval_native_constructor_with_evaluated_args_and_ref_mode(
             &class_name,
             instance,
             constructor_args,
             by_ref_mode,
             context,
             values,
-        )?;
+        );
+        if let Err(status) = constructor_result {
+            if crate::eval_trace::enabled() {
+                eprintln!(
+                    "[elephc-eval-trace] phase=reflection_new_instance stage=aot_constructor class={class_name:?} status={status:?}"
+                );
+            }
+            return Err(status);
+        }
         Ok(Some(instance))
     })
 }
@@ -184,6 +254,144 @@ pub(super) fn eval_reflection_class_new_instance_without_constructor_result(
         return eval_throw_error(&message, context, values);
     }
     values.new_object(&class_name).map(Some)
+}
+
+/// Answers the lazy-object API of `ReflectionClass` for classes the interpreter declared.
+///
+/// The compiled bodies call `$this->newInstanceWithoutConstructor()` compiled-to-compiled, so for
+/// an interpreter-declared class they looked the name up in the compiled class table and died
+/// "Class not found"; classes the compiled side knows keep going to those bodies.
+///
+/// `newLazyGhost()` is genuinely lazy: the instance is allocated without its constructor and the
+/// initializer is parked in the context, to run on the first property access
+/// ([`eval_initialize_lazy_ghost`]), exactly when php would run it. Running it eagerly is
+/// observable -- a service container hands out ghosts whose initializer resolves configuration
+/// the current command never needs, and a failure there (an empty secret, say) aborted commands
+/// php completes. `newLazyProxy()` still calls its factory at once, with an uninitialized
+/// instance standing in for the proxy, and returns the real object.
+pub(super) fn eval_reflection_class_new_lazy_object_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if let Some(result) =
+        eval_reflection_lazy_object_state_result(method_name, &evaluated_args, context, values)?
+    {
+        return Ok(Some(result));
+    }
+    let ghost = method_name.eq_ignore_ascii_case("newLazyGhost");
+    if !ghost && !method_name.eq_ignore_ascii_case("newLazyProxy") {
+        return Ok(None);
+    }
+    let Some(reflected_name) = context
+        .eval_reflection_class_name(identity)
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    if context.class(&reflected_name).is_none() {
+        return Ok(None);
+    }
+    let Some(callback) = evaluated_args.first().map(|arg| arg.value) else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let instance = eval_reflection_class_new_instance_without_constructor_result(
+        identity,
+        "newInstanceWithoutConstructor",
+        Vec::new(),
+        context,
+        values,
+    )?
+    .ok_or(EvalStatus::RuntimeFatal)?;
+    if ghost {
+        let object_identity = match values.object_identity(instance) {
+            Ok(object_identity) => object_identity,
+            Err(status) => {
+                values.release(instance)?;
+                return Err(status);
+            }
+        };
+        let initializer = values.retain(callback)?;
+        if let Some(replaced) = context.register_lazy_ghost(object_identity, initializer) {
+            values.release(replaced)?;
+        }
+        return Ok(Some(instance));
+    }
+    // `call_user_func` transfers its by-value argument cells to the callback activation, which
+    // releases them when that activation ends. Keep the allocator's original instance owner
+    // separate: the proxy returns the factory's result and discards this uninitialized instance.
+    let factory_instance = values.retain(instance)?;
+    let result = eval_call_user_func_with_values(vec![callback, factory_instance], context, values);
+    values.release(instance)?;
+    result.map(Some)
+}
+
+/// Answers `isUninitializedLazyObject()`, `initializeLazyObject()` and
+/// `markLazyObjectAsInitialized()` for objects that carry a parked ghost initializer.
+///
+/// Objects without one fall through to the compiled methods, whose eager lazy objects are never
+/// uninitialized.
+fn eval_reflection_lazy_object_state_result(
+    method_name: &str,
+    evaluated_args: &[EvaluatedCallArg],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let is_query = method_name.eq_ignore_ascii_case("isUninitializedLazyObject");
+    let initialize = method_name.eq_ignore_ascii_case("initializeLazyObject");
+    let mark = method_name.eq_ignore_ascii_case("markLazyObjectAsInitialized");
+    if !is_query && !initialize && !mark {
+        return Ok(None);
+    }
+    let Some(object) = evaluated_args.first().map(|arg| arg.value) else {
+        return Ok(None);
+    };
+    let Ok(object_identity) = values.object_identity(object) else {
+        return Ok(None);
+    };
+    if !context.is_uninitialized_lazy_ghost(object_identity) {
+        return Ok(None);
+    }
+    if is_query {
+        return values.bool_value(true).map(Some);
+    }
+    if initialize {
+        eval_initialize_lazy_ghost(object_identity, object, context, values)?;
+    } else if let Some(initializer) = context.take_lazy_ghost_initializer(object_identity) {
+        values.release(initializer)?;
+    }
+    values.retain(object).map(Some)
+}
+
+/// Runs the parked initializer of a lazy ghost, once, before its first property access.
+///
+/// The entry is removed BEFORE the call: the initializer's own writes (a `__construct()` on the
+/// ghost) are property accesses too and must not re-enter it. When the initializer throws, php
+/// leaves the object uninitialized, so the entry is put back.
+pub(in crate::interpreter) fn eval_initialize_lazy_ghost(
+    object_identity: u64,
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Some(initializer) = context.take_lazy_ghost_initializer(object_identity) else {
+        return Ok(());
+    };
+    let argument = values.retain(object)?;
+    match eval_call_user_func_with_values(vec![initializer, argument], context, values) {
+        Ok(result) => {
+            values.release(result)?;
+            values.release(initializer)
+        }
+        Err(status) => {
+            if let Some(replaced) = context.register_lazy_ghost(object_identity, initializer) {
+                values.release(replaced)?;
+            }
+            Err(status)
+        }
+    }
 }
 
 /// Builds PHP's reflection instantiation error for eval non-instantiable class-likes.

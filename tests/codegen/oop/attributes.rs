@@ -2182,6 +2182,135 @@ echo $iterator->isInternal() ? "I" : "i"; echo $iterator->isUserDefined() ? "U" 
     assert_eq!(out, "iU:iU:iU:iU:Iu:Iu:Iu:");
 }
 
+/// Verifies a runtime-target ReflectionClass returned across a native function frame retains
+/// the ReflectionClass method dispatch needed by ordinary AOT callers.
+#[test]
+fn test_reflection_class_runtime_target_returned_from_function_keeps_dispatch() {
+    let out = compile_and_run_capture(
+        r#"<?php
+interface RuntimeReflectionTarget {}
+eval('echo (class_exists("RuntimeReflectionTarget", false) ? "class-yes:" : "class-no:"), (interface_exists("RuntimeReflectionTarget", false) ? "iface-yes:" : "iface-no:"), "|"; $r = new ReflectionClass("RuntimeReflectionTarget"); echo $r->getName(), ":", ($r->isInterface() ? "eval-interface:" : "eval-class:");');
+
+function reflectRuntimeTarget(string $class): ?ReflectionClass {
+    return new ReflectionClass($class);
+}
+
+function inspectRuntimeTarget(string $class): string {
+    if (!$reflection = reflectRuntimeTarget($class)) {
+        return 'missing';
+    }
+    return $reflection->isInterface() ? 'interface' : 'class';
+}
+
+echo interface_exists(RuntimeReflectionTarget::class) ? 'loaded:' : 'missing:';
+echo inspectRuntimeTarget(RuntimeReflectionTarget::class);
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout,
+        out.stderr
+    );
+    let reflection_trace = out
+        .stderr
+        .lines()
+        .filter(|line| {
+            line.contains("reflection")
+                || line.contains("interface_exists")
+                || line.contains("class_exists")
+        })
+        .take(80)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        out.stdout,
+        "class-no:iface-yes:|RuntimeReflectionTarget:eval-interface:loaded:interface",
+        "reflection trace:\n{reflection_trace}"
+    );
+}
+
+/// Verifies ReflectionClass values cached in a generic array retain their AOT class-like flags.
+#[test]
+fn test_reflection_class_cached_in_array_keeps_interface_flag() {
+    let out = compile_and_run(
+        r#"<?php
+interface CachedReflectionTarget {}
+
+class ReflectionClassCache
+{
+    private array $classReflectors = [];
+
+    public function get(string $class): ReflectionClass
+    {
+        return $this->classReflectors[$class] ??= new ReflectionClass($class);
+    }
+}
+
+$reflection = (new ReflectionClassCache())->get(CachedReflectionTarget::class);
+echo $reflection->isInterface() ? 'interface' : 'class';
+"#,
+    );
+    assert_eq!(out, "interface");
+}
+
+/// Verifies ReflectionClass::getInterfaces materializes AOT interface objects after a runtime
+/// class-name lookup and returns the PHP name-keyed result shape.
+#[test]
+fn test_reflection_class_runtime_target_get_interfaces_for_aot_class() {
+    let out = compile_and_run(
+        r#"<?php
+interface RuntimeInterfacesMarker {}
+class RuntimeInterfacesTarget implements RuntimeInterfacesMarker {}
+
+function reflect_runtime_class(string $class): ReflectionClass {
+    return new ReflectionClass($class);
+}
+
+$interfaces = reflect_runtime_class(RuntimeInterfacesTarget::class)->getInterfaces();
+echo implode(',', array_keys($interfaces));
+"#,
+    );
+    assert_eq!(out, "RuntimeInterfacesMarker");
+}
+
+/// Verifies unresolved type-hint names do not become implemented interfaces in ReflectionClass.
+#[test]
+fn test_reflection_class_get_interfaces_ignores_unresolved_method_type_hints() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectionTypeHintOnly
+{
+    public function useValue(\Uninstalled\MethodContract $value): void {}
+}
+
+$reflection = new ReflectionClass(ReflectionTypeHintOnly::class);
+echo count($reflection->getInterfaces()), ':',
+     (int) interface_exists(\Uninstalled\MethodContract::class, false);
+"#,
+    );
+    assert_eq!(out, "0:0");
+}
+
+/// Verifies a parent class's unresolved method type hints are not mistaken for implemented
+/// interfaces on a reflected child.
+#[test]
+fn test_reflection_class_get_interfaces_ignores_inherited_unresolved_type_hints() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectionHintParent
+{
+    public function useLink(\Uninstalled\LinkInterface $link): void {}
+}
+class ReflectionHintChild extends ReflectionHintParent {}
+
+$reflection = new ReflectionClass(ReflectionHintChild::class);
+echo implode(',', array_keys($reflection->getInterfaces()));
+"#,
+    );
+    assert_eq!(out, "");
+}
+
 /// Verifies that `ReflectionClass::hasMethod()`, `hasProperty()`, and
 /// `hasConstant()` report PHP-visible members for static class-like metadata.
 #[test]

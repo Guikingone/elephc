@@ -187,6 +187,11 @@ pub enum Immediate {
     CmpPredicate(CmpPredicate),
     CastTarget(IrType),
     TypeName(DataId),
+    /// Declared parameter type plus the PHP strictness of the call site.
+    ParameterType {
+        name: DataId,
+        strict_types: bool,
+    },
     Capacity(u32),
     WidthBytes(u8),
 }

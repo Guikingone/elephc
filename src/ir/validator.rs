@@ -590,10 +590,13 @@ fn validate_opcode_rules(
         HashArrayUnion => check_hash_array_union(function, inst_id, inst),
         HashSpread => check_binary(function, inst_id, inst, IrType::Heap(IrHeapKind::Hash), "Heap(Hash)"),
         ArrayLen | ArrayGet | ArrayGetSilent | ArrayIsset | ArrayElemAddr | ArraySet | ArrayPush | ArrayEnsureUnique
-        | ArrayCloneShallow | ArrayToHash | ArraySetMixedKey | ArrayGetMixedKey
+        | ArrayCloneShallow | ArraySetMixedKey | ArrayGetMixedKey
         | ArrayGetMixedKeySilent | ArrayGetMixedKeyForWrite => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Array, "Heap(Array)")
         }
+        // ArrayToHash normalizes either supported PHP array storage kind. An in-place PHP array
+        // operation can change packed/hash storage without changing the source-level array type.
+        ArrayToHash => check_array_to_hash(function, inst_id, inst),
         // The fetch-for-write element read is emitted from exactly one site (a by-reference
         // `foreach` source, issue #580) and writes the copy-on-write split back into the
         // receiver's element slot, so its operand shape is pinned tighter than the shared read
@@ -834,6 +837,30 @@ fn check_hash_array_union(
         IrType::Heap(IrHeapKind::Array),
         "Heap(Array)",
     )
+}
+
+/// Validates the single PHP array operand accepted by `ArrayToHash`.
+fn check_array_to_hash(
+    function: &Function,
+    inst_id: InstId,
+    inst: &Instruction,
+) -> Result<(), ValidationError> {
+    check_count(inst_id, inst, 1, "1")?;
+    let operand = inst.operands[0];
+    let actual = function
+        .value(operand)
+        .ok_or(ValidationError::UnknownValue(operand))?
+        .ir_type;
+    if matches!(actual, IrType::Heap(IrHeapKind::Array | IrHeapKind::Hash)) {
+        Ok(())
+    } else {
+        Err(ValidationError::OperandTypeMismatch {
+            inst: inst_id,
+            operand,
+            expected: "Heap(Array)|Heap(Hash)",
+            actual,
+        })
+    }
 }
 
 /// Validates one exact operand count.

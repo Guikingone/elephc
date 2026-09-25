@@ -675,13 +675,23 @@ pub(crate) fn lower_is_a_relation(
     // Two class NAMES, one of them only known at run time: the static walk below can only answer
     // for literals and said false for every other pair -- including `is_a($attribute->getName(),
     // Route::class, true)`, the filter `ReflectionMethod::getAttributes(..., IS_INSTANCEOF)` runs.
-    if constant_flag == Some(true)
-        && ctx.value_php_type(object)?.codegen_repr() == PhpType::Str
-        && ctx.value_php_type(target)?.codegen_repr() == PhpType::Str
+    //
+    // A GRADUAL operand is decided at run time too: `is_subclass_of($class, $interface)` with
+    // `$class` from a parameter bag and `$interface` a `foreach` key answered false for every
+    // pair, `Countable` on `ArrayObject` included -- which is how Symfony's
+    // `ResolveInstanceofConditionalsPass` dropped every autoconfigured tag of a rebuilt container.
+    let gradual_object = matches!(
+        ctx.value_php_type(object)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    );
+    let strings_allowed = constant_flag == Some(true)
+        && class_name_operand_is_runtime_resolvable(ctx, object)?
         && (optional_const_string_operand(ctx, object)?.is_none()
-            || optional_const_string_operand(ctx, target)?.is_none())
-    {
-        emit_runtime_class_name_is_a(ctx, object, target, exclude_self)?;
+            || optional_const_string_operand(ctx, target)?.is_none());
+    // With `$allow_string` false only an OBJECT in the gradual value counts: `is_a($value, Foo::class)`.
+    let objects_only = constant_flag == Some(false) && gradual_object;
+    if (strings_allowed || objects_only) && class_name_operand_is_runtime_resolvable(ctx, target)? {
+        emit_runtime_class_name_is_a(ctx, object, target, exclude_self, strings_allowed)?;
         return store_if_result(ctx, inst);
     }
     let result = static_relation_holds(
@@ -716,8 +726,9 @@ fn emit_runtime_class_name_is_a(
     object: ValueId,
     target: ValueId,
     exclude_self: bool,
+    allow_string: bool,
 ) -> Result<()> {
-    load_class_name_is_a_args(ctx, object, target, exclude_self)?;
+    load_class_name_is_a_args(ctx, object, target, exclude_self, allow_string)?;
     abi::emit_call_label(ctx.emitter, "__rt_class_name_is_a");
     // `__rt_class_name_is_a` knows the COMPILED class table only. A class the interpreter declared
     // (an autoloaded file the compiler never saw) is absent from it, so a "no" is not final while
@@ -725,11 +736,69 @@ fn emit_runtime_class_name_is_a(
     if ctx.module.required_runtime_features.eval_bridge {
         let done = ctx.next_label("class_name_is_a_done");
         abi::emit_branch_if_int_result_nonzero(ctx.emitter, &done);
-        load_class_name_is_a_args(ctx, object, target, exclude_self)?;
+        load_class_name_is_a_args(ctx, object, target, exclude_self, allow_string)?;
         let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_class_name_is_a");
         abi::emit_call_label(ctx.emitter, &symbol);
         ctx.emitter.label(&done);
     }
+    Ok(())
+}
+
+/// Returns whether an `is_a()`/`is_subclass_of()` operand can be turned into a class name at run
+/// time by [`load_class_name_operand`]: a string, or a gradual value that may hold one.
+fn class_name_operand_is_runtime_resolvable(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<bool> {
+    Ok(matches!(
+        ctx.value_php_type(value)?.codegen_repr(),
+        PhpType::Str | PhpType::Mixed | PhpType::Union(_)
+    ))
+}
+
+/// Loads the class name an operand names into the string result registers.
+///
+/// A string is the name itself. A boxed gradual value is unboxed and answered by its runtime tag:
+/// an object gives its class name (through the eval bridge for an interpreter-declared class), a
+/// string gives itself when `allow_string` holds, and anything else gives the empty name, which no
+/// class relation matches.
+fn load_class_name_operand(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    allow_string: bool,
+) -> Result<()> {
+    if !matches!(
+        ctx.value_php_type(value)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        let (ptr, len) = abi::string_result_regs(ctx.emitter);
+        return ctx.load_string_value_to_regs(value, ptr, len);
+    }
+    let object_label = ctx.next_label("class_name_operand_object");
+    let string_label = ctx.next_label("class_name_operand_string");
+    let done_label = ctx.next_label("class_name_operand_done");
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    super::emit_branch_on_gettype_mixed_tag(ctx, 6, &object_label);
+    if allow_string {
+        super::emit_branch_on_gettype_mixed_tag(ctx, 1, &string_label);
+    }
+    emit_string_result(ctx, b"");
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&string_label);
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rax, rdi");                                // unboxed string pointer -> string result pointer (length is already in rdx)
+    }
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&object_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),                 // unboxed object pointer -> class-name lookup input
+        Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),                // unboxed object pointer -> class-name lookup input
+    }
+    emit_dynamic_object_class_name(ctx, "get_class");
+    ctx.emitter.label(&done_label);
     Ok(())
 }
 
@@ -740,11 +809,12 @@ fn load_class_name_is_a_args(
     object: ValueId,
     target: ValueId,
     exclude_self: bool,
+    allow_string: bool,
 ) -> Result<()> {
     let (ptr, len) = abi::string_result_regs(ctx.emitter);
-    ctx.load_string_value_to_regs(object, ptr, len)?;
+    load_class_name_operand(ctx, object, allow_string)?;
     abi::emit_push_reg_pair(ctx.emitter, ptr, len);
-    ctx.load_string_value_to_regs(target, ptr, len)?;
+    load_class_name_operand(ctx, target, true)?;
     let exclude = i64::from(exclude_self);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {

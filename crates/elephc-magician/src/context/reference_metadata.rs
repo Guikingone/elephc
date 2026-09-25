@@ -47,11 +47,11 @@ pub(super) struct EvalMagicScope {
 #[derive(Clone)]
 pub enum EvalReferenceTarget {
     Variable {
-        scope: *mut ElephcEvalScope,
+        scope: crate::scope::EvalScopeRef,
         name: String,
     },
     ArrayElement {
-        scope: *mut ElephcEvalScope,
+        scope: crate::scope::EvalScopeRef,
         array_name: String,
         index: EvalArrayReferenceKey,
     },

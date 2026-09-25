@@ -257,6 +257,13 @@ pub(super) fn ensure_dynamic_property_slot_results_supported(
 pub(super) fn ensure_dynamic_property_miss_supported(inst: &Instruction) -> Result<()> {
     match inst.result_php_type.codegen_repr() {
         PhpType::Mixed | PhpType::TaggedScalar | PhpType::Bool | PhpType::Int => Ok(()),
+        // An array result misses as the null CONTAINER sentinel `emit_dynamic_property_miss_result`
+        // already produces for every non-Mixed type, which array readers and the nested-append
+        // vivify step treat as the empty/absent array. Refusing it made
+        // `$this->{$kind . 'Configurators'}[$name][] = $callable` uncompilable, and a program that
+        // links the eval bridge then routed the statement through an eval fragment whose barrier
+        // froze the method's other locals at their pre-loop types.
+        PhpType::Array(_) | PhpType::AssocArray { .. } => Ok(()),
         ty => Err(CodegenIrError::unsupported(format!(
             "{} runtime miss for result PHP type {:?}",
             inst.op.name(),

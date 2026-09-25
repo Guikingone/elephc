@@ -11,7 +11,9 @@
 //! - Scope entries store runtime-cell handles only; the eval bridge does not
 //!   introduce a second PHP value representation.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::context::EvalReferenceTarget;
 use crate::value::RuntimeCellHandle;
@@ -163,6 +165,56 @@ pub struct ElephcEvalScope {
     static_aliases: HashMap<String, String>,
     reference_targets: HashMap<String, EvalReferenceTarget>,
     generation: u64,
+    /// Never reused, unlike the scope's address; see [`EvalScopeRef`].
+    id: u64,
+}
+
+/// Source of [`ElephcEvalScope`] ids. Zero is never handed out.
+static NEXT_SCOPE_ID: AtomicU64 = AtomicU64::new(1);
+
+thread_local! {
+    /// Ids of the scopes that have been created and not yet dropped on this thread.
+    ///
+    /// Thread-local is exact: a scope holds raw pointers (its reference targets), so it is
+    /// `!Send` and is dropped on the thread that created it.
+    static LIVE_SCOPE_IDS: RefCell<HashSet<u64>> = RefCell::new(HashSet::new());
+}
+
+/// A pointer to an activation scope that knows whether that scope still exists.
+///
+/// Reference targets outlive the statement that built them: a closure's `use (&$x)` keeps its
+/// target for as long as the closure lives, and that is routinely longer than the function that
+/// defined `$x` (`return static function () use (&$callback) { ... };`). A bare pointer then
+/// named freed memory -- or, once the allocator reused the address, an unrelated activation
+/// whose variable of the same name the write-back silently overwrote. The id is what tells the
+/// two apart: it is fixed at creation, survives moves, and leaves the live set on drop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EvalScopeRef {
+    scope: *mut ElephcEvalScope,
+    id: u64,
+}
+
+impl EvalScopeRef {
+    /// Captures a pointer to `scope` at its current address.
+    pub fn new(scope: &mut ElephcEvalScope) -> Self {
+        Self {
+            id: scope.id,
+            scope: scope as *mut ElephcEvalScope,
+        }
+    }
+
+    /// Returns the scope when it is still alive, and `None` once it has been dropped.
+    ///
+    /// # Safety
+    /// The scope must not have MOVED since [`EvalScopeRef::new`]; liveness is tracked by id,
+    /// so a moved scope still reads as alive. The caller must also hold no other reference to
+    /// it for the returned lifetime.
+    pub unsafe fn live_mut<'a>(self) -> Option<&'a mut ElephcEvalScope> {
+        let alive = LIVE_SCOPE_IDS
+            .try_with(|ids| ids.borrow().contains(&self.id))
+            .unwrap_or(false);
+        if alive { unsafe { self.scope.as_mut() } } else { None }
+    }
 }
 
 impl ElephcEvalScope {
@@ -175,6 +227,7 @@ impl ElephcEvalScope {
             static_aliases: HashMap::new(),
             reference_targets: HashMap::new(),
             generation: 0,
+            id: register_live_scope(),
         }
     }
 
@@ -532,3 +585,16 @@ impl Default for ElephcEvalScope {
 
 #[cfg(test)]
 mod tests;
+
+/// Hands out a fresh scope id and records it as live.
+fn register_live_scope() -> u64 {
+    let id = NEXT_SCOPE_ID.fetch_add(1, Ordering::Relaxed);
+    let _ = LIVE_SCOPE_IDS.try_with(|ids| ids.borrow_mut().insert(id));
+    id
+}
+
+impl Drop for ElephcEvalScope {
+    fn drop(&mut self) {
+        let _ = LIVE_SCOPE_IDS.try_with(|ids| ids.borrow_mut().remove(&self.id));
+    }
+}

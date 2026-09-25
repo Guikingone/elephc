@@ -200,7 +200,9 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         env_var: "ELEPHC_WEB_LIB_DIR",
         crate_name: "elephc-web",
         flag_name: "web",
-        whole_archive: true,
+        // CLI builds may link only the shared session entry points. The --web linker
+        // path explicitly whole-archives this bridge because it owns the program entry.
+        whole_archive: false,
         apple_frameworks: &[],
         apple_libraries: &[],
         needs_libdl: true,
@@ -1410,6 +1412,11 @@ mod tests {
         assert_eq!(magician.env_var, "ELEPHC_MAGICIAN_LIB_DIR");
         assert_eq!(magician.archive_filename(), "libelephc_magician.a");
         assert!(!magician.whole_archive);
+
+        let web = bridge_for_library("elephc_web").expect("web/session bridge");
+        assert_eq!(web.crate_name, "elephc-web");
+        assert!(!web.whole_archive);
+        assert_eq!(web.php_extensions, &["session"]);
 
         // `--with-curl` force-links the whole archive: a program that names no
         // `curl_*` function/class/constant (the ordinary pay-for-use detection path,

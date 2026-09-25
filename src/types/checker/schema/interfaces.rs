@@ -465,6 +465,7 @@ pub(crate) fn build_interface_info_recursive(
         interface.name.clone(),
         InterfaceInfo {
             interface_id: *next_interface_id,
+            doc_comment: checker.interface_doc_comments.get(&interface.name).cloned(),
             declaration_span: interface.span,
             parents: interface.extends.clone(),
             properties,
