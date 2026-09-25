@@ -541,3 +541,28 @@ return $c->tally;');
 
     assert_eq!(out, "1:1:1|2:2:3|1:1:1");
 }
+
+/// AOT throw statements defer Throwable validation for classes introduced by an earlier eval.
+#[test]
+fn test_aot_throw_accepts_eval_declared_throwable_class() {
+    let out = compile_and_run(r#"<?php
+eval('class EvalThrownRuntimeException extends RuntimeException {}');
+$expression = false ? throw new EvalThrownRuntimeException('expression') : 'expr';
+echo $expression, '|';
+$through_local = new EvalThrownRuntimeException('local');
+try { throw $through_local; } catch (Exception $error) { echo $error->getMessage(), '|'; }
+try { throw new EvalThrownRuntimeException('direct'); } catch (Exception $error) { echo $error->getMessage(); }
+"#);
+    assert_eq!(out, "expr|local|direct");
+}
+
+/// PHP still raises a catchable TypeError if eval has widened a non-object throw operand to Mixed.
+#[test]
+fn test_aot_throw_runtime_checks_eval_mixed_values_are_throwable() {
+    let out = compile_and_run(r#"<?php
+eval('$scalar = 42; $plain_object = new stdClass();');
+try { throw $scalar; } catch (TypeError $error) { echo $error->getMessage(), '|'; }
+try { throw $plain_object; } catch (TypeError $error) { echo $error->getMessage(); }
+"#);
+    assert_eq!(out, "Can only throw objects|Can only throw objects");
+}
