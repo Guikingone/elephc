@@ -464,7 +464,7 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
             }
             if let Some(object_label) = &object_label {
                 ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_OBJECT)); // classify an invokable object
-                ctx.emitter.instruction(&format!("b.eq {}", object_label));     // bind the public __invoke descriptor
+                abi::emit_branch_if_equal_wide(ctx.emitter, object_label);      // bind the public __invoke descriptor across large generated dispatch blocks
             }
         }
         Arch::X86_64 => {
