@@ -320,11 +320,11 @@ pub(crate) fn compile(config: CliConfig) {
     // - unresolvable path with the cache enabled → HARD COMPILE ERROR, the AOT equivalent of
     //   reference's startup fatal. It fires whether or not the program calls an OPcache function,
     //   because reference's fatal does not depend on that either.
-    // - resolvable but outside the compile-time script manifest → a WARNING only: preloading a file
-    //   this program never includes is a legitimate configuration and must not break a build. That
-    //   arm depends on the COMPLETE manifest, so it is evaluated after `autoload::run` below; only
-    //   the manifest-independent compile ERROR is decided here, matching reference PHP, which
-    //   fatals at startup regardless of what the script does.
+    // - resolvable → the file is preloaded. `inject_preload_require` makes it part of this binary,
+    //   so it is always a member of the script manifest and there is no out-of-manifest diagnostic.
+    //   Only the manifest-independent compile ERROR is decided here, matching reference PHP, which
+    //   fatals at startup regardless of what the script does; the verdict is taken again against
+    //   the COMPLETE manifest after `autoload::run`, for `preload_statistics`.
     // - empty directive, or a disabled cache → nothing at all happens (reference does not preload
     //   when the accelerator is off, and does not even validate the path).
     let opcache_preload =

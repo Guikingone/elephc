@@ -204,11 +204,9 @@ pub enum PreloadVerdict {
         requested: String,
     },
     /// Set, cache enabled, path resolves. `in_manifest` is whether the resolved path is one of the
-    /// scripts elephc actually baked into this binary; `false` earns a compile WARNING but not an
-    /// error, because a preload file that this program never includes, requires or autoloads is a
-    /// legitimate configuration — reference PHP would preload it, elephc simply does not compile
-    /// it in. The membership test must be made against the COMPLETE manifest, so `crate::pipeline`
-    /// evaluates the warning only after `autoload::run` (see [`bake_manifest`]).
+    /// scripts elephc baked into this binary. `inject_preload_require` compiles the preload file
+    /// in, so once the manifest is COMPLETE — `crate::pipeline` takes the verdict again after
+    /// `autoload::run` (see [`bake_manifest`]) — it is always `true`; no diagnostic depends on it.
     Preloading {
         /// The canonicalized preload path (same normalization `__FILE__` and [`ScriptEntry`] use).
         resolved: String,
@@ -368,8 +366,8 @@ pub fn preload_statistics(
 /// - the preload file and everything it transitively `require`s join `included_files`, so the
 ///   OPcache script manifest reports them the way reference's `preload_statistics.scripts` does
 ///   (VERIFIED: a preload file that requires one dependency reports BOTH paths);
-/// - [`PreloadVerdict::compile_warning`]'s "not in this binary's manifest" arm becomes
-///   unreachable, because the file is now always in the manifest;
+/// - the former "not in this binary's manifest" compile warning is gone, because the file is now
+///   always in the manifest;
 /// - the unresolvable path is refused HERE, before the autoload registry and the resolver run,
 ///   which is the compile-time position matching reference's startup fatal most closely.
 ///
