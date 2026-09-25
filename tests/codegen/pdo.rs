@@ -2830,6 +2830,21 @@ echo ($actual === $previous ? "same" : "different") . "|" . $error->getCode();
     assert_eq!(out, "same|17");
 }
 
+/// PDOException keeps PHP's inherited final Exception method metadata while its bridge
+/// implementation preserves PDO's SQLSTATE-returning getCode behavior.
+#[test]
+fn test_pdo_exception_methods_inherit_final_exception_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+$code = new ReflectionMethod(PDOException::class, 'getCode');
+$previous = new ReflectionMethod(PDOException::class, 'getPrevious');
+echo ($code->isFinal() ? '1' : '0'), '|', $code->getDeclaringClass()->getName(), '|';
+echo ($previous->isFinal() ? '1' : '0'), '|', $previous->getDeclaringClass()->getName();
+"#,
+    );
+    assert_eq!(out, "1|Exception|1|Exception");
+}
+
 /// Pdo\Pgsql::escapeIdentifier is a pure string transform (PQescapeIdentifier
 /// semantics: double interior double-quotes, wrap in double-quotes) that touches no
 /// connection, so it is exercised via a non-connecting Pdo\Pgsql subclass — proving

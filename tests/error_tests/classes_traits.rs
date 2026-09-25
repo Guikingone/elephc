@@ -937,3 +937,12 @@ fn test_error_cannot_override_final_exception_method() {
         "Cannot override final method Exception::getMessage",
     );
 }
+
+/// Verifies Exception::getCode cannot be overridden by user classes.
+#[test]
+fn test_error_cannot_override_final_exception_get_code() {
+    expect_error(
+        "<?php class CustomCodeException extends Exception { public function getCode(): int { return 0; } }",
+        "Cannot override final method Exception::getCode",
+    );
+}
