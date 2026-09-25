@@ -2830,19 +2830,26 @@ echo ($actual === $previous ? "same" : "different") . "|" . $error->getCode();
     assert_eq!(out, "same|17");
 }
 
-/// PDOException keeps PHP's inherited final Exception method metadata while its bridge
-/// implementation preserves PDO's SQLSTATE-returning getCode behavior.
+/// The compiler-injected PDOException implementation keeps Exception's final method metadata.
 #[test]
-fn test_pdo_exception_methods_inherit_final_exception_metadata() {
-    let out = compile_and_run(
-        r#"<?php
-$code = new ReflectionMethod(PDOException::class, 'getCode');
-$previous = new ReflectionMethod(PDOException::class, 'getPrevious');
-echo ($code->isFinal() ? '1' : '0'), '|', $code->getDeclaringClass()->getName(), '|';
-echo ($previous->isFinal() ? '1' : '0'), '|', $previous->getDeclaringClass()->getName();
-"#,
-    );
-    assert_eq!(out, "1|Exception|1|Exception");
+fn test_pdo_exception_internal_methods_keep_final_exception_metadata() {
+    let tokens = elephc::lexer::tokenize("<?php new PDOException('x');").unwrap();
+    let program = elephc::parser::parse(&tokens).unwrap();
+    let program = elephc::autoload::collect_aliases(program);
+    let mut inventory = elephc::optimize::reachability::PreludeInventory::new();
+    let program = elephc::pdo_prelude::inject_if_used(program, false, &mut inventory);
+    let program = elephc::name_resolver::resolve(program).unwrap();
+    let checked = elephc::types::check(&program).unwrap();
+    let info = checked.classes.get("PDOException").unwrap();
+
+    for method in ["getcode", "getprevious"] {
+        assert!(info.final_methods.contains(method), "{method}");
+        assert_eq!(
+            info.method_declaring_classes.get(method).map(String::as_str),
+            Some("Exception"),
+            "{method}"
+        );
+    }
 }
 
 /// Pdo\Pgsql::escapeIdentifier is a pure string transform (PQescapeIdentifier
