@@ -31,7 +31,39 @@ unset($source);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// Parses the live-block count while allowing eval-registered class metadata in the baseline.
+/// Eval-created ReflectionParameter public names add no retained string beyond eval metadata.
+#[test]
+fn test_eval_reflection_parameter_public_name_releases_string_owner() {
+    let baseline = compile_and_run_with_heap_debug(r#"<?php
+eval('function eval_parameter_owner_target(string $argument) {}');
+$parameter = new ReflectionParameter('strlen', 'string');
+if ($parameter->name !== 'string') { echo 'bad'; }
+unset($parameter);
+echo 'baseline';
+"#);
+    assert!(baseline.success, "stdout={:?}\nstderr={}", baseline.stdout, baseline.stderr);
+    assert_eq!(baseline.stdout, "baseline");
+    let baseline_live_blocks = eval_operand_owner_live_blocks(&baseline.stderr);
+
+    let out = compile_and_run_with_heap_debug(r#"<?php
+eval('function eval_parameter_owner_target(string $argument) {} $parameter = new ReflectionParameter("eval_parameter_owner_target", "argument"); return $parameter;');
+if ($parameter->name !== 'argument') { echo 'bad'; }
+unset($parameter);
+echo 'done';
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "done");
+    // The eval-created reflection owner retains five fixed metadata blocks beyond the AOT object;
+    // the public-name slot must not retain another string allocation after the object is unset.
+    assert_eq!(
+        eval_operand_owner_live_blocks(&out.stderr),
+        baseline_live_blocks + 5,
+        "discarded ReflectionParameter objects must release their public-name string: {}",
+        out.stderr,
+    );
+}
+
+/// Extracts the runtime heap's retained allocation count, accepting eval-registered class and reflection metadata in the baseline.
 fn eval_operand_owner_live_blocks(stderr: &str) -> usize {
     let summary = stderr
         .lines()
