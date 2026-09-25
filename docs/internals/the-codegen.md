@@ -82,11 +82,19 @@ float-key diagnostic. These updates also capture a mutable dimension after
 eager right-hand-side evaluation and before the read, so an error handler
 cannot redirect the write by changing the source index variable.
 
+Packed indexed arrays apply the same float-key conversion before `ArrayGet`,
+`ArraySet`, and existence probes. Compound writes reuse the read's diagnosis,
+including when a key becomes boxed `Mixed` or the array is promoted to hash
+storage at runtime. Integral float keys convert without a deprecation.
+
 String indexing returns a null sentinel for a missing offset when lowered for
 `isset()`, `empty()`, or `??`, allowing null coalescing to select its fallback
 without an out-of-bounds warning. Ordinary reads still return an empty string
 and warn. A float string offset is converted to an integer by a warning-marked
-`FToI` instruction before `StrCharAt`.
+`FToI` instruction before `StrCharAt`. A boxed float uses a marked integer cast
+that checks its runtime tag and issues the same warning. A boxed variable is
+fetched again after its warning handler returns, matching PHP when the handler
+changes that variable.
 
 ## Runtime Split
 

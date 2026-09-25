@@ -1206,11 +1206,16 @@ pub(super) fn lower_array_set_mixed_key(
         )));
     }
     let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    let helper = if matches!(inst.immediate, Some(Immediate::Bool(true))) {
+        "__rt_array_set_mixed_key_already_diagnosed"
+    } else {
+        "__rt_array_set_mixed_key"
+    };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            lower_array_set_mixed_key_aarch64(ctx, array, key, value, &value_ty)?
+            lower_array_set_mixed_key_aarch64(ctx, array, key, value, &value_ty, helper)?
         }
-        Arch::X86_64 => lower_array_set_mixed_key_x86_64(ctx, array, key, value, &value_ty)?,
+        Arch::X86_64 => lower_array_set_mixed_key_x86_64(ctx, array, key, value, &value_ty, helper)?,
     }
     // The storeback to the destination local is driven by the EIR-level
     // `store_local` of this op's result value (emitted by `store_mutated_local`
@@ -1285,6 +1290,7 @@ fn lower_array_set_mixed_key_aarch64(
     key: ValueId,
     value: ValueId,
     value_ty: &PhpType,
+    helper: &str,
 ) -> Result<()> {
     if matches!(value_ty, PhpType::Mixed | PhpType::Union(_)) {
         ctx.load_value_to_result(value)?;
@@ -1302,7 +1308,7 @@ fn lower_array_set_mixed_key_aarch64(
     }
     ctx.load_value_to_reg(key, "x1")?;
     abi::emit_pop_reg(ctx.emitter, "x2");
-    abi::emit_call_label(ctx.emitter, "__rt_array_set_mixed_key");
+    abi::emit_call_label(ctx.emitter, helper);
     Ok(())
 }
 
@@ -1313,6 +1319,7 @@ fn lower_array_set_mixed_key_x86_64(
     key: ValueId,
     value: ValueId,
     value_ty: &PhpType,
+    helper: &str,
 ) -> Result<()> {
     if matches!(value_ty, PhpType::Mixed | PhpType::Union(_)) {
         ctx.load_value_to_result(value)?;
@@ -1330,7 +1337,7 @@ fn lower_array_set_mixed_key_x86_64(
     ctx.emitter.instruction("mov rdi, rax");                                    // publish the transferred or retained helper owner
     ctx.load_value_to_reg(key, "rsi")?;
     abi::emit_pop_reg(ctx.emitter, "rdx");
-    abi::emit_call_label(ctx.emitter, "__rt_array_set_mixed_key");
+    abi::emit_call_label(ctx.emitter, helper);
     Ok(())
 }
 

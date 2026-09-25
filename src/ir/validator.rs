@@ -281,7 +281,12 @@ fn validate_instruction_effects(
 ) -> Result<(), ValidationError> {
     let expected = if inst.op == Op::MixedUnbox {
         Op::mixed_unbox_effects(&inst.result_php_type)
-    } else if inst.op == Op::FToI && matches!(inst.immediate, Some(Immediate::Bool(true))) {
+    } else if inst.op == Op::FToI
+        && matches!(
+            inst.immediate,
+            Some(Immediate::Bool(true) | Immediate::FloatKeyDiagnostic)
+        )
+    {
         Op::FToI.default_effects() | Effects::MAY_WARN
     } else if matches!(inst.op, Op::PropSet | Op::PropUnset)
         && matches!(inst.immediate, Some(Immediate::PropertyRef { .. }))
@@ -535,7 +540,7 @@ fn validate_instruction_immediate(
             matches!(imm, Imm::I64(1) | Imm::I64(-1))
         }),
         Cast => require_immediate(inst_id, inst, "cast target", |imm| {
-            matches!(imm, Imm::CastTarget(_))
+            matches!(imm, Imm::CastTarget(_) | Imm::StringOffsetCast)
         }),
         TypePredicate => require_immediate(inst_id, inst, "type predicate", |imm| {
             matches!(imm, Imm::TypePredicate(_))
@@ -560,13 +565,13 @@ fn validate_instruction_immediate(
             }
         }
         FToI => {
-            if matches!(inst.immediate, None | Some(Imm::Bool(true))) {
+            if matches!(inst.immediate, None | Some(Imm::Bool(true) | Imm::FloatKeyDiagnostic)) {
                 Ok(())
             } else {
                 Err(ValidationError::UnexpectedImmediate(inst_id))
             }
         }
-        HashGetForWrite | HashSet => {
+        HashGetForWrite | HashSet | ArraySetMixedKey => {
             if matches!(inst.immediate, None | Some(Imm::Bool(true))) {
                 Ok(())
             } else {

@@ -160,11 +160,15 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
         && index_is_boxed_mixed_key(index_value.ir_type)
         && !index_is_foreach_int_key(ctx, index)
     {
-        lower_mixed_key_array_set(ctx, array, array_value, index_value, value_value, span);
+        lower_mixed_key_array_set(
+            ctx, array, array_value, index_value, value_value, span, key_already_diagnosed,
+        );
         return;
     }
     if op == Op::ArraySet {
-        index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+        index_value = coerce_array_key_to_int_at_span(
+            ctx, index_value, Some(index.span), key_already_diagnosed,
+        );
         let array_ty = ctx.builder.value_php_type(array_value.value);
         value_value = coerce_indexed_array_set_value(ctx, &array_ty, value_value, Some(value.span));
     }
@@ -311,12 +315,13 @@ pub(super) fn lower_mixed_key_array_set(
     index: LoweredValue,
     value: LoweredValue,
     span: Span,
+    key_already_diagnosed: bool,
 ) {
     let mixed_array_ty = PhpType::Array(Box::new(PhpType::Mixed));
     let result = ctx.emit_value(
         Op::ArraySetMixedKey,
         vec![array_value.value, index.value, value.value],
-        None,
+        key_already_diagnosed.then_some(Immediate::Bool(true)),
         mixed_array_ty.clone(),
         Op::ArraySetMixedKey.default_effects(),
         Some(span),

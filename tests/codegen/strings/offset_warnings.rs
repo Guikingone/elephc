@@ -86,3 +86,43 @@ fn test_string_offset_integral_float_read_warns_once() {
     assert_eq!(out.stdout, "b");
     assert_eq!(out.stderr.matches("Warning: String offset cast occurred").count(), 1, "{}", out.stderr);
 }
+
+/// A boxed float retains the string-offset warning when the other branch is a string.
+#[test]
+fn test_string_offset_boxed_float_read_warns_once() {
+    let out = compile_and_run_capture("<?php $offset = $argc > 0 ? 1.9 : '1'; echo 'abc'[$offset];");
+    assert_eq!(out.stdout, "b");
+    assert_eq!(out.stderr.matches("Warning: String offset cast occurred").count(), 1, "{}", out.stderr);
+}
+
+/// A cast warning handler can update a boxed variable before the string fetch.
+#[test]
+fn test_string_offset_boxed_float_handler_updates_offset_once() {
+    let out = compile_and_run_capture(r#"<?php
+$s = 'abc';
+$offset = 1.9;
+set_error_handler(function($level, $message) use (&$offset) {
+    echo $level, ':', $message, '|';
+    $offset = 2.9;
+});
+echo $s[$offset];
+"#);
+    assert_eq!(out.stdout, "2:String offset cast occurred|c");
+    assert_eq!(out.stderr, "");
+}
+
+/// A boxed integer-form string offset remains silent on the runtime string branch.
+#[test]
+fn test_string_offset_boxed_integer_string_read_is_silent() {
+    let out = compile_and_run_capture("<?php $offset = $argc > 0 ? '01' : 1.9; echo 'abc'[$offset];");
+    assert_eq!(out.stdout, "b");
+    assert_eq!(out.stderr, "");
+}
+
+/// PHP accepts integer-form string offsets without reporting a cast warning.
+#[test]
+fn test_string_offset_integer_string_read_is_silent() {
+    let out = compile_and_run_capture("<?php echo 'abc'['01'];");
+    assert_eq!(out.stdout, "b");
+    assert_eq!(out.stderr, "");
+}

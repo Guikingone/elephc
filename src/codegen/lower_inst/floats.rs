@@ -170,20 +170,30 @@ pub(super) fn lower_float_to_int(
     inst: &Instruction,
 ) -> Result<()> {
     let value = expect_operand(inst, 0)?;
+    if matches!(inst.immediate, Some(Immediate::FloatKeyDiagnostic)) {
+        require_float(ctx.load_value_to_result(value)?, inst)?;
+        abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");
+        return store_if_result(ctx, inst);
+    }
     if matches!(inst.immediate, Some(Immediate::Bool(true))) {
-        let message = b"Warning: String offset cast occurred\n";
-        let (label, len) = ctx.data.add_string(message);
-        let (pointer_reg, length_reg) = match ctx.emitter.target.arch {
-            Arch::AArch64 => ("x1", "x2"),
-            Arch::X86_64 => ("rdi", "rsi"),
-        };
-        abi::emit_symbol_address(ctx.emitter, pointer_reg, &label);
-        abi::emit_load_int_immediate(ctx.emitter, length_reg, len as i64);
-        abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+        emit_string_offset_cast_warning(ctx);
     }
     require_float(ctx.load_value_to_result(value)?, inst)?;
     abi::emit_float_result_to_int_result(ctx.emitter);
     store_if_result(ctx, inst)
+}
+
+/// Reports PHP's string-offset cast warning through the shared diagnostic channel.
+pub(super) fn emit_string_offset_cast_warning(ctx: &mut FunctionContext<'_>) {
+    let message = b"Warning: String offset cast occurred\n";
+    let (label, len) = ctx.data.add_string(message);
+    let (pointer_reg, length_reg) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x1", "x2"),
+        Arch::X86_64 => ("rdi", "rsi"),
+    };
+    abi::emit_symbol_address(ctx.emitter, pointer_reg, &label);
+    abi::emit_load_int_immediate(ctx.emitter, length_reg, len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
 }
 
 /// Lowers an integer-like-to-float conversion, treating PHP null as numeric zero.

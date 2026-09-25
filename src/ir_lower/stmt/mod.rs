@@ -20,7 +20,8 @@ use crate::ir_lower::context::{
 };
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::expr::{
-    array_access_element_result_type, coerce_container_to_mixed_payload, coerce_to_int_at_span,
+    array_access_element_result_type, coerce_array_key_to_int_at_span,
+    coerce_container_to_mixed_payload, coerce_to_int_at_span,
     index_expr_key_type, lower_array_access_from_lowered_receiver,
     lower_by_ref_foreach_element_source, lower_by_ref_foreach_property_source,
     lower_callable_array_for_assignment,

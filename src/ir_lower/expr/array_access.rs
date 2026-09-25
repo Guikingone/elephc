@@ -59,7 +59,7 @@ pub(crate) fn lower_by_ref_foreach_element_source(
     // The hash lookup normalizes its own key, so only the indexed slot arithmetic needs an
     // int-coerced one.
     let index_value = if op == Op::ArrayGetForWrite {
-        coerce_to_int_at_span(ctx, index_value, Some(index.span))
+        coerce_array_key_to_int_at_span(ctx, index_value, Some(index.span), false)
     } else {
         index_value
     };
@@ -224,7 +224,7 @@ pub(super) fn lower_array_access_from_value(
                     Op::ArrayGetSilent
                 }
             } else if index_ty == PhpType::Int {
-                index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+                index_value = coerce_array_key_to_int_at_span(ctx, index_value, Some(index.span), false);
                 if warn_on_missing {
                     Op::ArrayGet
                 } else {
@@ -252,6 +252,9 @@ pub(super) fn lower_array_access_from_value(
             Op::BufferGet
         }
         IrType::Str => {
+            // PHP fetches a boxed variable again after its cast warning handler returns.
+            let reload_boxed_variable = matches!(index.kind, ExprKind::Variable(_))
+                && matches!(index_value.ir_type, IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union));
             index_value = if index_value.ir_type == IrType::F64 {
                 ctx.emit_value(
                     Op::FToI,
@@ -262,8 +265,12 @@ pub(super) fn lower_array_access_from_value(
                     Some(index.span),
                 )
             } else {
-                coerce_to_int_at_span(ctx, index_value, Some(index.span))
+                coerce_string_offset_to_int(ctx, index_value, index.span)
             };
+            if reload_boxed_variable {
+                let current_index = lower_expr(ctx, index);
+                index_value = coerce_to_int_at_span(ctx, current_index, Some(index.span));
+            }
             Op::StrCharAt
         }
         _ => Op::RuntimeCall,
@@ -294,6 +301,28 @@ pub(super) fn lower_array_access_from_value(
     // dropping that receiver; boxed and retained container reads are already
     // independent and must not be acquired twice.
     stabilize_borrowed_result_and_release_receiver(ctx, array_value, result, expr.span)
+}
+
+/// Converts a non-float string offset while preserving warnings for boxed float values.
+fn coerce_string_offset_to_int(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: crate::span::Span,
+) -> LoweredValue {
+    if matches!(value.ir_type, IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union)) {
+        let result = ctx.emit_value(
+            Op::Cast,
+            vec![value.value],
+            Some(Immediate::StringOffsetCast),
+            PhpType::Int,
+            Op::Cast.default_effects(),
+            Some(span),
+        );
+        release_coerced_source_if_owned(ctx, value, Some(span));
+        result
+    } else {
+        coerce_to_int_at_span(ctx, value, Some(span))
+    }
 }
 
 /// Lowers nullable receiver indexing without evaluating the index on a null receiver.

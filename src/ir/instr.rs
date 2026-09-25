@@ -118,6 +118,10 @@ pub enum Immediate {
     I64(i64),
     F64(f64),
     Bool(bool),
+    /// Reports PHP's array-key diagnostic while converting a float to an integer key.
+    FloatKeyDiagnostic,
+    /// Converts a string offset with runtime cast diagnostics for boxed values.
+    StringOffsetCast,
     Data(DataId),
     /// Data-pool reference carrying the strict-PHP profile of its physical call site.
     ProfiledData {
@@ -1336,8 +1340,11 @@ impl Op {
             // checks its load factor and may grow/rehash the table before it even knows whether
             // the key is already present.
             SlotDetach => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
-            ArrayElemAddr | ArraySetMixedKey => {
+            ArrayElemAddr => {
                 E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP
+            }
+            ArraySetMixedKey => {
+                E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::MAY_WARN | E::REFCOUNT_OP
             }
             ArrayGetMixedKey => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::MAY_WARN,
             ArrayGetMixedKeySilent => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_FATAL,

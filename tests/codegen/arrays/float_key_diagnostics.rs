@@ -9,6 +9,132 @@
 
 use crate::support::*;
 
+/// Packed reads and writes each diagnose a fractional float key once.
+#[test]
+fn test_packed_float_array_key_read_and_write_warn_once_each() {
+    let out = compile_and_run_capture("<?php $a = ['a', 'b']; echo $a[1.9]; $a[1.9] = 'x'; echo $a[1];");
+    assert_eq!(out.stdout, "bx");
+    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 2, "{}", out.stderr);
+}
+
+/// A compound packed write diagnoses its shared read and write key once.
+#[test]
+fn test_packed_float_array_key_compound_add_warns_once() {
+    let out = compile_and_run_capture("<?php $a = [10, 20]; $a[1.9] += 1; echo $a[1];");
+    assert_eq!(out.stdout, "21");
+    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+}
+
+/// Packed post-increment diagnoses a fractional key once.
+#[test]
+fn test_packed_float_array_key_post_increment_warns_once() {
+    let out = compile_and_run_capture("<?php $a = [10, 20]; $a[1.9]++; echo $a[1];");
+    assert_eq!(out.stdout, "21");
+    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+}
+
+/// Packed existence and coalescing probes still diagnose a fractional key.
+#[test]
+fn test_packed_float_array_key_probes_warn_once_each() {
+    let out = compile_and_run_capture("<?php $a = [10, 20]; echo (int)isset($a[1.9]), ':', (int)empty($a[1.9]), ':', ($a[1.9] ?? 0);");
+    assert_eq!(out.stdout, "1:0:20");
+    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 3, "{}", out.stderr);
+}
+
+/// Null-coalesce assignment on packed storage diagnoses its float key once.
+#[test]
+fn test_packed_float_array_key_null_coalesce_assignment_warns_once() {
+    let out = compile_and_run_capture("<?php $a = [10, 20]; echo ($a[1.9] ??= 7), ':', $a[1];");
+    assert_eq!(out.stdout, "20:20");
+    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
+}
+
+/// Packed array writes through object and static properties diagnose float keys.
+#[test]
+fn test_packed_float_array_key_property_writes_warn_once_each() {
+    let out = compile_and_run_capture(r#"<?php
+class Box {
+    public $items = [10, 20];
+    public static $staticItems = [10, 20];
+}
+$box = new Box();
+$box->items[1.9] = 21;
+Box::$staticItems[1.9] = 22;
+echo $box->items[1], ':', Box::$staticItems[1];
+"#);
+    assert_eq!(out.stdout, "21:22");
+    assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 2, "{}", out.stderr);
+}
+
+/// An integral float key remains silent on indexed storage.
+#[test]
+fn test_packed_integral_float_array_key_is_silent() {
+    let out = compile_and_run_capture("<?php $a = ['a', 'b']; echo $a[1.0]; $a[1.0] = 'x'; echo $a[1];");
+    assert_eq!(out.stdout, "bx");
+    assert_eq!(out.stderr, "");
+}
+
+/// An undefined packed read diagnoses the float before warning about the integer key.
+#[test]
+fn test_packed_float_array_key_missing_read_warns_once() {
+    let out = compile_and_run_capture("<?php $a = ['a', 'b']; var_dump($a[9.9]);");
+    assert_eq!(out.stderr.matches("Implicit conversion from float 9.9 to int loses precision").count(), 1, "{}", out.stderr);
+    assert_eq!(out.stderr.matches("Undefined array key 9").count(), 1, "{}", out.stderr);
+}
+
+/// A packed compound update keeps the diagnosed key even if its handler changes the variable.
+#[test]
+fn test_packed_float_array_key_compound_handler_keeps_original_dimension() {
+    let out = compile_and_run_capture(r#"<?php
+$a = [10, 20, 30];
+$k = 1.9;
+set_error_handler(function($level, $message) use (&$k) {
+    echo $level, ':', $message, '|';
+    $k = 2.9;
+});
+$a[$k] += 1;
+echo $a[1], ':', $a[2];
+"#);
+    assert_eq!(out.stdout, "8192:Implicit conversion from float 1.9 to int loses precision|21:30");
+    assert_eq!(out.stderr, "");
+}
+
+/// A boxed packed post-increment diagnoses its shared key once.
+#[test]
+fn test_packed_float_array_key_increment_handler_keeps_original_dimension() {
+    let out = compile_and_run_capture(r#"<?php
+$a = [10, 20, 30];
+$k = 1.9;
+set_error_handler(function($level, $message) use (&$k) {
+    echo $level, ':', $message, '|';
+    $k = 2.9;
+});
+$a[$k]++;
+echo $a[1], ':', $a[2];
+"#);
+    assert_eq!(out.stdout, "8192:Implicit conversion from float 1.9 to int loses precision|21:30");
+    assert_eq!(out.stderr, "");
+}
+
+/// A runtime-promoted packed array also avoids repeating its boxed float-key diagnosis.
+#[test]
+fn test_packed_promoted_float_array_key_compound_warns_once() {
+    let out = compile_and_run_capture(r#"<?php
+$a = [10, 20, 30];
+$name = $argc > 0 ? 'tag' : 0;
+$a[$name] = 7;
+$k = 1.9;
+set_error_handler(function($level, $message) use (&$k) {
+    echo $level, ':', $message, '|';
+    $k = 2.9;
+});
+$a[$k] += 1;
+echo $a[1], ':', $a[2], ':', $a['tag'];
+"#);
+    assert_eq!(out.stdout, "8192:Implicit conversion from float 1.9 to int loses precision|21:30:7");
+    assert_eq!(out.stderr, "");
+}
+
 /// Checks fractional reads and writes warn with the original float value.
 #[test]
 fn test_float_array_key_fractional_read_and_write_warn() {

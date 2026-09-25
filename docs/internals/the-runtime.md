@@ -130,6 +130,8 @@ call that warning helper. A float string offset instead reports `String offset
 cast occurred` before truncating the offset, including for integral-valued
 floats. These warnings follow `@` suppression and the registered PHP error
 handler through the shared diagnostic dispatcher.
+Boxed float offsets use the same warning before the string fetch.
+Integer-form string offsets remain silent, including when their value is boxed.
 
 ## String routines
 
