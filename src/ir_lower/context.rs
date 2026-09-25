@@ -316,10 +316,10 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// `LoweringContext::loops_a_throw_would_leave`.
     pub try_loop_depths: Vec<usize>,
     /// Exceptions a finalizer took from the in-flight cell and has not rethrown yet: the hidden
-    /// temp holding each, and the loop-stack depth its `finally` copy began at. A jump that
-    /// leaves the copy DISCARDS the exception, so `control_exit` releases it there — see
-    /// `stmt::exceptions::lower_catch_dispatch_with_finally`.
-    pub taken_finally_exceptions: Vec<(String, usize)>,
+    /// temp holding each, and the loop-stack and finally-stack depths its `finally` copy began
+    /// at. A jump that leaves the copy DISCARDS the exception, so `control_exit` releases it
+    /// there — see `stmt::exceptions::lower_catch_dispatch_with_finally`.
+    pub taken_finally_exceptions: Vec<(String, usize, usize)>,
     static_callable_locals: HashMap<String, StaticCallableBinding>,
     /// Per-local mutation generations used to distinguish a control-flow fact clear from an
     /// actual reassignment while lowering a try/catch region.

@@ -564,3 +564,58 @@ fn an_include_discarding_an_exception_destructs_it_at_the_return() {
         assert_eq!(live_blocks(&String::from_utf8_lossy(&run.stderr)), 0, "{label}: leaked");
     }
 }
+
+/// A discarded exception is destructed BEFORE the loops the jump leaves are cleaned up, as
+/// php-src unwinds: innermost first. A generator suspending inside such a `finally` keeps it.
+///
+/// The release used to follow the loop cleanups, so a `return` in a `finally` inside a
+/// `foreach` over an object destructed the iterator first. MEASURED on reference PHP 8.5.10:
+/// `got:[d][it]0` — exception, then iterator — and, through an include, `[d]r3 [d]r3 [it]`; a
+/// generator that yields inside the `finally` then returns prints `v2 [d]end`, and one that
+/// falls through rethrows to the caller's `catch` (`v2 caught end` and `[d]` at shutdown).
+/// `main` never destructed the discarded exception in three of these four.
+#[test]
+fn a_discarded_exception_is_destructed_before_the_loops_it_leaves() {
+    let e = "class E extends Exception { public function __destruct() { echo \"[d]\"; } }\n";
+    let it = "class It implements Iterator { private $i = 0;\n public function __destruct() { echo \"[it]\"; }\n public function current(): mixed { return $this->i; } public function key(): mixed { return $this->i; }\n public function next(): void { $this->i++; } public function rewind(): void { $this->i = 0; }\n public function valid(): bool { return $this->i < 2; } }\n";
+    let lib = "<?php\ntry { throw new E(\"b\"); }\nfinally { return 3; }\n";
+    let generator = "function gen($x) { try { throw new E(\"b\"); } finally { yield 2; if ($x) { return; } } }\n";
+    for (label, body, expected) in [
+        (
+            "foreach_return",
+            format!("{e}{it}function f() {{ foreach (new It() as $v) {{ try {{ throw new E(\"b\"); }} finally {{ return $v; }} }} }}\necho \"got:\", f(), \"\\n\";\necho \"end\\n\";\n"),
+            "got:[d][it]0\nend\n",
+        ),
+        (
+            "foreach_include",
+            format!("{e}{it}function f() {{ foreach (new It() as $v) {{ $r = include __DIR__ . '/lib.php'; echo \"r$r \"; }} }}\nf();\necho \"end\\n\";\n"),
+            "[d]r3 [d]r3 [it]end\n",
+        ),
+        (
+            "generator_returns",
+            format!("{e}{generator}foreach (gen(true) as $v) {{ echo \"v$v \"; }}\necho \"end\\n\";\n"),
+            "v2 [d]end\n",
+        ),
+        (
+            "generator_rethrows",
+            format!("{e}{generator}try {{ foreach (gen(false) as $v) {{ echo \"v$v \"; }} }} catch (E $x) {{ echo \"caught \"; }}\necho \"end\\n\";\n"),
+            "v2 caught end\n[d]",
+        ),
+    ] {
+        let main = format!("<?php\n{body}");
+        let (dir, output) = compile_with(
+            &format!("fin_order_{label}"),
+            &[("lib.php", lib), ("main.php", &main)],
+            &["--heap-debug"],
+        );
+        assert!(
+            output.status.success(),
+            "compilation failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let run = Command::new(dir.join("main")).output().expect("failed to run binary");
+        assert!(run.status.success(), "{label}: the binary died");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), expected, "{label}");
+        assert_eq!(live_blocks(&String::from_utf8_lossy(&run.stderr)), 0, "{label}: leaked");
+    }
+}

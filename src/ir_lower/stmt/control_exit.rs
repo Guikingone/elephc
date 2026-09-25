@@ -15,28 +15,37 @@ pub(super) fn lower_break(ctx: &mut LoweringContext<'_, '_>, level: usize) {
         ctx.builder.terminate(Terminator::Unreachable);
         return;
     };
-    release_exceptions_left_behind(ctx, ctx.loop_stack.len().saturating_sub(level.max(1)));
     terminate_branch(ctx, frame.break_block, loop_cleanup_count_for_branch(level));
 }
 
-/// Releases each exception a finalizer took that a jump to loop depth `target_depth` leaves.
+/// Releases the exceptions a finalizer took that a jump leaves behind, at the point in the exit
+/// sequence where reference PHP discards them.
 ///
-/// Leaving the `finally` copy discards its exception, and reference PHP destroys it right
+/// Leaving a `finally` copy DISCARDS the exception it took, and reference destroys it right
 /// there: `try { throw … } finally { return 9; }` in an included file prints `[destruct]` BEFORE
-/// the caller's next statement (MEASURED on PHP 8.5.10). The hidden temp holding it would keep
-/// it alive until the slot was reused or the frame ended. Released and then cleared, so the
-/// frame's cleanup finds nothing left to release. Emitted on the jump's own path only; the
-/// lexical list is untouched, so sibling paths still see every entry.
-fn release_exceptions_left_behind(ctx: &mut LoweringContext<'_, '_>, target_depth: usize) {
-    let left: Vec<String> = ctx
-        .taken_finally_exceptions
-        .iter()
-        .rev()
-        .filter(|(_, depth)| target_depth < *depth)
-        .map(|(temp, _)| temp.clone())
-        .collect();
-    for temp in left {
-        ctx.release_owned_hidden_temp(&temp, None);
+/// the caller's next statement, and inside a `foreach` the exception is destroyed BEFORE the
+/// loop's iterator (MEASURED on PHP 8.5.10). php-src unwinds innermost first — a `finally`
+/// nested inside the copy, then the discard, then the loops and the enclosing `finally` blocks —
+/// so an entry is released only once every finally frame inside its copy has run (`finally_depth`
+/// reached) and only if the jump leaves its copy's loops (`target_loop_depth`, `None` for a
+/// `return`). Released and cleared, so the frame's cleanup finds nothing left; each released
+/// entry is removed from the list for the REST of this exit path, which the caller restores.
+fn release_taken_exceptions(ctx: &mut LoweringContext<'_, '_>, target_loop_depth: Option<usize>) {
+    let finally_depth = ctx.finally_stack.len();
+    let mut kept = Vec::new();
+    let mut released = Vec::new();
+    for entry in std::mem::take(&mut ctx.taken_finally_exceptions) {
+        let (_, loop_depth, entry_finally_depth) = entry;
+        let leaves = target_loop_depth.is_none_or(|target| target < loop_depth);
+        if leaves && entry_finally_depth >= finally_depth {
+            released.push(entry.0);
+        } else {
+            kept.push(entry);
+        }
+    }
+    ctx.taken_finally_exceptions = kept;
+    for temp in released.iter().rev() {
+        ctx.release_owned_hidden_temp(temp, None);
     }
 }
 
@@ -46,7 +55,6 @@ pub(super) fn lower_continue(ctx: &mut LoweringContext<'_, '_>, level: usize) {
         ctx.builder.terminate(Terminator::Unreachable);
         return;
     };
-    release_exceptions_left_behind(ctx, ctx.loop_stack.len().saturating_sub(level.max(1)));
     terminate_branch(
         ctx,
         frame.continue_block,
@@ -479,6 +487,8 @@ pub(super) fn acquire_borrowed_return_value(
 pub(super) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<crate::ir::ValueId>) {
     let saved_finally_stack = ctx.finally_stack.clone();
     let saved_try_loop_depths = ctx.try_loop_depths.clone();
+    let saved_taken = ctx.taken_finally_exceptions.clone();
+    release_taken_exceptions(ctx, None);
     if run_innermost_finally(ctx, false) {
         if !ctx.builder.insertion_block_is_terminated() {
             terminate_return(ctx, value);
@@ -487,9 +497,11 @@ pub(super) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<
         // Restore the lexical lowering state for sibling and fallthrough blocks.
         ctx.finally_stack = saved_finally_stack;
         ctx.try_loop_depths = saved_try_loop_depths;
+        ctx.taken_finally_exceptions = saved_taken;
         return;
     }
     emit_innermost_loop_cleanups(ctx, ctx.loop_stack.len());
+    ctx.taken_finally_exceptions = saved_taken;
     ctx.emit_eval_scope_finalizer(None);
     ctx.builder.terminate(Terminator::Return { value });
 }
@@ -498,15 +510,21 @@ pub(super) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<
 pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockId, loop_cleanup_count: usize) {
     let saved_finally_stack = ctx.finally_stack.clone();
     let saved_try_loop_depths = ctx.try_loop_depths.clone();
+    let saved_taken = ctx.taken_finally_exceptions.clone();
+    // `break N` / `continue N` target the loop at this depth: `loop_cleanup_count` is N - 1.
+    let target_loop_depth = ctx.loop_stack.len().saturating_sub(loop_cleanup_count + 1);
+    release_taken_exceptions(ctx, Some(target_loop_depth));
     if run_innermost_finally(ctx, false) {
         if !ctx.builder.insertion_block_is_terminated() {
             terminate_branch(ctx, target, loop_cleanup_count);
         }
         ctx.finally_stack = saved_finally_stack;
         ctx.try_loop_depths = saved_try_loop_depths;
+        ctx.taken_finally_exceptions = saved_taken;
         return;
     }
     emit_innermost_loop_cleanups(ctx, loop_cleanup_count);
+    ctx.taken_finally_exceptions = saved_taken;
     ctx.builder.terminate(Terminator::Br {
         target,
         args: Vec::new(),

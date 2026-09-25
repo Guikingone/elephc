@@ -247,7 +247,7 @@ pub(super) fn lower_catch_dispatch_with_finally(
     if body_can_leave_by_jump(finally_body) {
         let taken = bind_in_flight_exception(ctx, span);
         ctx.taken_finally_exceptions
-            .push((taken.clone(), ctx.loop_stack.len()));
+            .push((taken.clone(), ctx.loop_stack.len(), ctx.finally_stack.len()));
         lower_block(ctx, finally_body);
         ctx.taken_finally_exceptions.pop();
         if !ctx.builder.insertion_block_is_terminated() {
