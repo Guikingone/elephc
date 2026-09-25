@@ -114,6 +114,7 @@ impl Span {
         }
     }
 
+    /// Packs an included-file source identity with its end column, asserting both fit.
     fn pack_end_column(end_col: u32, source_id: u32) -> u32 {
         if source_id == 0 {
             return end_col;

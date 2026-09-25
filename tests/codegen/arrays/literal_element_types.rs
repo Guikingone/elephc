@@ -138,6 +138,20 @@ echo count($c[0]), count($c[1]), "|", $c[0][0], $c[1][0];
     assert_eq!(out, "22|15");
 }
 
+/// The associative literal path must use the same caller-visible widened return type as indexed
+/// literals when an untyped parameter makes an inferred array's elements dynamic.
+#[test]
+fn test_assoc_literal_of_untyped_user_array_return_stores_mixed_elements() {
+    let out = compile_and_run(
+        r#"<?php
+function values($value) { return [$value]; }
+$literal = ["items" => values("x")];
+var_dump($literal["items"][0]);
+"#,
+    );
+    assert_eq!(out, "string(1) \"x\"\n");
+}
+
 /// The other control: a builtin the syntactic allowlist DOES name keeps answering from it, so
 /// the new lookup cannot be the thing that makes these work.
 #[test]
