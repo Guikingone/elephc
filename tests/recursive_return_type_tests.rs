@@ -535,7 +535,9 @@ function r(int $x): array {
 }
 print_r(r(0));
 "#,
-        "Function 'r' return type expects array<mixed>, got string",
+        // Rendered with the type's `Display`, as every diagnostic on this branch is: a declared
+        // `array` reads `array`, not the internal `array<mixed>`.
+        "Function 'r' return type expects array, got string",
     );
 }
 
