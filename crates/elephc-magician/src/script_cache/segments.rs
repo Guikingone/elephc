@@ -148,7 +148,11 @@ pub(crate) fn find_php_close_tag(bytes: &[u8], start: usize) -> Option<usize> {
     while i < bytes.len() {
         match bytes[i] {
             b'?' if bytes.get(i + 1) == Some(&b'>') => return Some(i),
-            b'\'' | b'"' | b'`' => i = skip_quoted(bytes, i)?,
+            b'\'' | b'"' | b'`' => match skip_quoted(bytes, i) {
+                QuotedScan::Closed(end) => i = end,
+                QuotedScan::PhpCloseTag(close) => return Some(close),
+                QuotedScan::Unterminated => return None,
+            },
             b'/' if bytes.get(i + 1) == Some(&b'*') => {
                 i = find_from(bytes, i + 2, b"*/")? + 2;
             }
@@ -175,6 +179,13 @@ pub(crate) fn find_php_close_tag(bytes: &[u8], start: usize) -> Option<usize> {
     None
 }
 
+/// Result of scanning a quoted token that may contain PHP close tags inside line comments.
+enum QuotedScan {
+    Closed(usize),
+    PhpCloseTag(usize),
+    Unterminated,
+}
+
 /// Returns the index just past the closing quote of the string opening at `open`, or `None`
 /// when it never closes. A backslash escapes the next byte in all three quote styles.
 ///
@@ -184,7 +195,7 @@ pub(crate) fn find_php_close_tag(bytes: &[u8], start: usize) -> Option<usize> {
 /// was cut there. MEASURED: reference runs `echo "{$a["?>"]}";` and prints the value; elephc
 /// raised a parse error. The interpolation is skipped as a balanced `{...}`, its own strings
 /// included, before the outer string resumes. Found by GLM.
-fn skip_quoted(bytes: &[u8], open: usize) -> Option<usize> {
+fn skip_quoted(bytes: &[u8], open: usize) -> QuotedScan {
     let quote = bytes[open];
     let interpolates = quote != b'\'';
     let mut i = open + 1;
@@ -192,22 +203,28 @@ fn skip_quoted(bytes: &[u8], open: usize) -> Option<usize> {
         match bytes[i] {
             b'\\' => i += 2,
             b'{' if interpolates && bytes.get(i + 1) == Some(&b'$') => {
-                i = skip_interpolation(bytes, i)?;
+                match skip_interpolation(bytes, i) {
+                    QuotedScan::Closed(end) => i = end,
+                    other => return other,
+                }
             }
             b'$' if interpolates && bytes.get(i + 1) == Some(&b'{') => {
-                i = skip_interpolation(bytes, i + 1)?;
+                match skip_interpolation(bytes, i + 1) {
+                    QuotedScan::Closed(end) => i = end,
+                    other => return other,
+                }
             }
-            byte if byte == quote => return Some(i + 1),
+            byte if byte == quote => return QuotedScan::Closed(i + 1),
             _ => i += 1,
         }
     }
-    None
+    QuotedScan::Unterminated
 }
 
 /// Returns the index just past the `}` that balances the `{` at `open`, skipping any string
 /// inside the braces. `None` when it never balances, which leaves the string unterminated —
 /// the parser then reports what is wrong, as PHP does.
-fn skip_interpolation(bytes: &[u8], open: usize) -> Option<usize> {
+fn skip_interpolation(bytes: &[u8], open: usize) -> QuotedScan {
     let mut depth = 0usize;
     let mut i = open;
     while i < bytes.len() {
@@ -220,14 +237,35 @@ fn skip_interpolation(bytes: &[u8], open: usize) -> Option<usize> {
                 depth -= 1;
                 i += 1;
                 if depth == 0 {
-                    return Some(i);
+                    return QuotedScan::Closed(i);
                 }
             }
-            b'\'' | b'"' | b'`' => i = skip_quoted(bytes, i)?,
+            b'\'' | b'"' | b'`' => match skip_quoted(bytes, i) {
+                QuotedScan::Closed(end) => i = end,
+                other => return other,
+            },
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                match find_from(bytes, i + 2, b"*/") {
+                    Some(end) => i = end + 2,
+                    None => return QuotedScan::Unterminated,
+                }
+            }
+            b'/' if bytes.get(i + 1) == Some(&b'/') => {
+                if let Some(close) = scan_line_comment(bytes, i + 2) {
+                    return QuotedScan::PhpCloseTag(close);
+                }
+                i = next_line(bytes, i + 2);
+            }
+            b'#' if bytes.get(i + 1) != Some(&b'[') => {
+                if let Some(close) = scan_line_comment(bytes, i + 1) {
+                    return QuotedScan::PhpCloseTag(close);
+                }
+                i = next_line(bytes, i + 1);
+            }
             _ => i += 1,
         }
     }
-    None
+    QuotedScan::Unterminated
 }
 
 /// Returns the offset of `needle` at or after `from`.
@@ -415,6 +453,31 @@ mod tests {
             find_php_close_tag(dollar_brace, 5),
             Some(dollar_brace.len() - 6),
             "the `${{...}}` form is skipped the same way"
+        );
+    }
+
+    /// Delimiters and quotes inside interpolation comments do not affect string balancing.
+    #[test]
+    fn interpolation_comments_hide_quotes_braces_and_close_tags() {
+        let source: &[u8] = b"<?php $a = ['ok']; echo \"{$a[ /* quote: \\\" brace: } close: ?> */ 0]}\"; ?>tail";
+        assert_eq!(
+            shape(&segment_script_fresh(source)),
+            ["code", "out(tail)"],
+            "{}",
+            String::from_utf8_lossy(source)
+        );
+        assert_eq!(
+            find_php_close_tag(source, 5),
+            Some(source.len() - 6),
+            "the block comment's quote, brace, and close tag are all inert"
+        );
+
+        let line_comment: &[u8] = b"<?php echo \"{$a[ // ?>\n 0]}\"; ?>tail";
+        let line_comment_close = find_from(line_comment, 5, b"?>").unwrap();
+        assert_eq!(
+            find_php_close_tag(line_comment, 5),
+            Some(line_comment_close),
+            "a close tag in an interpolation line comment still ends PHP mode"
         );
     }
 
