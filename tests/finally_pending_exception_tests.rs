@@ -207,3 +207,82 @@ fn only_a_pending_exception_is_chained() {
         "F X:orig\nend\n[~orig]",
     );
 }
+
+/// A `break`/`continue` that stays inside a protected region does NOT run its `finally` or
+/// drop its handler — in a `try` body, a `catch` body, or a `finally` entered with an
+/// exception pending.
+///
+/// Every such jump used to run the innermost `finally` whatever loop it targeted: `try { while
+/// (…) { break; } throw … } catch …` ran the `finally` early (`F` printed twice), popped the
+/// try's handler, and the later throw escaped its own `catch` as "Uncaught"; in a pending
+/// `finally` the same `break` dropped the chaining handler (`new|none`). `main` had all of it.
+/// MEASURED on reference PHP 8.5.10.
+#[test]
+fn a_jump_that_stays_inside_the_region_runs_no_finally() {
+    let loop_ = "$i = 0; while (true) { $i++; if ($i > $n) { break; } echo \"i$i \"; }";
+    for (label, body, expected) in [
+        (
+            "try_then_throw",
+            format!("function f(int $n) {{ try {{ {loop_} throw new Exception(\"t\"); }} catch (Exception $c) {{ echo \"caught \", $c->getMessage(), \" \"; }} finally {{ echo \"F \"; }} echo \"tail\"; }}\nf($argc + 1); echo \"\\n\";\n"),
+            "i1 i2 caught t F tail\n",
+        ),
+        (
+            "try_falls_through",
+            format!("function f(int $n) {{ try {{ {loop_} echo \"after \"; }} finally {{ echo \"F \"; }} echo \"tail\"; }}\nf($argc + 1); echo \"\\n\";\n"),
+            "i1 i2 after F tail\n",
+        ),
+        (
+            "foreach_in_try",
+            "function f(int $n) { try { foreach ([1, 2, 3] as $v) { if ($v === $n) { break; } echo \"v$v \"; } throw new Exception(\"t\"); } catch (Exception $c) { echo \"caught \"; } finally { echo \"F \"; } echo \"tail\"; }\nf($argc + 1); echo \"\\n\";\n".to_string(),
+            "v1 caught F tail\n",
+        ),
+        (
+            "pending_finally",
+            format!("function f(int $n) {{ try {{ throw new X(\"old\"); }} finally {{ {loop_} throw new X(\"new\"); }} }}\ntry {{ f($argc + 1); }} catch (X $e) {{ echo chain($e), \"\\n\"; }}\n"),
+            "i1 i2 X:new <- X:old\n[~new][~old]",
+        ),
+        (
+            "catch_body",
+            format!("function f(int $n) {{ try {{ throw new X(\"a\"); }} catch (X $c) {{ {loop_} throw new X(\"b\"); }} finally {{ echo \"F \"; }} }}\ntry {{ f($argc + 1); }} catch (X $e) {{ echo chain($e), \"\\n\"; }}\n"),
+            "i1 i2 F [~a]X:b\n[~b]",
+        ),
+    ] {
+        assert_program(label, &body, expected);
+    }
+}
+
+/// A jump that DOES leave a protected region still runs every `finally` it crosses, in order.
+///
+/// MEASURED on reference PHP 8.5.10.
+#[test]
+fn a_jump_that_leaves_the_region_runs_each_finally_it_crosses() {
+    for (label, body, expected) in [
+        (
+            "break",
+            "foreach ([1, 2] as $v) { try { echo \"t$v \"; break; } finally { echo \"F$v \"; } }\necho \"end\\n\";\n",
+            "t1 F1 end\n",
+        ),
+        (
+            "continue",
+            "foreach ([1, 2] as $v) { try { echo \"t$v \"; continue; } finally { echo \"F$v \"; } }\necho \"end\\n\";\n",
+            "t1 F1 t2 F2 end\n",
+        ),
+        (
+            "break_2_across_two",
+            "foreach ([1, 2] as $a) { try { foreach ([1, 2] as $b) { try { echo \"$a$b \"; break 2; } finally { echo \"in \"; } } } finally { echo \"out \"; } }\necho \"end\\n\";\n",
+            "11 in out end\n",
+        ),
+        (
+            "break_1_crosses_inner_only",
+            "foreach ([1, 2] as $a) { try { foreach ([1, 2] as $b) { try { echo \"$a$b \"; break; } finally { echo \"in \"; } } echo \"mid \"; } finally { echo \"out \"; } }\necho \"end\\n\";\n",
+            "11 in mid out 21 in mid out end\n",
+        ),
+        (
+            "return",
+            "function f() { foreach ([1] as $v) { try { return \"r\"; } finally { echo \"F \"; } } }\necho f(), \"\\nend\\n\";\n",
+            "F r\nend\n",
+        ),
+    ] {
+        assert_program(label, body, expected);
+    }
+}

@@ -75,6 +75,10 @@ pub(crate) struct FinallyFrame {
     pub body: Vec<Stmt>,
     pub run_on_throw: bool,
     pub handler_cleanup: Option<(i64, Span)>,
+    /// Loop-stack depth when the frame was pushed. A `break`/`continue` whose target loop is at
+    /// or below this depth leaves the protected region and must run the frame; one targeting a
+    /// loop opened INSIDE the region stays in it and must not.
+    pub loop_depth: usize,
 }
 
 /// Compile-time callable target tracked for straight-line local FCC calls.

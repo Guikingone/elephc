@@ -504,7 +504,7 @@ pub(super) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<
     let saved_taken = ctx.taken_finally_exceptions.clone();
     let saved_cleaned = ctx.exit_cleaned_loops.clone();
     release_taken_exceptions(ctx, None);
-    if run_innermost_finally(ctx, false) {
+    if run_innermost_finally(ctx, false, None) {
         if !ctx.builder.insertion_block_is_terminated() {
             terminate_return(ctx, value);
         }
@@ -532,7 +532,7 @@ pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockI
     // `break N` / `continue N` target the loop at this depth: `loop_cleanup_count` is N - 1.
     let target_loop_depth = ctx.loop_stack.len().saturating_sub(loop_cleanup_count + 1);
     release_taken_exceptions(ctx, Some(target_loop_depth));
-    if run_innermost_finally(ctx, false) {
+    if run_innermost_finally(ctx, false, Some(target_loop_depth)) {
         if !ctx.builder.insertion_block_is_terminated() {
             terminate_branch(ctx, target, loop_cleanup_count);
         }
@@ -555,7 +555,7 @@ pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockI
 pub(super) fn terminate_throw(ctx: &mut LoweringContext<'_, '_>, value: crate::ir::ValueId) {
     let saved_finally_stack = ctx.finally_stack.clone();
     let saved_try_loop_depths = ctx.try_loop_depths.clone();
-    if run_innermost_finally(ctx, true) {
+    if run_innermost_finally(ctx, true, None) {
         if !ctx.builder.insertion_block_is_terminated() {
             terminate_throw(ctx, value);
         }
@@ -695,11 +695,26 @@ pub(super) fn emit_innermost_loop_cleanups(ctx: &mut LoweringContext<'_, '_>, co
 }
 
 /// Runs and removes the innermost applicable finally frame.
-pub(super) fn run_innermost_finally(ctx: &mut LoweringContext<'_, '_>, is_throw: bool) -> bool {
+///
+/// `target_loop_depth` is the loop a `break`/`continue` lands in, `None` for a `return` or a
+/// throw. A frame pushed at or below that depth protects a region the jump never leaves — the
+/// loop was opened INSIDE the `try` — so it is not run, and neither is anything under it. It
+/// used to run anyway: `try { while (…) { break; } throw … } catch …` ran the `finally` early,
+/// popped the try's handler, and the later throw escaped its own `catch` as "Uncaught"; inside a
+/// `finally` entered with an exception pending, the same `break` dropped the chaining handler
+/// (MEASURED on reference PHP 8.5.10: `caught t F`, and `new|old`).
+pub(super) fn run_innermost_finally(
+    ctx: &mut LoweringContext<'_, '_>,
+    is_throw: bool,
+    target_loop_depth: Option<usize>,
+) -> bool {
     let Some(frame) = ctx.finally_stack.last() else {
         return false;
     };
     if is_throw && !frame.run_on_throw {
+        return false;
+    }
+    if target_loop_depth.is_some_and(|target| frame.loop_depth <= target) {
         return false;
     }
     let frame = ctx
@@ -722,7 +737,9 @@ pub(super) fn push_finally_frame(
     handler_cleanup: Option<(i64, Span)>,
 ) -> usize {
     let depth = ctx.finally_stack.len();
+    let loop_depth = ctx.loop_stack.len();
     ctx.finally_stack.push(FinallyFrame {
+        loop_depth,
         body: body.to_vec(),
         run_on_throw,
         handler_cleanup,
