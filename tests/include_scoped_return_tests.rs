@@ -756,3 +756,41 @@ fn a_releasing_loop_cleanup_runs_once_on_the_exit_path() {
         assert_eq!(live_blocks(&String::from_utf8_lossy(&run.stderr)), 0, "{label}: leaked");
     }
 }
+
+/// Nested taken exceptions with NO loop between them are discarded innermost first.
+///
+/// Both takes record loop depth 0, so only their nesting can order them; sorting by loop depth
+/// alone left them in push order, outermost first. MEASURED on reference PHP 8.5.10: `[y][x]`,
+/// and `[z][y][x]` for three.
+#[test]
+fn nested_taken_exceptions_without_a_loop_are_discarded_innermost_first() {
+    let e = "class E extends Exception { public function __destruct() { echo \"[\", $this->getMessage(), \"]\"; } }\n";
+    for (label, body, expected) in [
+        (
+            "two",
+            "function f() { try { throw new E(\"x\"); } finally { try { throw new E(\"y\"); } finally { return 3; } } }\necho \"got:\", f(), \"\\n\";\n",
+            "got:[y][x]3\n",
+        ),
+        (
+            "three",
+            "function f() { try { throw new E(\"x\"); } finally { try { throw new E(\"y\"); } finally { try { throw new E(\"z\"); } finally { return 4; } } } }\necho \"got:\", f(), \"\\n\";\n",
+            "got:[z][y][x]4\n",
+        ),
+    ] {
+        let main = format!("<?php\n{e}{body}");
+        let (dir, output) = compile_with(
+            &format!("fin_nested_takes_{label}"),
+            &[("main.php", &main)],
+            &["--heap-debug"],
+        );
+        assert!(
+            output.status.success(),
+            "compilation failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let run = Command::new(dir.join("main")).output().expect("failed to run binary");
+        assert!(run.status.success(), "{label}: the binary died");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), expected, "{label}");
+        assert_eq!(live_blocks(&String::from_utf8_lossy(&run.stderr)), 0, "{label}: leaked");
+    }
+}

@@ -48,7 +48,12 @@ fn release_taken_exceptions(ctx: &mut LoweringContext<'_, '_>, target_loop_depth
         }
     }
     ctx.taken_finally_exceptions = kept;
-    // Innermost first: the copy with the most loops open around it is the most deeply nested.
+    // Innermost first. Entries on the list at once are always nested — an inner take happens
+    // only while an outer copy is being lowered — so reverse push order IS nesting order, and
+    // the stable sort by loop depth keeps it for ties. Sorting by loop depth alone left two
+    // takes with no loop between them in push order, outermost first: `[x][y]` where reference
+    // destroys `[y][x]` (MEASURED on PHP 8.5.10).
+    released.reverse();
     released.sort_by_key(|(_, loop_depth, _)| std::cmp::Reverse(*loop_depth));
     for (temp, loop_depth, _) in released {
         let open = ctx.loop_stack.len();
