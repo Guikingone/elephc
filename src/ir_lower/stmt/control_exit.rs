@@ -15,7 +15,29 @@ pub(super) fn lower_break(ctx: &mut LoweringContext<'_, '_>, level: usize) {
         ctx.builder.terminate(Terminator::Unreachable);
         return;
     };
+    release_exceptions_left_behind(ctx, ctx.loop_stack.len().saturating_sub(level.max(1)));
     terminate_branch(ctx, frame.break_block, loop_cleanup_count_for_branch(level));
+}
+
+/// Releases each exception a finalizer took that a jump to loop depth `target_depth` leaves.
+///
+/// Leaving the `finally` copy discards its exception, and reference PHP destroys it right
+/// there: `try { throw … } finally { return 9; }` in an included file prints `[destruct]` BEFORE
+/// the caller's next statement (MEASURED on PHP 8.5.10). The hidden temp holding it would keep
+/// it alive until the slot was reused or the frame ended. Released and then cleared, so the
+/// frame's cleanup finds nothing left to release. Emitted on the jump's own path only; the
+/// lexical list is untouched, so sibling paths still see every entry.
+fn release_exceptions_left_behind(ctx: &mut LoweringContext<'_, '_>, target_depth: usize) {
+    let left: Vec<String> = ctx
+        .taken_finally_exceptions
+        .iter()
+        .rev()
+        .filter(|(_, depth)| target_depth < *depth)
+        .map(|(temp, _)| temp.clone())
+        .collect();
+    for temp in left {
+        ctx.release_owned_hidden_temp(&temp, None);
+    }
 }
 
 /// Lowers a `continue` terminator.
@@ -24,6 +46,7 @@ pub(super) fn lower_continue(ctx: &mut LoweringContext<'_, '_>, level: usize) {
         ctx.builder.terminate(Terminator::Unreachable);
         return;
     };
+    release_exceptions_left_behind(ctx, ctx.loop_stack.len().saturating_sub(level.max(1)));
     terminate_branch(
         ctx,
         frame.continue_block,

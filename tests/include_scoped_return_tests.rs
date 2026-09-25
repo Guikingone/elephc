@@ -506,3 +506,61 @@ fn a_rethrown_or_discarded_exception_is_destructed_on_time() {
         assert_eq!(live_blocks(&String::from_utf8_lossy(&run.stderr)), 0, "{label}: leaked");
     }
 }
+
+/// The exception an included file's `finally { return … }` discards is destructed AT that
+/// `return`, before the caller's next statement — in every place an include can sit.
+///
+/// The finalizer takes the exception into a hidden temp; the `break` an include's `return`
+/// becomes left it there, alive until the slot was reused or the frame ended, so `[destruct]`
+/// came AFTER the code following the include. MEASURED on reference PHP 8.5.10: `[destruct]`
+/// first, every time — at the top level, in a function, per loop iteration, in the statement
+/// form, and when the `return` sits in a loop inside the `finally`.
+#[test]
+fn an_include_discarding_an_exception_destructs_it_at_the_return() {
+    let class = "class E extends Exception { public function __destruct() { echo \"[destruct]\"; } }\n";
+    let lib = "<?php\ntry { throw new E(\"boom\"); }\nfinally { return 9; }\n";
+    let lib_loop = "<?php\ntry { throw new E(\"boom\"); }\nfinally { foreach ([1, 2] as $k) { if ($k === 2) { return 8; } } }\n";
+    for (label, body, expected) in [
+        (
+            "top_level",
+            "$v = include __DIR__ . '/lib.php';\necho \"after:\", $v, \"\\n\";\n",
+            "[destruct]after:9\n",
+        ),
+        (
+            "in_function",
+            "function f() { $v = include __DIR__ . '/lib.php'; echo \"after:\", $v, \"\\n\"; }\nf();\necho \"end\\n\";\n",
+            "[destruct]after:9\nend\n",
+        ),
+        (
+            "in_loop",
+            "for ($i = 0; $i < 2; $i++) { $v = include __DIR__ . '/lib.php'; echo \"after$i:\", $v, \"\\n\"; }\necho \"end\\n\";\n",
+            "[destruct]after0:9\n[destruct]after1:9\nend\n",
+        ),
+        (
+            "statement_form",
+            "include __DIR__ . '/lib.php';\necho \"after\\n\";\n",
+            "[destruct]after\n",
+        ),
+        (
+            "loop_inside_finally",
+            "$v = include __DIR__ . '/lib_loop.php';\necho \"after:\", $v, \"\\n\";\n",
+            "[destruct]after:8\n",
+        ),
+    ] {
+        let main = format!("<?php\n{class}{body}");
+        let (dir, output) = compile_with(
+            &format!("inc_fin_destruct_{label}"),
+            &[("lib.php", lib), ("lib_loop.php", lib_loop), ("main.php", &main)],
+            &["--heap-debug"],
+        );
+        assert!(
+            output.status.success(),
+            "compilation failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let run = Command::new(dir.join("main")).output().expect("failed to run binary");
+        assert!(run.status.success(), "{label}: the binary died");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), expected, "{label}");
+        assert_eq!(live_blocks(&String::from_utf8_lossy(&run.stderr)), 0, "{label}: leaked");
+    }
+}

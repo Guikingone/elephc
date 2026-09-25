@@ -315,6 +315,11 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// Loop-stack depth at each active `try` handler push; see
     /// `LoweringContext::loops_a_throw_would_leave`.
     pub try_loop_depths: Vec<usize>,
+    /// Exceptions a finalizer took from the in-flight cell and has not rethrown yet: the hidden
+    /// temp holding each, and the loop-stack depth its `finally` copy began at. A jump that
+    /// leaves the copy DISCARDS the exception, so `control_exit` releases it there — see
+    /// `stmt::exceptions::lower_catch_dispatch_with_finally`.
+    pub taken_finally_exceptions: Vec<(String, usize)>,
     static_callable_locals: HashMap<String, StaticCallableBinding>,
     /// Per-local mutation generations used to distinguish a control-flow fact clear from an
     /// actual reassignment while lowering a try/catch region.
@@ -479,6 +484,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             loop_stack: Vec::new(),
             finally_stack: Vec::new(),
             try_loop_depths: Vec::new(),
+            taken_finally_exceptions: Vec::new(),
             static_callable_locals: HashMap::new(),
             static_callable_local_epochs: HashMap::new(),
             function_global_names: HashMap::new(),
@@ -2887,6 +2893,25 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return false;
         }
         true
+    }
+
+    /// Releases an owned hidden temp's value and clears the slot, so the frame's own cleanup
+    /// finds nothing left to release.
+    pub(crate) fn release_owned_hidden_temp(&mut self, name: &str, span: Option<Span>) {
+        let Some(slot) = self.local_slots.get(name).copied() else {
+            return;
+        };
+        if self.builder.local_kind(slot) != LocalKind::OwnedTemp {
+            return;
+        }
+        self.emit_void(
+            Op::ReleaseLocalSlot,
+            Vec::new(),
+            Some(Immediate::LocalSlot(slot)),
+            Op::ReleaseLocalSlot.default_effects(),
+            span,
+        );
+        self.clear_owned_hidden_temp(name, span);
     }
 
     /// Clears an owned hidden temp after its value has been loaded into SSA.
