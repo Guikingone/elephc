@@ -420,3 +420,29 @@ fn test_include_variant_returning_its_parameter_keeps_the_call_site_type() {
     );
     assert_eq!(out, "3:c");
 }
+
+/// An included file whose one line runs past column 65535 must compile (#1292).
+///
+/// Included spans pack their source identity into the end column's high bits, which left 16 bits
+/// for the column, and a wider column aborted the compiler. The file is included TWICE on
+/// purpose: equal coordinates in the two copies are exactly what the identity keeps apart, so a
+/// fallback that dropped it would bring back the collision the packing exists to prevent.
+/// Expected output is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_included_line_wider_than_16_bit_columns_compiles() {
+    let row = format!(
+        "<?php{}$rows[] = [strlen($word), str_repeat($word, 2)];\n",
+        " ".repeat(70_000)
+    );
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\n$rows = [];\n$word = 'ab';\ninclude __DIR__ . '/row.php';\n$word = 'xyz';\ninclude __DIR__ . '/row.php';\nforeach ($rows as $r) { echo $r[0], ' ', $r[1], \"\\n\"; }\n",
+            ),
+            ("row.php", row.as_str()),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "2 abab\n3 xyzxyz\n");
+}
