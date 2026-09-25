@@ -138,26 +138,23 @@ pub(super) fn lower_throw_value(ctx: &mut FunctionContext<'_>, value: ValueId) -
             .get("Throwable")
             .map(|interface| interface.interface_id)
             .ok_or_else(|| CodegenIrError::unsupported("Throwable interface metadata is unavailable for mixed throw"))?;
-        let non_object_label = ctx.next_label("throw_mixed_non_object");
-        let non_throwable_label = ctx.next_label("throw_mixed_non_throwable");
+        let invalid_label = ctx.next_label("throw_mixed_invalid");
         let done_label = ctx.next_label("throw_mixed_done");
-        ctx.load_value_to_reg(value, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+        ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
         abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
+                ctx.emitter.comment("-- validate the Mixed throw tag and class --");
                 ctx.emitter.instruction("cmp x0, #6");                          // only Mixed's object tag can be checked for Throwable membership
-                ctx.emitter.instruction(&format!("b.ne {non_object_label}"));    // scalars and other boxed values raise a runtime TypeError
-                abi::emit_reserve_temporary_stack(ctx.emitter, 16);
-                ctx.emitter.instruction("str x1, [sp]");                       // preserve the unboxed object pointer across the metadata call
-                ctx.emitter.instruction("ldr x0, [x1]");                       // pass the runtime class id to the interface checker
+                ctx.emitter.instruction(&format!("b.ne {invalid_label}"));      // scalars and other boxed values raise a runtime TypeError
+                ctx.emitter.instruction("ldr x0, [x1]");                        // pass the runtime class id to the interface checker
                 abi::emit_load_int_immediate(ctx.emitter, "x1", throwable_interface_id as i64);
                 abi::emit_load_int_immediate(ctx.emitter, "x2", 1);            // request interface matching for Throwable
             }
             Arch::X86_64 => {
+                ctx.emitter.comment("-- validate the Mixed throw tag and class --");
                 ctx.emitter.instruction("cmp rax, 6");                          // only Mixed's object tag can be checked for Throwable membership
-                ctx.emitter.instruction(&format!("jne {non_object_label}"));     // scalars and other boxed values raise a runtime TypeError
-                abi::emit_reserve_temporary_stack(ctx.emitter, 16);
-                ctx.emitter.instruction("mov QWORD PTR [rsp], rdi");            // preserve the unboxed object pointer across the metadata call
+                ctx.emitter.instruction(&format!("jne {invalid_label}"));       // scalars and other boxed values raise a runtime TypeError
                 ctx.emitter.instruction("mov rdi, QWORD PTR [rdi]");            // pass the runtime class id to the interface checker
                 abi::emit_load_int_immediate(ctx.emitter, "rsi", throwable_interface_id as i64);
                 abi::emit_load_int_immediate(ctx.emitter, "rdx", 1);           // request interface matching for Throwable
@@ -166,23 +163,24 @@ pub(super) fn lower_throw_value(ctx: &mut FunctionContext<'_>, value: ValueId) -
         abi::emit_call_label(ctx.emitter, "__rt_class_implements_interface");
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction(&format!("cbz x0, {non_throwable_label}")); // reject object tags whose runtime class does not implement Throwable
-                ctx.emitter.instruction("ldr x0, [sp]");                       // restore the validated object pointer
-                abi::emit_release_temporary_stack(ctx.emitter, 16);
+                ctx.emitter.comment("-- transfer the boxed Throwable to the exception slot --");
+                ctx.emitter.instruction(&format!("cbz x0, {invalid_label}"));   // reject object tags whose runtime class does not implement Throwable
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction("test rax, rax");                      // did the runtime class implement Throwable?
-                ctx.emitter.instruction(&format!("jz {non_throwable_label}")); // reject ordinary objects at runtime
-                ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");            // restore the validated object pointer
-                abi::emit_release_temporary_stack(ctx.emitter, 16);
+                ctx.emitter.comment("-- transfer the boxed Throwable to the exception slot --");
+                ctx.emitter.instruction("test rax, rax");                       // did the runtime class implement Throwable?
+                ctx.emitter.instruction(&format!("jz {invalid_label}"));        // reject ordinary objects at runtime
             }
         }
+        ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
+        abi::emit_call_label(ctx.emitter, "__rt_throwable_take_boxed");
         abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), "_exc_value", 0);
         abi::emit_call_label(ctx.emitter, "__rt_throw_current");
         abi::emit_jump(ctx.emitter, &done_label);
-        ctx.emitter.label(&non_throwable_label);
-        abi::emit_release_temporary_stack(ctx.emitter, 16);
-        ctx.emitter.label(&non_object_label);
+        ctx.emitter.label(&invalid_label);
+        ctx.emitter.comment("-- release an invalid thrown box before raising TypeError --");
+        ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
         super::lower_inst::emit_type_error(ctx, "Can only throw objects");
         ctx.emitter.label(&done_label);
         return Ok(());

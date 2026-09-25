@@ -31,6 +31,23 @@ unset($source);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Mixed Throwable boxes are transferred cleanly by statement and expression throw paths.
+#[test]
+fn test_eval_declared_mixed_throw_transfers_boxed_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+eval('class EvalMixedThrowOwner extends RuntimeException {}');
+for ($i = 0; $i < 3; $i++) {
+    $through_local = new EvalMixedThrowOwner('local-' . $i);
+    try { throw $through_local; } catch (Exception $error) { echo $error->getMessage(), '|'; }
+    try { $unused = true ? throw new EvalMixedThrowOwner('expression-' . $i) : null; } catch (Exception $error) { echo $error->getMessage(), '|'; }
+    unset($through_local, $error, $unused);
+}
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "local-0|expression-0|local-1|expression-1|local-2|expression-2|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Reversing borrowed, temporary and nested eval strings allocates only the returned value.
 #[test]
 fn test_core_eval_strrev_borrows_input_bytes_without_leaking_cast_copies() {
