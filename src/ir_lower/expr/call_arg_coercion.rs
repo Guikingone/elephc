@@ -304,9 +304,11 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
 /// because `prop_get` on a declared `array` yields `Heap(Mixed)`. Nothing converted between the
 /// two, so the callee read the cell's header words as the array's:
 ///
-///     class Holder { public array $items = [3, 4]; }
-///     $ai = new ArrayIterator((new Holder())->items);
-///     echo $ai->count();                        // php: 2, elephc: 4 — and foreach yielded nothing
+/// ```php
+/// class Holder { public array $items = [3, 4]; }
+/// $ai = new ArrayIterator((new Holder())->items);
+/// echo $ai->count();                        // php: 2, elephc: 4 — and foreach yielded nothing
+/// ```
 ///
 /// The checker admits the call because a declared `array` is
 /// `array<mixed>|array<mixed, mixed>` and every member is assignable to `array<mixed>`; the
