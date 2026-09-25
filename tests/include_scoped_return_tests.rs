@@ -409,3 +409,100 @@ fn a_handwritten_break_out_of_finally_is_still_refused() {
         );
     }
 }
+
+/// An exception that passes THROUGH a `finally` able to return — the `return` not taken — leaves
+/// the frame intact and reaches the caller's `catch`, and is released once caught.
+///
+/// Such a finalizer takes the in-flight exception and rethrows it. Rethrowing with `throw $temp`
+/// handed the temp's reference on without clearing the slot, so unwinding the function released
+/// it under the in-flight exception: MEASURED, the caller's `catch` missed and the program died on
+/// "Uncaught" with a garbage line. The frame must actually unwind to show it — a `catch` in the
+/// same frame hides it — hence the function, in both forms. MEASURED on reference PHP 8.5.10:
+/// every exception is caught, `caught:20` for 20 calls.
+#[test]
+fn an_exception_passing_through_a_returning_finally_reaches_the_caller() {
+    let lib = "<?php\ntry { throw new Exception(\"boom\"); }\nfinally { if ($x > 5) { return 1; } }\n";
+    for (label, function) in [
+        (
+            "function",
+            "function f($x) { try { throw new Exception(\"boom\"); } finally { if ($x > 5) { return 1; } } }\n",
+        ),
+        ("include", "function f($x) { return include __DIR__ . '/lib.php'; }\n"),
+    ] {
+        let mut counts = Vec::new();
+        for iterations in [20, 200] {
+            let main = format!(
+                "<?php\n{function}$seen = 0;\nfor ($i = 0; $i < {iterations}; $i++) {{\n  try {{ f($argc); }} catch (Exception $e) {{ if ($e->getMessage() === 'boom') {{ $seen++; }} }}\n}}\necho \"caught:\", $seen, \"\\n\";\n"
+            );
+            let (dir, output) = compile_with(
+                &format!("inc_fin_passthrough_{label}"),
+                &[("lib.php", lib), ("main.php", &main)],
+                &["--heap-debug"],
+            );
+            assert!(
+                output.status.success(),
+                "compilation failed:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let run = Command::new(dir.join("main")).output().expect("failed to run binary");
+            assert!(
+                run.status.success(),
+                "{label}: the binary died:\n{}",
+                String::from_utf8_lossy(&run.stdout)
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&run.stdout),
+                format!("caught:{iterations}\n"),
+                "{label}"
+            );
+            counts.push(live_blocks(&String::from_utf8_lossy(&run.stderr)));
+        }
+        assert_eq!(counts[0], counts[1], "{label}: the rethrown exception leaks");
+    }
+}
+
+/// The exception's DESTRUCTOR runs when reference runs it — the sharpest oracle for who owns the
+/// reference a `finally` able to return takes and rethrows.
+///
+/// A second release of the rethrown exception ran `__destruct` during the unwind, before the
+/// caller's `catch`; a missing one never ran it at all. MEASURED on reference PHP 8.5.10, with
+/// `--heap-debug` clean here: `caught:boom`, `end`, then `[destruct]` at shutdown when the
+/// exception is caught (across a frame and within one); `[destruct]` BEFORE the returned value
+/// is printed when the `finally` discards it — `main` printed `got:7` and never destructed it.
+#[test]
+fn a_rethrown_or_discarded_exception_is_destructed_on_time() {
+    let class = "class E extends Exception { public function __destruct() { echo \"[destruct]\"; } }\n";
+    for (label, body, expected) in [
+        (
+            "cross_frame",
+            "function g($x) { try { throw new E(\"boom\"); } finally { if ($x) { return; } } }\ntry { g(false); } catch (E $e) { echo \"caught:\", $e->getMessage(), \"\\n\"; }\necho \"end\\n\";\n",
+            "caught:boom\nend\n[destruct]",
+        ),
+        (
+            "same_frame",
+            "try { try { throw new E(\"boom\"); } finally { if ($argc > 5) { return; } } }\ncatch (E $e) { echo \"caught:\", $e->getMessage(), \"\\n\"; }\necho \"end\\n\";\n",
+            "caught:boom\nend\n[destruct]",
+        ),
+        (
+            "discarded",
+            "function g($x) { try { throw new E(\"boom\"); } finally { if ($x) { return 7; } } }\necho \"got:\", g(true), \"\\n\";\necho \"end\\n\";\n",
+            "got:[destruct]7\nend\n",
+        ),
+    ] {
+        let main = format!("<?php\n{class}{body}");
+        let (dir, output) = compile_with(
+            &format!("fin_destruct_{label}"),
+            &[("main.php", &main)],
+            &["--heap-debug"],
+        );
+        assert!(
+            output.status.success(),
+            "compilation failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let run = Command::new(dir.join("main")).output().expect("failed to run binary");
+        assert!(run.status.success(), "{label}: the binary died");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), expected, "{label}");
+        assert_eq!(live_blocks(&String::from_utf8_lossy(&run.stderr)), 0, "{label}: leaked");
+    }
+}

@@ -248,7 +248,16 @@ pub(super) fn lower_catch_dispatch_with_finally(
         let taken = bind_in_flight_exception(ctx, span);
         lower_block(ctx, finally_body);
         if !ctx.builder.insertion_block_is_terminated() {
-            lower_throw(ctx, &Expr::new(ExprKind::Variable(taken), span));
+            // MOVE the temporary's reference back into the in-flight cell: load it, forget the
+            // slot without releasing, throw — the move `expr::merge_temps::take_owned_temp`
+            // performs, as `boxed_user_sort`'s rethrow of a caught exception does. `throw $temp` read an owned temp as a transferable
+            // temporary and handed the SAME reference on without clearing the slot, so unwinding
+            // the frame released it under the in-flight exception — MEASURED: an exception
+            // passing through `finally { if (false) return; }` reached the caller freed, its
+            // `catch` missed, and the program died on "Uncaught" with a garbage line.
+            let value = ctx.load_local(&taken, Some(span));
+            ctx.clear_owned_hidden_temp(&taken, Some(span));
+            terminate_throw(ctx, value.value);
         }
         return after_reachable;
     }
