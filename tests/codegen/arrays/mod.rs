@@ -21,6 +21,7 @@ mod internal_pointer;
 mod key_sort;
 mod key_sort_flags;
 mod assoc_helpers;
+mod assoc_chunk;
 mod nested;
 mod callbacks;
 mod boxed_filter;
