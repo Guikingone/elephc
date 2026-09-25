@@ -58,18 +58,20 @@ When the work tracks a GitHub issue, include the issue number, e.g.
 
 Worktrees can be managed by hand (`git worktree add`), but a small helper makes it
 painless. We recommend [`ggw`](https://github.com/illegalstudio/ggw), which
-creates, navigates, and pushes worktree-backed branches for you:
+creates and navigates isolated workspaces (git worktrees or copy-on-write snapshots):
 
 ```bash
-ggw create feat/my-feature      # create the branch and its worktree
-ggw cd feat/my-feature          # switch into the worktree
+ggw create feat/my-feature      # create the branch and its workspace
+cd "$(ggw cd feat/my-feature)"  # enter the workspace
 # ... implement your change ...
 git commit -m "feat: add my feature"
-ggw push                        # push the branch and set its upstream
+git push -u origin HEAD         # push the branch and set its upstream
 ```
 
-`ggw push` is equivalent to `git push -u <remote> feat/my-feature` — use whichever
-you prefer. Once the branch is pushed, open your Pull Request as described below.
+To push without entering the workspace, run
+`ggw exec feat/my-feature -- git push -u origin HEAD` from outside it. This works
+for both kinds of workspace because each retains the `origin` remote. Once the
+branch is pushed, open your Pull Request as described below.
 
 ## Pull Requests
 
