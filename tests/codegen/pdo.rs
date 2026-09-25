@@ -2852,6 +2852,20 @@ fn test_pdo_exception_internal_methods_keep_final_exception_metadata() {
     }
 }
 
+/// PDO exception Reflection reaches a large callable matrix; its tagged Mixed dispatch edges
+/// must remain assemblable when the generated normalizer crosses AArch64 short-branch range.
+#[test]
+fn test_pdo_exception_reflection_callable_matrix_uses_wide_dispatch_edges() {
+    let out = compile_and_run(
+        r#"<?php
+$code = new ReflectionMethod(PDOException::class, 'getCode');
+$previous = new ReflectionMethod(PDOException::class, 'getPrevious');
+echo $code->getName(), '|', $previous->getName();
+"#,
+    );
+    assert_eq!(out, "getCode|getPrevious");
+}
+
 /// Pdo\Pgsql::escapeIdentifier is a pure string transform (PQescapeIdentifier
 /// semantics: double interior double-quotes, wrap in double-quotes) that touches no
 /// connection, so it is exercised via a non-connecting Pdo\Pgsql subclass — proving
