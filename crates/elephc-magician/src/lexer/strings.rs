@@ -230,7 +230,10 @@ impl Lexer<'_> {
                     self.capture_braced_block_comment(&mut inner)?;
                 }
                 '/' if self.peek_char() == Some('/') => {
-                    inner.push('/');
+                    // BOTH slashes are copied: the capture is lexed again as a whole, and a lone
+                    // `/` there is a division — `"{$a[ // " }⏎"k"]}"` then read `" }…` as an
+                    // unterminated string.
+                    inner.push_str("//");
                     self.bump_char();
                     self.capture_braced_line_comment(&mut inner);
                 }

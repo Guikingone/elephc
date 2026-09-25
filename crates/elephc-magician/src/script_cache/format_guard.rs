@@ -59,7 +59,8 @@ mod tests {
     /// stored shape did not move, but this guard does not judge that, by design.
     /// BUMPED TO 5 WITH THIS VALUE: round 13 taught the same search to skip `{$...}`
     /// interpolation. Again no shape change — again the guard's rule.
-    const RECORDED_FINGERPRINT: u64 = 10324431639625042042;
+    /// BUMPED TO 6 WITH THIS VALUE: that skip learned to treat a comment inside `{$...}` as inert.
+    const RECORDED_FINGERPRINT: u64 = 3173998828687365817;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

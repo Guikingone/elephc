@@ -434,6 +434,25 @@ mod tests {
     /// reference prints the value; elephc raised a parse error. Found by GLM, whose own input
     /// `"{$a["k"]}"` happened to balance and worked before — the `?>` is what breaks it.
     #[test]
+    fn a_comment_inside_an_interpolation_is_inert() {
+        // MEASURED on reference PHP 8.5.10: each prints `v` then the trailing `X`.
+        let sources: [&[u8]; 4] = [
+            b"<?php $a = ['k' => 'v']; echo \"{$a[/* \" */ \"k\"]}\"; ?>X",
+            b"<?php $a = ['k' => 'v']; echo \"{$a[/* } ?> */ \"k\"]}\"; ?>X",
+            b"<?php $a = ['k' => 'v']; echo \"{$a[ // \" }\n\"k\"]}\"; ?>X",
+            b"<?php $a = ['k' => 'v']; echo \"{$a[ # \" }\n\"k\"]}\"; ?>X",
+        ];
+        for source in sources {
+            assert_eq!(
+                shape(&segment_script_fresh(source)),
+                ["code", "out(X)"],
+                "{}",
+                String::from_utf8_lossy(source)
+            );
+        }
+    }
+
+    #[test]
     fn interpolation_hides_a_nested_close_tag() {
         let sources: [&[u8]; 3] = [
             b"<?php $a = ['?>' => 1]; echo \"{$a[\"?>\"]}\"; ?>tail",

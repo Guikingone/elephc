@@ -49,7 +49,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 ///
 /// BUMPED TO 5 for the same reason, one round later: the close-tag search learned to skip
 /// `{$...}` interpolation, which again moved `segments.rs`'s source and so the fingerprint.
-pub(crate) const FORMAT_VERSION: u32 = 5;
+///
+/// BUMPED TO 6 likewise: that interpolation skip learned to treat a comment inside `{$...}` as
+/// inert.
+pub(crate) const FORMAT_VERSION: u32 = 6;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///
