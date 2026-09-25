@@ -22,30 +22,39 @@ pub(super) fn lower_break(ctx: &mut LoweringContext<'_, '_>, level: usize) {
 /// sequence where reference PHP discards them.
 ///
 /// Leaving a `finally` copy DISCARDS the exception it took, and reference destroys it right
-/// there: `try { throw … } finally { return 9; }` in an included file prints `[destruct]` BEFORE
-/// the caller's next statement, and inside a `foreach` the exception is destroyed BEFORE the
-/// loop's iterator (MEASURED on PHP 8.5.10). php-src unwinds innermost first — a `finally`
-/// nested inside the copy, then the discard, then the loops and the enclosing `finally` blocks —
-/// so an entry is released only once every finally frame inside its copy has run (`finally_depth`
+/// there, unwinding strictly innermost first: the loops opened INSIDE the copy, then the
+/// discard, then the loops and `finally` blocks around it. MEASURED on PHP 8.5.10 —
+/// `finally { foreach (new It() as $v) { return $v; } }` prints `[It][E]`, a `foreach` around the
+/// `try` prints `[E][It]`, an enclosing `finally` runs after the discard (`[E][outer]`), and an
+/// included file's `finally { return 9; }` destructs before the caller's next statement.
+///
+/// So an entry is released once every finally frame inside its copy has run (`finally_depth`
 /// reached) and only if the jump leaves its copy's loops (`target_loop_depth`, `None` for a
-/// `return`). Released and cleared, so the frame's cleanup finds nothing left; each released
-/// entry is removed from the list for the REST of this exit path, which the caller restores.
+/// `return`); the loops inside its copy are cleaned first and recorded in `exit_cleaned_loops`,
+/// so no later cleanup on this path repeats them. Released and cleared, so the frame's cleanup
+/// finds nothing left; each released entry is dropped for the REST of this exit path, which the
+/// caller restores.
 fn release_taken_exceptions(ctx: &mut LoweringContext<'_, '_>, target_loop_depth: Option<usize>) {
     let finally_depth = ctx.finally_stack.len();
     let mut kept = Vec::new();
     let mut released = Vec::new();
     for entry in std::mem::take(&mut ctx.taken_finally_exceptions) {
-        let (_, loop_depth, entry_finally_depth) = entry;
-        let leaves = target_loop_depth.is_none_or(|target| target < loop_depth);
-        if leaves && entry_finally_depth >= finally_depth {
-            released.push(entry.0);
+        let (_, loop_depth, entry_finally_depth) = &entry;
+        let leaves = target_loop_depth.is_none_or(|target| target < *loop_depth);
+        if leaves && *entry_finally_depth >= finally_depth {
+            released.push(entry);
         } else {
             kept.push(entry);
         }
     }
     ctx.taken_finally_exceptions = kept;
-    for temp in released.iter().rev() {
-        ctx.release_owned_hidden_temp(temp, None);
+    // Innermost first: the copy with the most loops open around it is the most deeply nested.
+    released.sort_by_key(|(_, loop_depth, _)| std::cmp::Reverse(*loop_depth));
+    for (temp, loop_depth, _) in released {
+        let open = ctx.loop_stack.len();
+        emit_innermost_loop_cleanups(ctx, open.saturating_sub(loop_depth));
+        ctx.exit_cleaned_loops.extend(loop_depth..open);
+        ctx.release_owned_hidden_temp(&temp, None);
     }
 }
 
@@ -488,6 +497,7 @@ pub(super) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<
     let saved_finally_stack = ctx.finally_stack.clone();
     let saved_try_loop_depths = ctx.try_loop_depths.clone();
     let saved_taken = ctx.taken_finally_exceptions.clone();
+    let saved_cleaned = ctx.exit_cleaned_loops.clone();
     release_taken_exceptions(ctx, None);
     if run_innermost_finally(ctx, false) {
         if !ctx.builder.insertion_block_is_terminated() {
@@ -498,10 +508,12 @@ pub(super) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<
         ctx.finally_stack = saved_finally_stack;
         ctx.try_loop_depths = saved_try_loop_depths;
         ctx.taken_finally_exceptions = saved_taken;
+        ctx.exit_cleaned_loops = saved_cleaned;
         return;
     }
     emit_innermost_loop_cleanups(ctx, ctx.loop_stack.len());
     ctx.taken_finally_exceptions = saved_taken;
+    ctx.exit_cleaned_loops = saved_cleaned;
     ctx.emit_eval_scope_finalizer(None);
     ctx.builder.terminate(Terminator::Return { value });
 }
@@ -511,6 +523,7 @@ pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockI
     let saved_finally_stack = ctx.finally_stack.clone();
     let saved_try_loop_depths = ctx.try_loop_depths.clone();
     let saved_taken = ctx.taken_finally_exceptions.clone();
+    let saved_cleaned = ctx.exit_cleaned_loops.clone();
     // `break N` / `continue N` target the loop at this depth: `loop_cleanup_count` is N - 1.
     let target_loop_depth = ctx.loop_stack.len().saturating_sub(loop_cleanup_count + 1);
     release_taken_exceptions(ctx, Some(target_loop_depth));
@@ -521,10 +534,12 @@ pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockI
         ctx.finally_stack = saved_finally_stack;
         ctx.try_loop_depths = saved_try_loop_depths;
         ctx.taken_finally_exceptions = saved_taken;
+        ctx.exit_cleaned_loops = saved_cleaned;
         return;
     }
     emit_innermost_loop_cleanups(ctx, loop_cleanup_count);
     ctx.taken_finally_exceptions = saved_taken;
+    ctx.exit_cleaned_loops = saved_cleaned;
     ctx.builder.terminate(Terminator::Br {
         target,
         args: Vec::new(),
@@ -626,12 +641,17 @@ pub(super) fn loop_cleanup_count_for_branch(level: usize) -> usize {
 
 /// Emits cleanup for the innermost active loops that will not reach their exit block.
 pub(super) fn emit_innermost_loop_cleanups(ctx: &mut LoweringContext<'_, '_>, count: usize) {
+    // Skips the loops this exit path already cleaned before discarding a `finally` copy's
+    // exception (`release_taken_exceptions`, the only writer of `exit_cleaned_loops`).
     let frames = ctx
         .loop_stack
         .iter()
+        .copied()
+        .enumerate()
         .rev()
         .take(count)
-        .copied()
+        .filter(|(index, _)| !ctx.exit_cleaned_loops.contains(index))
+        .map(|(_, frame)| frame)
         .collect::<Vec<_>>();
     for frame in frames {
         if let Some((state, span)) = frame.iterator_cleanup {

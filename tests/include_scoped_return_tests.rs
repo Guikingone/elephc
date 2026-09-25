@@ -619,3 +619,140 @@ fn a_discarded_exception_is_destructed_before_the_loops_it_leaves() {
         assert_eq!(live_blocks(&String::from_utf8_lossy(&run.stderr)), 0, "{label}: leaked");
     }
 }
+
+/// The loops opened INSIDE a returning `finally` are cleaned BEFORE its exception is discarded,
+/// the loops around it after — strictly innermost first, and each exactly once.
+///
+/// Round 18 put the discard ahead of every loop cleanup, which fixed a loop around the `try` but
+/// reversed a loop inside the `finally`. MEASURED on reference PHP 8.5.10, and `--heap-debug`
+/// clean here: `[Itin][E]` for a loop inside, `[Itb][Ita][E]` for two, `[Itin][E][Itout]` for
+/// one inside and one around, the same through an included file, and — the case that would
+/// clean a loop twice — an enclosing `finally` with its own `return` or `break` after the early
+/// cleanup: `[Itin][E]2`, `[Itin][E][Itout]2`, `[Itin][E][outer][Itout]1`; two nested taken
+/// exceptions: `[Itb][E][Ita][E]3`. `main` got every one of these wrong and leaked.
+#[test]
+fn loops_inside_a_returning_finally_are_cleaned_before_the_discard() {
+    let e = "class E extends Exception { public function __destruct() { echo \"[E]\"; } }\n";
+    let it = "class It implements Iterator { private $i = 0; public function __construct(private string $n) {}\n public function __destruct() { echo \"[It$this->n]\"; }\n public function current(): mixed { return $this->i; } public function key(): mixed { return $this->i; }\n public function next(): void { $this->i++; } public function rewind(): void { $this->i = 0; }\n public function valid(): bool { return $this->i < 2; } }\n";
+    let lib = "<?php\ntry { throw new E(\"b\"); }\nfinally { foreach (new It(\"in\") as $v) { return $v; } }\n";
+    for (label, body, expected) in [
+        (
+            "loop_inside",
+            "function f() { try { throw new E(\"b\"); } finally { foreach (new It(\"in\") as $v) { return $v; } } }\necho \"got:\", f(), \"\\n\";\n",
+            "got:[Itin][E]0\n",
+        ),
+        (
+            "two_loops_inside",
+            "function f() { try { throw new E(\"b\"); } finally { foreach (new It(\"a\") as $v) { foreach (new It(\"b\") as $u) { return $u; } } } }\necho \"got:\", f(), \"\\n\";\n",
+            "got:[Itb][Ita][E]0\n",
+        ),
+        (
+            "inside_and_around",
+            "function f() { foreach (new It(\"out\") as $w) { try { throw new E(\"b\"); } finally { foreach (new It(\"in\") as $v) { return $v; } } } }\necho \"got:\", f(), \"\\n\";\n",
+            "got:[Itin][E][Itout]0\n",
+        ),
+        (
+            "include",
+            "function f() { $r = include __DIR__ . '/lib.php'; echo \"r$r \"; }\nf();\necho \"end\\n\";\n",
+            "[Itin][E]r0 end\n",
+        ),
+        (
+            "outer_finally_returns",
+            "function f() { try { try { throw new E(\"b\"); } finally { foreach (new It(\"in\") as $v) { return 1; } } } finally { return 2; } }\necho \"got:\", f(), \"\\n\";\n",
+            "got:[Itin][E]2\n",
+        ),
+        (
+            "outer_finally_returns_in_loop",
+            "function f() { foreach (new It(\"out\") as $w) { try { try { throw new E(\"b\"); } finally { foreach (new It(\"in\") as $v) { return 1; } } } finally { return 2; } } }\necho \"got:\", f(), \"\\n\";\n",
+            "got:[Itin][E][Itout]2\n",
+        ),
+        (
+            "outer_finally_in_loop",
+            "function f() { foreach (new It(\"out\") as $w) { try { try { throw new E(\"b\"); } finally { foreach (new It(\"in\") as $v) { return 1; } } } finally { echo \"[outer]\"; } } return 0; }\necho \"got:\", f(), \"\\n\";\n",
+            "got:[Itin][E][outer][Itout]1\n",
+        ),
+        (
+            "two_taken_nested",
+            "function f() { try { throw new E(\"x\"); } finally { foreach (new It(\"a\") as $v) { try { throw new E(\"y\"); } finally { foreach (new It(\"b\") as $u) { return 3; } } } } }\necho \"got:\", f(), \"\\n\";\n",
+            "got:[Itb][E][Ita][E]3\n",
+        ),
+    ] {
+        let main = format!("<?php\n{e}{it}{body}");
+        let (dir, output) = compile_with(
+            &format!("fin_inner_loops_{label}"),
+            &[("lib.php", lib), ("main.php", &main)],
+            &["--heap-debug"],
+        );
+        assert!(
+            output.status.success(),
+            "compilation failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let run = Command::new(dir.join("main")).output().expect("failed to run binary");
+        assert!(run.status.success(), "{label}: the binary died");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), expected, "{label}");
+        assert_eq!(live_blocks(&String::from_utf8_lossy(&run.stderr)), 0, "{label}: leaked");
+    }
+}
+
+/// A loop whose cleanup RELEASES something — a `foreach` over an owned temporary array — is
+/// cleaned exactly once when a returning `finally` cleans it early and an enclosing `finally`
+/// then exits again on the same path.
+///
+/// The object-iterator loops above clean idempotently, so they cannot tell a second cleanup
+/// from the first; this one would release its array twice. MEASURED on reference PHP 8.5.10,
+/// `--heap-debug` clean here: `[Ob][E][Oa]a`, `[Ob][E][Oa]2` with an enclosing `finally` that
+/// returns, and `[Ob][E][outer][Ob][Oa][Oa]1` inside a loop over another temporary array.
+#[test]
+fn a_releasing_loop_cleanup_runs_once_on_the_exit_path() {
+    let pre = "class E extends Exception { public function __destruct() { echo \"[E]\"; } }\nclass O { public function __construct(public string $n) {} public function __destruct() { echo \"[O$this->n]\"; } }\nfunction make() { return [new O(\"a\"), new O(\"b\")]; }\n";
+    for (label, body, expected) in [
+        (
+            "returns",
+            "function f() { try { throw new E(\"b\"); } finally { foreach (make() as $o) { return $o->n; } } }\necho \"got:\", f(), \"\\n\";\n",
+            "got:[Ob][E][Oa]a\n",
+        ),
+        (
+            "outer_returns",
+            "function f() { try { try { throw new E(\"b\"); } finally { foreach (make() as $o) { return 1; } } } finally { return 2; } }\necho \"got:\", f(), \"\\n\";\n",
+            "got:[Ob][E][Oa]2\n",
+        ),
+        (
+            "outer_loop",
+            "function f() { foreach (make() as $w) { try { try { throw new E(\"b\"); } finally { foreach (make() as $o) { return 1; } } } finally { echo \"[outer]\"; } } return 0; }\necho \"got:\", f(), \"\\n\";\n",
+            "got:[Ob][E][outer][Ob][Oa][Oa]1\n",
+        ),
+        // An array LITERAL is the source whose loop owns an SSA cleanup (a call result is held
+        // through a slot, which clears on release); cleaning it twice would release it twice.
+        (
+            "literal_returns",
+            "function f() { try { throw new E(\"b\"); } finally { foreach ([new O(\"a\"), new O(\"b\")] as $o) { return $o->n; } } }\necho \"got:\", f(), \"\\n\";\n",
+            "got:[Ob][E][Oa]a\n",
+        ),
+        (
+            "literal_outer_returns",
+            "function f() { try { try { throw new E(\"b\"); } finally { foreach ([new O(\"a\"), new O(\"b\")] as $o) { return 1; } } } finally { return 2; } }\necho \"got:\", f(), \"\\n\";\n",
+            "got:[Ob][E][Oa]2\n",
+        ),
+    ] {
+        let main = format!("<?php\n{pre}{body}");
+        let (dir, output) = compile_with(
+            &format!("fin_release_once_{label}"),
+            &[("main.php", &main)],
+            &["--heap-debug"],
+        );
+        assert!(
+            output.status.success(),
+            "compilation failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let run = Command::new(dir.join("main")).output().expect("failed to run binary");
+        assert!(
+            run.status.success(),
+            "{label}: the binary died:\n{}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&run.stdout), expected, "{label}");
+        assert_eq!(live_blocks(&String::from_utf8_lossy(&run.stderr)), 0, "{label}: leaked");
+    }
+}

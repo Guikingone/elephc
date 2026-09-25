@@ -320,6 +320,11 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// at. A jump that leaves the copy DISCARDS the exception, so `control_exit` releases it
     /// there — see `stmt::exceptions::lower_catch_dispatch_with_finally`.
     pub taken_finally_exceptions: Vec<(String, usize, usize)>,
+    /// Loop-stack indices whose cleanup the CURRENT exit path already emitted, so no later step
+    /// of the same path — an enclosing `finally` lowered inline, with its own exit — emits it
+    /// again. Loops inside a `finally` copy are cleaned before its exception is discarded; see
+    /// `stmt::control_exit::release_taken_exceptions`, the only writer.
+    pub exit_cleaned_loops: Vec<usize>,
     static_callable_locals: HashMap<String, StaticCallableBinding>,
     /// Per-local mutation generations used to distinguish a control-flow fact clear from an
     /// actual reassignment while lowering a try/catch region.
@@ -485,6 +490,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             finally_stack: Vec::new(),
             try_loop_depths: Vec::new(),
             taken_finally_exceptions: Vec::new(),
+            exit_cleaned_loops: Vec::new(),
             static_callable_locals: HashMap::new(),
             static_callable_local_epochs: HashMap::new(),
             function_global_names: HashMap::new(),
