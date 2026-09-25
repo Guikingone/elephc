@@ -29,10 +29,12 @@ pub(super) fn lower_const_f64(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     abi::emit_symbol_address(ctx.emitter, scratch, &label);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr {}, [{}]", abi::float_result_reg(ctx.emitter), scratch)); // load the 64-bit float literal through the symbol scratch register
+            let assembly = format!("ldr {}, [{}]", abi::float_result_reg(ctx.emitter), scratch);
+            ctx.emitter.instruction(&assembly);                                 // load the 64-bit float literal through the symbol scratch register
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("movsd {}, QWORD PTR [{}]", abi::float_result_reg(ctx.emitter), scratch)); // load the 64-bit float literal through the symbol scratch register
+            let assembly = format!("movsd {}, QWORD PTR [{}]", abi::float_result_reg(ctx.emitter), scratch);
+            ctx.emitter.instruction(&assembly);                                 // load the 64-bit float literal through the symbol scratch register
         }
     }
     store_if_result(ctx, inst)
@@ -53,7 +55,8 @@ pub(super) fn lower_float_compare(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("fcmp d1, d0");                             // compare float operands for the EIR predicate
-            ctx.emitter.instruction(&format!("cset x0, {}", aarch64_float_condition(predicate)?)); // materialize the ordered float predicate result as 0 or 1
+            let assembly = format!("cset x0, {}", aarch64_float_condition(predicate)?);
+            ctx.emitter.instruction(&assembly);                                 // materialize the ordered float predicate result as 0 or 1
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("ucomisd xmm1, xmm0");                      // compare float operands for the EIR predicate
@@ -87,7 +90,8 @@ fn emit_x86_64_float_predicate_result(
             ctx.emitter.instruction("or al, r10b");                             // merge ordered inequality with unordered inequality
         }
         predicate => {
-            ctx.emitter.instruction(&format!("set{} al", x86_64_float_condition(predicate)?)); // materialize the ordered float predicate in the low byte
+            let assembly = format!("set{} al", x86_64_float_condition(predicate)?);
+            ctx.emitter.instruction(&assembly);                                 // materialize the ordered float predicate in the low byte
             ctx.emitter.instruction("setnp r10b");                              // materialize whether the comparison was ordered
             ctx.emitter.instruction("and al, r10b");                            // clear ordered predicates for unordered NaN comparisons
         }
@@ -111,11 +115,14 @@ pub(super) fn lower_float_binop(
     require_float(ctx.load_value_to_reg(rhs, rhs_reg)?, inst)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("{} {}, {}, {}", aarch64_mnemonic, rhs_reg, lhs_reg, rhs_reg)); // compute the floating-point arithmetic result
+            let assembly = format!("{} {}, {}, {}", aarch64_mnemonic, rhs_reg, lhs_reg, rhs_reg);
+            ctx.emitter.instruction(&assembly);                                 // compute the floating-point arithmetic result
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("{} {}, {}", x86_64_mnemonic, lhs_reg, rhs_reg)); // update the left float scratch with the arithmetic result
-            ctx.emitter.instruction(&format!("movsd {}, {}", rhs_reg, lhs_reg));// move the float arithmetic result back to the result register
+            let assembly = format!("{} {}, {}", x86_64_mnemonic, lhs_reg, rhs_reg);
+            ctx.emitter.instruction(&assembly);                                 // update the left float scratch with the arithmetic result
+            let assembly = format!("movsd {}, {}", rhs_reg, lhs_reg);
+            ctx.emitter.instruction(&assembly);                                 // move the float arithmetic result back to the result register
         }
     }
     store_if_result(ctx, inst)
