@@ -67,9 +67,17 @@ impl Blacklist {
 
     /// Adds every usable line of one blacklist file's contents.
     ///
-    /// Skips blank lines and `;` comments. php-src tests the FIRST character of the line
-    /// for `;`, so a comment marker that follows anything else — even whitespace — is not
-    /// a comment; the line is kept and simply will not match a real path.
+    /// Each line is handled in `zend_accel_blacklist_loadone`'s order, and every step is
+    /// MEASURED on reference PHP 8.5.10:
+    ///
+    /// 1. ONE trailing `\n` is removed, then ONE `\r` before it — and nothing else. Trailing
+    ///    spaces and tabs STAY in the entry (`"app.php  "` is reported as such, and blocks
+    ///    nothing); `app.php\r\r\n` keeps a `\r`; a last line with no `\n` keeps its `\r`.
+    /// 2. Leading `\r`s are stripped. Leading spaces are not: `  app.php` is a RELATIVE entry.
+    /// 3. One surrounding pair of double quotes is stripped; a lone `"` is dropped.
+    /// 4. An empty line is skipped, and so is one whose FIRST byte is now `;` — so a quoted
+    ///   `";…"` is a comment, while ` ; x` (a space first) is an entry. A spaces-only line is
+    ///    an entry too: `<dir>/   `.
     ///
     /// EVERY SURVIVING LINE IS EXPANDED, not stored verbatim. php-src strips a surrounding
     /// pair of double quotes, then resolves the entry against `base_dir` — the directory of
@@ -79,17 +87,29 @@ impl Blacklist {
     /// 8.5.10: a list containing only `flat.php` refuses `<dir>/flat.php` and reports the
     /// expanded path; a quoted entry behaves as the unquoted one.
     pub(crate) fn extend_from_file_contents(&mut self, contents: &str, base_dir: &Path) {
-        for line in contents.lines() {
-            let trimmed = line.trim_end_matches(['\r', ' ', '\t']);
-            if trimmed.is_empty() || trimmed.starts_with(';') {
-                continue;
-            }
+        for piece in contents.split_inclusive('\n') {
+            let line = match piece.strip_suffix('\n') {
+                Some(line) => line.strip_suffix('\r').unwrap_or(line),
+                None => piece,
+            };
+            let line = line.trim_start_matches('\r');
             // php-src strips the quotes FIRST and then drops the line if nothing is left
             // (`path_length -= 2; if (path_length <= 0) continue;`). Without this, a line of
             // two quotes expanded to the blacklist file's own directory — a prefix that
             // refuses everything beneath it. VERIFIED: reference blocks nothing and reports
-            // an empty list for such a line.
-            let Some(pattern) = expand_entry(trimmed, base_dir) else {
+            // an empty list for such a line, or for a lone `"`.
+            let entry = if line.starts_with('"') && line.ends_with('"') {
+                match line.len() {
+                    0..=2 => continue,
+                    len => &line[1..len - 1],
+                }
+            } else {
+                line
+            };
+            if entry.is_empty() || entry.starts_with(';') {
+                continue;
+            }
+            let Some(pattern) = expand_entry(entry, base_dir) else {
                 continue;
             };
             self.patterns.push(pattern);
@@ -367,39 +387,183 @@ fn is_glob(component: &str) -> bool {
     }
 }
 
-/// Matches one `glob()` character class against `byte`, returning the index just past the
-/// closing `]`. `[!abc]` and `[^abc]` negate; `a-z` is a range; `]` first is literal.
-fn class_matches(pattern: &[PatternByte], open: usize, byte: u8) -> Option<(bool, usize)> {
+/// One member of a `glob()` bracket class.
+#[derive(Clone, Copy)]
+enum ClassMember {
+    Byte(u8),
+    Range(u8, u8),
+    Named(fn(u8) -> bool),
+}
+
+/// What an unquoted `[` opens, as `php_glob`'s `glob0` parses it.
+enum Bracket {
+    /// No closing `]`: the `[` is an ordinary byte.
+    Literal,
+    /// A `[:name:]` naming no known class. php_glob then answers `GLOB_NOMATCH` for the WHOLE
+    /// pattern: `bl_[[:bogus:]].list` loads nothing, even beside `bl_[.list` (MEASURED).
+    UnknownClass,
+    /// A class; `next` is the index just past its closing `]`.
+    Class {
+        negated: bool,
+        members: Vec<ClassMember>,
+        next: usize,
+    },
+}
+
+fn is_blank(byte: u8) -> bool {
+    matches!(byte, b' ' | b'\t')
+}
+
+fn is_print(byte: u8) -> bool {
+    byte.is_ascii_graphic() || byte == b' '
+}
+
+fn is_space(byte: u8) -> bool {
+    // C's `isspace`, which unlike `u8::is_ascii_whitespace` includes the vertical tab.
+    matches!(byte, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r')
+}
+
+/// php_glob's `cclasses` table, tested with the C locale's ctype — ASCII only.
+const NAMED_CLASSES: [(&str, fn(u8) -> bool); 12] = [
+    ("alnum", |b| b.is_ascii_alphanumeric()),
+    ("alpha", |b| b.is_ascii_alphabetic()),
+    ("blank", is_blank),
+    ("cntrl", |b| b.is_ascii_control()),
+    ("digit", |b| b.is_ascii_digit()),
+    ("graph", |b| b.is_ascii_graphic()),
+    ("lower", |b| b.is_ascii_lowercase()),
+    ("print", is_print),
+    ("punct", |b| b.is_ascii_punctuation()),
+    ("space", is_space),
+    ("upper", |b| b.is_ascii_uppercase()),
+    ("xdigit", |b| b.is_ascii_hexdigit()),
+];
+
+/// `g_charclass`: `pattern[colon]` is the `:` right after a class's inner `[`.
+///
+/// `None` when there is no `:]` to end a name — the inner `[` is then an ordinary member
+/// (`[[:alpha]` is the class `{[, :, a, l, p, h}`, MEASURED). `Some(Err(()))` for a name the
+/// table lacks, `Some(Ok(..))` for a known one with the index past its `:]`.
+fn named_class(pattern: &[PatternByte], colon: usize) -> Option<Result<(fn(u8) -> bool, usize), ()>> {
+    let start = colon + 1;
+    let end = (start..pattern.len()).find(|&i| pattern[i].is(b':'))?;
+    if !pattern.get(end + 1).is_some_and(|b| b.is(b']')) {
+        return None;
+    }
+    let name = &pattern[start..end];
+    Some(
+        NAMED_CLASSES
+            .iter()
+            .find(|(known, _)| {
+                name.iter().all(|b| !b.quoted)
+                    && known.as_bytes().iter().copied().eq(name.iter().map(|b| b.byte))
+            })
+            .map(|(_, test)| (*test, end + 2))
+            .ok_or(()),
+    )
+}
+
+/// Parses the bracket expression an unquoted `pattern[open] == '['` starts.
+///
+/// Mirrors `glob0`'s `LBRACKET` case. Negation is `!` ONLY: php bundles its own `php_glob`
+/// (system glob is off by default), whose `LBRACKET` case tests `c == NOT` with
+/// `#define NOT '!'` — a leading `^` is an ordinary member. MEASURED: `bl_[^a].list` loads
+/// `bl_a.list` and `bl_[^b].list` loads nothing, so `[^i]nclude.list` matches `include.list`.
+/// The first member is taken whatever it is, so `]` first is literal; `a-z` is a range unless
+/// `]` follows the `-`; and `[:alpha:]`-style named classes (MEASURED: `[[:alpha:]]` matches a
+/// letter, `[[:digit:]]` does not, `[![:digit:]]` matches `a` and `[`) are members too.
+fn parse_bracket(pattern: &[PatternByte], open: usize) -> Bracket {
     let mut i = open + 1;
-    // `!` ONLY. PHP bundles its own `php_glob` (system glob is off by default), whose
-    // `LBRACKET` case tests `c == NOT` with `#define NOT '!'` — a leading `^` is an ordinary
-    // member of the class. VERIFIED: `bl_[^a].list` loads `bl_a.list`, so `^` matched itself
-    // or `a`; POSIX semantics would have loaded the other file instead.
     let negated = pattern.get(i).is_some_and(|b| b.is(b'!'));
     if negated {
         i += 1;
     }
-    let mut hit = false;
-    let mut first = true;
-    while i < pattern.len() {
-        if pattern[i].is(b']') && !first {
-            return Some((hit != negated, i + 1));
-        }
-        first = false;
-        // A range needs a `-` with a member on each side; a trailing `-` is literal.
-        if i + 2 < pattern.len() && pattern[i + 1].is(b'-') && !pattern[i + 2].is(b']') {
-            if pattern[i].byte <= byte && byte <= pattern[i + 2].byte {
-                hit = true;
-            }
-            i += 3;
-            continue;
-        }
-        if pattern[i].byte == byte {
-            hit = true;
-        }
-        i += 1;
+    if i >= pattern.len() || !pattern[i + 1..].iter().any(|b| b.is(b']')) {
+        return Bracket::Literal;
     }
-    None // unterminated: not a class after all
+    let starts_named = |i: usize, c: PatternByte| {
+        c.is(b'[') && pattern.get(i).is_some_and(|b| b.is(b':'))
+    };
+    let mut members = Vec::new();
+    let mut c = pattern[i];
+    i += 1;
+    loop {
+        if starts_named(i, c) {
+            loop {
+                match named_class(pattern, i) {
+                    Some(Err(())) => return Bracket::UnknownClass,
+                    // Not a name after all: this `[` is an ordinary member, below.
+                    None => break,
+                    Some(Ok((test, next))) => {
+                        members.push(ClassMember::Named(test));
+                        i = next;
+                    }
+                }
+                // A named class can consume the `]` the opener's check found; php_glob then
+                // reads past the pattern's end. Treat that as no class at all.
+                let Some(&following) = pattern.get(i) else {
+                    return Bracket::Literal;
+                };
+                c = following;
+                i += 1;
+                if !starts_named(i, c) {
+                    break;
+                }
+            }
+            if c.is(b']') {
+                return Bracket::Class {
+                    negated,
+                    members,
+                    next: i,
+                };
+            }
+        }
+        if pattern.get(i).is_some_and(|b| b.is(b'-'))
+            && pattern.get(i + 1).is_some_and(|b| !b.is(b']'))
+        {
+            members.push(ClassMember::Range(c.byte, pattern[i + 1].byte));
+            i += 2;
+        } else {
+            members.push(ClassMember::Byte(c.byte));
+        }
+        let Some(&following) = pattern.get(i) else {
+            return Bracket::Literal;
+        };
+        c = following;
+        i += 1;
+        if c.is(b']') {
+            return Bracket::Class {
+                negated,
+                members,
+                next: i,
+            };
+        }
+    }
+}
+
+/// Matches one `glob()` bracket class against `byte`, returning whether it matched and the
+/// index just past the closing `]`; `None` when the `[` opens no class and is literal.
+///
+/// A class naming an unknown `[:name:]` never matches, and every component of the pattern
+/// must match for a file to be loaded — so the pattern loads nothing, which is php_glob's
+/// `GLOB_NOMATCH` for it.
+fn class_matches(pattern: &[PatternByte], open: usize, byte: u8) -> Option<(bool, usize)> {
+    match parse_bracket(pattern, open) {
+        Bracket::Literal => None,
+        Bracket::UnknownClass => Some((false, pattern.len())),
+        Bracket::Class {
+            negated,
+            members,
+            next,
+        } => {
+            let hit = members.iter().any(|member| match *member {
+                ClassMember::Byte(member) => member == byte,
+                ClassMember::Range(low, high) => low <= byte && byte <= high,
+                ClassMember::Named(test) => test(byte),
+            });
+            Some((hit != negated, next))
+        }
+    }
 }
 
 /// `glob()` matching for ONE path component: like `prefix_matches` it refuses to cross `/`
@@ -469,16 +633,12 @@ fn component_matches(pattern: &str, name: &str) -> bool {
 
 /// Resolves one blacklist entry the way php-src's `zend_accel_blacklist_loadone` does.
 ///
-/// A surrounding pair of double quotes is stripped, then a relative entry is joined to
-/// `base_dir` — the blacklist FILE's directory — and `.` / `..` are folded out. An absolute
+/// The caller has already stripped the line ending and the quotes. A relative entry is joined
+/// to `base_dir` — the blacklist FILE's directory — and `.` / `..` are folded out. An absolute
 /// entry is normalised but not relocated. Wildcards survive untouched: this is a textual
 /// expansion, never a filesystem resolution, so an entry naming files that do not exist yet
 /// still works.
-fn expand_entry(entry: &str, base_dir: &Path) -> Option<String> {
-    let unquoted = entry
-        .strip_prefix('"')
-        .and_then(|rest| rest.strip_suffix('"'))
-        .unwrap_or(entry);
+fn expand_entry(unquoted: &str, base_dir: &Path) -> Option<String> {
     if unquoted.is_empty() {
         return None;
     }
@@ -727,23 +887,58 @@ mod tests {
         assert!(blacklist.blocks("/srv/P_CASE.PHP"));
     }
 
-    /// `;` comments and blank lines never become patterns — and a `;` that is not the
-    /// first character does NOT start one.
+    /// `;` comments and EMPTY lines never become patterns — and a `;` that is not the first
+    /// byte does NOT start one. A spaces-only line is not empty: it is the relative entry
+    /// `<dir>/   `. MEASURED on reference PHP 8.5.10, which reports exactly these entries.
     #[test]
-    fn comments_and_blank_lines_are_skipped() {
-        let blacklist = of("; /srv/commented.php\n\n   \n/srv/real.php\n");
-        assert_eq!(blacklist.patterns, vec!["/srv/real.php".to_string()]);
+    fn comments_and_empty_lines_are_skipped() {
+        let blacklist = of("; /srv/commented.php\n\n   \n ; x\n/srv/real.php\n");
+        assert_eq!(
+            blacklist.patterns,
+            vec![
+                "/srv/lists/   ".to_string(),
+                "/srv/lists/ ; x".to_string(),
+                "/srv/real.php".to_string(),
+            ]
+        );
         assert!(!blacklist.blocks("/srv/commented.php"));
         assert!(blacklist.blocks("/srv/real.php"));
     }
 
-    /// Trailing whitespace and a CRLF line ending must not become part of the pattern,
-    /// or a blacklist authored on Windows would silently match nothing.
+    /// Only the line ending is removed — ONE `\n`, then ONE `\r` — and trailing spaces and
+    /// tabs stay in the entry, which then blocks nothing. A CRLF file still works.
+    ///
+    /// This used to trim every trailing `\r`, space and tab. MEASURED on reference PHP 8.5.10:
+    /// `app.php  \r\n` reports `app.php  `, `app.php\t` keeps the tab, `app.php\r\r\n` keeps
+    /// one `\r`, and a final line with no `\n` keeps its `\r`.
     #[test]
-    fn trailing_whitespace_and_crlf_are_trimmed() {
-        let blacklist = of("/srv/app.php  \r\n");
-        assert_eq!(blacklist.patterns, vec!["/srv/app.php".to_string()]);
-        assert!(blacklist.blocks("/srv/app.php"));
+    fn only_the_line_ending_is_removed() {
+        let blacklist = of("/srv/app.php  \r\n/srv/tab.php\t\n/srv/crlf.php\r\n/srv/two.php\r\r\n/srv/last.php\r");
+        assert_eq!(
+            blacklist.patterns,
+            vec![
+                "/srv/app.php  ".to_string(),
+                "/srv/tab.php\t".to_string(),
+                "/srv/crlf.php".to_string(),
+                "/srv/two.php\r".to_string(),
+                "/srv/last.php\r".to_string(),
+            ]
+        );
+        assert!(!blacklist.blocks("/srv/app.php"));
+        assert!(blacklist.blocks("/srv/crlf.php"));
+    }
+
+    /// Leading `\r`s are stripped before the comment test, quotes are stripped BEFORE it too,
+    /// and a lone `"` is dropped. MEASURED: `\r;x` and `";<path>"` are comments; `"` alone
+    /// reports nothing; a `\r` inside the line stays.
+    #[test]
+    fn quotes_and_carriage_returns_follow_php_srcs_order() {
+        let blacklist = of("\r\r/srv/lead.php\n\r;x\n\";/srv/quoted_comment.php\"\n\"\n\"\r\n/srv/t.p\rhp\n");
+        assert_eq!(
+            blacklist.patterns,
+            vec!["/srv/lead.php".to_string(), "/srv/t.p\rhp".to_string()]
+        );
+        assert!(!blacklist.blocks("/srv/quoted_comment.php"));
     }
 
     /// An empty blacklist blocks nothing — the state almost every process is in.
@@ -888,6 +1083,36 @@ mod tests {
         assert!(!is_glob("plain.list"));
     }
 
+    /// Verifies `[:name:]` classes inside a bracket, as php_glob parses them.
+    ///
+    /// Each row is a MEASURED reference PHP 8.5.10 outcome: `[[:alpha:]]` matches a letter and
+    /// `[[:digit:]]` does not; `[![:digit:]]` matches `a` and `[`; a name with no `:]`
+    /// (`[[:alpha]`) leaves its `[` an ordinary member; and an UNKNOWN name makes the whole
+    /// pattern match nothing.
+    #[test]
+    fn the_directive_glob_knows_named_classes() {
+        assert!(component_matches("[[:alpha:]]nclude.list", "include.list"));
+        assert!(component_matches("bl_[[:alpha:]].list", "bl_a.list"));
+        assert!(!component_matches("bl_[[:digit:]].list", "bl_a.list"));
+        assert!(component_matches("bl_[[:digit:]].list", "bl_7.list"));
+        assert!(component_matches("bl_[![:digit:]].list", "bl_a.list"));
+        assert!(component_matches("bl_[![:digit:]].list", "bl_[.list"));
+        assert!(component_matches("bl_[[:digit:]a].list", "bl_a.list"));
+        assert!(component_matches("bl_[[:lower:]].list", "bl_a.list"));
+        assert!(!component_matches("bl_[[:upper:]].list", "bl_a.list"));
+        assert!(component_matches("bl_[[:alpha]].list", "bl_a].list"));
+        assert!(component_matches("bl_[[:alpha].list", "bl_[.list"));
+        assert!(!component_matches("bl_[[:bogus:]].list", "bl_a.list"));
+        assert!(!component_matches("bl_[[:bogus:]].list", "bl_[.list"));
+        // Not even the name a literal `[` would have spelled.
+        assert!(!component_matches("bl_[[:bogus:]].list", "bl_[b].list"));
+        // A quoted `[` opens nothing, so `[:bogus:]` is an ordinary class of its bytes.
+        assert!(component_matches("bl_\\[[:bogus:]].list", "bl_[b].list"));
+        // `^` stays an ordinary member, named classes or not.
+        assert!(component_matches("[^i]nclude.list", "include.list"));
+        assert!(!component_matches("bl_[^b].list", "bl_a.list"));
+    }
+
     /// Verifies a backslash quotes the next byte, so a quoted metacharacter is literal.
     ///
     /// Each row is a MEASURED reference PHP 8.5.10 outcome: `k\[ab].list` and `k[ab\].list`
@@ -945,6 +1170,32 @@ mod tests {
         assert!(blocks(std::path::Path::new("/srv/one.php")));
         assert!(blocks(std::path::Path::new("/srv/two.php")));
         assert!(!blocks(std::path::Path::new("/srv/three.php")));
+    }
+
+    /// Verifies an unknown class name anywhere in the directive makes it load nothing, even
+    /// where another reading would have matched a file. MEASURED: with `bl_a.list`,
+    /// `bl_[.list` and `bl_[b].list` all present, `bl_[[:bogus:]].list` loads none of them,
+    /// while the quoted `bl_\[[:bogus:]].list` loads `bl_[b].list`.
+    #[test]
+    fn an_unknown_class_name_loads_nothing() {
+        let dir = scratch("bogus_class");
+        std::fs::write(dir.join("bl_a.list"), "/srv/bogus_a.php\n").unwrap();
+        std::fs::write(dir.join("bl_[.list"), "/srv/bogus_bracket.php\n").unwrap();
+        std::fs::write(dir.join("bl_[b].list"), "/srv/bogus_literal.php\n").unwrap();
+        reset_for_tests();
+        load(&format!("{}/bl_[[:bogus:]].list", dir.display()));
+        assert!(!blocks(std::path::Path::new("/srv/bogus_a.php")));
+        assert!(!blocks(std::path::Path::new("/srv/bogus_bracket.php")));
+        assert!(!blocks(std::path::Path::new("/srv/bogus_literal.php")));
+
+        reset_for_tests();
+        load(&format!("{}/bl_\\[[:bogus:]].list", dir.display()));
+        assert!(blocks(std::path::Path::new("/srv/bogus_literal.php")));
+
+        reset_for_tests();
+        load(&format!("{}/bl_[![:digit:]].list", dir.display()));
+        assert!(blocks(std::path::Path::new("/srv/bogus_a.php")));
+        assert!(blocks(std::path::Path::new("/srv/bogus_bracket.php")));
     }
 
     /// Verifies an escaped directive value with NO wildcard is unescaped before it is read.

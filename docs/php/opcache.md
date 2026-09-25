@@ -1050,7 +1050,10 @@ include executes exactly as it would otherwise — the directive changes what is
 
 The directive value is itself a `glob()` naming the blacklist files — wildcards
 and `[...]` classes included — and **every** matching file is loaded and their
-entries unioned:
+entries unioned. It is PHP's bundled glob, so a class negates with `!` only (`^`
+is an ordinary member), `[:alpha:]`-style named classes work inside a class, an
+unknown class name makes the value match nothing, and a backslash quotes the
+next character (`deny\.list` names `deny.list`):
 
 ```ini
 opcache.blacklist_filename=/etc/opcache/deny-*.list
@@ -1063,11 +1066,17 @@ Inside each file:
 | Line | Meaning |
 |---|---|
 | `;` as the **first** character | Comment, skipped. A `;` after anything else — even a space — does not start one |
-| Blank, or only whitespace | Skipped |
-| Anything else | A pattern |
+| Empty | Skipped |
+| Anything else — including a line of only spaces | A pattern |
+
+Only the line ending is removed: one `\n`, then one `\r` before it. Trailing
+spaces and tabs **stay** in the pattern (which then matches nothing that lacks
+them), so a CRLF file works but `app.php  ` is not `app.php`. Leading `\r`s are
+stripped; leading spaces are not.
 
 Every surviving line is **expanded, not taken verbatim**: a surrounding pair of
-double quotes is stripped, a relative entry is resolved against *the blacklist
+double quotes is stripped — before the `;` test, so `";…"` is a comment — a
+relative entry is resolved against *the blacklist
 file's own directory* (not the process cwd), and `.` / `..` are folded out. So a
 list sitting beside the code it names can simply say `vendor/`. The expanded form
 is also what `opcache_get_configuration()['blacklist']` reports.

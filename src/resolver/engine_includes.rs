@@ -163,8 +163,10 @@ pub(super) fn resolve_include_stmt(
 /// first top-level `return E` is rewritten to assign a hidden temporary. A successful include with
 /// no top-level `return` yields `1`; a missing non-required include yields `false`, matching PHP.
 ///
-/// Nested top-level returns inside control flow within the included file are not rewritten and keep
-/// the same semantics as a statement-position include (they return from the enclosing function).
+/// A `return` nested in the file's own control flow — an `if`, a loop, a `switch`, a `try` — ends
+/// THAT file too: `confine_nested_returns` wraps the body in `do { … } while (false)` and turns each
+/// such `return E` into an assignment to the temporary plus a `break` out to the wrapper, and a bare
+/// `return;` yields NULL.
 pub(super) fn expand_value_include(
     span: Span,
     path: &Expr,

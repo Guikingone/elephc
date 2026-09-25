@@ -821,16 +821,6 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     emit_registered_instr_enter(ctx);
 }
 
-/// Emits the request-boundary call that performs a deferred `opcache_reset()`.
-///
-/// php-src schedules a restart and performs it at the START of the next request, so this
-/// sits beside the other per-request resets rather than inside `opcache_reset()` itself.
-/// A request that calls `opcache_reset()` therefore keeps being served by the cache, and
-/// the one after it starts cold — which is what reference PHP does.
-///
-/// PAY-FOR-USE, the same rule the `opcache_get_status()` readers follow: a binary with no
-/// eval bridge has no runtime script cache to restart, so the call is not emitted at all
-/// and the interpreter archive stays unlinked.
 /// Installs the compiled OPcache configuration before any of the program's code runs.
 ///
 /// php-src configures OPcache during module startup, so every directive is in force for the
@@ -900,6 +890,16 @@ fn emit_web_preload_startup(ctx: &mut FunctionContext<'_>) -> crate::codegen::Re
     Ok(())
 }
 
+/// Emits the request-boundary call that performs a deferred `opcache_reset()`.
+///
+/// php-src schedules a restart and performs it at the START of the next request, so this
+/// sits beside the other per-request resets rather than inside `opcache_reset()` itself.
+/// A request that calls `opcache_reset()` therefore keeps being served by the cache, and
+/// the one after it starts cold — which is what reference PHP does.
+///
+/// PAY-FOR-USE, the same rule the `opcache_get_status()` readers follow: a binary with no
+/// eval bridge has no runtime script cache to restart, so the call is not emitted at all
+/// and the interpreter archive stays unlinked.
 fn emit_opcache_restart_boundary(ctx: &mut FunctionContext<'_>) {
     if !ctx.module.required_runtime_features.eval_bridge {
         return;

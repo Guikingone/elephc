@@ -205,8 +205,9 @@ fn a_blacklisted_include_runs_but_is_not_cached() {
     );
 }
 
-/// A `;` comment and a blank line are not patterns, so a blacklist made only of those
-/// blocks nothing.
+/// A `;` comment and an empty line are not patterns, so a blacklist made only of those
+/// blocks nothing. The spaces-only line IS one — `<dir>/   ` — but no script's name starts
+/// with three spaces, so it blocks nothing either.
 ///
 /// This is the test that fails if the comment marker is ever matched loosely — for
 /// instance by trimming leading whitespace before testing for `;`, which reference PHP
