@@ -75,6 +75,48 @@ fn compile_and_run(dir: &Path, source: &str) -> String {
     String::from_utf8_lossy(&run.stdout).into_owned()
 }
 
+/// Returns the EIR instruction that produced the value `source`'s first static store writes.
+///
+/// Follows the stored value through its `acquire` to the instruction that made it. A probe
+/// whose producer turns out to be `const_str` stores a rodata literal, never touches the
+/// scratch buffer, and proves nothing — so the producer table asserts on this.
+fn static_store_producer(dir: &Path, source: &str) -> String {
+    let probe = dir.join("ir.php");
+    fs::write(&probe, source).unwrap();
+    let output = Command::new(elephc_bin())
+        .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .current_dir(dir)
+        .arg("--emit-ir")
+        .arg(&probe)
+        .output()
+        .expect("failed to spawn elephc");
+    assert!(output.status.success(), "--emit-ir failed: {}", String::from_utf8_lossy(&output.stderr));
+    let ir = String::from_utf8_lossy(&output.stdout).into_owned();
+    let lines: Vec<&str> = ir.lines().map(str::trim).collect();
+    let store_at = lines
+        .iter()
+        .position(|line| line.starts_with("store_static_property "))
+        .unwrap_or_else(|| panic!("no static store in:\n{ir}"));
+    // Value numbers restart in every function, so a definition is searched BACKWARDS from
+    // the store: the nearest one is the store's own function's, never another's `vN`.
+    let definition = |value: &str| -> String {
+        let prefix = format!("{value}: ");
+        lines[..store_at]
+            .iter()
+            .rev()
+            .find(|line| line.starts_with(&prefix))
+            .unwrap_or_else(|| panic!("no definition of {value} in:\n{ir}"))
+            .to_string()
+    };
+    let stored = lines[store_at].split_whitespace().nth(1).unwrap();
+    let mut producer = definition(stored);
+    if let Some(rest) = producer.split(" = acquire ").nth(1) {
+        let source_value = rest.split_whitespace().next().unwrap().to_string();
+        producer = definition(&source_value);
+    }
+    producer
+}
+
 /// Builds a probe that stores `call` in a static property, clobbers the scratch buffer, reads back.
 fn static_property_probe(call: &str) -> String {
     format!(
@@ -207,21 +249,26 @@ echo $a["k"];
 /// Persisting at the STORE covers all of them at once, and this table is what says so: if the
 /// fix ever migrates back to the producer, the `UnaryString` row keeps passing and these fail.
 ///
-/// Each case reads a value out of a variable so the expression cannot be constant-folded into
-/// a rodata literal, which would sidestep the scratch buffer and make the probe vacuous.
+/// EVERY INPUT DEPENDS ON `$argc`, so no row can be constant-folded into a rodata literal,
+/// which would sidestep the scratch buffer and make the row vacuous. Reading a constant out
+/// of a variable is NOT enough: the optimizer propagates it, and four rows of an earlier
+/// version (`$x . "c"`, `"v=$x!"`, `(string)$i`, `(string)$b`) stored a `const_str` and
+/// exercised nothing. The ternary keeps each value's own type — `$argc + 41` would make the
+/// integer rows `mixed` and test a different cast. Each row also asserts, on the EIR, that
+/// its producer survived, so a smarter optimizer fails this test instead of hollowing it.
 #[test]
 fn every_string_producer_survives_a_static_property_store() {
     let dir = make_test_dir("static_prop_producers");
     // (prelude, expression, expected)
     let cases = [
-        (r#"$x = "ab";"#, r#"$x . "c""#, "abc"),
-        (r#"$x = "ab";"#, r#""v=$x!""#, "v=ab!"),
-        (r#"$i = 41 + 1;"#, r#"(string)$i"#, "42"),
-        (r#"$i = 41 + 1;"#, r#"strval($i)"#, "42"),
-        (r#"$x = "ab";"#, r#"strtoupper($x) . "!""#, "AB!"),
-        (r#"$x = "ab";"#, r#"str_repeat($x, 2)"#, "abab"),
-        (r#"$f = 1.5;"#, r#"(string)$f"#, "1.5"),
-        (r#"$b = true;"#, r#"(string)$b"#, "1"),
+        (r#"$x = $argc > 0 ? "ab" : "";"#, r#"$x . "c""#, "abc"),
+        (r#"$x = $argc > 0 ? "ab" : "";"#, r#""v=$x!""#, "v=ab!"),
+        (r#"$i = $argc > 0 ? 42 : 0;"#, r#"(string)$i"#, "42"),
+        (r#"$i = $argc > 0 ? 42 : 0;"#, r#"strval($i)"#, "42"),
+        (r#"$x = $argc > 0 ? "ab" : "";"#, r#"strtoupper($x) . "!""#, "AB!"),
+        (r#"$x = $argc > 0 ? "ab" : "";"#, r#"str_repeat($x, 2)"#, "abab"),
+        (r#"$f = $argc > 0 ? 1.5 : 0.0;"#, r#"(string)$f"#, "1.5"),
+        (r#"$b = $argc > 0;"#, r#"(string)$b"#, "1"),
     ];
     for (prelude, call, expected) in cases {
         let source = format!(
@@ -232,6 +279,11 @@ B::$s = {call};
 $noise = str_repeat("Z", 24);
 echo B::$s;
 "#
+        );
+        let producer = static_store_producer(&dir, &source);
+        assert!(
+            !producer.contains(" = const_str "),
+            "`B::$s = {call}` was folded to a literal, so it tests nothing: {producer}"
         );
         let actual = compile_and_run(&dir, &source);
         assert_eq!(

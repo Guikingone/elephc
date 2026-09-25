@@ -238,16 +238,17 @@ fn expand_and_read(value: &str) -> Vec<(PathBuf, String)> {
 /// wildcard one lists each candidate directory and keeps the entries `component_matches`
 /// accepts. Every intermediate match must be a directory; the final ones may be anything, and
 /// reading them is what filters out whatever is not a file. A pattern with no wildcard at all
-/// is returned as is, so a literal path is read directly rather than listed.
+/// yields its one literal path without listing any directory.
+///
+/// A backslash quotes the next byte, in EVERY component: php-src globs the directive with
+/// `php_glob(..., 0, ...)`, and without `GLOB_NOESCAPE` that is `glob()`'s default. So a
+/// literal component is appended UNESCAPED, which is why there is no "no wildcard, return the
+/// value as is" shortcut any more: `deny\.list` named a file that does not exist, the read
+/// failed, and every listed script stayed cacheable. MEASURED on reference PHP 8.5.10 —
+/// `deny\.list` and `de\ny.list` both load `deny.list`, and `d\*.list` names the literal
+/// `d*.list`, which loads nothing.
 fn glob_paths(pattern: &Path) -> Vec<PathBuf> {
     let components: Vec<_> = pattern.components().collect();
-    let has_wildcard = components.iter().any(|component| match component {
-        std::path::Component::Normal(name) => name.to_str().is_some_and(is_glob),
-        _ => false,
-    });
-    if !has_wildcard {
-        return vec![pattern.to_path_buf()];
-    }
     let mut candidates = vec![PathBuf::new()];
     let last = components.len().saturating_sub(1);
     for (index, component) in components.iter().enumerate() {
@@ -257,12 +258,19 @@ fn glob_paths(pattern: &Path) -> Vec<PathBuf> {
             }
             continue;
         };
-        let Some(name) = name.to_str().filter(|name| is_glob(name)) else {
+        let Some(name) = name.to_str() else {
             for candidate in &mut candidates {
                 candidate.push(name);
             }
             continue;
         };
+        if !is_glob(name) {
+            let literal = unescaped(name);
+            for candidate in &mut candidates {
+                candidate.push(&literal);
+            }
+            continue;
+        }
         let mut next = Vec::new();
         for candidate in &candidates {
             let dir = if candidate.as_os_str().is_empty() {
@@ -294,6 +302,52 @@ fn glob_paths(pattern: &Path) -> Vec<PathBuf> {
     candidates
 }
 
+/// One byte of a `glob()` pattern component, and whether a backslash quoted it.
+///
+/// A quoted byte is always literal: `\*` and `\?` match themselves, `\[` opens no class,
+/// `\]` closes none, and a quoted `!` or `-` inside a class is a plain member. MEASURED on
+/// reference PHP 8.5.10: `k\[ab].list` and `k[ab\].list` both load the file literally named
+/// `k[ab].list`, and `x[\!]y.list` loads `x!y.list`. A trailing backslash quotes nothing and
+/// stays a backslash, as `glob()` leaves it.
+#[derive(Clone, Copy)]
+struct PatternByte {
+    byte: u8,
+    quoted: bool,
+}
+
+impl PatternByte {
+    /// Whether this byte is the UNQUOTED metacharacter `meta`.
+    fn is(self, meta: u8) -> bool {
+        !self.quoted && self.byte == meta
+    }
+}
+
+/// Splits `component` into pattern bytes, consuming each quoting backslash.
+fn pattern_bytes(component: &str) -> Vec<PatternByte> {
+    let bytes = component.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let quoted = bytes[i] == b'\\' && i + 1 < bytes.len();
+        if quoted {
+            i += 1;
+        }
+        out.push(PatternByte {
+            byte: bytes[i],
+            quoted,
+        });
+        i += 1;
+    }
+    out
+}
+
+/// The file name a wildcard-free `component` names: its bytes with the quoting removed.
+/// Only ASCII backslashes are dropped, so what remains is still UTF-8.
+fn unescaped(component: &str) -> String {
+    let bytes: Vec<u8> = pattern_bytes(component).iter().map(|b| b.byte).collect();
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
 /// Whether a filename component carries any `glob()` metacharacter.
 ///
 /// `[` counts: `glob()` honours character classes, and treating `bl_[ab].list` as a literal
@@ -301,43 +355,46 @@ fn glob_paths(pattern: &Path) -> Vec<PathBuf> {
 /// (VERIFIED). A `[` with no closing `]` is not a class, and `glob()` then treats it
 /// literally, which is why the scan below looks for the pair.
 fn is_glob(component: &str) -> bool {
-    if component.contains(['*', '?']) {
+    let pattern = pattern_bytes(component);
+    if pattern.iter().any(|b| b.is(b'*') || b.is(b'?')) {
         return true;
     }
-    match component.find('[') {
-        Some(open) => component[open + 1..].contains(']'),
+    // The FIRST opener decides: any later `[` that has a closer after it, the first one has
+    // too.
+    match pattern.iter().position(|b| b.is(b'[')) {
+        Some(open) => pattern[open + 1..].iter().any(|b| b.is(b']')),
         None => false,
     }
 }
 
 /// Matches one `glob()` character class against `byte`, returning the index just past the
 /// closing `]`. `[!abc]` and `[^abc]` negate; `a-z` is a range; `]` first is literal.
-fn class_matches(pattern: &[u8], open: usize, byte: u8) -> Option<(bool, usize)> {
+fn class_matches(pattern: &[PatternByte], open: usize, byte: u8) -> Option<(bool, usize)> {
     let mut i = open + 1;
     // `!` ONLY. PHP bundles its own `php_glob` (system glob is off by default), whose
     // `LBRACKET` case tests `c == NOT` with `#define NOT '!'` — a leading `^` is an ordinary
     // member of the class. VERIFIED: `bl_[^a].list` loads `bl_a.list`, so `^` matched itself
     // or `a`; POSIX semantics would have loaded the other file instead.
-    let negated = pattern.get(i) == Some(&b'!');
+    let negated = pattern.get(i).is_some_and(|b| b.is(b'!'));
     if negated {
         i += 1;
     }
     let mut hit = false;
     let mut first = true;
     while i < pattern.len() {
-        if pattern[i] == b']' && !first {
+        if pattern[i].is(b']') && !first {
             return Some((hit != negated, i + 1));
         }
         first = false;
         // A range needs a `-` with a member on each side; a trailing `-` is literal.
-        if i + 2 < pattern.len() && pattern[i + 1] == b'-' && pattern[i + 2] != b']' {
-            if pattern[i] <= byte && byte <= pattern[i + 2] {
+        if i + 2 < pattern.len() && pattern[i + 1].is(b'-') && !pattern[i + 2].is(b']') {
+            if pattern[i].byte <= byte && byte <= pattern[i + 2].byte {
                 hit = true;
             }
             i += 3;
             continue;
         }
-        if pattern[i] == byte {
+        if pattern[i].byte == byte {
             hit = true;
         }
         i += 1;
@@ -350,26 +407,27 @@ fn class_matches(pattern: &[u8], open: usize, byte: u8) -> Option<(bool, usize)>
 /// prefix, and it additionally honours `[...]` classes, which `glob()` has and the blacklist
 /// entry matcher does not.
 fn component_matches(pattern: &str, name: &str) -> bool {
-    let (pat, nam) = (pattern.as_bytes(), name.as_bytes());
+    let (pat, nam) = (pattern_bytes(pattern), name.as_bytes());
     // POSIX `glob()` hides dotfiles: a leading `.` is matched only by a LITERAL `.` in the
     // pattern, never by `*`, `?` or a class. VERIFIED on reference PHP 8.5.10 —
     // `opcache.blacklist_filename=*.list` loaded `deny.list` and ignored `.secret.list`.
     // Without this an editor's backup or a hidden file beside the real list would be read as
-    // a blacklist and silently change what the cache stores.
-    if nam.first() == Some(&b'.') && pat.first() != Some(&b'.') {
+    // a blacklist and silently change what the cache stores. A QUOTED leading `.` is literal
+    // too: `\.s*.list` loads `.secret.list` (MEASURED).
+    if nam.first() == Some(&b'.') && pat.first().map(|b| b.byte) != Some(b'.') {
         return false;
     }
     let (mut p, mut n) = (0usize, 0usize);
     let mut star: Option<(usize, usize)> = None;
     while n < nam.len() {
         if p < pat.len() {
-            if pat[p] == b'*' {
+            if pat[p].is(b'*') {
                 star = Some((p, n));
                 p += 1;
                 continue;
             }
-            if pat[p] == b'[' {
-                if let Some((hit, next)) = class_matches(pat, p, nam[n]) {
+            if pat[p].is(b'[') {
+                if let Some((hit, next)) = class_matches(&pat, p, nam[n]) {
                     if hit {
                         p = next;
                         n += 1;
@@ -388,7 +446,7 @@ fn component_matches(pattern: &str, name: &str) -> bool {
                     }
                 }
             }
-            if pat[p] == b'?' || pat[p] == nam[n] {
+            if pat[p].is(b'?') || pat[p].byte == nam[n] {
                 p += 1;
                 n += 1;
                 continue;
@@ -403,7 +461,7 @@ fn component_matches(pattern: &str, name: &str) -> bool {
             None => return false,
         }
     }
-    while p < pat.len() && pat[p] == b'*' {
+    while p < pat.len() && pat[p].is(b'*') {
         p += 1;
     }
     p >= pat.len()
@@ -830,6 +888,32 @@ mod tests {
         assert!(!is_glob("plain.list"));
     }
 
+    /// Verifies a backslash quotes the next byte, so a quoted metacharacter is literal.
+    ///
+    /// Each row is a MEASURED reference PHP 8.5.10 outcome: `k\[ab].list` and `k[ab\].list`
+    /// name `k[ab].list` literally, `x[\!]y.list` matches `x!y.list`, and a quoted leading `.`
+    /// still reaches a dotfile.
+    #[test]
+    fn a_backslash_makes_the_next_glob_byte_literal() {
+        assert!(!is_glob("d\\*.list"));
+        assert!(!is_glob("k\\[ab].list"));
+        assert!(!is_glob("k[ab\\].list"));
+        assert!(is_glob("d*\\.list"));
+        assert_eq!(unescaped("deny\\.list"), "deny.list");
+        assert_eq!(unescaped("de\\ny.list"), "deny.list");
+        assert_eq!(unescaped("k\\[ab].list"), "k[ab].list");
+        // A trailing backslash quotes nothing and stays.
+        assert_eq!(unescaped("deny.list\\"), "deny.list\\");
+        assert!(component_matches("d*\\.list", "deny.list"));
+        assert!(component_matches("x[\\!]y.list", "x!y.list"));
+        assert!(!component_matches("x[\\!]y.list", "xzy.list"));
+        assert!(component_matches("x\\*y*", "x*yz"));
+        assert!(!component_matches("x\\*y*", "xay"));
+        assert!(component_matches("x\\?*", "x?z"));
+        assert!(!component_matches("x\\?*", "xaz"));
+        assert!(component_matches("\\.s*.list", ".secret.list"));
+    }
+
     /// Creates a fresh directory for one test's blacklist files.
     fn scratch(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -861,6 +945,24 @@ mod tests {
         assert!(blocks(std::path::Path::new("/srv/one.php")));
         assert!(blocks(std::path::Path::new("/srv/two.php")));
         assert!(!blocks(std::path::Path::new("/srv/three.php")));
+    }
+
+    /// Verifies an escaped directive value with NO wildcard is unescaped before it is read.
+    ///
+    /// It used to be read verbatim, the read failed, and the scripts it listed stayed
+    /// cacheable. MEASURED: reference loads `deny.list` for `deny\.list`, and nothing for
+    /// `d\*.list`, which names a file that does not exist.
+    #[test]
+    fn an_escaped_directive_value_names_the_unescaped_file() {
+        let dir = scratch("escaped");
+        std::fs::write(dir.join("deny.list"), "/srv/escaped.php\n").unwrap();
+        reset_for_tests();
+        load(&format!("{}/deny\\.list", dir.display()));
+        assert!(blocks(std::path::Path::new("/srv/escaped.php")));
+
+        reset_for_tests();
+        load(&format!("{}/d\\*.list", dir.display()));
+        assert!(!blocks(std::path::Path::new("/srv/escaped.php")));
     }
 
     /// A wildcard in a DIRECTORY component is expanded too, as `glob()` does.
