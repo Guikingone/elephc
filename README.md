@@ -763,6 +763,15 @@ ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 ./scripts/test-linux-x86_64.sh  # Linux x86_64 suite in Docker
 ```
 
+The Docker test scripts limit the test container to one CPU and 8 GiB of memory
+without swap. They check its temporary Cargo target volume every 30 seconds and
+stop the test if it exceeds 24 GiB or Docker's filesystem has less than 20 GiB
+free. These disk checks are periodic, not a filesystem quota. Override the
+defaults with `ELEPHC_DOCKER_CPUS`, `ELEPHC_DOCKER_MEMORY`,
+`ELEPHC_DOCKER_MAX_TARGET_GIB`, `ELEPHC_DOCKER_MIN_FREE_GIB`, and
+`ELEPHC_DOCKER_DISK_CHECK_SECONDS`. The target volume is removed after the run;
+the Docker image and build cache remain available for later runs.
+
 ## Documentation
 
 The **[docs/](docs/)** directory is a complete wiki covering every aspect of the compiler. Inside you'll find:
