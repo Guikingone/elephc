@@ -4395,3 +4395,17 @@ echo 'got', "\n";
     );
     assert_eq!(out, "built|got\n");
 }
+
+/// Releasing a unit-enum ReflectionEnum must retain its distinct case layout,
+/// even when the program never reads the eagerly-created case objects.
+#[test]
+fn test_reflection_enum_unit_case_layout_without_method_use_is_heap_safe() {
+    let out = compile_and_run(
+        r#"<?php
+enum UnitCaseLayout { case One; }
+$reflection = new ReflectionEnum(UnitCaseLayout::class);
+echo "built\n";
+"#,
+    );
+    assert_eq!(out, "built\n");
+}
