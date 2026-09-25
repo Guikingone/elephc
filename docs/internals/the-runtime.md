@@ -117,6 +117,22 @@ These helpers implement PHP's `@` error-suppression operator and the runtime war
 | `__rt_diag_pop_suppression` | Leave one `@` suppression scope, clamped against underflow | — | — |
 | `__rt_diag_warning` | Write a runtime warning string to stderr unless suppression is active | `x1`/`x2` = message string | — |
 
+Array-key conversion uses `__rt_float_key_to_int` to apply PHP's integer
+conversion and report precision loss or an unrepresentable float through the
+diagnostic channel. A single PHP array access can probe, insert, and probe the
+same key again. Only its first conversion emits diagnostics; subsequent probes
+use `__rt_php_float_to_int` to obtain the same integer key without repeating the
+message. This applies to typed float keys and float values inside `Mixed` cells.
+
+Out-of-bounds string reads use `__rt_warn_string_offset` to report
+the missing offset. Silent existence probes such as `isset()` and `??` do not
+call that warning helper. A float string offset instead reports `String offset
+cast occurred` before truncating the offset, including for integral-valued
+floats. These warnings follow `@` suppression and the registered PHP error
+handler through the shared diagnostic dispatcher.
+Boxed float offsets use the same warning before the string fetch.
+Integer-form string offsets remain silent, including when their value is boxed.
+
 ## String routines
 
 **Source:** `src/codegen_support/runtime/strings/`

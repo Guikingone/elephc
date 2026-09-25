@@ -74,6 +74,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_key_exists(emitter);
     arrays::emit_array_key_exists_mixed_key(emitter);
     arrays::emit_undefined_array_key_warning(emitter);
+    arrays::emit_float_key_to_int(emitter);
     arrays::emit_array_search(emitter);
     arrays::emit_in_array_mixed_int(emitter);
     arrays::emit_array_reverse(emitter);
