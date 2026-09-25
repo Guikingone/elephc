@@ -235,12 +235,117 @@ pub(super) fn lower_catch_dispatch_with_finally(
         ctx.builder.position_at_end(next_catch);
     }
 
+    // No catch matched: the finalizer runs with the exception still in flight, then rethrows
+    // it. When the finalizer can LEAVE instead — a `return`, or the `break` an included file's
+    // `return` becomes — it must first TAKE the exception, exactly as
+    // `catch (Throwable $t) { <finally>; throw $t; }` would. Peeking at it (`CatchCurrent`)
+    // relied on the rethrow to hand the reference on, and the jump skipped the rethrow: the
+    // exception was never released — MEASURED, one leaked object per call, for a function's
+    // `return` in `finally` and an included file's alike. Reference PHP discards it.
+    //
+    // Only such finalizers take this path, so every other `try`/`finally` lowers as before.
+    if body_can_leave_by_jump(finally_body) {
+        let taken = bind_in_flight_exception(ctx, span);
+        lower_block(ctx, finally_body);
+        if !ctx.builder.insertion_block_is_terminated() {
+            lower_throw(ctx, &Expr::new(ExprKind::Variable(taken), span));
+        }
+        return after_reachable;
+    }
     let current = lower_current_exception(ctx, span);
     lower_block(ctx, finally_body);
     if !ctx.builder.insertion_block_is_terminated() {
         terminate_throw(ctx, current.value);
     }
     after_reachable
+}
+
+/// Takes and clears the in-flight exception into a hidden owned temporary, as a variable-less
+/// `catch (Throwable)` would, and returns the temporary's name.
+fn bind_in_flight_exception(ctx: &mut LoweringContext<'_, '_>, span: Span) -> String {
+    let php_type = PhpType::Object("Throwable".to_string());
+    let temp = ctx.declare_owned_hidden_temp(php_type.clone());
+    let caught = ctx.emit_owned_value(
+        Op::CatchBind,
+        Vec::new(),
+        None,
+        php_type.clone(),
+        Op::CatchBind.default_effects(),
+        Some(span),
+    );
+    ctx.store_local(&temp, caught, php_type, Some(span));
+    temp
+}
+
+/// Whether `body` holds a statement that jumps OUT of it rather than falling through: a
+/// `return`, or a `break` deeper than the loops inside `body` — which, in a `finally`, can only
+/// be the `break` an included file's `return` becomes, since the checker refuses every other
+/// jump out of a `finally`. Counted structurally rather than by that `break`'s marker, which the
+/// AST optimizer does not preserve. Declaration bodies are not entered: their `return` is their
+/// own.
+fn body_can_leave_by_jump(body: &[Stmt]) -> bool {
+    body_jumps_past(body, 0)
+}
+
+/// `body_can_leave_by_jump` with `loops` loops (or switches) already entered inside the body.
+fn body_jumps_past(body: &[Stmt], loops: usize) -> bool {
+    body.iter().any(|stmt| match &stmt.kind {
+        StmtKind::Return(_) => true,
+        StmtKind::Break(levels) | StmtKind::Continue(levels) => *levels > loops,
+        StmtKind::Synthetic(body)
+        | StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. } => body_jumps_past(body, loops),
+        StmtKind::While { body, .. }
+        | StmtKind::DoWhile { body, .. }
+        | StmtKind::Foreach { body, .. }
+        | StmtKind::For { body, .. } => body_jumps_past(body, loops + 1),
+        StmtKind::If {
+            then_body,
+            elseif_clauses,
+            else_body,
+            ..
+        } => {
+            body_jumps_past(then_body, loops)
+                || elseif_clauses
+                    .iter()
+                    .any(|(_, body)| body_jumps_past(body, loops))
+                || else_body
+                    .as_deref()
+                    .is_some_and(|body| body_jumps_past(body, loops))
+        }
+        StmtKind::IfDef {
+            then_body,
+            else_body,
+            ..
+        } => {
+            body_jumps_past(then_body, loops)
+                || else_body
+                    .as_deref()
+                    .is_some_and(|body| body_jumps_past(body, loops))
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            body_jumps_past(try_body, loops)
+                || catches
+                    .iter()
+                    .any(|clause| body_jumps_past(&clause.body, loops))
+                || finally_body
+                    .as_deref()
+                    .is_some_and(|body| body_jumps_past(body, loops))
+        }
+        StmtKind::Switch { cases, default, .. } => {
+            cases
+                .iter()
+                .any(|(_, body)| body_jumps_past(body, loops + 1))
+                || default
+                    .as_deref()
+                    .is_some_and(|body| body_jumps_past(body, loops + 1))
+        }
+        _ => false,
+    })
 }
 
 /// Emits the match tests for one catch clause and branches to body or next clause.

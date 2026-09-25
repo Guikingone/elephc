@@ -1108,6 +1108,11 @@ mod tests {
         assert!(!component_matches("bl_[[:bogus:]].list", "bl_[b].list"));
         // A quoted `[` opens nothing, so `[:bogus:]` is an ordinary class of its bytes.
         assert!(component_matches("bl_\\[[:bogus:]].list", "bl_[b].list"));
+        // A QUOTED byte in or around the name is never a class name's: MEASURED, reference
+        // loads nothing for any of these beside `bl_a.list`.
+        assert!(!component_matches("bl_[[:al\\pha:]].list", "bl_a.list"));
+        assert!(!component_matches("bl_[[:alpha\\:]].list", "bl_a.list"));
+        assert!(!component_matches("bl_[[\\:alpha:]].list", "bl_a.list"));
         // `^` stays an ordinary member, named classes or not.
         assert!(component_matches("[^i]nclude.list", "include.list"));
         assert!(!component_matches("bl_[^b].list", "bl_a.list"));

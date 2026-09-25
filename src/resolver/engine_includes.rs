@@ -422,7 +422,10 @@ fn rewrite_scoped_returns(stmts: &mut [Stmt], depth: usize, temp: Option<&str>) 
                 (None, Some(value)) => replacement.push(Stmt::new(StmtKind::ExprStmt(value), span)),
                 (None, None) => {}
             }
-            replacement.push(Stmt::new(StmtKind::Break(depth), span));
+            // Marked, so the checker lets it leave a `finally`: `finally { return 7; }` is
+            // legal PHP, and reference prints `try after:7` for it (MEASURED), where an
+            // unmarked `break` was refused as "Cannot jump out of a finally block".
+            replacement.push(Stmt::include_return_break(depth, span));
             stmt.kind = StmtKind::Synthetic(replacement);
             continue;
         }

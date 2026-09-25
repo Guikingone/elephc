@@ -195,3 +195,217 @@ fn the_include_value_comes_from_whichever_return_ran() {
         "string(5) \"early\"\nstring(7) \"in-loop\"\nstring(4) \"late\"\nNULL\n"
     );
 }
+
+/// Compiles `main.php` among `files` with `args`, returning the compiler's output unchecked.
+fn compile_with(
+    prefix: &str,
+    files: &[(&str, &str)],
+    args: &[&str],
+) -> (PathBuf, std::process::Output) {
+    let dir = make_test_dir(prefix);
+    for (name, source) in files {
+        fs::write(dir.join(name), source).unwrap();
+    }
+    let output = Command::new(elephc_bin())
+        .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .current_dir(&dir)
+        .args(args)
+        .arg(dir.join("main.php"))
+        .output()
+        .expect("failed to spawn elephc");
+    (dir, output)
+}
+
+/// Returns the `live_blocks=` count of a `--heap-debug` binary's leak summary.
+fn live_blocks(stderr: &str) -> usize {
+    let summary = stderr
+        .lines()
+        .find(|line| line.contains("leak summary"))
+        .unwrap_or_else(|| panic!("no leak summary in:\n{stderr}"));
+    if summary.contains("clean") {
+        return 0;
+    }
+    summary
+        .split("live_blocks=")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|count| count.parse().ok())
+        .unwrap_or_else(|| panic!("no live_blocks in: {summary}"))
+}
+
+/// A `return` inside a `finally` ends the included file too — in both include forms, and
+/// overriding a `return` the `try` already made.
+///
+/// Round 13's rewrite turned it into a `break` out of the `finally`, which the checker refuses
+/// as "Cannot jump out of a finally block": these programs stopped compiling. Before that, the
+/// `return` ended the whole program. MEASURED on reference PHP 8.5.10: `try after:7`,
+/// `try after`, `after:2`, `t1 after:5`.
+#[test]
+fn a_return_in_finally_ends_only_the_file() {
+    let lib = "<?php\ntry { echo \"try \"; }\nfinally { return 7; }\n";
+    let value = run_program(
+        "inc_ret_fin_value",
+        &[
+            ("lib.php", lib),
+            (
+                "main.php",
+                "<?php\n$v = include __DIR__ . '/lib.php';\necho \"after:\", $v, \"\\n\";\n",
+            ),
+        ],
+    );
+    assert_eq!(value, "try after:7\n");
+
+    let statement = run_program(
+        "inc_ret_fin_stmt",
+        &[
+            ("lib.php", lib),
+            ("main.php", "<?php\ninclude __DIR__ . '/lib.php';\necho \"after\\n\";\n"),
+        ],
+    );
+    assert_eq!(statement, "try after\n");
+
+    let overrides = run_program(
+        "inc_ret_fin_override",
+        &[
+            ("lib.php", "<?php\ntry { return 1; }\nfinally { return 2; }\n"),
+            (
+                "main.php",
+                "<?php\n$v = include __DIR__ . '/lib.php';\necho \"after:\", $v, \"\\n\";\n",
+            ),
+        ],
+    );
+    assert_eq!(overrides, "after:2\n");
+
+    let in_loop = run_program(
+        "inc_ret_fin_loop",
+        &[
+            (
+                "lib.php",
+                "<?php\nforeach ([1, 2] as $i) {\n  try { echo \"t$i \"; }\n  finally { if ($i === 1) { return 5; } }\n}\necho \"NEVER \";\n",
+            ),
+            (
+                "main.php",
+                "<?php\n$v = include __DIR__ . '/lib.php';\necho \"after:\", $v, \"\\n\";\n",
+            ),
+        ],
+    );
+    assert_eq!(in_loop, "t1 after:5\n");
+}
+
+/// A `return` in `finally` DISCARDS the exception in flight, and the program continues after
+/// the include; one that does not return lets it propagate to the caller's `catch`.
+///
+/// The optimizer read `try { throw … }` as a function exit without noticing that the `finally`
+/// could break out, and pruned everything after the include: elephc printed nothing. MEASURED on
+/// reference PHP 8.5.10: `after:9`, then `caught:boom`. That the discarded exception is also
+/// RELEASED is `a_discarded_exception_is_released`.
+#[test]
+fn a_return_in_finally_discards_the_exception_in_flight() {
+    let discarded = run_program(
+        "inc_ret_fin_discard",
+        &[
+            (
+                "lib.php",
+                "<?php\ntry { throw new Exception(\"boom\"); }\nfinally { return 9; }\n",
+            ),
+            (
+                "main.php",
+                "<?php\n$v = include __DIR__ . '/lib.php';\necho \"after:\", $v, \"\\n\";\n",
+            ),
+        ],
+    );
+    assert_eq!(discarded, "after:9\n");
+
+    let propagated = run_program(
+        "inc_ret_fin_propagate",
+        &[
+            (
+                "lib.php",
+                "<?php\ntry { throw new Exception(\"boom\"); }\nfinally { if ($argc > 5) { return 9; } }\n",
+            ),
+            (
+                "main.php",
+                "<?php\ntry { $v = include __DIR__ . '/lib.php'; echo \"NEVER\\n\"; }\ncatch (Exception $e) { echo \"caught:\", $e->getMessage(), \"\\n\"; }\n",
+            ),
+        ],
+    );
+    assert_eq!(propagated, "caught:boom\n");
+}
+
+/// The exception a `return` in `finally` discards is RELEASED — in an included file and in a
+/// function alike.
+///
+/// The finalizer used to peek at the in-flight exception and rely on rethrowing it; a `return`
+/// skipped the rethrow and the exception was never released, one leaked object per call. It now
+/// takes the exception first, as `catch (Throwable $t) { …; throw $t; }` would. Measured as a
+/// SLOPE — 20 against 200 iterations — so a live value at exit cannot pass for a leak.
+#[test]
+fn a_discarded_exception_is_released() {
+    for (label, main) in [
+        (
+            "include",
+            "<?php\nfor ($i = 0; $i < N; $i++) { $v = include __DIR__ . '/lib.php'; }\necho $v, \"\\n\";\n",
+        ),
+        (
+            "function",
+            "<?php\nfunction f() { try { throw new Exception(\"boom\"); } finally { return 9; } }\nfor ($i = 0; $i < N; $i++) { $v = f(); }\necho $v, \"\\n\";\n",
+        ),
+    ] {
+        let mut counts = Vec::new();
+        for iterations in [20, 200] {
+            let source = main.replace('N', &iterations.to_string());
+            let (dir, output) = compile_with(
+                &format!("inc_ret_fin_leak_{label}"),
+                &[
+                    (
+                        "lib.php",
+                        "<?php\ntry { throw new Exception(\"boom\"); }\nfinally { return 9; }\n",
+                    ),
+                    ("main.php", &source),
+                ],
+                &["--heap-debug"],
+            );
+            assert!(
+                output.status.success(),
+                "compilation failed:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let run = Command::new(dir.join("main")).output().expect("failed to run binary");
+            assert_eq!(String::from_utf8_lossy(&run.stdout), "9\n", "{label}");
+            counts.push(live_blocks(&String::from_utf8_lossy(&run.stderr)));
+        }
+        assert_eq!(
+            counts[0], counts[1],
+            "{label}: live blocks grow with the iteration count, so the discarded exception leaks"
+        );
+    }
+}
+
+/// Only the `break` a `return` becomes may leave a `finally`. One written by hand is still
+/// refused, in the entry script and in an included file alike, as reference refuses it with
+/// "jump out of a finally block is disallowed".
+#[test]
+fn a_handwritten_break_out_of_finally_is_still_refused() {
+    let body = "for (;;) { try { echo \"a\"; } finally { break; } }\n";
+    let entry = format!("<?php\n{body}echo \"b\\n\";\n");
+    let lib = format!("<?php\n{body}");
+    let cases: [(&str, Vec<(&str, &str)>); 2] = [
+        ("main", vec![("main.php", entry.as_str())]),
+        (
+            "include",
+            vec![
+                ("lib.php", lib.as_str()),
+                ("main.php", "<?php\ninclude __DIR__ . '/lib.php';\necho \"b\\n\";\n"),
+            ],
+        ),
+    ];
+    for (label, files) in cases {
+        let (_, output) = compile_with(&format!("inc_fin_break_{label}"), &files, &[]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{label}: a hand-written break out of finally compiled");
+        assert!(
+            stderr.contains("Cannot jump out of a finally block"),
+            "{label}: {stderr}"
+        );
+    }
+}
