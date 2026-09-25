@@ -31,9 +31,38 @@ unset($source);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// Mixed Throwable boxes are transferred cleanly by statement and expression throw paths.
+/// Parses the live-block count while allowing eval-registered class metadata in the baseline.
+fn eval_operand_owner_live_blocks(stderr: &str) -> usize {
+    let summary = stderr
+        .lines()
+        .find(|line| line.contains("HEAP DEBUG: leak summary:"))
+        .expect("heap-debug exit summary");
+    if summary.ends_with("clean") {
+        return 0;
+    }
+    summary
+        .split_once("live_blocks=")
+        .and_then(|(_, count)| count.split_whitespace().next())
+        .and_then(|count| count.parse().ok())
+        .expect("heap-debug live block count")
+}
+
+/// Mixed Throwable boxes do not add leaks beyond eval-registered metadata.
 #[test]
 fn test_eval_declared_mixed_throw_transfers_boxed_owners() {
+    let baseline = compile_and_run_with_heap_debug(r#"<?php
+eval('class EvalMixedThrowOwner extends RuntimeException {}');
+for ($i = 0; $i < 3; $i++) {
+    $through_local = new EvalMixedThrowOwner('local-' . $i);
+    $expression = new EvalMixedThrowOwner('expression-' . $i);
+    unset($through_local, $expression);
+}
+echo 'baseline';
+"#);
+    assert!(baseline.success, "stdout={:?}\nstderr={}", baseline.stdout, baseline.stderr);
+    assert_eq!(baseline.stdout, "baseline");
+    let baseline_live_blocks = eval_operand_owner_live_blocks(&baseline.stderr);
+
     let out = compile_and_run_with_heap_debug(r#"<?php
 eval('class EvalMixedThrowOwner extends RuntimeException {}');
 for ($i = 0; $i < 3; $i++) {
@@ -45,7 +74,12 @@ for ($i = 0; $i < 3; $i++) {
 "#);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "local-0|expression-0|local-1|expression-1|local-2|expression-2|");
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert_eq!(
+        eval_operand_owner_live_blocks(&out.stderr),
+        baseline_live_blocks,
+        "throwing a Mixed Throwable must not leak its box: {}",
+        out.stderr,
+    );
 }
 
 /// Reversing borrowed, temporary and nested eval strings allocates only the returned value.
