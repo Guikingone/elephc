@@ -1861,6 +1861,19 @@ fn build_tar_phar_container(entries: &[(&str, &[u8])]) -> Vec<u8> {
 }
 
 /// Builds a ZIP archive with ordinary store/deflate entries and a central directory.
+/// Computes ZIP's standard reflected CRC32 for test archive payloads.
+fn zip_fixture_crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xffff_ffffu32;
+    for &byte in bytes {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            let mask = 0u32.wrapping_sub(crc & 1);
+            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+        }
+    }
+    !crc
+}
+
 fn build_zip_phar_container(entries: &[(&str, &[u8], bool)]) -> Vec<u8> {
     let mut out = Vec::new();
     let mut central = Vec::new();
@@ -1875,13 +1888,14 @@ fn build_zip_phar_container(entries: &[(&str, &[u8], bool)]) -> Vec<u8> {
             content.to_vec()
         };
         let method = if *deflate { 8u16 } else { 0u16 };
+        let crc = zip_fixture_crc32(content);
         out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
         out.extend_from_slice(&20u16.to_le_bytes());
         out.extend_from_slice(&0u16.to_le_bytes());
         out.extend_from_slice(&method.to_le_bytes());
         out.extend_from_slice(&0u16.to_le_bytes());
         out.extend_from_slice(&0u16.to_le_bytes());
-        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&crc.to_le_bytes());
         out.extend_from_slice(&(stored.len() as u32).to_le_bytes());
         out.extend_from_slice(&(content.len() as u32).to_le_bytes());
         out.extend_from_slice(&(name.len() as u16).to_le_bytes());
@@ -1896,7 +1910,7 @@ fn build_zip_phar_container(entries: &[(&str, &[u8], bool)]) -> Vec<u8> {
         central.extend_from_slice(&method.to_le_bytes());
         central.extend_from_slice(&0u16.to_le_bytes());
         central.extend_from_slice(&0u16.to_le_bytes());
-        central.extend_from_slice(&0u32.to_le_bytes());
+        central.extend_from_slice(&crc.to_le_bytes());
         central.extend_from_slice(&(stored.len() as u32).to_le_bytes());
         central.extend_from_slice(&(content.len() as u32).to_le_bytes());
         central.extend_from_slice(&(name.len() as u16).to_le_bytes());
