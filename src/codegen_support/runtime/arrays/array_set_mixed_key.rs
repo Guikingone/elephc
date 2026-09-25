@@ -53,7 +53,7 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("b __rt_array_set_mixed_key_entry");                    // enter with float-key diagnostics enabled
     emitter.label_global("__rt_array_set_mixed_key_already_diagnosed");
     abi::emit_load_int_immediate(emitter, "x3", 1);
-    emitter.label("__rt_array_set_mixed_key_entry");
+    emitter.label_shared("__rt_array_set_mixed_key_entry");
 
     emitter.instruction("sub sp, sp, #96");                                     // reserve frame for array, key, value, promoted key, temp/merged hash
     emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
