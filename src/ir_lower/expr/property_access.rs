@@ -303,12 +303,41 @@ pub(super) fn property_get_result_type(
     op: Op,
     expr: &Expr,
 ) -> PhpType {
-    if let Some(property_ty) = ctx
+    let slot_ty = slot_property_get_result_type(ctx, object, property, op, expr);
+    let Some(flow_ty) = ctx
         .flow_typed_property_accesses
         .get(&(ctx.loop_storage_scope.clone(), expr.span))
-    {
-        return normalize_value_php_type(property_ty.clone());
+    else {
+        return slot_ty;
+    };
+    let flow_ty = normalize_value_php_type(flow_ty.clone());
+    // A flow fact narrows what the value IS, never how the slot STORES it. The checker records
+    // the property's pre-EIR type, and an untyped array property is normalized to hash storage
+    // after checking: `public $items = [2, 4]` is checked as `array<int>` and stored as a hash.
+    // Reading that hash as a packed list printed `0,10,1` for `2,4,9` and an address for `12`.
+    // A boxed slot narrowed to an OBJECT is what the flow fact exists for (`$this->p instanceof X`
+    // then `$this->p->m()`); a boxed slot narrowed to a container is not, and reading the box as
+    // the array it holds counted `($box->items[0] = $box->items)` as 4 elements instead of 0.
+    let slot_repr = slot_ty.codegen_repr();
+    let flow_repr = flow_ty.codegen_repr();
+    if flow_repr == slot_repr {
+        return flow_ty;
     }
+    match slot_repr {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => slot_ty,
+        PhpType::Mixed | PhpType::Union(_) if !matches!(flow_repr, PhpType::Object(_)) => slot_ty,
+        _ => flow_ty,
+    }
+}
+
+/// Returns the type a property read produces from the receiver's declared slot.
+fn slot_property_get_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+    op: Op,
+    expr: &Expr,
+) -> PhpType {
     if op == Op::NullsafePropGet {
         return PhpType::Mixed;
     }

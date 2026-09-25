@@ -11,8 +11,12 @@ use super::*;
 
 /// Lowers `$array[] = value`.
 pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr, span: Span) {
-    let array_value = ctx.load_local(array, Some(span));
+    // Value first, container second: see `lower_array_assign` for the stale-pointer failure.
     let value = lower_array_reference_or_value(ctx, value);
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
+    let array_value = ctx.load_local(array, Some(span));
     let op = if array_value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Array) {
         Op::ArrayPush
     } else if array_value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Mixed) {

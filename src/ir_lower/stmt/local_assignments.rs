@@ -117,6 +117,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
     // type with `global_alias_type` (already `Mixed`) and stores through the global symbol, so a
     // marked top-level local another body writes via `global $a` keeps exactly the representation
     // it has today.
+    let lowered = detach_copied_mixed_cell(ctx, value, lowered, span);
     let mixed_storage_site = ctx.is_recorded_mixed_storage_site(span, name);
     if mixed_storage_site && !ctx.has_local_slot(name) {
         ctx.declare_local(name, PhpType::Mixed);
@@ -164,6 +165,45 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
 }
 
 /// Returns whether a closure literal captures the local being assigned.
+/// Gives `$copy = $place` its own boxed `Mixed` cell when `$place` holds one.
+///
+/// A PHP assignment copies the value, but a boxed cell was shared by pointer: both names held the
+/// same cell, and the in-place element writes on boxed containers (`mixed_array_append`,
+/// `__rt_mixed_array_set`) mutated it for both. `$old = $this->items; $this->items[] = 'x';` left
+/// `$old` holding the new element, and a `mixed` parameter copied then written did the same. The
+/// clone is a fresh cell over the SAME payload with its refcount raised, so the payload itself is
+/// still shared until a write — which the array runtime then separates like any other shared array.
+fn detach_copied_mixed_cell(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: &Expr,
+    lowered: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let reads_a_place = matches!(
+        value.kind,
+        ExprKind::Variable(_)
+            | ExprKind::PropertyAccess { .. }
+            | ExprKind::StaticPropertyAccess { .. }
+    );
+    if !reads_a_place || lowered.ir_type != IrType::Heap(crate::ir::IrHeapKind::Mixed) {
+        return lowered;
+    }
+    let detached = ctx.emit_value(
+        Op::MixedClone,
+        vec![lowered.value],
+        None,
+        PhpType::Mixed,
+        Op::MixedClone.default_effects(),
+        Some(span),
+    );
+    // A property read hands back its own reference to the SAME cell, so owning it is no evidence
+    // of a private copy; the clone replaces it, and that reference is dropped here.
+    if ctx.value_is_owning_temporary(lowered) {
+        crate::ir_lower::ownership::release_if_owned(ctx, lowered, Some(span));
+    }
+    detached
+}
+
 pub(super) fn closure_captures_local(value: &Expr, name: &str) -> bool {
     matches!(
         &value.kind,

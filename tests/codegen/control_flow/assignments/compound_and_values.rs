@@ -593,3 +593,45 @@ fn test_undefined_var_star_equals() {
     let out = compile_and_run(r#"<?php $w *= 5; echo $w;"#);
     assert_eq!(out, "0");
 }
+
+/// An untyped array property is stored as a hash after EIR normalization, and every read must
+/// use that storage. The checker's flow-recorded `array<int>` for the read overrode it, so an
+/// append read the hash as a packed list (`0,10,1` for `2,4,9`) and a compound assignment printed
+/// an address.
+#[test]
+fn test_untyped_array_property_reads_match_its_hash_storage() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public $items = [2, 4]; }
+$b = new Box();
+$b->items[] = 9;
+echo implode(',', $b->items), "|";
+$c = new Box();
+echo ($c->items[1] *= 3), ":", $c->items[1];
+"#,
+    );
+    assert_eq!(out, "2,4,9|12:12");
+}
+
+/// Copying a boxed `mixed` value into a local copies the value, not the cell: a later element
+/// write through either name must leave the other untouched.
+#[test]
+fn test_copied_mixed_value_is_detached_from_later_element_writes() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public $items = [];
+    public function grow(): array {
+        $old = $this->items;
+        $this->items[] = 'x';
+        return $old;
+    }
+}
+function g(mixed $m): int { $copy = $m; $m[] = 1; return count($copy); }
+function h(mixed $m): int { $copy = $m; $m['k'] = 1; return count($copy); }
+$b = new Box();
+echo count($b->grow()), ':', count($b->items), '|', g([]), h(['a' => 0]);
+"#,
+    );
+    assert_eq!(out, "0:1|01");
+}

@@ -100,8 +100,17 @@ pub(super) fn lower_array_assign(
     value: &Expr,
     span: Span,
 ) {
-    let array_value = ctx.load_local(array, Some(span));
+    // The container is fetched for writing AFTER the key and the value, as PHP does. Loading it
+    // first kept a pointer the right-hand side could invalidate: `$a['x'] = grow($a)` with a
+    // by-reference `grow` that appends reallocates `$a`, and the write then went into the old
+    // block -- the appended entries vanished, and Symfony's recursive
+    // `DefinitionErrorExceptionPass::isErrorForRuntime($id, $visitedIds)` wrote through a freed
+    // hash and crashed every `lint:container` and `cache:clear`.
     let (mut index_value, mut value_value) = lower_write_key_and_value(ctx, index, value);
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
+    let array_value = ctx.load_local(array, Some(span));
     if array_value.ir_type == IrType::Str {
         index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
         value_value = coerce_to_string_at_span(ctx, value_value, Some(value.span));

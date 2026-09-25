@@ -209,11 +209,35 @@ pub(super) fn acquire_borrowed_return_value(
     crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
 }
 
+/// Runs one exit's lowering, then puts back the finally and handler frames it consumed.
+///
+/// An exit inlines the finalizers it crosses by popping their frames, but the protected body
+/// goes on after that exit in its other branches: `try { if ($a) continue; if ($b) break; }
+/// finally { ... }` must run the finalizer on BOTH jumps. With the pop left in place the second
+/// exit found no frame and skipped the `finally` entirely.
+fn with_exit_frames_restored(
+    ctx: &mut LoweringContext<'_, '_>,
+    lower_exit: impl FnOnce(&mut LoweringContext<'_, '_>),
+) {
+    let finally_stack = ctx.finally_stack.clone();
+    let try_handler_stack = ctx.try_handler_stack.clone();
+    lower_exit(ctx);
+    ctx.finally_stack = finally_stack;
+    ctx.try_handler_stack = try_handler_stack;
+}
+
 /// Terminates with a return after running active finally bodies from inner to outer.
 pub(super) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<crate::ir::ValueId>) {
+    with_exit_frames_restored(ctx, |ctx| terminate_return_consuming_frames(ctx, value));
+}
+
+fn terminate_return_consuming_frames(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: Option<crate::ir::ValueId>,
+) {
     if run_innermost_finally(ctx, false) {
         if !ctx.builder.insertion_block_is_terminated() {
-            terminate_return(ctx, value);
+            terminate_return_consuming_frames(ctx, value);
         }
         return;
     }
@@ -230,9 +254,29 @@ pub(super) fn terminate_branch(
     loop_cleanup_count: usize,
     target_loop_index: usize,
 ) {
-    if run_innermost_finally(ctx, false) {
+    with_exit_frames_restored(ctx, |ctx| {
+        terminate_branch_consuming_frames(ctx, target, loop_cleanup_count, target_loop_index)
+    });
+}
+
+fn terminate_branch_consuming_frames(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: BlockId,
+    loop_cleanup_count: usize,
+    target_loop_index: usize,
+) {
+    // Only a `try` the jump actually leaves runs its finalizer. A loop nested INSIDE the
+    // `try` is exited and re-entered without leaving the protected body, so its
+    // `continue`/`break` must not inline the `finally` -- that ran Symfony's
+    // `InlineServiceDefinitionsPass` cleanup (`$this->graph = null`) on the first skipped
+    // definition, and every `lint:container` / `cache:clear` died on `hasNode() on null`.
+    let leaves_innermost_try = ctx
+        .finally_stack
+        .last()
+        .is_some_and(|frame| target_loop_index < frame.loop_depth);
+    if leaves_innermost_try && run_innermost_finally(ctx, false) {
         if !ctx.builder.insertion_block_is_terminated() {
-            terminate_branch(ctx, target, loop_cleanup_count, target_loop_index);
+            terminate_branch_consuming_frames(ctx, target, loop_cleanup_count, target_loop_index);
         }
         return;
     }
@@ -246,9 +290,13 @@ pub(super) fn terminate_branch(
 
 /// Terminates with a throw after running finally bodies that apply to uncaught throws.
 pub(super) fn terminate_throw(ctx: &mut LoweringContext<'_, '_>, value: crate::ir::ValueId) {
+    with_exit_frames_restored(ctx, |ctx| terminate_throw_consuming_frames(ctx, value));
+}
+
+fn terminate_throw_consuming_frames(ctx: &mut LoweringContext<'_, '_>, value: crate::ir::ValueId) {
     if run_innermost_finally(ctx, true) {
         if !ctx.builder.insertion_block_is_terminated() {
-            terminate_throw(ctx, value);
+            terminate_throw_consuming_frames(ctx, value);
         }
         return;
     }
@@ -398,6 +446,7 @@ pub(super) fn push_finally_frame(
         body: body.to_vec(),
         run_on_throw,
         handler_cleanup,
+        loop_depth: ctx.loop_stack.len(),
     });
     depth
 }

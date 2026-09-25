@@ -205,9 +205,16 @@ impl Checker {
         if by_ref_declared.is_empty() {
             return;
         }
+        let element_keys: Vec<String> = by_ref_declared
+            .iter()
+            .map(|(name, _)| element_write_bucket(name))
+            .collect();
         let mut stores: HashMap<&str, Vec<&Expr>> = HashMap::new();
         for (name, _) in &by_ref_declared {
             stores.insert(name, Vec::new());
+        }
+        for key in &element_keys {
+            stores.insert(key.as_str(), Vec::new());
         }
         collect_local_stores(body, &mut stores);
         // No parameter is filtered out up front, including one already declared `mixed`: the
@@ -223,7 +230,19 @@ impl Checker {
                 .flatten()
                 .filter_map(|value| self.stored_value_type(value))
                 .any(|stored| self.store_leaves_declared_representation(&declared, &stored));
-            if widens {
+            // A string-keyed ELEMENT write is a store too: it promotes an indexed array to a hash,
+            // and the promoted hash is what the caller's cell receives. With the declaration still
+            // saying "indexed", the next entry re-promoted a hash as if it were a list and
+            // corrupted it -- Symfony's recursive
+            // `DefinitionErrorExceptionPass::isErrorForRuntime(string $id, array &$visitedIds)`
+            // writing `$visitedIds[$id]`.
+            let promotes_to_hash = matches!(declared.codegen_repr(), PhpType::Array(_))
+                && stores
+                    .get(element_write_bucket(name).as_str())
+                    .into_iter()
+                    .flatten()
+                    .any(|index| index_is_string_key(index, params));
+            if widens || promotes_to_hash {
                 widened.push((scope.to_string(), name.to_string()));
             }
         }
@@ -361,6 +380,13 @@ fn collect_local_stores<'a>(stmts: &'a [Stmt], out: &mut HashMap<&str, Vec<&'a E
 /// Walks one statement and the executable bodies nested inside it.
 fn collect_local_stores_in_stmt<'a>(stmt: &'a Stmt, out: &mut HashMap<&str, Vec<&'a Expr>>) {
     match &stmt.kind {
+        StmtKind::ArrayAssign { array, index, value } => {
+            if let Some(indexes) = out.get_mut(element_write_bucket(array).as_str()) {
+                indexes.push(index);
+            }
+            collect_local_stores_in_expr(index, out);
+            collect_local_stores_in_expr(value, out);
+        }
         StmtKind::Assign { name, value } | StmtKind::TypedAssign { name, value, .. } => {
             if let Some(values) = out.get_mut(name.as_str()) {
                 values.push(value);
@@ -477,11 +503,44 @@ fn collect_local_stores_in_expr<'a>(expr: &'a Expr, out: &mut HashMap<&str, Vec<
                     values.push(value);
                 }
             }
+            if let ExprKind::ArrayAccess { array, index } = &target.kind {
+                if let ExprKind::Variable(name) = &array.kind {
+                    if let Some(indexes) = out.get_mut(element_write_bucket(name).as_str()) {
+                        indexes.push(index);
+                    }
+                }
+            }
             collect_local_stores_in_expr(value, out);
         }
         ExprKind::BinaryOp { left, right, .. } => {
             collect_local_stores_in_expr(left, out);
             collect_local_stores_in_expr(right, out);
+        }
+        // `$v[$k] ?? $v[$k] = f()` keeps its write in the DEFAULT arm, and Symfony writes its
+        // memoized recursion exactly that way.
+        ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
+            collect_local_stores_in_expr(value, out);
+            collect_local_stores_in_expr(default, out);
+        }
+        ExprKind::ArrayAccess { array, index } => {
+            collect_local_stores_in_expr(array, out);
+            collect_local_stores_in_expr(index, out);
+        }
+        ExprKind::ArrayLiteral(items) => {
+            for item in items {
+                collect_local_stores_in_expr(item, out);
+            }
+        }
+        ExprKind::ArrayLiteralAssoc(pairs) => {
+            for (key, value) in pairs {
+                collect_local_stores_in_expr(key, out);
+                collect_local_stores_in_expr(value, out);
+            }
+        }
+        ExprKind::NewObject { args, .. } => {
+            for arg in args {
+                collect_local_stores_in_expr(arg, out);
+            }
         }
         ExprKind::Negate(inner)
         | ExprKind::Not(inner)
@@ -615,6 +674,32 @@ fn widen_signature_param(signature: &mut crate::types::FunctionSig, param: &str)
 ///
 /// `TaggedScalar` is included: a nullable integer carries its tag in a second word rather than in a
 /// box, so it can no more hold an arbitrary value than a bare `int` can.
+/// Names the bucket that collects the INDEX expressions of `$name[...] = …` writes.
+///
+/// Shares the store map with the whole-variable stores; a NUL cannot appear in a PHP variable
+/// name, so the bucket can never collide with a real one.
+fn element_write_bucket(name: &str) -> String {
+    format!("{name}\u{0}[]")
+}
+
+/// Returns whether an element write's key is a string this pass can see without checking the body.
+///
+/// A literal, a concatenation, or a parameter declared `string`. A numeric string literal is an
+/// integer key in PHP (`$a["1"]` writes key 1), so it keeps a list a list and is not counted.
+fn index_is_string_key(index: &Expr, params: &[(String, Option<TypeExpr>, bool)]) -> bool {
+    match &index.kind {
+        ExprKind::StringLiteral(value) => value.parse::<i64>().is_err(),
+        ExprKind::BinaryOp {
+            op: crate::parser::ast::BinOp::Concat,
+            ..
+        } => true,
+        ExprKind::Variable(name) => params
+            .iter()
+            .any(|(param, type_expr, _)| param == name && matches!(type_expr, Some(TypeExpr::Str))),
+        _ => false,
+    }
+}
+
 fn declared_is_raw_scalar(declared: &PhpType) -> bool {
     matches!(
         declared.codegen_repr(),

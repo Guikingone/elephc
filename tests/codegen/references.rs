@@ -895,3 +895,36 @@ fn test_by_ref_closure_capture_initializes_undefined_variable() {
     );
     assert_eq!(out, "ready");
 }
+
+/// A by-reference array parameter the body writes string keys into holds a hash in the CALLER's
+/// cell, and an element assignment whose right-hand side grows that array by reference must
+/// write into the grown array. Both went wrong in Symfony's recursive
+/// `DefinitionErrorExceptionPass::isErrorForRuntime(string $id, array &$visitedIds)`: the next
+/// entry re-promoted the hash as a list, and the write went into the block the call had replaced.
+#[test]
+fn test_by_ref_array_param_promoted_to_hash_survives_recursion_and_growth() {
+    let out = compile_and_run(
+        r#"<?php
+function rec(int $d, array &$v): bool {
+    $v['d' . $d] = true;
+    if ($d > 0) {
+        $v['r' . $d] = rec($d - 1, $v);
+    }
+    return true;
+}
+function grow(array &$a, int $d): int {
+    for ($i = 0; $i < 20; $i++) { $a["k$d-$i"] = $i; }
+    return $d;
+}
+function memo(array &$a): void { $a['y'] ?? $a['y'] = grow($a, 7); }
+$v = [];
+rec(30, $v);
+$a = [];
+$a['x'] = grow($a, 5);
+$c = [];
+memo($c);
+echo count($v), ' ', count($a), ' ', $a['x'], ' ', count($c), ' ', $c['y'];
+"#,
+    );
+    assert_eq!(out, "61 21 5 21 7");
+}

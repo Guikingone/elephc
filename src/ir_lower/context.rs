@@ -60,6 +60,9 @@ pub(crate) struct FinallyFrame {
     pub body: Vec<Stmt>,
     pub run_on_throw: bool,
     pub handler_cleanup: Option<(i64, Span)>,
+    /// Number of surrounding loop targets when the protected body began. A `break`/`continue`
+    /// runs this finalizer only when its target loop lies OUTSIDE the `try`.
+    pub loop_depth: usize,
 }
 
 /// Active `try` handler that must be unlinked when control leaves its protected body.
@@ -3188,6 +3191,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::BoolToStr
                     | Op::ResourceToStr
                     | Op::MixedBox
+                    | Op::MixedClone
                     | Op::ArrayToMixed
                     | Op::HashToMixed
                     | Op::InvokerRefArg

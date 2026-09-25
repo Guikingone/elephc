@@ -1396,3 +1396,47 @@ echo overwritten();
     );
     assert_eq!(out, "9");
 }
+
+/// A `continue`/`break` that stays inside a `try` must not run its `finally`, and every exit
+/// that does leave it must. Each jump used to inline the innermost finalizer whatever loop it
+/// targeted, then drop the frame for the rest of the protected body: Symfony's
+/// `InlineServiceDefinitionsPass` nulled its graph on the first skipped definition, and a later
+/// `break` out of a `try` skipped the finalizer entirely.
+#[test]
+fn test_loop_jumps_run_finally_only_when_they_leave_the_try() {
+    let out = compile_and_run(
+        r#"<?php
+final class P {
+    private ?string $graph = null;
+    public function inside(): void {
+        try {
+            $this->graph = 'g';
+            foreach (['a' => 1, 'b' => 2, 'c' => 3] as $id => $v) {
+                if ($v === 1) { continue; }
+                if ($v === 3) { break; }
+                echo $id, ':', $this->graph ?? 'null', "\n";
+            }
+        } finally {
+            $this->graph = null;
+            echo "fin\n";
+        }
+    }
+    public function outside(): void {
+        foreach ([1, 2, 3] as $v) {
+            try {
+                if ($v === 1) { continue; }
+                if ($v === 3) { break; }
+                echo "o$v\n";
+            } finally {
+                echo "f$v\n";
+            }
+        }
+    }
+}
+$p = new P();
+$p->inside();
+$p->outside();
+"#,
+    );
+    assert_eq!(out, "b:g\nfin\nf1\no2\nf2\nf3\n");
+}
