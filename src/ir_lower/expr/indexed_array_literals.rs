@@ -651,7 +651,7 @@ pub(super) fn array_literal_element_type_for_ir(
 /// `static::` is late-bound and a constant whose value is not statically typeable is unknown;
 /// both answer `None`, which the caller turns into `Mixed` -- the representation that holds
 /// whatever arrives.
-fn scoped_constant_type_for_ir(
+pub(super) fn scoped_constant_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
     receiver: &crate::parser::ast::StaticReceiver,
     name: &str,

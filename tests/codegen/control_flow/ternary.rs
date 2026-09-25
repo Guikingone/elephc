@@ -369,3 +369,27 @@ echo $r[0], "\n", $r[1], "\n", $a[0], "\n";
     );
     assert_eq!(out, "1\n2\n1\n");
 }
+
+/// A ternary over two int class/interface constants merges as `int`. The merge type came from
+/// the syntactic fallback, which answers `string` for every scoped constant, so each arm went
+/// through `i_to_str` and an `int` parameter received 0 (symfony/console's
+/// `$decorated ? OutputInterface::OUTPUT_NORMAL : OutputInterface::OUTPUT_RAW`).
+#[test]
+fn test_ternary_over_int_scoped_constants_stays_int() {
+    let out = compile_and_run(
+        r#"<?php
+interface OI { public const A = 1; public const B = 2; }
+class C { public const A = 1; public const B = 2; }
+function take(int $o): void { echo $o, "\n"; }
+function f(bool $d): void {
+    $x = $d ? OI::A : OI::B;
+    var_dump($x);
+    var_dump($d ? C::A : C::B);
+    take($d ? OI::A : OI::B);
+}
+f(false);
+f(true);
+"#,
+    );
+    assert_eq!(out, "int(2)\nint(2)\n2\nint(1)\nint(1)\n1\n");
+}

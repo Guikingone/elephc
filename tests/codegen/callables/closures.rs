@@ -1953,3 +1953,25 @@ echo relativeParts('/a/b/c', '/a/d').'|'.replacePart(true, 'ab');
     );
     assert_eq!(out, "../b/c|AB");
 }
+
+/// A closure returning a property of an untyped parameter returns the property's value. The
+/// closure signature typed that return syntactically as `int`, so the body converted the string
+/// on its way out and `array_map(fn ($t) => $t->name, $objects)` produced a list of zeros.
+#[test]
+fn test_closure_returning_property_of_untyped_param_keeps_value() {
+    let out = compile_and_run(
+        r#"<?php
+final class Named { public function __construct(public string $name) {} }
+final class Holder { public ?Named $n = null; }
+$f = fn ($t) => $t->name;
+$g = function ($t) { return $t->name; };
+echo $f(new Named('A')), $g(new Named('B')), "\n";
+echo implode(',', array_map(fn ($t) => $t->name, [new Named('C'), new Named('D')])), "\n";
+$h = new Holder();
+$h->n = new Named('E');
+$prop = 'name';
+echo (fn ($m) => $m?->n?->name)($h), (fn ($t) => $t->$prop)(new Named('F')), "\n";
+"#,
+    );
+    assert_eq!(out, "AB\nC,D\nEF\n");
+}

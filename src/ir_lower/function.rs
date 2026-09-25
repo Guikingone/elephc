@@ -2085,6 +2085,18 @@ fn direct_closure_return_expr_type(
                 }
             }
         }
+        // A property this signature cannot type is read at run time and can hold anything.
+        // The syntactic default answers `int`, and the body then converted the value on its way
+        // out: `fn ($t) => $t->name` over an untyped `$t` returned `0` for every string name.
+        return PhpType::Mixed;
+    }
+    if matches!(
+        expr.kind,
+        ExprKind::NullsafePropertyAccess { .. }
+            | ExprKind::DynamicPropertyAccess { .. }
+            | ExprKind::NullsafeDynamicPropertyAccess { .. }
+    ) {
+        return PhpType::Mixed;
     }
     crate::types::checker::infer_expr_type_syntactic(expr)
 }

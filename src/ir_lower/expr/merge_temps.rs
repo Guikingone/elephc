@@ -203,6 +203,17 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         ExprKind::ArrayLiteralAssoc(pairs) => {
             super::assoc_array_literal_type_for_ir(ctx, pairs, expr).codegen_repr()
         }
+        // `C::A` is typed from the constant's value, the way `lower_scoped_constant` lowers it.
+        // The syntactic fallback answers `string` for every scoped constant, so a ternary over two
+        // int constants stored each arm through `i_to_str`: symfony/console's
+        // `$decorated ? OutputInterface::OUTPUT_NORMAL : OutputInterface::OUTPUT_RAW` reached an
+        // `int $options` parameter as 0, and `list --format=json` ran its JSON through the
+        // formatter. An untypeable constant (late-bound `static::`) keeps the boxed Mixed temp.
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            super::scoped_constant_type_for_ir(ctx, receiver, name, 0)
+                .map(|ty| normalize_value_php_type(ty.codegen_repr()))
+                .unwrap_or(PhpType::Mixed)
+        }
         _ => fallback_expr_type(expr),
     }
 }
