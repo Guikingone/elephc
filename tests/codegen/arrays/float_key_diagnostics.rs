@@ -66,6 +66,72 @@ fn test_float_array_key_null_coalesce_assignment_warns_once() {
     assert_eq!(out.stderr.matches("Implicit conversion from float 1.9 to int loses precision").count(), 1, "{}", out.stderr);
 }
 
+/// An error handler may change the source variable, but increment keeps its original key.
+#[test]
+fn test_float_array_key_increment_handler_keeps_original_dimension() {
+    let out = compile_and_run_capture(r#"<?php
+$a = [1 => 10, 2 => 20];
+$k = 1.9;
+set_error_handler(function($level, $message) use (&$k) {
+    echo $level, ':', $message, '|';
+    $k = 2.9;
+});
+$a[$k]++;
+echo $a[1], ':', $a[2];
+"#);
+    assert_eq!(out.stdout, "8192:Implicit conversion from float 1.9 to int loses precision|11:20");
+    assert_eq!(out.stderr, "");
+}
+
+/// Compound assignment also keeps the key read before its diagnostic handler ran.
+#[test]
+fn test_float_array_key_compound_handler_keeps_original_dimension() {
+    let out = compile_and_run_capture(r#"<?php
+$a = [1 => 10, 2 => 20];
+$k = 1.9;
+set_error_handler(function($level, $message) use (&$k) {
+    echo $level, ':', $message, '|';
+    $k = 2.9;
+});
+$a[$k] += 1;
+echo $a[1], ':', $a[2];
+"#);
+    assert_eq!(out.stdout, "8192:Implicit conversion from float 1.9 to int loses precision|11:20");
+    assert_eq!(out.stderr, "");
+}
+
+/// An expression compound assignment returns the updated value at its original key.
+#[test]
+fn test_float_array_key_compound_expression_handler_keeps_original_dimension() {
+    let out = compile_and_run_capture(r#"<?php
+$a = [1 => 10, 2 => 20];
+$k = 1.9;
+set_error_handler(function($level, $message) use (&$k) {
+    echo $level, ':', $message, '|';
+    $k = 2.9;
+});
+echo ($a[$k] += 1), '|', $a[1], ':', $a[2];
+"#);
+    assert_eq!(out.stdout, "8192:Implicit conversion from float 1.9 to int loses precision|11|11:20");
+    assert_eq!(out.stderr, "");
+}
+
+/// An expression increment returns the old value while writing to its original key.
+#[test]
+fn test_float_array_key_increment_expression_handler_keeps_original_dimension() {
+    let out = compile_and_run_capture(r#"<?php
+$a = [1 => 10, 2 => 20];
+$k = 1.9;
+set_error_handler(function($level, $message) use (&$k) {
+    echo $level, ':', $message, '|';
+    $k = 2.9;
+});
+echo $a[$k]++, '|', $a[1], ':', $a[2];
+"#);
+    assert_eq!(out.stdout, "8192:Implicit conversion from float 1.9 to int loses precision|10|11:20");
+    assert_eq!(out.stderr, "");
+}
+
 /// Separate source-level read and write operations each diagnose the same float key.
 #[test]
 fn test_float_array_key_separate_accesses_warn_twice() {

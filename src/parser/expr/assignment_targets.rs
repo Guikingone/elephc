@@ -11,7 +11,10 @@
 use std::collections::HashSet;
 
 use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
-use crate::parser::stmt::{can_replay_assignment_target, lower_postfix_incdec_assignment};
+use crate::parser::stmt::{
+    can_replay_assignment_target, lower_postfix_incdec_assignment,
+    update_index_needs_snapshot,
+};
 use crate::span::Span;
 
 /// Desugars `++$place` / `$place++` into a read-modify-write an expression can carry.
@@ -47,6 +50,7 @@ pub(super) fn desugar_lvalue_incdec(
     // measures the target's parts against.
     let probe = target.clone();
     let target = lowerer.stabilize_non_local_target(target, &probe);
+    let target = lowerer.snapshot_update_dimension(target);
     if !can_replay_assignment_target(&target) {
         return None;
     }
@@ -188,6 +192,27 @@ impl AssignmentExpressionLowerer {
     /// mutate. Returns a replacement expression with temporaries substituted.
     pub(super) fn stabilize_non_local_target(&mut self, target: Expr, rhs: &Expr) -> Expr {
         self.stabilize_assignment_target(target, rhs)
+    }
+
+    /// Captures a variable-rooted array index for both halves of an update.
+    pub(super) fn snapshot_update_dimension(&mut self, target: Expr) -> Expr {
+        let span = target.span;
+        match target.kind {
+            ExprKind::ArrayAccess { array, index }
+                if matches!(&array.kind, ExprKind::Variable(_)) =>
+            {
+                let index = if update_index_needs_snapshot(&index) {
+                    self.bind_temp(*index)
+                } else {
+                    *index
+                };
+                Expr::new(ExprKind::ArrayAccess {
+                    array,
+                    index: Box::new(index),
+                }, span)
+            }
+            kind => Expr::new(kind, span),
+        }
     }
 
     /// Binds a value expression for use in an assignment context. If the value

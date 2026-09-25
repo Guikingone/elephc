@@ -78,7 +78,9 @@ their undefined-key warning.
 Compound hash updates carry the same diagnosed-key marker from the read half
 to `HashSet`. Increment and decrement expressions capture the old element once,
 then calculate and write the new value, so one source operation reports one
-float-key diagnostic.
+float-key diagnostic. These updates also capture a mutable dimension after
+eager right-hand-side evaluation and before the read, so an error handler
+cannot redirect the write by changing the source index variable.
 
 String indexing returns a null sentinel for a missing offset when lowered for
 `isset()`, `empty()`, or `??`, allowing null coalescing to select its fallback
