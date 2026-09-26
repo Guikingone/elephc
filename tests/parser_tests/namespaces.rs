@@ -130,3 +130,19 @@ fn test_fully_qualified_predefined_constant_span_starts_at_the_backslash() {
     // `<?php echo ` is eleven columns, so the `\` is at column 12.
     assert_eq!((expr.span.line, expr.span.col), (1, 12));
 }
+
+/// Verifies a reserved word parses as a segment of a qualified namespace name (#826, #840),
+/// while a lone keyword is still refused as a namespace name.
+#[test]
+fn test_reserved_word_namespace_segments_parse() {
+    for source in [
+        "<?php namespace Demo\\Namespace;",
+        "<?php namespace Vendor\\Default\\Theme;",
+        "<?php use Vendor\\Default\\Theme\\Example;",
+        "<?php new \\Vendor\\List\\Item();",
+    ] {
+        let stmts = parse_source(source);
+        assert!(!stmts.is_empty(), "{source}: expected a statement");
+    }
+    assert!(parse_fails("<?php namespace Namespace;"));
+}
