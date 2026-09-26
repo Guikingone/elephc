@@ -424,10 +424,11 @@ fn test_include_variant_returning_its_parameter_keeps_the_call_site_type() {
 /// An included file whose one line runs past column 65535 must compile (#1292).
 ///
 /// Included spans pack their source identity into the end column's high bits, which left 16 bits
-/// for the column, and a wider column aborted the compiler. The file is included TWICE on
-/// purpose: equal coordinates in the two copies are exactly what the identity keeps apart, so a
-/// fallback that dropped it would bring back the collision the packing exists to prevent.
-/// Expected output is the host PHP 8.5.10 output for the same fixture.
+/// for the column, and a wider column aborted the compiler. Including the file twice gives two
+/// source identities past that column, so both copies take the interned encoding. The output
+/// only proves that the program compiles and runs correctly; that the two copies stay distinct
+/// map keys is pinned by the unit tests in `src/span.rs`. Expected output is the host PHP 8.5.10
+/// output for the same fixture.
 #[test]
 fn test_included_line_wider_than_16_bit_columns_compiles() {
     let row = format!(

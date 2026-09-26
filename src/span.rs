@@ -29,7 +29,8 @@ const PACKED_SOURCE_SPAN: u32 = 1 << 31;
 /// Marks a packed `end_col` whose identity and column live in [`INTERNED_SPAN_ENDS`]: the low
 /// bits are an index there. Used when either half is too wide for the inline form below.
 const INTERNED_SOURCE_SPAN: u32 = 1 << 30;
-/// Inline form: the source identity in bits 16..30, the end column in bits 0..16.
+/// Inline form: the source identity in bits 16 to 29 (so at most 16383), the end column in
+/// bits 0 to 15 (at most 65535).
 const SOURCE_ID_MASK: u32 = 0x3fff;
 const PACKED_END_COL_MASK: u32 = 0xffff;
 const INTERNED_INDEX_MASK: u32 = INTERNED_SOURCE_SPAN - 1;
@@ -40,7 +41,11 @@ const INTERNED_INDEX_MASK: u32 = INTERNED_SOURCE_SPAN - 1;
 /// Process-wide rather than per thread, because a span may be read on another thread than the
 /// one that built it. A pair always interns to the same index, so two spans are equal exactly
 /// when their coordinates and source are: spans stay usable as map keys. Nothing is ever
-/// removed; the table holds only distinct wide pairs, which a compile produces few of.
+/// removed. The table grows by one entry (about 24 bytes with its reverse map) per distinct
+/// `(file, column)` pair that does not fit inline, so a long minified line interns roughly one
+/// pair per token past column 65535, and a compile with more than 16383 included files interns
+/// every span position of the files beyond that. Both cost a lock and a hash lookup per span
+/// instead of a bit test, which is slower but no longer aborts.
 static INTERNED_SPAN_ENDS: std::sync::OnceLock<std::sync::RwLock<InternedSpanEnds>> =
     std::sync::OnceLock::new();
 
@@ -104,7 +109,7 @@ impl Span {
             line,
             col,
             end_line: line,
-            end_col: col,
+            end_col: Self::pack_end_column(col, 0),
         }
     }
 
@@ -124,15 +129,18 @@ impl Span {
             line,
             col,
             end_line,
-            end_col,
+            end_col: Self::pack_end_column(end_col, 0),
         }
     }
 
     /// Creates a span extent while preserving the identity attached to its token start.
     pub fn with_end_from(start: Span, end: Span) -> Self {
-        let mut span = Self::with_end(start.line, start.col, end.end_line, end.end_column());
-        span.end_col = Self::pack_end_column(end.end_column(), start.source_id());
-        span
+        Self {
+            line: start.line,
+            col: start.col,
+            end_line: end.end_line,
+            end_col: Self::pack_end_column(end.end_column(), start.source_id()),
+        }
     }
 
     /// Returns a fresh source identity for a separately parsed included file.
@@ -141,7 +149,7 @@ impl Span {
             let id = next.get();
             // An identity past the inline range is interned with its column instead, so the
             // only limit left is the counter itself.
-            next.set(id.checked_add(1).expect("too many included source files in one compile"));
+            next.set(id.checked_add(1).expect("included source identity counter overflowed u32"));
             id
         })
     }
@@ -177,11 +185,14 @@ impl Span {
     ///
     /// Inline when both fit; otherwise the pair is interned. The choice depends only on the pair,
     /// so one pair never has two encodings and span equality stays exact.
+    ///
+    /// A root-source column stays bare unless it reaches bit 31 (a line past 2^31 columns), where
+    /// the bare value would read as a packed one; it is interned with source 0 instead.
     fn pack_end_column(end_col: u32, source_id: u32) -> u32 {
-        if source_id == 0 {
+        if source_id == 0 && end_col & PACKED_SOURCE_SPAN == 0 {
             return end_col;
         }
-        if source_id <= SOURCE_ID_MASK && end_col <= PACKED_END_COL_MASK {
+        if source_id != 0 && source_id <= SOURCE_ID_MASK && end_col <= PACKED_END_COL_MASK {
             return PACKED_SOURCE_SPAN | (source_id << 16) | end_col;
         }
         PACKED_SOURCE_SPAN | INTERNED_SOURCE_SPAN | intern_span_end(source_id, end_col)
@@ -276,12 +287,9 @@ impl Span {
         } else {
             self.source_id()
         };
-        let (end_line, end_col) =
-            if (other.end_line, other.end_column()) > (self.end_line, self.end_column()) {
-                (other.end_line, other.end_column())
-            } else {
-                (self.end_line, self.end_column())
-            };
+        let other_end = (other.end_line, other.end_column());
+        let self_end = (self.end_line, self.end_column());
+        let (end_line, end_col) = if other_end > self_end { other_end } else { self_end };
         Span {
             line,
             col,
@@ -325,6 +333,17 @@ mod tests {
 
         let crossing = Span::with_end_from(Span::new_in_source(1, 65_530, 5), wide);
         assert_eq!((crossing.col, crossing.end_column(), crossing.source_id()), (65_530, 70_000, 5));
+    }
+
+    /// A root column that reaches bit 31 is interned rather than read back as a packed value.
+    #[test]
+    fn root_column_past_31_bits_round_trips() {
+        let huge = Span::new(1, 0xC000_0005);
+        assert_eq!(huge.end_column(), 0xC000_0005);
+        assert_eq!(huge.source_id(), 0);
+        let extent = Span::with_end(1, 1, 1, 0x8000_0000);
+        assert_eq!((extent.end_column(), extent.source_id()), (0x8000_0000, 0));
+        assert_ne!(huge, Span::new_in_source(1, 0xC000_0005, 1));
     }
 
     /// A source identity past the inline 14 bits is interned rather than refused.
