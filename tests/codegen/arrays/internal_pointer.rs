@@ -343,3 +343,33 @@ echo $t;
         out.stderr
     );
 }
+
+/// An entry held by a PHP reference is dereferenced to the reference's boxed Mixed cell, which
+/// must be returned with a retain like any boxed entry: boxing it again nested a Mixed in a
+/// Mixed, so an array reached through `next()` counted 0 and indexed as null. PHP 8.5.10 prints
+/// `array same 1 8`; the heap must stay balanced across the repeated reads.
+#[test]
+fn test_pointer_reads_over_referenced_entries_return_the_value() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$m = ['k' => ($argc > 5 ? 'str' : 42), 'j' => ($argc > 5 ? 1.5 : [7])];
+$r4 = &$m['k'];
+$r5 = &$m['j'];
+for ($i = 0; $i < 20; $i++) {
+    $c = current($m);
+    $n = next($m);
+    $e = end($m);
+    reset($m);
+}
+echo gettype($c), " ", $c === 42 ? "same" : "diff", "|";
+echo gettype($n), " ", $n === [7] ? "same" : "diff", " ", count($n), " ", $n[0] + 1, "|";
+echo $e === $n ? "same" : "diff";
+"#,
+    );
+    assert_eq!(out.stdout, "integer same|array same 1 8|same", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
