@@ -2,7 +2,7 @@
 title: "xml_get_current_column_number() — internals"
 description: "Compiler internals for xml_get_current_column_number(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 951
+  order: 955
 ---
 
 ## `xml_get_current_column_number()` — internals

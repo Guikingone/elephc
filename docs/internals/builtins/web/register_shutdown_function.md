@@ -2,7 +2,7 @@
 title: "register_shutdown_function() — internals"
 description: "Compiler internals for register_shutdown_function(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 918
+  order: 922
 ---
 
 ## `register_shutdown_function()` — internals

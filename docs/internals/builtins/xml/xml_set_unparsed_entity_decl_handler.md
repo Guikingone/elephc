@@ -2,7 +2,7 @@
 title: "xml_set_unparsed_entity_decl_handler() — internals"
 description: "Compiler internals for xml_set_unparsed_entity_decl_handler(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 970
+  order: 974
 ---
 
 ## `xml_set_unparsed_entity_decl_handler()` — internals

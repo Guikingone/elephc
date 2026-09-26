@@ -177,6 +177,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     HashOneShot,
     /// Dispatches `hex2bin(...)`.
     Hex2Bin,
+    /// Dispatches the `sodium_crypto_box_*` sealed-box family.
+    SodiumBox,
     /// Dispatches HTML entity encode/decode builtins.
     HtmlEntity,
     /// Dispatches `intdiv(...)`.
@@ -466,6 +468,7 @@ impl EvalDirectHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::Hex2Bin => eval_builtin_hex2bin(args, context, scope, values),
+            Self::SodiumBox => eval_builtin_sodium_box(name, args, context, scope, values),
             Self::HtmlEntity => match name {
                 "html_entity_decode" => {
                     eval_builtin_html_entity_decode(args, context, scope, values)

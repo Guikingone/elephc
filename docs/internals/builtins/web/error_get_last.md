@@ -2,7 +2,7 @@
 title: "error_get_last() — internals"
 description: "Compiler internals for error_get_last(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 912
+  order: 916
 ---
 
 ## `error_get_last()` — internals

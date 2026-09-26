@@ -20,6 +20,8 @@ pub mod __elephc_hash_ctx_copy;
 pub mod __elephc_hash_ctx_final;
 pub mod __elephc_hash_ctx_init;
 pub mod __elephc_hash_ctx_update;
+pub mod __elephc_sodium_box;
+pub mod __elephc_sodium_status;
 pub mod addslashes;
 pub mod base64_decode;
 pub mod base64_encode;

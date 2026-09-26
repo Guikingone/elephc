@@ -136,6 +136,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     curl::emit_curl(emitter);
     strings::emit_openssl_methods(emitter);
     strings::emit_openssl_cipher(emitter);
+    strings::emit_sodium_box(emitter);
     strings::emit_digest_to_string(emitter);
     strings::emit_base64_encode(emitter);
     strings::emit_base64_decode(emitter);

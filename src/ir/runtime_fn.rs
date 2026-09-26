@@ -573,6 +573,10 @@ pub enum RuntimeFnId {
     OpensslDecrypt,
     OpensslEncrypt,
     OpensslGetCipherMethods,
+    /// One libsodium-compatible sealed-box operation behind the sodium prelude.
+    SodiumBox,
+    /// The status the last `SodiumBox` call recorded.
+    SodiumStatus,
     Iconv,
     IconvGetEncoding,
     IconvMimeDecode,
@@ -1492,6 +1496,7 @@ impl RuntimeFnId {
             | RuntimeFnId::IconvSubstr
             | RuntimeFnId::Md5
             | RuntimeFnId::Sha1
+            | RuntimeFnId::SodiumBox
             | RuntimeFnId::StreamSocketEnableCrypto => MonitoringPolicy::GenericTiming,
             _ => MonitoringPolicy::Unspecified,
         }
@@ -1594,7 +1599,8 @@ impl RuntimeFnId {
             RuntimeFnId::OpensslCipherIvLength
             | RuntimeFnId::OpensslDecrypt
             | RuntimeFnId::OpensslEncrypt
-            | RuntimeFnId::OpensslGetCipherMethods => {
+            | RuntimeFnId::OpensslGetCipherMethods
+            | RuntimeFnId::SodiumBox => {
                 &[BuiltinRequirement::Bridge("elephc_crypto")]
             }
             RuntimeFnId::Iconv
@@ -2085,6 +2091,12 @@ impl RuntimeFnId {
                 | RuntimeFnId::OpensslDecrypt
                 | RuntimeFnId::OpensslEncrypt
                 | RuntimeFnId::OpensslGetCipherMethods
+                // `file_put_contents()` answers `int|false`, boxed by `__rt_mixed_from_value` from
+                // the helper's byte count: a scalar cell that never aliases the path or the data.
+                | RuntimeFnId::FilePutContents
+                // `__rt_sodium_box` returns the heap buffer it allocated for the bridge output,
+                // on failure too (with length 0), so the string never aliases an argument.
+                | RuntimeFnId::SodiumBox
                 | RuntimeFnId::ParseUrl
                 | RuntimeFnId::PregGrep
                 | RuntimeFnId::PregSplit
@@ -2595,6 +2607,8 @@ impl RuntimeFnId {
             RuntimeFnId::HashInit => "__elephc_hash_ctx_init",
             RuntimeFnId::HashUpdate => "__elephc_hash_ctx_update",
             RuntimeFnId::OpensslCipherIvLength => "openssl_cipher_iv_length",
+            RuntimeFnId::SodiumBox => "__elephc_sodium_box",
+            RuntimeFnId::SodiumStatus => "__elephc_sodium_status",
             RuntimeFnId::OpensslDecrypt => "openssl_decrypt",
             RuntimeFnId::OpensslEncrypt => "openssl_encrypt",
             RuntimeFnId::OpensslGetCipherMethods => "openssl_get_cipher_methods",

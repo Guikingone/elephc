@@ -195,6 +195,47 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         Mixed,
         "Feeds data into an incremental hashing context."
     ),
+    // `ext/sodium` sealed boxes, declared by `sodium_prelude` over `__elephc_sodium_box`.
+    surface!(
+        "sodium_crypto_box_keypair",
+        String,
+        Sodium,
+        PreludeProvided,
+        [],
+        None,
+        Str,
+        "Generates a random X25519 keypair (secret key followed by public key)."
+    ),
+    surface!(
+        "sodium_crypto_box_publickey",
+        String,
+        Sodium,
+        PreludeProvided,
+        [param!("key_pair", Str)],
+        None,
+        Str,
+        "Extracts the public key from a crypto_box keypair."
+    ),
+    surface!(
+        "sodium_crypto_box_seal",
+        String,
+        Sodium,
+        PreludeProvided,
+        [param!("message", Str), param!("public_key", Str)],
+        None,
+        Str,
+        "Encrypts a message anonymously to a public key (sealed box)."
+    ),
+    surface!(
+        "sodium_crypto_box_seal_open",
+        String,
+        Sodium,
+        PreludeProvided,
+        [param!("ciphertext", Str), param!("key_pair", Str)],
+        None,
+        Mixed,
+        "Opens a sealed box with a keypair, returning false when it does not authenticate."
+    ),
     // The `--web` request prelude's error/exception-handler stack and shutdown queue. All six
     // are PHP declarations over the request-local state helpers (`__elephc_error_handler_state`
     // and friends), so they have no `builtin!` binding. The prelude widens PHP's `?callable`

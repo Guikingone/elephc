@@ -2,7 +2,7 @@
 title: "restore_exception_handler()"
 description: "Restores the previous user-defined exception handler."
 sidebar:
-  order: 920
+  order: 924
 ---
 
 ## restore_exception_handler()

@@ -91,6 +91,13 @@ pub(crate) fn reset_dynamic_object_contexts() {
     }
 }
 
+/// Unit tests run a single interpreter context with no registry, so no object has a foreign
+/// owner; the cross-context closure path (`eval_foreign_closure_owner`) then stays inert.
+#[cfg(test)]
+pub(crate) fn dynamic_object_owner_context(_identity: u64) -> Option<*mut ElephcEvalContext> {
+    None
+}
+
 /// Looks up the eval context that owns one dynamic object identity.
 #[cfg(not(test))]
 pub(crate) fn dynamic_object_owner_context(identity: u64) -> Option<*mut ElephcEvalContext> {

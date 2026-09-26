@@ -115,6 +115,11 @@ pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement]
             "openssl_encrypt",
             "openssl_get_cipher_methods",
             "sha1",
+            "__elephc_sodium_box",
+            "sodium_crypto_box_keypair",
+            "sodium_crypto_box_publickey",
+            "sodium_crypto_box_seal",
+            "sodium_crypto_box_seal_open",
         ],
     ) {
         return CRYPTO;

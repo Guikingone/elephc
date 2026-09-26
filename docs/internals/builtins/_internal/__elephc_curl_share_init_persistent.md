@@ -2,7 +2,7 @@
 title: "__elephc_curl_share_init_persistent() — internals"
 description: "Compiler internals for __elephc_curl_share_init_persistent(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1053
+  order: 1057
 ---
 
 ## `__elephc_curl_share_init_persistent()` — internals

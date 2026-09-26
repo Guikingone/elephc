@@ -107,6 +107,12 @@ pub(super) fn lower(
         RuntimeFnId::HashUpdate => Some({
             crate::codegen::lower_inst::builtins::strings::lower_hash_update(ctx, inst)
         }),
+        RuntimeFnId::SodiumBox => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_sodium_box(ctx, inst)
+        }),
+        RuntimeFnId::SodiumStatus => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_sodium_status(ctx, inst)
+        }),
         RuntimeFnId::OpensslCipherIvLength => Some({
             crate::codegen::lower_inst::builtins::openssl::lower_openssl_cipher_iv_length(ctx, inst)
         }),

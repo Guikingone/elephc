@@ -32,8 +32,9 @@ const CURL_SURFACE_LEN: usize = if cfg!(feature = "curl") { 34 } else { 0 };
 ///
 /// Named rather than inlined because it is the number a landing prelude family changes, and a
 /// bare literal in the middle of five assertions gives no clue which of them is the live one.
-/// See the derivation note at its use site.
-const PRELUDE_PROVIDED_NON_CURL: usize = 357;
+/// See the derivation note at its use site. 362 = 357 + `addcslashes` + the four
+/// `sodium_crypto_box_*` wrappers `sodium_prelude` declares.
+const PRELUDE_PROVIDED_NON_CURL: usize = 362;
 
 /// The two curl contracts whose eval route needs caller-addressable storage.
 ///

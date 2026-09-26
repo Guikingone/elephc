@@ -176,6 +176,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     HashOneShot,
     /// Dispatches `hex2bin(...)`.
     Hex2Bin,
+    /// Dispatches the `sodium_crypto_box_*` sealed-box family.
+    SodiumBox,
     /// Dispatches HTML entity encode/decode builtins.
     HtmlEntity,
     /// Dispatches `intdiv(...)`.
@@ -509,6 +511,7 @@ impl EvalValuesHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::Hex2Bin => one_arg(evaluated_args, values, eval_hex2bin_result),
+            Self::SodiumBox => eval_sodium_box_result(name, evaluated_args, context, values),
             Self::HtmlEntity => {
                 // All three accept the optional flags/encoding args; like the static
                 // runtime they are accepted without effect (ENT_QUOTES). `html_entity_decode`

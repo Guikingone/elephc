@@ -319,7 +319,7 @@ fn emit_file_put_contents_maybe_phar_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #-1");                                         // report failure for phar:// when the bridge is unavailable
     emitter.instruction("ret");                                                 // return the failure result
     emitter.label("__rt_fpc_maybe_phar_plain");
-    emitter.instruction("b __rt_file_put_contents");                            // tail-call the ordinary filesystem writer
+    emitter.instruction("b __rt_file_put_contents_flags");                      // tail-call the ordinary filesystem writer, flags still in x5
 }
 
 /// Emits the x86_64 Linux variant of the phar-write runtime routines.
@@ -565,5 +565,5 @@ fn emit_file_put_contents_maybe_phar_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, -1");                                         // report failure for phar:// when the bridge is unavailable
     emitter.instruction("ret");                                                 // return the failure result
     emitter.label("__rt_fpc_maybe_phar_plain_x86");
-    emitter.instruction("jmp __rt_file_put_contents");                          // tail-call the ordinary filesystem writer
+    emitter.instruction("jmp __rt_file_put_contents_flags");                    // tail-call the ordinary filesystem writer, flags still in r8
 }

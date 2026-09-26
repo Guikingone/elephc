@@ -849,6 +849,10 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`rawurlencode()`](./builtins/string/rawurlencode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`rtrim()`](./builtins/string/rtrim.md) | `(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string` | `string` | ✓ | ✓ |
 | [`sha1()`](./builtins/string/sha1.md) | `(string $string, bool $binary = false): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_box_keypair()`](./builtins/string/sodium_crypto_box_keypair.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_box_publickey()`](./builtins/string/sodium_crypto_box_publickey.md) | `(string $key_pair): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_box_seal()`](./builtins/string/sodium_crypto_box_seal.md) | `(string $message, string $public_key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_box_seal_open()`](./builtins/string/sodium_crypto_box_seal_open.md) | `(string $ciphertext, string $key_pair): mixed` | `mixed` | ✓ | ✓ |
 | [`sprintf()`](./builtins/string/sprintf.md) | `(string $format, ...$values): string` | `string` | ✓ | ✓ |
 | [`sscanf()`](./builtins/string/sscanf.md) | `(string $string, string $format, ...$vars): array` | `array` | ✓ | ✓ |
 | [`str_contains()`](./builtins/string/str_contains.md) | `(string $haystack, string $needle): bool` | `bool` | ✓ | ✓ |

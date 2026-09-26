@@ -2,7 +2,7 @@
 title: "get_debug_type()"
 description: "Returns a debug-oriented PHP type or class name."
 sidebar:
-  order: 888
+  order: 892
 ---
 
 ## get_debug_type()

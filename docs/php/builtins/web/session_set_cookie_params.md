@@ -2,7 +2,7 @@
 title: "session_set_cookie_params()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 938
+  order: 942
 ---
 
 ## session_set_cookie_params()

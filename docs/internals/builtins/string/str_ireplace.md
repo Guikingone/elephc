@@ -2,7 +2,7 @@
 title: "str_ireplace() — internals"
 description: "Compiler internals for str_ireplace(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 843
+  order: 847
 ---
 
 ## `str_ireplace()` — internals
@@ -45,13 +45,15 @@ function str_ireplace(string $search, string $replace, string $subject, int $cou
 ## What the type checker enforces
 
 - **Arity**: takes 3–4 arguments (1 optional).
+- **By-reference parameters**: `$count`.
 
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/str_ireplace.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/str_ireplace.rs) (`eval_builtin!`)
 - **Execution**: Magician interpreter adapter.
-- **Adapter reason**: `interpreter-specific-value-semantics`.
+- **Adapter reason**: `by-reference-or-lvalue`.
 - **Dispatch hooks**: `direct`, `values`
+- **By-reference parameters**: `$count`.
 
 ## Cross-references
 

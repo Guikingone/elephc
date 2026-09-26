@@ -2,7 +2,7 @@
 title: "error_reporting()"
 description: "Implemented by the compiler-injected error-handling prelude."
 sidebar:
-  order: 913
+  order: 917
 ---
 
 ## error_reporting()

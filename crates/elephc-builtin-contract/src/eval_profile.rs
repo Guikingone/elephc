@@ -61,6 +61,22 @@ fn eval_signature_override(id: BuiltinId) -> Option<EvalSignatureProfile> {
             ),
         });
     }
+    // php's `$count` is a by-reference output. The AOT backend caps both at three arguments
+    // (`max_args`), so the canonical contract keeps it by value — a by-ref parameter on a
+    // statically pure builtin would break `propagate_args` — while the interpreter, which runs
+    // Symfony's container passes and writes the count back, binds it by reference.
+    if id == BuiltinId::from_canonical_name("str_replace")
+        || id == BuiltinId::from_canonical_name("str_ireplace")
+    {
+        return Some(EvalSignatureProfile {
+            signature: BuiltinSignature {
+                params: STR_REPLACE_PARAMS,
+                variadic: None,
+                required_param_count: None,
+            },
+            override_reason: Some(EvalSignatureOverrideReason::AdditionalByReferenceOutput),
+        });
+    }
     if id == BuiltinId::from_canonical_name("is_callable") {
         return Some(EvalSignatureProfile {
             signature: BuiltinSignature {
@@ -106,6 +122,34 @@ const IMPLODE_PARAMS: &[ParamSpec] = &[
         ty: TypeSpec::Mixed,
         default: None,
         by_ref: false,
+    },
+];
+
+/// `str_replace` / `str_ireplace` with php's by-reference `$count` output.
+const STR_REPLACE_PARAMS: &[ParamSpec] = &[
+    ParamSpec {
+        name: "search",
+        ty: TypeSpec::Str,
+        default: None,
+        by_ref: false,
+    },
+    ParamSpec {
+        name: "replace",
+        ty: TypeSpec::Str,
+        default: None,
+        by_ref: false,
+    },
+    ParamSpec {
+        name: "subject",
+        ty: TypeSpec::Str,
+        default: None,
+        by_ref: false,
+    },
+    ParamSpec {
+        name: "count",
+        ty: TypeSpec::Mixed,
+        default: Some(DefaultSpec::Null),
+        by_ref: true,
     },
 ];
 

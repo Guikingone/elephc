@@ -30,6 +30,7 @@
 mod algos;
 mod cipher;
 mod hmac;
+pub mod sodium;
 
 pub use algos::HashState;
 pub use cipher::{

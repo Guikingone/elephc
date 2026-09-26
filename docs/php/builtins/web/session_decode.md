@@ -2,7 +2,7 @@
 title: "session_decode()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 926
+  order: 930
 ---
 
 ## session_decode()

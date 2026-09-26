@@ -27,11 +27,61 @@ pub(crate) fn lower_file_put_contents(
         publish_dynamic_phar_write_function_pointer(ctx);
         "__rt_file_put_contents_maybe_phar"
     } else {
-        "__rt_file_put_contents"
+        "__rt_file_put_contents_flags"
     };
+    // `$flags` (FILE_APPEND / LOCK_EX); both helpers read it from x5 / r8.
+    let flags = inst.operands.get(2).copied();
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_file_put_contents_arm64(ctx, path, data, helper)?,
-        Arch::X86_64 => lower_file_put_contents_x86_64(ctx, path, data, helper)?,
+        Arch::AArch64 => lower_file_put_contents_arm64(ctx, path, data, flags, helper)?,
+        Arch::X86_64 => lower_file_put_contents_x86_64(ctx, path, data, flags, helper)?,
+    }
+    store_byte_count_or_false(ctx, inst)
+}
+
+/// Stores a `file_put_contents()` result: the helper's byte count, or php's `false` for the
+/// helper's negative failure sentinel when the result is the boxed `int|false`.
+fn store_byte_count_or_false(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let boxed = match inst.result {
+        Some(result) => matches!(
+            ctx.value_php_type(result)?.codegen_repr(),
+            crate::types::PhpType::Mixed
+        ),
+        None => false,
+    };
+    if boxed {
+        let failed = ctx.next_label("file_put_contents_failed");
+        let done = ctx.next_label("file_put_contents_boxed");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x1, x0");                          // the byte count becomes the int payload
+                ctx.emitter.instruction(&format!("tbnz x1, #63, {failed}"));    // a negative sentinel is php's false
+                ctx.emitter.instruction("mov x2, #0");                          // int payloads have no high word
+                ctx.emitter.instruction("mov x0, #0");                          // runtime tag 0 is int
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+                ctx.emitter.instruction(&format!("b {done}"));
+                ctx.emitter.label(&failed);
+                ctx.emitter.instruction("mov x1, #0");                          // false carries no payload
+                ctx.emitter.instruction("mov x2, #0");
+                ctx.emitter.instruction("mov x0, #3");                          // runtime tag 3 is bool
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+                ctx.emitter.label(&done);
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rdi, rax");                        // the byte count becomes the int payload
+                ctx.emitter.instruction("test rdi, rdi");                       // a negative sentinel is php's false
+                ctx.emitter.instruction(&format!("js {failed}"));
+                ctx.emitter.instruction("xor esi, esi");                        // int payloads have no high word
+                ctx.emitter.instruction("xor eax, eax");                        // runtime tag 0 is int
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+                ctx.emitter.instruction(&format!("jmp {done}"));
+                ctx.emitter.label(&failed);
+                ctx.emitter.instruction("xor edi, edi");                        // false carries no payload
+                ctx.emitter.instruction("xor esi, esi");
+                ctx.emitter.instruction("mov eax, 3");                          // runtime tag 3 is bool
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+                ctx.emitter.label(&done);
+            }
+        }
     }
     store_if_result(ctx, inst)
 }
@@ -52,7 +102,7 @@ pub(super) fn lower_literal_phar_file_put_contents(
                 ctx.emitter.instruction("mov rax, -1");                         // unresolved phar write target returns failure
             }
         }
-        return store_if_result(ctx, inst);
+        return store_byte_count_or_false(ctx, inst);
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -80,7 +130,7 @@ pub(super) fn lower_literal_phar_file_put_contents(
             abi::emit_pop_reg(ctx.emitter, "rax");
         }
     }
-    store_if_result(ctx, inst)
+    store_byte_count_or_false(ctx, inst)
 }
 
 /// Lowers the compiler-internal native PHAR compression-control helper.

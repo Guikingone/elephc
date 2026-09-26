@@ -25,6 +25,8 @@ mod interpolation_and_hashes;
 mod misc;
 #[path = "strings/openssl.rs"]
 mod openssl;
+#[path = "strings/sodium.rs"]
+mod sodium;
 #[path = "strings/parse_url.rs"]
 mod parse_url;
 

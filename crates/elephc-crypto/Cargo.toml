@@ -44,3 +44,6 @@ cipher = "0.4"
 ctr = "0.9"
 ghash = "0.5"
 subtle = "2"
+
+# libsodium-compatible sealed boxes (X25519 + XSalsa20-Poly1305) for sodium_crypto_box_*.
+crypto_box = { version = "0.9", default-features = false, features = ["salsa20", "seal", "getrandom"] }

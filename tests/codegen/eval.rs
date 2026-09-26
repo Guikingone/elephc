@@ -33486,3 +33486,31 @@ echo $first, "|", $second;');
     );
     assert_eq!(out, "xy|yx");
 }
+
+/// Verifies interpreted code reaches the sealed-box surface and `SodiumException` even when the
+/// compiled program never names either: Symfony's `SodiumVault` runs this way.
+#[test]
+fn test_eval_sodium_crypto_box_surface_and_exception() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$pair = sodium_crypto_box_keypair();
+$sealed = sodium_crypto_box_seal("v", sodium_crypto_box_publickey($pair));
+echo strlen($pair), ":", strlen($sealed), ":", sodium_crypto_box_seal_open($sealed, $pair), "|";
+var_dump(sodium_crypto_box_seal_open("short", $pair));
+try {
+    sodium_crypto_box_seal("m", "x");
+} catch (SodiumException $e) {
+    echo get_class($e), "|", get_parent_class($e), "|", $e->getMessage(), "\n";
+}
+echo function_exists("sodium_crypto_box_seal") ? "y" : "n";');
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "64:49:v|bool(false)\n",
+            "SodiumException|Exception|sodium_crypto_box_seal(): Argument #2 ($public_key) must be SODIUM_CRYPTO_BOX_PUBLICKEYBYTES bytes long\n",
+            "y",
+        )
+    );
+}

@@ -101,6 +101,25 @@ pub(crate) fn publish_elephc_cipher_function_pointers(emitter: &mut Emitter) {
     }
 }
 
+/// Publishes the sealed-box bridge entry used by `__rt_sodium_box`.
+///
+/// Separate from the hash and cipher publishers so only programs that reach the sodium
+/// prelude reference `elephc_crypto_sodium`.
+pub(crate) fn publish_elephc_sodium_function_pointers(emitter: &mut Emitter) {
+    let extern_sym = emitter.target.extern_symbol("elephc_crypto_sodium");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_extern_symbol_address(emitter, "x9", &extern_sym);
+            abi::emit_symbol_address(emitter, "x10", "_elephc_crypto_sodium_fn");
+            emitter.instruction("str x9, [x10]");                               // publish the elephc-crypto sodium entry into its runtime slot
+        }
+        Arch::X86_64 => {
+            abi::emit_extern_symbol_address(emitter, "r9", &extern_sym);
+            abi::emit_store_reg_to_symbol(emitter, "r9", "_elephc_crypto_sodium_fn", 0); // publish the elephc-crypto sodium entry into its runtime slot
+        }
+    }
+}
+
 /// Emits a catchable `\ValueError` for the unknown-algorithm paths of `hash()`
 /// and `hash_hmac()`.
 ///

@@ -159,19 +159,39 @@ pub(super) fn lower_rewind_x86_64(
     ctx.emitter.label(&after_dispatch_label);
 }
 
+/// Loads `file_put_contents()`'s `$flags` into the integer result register, casting a boxed
+/// value (a flags variable php typed only at run time) to int first.
+fn load_file_put_contents_flags(ctx: &mut FunctionContext<'_>, flags: ValueId) -> Result<()> {
+    ctx.load_value_to_result(flags)?;
+    if matches!(
+        ctx.value_php_type(flags)?.codegen_repr(),
+        crate::types::PhpType::Mixed | crate::types::PhpType::Union(_)
+    ) {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+    }
+    Ok(())
+}
+
 /// Materializes `file_put_contents` arguments for the ARM64 runtime ABI.
 pub(super) fn lower_file_put_contents_arm64(
     ctx: &mut FunctionContext<'_>,
     path: ValueId,
     data: ValueId,
+    flags: Option<ValueId>,
     helper: &str,
 ) -> Result<()> {
+    match flags {
+        Some(flags) => load_file_put_contents_flags(ctx, flags)?,
+        None => abi::emit_load_int_immediate(ctx.emitter, "x0", 0),
+    }
+    abi::emit_push_reg_pair(ctx.emitter, "x0", "xzr");
     load_string_to_result(ctx, path, "file_put_contents filename")?;
     abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
     load_string_to_result(ctx, data, "file_put_contents data")?;
     ctx.emitter.instruction("mov x3, x1");                                      // pass the data pointer in the runtime helper's second string slot
     ctx.emitter.instruction("mov x4, x2");                                      // pass the data length in the runtime helper's second string slot
     abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+    abi::emit_pop_reg_pair(ctx.emitter, "x5", "x9");                            // restore the PHP flags into the helper's flags register
     abi::emit_call_label(ctx.emitter, helper);
     Ok(())
 }
@@ -181,14 +201,21 @@ pub(super) fn lower_file_put_contents_x86_64(
     ctx: &mut FunctionContext<'_>,
     path: ValueId,
     data: ValueId,
+    flags: Option<ValueId>,
     helper: &str,
 ) -> Result<()> {
+    match flags {
+        Some(flags) => load_file_put_contents_flags(ctx, flags)?,
+        None => abi::emit_load_int_immediate(ctx.emitter, "rax", 0),
+    }
+    abi::emit_push_reg_pair(ctx.emitter, "rax", "rax");
     load_string_to_result(ctx, path, "file_put_contents filename")?;
     abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
     load_string_to_result(ctx, data, "file_put_contents data")?;
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the data pointer while the filename remains on the temporary stack
     ctx.emitter.instruction("mov rsi, rdx");                                    // pass the data length while the filename remains on the temporary stack
     abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+    abi::emit_pop_reg_pair(ctx.emitter, "r8", "r9");                            // restore the PHP flags into the helper's flags register
     abi::emit_call_label(ctx.emitter, helper);
     Ok(())
 }

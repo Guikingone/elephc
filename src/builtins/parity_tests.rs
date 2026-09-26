@@ -92,6 +92,9 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
             ),
         ),
         ("web_prelude(wrap)", vec![crate::web_prelude::web_wrap_stmt()]),
+        ("addcslashes_prelude", crate::addcslashes_prelude::declarations()),
+        ("parse_str_prelude", crate::parse_str_prelude::declarations()),
+        ("sodium_prelude", crate::sodium_prelude::declarations(true, true)),
     ];
     // The mysqli prelude is a second bridge surface built as Rust AST like the others; the
     // gate must cover its `__elephc_*` internal-alias discipline too. The shared `elephc_pdo`

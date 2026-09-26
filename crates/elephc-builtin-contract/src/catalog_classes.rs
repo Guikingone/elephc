@@ -216,6 +216,7 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("SessionHandlerInterface", "sessionhandlerinterface", Interface, Session, Prelude),
     class!("SessionIdInterface", "sessionidinterface", Interface, Session, Prelude),
     class!("SessionUpdateTimestampHandlerInterface", "sessionupdatetimestamphandlerinterface", Interface, Session, Prelude),
+    class!("SodiumException", "sodiumexception", Class, Sodium, Prelude),
     class!("SortDirection", "sortdirection", Enum, Core, CheckerInjected, since: Php86),
     class!("SplDoublyLinkedList", "spldoublylinkedlist", Class, Spl, CheckerInjected),
     class!("SplFileInfo", "splfileinfo", Class, Spl, CheckerInjected),

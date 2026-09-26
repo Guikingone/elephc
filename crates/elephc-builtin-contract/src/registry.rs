@@ -160,7 +160,13 @@ mod tests {
         // `set_error_handler`, `set_exception_handler`). It also re-applies its own semantics
         // to entries both catalogs share, so the per-backend splits below differ from main's
         // by more than those 32 names alone.
-        assert_eq!(contracts().len(), 1071 + curl_surface);
+        //
+        //
+        // Since then: `addcslashes`, `gc_mem_caches`, the two `memory_get_*` functions and
+        // `__elephc_diag_suppressed` landed without moving this count, and the sodium surface adds
+        // six (the four `sodium_crypto_box_*` declarations and `__elephc_sodium_box` /
+        // `__elephc_sodium_status`). Two more have no catalog change since 1071 to name them.
+        assert_eq!(contracts().len(), 1084 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

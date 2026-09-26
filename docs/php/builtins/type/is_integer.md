@@ -2,7 +2,7 @@
 title: "is_integer()"
 description: "Alias of is_int()."
 sidebar:
-  order: 899
+  order: 903
 ---
 
 ## is_integer()

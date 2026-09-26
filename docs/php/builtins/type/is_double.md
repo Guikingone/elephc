@@ -2,7 +2,7 @@
 title: "is_double()"
 description: "Alias of is_float()."
 sidebar:
-  order: 896
+  order: 900
 ---
 
 ## is_double()

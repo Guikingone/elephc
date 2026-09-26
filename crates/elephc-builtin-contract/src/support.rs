@@ -184,7 +184,10 @@ pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
 /// it. Each therefore has a real interpreter implementation rather than a forward:
 /// `interpreter::builtins::core::var_export` (Symfony's routing dumper is interpreted and calls
 /// it), `interpreter::builtins::string::levenshtein`, and
-/// `interpreter::builtins::filesystem::file`. Leaving one out is not a quiet loss of coverage —
+/// `interpreter::builtins::filesystem::file`. The four `sodium_crypto_box_*` entries are the
+/// same case: Symfony's `SodiumVault` is interpreted in an eval-heavy build, so
+/// `interpreter::builtins::string::sodium_box` calls `elephc_crypto::sodium` directly.
+/// Leaving one out is not a quiet loss of coverage —
 /// `spec.rs` asserts every binding has an execution route, so the interpreter aborts at startup.
 const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] = &[
     "addcslashes",
@@ -195,6 +198,10 @@ const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] = &[
     "hash_update",
     "levenshtein",
     "parse_str",
+    "sodium_crypto_box_keypair",
+    "sodium_crypto_box_publickey",
+    "sodium_crypto_box_seal",
+    "sodium_crypto_box_seal_open",
     "var_export",
 ];
 
@@ -430,20 +437,26 @@ mod tests {
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         // Sixty-four of these are the `xml_*` / `xmlwriter_*` contracts, which eval binds
         // through forwarding homes (see `eval_support`).
-        assert_eq!(eval_registry, 610 + curl_surface);
+        // These counts had drifted before the sodium surface landed: the catalog grew and eval
+        // homes landed (the thirteen names taken out of `EVAL_IMPLEMENTATION_PENDING`, among
+        // them) without the numbers moving. Only the sodium share is named per count below.
+        // Sodium: the four `sodium_crypto_box_*` eval homes.
+        assert_eq!(eval_registry, 633 + curl_surface);
         // 82 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
-        // image prelude declares for its own use.
-        assert_eq!(eval_internal, 99);
+        // image prelude declares for its own use. Sodium: `__elephc_sodium_box` and
+        // `__elephc_sodium_status`.
+        assert_eq!(eval_internal, 102);
         // Registry builtins awaiting eval homes, plus the PHP-visible prelude-provided and
         // name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 360);
+        assert_eq!(eval_pending, 349);
         // Main's BCMath registry adds fourteen AOT contracts; this branch also
         // promotes get_object_vars from an external surface into the registry and
         // adds the ten iconv contracts, thirty-five PCNTL contracts, forty-three
         // internal `__elephc_curl_*` entry points, and the ten `ext/xml` registry
         // builtins (`xml_parse_into_struct` plus the nine handler setters).
         // Twenty of this branch's 23 added contracts are registry-backed here.
-        assert_eq!(aot_registry, 649);
+        // Sodium: `__elephc_sodium_box` and `__elephc_sodium_status`.
+        assert_eq!(aot_registry, 657);
         // Constructs, dedicated syntax and hash surfaces, the prelude-provided and
         // name-resolver-rewritten contracts (54 of them the xml prelude, seven the `--web`
         // handler stack this branch contracted), and the curl prelude when published.
@@ -453,7 +466,8 @@ mod tests {
         // out-parameter is an ordinary by-reference parameter rather than a by-reference the
         // compiled side has no counterpart for. It is the same contract on the other side of the
         // `aot_unsupported` count below, which drops by the same one.
-        assert_eq!(aot_external, 415 + curl_surface);
+        // Sodium: the four `sodium_crypto_box_*` prelude declarations.
+        assert_eq!(aot_external, 422 + curl_surface);
         // `get_called_class`, `get_class_methods` and `get_class_vars` from main, plus this
         // branch's `register_tick_function` and `unregister_tick_function`.
         assert_eq!(aot_unsupported, 5);
@@ -503,8 +517,11 @@ mod tests {
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         assert_eq!(shared_runtime, 20);
         assert_eq!(hybrid_adapter, 2);
-        assert_eq!(interpreter_adapter, 588 + curl_surface);
-        assert_eq!(unsupported, 459);
+        // Moves in step with `eval_registry` above: every newly bound eval home is an adapter.
+        assert_eq!(interpreter_adapter, 611 + curl_surface);
+        // Drifted with the counts in `every_contract_has_a_backend_support_record`; sodium's
+        // share is its two internal builtins, which eval never exposes.
+        assert_eq!(unsupported, 451);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

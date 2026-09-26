@@ -2,7 +2,7 @@
 title: "get_error_handler()"
 description: "Returns the current user-defined error handler."
 sidebar:
-  order: 914
+  order: 918
 ---
 
 ## get_error_handler()

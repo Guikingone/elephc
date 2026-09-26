@@ -2,7 +2,7 @@
 title: "xmlwriter_write_attribute_ns()"
 description: "Writes a complete namespaced attribute."
 sidebar:
-  order: 1002
+  order: 1006
 ---
 
 ## xmlwriter_write_attribute_ns()
