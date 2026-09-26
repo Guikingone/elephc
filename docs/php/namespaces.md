@@ -46,6 +46,9 @@ Supported forms: `use Foo\Bar;`, `use Foo\Bar as Baz;`, `use function`, `use con
 - A predefined constant can be written fully qualified too, as namespaced code often does to skip
   the namespace lookup: `\PHP_EOL`, `\PHP_INT_MAX`, `\M_PI`, `\STDERR`, `\true`, `\null`. Each
   names the same global constant as its bare spelling
+- A reserved word is an ordinary segment inside a qualified name, as in PHP 8:
+  `namespace Vendor\Default\Theme;`, `use Demo\Namespace\Subject;`, `new \Vendor\List\Item()`.
+  Standing alone it is still the keyword, so `namespace Namespace;` is refused
 - Included files keep their own namespace and imports; an include cannot inherit the caller's namespace scope
 
 ## Case sensitivity
