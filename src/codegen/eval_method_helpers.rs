@@ -345,9 +345,13 @@ fn eval_runtime_backed_instance_method_helper(
     class_name: &str,
     method_name: &str,
 ) -> Option<&'static str> {
+    // `Generator` belongs here too: interpreted code iterating a COMPILED generator --
+    // `foreach ($this->warmers as $w)` over a container `RewindableGenerator` whose
+    // `getIterator()` runs a compiled closure -- drives it by method name, and without a slot
+    // `rewind()` failed as an unknown native method ("unsupported Foreach statement").
     if !matches!(
         class_name.trim_start_matches('\\'),
-        "SplDoublyLinkedList" | "SplStack" | "SplQueue" | "SplFixedArray"
+        "SplDoublyLinkedList" | "SplStack" | "SplQueue" | "SplFixedArray" | "Generator"
     ) {
         return None;
     }
@@ -2357,6 +2361,11 @@ fn emit_aarch64_cast_eval_array_arg(
 ) {
     emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for array unboxing
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the array payload for the native method call
+    // A null reaching an array slot here is a parameter DEFAULT (binding type-checks every
+    // argument the caller passed): `$default = null` in storage adopted from an ancestor's
+    // hidden variadic. Compiled callers pass that default as a null pointer, so this does too.
+    emitter.instruction("cmp x0, #8");                                          // runtime tag 8 means the defaulted argument is null
+    emitter.instruction("b.eq 3f");                                             // pass the null default as a null array pointer
     abi::emit_load_int_immediate(emitter, "x9", expected_tag);
     emitter.instruction("cmp x0, x9");                                          // compare the eval payload tag with the expected array ABI
     if allow_assoc_shape {
@@ -2368,6 +2377,10 @@ fn emit_aarch64_cast_eval_array_arg(
         emit_aarch64_branch_if_not_equal_far(emitter, fail_label);
     }
     emitter.instruction("mov x0, x1");                                          // place the unboxed array pointer in the result register
+    emitter.instruction("b 4f");                                                // skip the null-default materialization
+    emitter.label("3");
+    emitter.instruction("mov x0, #0");                                          // a null default travels as a null array pointer
+    emitter.label("4");
 }
 
 /// Validates and unboxes one ARM64 iterable-typed eval argument for native method dispatch.
@@ -2542,6 +2555,8 @@ fn emit_x86_64_cast_eval_array_arg(
 ) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed eval argument for array unboxing
     emitter.instruction("call __rt_mixed_unbox");                               // expose the array payload for the native method call
+    emitter.instruction("cmp rax, 8");                                          // runtime tag 8 means the defaulted argument is null
+    emitter.instruction("je 3f");                                               // pass the null default as a null array pointer
     abi::emit_load_int_immediate(emitter, "r10", expected_tag);
     emitter.instruction("cmp rax, r10");                                        // compare the eval payload tag with the expected array ABI
     if allow_assoc_shape {
@@ -2553,6 +2568,10 @@ fn emit_x86_64_cast_eval_array_arg(
         emitter.instruction(&format!("jne {}", fail_label));                    // reject array payloads with an incompatible ABI shape
     }
     emitter.instruction("mov rax, rdi");                                        // place the unboxed array pointer in the result register
+    emitter.instruction("jmp 4f");                                              // skip the null-default materialization
+    emitter.label("3");
+    emitter.instruction("xor eax, eax");                                        // a null default travels as a null array pointer
+    emitter.label("4");
 }
 
 /// Validates and unboxes one x86_64 iterable-typed eval argument for native method dispatch.

@@ -88,6 +88,11 @@ pub struct Module {
     pub deferred_class_loads: std::collections::BTreeSet<String>,
     /// Public function names whose implementation is selected during execution.
     pub(crate) runtime_bound_functions: std::sync::Arc<std::collections::HashSet<String>>,
+    /// Lowercase bare names of functions and methods whose by-reference parameter a closure
+    /// binds by reference, so an omitted argument's cell must outlive the call
+    /// (`RefArgCellLifetime::MayOutliveCall`). Matched by name alone: over-matching only costs a
+    /// heap cell where a stack one would have done.
+    pub(crate) ref_param_escaping_callees: std::collections::HashSet<String>,
     /// `--probe` build key, embedded as `_elephc_probe_key` so the probe endpoint
     /// can prove the binary's identity through the HMAC handshake. `None` unless
     /// `--probe` is set.
@@ -151,6 +156,7 @@ impl Module {
             preincluded_sources: Default::default(),
             deferred_class_loads: Default::default(),
             runtime_bound_functions: Default::default(),
+            ref_param_escaping_callees: Default::default(),
             target,
             source_path: None,
             probe_key: None,

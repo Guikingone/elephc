@@ -42,6 +42,10 @@ pub(in crate::interpreter) enum EvalDirectHook {
     ArrayValues,
     /// Dispatches `base_convert(...)`.
     BaseConvert,
+    /// Dispatches the six fixed-base conversions (`dechex`, `hexdec`, ...).
+    BaseDigits,
+    /// Dispatches `setlocale(...)`.
+    Setlocale,
     /// Dispatches the PHP BCMath procedural surface.
     Bcmath,
     /// Dispatches `base64_decode(...)`.
@@ -50,6 +54,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Base64Encode,
     /// Dispatches `bin2hex(...)`.
     Bin2Hex,
+    /// Dispatches `unpack(...)`.
+    Unpack,
     /// Dispatches `chr(...)`.
     Chr,
     /// Dispatches `chunk_split(...)`.
@@ -68,6 +74,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     ParseStr,
     /// Dispatches `levenshtein(...)`.
     Levenshtein,
+    /// Dispatches `addcslashes(...)`.
+    AddCSlashes,
     /// Dispatches `clamp(...)`.
     Clamp,
     /// Dispatches `count(...)`.
@@ -376,10 +384,13 @@ impl EvalDirectHook {
             Self::Atan => eval_builtin_atan(args, context, scope, values),
             Self::Atan2 => eval_builtin_atan2(args, context, scope, values),
             Self::BaseConvert => eval_builtin_base_convert(args, context, scope, values),
+            Self::BaseDigits => eval_builtin_base_digits(name, args, context, scope, values),
+            Self::Setlocale => eval_builtin_setlocale(args, context, scope, values),
             Self::Bcmath => eval_builtin_bcmath_call(name, args, context, scope, values),
             Self::Base64Decode => eval_builtin_base64_decode(args, context, scope, values),
             Self::Base64Encode => eval_builtin_base64_encode(args, context, scope, values),
             Self::Bin2Hex => eval_builtin_bin2hex(args, context, scope, values),
+            Self::Unpack => eval_builtin_unpack(args, context, scope, values),
             Self::Chr => eval_builtin_chr(args, context, scope, values),
             Self::ChunkSplit => eval_builtin_chunk_split(args, context, scope, values),
             Self::SubstrCompare => eval_builtin_substr_compare(args, context, scope, values),
@@ -389,6 +400,7 @@ impl EvalDirectHook {
             Self::GetDebugType => eval_builtin_get_debug_type(args, context, scope, values),
             Self::ParseStr => eval_builtin_parse_str_direct(args, context, scope, values),
             Self::Levenshtein => eval_builtin_levenshtein(args, context, scope, values),
+            Self::AddCSlashes => eval_builtin_addcslashes(args, context, scope, values),
             Self::Clamp => eval_builtin_clamp(args, context, scope, values),
             Self::Core => eval_builtin_core_call(name, args, context, scope, values),
             Self::Cos => eval_builtin_cos(args, context, scope, values),

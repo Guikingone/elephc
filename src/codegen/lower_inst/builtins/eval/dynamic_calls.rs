@@ -427,6 +427,8 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_new_dynamic_fa
     emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
+    // The mixed factory keeps the cell; a constrained `new static` expects the object pointer.
+    emit_eval_result_as_type(ctx, &inst.result_php_type)?;
     abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     abi::emit_jump(ctx.emitter, &done_label);

@@ -55,6 +55,9 @@ pub(in crate::interpreter) fn eval_array_declared_values_result(
         "key" => super::key::eval_key_declared_values_result(evaluated_args, context, values),
         "range" => super::range::eval_range_declared_values_result(evaluated_args, context, values),
         "array_walk" => super::array_walk::eval_array_walk_declared_values_result(evaluated_args, context, values),
+        "array_walk_recursive" => {
+            super::array_walk_recursive::eval_array_walk_recursive_declared_values_result(evaluated_args, context, values)
+        }
         "array_pop" => super::array_pop::eval_array_pop_declared_values_result(evaluated_args, context, values),
         "array_shift" => super::array_shift::eval_array_shift_declared_values_result(evaluated_args, context, values),
         "array_push" => super::array_push::eval_array_push_declared_values_result(evaluated_args, context, values),

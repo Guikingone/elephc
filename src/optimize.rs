@@ -42,6 +42,7 @@ use fold::*;
 use propagate::*;
 
 pub use reachability::prune_unreachable_declarations;
+pub(crate) use control::expr_has_side_effects;
 
 #[cfg(test)]
 mod tests;

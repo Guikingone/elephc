@@ -107,9 +107,13 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
             "__construct" | "current" | "key" | "getflags" | "setflags"
         ),
         "GlobIterator" => matches!(method_key, "__construct" | "count" | "setflags"),
-        "RecursiveDirectoryIterator" => {
-            matches!(method_key, "__construct" | "haschildren" | "getchildren")
-        }
+        // `getSubPath` has a body in the checker's declaration; leaving it out of this list
+        // left its vtable slot null, and Symfony Finder's `RecursiveDirectoryIterator::current()`
+        // -- every `lint:twig`, `cache:warmup` -- jumped to address 0.
+        "RecursiveDirectoryIterator" => matches!(
+            method_key,
+            "__construct" | "haschildren" | "getchildren" | "getsubpath" | "getsubpathname"
+        ),
         "RecursiveCachingIterator" => matches!(
             method_key,
             "__construct" | "haschildren" | "getchildren" | "__elephcassumerecursiveiterator"

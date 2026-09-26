@@ -58,7 +58,30 @@ pub(super) fn eval_closure_from_callable(
         }
         Err(status) => return Err(status),
     };
-    eval_validate_closure_from_callable_callback(&callable, context, values)?;
+    // With no lexical scope, `fromCallable` was reached through callable dispatch --
+    // `$factory(...$arguments)` with the factory `['Closure', 'fromCallable']`, which is how
+    // Symfony builds its `container.getenv` service from `[service_container, 'getEnv']`. PHP
+    // checks visibility against the frame that made that call, and a compiled frame calling
+    // through a shared callable invoker publishes none: the class scope here is whatever outer
+    // interpreted frame happened to be running (`AbstractRecursivePass` during
+    // `lint:container`), which refused the container's own protected method. The target
+    // object's class stands in for the unknown caller, which errs towards accepting.
+    let stand_in_scope = match &callable {
+        EvaluatedCallable::ObjectMethod {
+            object,
+            native_class: None,
+            ..
+        } if lexical_scope.is_none() => runtime_object_class_name(*object, values).ok(),
+        _ => None,
+    };
+    if let Some(scope) = &stand_in_scope {
+        context.push_class_scope(scope.clone());
+    }
+    let validation = eval_validate_closure_from_callable_callback(&callable, context, values);
+    if stand_in_scope.is_some() {
+        context.pop_class_scope();
+    }
+    validation?;
     let target = eval_closure_object_target_from_callable(callable);
     eval_closure_object_from_target(target, context, values)
 }

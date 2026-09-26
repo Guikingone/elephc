@@ -25,6 +25,9 @@ pub(super) struct MixedMethodCandidate {
     pub(super) class_id: u64,
     pub(super) class_name: String,
     pub(super) target: MethodCallTarget,
+    /// The candidate's declared defaults, one per parameter, for the arguments the call site
+    /// omits (see `omitted_default_is_materializable`).
+    pub(super) defaults: Vec<Option<crate::parser::ast::Expr>>,
 }
 
 /// Outgoing call argument state that must be cleaned up after the call returns.
@@ -69,8 +72,8 @@ pub(super) enum RefArgWritebackKind {
 pub(super) enum RefArgCellLifetime {
     /// The reference cannot outlive the call, so the cell is a caller-stack slot released
     /// with the rest of the by-reference cell block. Every ordinary function and method
-    /// call: a PHP callee has no way to bind a by-reference parameter into storage that
-    /// survives its own frame.
+    /// call whose callee never binds a by-reference parameter into a closure
+    /// (`use (&$param)`, see [`RefArgCellLifetime::for_callee`]).
     CallOnly,
     /// The callee may KEEP the reference. A constructor that promotes a by-reference
     /// parameter (`__construct(public int &$value = 1)`) BORROWS the cell for the whole life
@@ -79,7 +82,28 @@ pub(super) enum RefArgCellLifetime {
     /// cell rather than an owned one — so the cell must be heap storage that outlives this
     /// frame. It is never freed, which is a narrower pre-existing defect (one cell per
     /// constructed object, not one per call) that only the object model can fix.
+    ///
+    /// Also every call to a callee a CLOSURE keeps a by-reference parameter of: `use (&$param)`
+    /// binds the cell for the closure's life, and a closure handed out (a `RewindableGenerator`
+    /// factory, a lazy initializer) runs after the call returned. Those cells leak the same way.
     MayOutliveCall,
+}
+
+impl RefArgCellLifetime {
+    /// The lifetime a call to the function or method named `callee` needs, by the checker's
+    /// escape fact (`Module::ref_param_escaping_callees`, matched on the bare lowercase name).
+    pub(super) fn for_callee(ctx: &FunctionContext<'_>, callee: &str) -> Self {
+        let bare = callee.rsplit_once("::").map_or(callee, |(_, method)| method);
+        if ctx
+            .module
+            .ref_param_escaping_callees
+            .contains(&crate::names::php_symbol_key(bare))
+        {
+            RefArgCellLifetime::MayOutliveCall
+        } else {
+            RefArgCellLifetime::CallOnly
+        }
+    }
 }
 
 /// A caller-side stack cell standing in for a by-reference argument that has NO caller

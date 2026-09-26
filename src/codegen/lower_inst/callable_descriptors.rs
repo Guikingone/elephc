@@ -226,6 +226,23 @@ pub(super) fn emit_instance_method_first_class_callable(
         .get(&method_key)
         .cloned()
         .unwrap_or_else(|| normalized_class.clone());
+    // `$this->m(...)` is late-bound like `$this->m()`: the Closure calls the method the RECEIVER's
+    // class resolves, not the one the creating class declares. Binding the static class's body
+    // skipped every override -- Symfony's `Container::getEnv()` stores `$this->getEnv(...)`, and
+    // on a ContainerBuilder the stored callable ran `Container::getEnv`, never the override that
+    // resolves nested env placeholders, so `lint:container` read a placeholder string as a value.
+    // A private method is the lexical class's own and never overridden, so it keeps the static
+    // binding, as does a method no compiled descendant replaces.
+    let is_private = class_info.method_visibilities.get(&method_key) == Some(&Visibility::Private);
+    if !is_private && method_overridden_below(ctx, &normalized_class, &method_key, &impl_class) {
+        emit_object_receiver_first_class_callable(
+            ctx,
+            receiver,
+            method_name,
+            Some(&normalized_class),
+        )?;
+        return Ok(true);
+    }
     if !class_method_body_exists(ctx, &impl_class, &method_key) {
         return Err(CodegenIrError::unsupported(format!(
             "instance first-class callable '{}' without emitted method body",
@@ -386,8 +403,9 @@ fn mixed_first_class_method_candidates(
         if !class_info.methods.contains_key(&method_key) {
             continue;
         }
-        if interface_filter.is_some_and(|interface_name| {
-            !class_implements_interface(ctx, class_name, interface_name)
+        if interface_filter.is_some_and(|ancestor| {
+            !class_implements_interface(ctx, class_name, ancestor)
+                && !class_is_or_extends(ctx, class_name, ancestor)
         }) {
             continue;
         }
@@ -422,6 +440,40 @@ fn mixed_first_class_method_candidates(
     }
     candidates.sort_by_key(|candidate| candidate.class_id);
     candidates
+}
+
+/// Returns whether `class_name` is `ancestor` or extends it, under PHP's case-insensitive rules.
+fn class_is_or_extends(ctx: &FunctionContext<'_>, class_name: &str, ancestor: &str) -> bool {
+    let wanted = php_symbol_key(ancestor.trim_start_matches('\\'));
+    let mut current = Some(class_name.trim_start_matches('\\'));
+    while let Some(candidate) = current {
+        if php_symbol_key(candidate) == wanted {
+            return true;
+        }
+        current = ctx
+            .module
+            .class_infos
+            .get(candidate)
+            .and_then(|info| info.parent.as_deref());
+    }
+    false
+}
+
+/// Returns whether a compiled descendant of `class_name` runs a different body for `method_key`.
+fn method_overridden_below(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    method_key: &str,
+    impl_class: &str,
+) -> bool {
+    ctx.module.class_infos.iter().any(|(candidate, info)| {
+        candidate.as_str() != class_name
+            && class_is_or_extends(ctx, candidate, class_name)
+            && info
+                .method_impl_classes
+                .get(method_key)
+                .is_some_and(|candidate_impl| candidate_impl != impl_class)
+    })
 }
 
 /// Returns whether the EIR module contains an interface under PHP's case-insensitive rules.

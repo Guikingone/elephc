@@ -172,15 +172,30 @@ fn decl_fn_error_reporting() -> Stmt {
         .param_default("error_level", t_nullable(TypeExpr::Int), e_null())
         .returns(TypeExpr::Int)
         .body(vec![
+            // Inside `@`, php 8 answers the mask narrowed to the fatal levels
+            // (E_ERROR | E_PARSE | E_CORE_ERROR | E_COMPILE_ERROR | E_USER_ERROR |
+            // E_RECOVERABLE_ERROR = 4437), and `__elephc_diag_dispatch` gates display on this
+            // answer: without it `@trigger_error(..., E_USER_DEPRECATED)` printed every Symfony
+            // and Twig deprecation.
+            s_assign("__elephc_er_current", e_call("__elephc_error_reporting_state", vec![])),
             s_if(
-                e_binop(e_var("error_level"), BinOp::StrictEq, e_null()),
+                e_binop(e_call("__elephc_diag_suppressed", vec![]), BinOp::Gt, e_int(0)),
                 vec![
-                    s_return(e_call("__elephc_error_reporting_state", vec![])),
+                    s_assign("__elephc_er_current", e_binop(e_var("__elephc_er_current"), BinOp::BitAnd, e_int(4437))),
                 ],
                 vec![],
                 None,
             ),
-            s_return(e_call("__elephc_error_reporting_state", vec![e_var("error_level"), e_bool(true)])),
+            s_if(
+                e_binop(e_var("error_level"), BinOp::StrictEq, e_null()),
+                vec![
+                    s_return(e_var("__elephc_er_current")),
+                ],
+                vec![],
+                None,
+            ),
+            s_expr(e_call("__elephc_error_reporting_state", vec![e_var("error_level"), e_bool(true)])),
+            s_return(e_var("__elephc_er_current")),
         ])
         .build()
 }

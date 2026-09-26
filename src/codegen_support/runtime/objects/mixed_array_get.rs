@@ -114,6 +114,11 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #1");                                          // an in-bounds string offset has one byte
     emitter.instruction("b __rt_mixed_array_get_string_box");                   // box a detached one-byte string result
     emitter.label("__rt_mixed_array_get_string_empty");
+    // A QUIET read is `isset()`/`??` asking whether the offset exists, and an out-of-range
+    // string offset does not: `isset($mixed[$i])` answered true for every offset, which is how
+    // `PhpDumper::export()` appended `.''` to every path that ends exactly at the target dir.
+    emitter.instruction("ldr x13, [sp, #40]");                                  // reload whether this read reports missing offsets
+    emitter.instruction("cbz x13, __rt_mixed_array_get_null");                  // quiet reads see an absent offset as null
     emitter.instruction("mov x1, x10");                                         // preserve a valid source pointer for the empty string
     emitter.instruction("mov x2, #0");                                          // out-of-bounds string offsets stringify to empty
     emitter.label("__rt_mixed_array_get_string_box");
@@ -485,6 +490,8 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, 1");                                          // an in-bounds string offset has one byte
     emitter.instruction("jmp __rt_mixed_array_get_string_box");                 // box a detached one-byte string result
     emitter.label("__rt_mixed_array_get_string_empty");
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // does this read report missing offsets?
+    emitter.instruction("je __rt_mixed_array_get_null");                        // quiet isset()/?? reads see an absent offset as null
     emitter.instruction("xor esi, esi");                                        // out-of-bounds string offsets stringify to empty
     emitter.label("__rt_mixed_array_get_string_box");
     emitter.instruction("mov rax, 1");                                          // runtime tag 1 identifies a string payload

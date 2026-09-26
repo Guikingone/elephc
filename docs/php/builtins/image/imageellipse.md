@@ -2,7 +2,7 @@
 title: "imageellipse()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 498
+  order: 501
 ---
 
 ## imageellipse()

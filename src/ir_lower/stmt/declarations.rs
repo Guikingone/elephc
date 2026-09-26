@@ -27,14 +27,42 @@ pub(super) fn lower_list_unpack(ctx: &mut LoweringContext<'_, '_>, vars: &[Strin
     let source = lower_expr(ctx, value);
     let item_type = list_unpack_item_type(ctx, source.value);
     let get_op = list_unpack_get_op(source.ir_type);
+    // Boxed `Mixed` sources read through `__rt_mixed_array_get`, which takes an explicit
+    // warn-on-missing flag. Destructuring is an ordinary read, so a short source reports PHP's
+    // undefined-key warning like `$src[$i]` would -- but destructuring NULL is silent in PHP,
+    // every target simply becomes null. `PhpDumper::addServices()` destructures each
+    // `$services[$id]`, null for a synthetic service, and printed "Trying to access array offset
+    // on null" for each. The flag is therefore "the source is not null", decided at run time.
+    let warning_flag = matches!(get_op, Op::RuntimeCall).then(|| {
+        let is_null = ctx.emit_value(
+            Op::IsNull,
+            vec![source.value],
+            None,
+            PhpType::Bool,
+            Op::IsNull.default_effects(),
+            Some(span),
+        );
+        let zero = ctx.emit_value(
+            Op::ConstI64,
+            Vec::new(),
+            Some(Immediate::I64(0)),
+            PhpType::Int,
+            Op::ConstI64.default_effects(),
+            Some(span),
+        );
+        ctx.emit_value(
+            Op::ICmp,
+            vec![is_null.value, zero.value],
+            Some(Immediate::CmpPredicate(crate::ir::CmpPredicate::Eq)),
+            PhpType::Bool,
+            Op::ICmp.default_effects(),
+            Some(span),
+        )
+    });
     for (index, var) in vars.iter().enumerate() {
         let index_value = lower_list_unpack_index(ctx, index, span);
         let mut operands = vec![source.value, index_value.value];
-        // Boxed `Mixed` sources read through `__rt_mixed_array_get`, which takes an
-        // explicit warn-on-missing flag. Destructuring is an ordinary read, so a
-        // short source reports PHP's undefined-key warning like `$src[$i]` would.
-        if matches!(get_op, Op::RuntimeCall) {
-            let warning_flag = crate::ir_lower::expr::emit_bool_literal(ctx, true, Some(span));
+        if let Some(warning_flag) = warning_flag {
             operands.push(warning_flag.value);
         }
         let item = ctx.emit_value(

@@ -162,7 +162,14 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
             is_abstract: false,
             is_final: false,
             is_readonly_class: false,
-            properties: Vec::new(),
+            // PHP tracks a child iterator's path relative to the ROOT iterator; each child is
+            // handed its parent's sub-path plus the entry it descended into.
+            properties: vec![storage_property_with_visibility(
+                "elephcSubPath",
+                Some(TypeExpr::Str),
+                Some(string_expr("")),
+                Visibility::Protected,
+            )],
             methods: recursive_directory_iterator_methods(),
             attributes: Vec::new(),
             constants: filesystem_iterator_constants(),
@@ -594,9 +601,18 @@ fn recursive_directory_iterator_methods() -> Vec<ClassMethod> {
             recursive_directory_get_sub_path_body(),
         ),
         method_with_body(
+            "getSubPathname",
+            Vec::new(),
+            Some(TypeExpr::Str),
+            recursive_directory_get_sub_pathname_body(),
+        ),
+        // PHP 8 declares `getChildren(): RecursiveDirectoryIterator`. The wider `?RecursiveIterator`
+        // made every overriding subclass that spells PHP's own signature -- Symfony Finder's --
+        // fail the override check, so an interpreted Finder iterator could not be declared.
+        method_with_body(
             "getChildren",
             Vec::new(),
-            Some(TypeExpr::Nullable(Box::new(named_type("RecursiveIterator")))),
+            Some(named_type("RecursiveDirectoryIterator")),
             recursive_directory_get_children_body(),
         ),
     ]
@@ -1624,20 +1640,31 @@ fn recursive_directory_has_children_body() -> Vec<Stmt> {
 
 /// Builds RecursiveDirectoryIterator getSubPath() from the current entry and root directory.
 fn recursive_directory_get_sub_path_body() -> Vec<Stmt> {
-    return_body(function_call(
-        "substr",
-        vec![
-            function_call("dirname", vec![file_path_arg_expr()]),
+    return_body(property_access(this_expr(), "elephcSubPath"))
+}
+
+/// Builds RecursiveDirectoryIterator getSubPathname(): the sub-path joined with the entry name.
+fn recursive_directory_get_sub_pathname_body() -> Vec<Stmt> {
+    vec![
+        if_stmt(
             binary_expr(
-                function_call(
-                    "strlen",
-                    vec![property_access(this_expr(), "directory")],
-                ),
-                BinOp::Add,
-                int_expr(1),
+                property_access(this_expr(), "elephcSubPath"),
+                BinOp::StrictEq,
+                string_expr(""),
             ),
-        ],
-    ))
+            return_body(method_call(this_expr(), "getFilename", Vec::new())),
+            None,
+        ),
+        return_stmt(binary_expr(
+            binary_expr(
+                property_access(this_expr(), "elephcSubPath"),
+                BinOp::Concat,
+                string_expr("/"),
+            ),
+            BinOp::Concat,
+            method_call(this_expr(), "getFilename", Vec::new()),
+        )),
+    ]
 }
 
 /// Builds RecursiveDirectoryIterator getChildren().
@@ -1645,13 +1672,33 @@ fn recursive_directory_get_children_body() -> Vec<Stmt> {
     vec![
         if_stmt(
             not_expr(method_call(this_expr(), "hasChildren", Vec::new())),
-            return_body(null_expr()),
+            vec![throw_stmt(new_object_expr(
+                "UnexpectedValueException",
+                vec![binary_expr(
+                    binary_expr(
+                        string_expr("RecursiveDirectoryIterator::__construct("),
+                        BinOp::Concat,
+                        file_path_arg_expr(),
+                    ),
+                    BinOp::Concat,
+                    string_expr("): Failed to open directory: Not a directory"),
+                )],
+            ))],
             None,
         ),
-        return_stmt(new_object_expr(
-            "RecursiveDirectoryIterator",
-            vec![file_path_arg_expr(), filesystem_flags_expr()],
-        )),
+        // `new static`: PHP instantiates the RECEIVER's class, so a subclass's children are
+        // subclass instances -- Symfony Finder checks `$children instanceof self` before handing
+        // them its root path.
+        assign_stmt(
+            "child",
+            new_static_expr(vec![file_path_arg_expr(), filesystem_flags_expr()]),
+        ),
+        property_assign_stmt(
+            var_expr("child"),
+            "elephcSubPath",
+            method_call(this_expr(), "getSubPathname", Vec::new()),
+        ),
+        return_stmt(var_expr("child")),
     ]
 }
 

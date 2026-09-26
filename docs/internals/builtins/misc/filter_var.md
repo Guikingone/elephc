@@ -2,7 +2,7 @@
 title: "filter_var() — internals"
 description: "Compiler internals for filter_var(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 325
+  order: 611
 ---
 
 ## `filter_var()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/filter_var.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/filter_var.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:554](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L554) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:668](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L668) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -9,10 +9,16 @@ sidebar:
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
-| [`error_log()`](./web/error_log.md) | `(string $message, int $message_type = 0, ?string $destination = null, ?string $additional_headers = null): bool` | `bool` | ✓ | — |
+| [`error_clear_last()`](./web/error_clear_last.md) | `(): void` | `void` | ✓ | — |
+| [`error_get_last()`](./web/error_get_last.md) | `(): ?array` | `?array` | ✓ | — |
+| [`error_reporting()`](./web/error_reporting.md) | `(?int $error_level = null): int` | `int` | ✓ | — |
+| [`get_error_handler()`](./web/get_error_handler.md) | `(): mixed` | `mixed` | ✓ | — |
 | [`ini_get()`](./web/ini_get.md) | `(string $option): mixed` | `mixed` | ✓ | — |
 | [`ini_get_all()`](./web/ini_get_all.md) | `(?string $extension = null, bool $details = true): mixed` | `mixed` | ✓ | — |
 | [`ini_set()`](./web/ini_set.md) | `(string $option, mixed $value): mixed` | `mixed` | ✓ | — |
+| [`register_shutdown_function()`](./web/register_shutdown_function.md) | `(callable $callback, ...$args): void` | `void` | ✓ | — |
+| [`restore_error_handler()`](./web/restore_error_handler.md) | `(): bool` | `bool` | ✓ | — |
+| [`restore_exception_handler()`](./web/restore_exception_handler.md) | `(): bool` | `bool` | ✓ | — |
 | [`session_abort()`](./web/session_abort.md) | `(): bool` | `bool` | ✓ | — |
 | [`session_cache_expire()`](./web/session_cache_expire.md) | `(?int $value = null): mixed` | `mixed` | ✓ | — |
 | [`session_cache_limiter()`](./web/session_cache_limiter.md) | `(?string $value = null): mixed` | `mixed` | ✓ | — |
@@ -36,6 +42,8 @@ sidebar:
 | [`session_status()`](./web/session_status.md) | `(): int` | `int` | ✓ | — |
 | [`session_unset()`](./web/session_unset.md) | `(): bool` | `bool` | ✓ | — |
 | [`session_write_close()`](./web/session_write_close.md) | `(): bool` | `bool` | ✓ | — |
+| [`set_error_handler()`](./web/set_error_handler.md) | `(mixed $callback, int $error_levels = E_ALL): mixed` | `mixed` | ✓ | — |
+| [`set_exception_handler()`](./web/set_exception_handler.md) | `(mixed $callback): mixed` | `mixed` | ✓ | — |
 | [`setcookie()`](./web/setcookie.md) | `(mixed $name, mixed $value = '', mixed $expires = 0, mixed $path = '', mixed $domain = '', mixed $secure = false, mixed $httponly = false): mixed` | `mixed` | ✓ | — |
 | [`setrawcookie()`](./web/setrawcookie.md) | `(mixed $name, mixed $value = '', mixed $expires = 0, mixed $path = '', mixed $domain = '', mixed $secure = false, mixed $httponly = false): mixed` | `mixed` | ✓ | — |
 | [`trigger_error()`](./web/trigger_error.md) | `(string $message, int $error_level = E_USER_NOTICE): bool` | `bool` | ✓ | — |

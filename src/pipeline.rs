@@ -617,6 +617,10 @@ pub(crate) fn compile(config: CliConfig) {
         &mut prelude_inventory,
     );
     let ast = crate::assert_prelude::inject_if_used(ast);
+    // `ErrorException` is what a user error handler throws for a warning; Symfony's
+    // `ErrorHandler` does it for every warning it is configured to throw on, from a class the
+    // autoload pass splices in, so the gate has to read the complete program like the rest here.
+    let ast = crate::error_exception_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::array_merge_prelude::inject_if_used(ast, &mut prelude_inventory);
     if prelude_inventory.groups.contains_key("array_merge") {
         forced_groups.insert("array_merge".to_string());

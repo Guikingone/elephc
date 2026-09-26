@@ -45,6 +45,54 @@ pub(super) fn builtin_reflection_class_array_method(
     }
 }
 
+/// Returns a `ReflectionClass` method that builds one reflector per name held in `names_property`.
+///
+/// php hands back fresh reflector objects on every call, keyed by name, so building them here is
+/// the documented behavior rather than a workaround. It also removes a dependency on the object
+/// slot (`__interfaces` / `__traits`) being populated: a reflector built from a RUNTIME class name
+/// goes through the eval bridge's `reflection_owner_layout`, which fills the name arrays and never
+/// the object arrays. Symfony's `AutowirePass::populateAvailableType()` iterates
+/// `getInterfaces()` on exactly such reflectors, got null, and warned for every service.
+pub(super) fn builtin_reflection_class_objects_from_names_method(
+    method_name: &str,
+    names_property: &str,
+    return_type: TypeExpr,
+) -> ClassMethod {
+    use crate::synthetic_class::{e_array, e_new, e_var, s_array_assign, s_assign, s_foreach, s_return};
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(return_type),
+        by_ref_return: false,
+        body: vec![
+            s_assign("__elephc_reflectors", e_array(Vec::new())),
+            s_foreach(
+                reflection_this_property(names_property, dummy_span),
+                None,
+                "__elephc_reflector_name",
+                vec![s_array_assign(
+                    "__elephc_reflectors",
+                    e_var("__elephc_reflector_name"),
+                    e_new("ReflectionClass", vec![e_var("__elephc_reflector_name")]),
+                )],
+            ),
+            s_return(e_var("__elephc_reflectors")),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns a public `ReflectionClass` array method with an optional modifier filter.
 pub(super) fn builtin_reflection_class_filtered_array_method(
     method_name: &str,

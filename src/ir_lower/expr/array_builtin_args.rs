@@ -102,7 +102,7 @@ fn promote_indexed_receiver_for_key_preserving_sort(
     };
     let array_value = ctx.load_local(name, Some(receiver.span));
     let assoc_ty = PhpType::AssocArray {
-        key: Box::new(PhpType::Int),
+        key: Box::new(promoted_hash_key_type(&element)),
         value: Box::new(element.codegen_repr()),
     };
     let hash = ctx.emit_value(
@@ -114,6 +114,19 @@ fn promote_indexed_receiver_for_key_preserving_sort(
         Some(receiver.span),
     );
     ctx.store_mutated_local(name, hash, assoc_ty, Some(receiver.span));
+}
+
+/// Key type for a hash promoted from an `Array(element)` local or place.
+///
+/// A list promotes with `int` keys. A bare `array<mixed>` is a gradual contract rather than a
+/// list -- `array_combine()` hands back a string-keyed hash under it -- so its keys stay `mixed`;
+/// typing them `int` made a later `array_keys()` read each string key's pointer as an integer.
+pub(in crate::ir_lower) fn promoted_hash_key_type(element: &PhpType) -> PhpType {
+    if matches!(element.codegen_repr(), PhpType::Mixed) {
+        PhpType::Mixed
+    } else {
+        PhpType::Int
+    }
 }
 
 /// Lowers builtin call operands, applying builtin-specific preservation where source order matters.
@@ -472,7 +485,7 @@ fn lower_key_sort_args(
     }
 
     let hash_type = PhpType::AssocArray {
-        key: Box::new(PhpType::Int),
+        key: Box::new(promoted_hash_key_type(&value_type)),
         value: value_type,
     };
     let local = ctx.load_local(&name, Some(span));
@@ -658,7 +671,7 @@ fn lower_indexed_array_ref_arg_to_hash(
         return None;
     };
     let assoc_ty = PhpType::AssocArray {
-        key: Box::new(PhpType::Int),
+        key: Box::new(promoted_hash_key_type(&elem_ty)),
         value: elem_ty,
     };
     let array = ctx.load_local(name, Some(arg.span));

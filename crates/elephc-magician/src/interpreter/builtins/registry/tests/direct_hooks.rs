@@ -31,6 +31,7 @@ fn declared_builtin_registry_marks_only_pre_dispatched_adapters_without_direct_h
                 "array_splice",
                 "array_unshift",
                 "array_walk",
+                "array_walk_recursive",
                 "arsort",
                 "asort",
                 "end",

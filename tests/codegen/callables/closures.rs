@@ -1975,3 +1975,46 @@ echo (fn ($m) => $m?->n?->name)($h), (fn ($t) => $t->$prop)(new Named('F')), "\n
     );
     assert_eq!(out, "AB\nC,D\nEF\n");
 }
+
+
+/// A throw inside a first-class callable reaches the compiled `catch`, whatever the callable
+/// names. The descriptor's invoker carries an exception boundary for the interpreter, and it used
+/// to catch for every caller: an AOT `$f()` over `thrower(...)` returned NULL instead.
+#[test]
+fn test_first_class_callable_throw_reaches_compiled_catch() {
+    let out = compile_and_run(
+        r#"<?php
+function thrower(string $n): string { throw new RuntimeException("fn:$n"); }
+class A {
+    public function pub(string $n): string { throw new RuntimeException("pub:$n"); }
+    public static function stat(string $n): string { throw new RuntimeException("stat:$n"); }
+}
+function call(\Closure $f): mixed { return $f('x'); }
+$a = new A();
+foreach ([thrower(...), $a->pub(...), A::stat(...)] as $f) {
+    try { call($f); echo "returned\n"; } catch (RuntimeException $e) { echo $e->getMessage(), "\n"; }
+}
+"#,
+    );
+    assert_eq!(out, "fn:x\npub:x\nstat:x\n");
+}
+
+/// `$this->m(...)` binds the method the RECEIVER's class resolves, like `$this->m()` does. It was
+/// bound to the creating class's body, so a subclass override never ran through the callable.
+#[test]
+fn test_this_method_first_class_callable_is_late_bound() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    private ?\Closure $cb = null;
+    protected function getEnv(string $n): string { return "base:$n"; }
+    public function viaFcc(string $n): string { $this->cb ??= $this->getEnv(...); return ($this->cb)($n); }
+}
+class Child extends Base {
+    protected function getEnv(string $n): string { return 'child(' . parent::getEnv($n) . ')'; }
+}
+echo (new Child())->viaFcc('a'), '|', (new Base())->viaFcc('b');
+"#,
+    );
+    assert_eq!(out, "child(base:a)|base:b");
+}

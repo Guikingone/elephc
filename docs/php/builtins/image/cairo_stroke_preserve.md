@@ -2,7 +2,7 @@
 title: "cairo_stroke_preserve()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 442
+  order: 445
 ---
 
 ## cairo_stroke_preserve()

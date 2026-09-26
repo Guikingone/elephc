@@ -138,6 +138,16 @@ fn eval_target_dependent_constant(name: &str) -> Option<EvalPredefinedConstant> 
         // Platform `fnmatch(3)` flag values; the fnmatch/glob builtins interpret the same bits.
         "FNM_NOESCAPE" => EvalPredefinedConstant::Int(EVAL_FNM_NOESCAPE),
         "FNM_PATHNAME" => EvalPredefinedConstant::Int(EVAL_FNM_PATHNAME),
+        // `setlocale()` categories: the catalog marks them `TargetDependent` because macOS/BSD
+        // libc and glibc number them differently, and nothing resolved them here, so every
+        // `setlocale(LC_NUMERIC, ...)` in an interpreted fragment (Twig's float repr) fataled.
+        "LC_ALL" => EvalPredefinedConstant::Int(EVAL_LC_ALL),
+        "LC_COLLATE" => EvalPredefinedConstant::Int(EVAL_LC_COLLATE),
+        "LC_CTYPE" => EvalPredefinedConstant::Int(EVAL_LC_CTYPE),
+        "LC_MONETARY" => EvalPredefinedConstant::Int(EVAL_LC_MONETARY),
+        "LC_NUMERIC" => EvalPredefinedConstant::Int(EVAL_LC_NUMERIC),
+        "LC_TIME" => EvalPredefinedConstant::Int(EVAL_LC_TIME),
+        "LC_MESSAGES" => EvalPredefinedConstant::Int(EVAL_LC_MESSAGES),
         _ => return None,
     })
 }

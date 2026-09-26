@@ -2,7 +2,7 @@
 title: "headers_sent()"
 description: "Reports whether output has already committed response headers."
 sidebar:
-  order: 329
+  order: 621
 ---
 
 ## headers_sent()
@@ -22,7 +22,7 @@ Reports whether output has already committed response headers.
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/headers_sent.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/headers_sent.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

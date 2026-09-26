@@ -2,7 +2,7 @@
 title: "preg_quote() — internals"
 description: "Compiler internals for preg_quote(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 453
+  order: 831
 ---
 
 ## `preg_quote()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/preg_quote.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/preg_quote.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:554](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L554) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:668](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L668) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

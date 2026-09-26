@@ -365,7 +365,59 @@ pub(super) fn lower_hash_ref_element(
             abi::emit_pop_reg(ctx.emitter, "rax");
         }
     }
+    if matches!(
+        ctx.value_php_type(hash)?.codegen_repr(),
+        PhpType::AssocArray { value, .. } if value.codegen_repr() == PhpType::Mixed
+    ) {
+        emit_box_vivified_hash_ref_cell(ctx);
+    }
     store_if_result(ctx, inst)
+}
+
+/// Makes a freshly vivified reference cell of a MIXED-valued hash hold a boxed null.
+///
+/// A reference cell is `{ value@0, inner_tag@8 }`, and the alias local writes it in the hash's
+/// value representation: for a Mixed-valued hash that is a box pointer at `+0`, leaving the tag
+/// alone. Every existing element of such a hash is already a box (tag 7), but a missing key is
+/// vivified as `(0, tag 0)`, so after `$r = &$h['new']; $r = $obj;` the hash read the box pointer
+/// back as an integer. Symfony's `ContainerBuilder::addObjectResource()` caches every interface
+/// reflector that way, and each cached reflector then answered `getInterfaces()` with garbage.
+/// The cell pointer is in the integer result register on entry and on exit.
+fn emit_box_vivified_hash_ref_cell(ctx: &mut FunctionContext<'_>) {
+    let done = ctx.next_label("hash_ref_mixed_ready");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0, #8]");                           // load the reference cell's inner value-tag
+            ctx.emitter.instruction("cmp x9, #7");                                 // a boxed Mixed element is already in the hash's representation
+            ctx.emitter.instruction(&format!("b.eq {}", done));                    // keep existing boxed elements unchanged
+            abi::emit_push_reg(ctx.emitter, "x0");
+            ctx.emitter.instruction("mov x0, #8");                                 // runtime value-tag 8 = null for the vivified element
+            ctx.emitter.instruction("mov x1, xzr");                                // null carries no payload word
+            ctx.emitter.instruction("mov x2, xzr");                                // null carries no high payload word
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            abi::emit_pop_reg(ctx.emitter, "x9");
+            ctx.emitter.instruction("str x0, [x9]");                               // the cell now owns a boxed null
+            ctx.emitter.instruction("mov x10, #7");                                // runtime value-tag 7 = boxed Mixed
+            ctx.emitter.instruction("str x10, [x9, #8]");                          // record the boxed representation in the cell
+            ctx.emitter.instruction("mov x0, x9");                                 // return the reference cell pointer again
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r10, QWORD PTR [rax + 8]");               // load the reference cell's inner value-tag
+            ctx.emitter.instruction("cmp r10, 7");                                 // a boxed Mixed element is already in the hash's representation
+            ctx.emitter.instruction(&format!("je {}", done));                      // keep existing boxed elements unchanged
+            abi::emit_push_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("mov eax, 8");                                 // runtime value-tag 8 = null for the vivified element
+            ctx.emitter.instruction("xor edi, edi");                               // null carries no payload word
+            ctx.emitter.instruction("xor esi, esi");                               // null carries no high payload word
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            abi::emit_pop_reg(ctx.emitter, "r10");
+            ctx.emitter.instruction("mov QWORD PTR [r10], rax");                   // the cell now owns a boxed null
+            ctx.emitter.instruction("mov QWORD PTR [r10 + 8], 7");                 // record the boxed representation in the cell
+            ctx.emitter.instruction("mov rax, r10");                               // return the reference cell pointer again
+            ctx.emitter.label(&done);
+        }
+    }
 }
 
 /// Binds one associative-array element to an existing managed reference cell.

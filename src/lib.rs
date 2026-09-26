@@ -31,11 +31,14 @@ pub use cli_entry::run as run_cli;
 
 pub mod autoload;
 /// Gradual and associative `array_merge()` compatibility prelude.
+mod addcslashes_prelude;
 pub mod array_merge_prelude;
 /// Default-initial-value `array_reduce()` compatibility prelude.
 pub mod array_reduce_prelude;
 /// Single-argument `assert()` compatibility prelude.
 pub mod assert_prelude;
+/// PHP's builtin `ErrorException`, declared as an AST-built class.
+pub mod error_exception_prelude;
 /// Whole-program PHP symbol usage collection for conditional prelude injection.
 pub(crate) mod append_vivify;
 pub mod ast_usage;

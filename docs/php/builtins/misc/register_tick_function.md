@@ -2,7 +2,7 @@
 title: "register_tick_function()"
 description: "Registers a function to run on each tick."
 sidebar:
-  order: 336
+  order: 675
 ---
 
 ## register_tick_function()

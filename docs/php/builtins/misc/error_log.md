@@ -2,7 +2,7 @@
 title: "error_log()"
 description: "Writes a message to the configured error log destination."
 sidebar:
-  order: 323
+  order: 609
 ---
 
 ## error_log()
@@ -24,7 +24,7 @@ Writes a message to the configured error log destination.
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/error_log.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/error_log.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

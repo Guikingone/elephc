@@ -104,6 +104,21 @@ impl Checker {
                 self.collect_widened_ref_params(&key, &params, &method.body, &mut widened);
             }
         }
+        let escaping = self.propagate_widened_ref_params(program, classes, &mut widened);
+        // Codegen matches a call to its callee by NAME alone (a method call may reach several
+        // implementations), so the escape fact is published as the bare lowercase name.
+        for (scope, _) in &escaping {
+            let name = scope.rsplit_once("::").map_or(scope.as_str(), |(_, method)| method);
+            self.ref_param_escaping_callees.insert(php_symbol_key(name));
+        }
+        if std::env::var_os("ELEPHC_TRACE_REF_WIDEN").is_some() {
+            for (scope, param) in &widened {
+                eprintln!("[ref-widen] {scope} ${param}");
+            }
+            for (scope, param) in &escaping {
+                eprintln!("[ref-escape] {scope} ${param}");
+            }
+        }
         for (scope, param) in widened {
             // EIR lowering looks the callee's own parameter slot up by the body scope key it
             // builds from the DECLARATION, so that entry keeps the exact spelling. The checker's
@@ -116,6 +131,257 @@ impl Checker {
                 .insert((folded_scope_key(&scope), param.clone()));
             self.widened_ref_param_decls.push((scope, param));
         }
+    }
+
+    /// Widens a by-reference parameter that is FORWARDED into a widened by-reference parameter.
+    ///
+    /// The forwarded argument is the caller's own cell, so the callee boxes exactly the storage the
+    /// caller's declaration still calls concrete. `ContainerBuilder::doGet(?array &$inlineServices)`
+    /// hands its cell to `createService(array &$inlineServices)`, which writes string keys and is
+    /// widened; `doGet` kept its array contract and read the box back as the TypeError
+    /// "Value must be of type array, int given" on every `lint:container`. Runs to a fixpoint,
+    /// because a forwarding chain can be any length. A method call resolves by NAME among the
+    /// classes it can reach (the caller's own chain for `$this`/`self`/`parent`/`static`, every
+    /// class otherwise), which errs towards widening -- a boxed cell costs speed, a missed one
+    /// costs a wrong value.
+    fn propagate_widened_ref_params(
+        &self,
+        program: &Program,
+        classes: &[FlattenedClass],
+        widened: &mut Vec<(String, String)>,
+    ) -> std::collections::HashSet<(String, String)> {
+        let mut bodies: Vec<RefBody<'_>> = Vec::new();
+        // By-reference parameters whose DECLARED type is already a boxed cell -- `?array &`,
+        // `mixed &`, a non-int union. They never enter `widened` (their representation is right
+        // as declared), but a body forwarding its own concrete cell into one hands the callee a
+        // raw pointer it reads as a box: `ContainerBuilder::createService(array &$inlineServices)`
+        // recursing into `doGet(?array &$inlineServices)` read the array header's first word as
+        // the type tag -- "Value must be of type array, int given" on every `lint:container`.
+        let mut boxed_by_declaration: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+        let mut note_boxed = |scope: &str, param: &str, type_expr: Option<&TypeExpr>| {
+            let Some(type_expr) = type_expr else {
+                return;
+            };
+            if self
+                .resolve_type_expr(type_expr, Span::dummy())
+                .is_ok_and(|declared| declared.codegen_repr() == PhpType::Mixed)
+            {
+                boxed_by_declaration.insert((scope.to_string(), param.to_string()));
+            }
+        };
+        for stmt in program {
+            let StmtKind::FunctionDecl { name, .. } = &stmt.kind else {
+                continue;
+            };
+            let key = self
+                .canonical_function_name_folded(name)
+                .unwrap_or_else(|| name.clone());
+            let Some(decl) = self.fn_decls.get(&key) else {
+                continue;
+            };
+            for ((param, type_expr), by_ref) in decl
+                .params
+                .iter()
+                .zip(decl.param_types.iter())
+                .zip(decl.ref_params.iter())
+            {
+                if *by_ref {
+                    note_boxed(&key, param, type_expr.as_ref());
+                }
+            }
+            bodies.push(RefBody {
+                scope: key,
+                class: None,
+                params: decl
+                    .params
+                    .iter()
+                    .cloned()
+                    .zip(decl.ref_params.iter().copied())
+                    .collect(),
+                body: std::borrow::Cow::Owned(decl.body.clone()),
+            });
+        }
+        for class in classes {
+            for method in &class.methods {
+                if !method.has_body {
+                    continue;
+                }
+                let scope = format!("{}::{}", class.name, method.name);
+                for (param, type_expr, _, by_ref) in &method.params {
+                    if *by_ref {
+                        note_boxed(&scope, param, type_expr.as_ref());
+                    }
+                }
+                bodies.push(RefBody {
+                    scope,
+                    class: Some(class.name.clone()),
+                    params: method
+                        .params
+                        .iter()
+                        .map(|(name, _, _, by_ref)| (name.clone(), *by_ref))
+                        .collect(),
+                    body: std::borrow::Cow::Borrowed(&method.body),
+                });
+            }
+        }
+        let parents: HashMap<String, String> = classes
+            .iter()
+            .filter_map(|class| {
+                class.extends.as_ref().map(|parent| {
+                    (
+                        php_symbol_key(class.name.trim_start_matches('\\')),
+                        php_symbol_key(parent.trim_start_matches('\\')),
+                    )
+                })
+            })
+            .collect();
+        let chain = |class: &str| -> Vec<String> {
+            let mut out = vec![php_symbol_key(class.trim_start_matches('\\'))];
+            while let Some(parent) = parents.get(out.last().expect("chain starts non-empty")) {
+                if out.contains(parent) {
+                    break;
+                }
+                out.push(parent.clone());
+            }
+            out
+        };
+        let related = |a: &str, b: &str| {
+            chain(a).contains(&php_symbol_key(b.trim_start_matches('\\')))
+                || chain(b).contains(&php_symbol_key(a.trim_start_matches('\\')))
+        };
+        // Whether `body` hands its by-reference `param` to a callee parameter `is_target` names.
+        let forwards_into = |body: &RefBody<'_>,
+                             param: &str,
+                             is_target: &dyn Fn(&(String, String)) -> bool|
+         -> bool {
+            let mut forwards = false;
+            for_each_call(&body.body, &mut |call| {
+                if forwards {
+                    return;
+                }
+                for (position, arg) in call.args.iter().enumerate() {
+                    if !matches!(&arg.kind, ExprKind::Variable(name) if name == param) {
+                        continue;
+                    }
+                    forwards |= bodies.iter().any(|callee| {
+                        let target_matches = match &call.target {
+                            CallTarget::Function(name) => {
+                                callee.class.is_none()
+                                    && self
+                                        .canonical_function_name_folded(name)
+                                        .is_some_and(|key| key == callee.scope)
+                            }
+                            CallTarget::Method {
+                                method,
+                                receiver_class,
+                            } => {
+                                let Some(owner) = callee.class.as_deref() else {
+                                    return false;
+                                };
+                                let method_matches = callee
+                                    .scope
+                                    .rsplit_once("::")
+                                    .is_some_and(|(_, m)| m.eq_ignore_ascii_case(method));
+                                method_matches
+                                    && match (receiver_class, body.class.as_deref()) {
+                                        (Some(ReceiverClass::Own), Some(own)) => {
+                                            related(own, owner)
+                                        }
+                                        (Some(ReceiverClass::Named(named)), _) => {
+                                            related(named, owner)
+                                        }
+                                        _ => true,
+                                    }
+                            }
+                            CallTarget::RefCapture(_) => false,
+                        };
+                        target_matches
+                            && callee.params.get(position).is_some_and(
+                                |(callee_param, callee_by_ref)| {
+                                    *callee_by_ref
+                                        && is_target(&(callee.scope.clone(), callee_param.clone()))
+                                },
+                            )
+                    });
+                }
+            });
+            forwards
+        };
+        // Grows `set` to a fixpoint: every by-reference parameter forwarded into a member joins.
+        let grow = |set: &mut std::collections::HashSet<(String, String)>,
+                    extra_targets: &std::collections::HashSet<(String, String)>|
+         -> Vec<(String, String)> {
+            let mut grown = Vec::new();
+            loop {
+                let mut added = Vec::new();
+                for body in &bodies {
+                    for (param, by_ref) in &body.params {
+                        let key = (body.scope.clone(), param.clone());
+                        if !by_ref || set.contains(&key) {
+                            continue;
+                        }
+                        if forwards_into(body, param, &|target| {
+                            set.contains(target) || extra_targets.contains(target)
+                        }) {
+                            added.push(key);
+                        }
+                    }
+                }
+                if added.is_empty() {
+                    return grown;
+                }
+                for entry in added {
+                    if set.insert(entry.clone()) {
+                        grown.push(entry);
+                    }
+                }
+            }
+        };
+        // By-reference parameters a closure binds with `use (&$param)`. Two facts follow.
+        //
+        // WIDENED: EIR lowering gives a by-reference capture a boxed `Mixed` cell, and the body
+        // reads the parameter through that representation -- while the declaration, and so every
+        // caller, still said `array`. The closure's first string-keyed write stored a box the
+        // caller then read as a raw array ("count(): Argument #1 must be of type
+        // Countable|array, string given").
+        //
+        // ESCAPES: the closure can outlive the call, and the cell with it, so a caller omitting
+        // that argument must give it heap storage rather than a stack temporary.
+        // `ContainerBuilder::doGet($id)` omits `$inlineServices`, forwards it through
+        // `createService` into `doResolveServices`, whose `RewindableGenerator` closure captures
+        // it and runs long after `doGet` returned -- reading freed stack as the container.
+        let mut captured: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+        for body in &bodies {
+            for (param, by_ref) in &body.params {
+                if !by_ref {
+                    continue;
+                }
+                let mut is_captured = false;
+                for_each_call(&body.body, &mut |call| {
+                    if let CallTarget::RefCapture(names) = call.target {
+                        is_captured |= names.iter().any(|name| name == param);
+                    }
+                });
+                if is_captured {
+                    captured.insert((body.scope.clone(), param.clone()));
+                }
+            }
+        }
+
+        let mut widened_set: std::collections::HashSet<(String, String)> =
+            widened.iter().cloned().collect();
+        for entry in &captured {
+            if widened_set.insert(entry.clone()) {
+                widened.push(entry.clone());
+            }
+        }
+        widened.extend(grow(&mut widened_set, &boxed_by_declaration));
+
+        let mut escaping = captured;
+        grow(&mut escaping, &std::collections::HashSet::new());
+        escaping
     }
 
     /// Rewrites every widened by-reference parameter's type in the resolved signatures, once all
@@ -710,4 +976,279 @@ fn declared_is_raw_scalar(declared: &PhpType) -> bool {
             | PhpType::Str
             | PhpType::TaggedScalar
     )
+}
+
+/// One function or method body with its parameters, for the forwarding fixpoint.
+struct RefBody<'a> {
+    scope: String,
+    class: Option<String>,
+    params: Vec<(String, bool)>,
+    body: std::borrow::Cow<'a, [Stmt]>,
+}
+
+/// Whose class a method call's receiver names, when the call says.
+enum ReceiverClass {
+    /// `$this->m()`, `self::m()`, `static::m()`, `parent::m()`: the calling body's own chain.
+    Own,
+    /// `Foo::m()`.
+    Named(String),
+}
+
+/// What a call reaches, as far as this pass can tell from syntax.
+enum CallTarget<'a> {
+    Function(String),
+    Method {
+        method: String,
+        receiver_class: Option<ReceiverClass>,
+    },
+    /// Not a call: a closure literal binding these enclosing variables by reference. Reported
+    /// through the same walk because the escape analysis needs both from one body.
+    RefCapture(&'a [String]),
+}
+
+/// One call site: its target and its positional arguments.
+struct CallSite<'a> {
+    target: CallTarget<'a>,
+    args: &'a [Expr],
+}
+
+/// Visits every call in a body, including calls nested in expressions and in nested statements.
+///
+/// Closure bodies are not entered, for the reason `collect_local_stores` gives.
+fn for_each_call<'a>(stmts: &'a [Stmt], visit: &mut dyn FnMut(CallSite<'a>)) {
+    for stmt in stmts {
+        for_each_call_in_stmt(stmt, visit);
+    }
+}
+
+fn for_each_call_in_stmt<'a>(stmt: &'a Stmt, visit: &mut dyn FnMut(CallSite<'a>)) {
+    match &stmt.kind {
+        StmtKind::Assign { value, .. }
+        | StmtKind::TypedAssign { value, .. }
+        | StmtKind::ExprStmt(value)
+        | StmtKind::Echo(value)
+        | StmtKind::Throw(value)
+        | StmtKind::Return(Some(value))
+        | StmtKind::StaticPropertyAssign { value, .. } => for_each_call_in_expr(value, visit),
+        StmtKind::ArrayAssign { index, value, .. } => {
+            for_each_call_in_expr(index, visit);
+            for_each_call_in_expr(value, visit);
+        }
+        StmtKind::ArrayPush { value, .. } => for_each_call_in_expr(value, visit),
+        StmtKind::PropertyAssign { object, value, .. }
+        | StmtKind::PropertyArrayPush { object, value, .. } => {
+            for_each_call_in_expr(object, visit);
+            for_each_call_in_expr(value, visit);
+        }
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => {
+            for_each_call_in_expr(condition, visit);
+            for_each_call(then_body, visit);
+            for (clause_condition, body) in elseif_clauses {
+                for_each_call_in_expr(clause_condition, visit);
+                for_each_call(body, visit);
+            }
+            if let Some(body) = else_body {
+                for_each_call(body, visit);
+            }
+        }
+        StmtKind::While { condition, body } | StmtKind::DoWhile { body, condition } => {
+            for_each_call_in_expr(condition, visit);
+            for_each_call(body, visit);
+        }
+        StmtKind::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(init) = init {
+                for_each_call_in_stmt(init, visit);
+            }
+            if let Some(condition) = condition {
+                for_each_call_in_expr(condition, visit);
+            }
+            if let Some(update) = update {
+                for_each_call_in_stmt(update, visit);
+            }
+            for_each_call(body, visit);
+        }
+        StmtKind::Foreach { array, body, .. } => {
+            for_each_call_in_expr(array, visit);
+            for_each_call(body, visit);
+        }
+        StmtKind::Switch {
+            subject,
+            cases,
+            default,
+        } => {
+            for_each_call_in_expr(subject, visit);
+            for (values, body) in cases {
+                for value in values {
+                    for_each_call_in_expr(value, visit);
+                }
+                for_each_call(body, visit);
+            }
+            if let Some(body) = default {
+                for_each_call(body, visit);
+            }
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            for_each_call(try_body, visit);
+            for catch in catches {
+                for_each_call(&catch.body, visit);
+            }
+            if let Some(body) = finally_body {
+                for_each_call(body, visit);
+            }
+        }
+        StmtKind::Synthetic(body)
+        | StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. } => for_each_call(body, visit),
+        StmtKind::IfDef {
+            then_body,
+            else_body,
+            ..
+        } => {
+            for_each_call(then_body, visit);
+            if let Some(body) = else_body {
+                for_each_call(body, visit);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn for_each_call_in_expr<'a>(expr: &'a Expr, visit: &mut dyn FnMut(CallSite<'a>)) {
+    use crate::parser::ast::StaticReceiver;
+    match &expr.kind {
+        ExprKind::FunctionCall { name, args } => {
+            visit(CallSite {
+                target: CallTarget::Function(name.as_str().to_string()),
+                args,
+            });
+            for arg in args {
+                for_each_call_in_expr(arg, visit);
+            }
+        }
+        ExprKind::MethodCall {
+            object,
+            method,
+            args,
+        }
+        | ExprKind::NullsafeMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            let receiver_class =
+                matches!(object.kind, ExprKind::This).then_some(ReceiverClass::Own);
+            visit(CallSite {
+                target: CallTarget::Method {
+                    method: method.clone(),
+                    receiver_class,
+                },
+                args,
+            });
+            for_each_call_in_expr(object, visit);
+            for arg in args {
+                for_each_call_in_expr(arg, visit);
+            }
+        }
+        ExprKind::StaticMethodCall {
+            receiver,
+            method,
+            args,
+        } => {
+            let receiver_class = Some(match receiver {
+                StaticReceiver::Named(name) => {
+                    ReceiverClass::Named(name.as_str().trim_start_matches('\\').to_string())
+                }
+                StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent => {
+                    ReceiverClass::Own
+                }
+            });
+            visit(CallSite {
+                target: CallTarget::Method {
+                    method: method.clone(),
+                    receiver_class,
+                },
+                args,
+            });
+            for arg in args {
+                for_each_call_in_expr(arg, visit);
+            }
+        }
+        ExprKind::NewObject { args, .. } => {
+            for arg in args {
+                for_each_call_in_expr(arg, visit);
+            }
+        }
+        ExprKind::Assignment {
+            target,
+            value,
+            prelude,
+            ..
+        } => {
+            for_each_call(prelude, visit);
+            for_each_call_in_expr(target, visit);
+            for_each_call_in_expr(value, visit);
+        }
+        ExprKind::BinaryOp { left, right, .. } => {
+            for_each_call_in_expr(left, visit);
+            for_each_call_in_expr(right, visit);
+        }
+        ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
+            for_each_call_in_expr(value, visit);
+            for_each_call_in_expr(default, visit);
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            for_each_call_in_expr(condition, visit);
+            for_each_call_in_expr(then_expr, visit);
+            for_each_call_in_expr(else_expr, visit);
+        }
+        ExprKind::Negate(inner)
+        | ExprKind::Not(inner)
+        | ExprKind::BitNot(inner)
+        | ExprKind::ErrorSuppress(inner)
+        | ExprKind::Print(inner)
+        | ExprKind::Cast { expr: inner, .. } => for_each_call_in_expr(inner, visit),
+        ExprKind::ArrayAccess { array, index } => {
+            for_each_call_in_expr(array, visit);
+            for_each_call_in_expr(index, visit);
+        }
+        ExprKind::PropertyAccess { object, .. } => for_each_call_in_expr(object, visit),
+        ExprKind::ArrayLiteral(items) => {
+            for item in items {
+                for_each_call_in_expr(item, visit);
+            }
+        }
+        ExprKind::ArrayLiteralAssoc(pairs) => {
+            for (key, value) in pairs {
+                for_each_call_in_expr(key, visit);
+                for_each_call_in_expr(value, visit);
+            }
+        }
+        // The body is not entered (see `for_each_call`), but the capture list belongs to the
+        // enclosing body: `use (&$x)` binds the enclosing `$x`'s cell into the closure.
+        ExprKind::Closure { capture_refs, .. } if !capture_refs.is_empty() => {
+            visit(CallSite {
+                target: CallTarget::RefCapture(capture_refs),
+                args: &[],
+            });
+        }
+        _ => {}
+    }
 }

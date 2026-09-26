@@ -189,6 +189,7 @@ pub(super) fn bind_native_signature_args(
         }
     }
 
+    let mut defaulted = vec![false; bound_args.len()];
     for (position, value) in bound_args.iter_mut().enumerate() {
         if Some(position) == variadic_index {
             continue;
@@ -196,6 +197,7 @@ pub(super) fn bind_native_signature_args(
         if value.is_some() {
             continue;
         }
+        defaulted[position] = true;
         if position < signature.required_param_count() {
             return Err(EvalStatus::RuntimeFatal);
         }
@@ -214,7 +216,13 @@ pub(super) fn bind_native_signature_args(
         .into_iter()
         .collect::<Option<Vec<_>>>()
         .ok_or(EvalStatus::RuntimeFatal)?;
-    apply_native_callable_bound_arg_types(signature, &mut bound_args, context, values)?;
+    apply_native_callable_bound_arg_types_except(
+        signature,
+        &mut bound_args,
+        &defaulted,
+        context,
+        values,
+    )?;
     copy_native_call_user_func_by_value_ref_args(
         signature,
         &mut bound_args,
@@ -231,7 +239,27 @@ pub(super) fn apply_native_callable_bound_arg_types(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    apply_native_callable_bound_arg_types_except(signature, bound_args, &[], context, values)
+}
+
+/// [`apply_native_callable_bound_arg_types`], leaving the positions `defaulted` marks alone.
+///
+/// A default is the callee's own value, never the caller's argument, so php does not type-check
+/// it -- `= null` even makes a declared type implicitly nullable. Coercing it anyway refused
+/// Twig's `SupportDefinedTestDeprecationTrait::getAttribute($name, $default = null)`, whose
+/// `$default` slot is array-typed storage adopted from the ancestor's hidden variadic: every
+/// interpreted `$node->getAttribute('name')` on a compiled name expression died in binding.
+pub(super) fn apply_native_callable_bound_arg_types_except(
+    signature: &NativeCallableSignature,
+    bound_args: &mut [BoundMethodArg],
+    defaulted: &[bool],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
     for (position, bound_arg) in bound_args.iter_mut().enumerate() {
+        if defaulted.get(position).copied().unwrap_or(false) {
+            continue;
+        }
         let Some(param_type) = signature.param_type(position) else {
             continue;
         };

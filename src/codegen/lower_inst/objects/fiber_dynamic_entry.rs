@@ -95,7 +95,12 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new(
         CodegenIrError::invalid_module("dynamic_object_new missing class operand")
     })?;
     let candidates = dynamic_new_candidates(ctx, &required_parent, constructor_args.len(), inst)?;
-    if candidates.is_empty() {
+    // An interpreted subclass has no AOT case (and usually no compiled class id): `new static`
+    // inside an inherited builtin method must still build it, so the class-string is kept for
+    // the eval bridge instead of dying on the factory fatal.
+    let eval_bridge_available = builtins::has_eval_context(ctx)
+        || ctx.module.required_runtime_features.eval_bridge;
+    if candidates.is_empty() && !eval_bridge_available {
         return Err(CodegenIrError::unsupported(format!(
             "dynamic object construction for {} without EIR-lowered candidates",
             required_parent
@@ -104,7 +109,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new(
     let result = inst
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("dynamic_object_new missing result value"))?;
-    emit_dynamic_new_class_lookup(ctx, class_name_value, &required_parent)?;
+    emit_dynamic_new_class_lookup(ctx, class_name_value, &required_parent, eval_bridge_available)?;
     let invalid_label = ctx.next_label("dynamic_new_invalid");
     let unmatched_label = ctx.next_label("dynamic_new_unmatched");
     let done_label = ctx.next_label("dynamic_new_done");
@@ -122,14 +127,28 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new(
 
     ctx.emitter.label(&unmatched_label);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
-    emit_dynamic_new_fatal(ctx, &required_parent);
+    if eval_bridge_available {
+        abi::emit_jump(ctx.emitter, &invalid_label);
+    } else {
+        emit_dynamic_new_fatal(ctx, &required_parent);
+    }
 
     ctx.emitter.label(&invalid_label);
+    if eval_bridge_available {
+        let eval_miss_label = ctx.next_label("dynamic_new_eval_miss");
+        builtins::lower_eval_object_new_dynamic_fallback(ctx, inst, &eval_miss_label)?;
+        ctx.store_result_value(result)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&eval_miss_label);
+    }
     emit_dynamic_new_fatal(ctx, &required_parent);
 
     for (candidate, label) in candidates.iter().zip(case_labels.iter()) {
         ctx.emitter.label(label);
         abi::emit_release_temporary_stack(ctx.emitter, 16);
+        if eval_bridge_available {
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+        }
         emit_dynamic_new_candidate(ctx, candidate, constructor_args, result, inst.span.map_or(0, |span| span.line))?;
         abi::emit_jump(ctx.emitter, &done_label);
     }

@@ -140,6 +140,21 @@ pub(super) fn lower_static_method_call(
     let operands = lower_args_with_signature(ctx, sig.as_ref(), call_args);
     let operands =
         coerce_int_backed_enum_string_argument(ctx, receiver, dispatch_method, operands, expr);
+    // `parent::__construct(...)` enters a constructor exactly like `new` does, so it carries the
+    // same source-arity marker an introspecting optional-parameter constructor reads back.
+    // Without it `func_num_args()` read the hidden tail at index -1: Symfony's
+    // `UninitializedStub` calls `parent::__construct($name, 'Uninitialized property')` into
+    // `ConstStub`, which warned "Undefined array key -1" and kept the wrong value -- and under
+    // `--web` the error handler turned that warning into the 404 page's fatal.
+    if php_symbol_key(dispatch_method) == "__construct" {
+        super::object_construction::append_optional_constructor_argc_marker(
+            ctx,
+            sig.as_ref(),
+            call_args,
+            &operands,
+            expr,
+        );
+    }
     let name = format!("{}::{}", receiver_name(receiver), dispatch_method);
     let data = ctx.intern_string(&name);
     let result_type = sig

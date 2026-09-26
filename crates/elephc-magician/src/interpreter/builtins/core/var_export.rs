@@ -250,7 +250,7 @@ fn eval_var_export_append_escaped(bytes: &[u8], output: &mut Vec<u8>) {
 /// round-trip digits, then php's own placement -- scientific when the decimal point would sit
 /// before position -3 or past position 17, and a trailing `.0` whenever the decimal form would
 /// otherwise look like an integer.
-fn eval_var_export_float(value: f64) -> String {
+pub(super) fn eval_var_export_float(value: f64) -> String {
     if value.is_nan() {
         return String::from("NAN");
     }

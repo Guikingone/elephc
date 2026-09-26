@@ -2,7 +2,7 @@
 title: "ini_get_all()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 883
+  order: 916
 ---
 
 ## ini_get_all()

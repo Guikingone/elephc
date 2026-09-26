@@ -2,7 +2,7 @@
 title: "cairo_arc()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 398
+  order: 401
 ---
 
 ## cairo_arc()

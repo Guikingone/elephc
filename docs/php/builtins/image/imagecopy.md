@@ -2,7 +2,7 @@
 title: "imagecopy()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 480
+  order: 483
 ---
 
 ## imagecopy()

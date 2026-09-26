@@ -283,6 +283,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_exc_handler_top", 8, target));
     out.push_str(&comm_directive("_exc_call_frame_top", 8, target));
     out.push_str(&comm_directive("_exc_value", 8, target));
+    // Raised by the interpreter right before it calls a descriptor invoker, consumed by every
+    // invoker on entry: a bounded invoker pushes its exception boundary only for that caller.
+    out.push_str(&comm_directive("__rt_eval_invoker_bounded", 8, target));
     out.push_str(&comm_directive("_fiber_current", 8, target));
     out.push_str(&comm_directive("_fiber_main_saved_sp", 8, target));
     out.push_str(&comm_directive("_fiber_main_saved_exc", 8, target));

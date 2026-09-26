@@ -281,6 +281,7 @@ pub(super) fn emit_dynamic_new_class_lookup(
     ctx: &mut FunctionContext<'_>,
     class_name_value: ValueId,
     required_parent: &str,
+    keep_name_for_eval: bool,
 ) -> Result<()> {
     let class_ty = ctx.value_php_type(class_name_value)?.codegen_repr();
     match class_ty {
@@ -295,6 +296,10 @@ pub(super) fn emit_dynamic_new_class_lookup(
         _ => {
             emit_dynamic_new_fatal(ctx, required_parent);
         }
+    }
+    if keep_name_for_eval {
+        // The eval fallback reads the class-string back from temporary slots 0/8.
+        abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
     }
     abi::emit_call_label(ctx.emitter, "__rt_instanceof_lookup");
     Ok(())

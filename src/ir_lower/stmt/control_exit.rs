@@ -188,8 +188,25 @@ pub(super) fn acquire_borrowed_return_value(
     if !Ownership::php_type_needs_lifetime_tracking(&php_type) {
         return value;
     }
+    // `Op::Move` only relabels a container for the return contract (a hash property returned
+    // under a bare `array` return type). It owns nothing, so the question is asked of the value
+    // it relabels: `return $this->items;` with `$items` holding string keys reached the caller
+    // unretained, the caller released it, and the property was freed under the object. Symfony's
+    // `MergeExtensionConfigurationParameterBag` then fed the freed hash to `+=`, and
+    // `__rt_hash_new` wrote 117 MB past the heap.
+    let mut source = value.value;
+    while ctx.builder.value_defining_op(source) == Some(Op::Move) {
+        let Some(operand) = ctx
+            .builder
+            .value_defining_instruction(source)
+            .and_then(|inst| inst.operands.first().copied())
+        else {
+            break;
+        };
+        source = operand;
+    }
     if !matches!(
-        ctx.builder.value_defining_op(value.value),
+        ctx.builder.value_defining_op(source),
         Some(
             Op::ArrayGet
                 | Op::HashGet

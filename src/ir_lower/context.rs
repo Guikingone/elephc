@@ -195,6 +195,39 @@ const EVAL_ARGV_LOCAL_NAME: &str = "argv";
 
 thread_local! {
     static RUNTIME_DYNAMIC_FUNCTION_RESOLUTION: Cell<bool> = const { Cell::new(false) };
+    /// `CheckResult::ref_param_escaping_callees` for the program being lowered.
+    static REF_PARAM_ESCAPING_CALLEES: std::cell::RefCell<HashSet<String>> =
+        std::cell::RefCell::new(HashSet::new());
+}
+
+/// Restores the enclosing lowering invocation's escaping-callee set on drop.
+pub(crate) struct RefParamEscapingCalleesGuard {
+    previous: HashSet<String>,
+}
+
+impl Drop for RefParamEscapingCalleesGuard {
+    fn drop(&mut self) {
+        let previous = std::mem::take(&mut self.previous);
+        REF_PARAM_ESCAPING_CALLEES.with(|set| *set.borrow_mut() = previous);
+    }
+}
+
+/// Publishes, for one program-lowering invocation, the callees whose by-reference parameter a
+/// closure may keep past the call (thread-local for the same reason as the dynamic-resolution
+/// setting above).
+pub(crate) fn set_ref_param_escaping_callees(
+    callees: HashSet<String>,
+) -> RefParamEscapingCalleesGuard {
+    let previous = REF_PARAM_ESCAPING_CALLEES.with(|set| std::mem::replace(&mut *set.borrow_mut(), callees));
+    RefParamEscapingCalleesGuard { previous }
+}
+
+/// Whether a closure may keep a by-reference parameter of the function or method named `callee`
+/// past the call (matched on the bare lowercase name, like the backend's lifetime choice).
+pub(crate) fn ref_param_may_escape(callee: &str) -> bool {
+    let bare = callee.rsplit_once("::").map_or(callee, |(_, method)| method);
+    let key = crate::names::php_symbol_key(bare);
+    REF_PARAM_ESCAPING_CALLEES.with(|set| set.borrow().contains(&key))
 }
 
 /// Scoped lowering setting for programs that preserve runtime include/eval execution.
@@ -1859,6 +1892,23 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     self.release_stored_local_value_unless_aliases(name, slot, stored, span);
                     return;
                 }
+            }
+            // Inside a loop a LATER store in the same body can still widen the slot, and the
+            // backend lays out every access by the FINAL storage type. A cleanup load typed with
+            // the storage known so far then reads the previous iteration's value through a
+            // conversion: `$e = "…"; $e = explode(…);` in a loop loaded last iteration's array as
+            // `Str`, raised "Array to string conversion" on every pass (Symfony's
+            // `PhpDumper::addDefaultParametersMethod`) and released the converted copy instead of
+            // the array. `ReleaseLocalSlot` is resolved against the final slot type in codegen.
+            if !self.loop_stack.is_empty() && !self.is_ref_bound_local(name) {
+                self.emit_void(
+                    Op::ReleaseLocalSlot,
+                    Vec::new(),
+                    Some(Immediate::LocalSlot(slot)),
+                    Op::ReleaseLocalSlot.default_effects(),
+                    span,
+                );
+                return;
             }
             self.release_stored_local_value(name, slot, span);
             return;

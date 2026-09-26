@@ -547,6 +547,12 @@ pub fn execute_context_method_call_outcome(
 ) -> Result<EvalOutcome, EvalStatus> {
     let evaluated_args = eval_bridge_positional_args(args, values)?;
     match eval_method_call_result_with_evaluated_args(object, method, evaluated_args, context, values) {
+        // `return $this` hands back the receiver cell itself without a retain: the CALL side
+        // compensates, as `eval_method_call_with_temporary_receiver_cleanup` does for interpreted
+        // callers. A compiled caller boxed the receiver just for this call and releases that box
+        // afterwards, so without this retain the fluent `$compiler->write(...)->raw(...)` chain
+        // Twig's nodes compile with read a freed cell on its second link.
+        Ok(result) if result == object => Ok(EvalOutcome::Value(values.retain(result)?)),
         Ok(result) => Ok(EvalOutcome::Value(result)),
         Err(EvalStatus::UncaughtThrowable) => context
             .take_pending_throw()

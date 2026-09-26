@@ -338,6 +338,16 @@ fn eval_validate_call_user_func_static_method(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    // `Closure` is a builtin with no class record: its two static methods are answered by
+    // `eval_closure_static_method_result`, which static dispatch consults first. Symfony
+    // registers closure services with the factory `[Closure::class, 'fromCallable']` and
+    // `ContainerBuilder::createService` calls it through `call_user_func_array`.
+    if class_name.trim_start_matches('\\').eq_ignore_ascii_case("Closure")
+        && (method_name.eq_ignore_ascii_case("fromCallable")
+            || method_name.eq_ignore_ascii_case("bind"))
+    {
+        return Ok(());
+    }
     let class_name = resolve_eval_static_member_class_name(class_name, context)?;
     if eval_enum_static_builtin_applies(&class_name, method_name, context).is_some() {
         return Ok(());

@@ -23,7 +23,8 @@ pub(super) fn lower_native_isset_offset_probe(
     lower_native_isset_offset_probe_from_value(ctx, array_value, index, expr)
 }
 
-/// Lowers nullable native array/hash `isset` without evaluating the offset on null receivers.
+/// Lowers nullable native array/hash `isset`, evaluating the offset only for its effects on a
+/// null receiver.
 pub(super) fn lower_nullable_native_isset_offset_probe(
     ctx: &mut LoweringContext<'_, '_>,
     array_value: LoweredValue,
@@ -57,6 +58,7 @@ pub(super) fn lower_nullable_native_isset_offset_probe(
     });
 
     ctx.builder.position_at_end(null_block);
+    super::array_access::lower_skipped_index_for_effects(ctx, index);
     let false_value = emit_bool_literal(ctx, false, Some(expr.span));
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, false_value, expr.span);
     branch_to(ctx, merge);

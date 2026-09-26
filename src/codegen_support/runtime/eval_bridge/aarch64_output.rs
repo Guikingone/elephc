@@ -268,6 +268,12 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     emitter.instruction("str x0, [x9]");                                        // publish Magician handler execution to the Fiber guard
     emitter.instruction("ret");                                                 // return to the Rust interpreter
 
+    label_c_global(emitter, "__elephc_eval_request_invoker_boundary");
+    abi::emit_symbol_address(emitter, "x9", "__rt_eval_invoker_bounded");
+    emitter.instruction("mov x10, #1");                                         // the next descriptor invoker is called by the interpreter
+    emitter.instruction("str x10, [x9]");                                       // ask that invoker for its exception boundary
+    emitter.instruction("ret");                                                 // return to the Rust interpreter
+
     label_c_global(emitter, "__elephc_eval_value_release");
     emitter.instruction("b __rt_decref_mixed");                                 // release one eval-owned boxed Mixed cell
 }

@@ -46,6 +46,7 @@ mod array_unique;
 mod array_unshift;
 pub(in crate::interpreter) mod array_values;
 mod array_walk;
+mod array_walk_recursive;
 mod arsort;
 mod asort;
 mod count;

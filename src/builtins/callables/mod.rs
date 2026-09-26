@@ -54,6 +54,7 @@ pub mod property_exists;
 // Internal object-introspection aliases used by injected support code. They keep
 // metadata access private instead of adding PHP-visible extension functions.
 #[allow(non_snake_case)]
+pub mod __elephc_diag_suppressed;
 pub mod __elephc_object_is_enum;
 #[allow(non_snake_case)]
 pub mod __elephc_object_prop_count;

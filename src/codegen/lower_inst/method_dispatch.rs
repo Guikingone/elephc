@@ -154,7 +154,7 @@ fn lower_native_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         &param_types,
         &ref_params,
         true,
-        crate::codegen::lower_inst::RefArgCellLifetime::CallOnly,
+        crate::codegen::lower_inst::RefArgCellLifetime::for_callee(ctx, &method_name),
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
@@ -492,14 +492,15 @@ pub(super) fn lower_mixed_method_candidate_call(
     ref_params.push(false);
     ref_params.extend(candidate.target.ref_params.iter().copied());
     guard_mixed_method_candidate_object_arguments(ctx, inst, candidate)?;
-    let call_args = materialize_method_call_args_with_receiver_reg_and_refs(
+    let call_args = materialize_method_call_args_with_receiver_reg_refs_and_defaults(
         ctx,
         receiver_reg,
         &receiver_ty,
         &inst.operands,
         &param_types,
         &ref_params,
-        crate::codegen::lower_inst::RefArgCellLifetime::CallOnly,
+        crate::codegen::lower_inst::RefArgCellLifetime::for_callee(ctx, method_name),
+        &candidate.defaults,
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
@@ -839,7 +840,10 @@ pub(super) fn mixed_method_candidates(
         if provided > signature.params.len()
             || signature.defaults[provided..]
                 .iter()
-                .any(|default| !matches!(default.as_ref().map(|expr| &expr.kind), Some(ExprKind::Null)))
+                .zip(signature.params[provided..].iter())
+                .any(|(default, (_, param_ty))| {
+                    !omitted_default_is_materializable(default.as_ref(), param_ty)
+                })
         {
             continue;
         }
@@ -853,6 +857,7 @@ pub(super) fn mixed_method_candidates(
             class_id: class_info.class_id,
             class_name: class_name.clone(),
             target,
+            defaults: signature.defaults.clone(),
         });
     }
     candidates.sort_by_key(|candidate| candidate.class_id);

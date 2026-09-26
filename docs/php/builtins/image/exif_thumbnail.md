@@ -2,7 +2,7 @@
 title: "exif_thumbnail()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 449
+  order: 452
 ---
 
 ## exif_thumbnail()

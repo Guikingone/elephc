@@ -124,6 +124,56 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
     ref_params: &[bool],
     lifetime: RefArgCellLifetime,
 ) -> Result<CallArgMaterialization> {
+    materialize_method_call_args_with_receiver_reg_refs_and_defaults(
+        ctx,
+        receiver_reg,
+        receiver_ty,
+        operands,
+        param_types,
+        ref_params,
+        lifetime,
+        &[],
+    )
+}
+
+/// Whether an omitted argument's declared default can be staged without evaluating PHP code.
+///
+/// A runtime-dispatched call (a `Mixed` or interface receiver) picks its method only once the
+/// class is known, so it cannot run the checker's default planning. A literal default is the
+/// value itself, and is all this path needs: `RecursiveIteratorIterator` calls
+/// `$it->hasChildren()` with no argument, and Symfony Finder's override declares
+/// `hasChildren(bool $allowLinks = false)`. Refusing that candidate left the iterator with
+/// no implementation to call.
+pub(super) fn omitted_default_is_materializable(
+    default: Option<&crate::parser::ast::Expr>,
+    param_ty: &PhpType,
+) -> bool {
+    use crate::parser::ast::ExprKind;
+    let Some(default) = default else {
+        return false;
+    };
+    match (&default.kind, param_ty.codegen_repr()) {
+        (ExprKind::Null, _) => true,
+        (ExprKind::BoolLiteral(_), PhpType::Bool) => true,
+        (ExprKind::IntLiteral(_), PhpType::Int) => true,
+        (ExprKind::StringLiteral(_), PhpType::Str) => true,
+        _ => false,
+    }
+}
+
+/// [`materialize_method_call_args_with_receiver_reg_and_refs`], staging each omitted
+/// argument from `defaults` (one entry per parameter after the receiver) when it is a literal.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn materialize_method_call_args_with_receiver_reg_refs_and_defaults(
+    ctx: &mut FunctionContext<'_>,
+    receiver_reg: &str,
+    receiver_ty: &PhpType,
+    operands: &[ValueId],
+    param_types: &[PhpType],
+    ref_params: &[bool],
+    lifetime: RefArgCellLifetime,
+    defaults: &[Option<crate::parser::ast::Expr>],
+) -> Result<CallArgMaterialization> {
     if operands.len() > param_types.len() {
         return Err(CodegenIrError::invalid_module(format!(
             "method call materialization received {} operands for {} params",
@@ -228,6 +278,38 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
             continue;
         }
         let param_ty = param_types[param_index].codegen_repr();
+        let literal_default = defaults
+            .get(param_index - 1)
+            .and_then(|default| default.as_ref())
+            .map(|default| &default.kind);
+        match (literal_default, &param_ty) {
+            (Some(crate::parser::ast::ExprKind::BoolLiteral(value)), PhpType::Bool) => {
+                abi::emit_load_int_immediate(
+                    ctx.emitter,
+                    abi::int_result_reg(ctx.emitter),
+                    i64::from(*value),
+                );
+                abi::emit_push_result_value(ctx.emitter, &PhpType::Bool);
+                arg_temp_bytes += call_arg_temp_slot_size(&abi_param_types[param_index]);
+                continue;
+            }
+            (Some(crate::parser::ast::ExprKind::IntLiteral(value)), PhpType::Int) => {
+                abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), *value);
+                abi::emit_push_result_value(ctx.emitter, &PhpType::Int);
+                arg_temp_bytes += call_arg_temp_slot_size(&abi_param_types[param_index]);
+                continue;
+            }
+            (Some(crate::parser::ast::ExprKind::StringLiteral(value)), PhpType::Str) => {
+                let (label, len) = ctx.data.add_string(value.as_bytes());
+                let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+                abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
+                abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
+                abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
+                arg_temp_bytes += call_arg_temp_slot_size(&abi_param_types[param_index]);
+                continue;
+            }
+            _ => {}
+        }
         match param_ty {
             PhpType::Mixed => {
                 objects::emit_boxed_null(ctx);
@@ -594,6 +676,13 @@ pub(super) fn materialize_temporary_ref_arg_cell(
     let source_ty = ctx.load_value_to_result(value)?;
     let target_ty = param_ty.codegen_repr();
     coerce_ref_cell_store_value(ctx, value, &source_ty, &target_ty)?;
+    // The cell outlives the call, and the caller releases its operand right after it: without
+    // a reference of its own, the cell a closure captured (`use (&$inline)` on an omitted
+    // `array &$inline = []`) pointed at the freed array by the time the closure ran. A boxing
+    // coercion already produced a box of its own, so only the unconverted value is retained.
+    if source_ty.codegen_repr() == target_ty {
+        abi::emit_incref_if_refcounted(ctx.emitter, &target_ty);
+    }
     abi::emit_push_result_value(ctx.emitter, &target_ty);
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
@@ -749,6 +838,24 @@ pub(super) fn mixed_unbox_low_payload_reg(ctx: &FunctionContext<'_>) -> &'static
 /// Unboxes a boxed Mixed/Union payload and retains it for an owned concrete heap result.
 pub(super) fn emit_unbox_mixed_to_owned_refcounted_result(ctx: &mut FunctionContext<'_>, result_ty: &PhpType) {
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    if matches!(result_ty.codegen_repr(), PhpType::Object(_)) {
+        // A boxed NULL read as an object must be the null pointer, not the box's payload word,
+        // which a null box does not zero. A parameter declared `Def $d` and later reassigned
+        // (`$d = $factory;`) keeps its object-typed reads while its slot holds boxes, and
+        // Symfony's `PhpDumper::getClasses()` loop `while ($definition instanceof Definition)`
+        // then saw a non-null "object" after `$definition = null` and called `getTag()` on null.
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("cmp x0, #8");                             // runtime tag 8 means the boxed value is null
+                ctx.emitter.instruction("csel x1, xzr, x1, eq");                   // a null box reads as the null object pointer
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("xor r10d, r10d");                         // prepare the null object pointer
+                ctx.emitter.instruction("cmp rax, 8");                             // runtime tag 8 means the boxed value is null
+                ctx.emitter.instruction("cmove rdi, r10");                         // a null box reads as the null object pointer
+            }
+        }
+    }
     move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
     abi::emit_incref_if_refcounted(ctx.emitter, result_ty);
 }
@@ -992,7 +1099,51 @@ fn emit_heap_ref_writeback_store(
 /// Loads a local variable's address for a by-reference method-call argument.
 pub(super) fn materialize_local_ref_arg_address(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
     let source = local_ref_arg_source(ctx, value)?;
-    ctx.materialize_local_storage_address(source.slot, abi::int_result_reg(ctx.emitter))
+    ctx.materialize_local_storage_address(source.slot, abi::int_result_reg(ctx.emitter))?;
+    if ctx.local_php_type(source.slot)? == PhpType::Mixed {
+        emit_seed_unassigned_mixed_cell(ctx);
+    }
+    Ok(())
+}
+
+/// Gives a never-assigned boxed-Mixed local a boxed null before its address is passed by
+/// reference, keeping that address in the result register.
+///
+/// PHP creates the variable when it is passed by reference, and the callee may write THROUGH it:
+/// `addServices(?array &$services = null) { $services[$id] = …; }` vivifies the array inside the
+/// box it was handed. A slot that was never stored holds a zero word -- no box -- so the element
+/// write built its array in a box nobody kept, and the caller's `$services` stayed null
+/// (`PhpDumper::dump()` then passed it to `generateServiceFiles(array $services)`: "Value must be
+/// of type array, null given" on every `cache:clear`). Checked at run time, because a loop can
+/// reach the call with the slot already holding the previous iteration's value.
+fn emit_seed_unassigned_mixed_cell(ctx: &mut FunctionContext<'_>) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let assigned = ctx.next_label("ref_arg_mixed_cell_assigned");
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0]");                            // read the local's current boxed-Mixed pointer
+            ctx.emitter.instruction(&format!("cbnz x9, {}", assigned));         // an assigned local already owns a box to write through
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                // read the local's current boxed-Mixed pointer
+            ctx.emitter.instruction("test r10, r10");                           // is the local still unassigned?
+            ctx.emitter.instruction(&format!("jne {}", assigned));              // an assigned local already owns a box to write through
+        }
+    }
+    objects::emit_boxed_null(ctx);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [sp]");                            // reload the local's storage address
+            ctx.emitter.instruction("str x0, [x9]");                            // the local now holds a boxed null the callee can vivify
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r11, QWORD PTR [rsp]");                // reload the local's storage address
+            ctx.emitter.instruction("mov QWORD PTR [r11], rax");                // the local now holds a boxed null the callee can vivify
+        }
+    }
+    ctx.emitter.label(&assigned);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
 }
 
 /// Returns true when a value already holds a direct pointer to an array element slot.

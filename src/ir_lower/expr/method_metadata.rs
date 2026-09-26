@@ -28,7 +28,23 @@ pub(super) fn method_signature(
             return common_dynamic_method_signature(ctx, &key);
         }
         if ctx.interfaces.contains_key(normalized) {
-            if let Some(signature) = narrowed_runtime_method_signature(ctx, normalized, &key) {
+            if let Some(mut signature) = narrowed_runtime_method_signature(ctx, normalized, &key) {
+                // An interface that DECLARES the method is dispatched through its interface
+                // table, whose wrapper returns what the interface declares -- a boxed Mixed for
+                // an untyped method -- so the implementors' shared return type would describe a
+                // value the call never produces. Twig's `ExtensionInterface::getOperators()` is
+                // untyped while every extension inherits `AbstractExtension`'s `return [[], []]`:
+                // the call site read the Mixed box as a raw array, `count()` answered 4, and
+                // `ExtensionSet` refused CoreExtension. The shared signature still supplies the
+                // parameters, whose omitted defaults are materialized here.
+                if let Some(interface_signature) = ctx
+                    .interfaces
+                    .get(normalized)
+                    .and_then(|interface_info| interface_info.methods.get(&key))
+                {
+                    signature.return_type = interface_signature.return_type.clone();
+                    signature.by_ref_return = interface_signature.by_ref_return;
+                }
                 return Some(signature);
             }
         }

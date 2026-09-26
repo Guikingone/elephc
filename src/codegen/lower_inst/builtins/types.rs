@@ -1410,7 +1410,36 @@ fn static_relation_holds(
     if parent_chain_contains(ctx, object_class, &target_key) {
         return Ok(true);
     }
-    Ok(class_interfaces_contain(ctx, object_class, &target_key))
+    if class_interfaces_contain(ctx, object_class, &target_key) {
+        return Ok(true);
+    }
+    // An INTERFACE named as the subject is a subtype of every interface it extends, directly or
+    // through a parent: `is_subclass_of(Child::class, Base::class)` for `interface Child extends
+    // Base`. Interfaces have no `class_infos` entry, so the two walks above never saw them.
+    let mut pending = vec![object_class.to_string()];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(current) = pending.pop() {
+        let current_key = php_symbol_key(current.trim_start_matches('\\'));
+        if !seen.insert(current_key.clone()) {
+            continue;
+        }
+        let Some(info) = ctx
+            .module
+            .interface_infos
+            .iter()
+            .find(|(name, _)| php_symbol_key(name.trim_start_matches('\\')) == current_key)
+            .map(|(_, info)| info)
+        else {
+            continue;
+        };
+        for parent in &info.parents {
+            if php_symbol_key(parent.trim_start_matches('\\')) == target_key {
+                return Ok(true);
+            }
+            pending.push(parent.clone());
+        }
+    }
+    Ok(false)
 }
 
 /// Returns true when an object's parent chain contains the target PHP symbol key.

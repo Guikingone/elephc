@@ -623,7 +623,7 @@ impl Rewriter {
                 && call == IntrospectionCall::NumArgs
             {
                 scope.used = true;
-                return Ok(build::optional_constructor_argc(span));
+                return Ok(build::optional_constructor_argc(scope.param_names.len(), span));
             }
         }
         scope.used = true;

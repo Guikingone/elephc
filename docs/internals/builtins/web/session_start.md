@@ -2,7 +2,7 @@
 title: "session_start() — internals"
 description: "Compiler internals for session_start(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 904
+  order: 940
 ---
 
 ## `session_start()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:1886](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L1886) (`session_start`)
+- **Lowering**: [`src/web_prelude/build.rs`:1874](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L1874) (`session_start`)
 - **Function symbol**: `session_start()`
 
 

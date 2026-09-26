@@ -242,17 +242,31 @@ fn emit_runtime_callable_invoker_impl(
         abi::int_arg_reg_name(emitter.target, 0),
         INVOKER_DESCRIPTOR_OFFSET,
     );
+    // The boundary exists for the INTERPRETER's calls only, and only the interpreter can say that
+    // it is the caller: it raises `__rt_eval_invoker_bounded` immediately before invoking, and
+    // every invoker consumes the request on entry. A compiled caller never raises it, so its
+    // throw keeps unwinding to the compiled `catch` it was aimed at -- before this, any AOT
+    // `$f()` over a first-class callable `f(...)` returned NULL for a throw, and Symfony's
+    // `resolveEnvPlaceholders()` handed the swallowed failure on as a value. An unbounded invoker
+    // consumes the request too, so a stale one can never reach a bounded invoker nested inside.
+    let boundary_flag_offset = boundary_base_offset - TRY_HANDLER_SLOT_SIZE;
+    let unbounded_label = format!("{}_unbounded", invoker.label);
     if catch_native_throws {
         abi::store_at_offset(
             emitter,
             abi::int_arg_reg_name(emitter.target, 1),
             INVOKER_ARG_ARRAY_OFFSET,
         );
+        emit_consume_invoker_boundary_request(
+            emitter,
+            Some((boundary_flag_offset, unbounded_label.as_str())),
+        );
         emit_invoker_exception_boundary_push(
             emitter,
             boundary_base_offset,
             &escape_label,
         );
+        emitter.label(&unbounded_label);
         abi::load_at_offset(
             emitter,
             abi::int_arg_reg_name(emitter.target, 1),
@@ -260,6 +274,7 @@ fn emit_runtime_callable_invoker_impl(
         );
         emit_saved_descriptor_entry_to_call_reg(emitter, call_reg);
     } else {
+        emit_consume_invoker_boundary_request(emitter, None);
         emit_descriptor_entry_to_call_reg(emitter, call_reg);
     }
 
@@ -275,7 +290,10 @@ fn emit_runtime_callable_invoker_impl(
     );
     emit_boxed_invoker_return(emitter, &ret_ty);
     if catch_native_throws {
+        let popped_label = format!("{}_boundary_popped", invoker.label);
+        emit_branch_if_boundary_not_pushed(emitter, boundary_flag_offset, &popped_label);
         emit_invoker_exception_boundary_pop(emitter, boundary_base_offset);
+        emitter.label(&popped_label);
     }
     // Restore before tearing down the frame (and on the escape path below): the boxed
     // Mixed result travels in return registers, which these loads never touch.
@@ -349,6 +367,57 @@ fn emit_descriptor_entry_to_call_reg(emitter: &mut Emitter, call_reg: &str) {
 fn emit_saved_descriptor_entry_to_call_reg(emitter: &mut Emitter, call_reg: &str) {
     abi::load_at_offset(emitter, call_reg, INVOKER_DESCRIPTOR_OFFSET);
     callable_descriptor::emit_load_entry_from_descriptor(emitter, call_reg, call_reg);
+}
+
+/// Symbol the interpreter raises right before it calls a descriptor invoker.
+const EVAL_INVOKER_BOUNDARY_REQUEST: &str = "__rt_eval_invoker_bounded";
+
+/// Consumes the interpreter's boundary request on invoker entry.
+///
+/// With `bounded = Some((slot, label))` the request is also remembered in the frame slot and a
+/// missing request branches to `label`, skipping the boundary push. The clobbered registers are
+/// scratch here: the invoker reloads its arguments from the frame afterwards.
+fn emit_consume_invoker_boundary_request(emitter: &mut Emitter, bounded: Option<(usize, &str)>) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(emitter, "x9", EVAL_INVOKER_BOUNDARY_REQUEST);
+            if let Some((slot, label)) = bounded {
+                emitter.instruction("ldr x10, [x9]");                           // did the interpreter ask for a boundary?
+                emitter.instruction("str xzr, [x9]");                           // consume the request for this invoker only
+                abi::store_at_offset(emitter, "x10", slot);
+                emitter.instruction(&format!("cbz x10, {}", label));            // a compiled caller keeps native unwinding
+            } else {
+                emitter.instruction("str xzr, [x9]");                           // an unbounded invoker still consumes the request
+            }
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(emitter, "r9", EVAL_INVOKER_BOUNDARY_REQUEST);
+            if let Some((slot, label)) = bounded {
+                emitter.instruction("mov r10, QWORD PTR [r9]");                 // did the interpreter ask for a boundary?
+                emitter.instruction("mov QWORD PTR [r9], 0");                   // consume the request for this invoker only
+                abi::store_at_offset(emitter, "r10", slot);
+                emitter.instruction("test r10, r10");                           // was a boundary requested?
+                emitter.instruction(&format!("jz {}", label));                  // a compiled caller keeps native unwinding
+            } else {
+                emitter.instruction("mov QWORD PTR [r9], 0");                   // an unbounded invoker still consumes the request
+            }
+        }
+    }
+}
+
+/// Branches to `label` when this invoker call did not push its boundary.
+fn emit_branch_if_boundary_not_pushed(emitter: &mut Emitter, slot: usize, label: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::load_at_offset(emitter, "x10", slot);
+            emitter.instruction(&format!("cbz x10, {}", label));                // no boundary was pushed on entry
+        }
+        Arch::X86_64 => {
+            abi::load_at_offset(emitter, "r10", slot);
+            emitter.instruction("test r10, r10");                               // was a boundary pushed on entry?
+            emitter.instruction(&format!("jz {}", label));                      // no boundary was pushed on entry
+        }
+    }
 }
 
 /// Pushes a native exception boundary around an eval-owned descriptor invoker call.

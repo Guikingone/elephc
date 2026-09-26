@@ -405,6 +405,7 @@ pub enum RuntimeFnId {
     Sqrt,
     Tan,
     Tanh,
+    ElephcDiagSuppressed,
     ElephcObjectIsEnum,
     ElephcObjectPropCount,
     ElephcObjectPropName,
@@ -1193,7 +1194,8 @@ impl RuntimeFnId {
             | RuntimeFnId::JsonLastError
             | RuntimeFnId::JsonLastErrorMsg
             | RuntimeFnId::DateDefaultTimezoneGet
-            | RuntimeFnId::ObGetLevel => crate::ir::Effects::READS_GLOBAL,
+            | RuntimeFnId::ObGetLevel
+            | RuntimeFnId::ElephcDiagSuppressed => crate::ir::Effects::READS_GLOBAL,
             RuntimeFnId::SplAutoloadExtensions => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_GLOBAL.bits()
                     | crate::ir::Effects::WRITES_GLOBAL.bits(),
@@ -2480,6 +2482,7 @@ impl RuntimeFnId {
             RuntimeFnId::Sqrt => "sqrt",
             RuntimeFnId::Tan => "tan",
             RuntimeFnId::Tanh => "tanh",
+            RuntimeFnId::ElephcDiagSuppressed => "__elephc_diag_suppressed",
             RuntimeFnId::ElephcObjectIsEnum => "__elephc_object_is_enum",
             RuntimeFnId::ElephcObjectPropCount => "__elephc_object_prop_count",
             RuntimeFnId::ElephcObjectPropName => "__elephc_object_prop_name",

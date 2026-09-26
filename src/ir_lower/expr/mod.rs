@@ -1070,7 +1070,28 @@ fn lower_new_dynamic_planned_dispatch(
         ctx.builder.position_at_end(next_block);
     }
 
-    if let Some(parent) = required_parent {
+    let positional_only = !args.iter().any(variadic_args::is_spread_arg)
+        && !crate::types::call_args::has_named_args(args);
+    if let (Some(parent), true) = (required_parent, positional_only) {
+        // No AOT candidate matched: the late-static class may be an interpreted subclass. The
+        // constrained dynamic-new op builds it through the eval bridge when one is linked, and
+        // raises the factory fatal otherwise.
+        let name_value = ctx.load_local(&name_temp, Some(expr.span));
+        let mut operands = vec![name_value.value];
+        operands.extend(lower_args(ctx, args));
+        let metadata = format!("{}|{}", parent, parent);
+        let data = ctx.intern_class_name(&metadata);
+        let fallback = ctx.emit_value(
+            Op::DynamicObjectNew,
+            operands,
+            Some(Immediate::Data(data)),
+            PhpType::Object(parent.to_string()),
+            Op::DynamicObjectNew.default_effects(),
+            Some(expr.span),
+        );
+        store_value_into_temp(ctx, &result_temp, result_type, fallback, expr.span);
+        branch_to(ctx, merge);
+    } else if let Some(parent) = required_parent {
         let message = ctx.intern_string(&format!(
             "Fatal error: Cannot instantiate late-static class constrained to {}\n",
             parent

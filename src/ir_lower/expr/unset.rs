@@ -713,7 +713,7 @@ pub(super) fn lower_unset_indexed_element(
 ) {
     let array_value = ctx.load_local(name, Some(array_span));
     let assoc_ty = PhpType::AssocArray {
-        key: Box::new(PhpType::Int),
+        key: Box::new(super::array_builtin_args::promoted_hash_key_type(&elem_ty)),
         value: Box::new(elem_ty),
     };
     let hash = ctx.emit_value(

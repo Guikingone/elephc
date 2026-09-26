@@ -2,7 +2,7 @@
 title: "exif_imagetype()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 446
+  order: 449
 ---
 
 ## exif_imagetype()

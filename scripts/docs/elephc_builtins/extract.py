@@ -561,6 +561,7 @@ PRELUDE_SOURCES: dict[str, tuple[tuple[tuple[str, str], ...], str]] = {
             ("hash_prelude.rs", "hash"),
             ("backend_gap_prelude.rs", "backend-gap"),
             ("parse_str_prelude.rs", "parse_str"),
+            ("addcslashes_prelude.rs", "addcslashes"),
         ),
         "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
     ),

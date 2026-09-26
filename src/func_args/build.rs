@@ -59,7 +59,12 @@ pub(super) fn replacement(
 ///
 /// Constructors with optional parameters cannot reconstruct this count from defaulted
 /// regular slots, so object-call lowering appends the source arity after the real surplus tail.
-pub(super) fn optional_constructor_argc(span: Span) -> ExprKind {
+///
+/// A construction path that reaches the constructor without that marker -- a runtime-selected
+/// class, the eval bridge -- leaves the hidden array empty, and reading `[count - 1]` raised
+/// `Undefined array key -1` on every Twig node built that way. An empty tail answers the
+/// declared regular count instead: the same conservative answer a plain function gives.
+pub(super) fn optional_constructor_argc(declared: usize, span: Span) -> ExprKind {
     let hidden = hidden_args_var(span);
     let last_index = Expr::new(
         ExprKind::BinaryOp {
@@ -69,9 +74,25 @@ pub(super) fn optional_constructor_argc(span: Span) -> ExprKind {
         },
         span,
     );
-    ExprKind::ArrayAccess {
-        array: Box::new(hidden),
-        index: Box::new(last_index),
+    let marker = Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(hidden.clone()),
+            index: Box::new(last_index),
+        },
+        span,
+    );
+    let empty = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(count_call(hidden, span)),
+            op: BinOp::StrictEq,
+            right: Box::new(Expr::new(ExprKind::IntLiteral(0), span)),
+        },
+        span,
+    );
+    ExprKind::Ternary {
+        condition: Box::new(empty),
+        then_expr: Box::new(Expr::new(ExprKind::IntLiteral(declared as i64), span)),
+        else_expr: Box::new(marker),
     }
 }
 

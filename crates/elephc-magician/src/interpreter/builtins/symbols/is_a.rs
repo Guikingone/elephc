@@ -135,6 +135,17 @@ pub(in crate::interpreter) fn eval_is_a_relation_result(
         } else if context.trait_decl(&resolved_source_class).is_some() {
             !exclude_self
                 && eval_class_like_name_matches(&resolved_source_class, &resolved_target_class)
+        } else if values.interface_exists(&resolved_source_class)? {
+            // A COMPILED interface: the runtime relation helper walks class parents and
+            // implemented interfaces only, so `is_a(ContainerInterface::class,
+            // PsrContainerInterface::class, true)` answered false and `lint:container` rejected
+            // every service taking the PSR container. Its inherited interfaces are the same
+            // runtime metadata `class_implements()` answers from.
+            (!exclude_self
+                && eval_class_like_name_matches(&resolved_source_class, &resolved_target_class))
+                || eval_runtime_class_interface_names(&resolved_source_class, values)?
+                    .iter()
+                    .any(|parent| eval_class_like_name_matches(parent, &resolved_target_class))
         } else {
             values.object_is_a(object_or_class, &resolved_target_class, exclude_self)?
         }

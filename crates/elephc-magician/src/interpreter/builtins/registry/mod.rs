@@ -297,6 +297,38 @@ pub(in crate::interpreter) fn eval_declared_builtin_direct_call(
     let Some(hook) = spec.direct else {
         return Ok(None);
     };
+    // A `string` parameter accepts any Stringable object, converted through `__toString()`
+    // (`file_get_contents($splFileInfo)` is how Symfony's `lint:twig` reads each template). A
+    // direct hook evaluates its own arguments and reads the raw bytes, which are empty for an
+    // object, so a builtin that has an evaluated-argument hook is routed through it instead,
+    // where the conversion happens once for every builtin.
+    // The arity guard leaves a wrong argument count to the direct hook, which is what raises
+    // PHP's catchable ArgumentCountError.
+    let required = spec.required_param_count.unwrap_or_else(|| {
+        spec.params
+            .iter()
+            .take_while(|param| param.default.is_none())
+            .count()
+    });
+    let arity_fits = args.len() >= required
+        && (spec.variadic.is_some() || args.len() <= spec.params.len());
+    if spec.has_string_param()
+        && arity_fits
+        && spec.by_ref_param_names().is_empty()
+        && !eval_builtin_is_backtrace_visible(spec.name)
+    {
+        if let Some(values_hook) = spec.values {
+            let mut evaluated_args = Vec::with_capacity(args.len());
+            for arg in args {
+                evaluated_args.push(eval_expr(arg, context, scope, values)?);
+            }
+            let evaluated_args =
+                eval_coerce_string_param_objects(spec, evaluated_args, context, values)?;
+            return values_hook
+                .call(spec.name, &evaluated_args, context, values)
+                .map(Some);
+        }
+    }
     if eval_builtin_is_backtrace_visible(spec.name) {
         // The class probes must be visible to a userland autoloader they start: Symfony's
         // `ClassExistenceResource::throwOnRequiredClass` returns silently only when it finds one
@@ -350,6 +382,13 @@ pub(in crate::interpreter) fn eval_declared_builtin_values_call(
     let Some(hook) = spec.values else {
         return Ok(None);
     };
+    let coerced;
+    let evaluated_args = if spec.has_string_param() {
+        coerced = eval_coerce_string_param_objects(spec, evaluated_args.to_vec(), context, values)?;
+        coerced.as_slice()
+    } else {
+        evaluated_args
+    };
     if eval_builtin_is_backtrace_visible(spec.name) {
         let frame =
             EvalCallFrame::function(spec.name, Some(evaluated_args.to_vec()), context);
@@ -360,6 +399,30 @@ pub(in crate::interpreter) fn eval_declared_builtin_values_call(
     }
     hook.call(spec.name, evaluated_args, context, values)
         .map(Some)
+}
+
+/// Converts each object passed to a `string` parameter through `__toString()`.
+///
+/// Only objects are touched: a scalar keeps its own coercion inside the implementation, which
+/// is where PHP's per-type rules already live.
+fn eval_coerce_string_param_objects(
+    spec: &EvalBuiltinSpec,
+    mut evaluated_args: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    for (index, arg) in evaluated_args.iter_mut().enumerate() {
+        let Some(param) = spec.params.get(index) else {
+            break;
+        };
+        if !param.string_param || values.type_tag(*arg)? != EVAL_TAG_OBJECT {
+            continue;
+        }
+        *arg = crate::interpreter::dynamic_functions::eval_string_context_value(
+            *arg, context, values,
+        )?;
+    }
+    Ok(evaluated_args)
 }
 
 #[cfg(test)]

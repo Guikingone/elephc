@@ -498,4 +498,35 @@ echo $definitions[$target];
     assert_eq!(out, "ok");
 }
 
+/// Verifies an `if` whose arms leave a by-reference array indexed on one edge and hash-promoted
+/// on the other joins at hash storage, so the nested write below the branch reaches the caller.
+/// Joined as boxed `Mixed`, the raw hash pointer went down the Mixed write path and every
+/// `++$calls[$id][0]` was lost (Symfony's `PhpDumper::getDefinitionsFromArguments`).
+#[test]
+fn test_if_join_of_indexed_and_hash_ref_param_keeps_nested_writes() {
+    let out = compile_and_run(
+        r#"<?php
+final class Ref {
+    public function __construct(public string $id, public int $b = 1) {}
+    public function __toString(): string { return $this->id; }
+}
+final class Walker {
+    public function walk(array $arguments, array &$calls = []): void {
+        foreach ($arguments as $argument) {
+            $id = (string) $argument;
+            if (!isset($calls[$id])) {
+                $calls[$id] = [0, $argument->b];
+            }
+            ++$calls[$id][0];
+        }
+    }
+}
+$calls = [];
+(new Walker())->walk([new Ref("a"), new Ref("s", 0), new Ref("a")], $calls);
+echo json_encode($calls);
+"#,
+    );
+    assert_eq!(out, r#"{"a":[2,1],"s":[1,0]}"#);
+}
+
 // --- Ternary operator ---

@@ -7,20 +7,20 @@ created: 2026-09-21
 verified_by: "Matched-pair 20s sample of the serving worker on one binary with a single env lever; 600-request soak with per-reply sha256"
 sources:
   - path: crates/elephc-magician/src/interpreter/runtime_ops.rs
-    blob: eaa6675e055a3fef2b170e22b3d58e1cacf2c8bb
+    blob: 80323a4143f0b7b4fcfadb26887060acf92e82f4
     lines: 21-60
     snip: 1467416377fd
     anchor: "pub enum AotMemberNameKind {"
   - path: crates/elephc-magician/src/runtime_hooks/ops/reflection.rs
     blob: 0ab3c0586a15fce3033a022ff672b5850ebef50d
-    lines: 148-168
-    snip: f11ffbc2209f
-    anchor: "fn aot_member_names("
+    lines: 11-437
+    snip: 31168008fc68
+    anchor: "macro_rules! impl_reflection_ops {"
   - path: src/codegen_support/runtime/data/user.rs
-    blob: f6e11c6c6e26df7a8621da87044b20981c9449da
-    lines: 1495-1515
-    snip: b72e626bbb2b
-    anchor: "declaring_interface,"
+    blob: b6d3ce38902ea2ee0eca2d94879a332c604f7f9a
+    lines: 1380-1517
+    snip: b3cf44741b63
+    anchor: "fn emit_eval_reflection_method_lookup_data("
 ---
 
 # The --web autoloader cost was a table rescan, not the 31 includes

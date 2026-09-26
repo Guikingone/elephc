@@ -45,6 +45,10 @@ pub(in crate::interpreter) enum EvalValuesHook {
     ArrayValues,
     /// Dispatches `base_convert(...)`.
     BaseConvert,
+    /// Dispatches the six fixed-base conversions (`dechex`, `hexdec`, ...).
+    BaseDigits,
+    /// Dispatches `setlocale(...)`.
+    Setlocale,
     /// Dispatches the PHP BCMath procedural surface.
     Bcmath,
     /// Dispatches `base64_decode(...)`.
@@ -53,6 +57,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Base64Encode,
     /// Dispatches `bin2hex(...)`.
     Bin2Hex,
+    /// Dispatches `unpack(...)`.
+    Unpack,
     /// Dispatches `chr(...)`.
     Chr,
     /// Dispatches `chunk_split(...)`.
@@ -69,6 +75,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     GetDebugType,
     /// Dispatches `levenshtein(...)`.
     Levenshtein,
+    /// Dispatches `addcslashes(...)`.
+    AddCSlashes,
     /// Dispatches `clamp(...)`.
     Clamp,
     /// Dispatches `count(...)`.
@@ -379,6 +387,10 @@ impl EvalValuesHook {
             Self::Atan => one_arg(evaluated_args, values, eval_atan_result),
             Self::Atan2 => two_args(evaluated_args, values, eval_atan2_result),
             Self::BaseConvert => three_args(evaluated_args, values, eval_base_convert_result),
+            Self::BaseDigits => one_arg(evaluated_args, values, |value, values| {
+                eval_base_digits_result(name, value, values)
+            }),
+            Self::Setlocale => eval_setlocale_values(evaluated_args, values),
             Self::Bcmath => eval_bcmath_values_result(name, evaluated_args, context, values),
             Self::Base64Decode => match evaluated_args {
                 [value] => eval_base64_decode_result(*value, false, values),
@@ -390,6 +402,7 @@ impl EvalValuesHook {
             },
             Self::Base64Encode => one_arg(evaluated_args, values, eval_base64_encode_result),
             Self::Bin2Hex => one_arg(evaluated_args, values, eval_bin2hex_result),
+            Self::Unpack => eval_unpack_values_result(evaluated_args, values),
             Self::Chr => one_arg(evaluated_args, values, eval_chr_result),
             Self::ChunkSplit => match evaluated_args {
                 [subject] => eval_chunk_split_result(*subject, None, None, values),
@@ -411,6 +424,7 @@ impl EvalValuesHook {
             }
             Self::GetDebugType => eval_get_debug_type_values(evaluated_args, context, values),
             Self::Levenshtein => eval_levenshtein_values(evaluated_args, context, values),
+            Self::AddCSlashes => eval_addcslashes_values(evaluated_args, context, values),
             Self::Clamp => three_args(evaluated_args, values, eval_clamp_result),
             Self::Core => eval_core_values_result(name, evaluated_args, context, values),
             Self::Cos => one_arg(evaluated_args, values, eval_cos_result),

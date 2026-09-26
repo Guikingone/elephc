@@ -2113,3 +2113,24 @@ echo call_user_func($f, [1, 2, 3]) + 1;
     );
     assert_eq!(out, "int(3)\n4");
 }
+
+/// Regression: a dynamic static call whose class expression is a property read leaves the
+/// property's string intact. `$class->name::getSubscribedServices()` desugars to a callable
+/// array whose receiver sat in a hidden temporary WITHOUT its own reference, so the frame's
+/// cleanup freed the property's string -- Symfony's `ReflectionClassResource` then read freed
+/// memory as the reflected class name on every `cache:clear`.
+#[test]
+fn test_dynamic_static_call_on_a_property_keeps_the_property_string() {
+    let out = compile_and_run(
+        r#"<?php
+final class Holder { public string $name; public function __construct(string $n) { $this->name = $n; } }
+final class Greeter { public static function hello(): string { return 'hi'; } }
+function viaProperty(Holder $h): string { return $h->name::hello(); }
+$h = new Holder(str_repeat('Greeter', 1));
+echo viaProperty($h), viaProperty($h), "|";
+str_repeat('x', 64);
+echo $h->name;
+"#,
+    );
+    assert_eq!(out, "hihi|Greeter");
+}

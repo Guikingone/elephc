@@ -1124,7 +1124,10 @@ pub fn inject_if_used(
     // and no lowering, so a compiled call fell through to the eval bridge, whose array ABI cannot
     // bind the mandatory by-reference `$result`.
     let needs_parse_str = usage.references("parse_str");
+    // And so is `addcslashes()`, which has no backend implementation either.
+    let needs_addcslashes = usage.references("addcslashes");
     if sources.is_empty()
+        && !needs_addcslashes
         && !inject_randomizer
         && !needs_natural_order
         && !needs_tokenizer
@@ -1137,6 +1140,11 @@ pub fn inject_if_used(
         return program;
     }
     let mut combined = Vec::new();
+    if needs_addcslashes {
+        let declarations = crate::addcslashes_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
     if needs_natural_order {
         let declarations = crate::strnatcmp_prelude::declarations();
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);

@@ -2,7 +2,7 @@
 title: "cairo_new_path()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 419
+  order: 422
 ---
 
 ## cairo_new_path()

@@ -2,7 +2,7 @@
 title: "imagefilledrectangle()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 503
+  order: 506
 ---
 
 ## imagefilledrectangle()

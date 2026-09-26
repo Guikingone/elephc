@@ -193,7 +193,7 @@ pub(super) fn lower_lexical_instance_static_method_call(
     let ref_cell_lifetime = if method_name.eq_ignore_ascii_case("__construct") {
         RefArgCellLifetime::MayOutliveCall
     } else {
-        RefArgCellLifetime::CallOnly
+        RefArgCellLifetime::for_callee(ctx, method_name)
     };
     let call_args = materialize_method_call_args_with_receiver_local_and_refs(
         ctx,

@@ -664,6 +664,21 @@ impl Checker {
             _ if a == b => a.clone(),
             (PhpType::Never, other) | (other, PhpType::Never) => other.clone(),
             (PhpType::Void, other) | (other, PhpType::Void) => nullable_return_type(other),
+            // A return is not a coercion: without a declared type the value leaves as it is.
+            // `string` absorbing `false` turned every hint-less `string|false` function --
+            // symfony/polyfill-mbstring's `mb_detect_encoding()` among them -- into one that
+            // answered `""` for its failure, and callers testing `false === $x` then fed that
+            // empty string to `mb_strlen()` as an encoding.
+            (PhpType::Str, PhpType::False | PhpType::Bool)
+            | (PhpType::False | PhpType::Bool, PhpType::Str) => {
+                let falsy = if matches!(a, PhpType::Str) { b } else { a };
+                PhpType::Union(vec![PhpType::Str, falsy.clone()])
+            }
+            (PhpType::Union(members), other) | (other, PhpType::Union(members))
+                if members.contains(other) =>
+            {
+                PhpType::Union(members.clone())
+            }
             (PhpType::Str, _) | (_, PhpType::Str) => PhpType::Str,
             (PhpType::Float, _) | (_, PhpType::Float) => PhpType::Float,
             _ => PhpType::Mixed,

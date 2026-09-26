@@ -1,6 +1,6 @@
 ---
 title: "array_push()"
-description: "Pushes one or more elements onto the end of array."
+description: "Pushes zero or more elements onto the end of array and returns the new count."
 sidebar:
   order: 30
 ---
@@ -8,16 +8,16 @@ sidebar:
 ## array_push()
 
 ```php
-function array_push(array $array, ...$values): void
+function array_push(array $array, ...$values): int
 ```
 
-Pushes one or more elements onto the end of array.
+Pushes zero or more elements onto the end of array and returns the new count.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
 - `...$values` — variadic: collects excess arguments into `$values`.
 
-**Returns**: `void`
+**Returns**: `int`
 
 ## Availability
 

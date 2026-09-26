@@ -2,7 +2,7 @@
 title: "imagecolorexactalpha()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 471
+  order: 474
 ---
 
 ## imagecolorexactalpha()

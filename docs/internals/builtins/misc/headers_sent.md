@@ -2,7 +2,7 @@
 title: "headers_sent() — internals"
 description: "Compiler internals for headers_sent(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 329
+  order: 621
 ---
 
 ## `headers_sent()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/headers_sent.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/headers_sent.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:554](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L554) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:668](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L668) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -49,7 +49,10 @@ function headers_sent(mixed $filename = null, mixed $line = null): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/headers_sent.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/headers_sent.rs) (`eval_builtin!`)
+- **Execution**: shared generated-runtime ABI (`RuntimeBuiltinId(22)`).
+- **Dispatch hooks**: _none_ (shared runtime dispatch)
+- **By-reference parameters**: `$filename`, `$line`.
 
 ## Cross-references
 

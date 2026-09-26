@@ -297,6 +297,20 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         "Computes the Levenshtein edit distance between two strings."
     ),
     // `PreludeProvided` for the same asymmetry as `levenshtein` above: the AOT side declares
+    // `addcslashes` as a conditionally injected AST prelude (`src/addcslashes_prelude.rs`), and
+    // the INTERPRETER has its own implementation (`interpreter::builtins::string::addcslashes`),
+    // because Twig's `Compiler` runs interpreted and calls it for every string literal it emits.
+    surface!(
+        "addcslashes",
+        String,
+        Standard,
+        PreludeProvided,
+        [param!("string", Str), param!("characters", Str)],
+        None,
+        Str,
+        "Quotes the listed characters with C-style backslash escapes."
+    ),
+    // `PreludeProvided` for the same asymmetry as `levenshtein` above: the AOT side declares
     // `parse_str` as a conditionally injected prelude (`src/parse_str_prelude.rs`) rather than a
     // `builtin!` registry binding, because its mandatory by-reference `$result` is an ordinary
     // by-reference PARAMETER there and needs no runtime symbol. The INTERPRETER has its own

@@ -173,6 +173,7 @@ pub(in crate::interpreter) fn eval_call(
             | "array_splice"
             | "array_unshift"
             | "array_walk"
+            | "array_walk_recursive"
             | "arsort"
             | "asort"
             | "end"
@@ -221,8 +222,49 @@ pub(in crate::interpreter) fn eval_call(
             return eval_dynamic_function(&function, args, context, scope, values);
         }
     }
+    if name.eq_ignore_ascii_case("assert") {
+        return eval_assert_call(args, context, scope, values);
+    }
     note_eval_runtime_failure(format!("call to undefined function {name}()"), context);
     Err(EvalStatus::UnsupportedConstruct)
+}
+
+/// Evaluates `assert($assertion[, $description])` the way PHP's default `zend.assertions=1` does.
+///
+/// The compiler turns `assert()` into an injected helper, so there is no builtin to find, and an
+/// interpreted body reached "call to undefined function assert()" -- Symfony's
+/// `TagAwareAdapter::invalidateTags()` guards itself with one, which killed
+/// `cache:pool:invalidate-tags`. A failing assertion throws its description when that is a
+/// Throwable, and otherwise an `AssertionError` carrying it (or the compiled helper's message).
+fn eval_assert_call(
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let args = positional_call_arg_exprs(args)?;
+    let Some(assertion) = args.first() else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    if eval_truthy_expr(assertion, context, scope, values)? {
+        return values.bool_value(true);
+    }
+    let message = match args.get(1) {
+        Some(description) => {
+            let value = eval_expr(description, context, scope, values)?;
+            if values.type_tag(value)? == EVAL_TAG_OBJECT {
+                context.set_pending_throw(value);
+                return Err(EvalStatus::UncaughtThrowable);
+            }
+            values.cast_string(value)?
+        }
+        None => values.string("assertion failed")?,
+    };
+    let exception = values.new_object("AssertionError")?;
+    let code = values.int(0)?;
+    values.construct_object(exception, vec![message, code])?;
+    context.set_pending_throw(exception);
+    Err(EvalStatus::UncaughtThrowable)
 }
 
 /// Evaluates an unqualified namespaced function call with PHP's global fallback.

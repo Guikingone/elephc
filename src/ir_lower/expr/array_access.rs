@@ -311,7 +311,28 @@ pub(super) fn lower_array_access_from_value(
     stabilize_borrowed_result_and_release_receiver(ctx, array_value, result, expr.span)
 }
 
-/// Lowers nullable receiver indexing without evaluating the index on a null receiver.
+/// Evaluates, for its effects alone, an index the null-receiver edge does not read through.
+///
+/// PHP evaluates every dim operand of a fetch chain before it looks at the container, so
+/// `isset($seen[$group][$class = $def->getClass()])` assigns `$class` even when `$seen[$group]`
+/// is missing -- and Symfony's `PhpDumper::generateProxyClasses` reads `$class` right after that
+/// probe. Skipping the index on the null edge left `$class` holding the previous iteration's
+/// value (or nothing). A side-effect-free index is still skipped: evaluating it cannot be
+/// observed, and lowering it twice would only cost code.
+pub(super) fn lower_skipped_index_for_effects(ctx: &mut LoweringContext<'_, '_>, index: &Expr) {
+    if !crate::optimize::expr_has_side_effects(index) {
+        return;
+    }
+    // Discarded like an expression statement: `$class = …` yields the local's own storage, which
+    // must survive; only a value that owns a temporary is released.
+    let value = lower_expr(ctx, index);
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(index.span));
+    }
+}
+
+/// Lowers nullable receiver indexing, evaluating the index only for its effects on a null
+/// receiver.
 pub(super) fn lower_nullable_array_access(
     ctx: &mut LoweringContext<'_, '_>,
     array_value: LoweredValue,
@@ -347,6 +368,7 @@ pub(super) fn lower_nullable_array_access(
     });
 
     ctx.builder.position_at_end(null_block);
+    lower_skipped_index_for_effects(ctx, index);
     let null_value = lower_boxed_null(ctx, expr);
     store_value_into_temp(ctx, &temp_name, result_type.clone(), null_value, expr.span);
     branch_to(ctx, merge);

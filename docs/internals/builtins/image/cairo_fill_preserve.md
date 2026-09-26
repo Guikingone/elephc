@@ -2,7 +2,7 @@
 title: "cairo_fill_preserve() — internals"
 description: "Compiler internals for cairo_fill_preserve(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 404
+  order: 407
 ---
 
 ## `cairo_fill_preserve()` — internals

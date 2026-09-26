@@ -2,7 +2,7 @@
 title: "cairo_set_line_join()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 435
+  order: 438
 ---
 
 ## cairo_set_line_join()

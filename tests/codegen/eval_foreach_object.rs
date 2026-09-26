@@ -212,3 +212,23 @@ foreach ($o as $k => $v) { echo "$k=$v;"; }
     );
     assert_eq!(out, "loaded;pub=u;zeta=z;alpha=a;mid=m;");
 }
+
+/// Verifies interpreted code can iterate a COMPILED generator, directly and through an
+/// `IteratorAggregate` whose `getIterator()` returns one. Symfony's `CacheWarmerAggregate`
+/// runs `foreach ($this->warmers as $warmer)` over a container `RewindableGenerator`; the
+/// interpreter drives the generator by method name, and `rewind()` had no bridge slot.
+#[test]
+fn test_eval_foreach_over_a_compiled_generator() {
+    let out = compile_and_run(
+        r#"<?php
+final class Lazy implements IteratorAggregate {
+    public function __construct(private Closure $factory) {}
+    public function getIterator(): Traversable { return ($this->factory)(); }
+}
+$lazy = new Lazy(function () { yield 'a' => 1; yield 'b' => 2; });
+$gen = (function () { yield 10; yield 20; })();
+eval('foreach ($lazy as $k => $v) { echo "$k=$v;"; } foreach ($gen as $v) { echo "$v;"; }');
+"#,
+    );
+    assert_eq!(out, "a=1;b=2;10;20;");
+}

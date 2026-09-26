@@ -243,6 +243,18 @@ pub(crate) fn activate_compiled_source(path: &std::path::Path) {
 #[cfg(test)]
 pub(crate) fn activate_compiled_source(_path: &std::path::Path) {}
 
+/// Tells the descriptor invoker about to run that the interpreter is its caller.
+///
+/// Only then does it catch a native throw and hand it back as a pending status; a compiled
+/// caller of the same descriptor needs the throw to keep unwinding to its own `catch`.
+#[cfg(not(test))]
+pub(crate) fn request_invoker_boundary() {
+    unsafe { externs::__elephc_eval_request_invoker_boundary() };
+}
+
+#[cfg(test)]
+pub(crate) fn request_invoker_boundary() {}
+
 /// Test builds link no generated table, so every compiled class counts as loaded.
 #[cfg(test)]
 pub(crate) fn compiled_class_is_loaded(_name: &str) -> bool {

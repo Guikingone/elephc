@@ -928,3 +928,104 @@ echo count($v), ' ', count($a), ' ', $a['x'], ' ', count($c), ' ', $c['y'];
     );
     assert_eq!(out, "61 21 5 21 7");
 }
+
+
+/// A by-reference parameter forwarded into a widened by-reference parameter is widened too, so
+/// both sides agree the shared cell is boxed. `ContainerBuilder::doGet(?array &$inline)` forwards
+/// its cell to `createService(array &$inline)` exactly like this.
+#[test]
+fn test_forwarded_by_ref_array_param_follows_the_callee_widening() {
+    let out = compile_and_run(
+        r#"<?php
+function writer(array &$a, string $id): void { $a[$id] = strtoupper($id); }
+function forwarder(?array &$a, string $id): void { $a ??= []; writer($a, $id); }
+function outer(?array &$a): void { forwarder($a, 'x'); forwarder($a, 'y'); }
+$v = null;
+outer($v);
+echo json_encode($v);
+"#,
+    );
+    assert_eq!(out, r#"{"x":"X","y":"Y"}"#);
+}
+
+/// A concrete by-reference parameter forwarded into a by-reference parameter whose DECLARED type
+/// is already boxed (`?array &`) is widened too. Without it the callee read the caller's raw
+/// array pointer as a box and raised "Value must be of type array, int given" -- Symfony's
+/// `createService(array &$inlineServices)` recursing into `doGet(?array &$inlineServices)`.
+#[test]
+fn test_forwarded_by_ref_array_param_into_declared_nullable_cell() {
+    let out = compile_and_run(
+        r#"<?php
+function nullable(?array &$cell): void { $cell[] = count($cell ?? []); }
+function forward(array &$cell): void { nullable($cell); nullable($cell); }
+$c = [];
+forward($c);
+echo json_encode($c);
+"#,
+    );
+    assert_eq!(out, "[0,1]");
+}
+
+/// An UNDEFINED variable passed by reference is created by the call, and the callee may vivify it
+/// with an element write; destructuring a null element afterwards is silent. Symfony's
+/// `PhpDumper::dump()` calls `addServices($services)` with a fresh `$services`, which
+/// `addServices(?array &$services = null)` fills with `$services[$id] = …`, then destructures
+/// `[$file, $code] = $services[$id]` where a synthetic service stored null.
+#[test]
+fn test_undefined_by_ref_argument_is_vivified_through_its_cell() {
+    let out = compile_and_run(
+        r#"<?php
+function add(?array &$services = null): string {
+    foreach (['b' => 1, 'a' => 0] as $id => $kind) {
+        $services[$id] = $kind ? [null, "code-$id"] : null;
+    }
+    $out = '';
+    foreach (['a', 'b'] as $id) {
+        if (!([$file, $code] = $services[$id]) || null !== $file) {
+            continue;
+        }
+        $out .= $code;
+    }
+    return $out;
+}
+function untyped(&$s): void { $s['k'] = 1; }
+echo add($services), ' ', json_encode($services), "\n";
+untyped($fresh);
+echo json_encode($fresh);
+"#,
+    );
+    assert_eq!(out, "code-b {\"b\":[null,\"code-b\"],\"a\":null}\n{\"k\":1}");
+}
+
+/// A by-reference parameter a closure binds with `use (&$param)` shares one boxed cell with
+/// every caller, and an OMITTED one gets a cell that outlives the call. The closure's write used
+/// to store a box the caller read as a raw array, and the omitted default lived in the caller's
+/// frame -- Symfony's `doResolveServices(mixed $value, array &$inlineServices = [])` returning a
+/// `RewindableGenerator` over such a closure that runs long after the call.
+#[test]
+fn test_by_ref_param_captured_by_closure_shares_and_outlives_its_cell() {
+    let out = compile_and_run(
+        r#"<?php
+function writes(array &$inline): string {
+    $f = function () use (&$inline) { $inline['k'] = 1; return 'w'; };
+    return $f() . count($inline);
+}
+final class Maker {
+    public function mk(array &$inline = []): Closure {
+        return function (string $k) use (&$inline) {
+            $inline[$k] = strtoupper($k);
+            return count($inline);
+        };
+    }
+    public function outer(): Closure { return $this->mk(); }
+}
+function clobber(): string { return str_repeat(' ', 64) . strtolower('XX'); }
+$x = [1];
+echo writes($x), json_encode($x), "\n";
+$f = (new Maker())->outer();
+clobber();
+echo $f('a'), $f('b'), "\n";
+"#,
+    );
+    assert_eq!(out, "w2{\"0\":1,\"k\":1}\n12\n");
+}

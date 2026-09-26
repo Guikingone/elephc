@@ -644,8 +644,29 @@ pub(in crate::interpreter) fn eval_dynamic_class_allocate_object(
                 // `$targetDir`, `$parameters` and `$getService` — and treating the missing slot as
                 // a failure aborted the allocation and killed every warm-container request. The
                 // overlay below still takes the value and `$object->property` still reads it.
+                //
+                // A property the COMPILED parent declares is the other case that must reach the
+                // slot, whatever its visibility: the parent's compiled methods read that slot and
+                // nothing else. `CheckTypeDeclarationsPass extends AbstractRecursivePass`
+                // redeclares `protected bool $skipScalars = true`, and the compiled
+                // `AbstractRecursivePass::processValue()` kept reading the parent's `false` --
+                // recursing into every scalar argument until `lint:container` died on a
+                // TypeError. The slot exists by construction, so nothing new becomes enumerable.
                 if property.visibility() == EvalVisibility::Public {
                     let _ = values.property_set(object, &storage_name, value);
+                } else if let Some(declaring_class) = eval_native_parent_inheritable_slot_owner(
+                    class.name(),
+                    property.name(),
+                    context,
+                    values,
+                )? {
+                    // A non-public slot is only writable from its declaring class's scope, which
+                    // is the same wrapper an interpreted `$this->p = …` uses for such a slot.
+                    let _ = eval_reflection_with_declaring_class_scope(
+                        &declaring_class,
+                        context,
+                        |_| values.property_set(object, &storage_name, value),
+                    );
                 }
                 eval_store_dynamic_property_value(
                     identity,
@@ -659,4 +680,28 @@ pub(in crate::interpreter) fn eval_dynamic_class_allocate_object(
         }
     }
     Ok(object)
+}
+
+/// Returns the class declaring the compiled parent's non-private slot named `property`, if any.
+///
+/// A private parent slot is the parent's own and is never the one a redeclaration replaces.
+fn eval_native_parent_inheritable_slot_owner(
+    class_name: &str,
+    property: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<String>, EvalStatus> {
+    let Some(parent) = context.class_native_parent_name(class_name) else {
+        return Ok(None);
+    };
+    Ok(
+        match crate::interpreter::builtins::eval_runtime_property_access_metadata(
+            &parent, property, values,
+        )? {
+            Some((declaring_class, visibility, _)) if visibility != EvalVisibility::Private => {
+                Some(declaring_class)
+            }
+            _ => None,
+        },
+    )
 }

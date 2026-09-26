@@ -107,6 +107,8 @@ pub struct CheckResult {
     pub string_incdec_locals: HashSet<(String, String)>,
     /// Boxed caller-local storage contracts selected for source-declared by-reference calls.
     pub by_ref_local_storage_types: HashMap<(String, String), PhpType>,
+    /// Lowercase bare names of callees whose by-reference parameter cell may outlive the call.
+    pub ref_param_escaping_callees: HashSet<String>,
     /// Checker-proven types for dynamic property reference locals, keyed by scope and local.
     pub dynamic_ref_local_types: HashMap<(String, String), PhpType>,
     /// The `unset()` arguments whose local binding the checker killed, as span -> the SET of local

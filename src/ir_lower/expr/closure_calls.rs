@@ -210,6 +210,7 @@ pub(super) fn lower_dynamic_method_expr_call(
     let method = lower_expr(ctx, method);
     let method_type = ctx.builder.value_php_type(method.value);
     let method_name = ctx.declare_hidden_temp(method_type.clone());
+    let method = super::nullable_method_calls::acquire_borrowed_for_hidden_temp(ctx, method, expr.span);
     ctx.store_local(&method_name, method, method_type, Some(expr.span));
     let method_expr = Expr::new(ExprKind::Variable(method_name), expr.span);
     let object_type = ctx.builder.value_php_type(object.value).codegen_repr();

@@ -356,6 +356,10 @@ pub(crate) struct Checker {
     /// Checker-selected boxed storage contracts for caller locals passed through
     /// source-declared by-reference parameters whose writable type is represented as `Mixed`.
     pub by_ref_local_storage_types: HashMap<(String, String), PhpType>,
+    /// Lowercase bare names of functions and methods with a by-reference parameter that a
+    /// closure binds by reference (directly or through forwarding), so the cell may outlive the
+    /// call. See `Checker::scan_widened_ref_params`.
+    pub ref_param_escaping_callees: HashSet<String>,
     /// DECLARED by-reference parameters whose own body stores a value the declaration cannot
     /// represent, as `(body scope key, parameter name)`.
     ///
@@ -1174,6 +1178,7 @@ pub fn check_types_with_options(
         loop_storage_types: checker.loop_storage_types,
         string_incdec_locals: checker.string_incdec_locals,
         by_ref_local_storage_types: checker.by_ref_local_storage_types,
+        ref_param_escaping_callees: checker.ref_param_escaping_callees,
         dynamic_ref_local_types: checker.dynamic_ref_local_types,
         local_bind_kill_sites: checker.local_bind_kill_sites,
         local_retype_sites: checker.local_retype_sites,

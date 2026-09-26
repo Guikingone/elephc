@@ -2,7 +2,7 @@
 title: "unregister_tick_function() — internals"
 description: "Compiler internals for unregister_tick_function(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 339
+  order: 679
 ---
 
 ## `unregister_tick_function()` — internals

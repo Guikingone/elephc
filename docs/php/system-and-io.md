@@ -14,6 +14,8 @@ sidebar:
 | `time()` | `time(): int` | Unix timestamp |
 | `microtime()` | `microtime($as_float = false): string\|float` | Current time with microsecond precision. Returns the `"0.NNNNNNNN SSSSSSSSSS"` string (fractional microseconds as 8 digits, a space, then Unix seconds) by default or when `$as_float` is `false`; returns seconds as a `float` when `$as_float` is `true`. A non-literal flag yields `string\|float` (boxed `Mixed`), resolved at runtime. |
 | `hrtime()` | `hrtime($as_number = false): array\|int` | High-resolution monotonic time (`CLOCK_MONOTONIC`). Returns `[seconds, nanoseconds]`, or the total nanoseconds as an int when `$as_number` is true — for benchmarking elapsed time. |
+| `memory_get_usage()` | `memory_get_usage($real_usage = false): int` | Bytes the elephc allocator currently has handed out, or — with `$real_usage` — bytes it has taken from its arena. See [What these report, and how they differ from php](#memory-reporting) |
+| `memory_get_peak_usage()` | `memory_get_peak_usage($real_usage = false): int` | The high-water mark of the same two figures |
 | `sleep()` | `sleep($seconds): int` | Sleep for seconds |
 | `usleep()` | `usleep($microseconds): void` | Sleep for microseconds |
 | `getenv()` | `getenv($name = null, $local_only = false): string\|array\|false` | Get one environment variable, or — with no argument — the whole environment as a string-keyed array. Answers `false` for a name that is not set, and `""` for one set to the empty string. `$local_only` is accepted and has no effect: there is no environment here separate from the process's |
@@ -30,6 +32,56 @@ sidebar:
 | `shell_exec()` | `shell_exec($command): string` | Execute via shell, return output |
 | `system()` | `system($command): string` | Execute, output to stdout |
 | `passthru()` | `passthru($command): void` | Execute, pass raw output |
+
+### Memory reporting
+
+php's two memory functions report the Zend memory manager: `$real_usage = false` is what
+`emalloc` currently has handed out, and `$real_usage = true` is what the manager has taken from
+the system, in 2 MB chunks. elephc has no Zend memory manager, but its own allocator already
+maintains exactly those two quantities on every allocation and free, so both modes answer with a
+**measured** figure from the allocator that served the program:
+
+| Mode | elephc reports |
+|---|---|
+| `memory_get_usage(false)` | bytes in live heap blocks, 16-byte block header included (`_gc_live`) |
+| `memory_get_usage(true)` | bytes ever carved out of the heap arena (`_heap_off`) |
+| `memory_get_peak_usage(false)` | the high-water mark of the live-byte figure (`_gc_peak`) |
+| `memory_get_peak_usage(true)` | the arena figure, which only ever climbs |
+
+These counters are maintained unconditionally, not only under `--heap-debug`; that switch only
+prints them. Neither function makes a syscall.
+
+**Where the numbers differ from php's, and why.** The relationships hold — a live allocation
+raises the figure by at least its own size, releasing it lowers the figure again, the peak never
+falls back, and the real figure is never below the live figure it contains — but the magnitudes
+are elephc's own and are much smaller:
+
+* **A trivial program.** php reports ~481 KB in use and a 2 MB system chunk; elephc reports well
+  under a kilobyte. Both are true. A compiled elephc program keeps locals in registers and stack
+  slots and string literals in static data, so very little of it is heap at all, and there is no
+  interpreter to account for.
+* **`$real_usage` starts at 0.** php hands out one 2 MB chunk before the first line runs. elephc's
+  arena is a BSS buffer that is demand-paged, so "taken from the system" means "carved out of the
+  arena", which begins empty.
+* **Byte granularity, not 2 MB granularity.** php's real figure moves in 2 MB steps and so looks
+  stable across nearby calls; elephc's moves by the bytes actually used. Two consecutive calls can
+  therefore differ by a few dozen bytes here and be equal in php.
+* **Only elephc heap bytes are counted.** Interpreter-side Rust allocations, `malloc` inside a
+  linked C library (curl, iconv), and the arena reservation itself are not included. php's figure
+  has the mirror-image blind spot: it does not count `malloc` outside the Zend memory manager.
+* **A freed block is parked, not returned.** The arena figure never decreases. php's real usage is
+  likewise sticky.
+
+Under `--web`, the request boundary drops the whole arena, so both live figures restart at zero
+for each request, while `memory_get_peak_usage()` stays a **process** high-water mark — which is
+what php's is too.
+
+**Argument handling.** `$real_usage` is read for truthiness, so `memory_get_usage(1)` and
+`memory_get_usage("x")` select the real figure as they do in php. Passing a value that cannot
+stand for a bool (an array, an object) is refused at compile time rather than raising php's
+`TypeError` at run time — the same refusal `microtime($array)` already gives. A second argument
+is a compile error (`memory_get_usage() takes 0 or 1 arguments`) where php raises
+`ArgumentCountError`.
 
 ## The environment and the CLI superglobals
 

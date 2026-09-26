@@ -494,6 +494,6 @@ mod tests {
             whole_archive_bridges(&["elephc_crypto".to_string()], true),
             ["elephc_crypto", "elephc_web"]
         );
-        assert_eq!(whole_archive_bridges(&[], false), []);
+        assert!(whole_archive_bridges(&[], false).is_empty());
     }
 }

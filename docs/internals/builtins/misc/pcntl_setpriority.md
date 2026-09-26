@@ -2,7 +2,7 @@
 title: "pcntl_setpriority() — internals"
 description: "Compiler internals for pcntl_setpriority(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 633
+  order: 648
 ---
 
 ## `pcntl_setpriority()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_setpriority.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_setpriority.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:639](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L639) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:668](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L668) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

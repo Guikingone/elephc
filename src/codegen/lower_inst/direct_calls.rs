@@ -48,7 +48,7 @@ pub(super) fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
         &ref_params,
         true,
         &borrowed_stack_mixed_args,
-        RefArgCellLifetime::CallOnly,
+        RefArgCellLifetime::for_callee(ctx, &function_name),
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);

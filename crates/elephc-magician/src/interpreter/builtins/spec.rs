@@ -95,6 +95,9 @@ pub(in crate::interpreter) struct EvalParamSpec {
     pub(in crate::interpreter) default: Option<EvalBuiltinDefaultValue>,
     /// Whether this parameter must bind to caller storage.
     pub(in crate::interpreter) by_ref: bool,
+    /// Whether the contract declares this parameter `string`, so an object argument is
+    /// converted through `__toString()` before the implementation sees it.
+    pub(in crate::interpreter) string_param: bool,
 }
 
 /// Magician-specific implementation binding submitted by one builtin home file.
@@ -237,6 +240,11 @@ impl EvalBuiltinSpec {
         self.by_ref_params.as_ref()
     }
 
+    /// Returns whether any fixed parameter is declared `string`.
+    pub(in crate::interpreter) fn has_string_param(&self) -> bool {
+        self.params.iter().any(|param| param.string_param)
+    }
+
     /// Returns the default value for one PHP parameter slot.
     pub(in crate::interpreter) fn default_value(
         &self,
@@ -252,6 +260,7 @@ fn eval_param_spec(param: ParamSpec) -> EvalParamSpec {
         name: param.name,
         default: param.default.map(eval_default_value),
         by_ref: param.by_ref,
+        string_param: matches!(param.ty, elephc_builtin_contract::TypeSpec::Str),
     }
 }
 

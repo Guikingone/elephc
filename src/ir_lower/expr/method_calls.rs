@@ -208,7 +208,7 @@ pub(super) fn lower_method_call(
     let padded_args;
     let args = match sig
         .as_ref()
-        .and_then(|signature| pad_omitted_by_ref_args(ctx, signature, args))
+        .and_then(|signature| pad_omitted_by_ref_args(ctx, dispatch_method, signature, args))
     {
         Some(padded) => {
             padded_args = padded;

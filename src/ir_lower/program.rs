@@ -89,6 +89,10 @@ pub(crate) fn lower(
     module.runtime_bound_functions = std::sync::Arc::new(
         runtime_bindings::collect_runtime_bound_functions(program),
     );
+    module.ref_param_escaping_callees = check_result.ref_param_escaping_callees.clone();
+    let _ref_param_escaping_callees = super::context::set_ref_param_escaping_callees(
+        check_result.ref_param_escaping_callees.clone(),
+    );
     let constants = crate::codegen::collect_constants(program, target);
     module.global_constants = constants.clone();
     let fiber_return_sigs = crate::ir_lower::fibers::collect_fiber_return_sigs(program);

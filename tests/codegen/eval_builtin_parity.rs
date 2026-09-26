@@ -739,3 +739,20 @@ echo eval("return headers_sent() ? \"sent\" : \"clean\";"), "\n";
 
     assert_eq!(out, "clean\nx\nsent\n");
 }
+
+/// Verifies eval's `defined()` answers a `Class::CONST` name, compiled and eval-declared alike,
+/// and says `false` for a missing class or constant instead of failing. Symfony's
+/// `DebugHandlersListener::getSubscribedEvents()` gates a listener on
+/// `defined('Symfony\Component\Console\ConsoleEvents::COMMAND')`.
+#[test]
+fn test_eval_defined_answers_class_constants() {
+    let out = compile_and_run(
+        r#"<?php
+final class Compiled { public const X = 1; }
+eval('final class Interpreted { public const Y = 2; }');
+echo eval('return var_export([defined("Compiled::X"), defined("Interpreted::Y"), defined("Compiled::Z"), defined("Nope::X")], true);');
+"#,
+    );
+
+    assert_eq!(out, "array (\n  0 => true,\n  1 => true,\n  2 => false,\n  3 => false,\n)");
+}

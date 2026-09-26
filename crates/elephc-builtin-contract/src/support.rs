@@ -187,6 +187,7 @@ pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
 /// `interpreter::builtins::filesystem::file`. Leaving one out is not a quiet loss of coverage —
 /// `spec.rs` asserts every binding has an execution route, so the interpreter aborts at startup.
 const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] = &[
+    "addcslashes",
     "file",
     "hash_copy",
     "hash_final",
@@ -375,17 +376,8 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "array_replace_recursive",
     "array_udiff",
     "array_uintersect",
-    "array_walk_recursive",
-    "bindec",
-    "decbin",
-    "dechex",
-    "decoct",
     "header_remove",
-    "hexdec",
-    "octdec",
     "preg_grep",
-    "setlocale",
-    "unpack",
     "zval_free",
     "zval_pack",
     "zval_type",

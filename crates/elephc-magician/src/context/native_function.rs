@@ -194,6 +194,7 @@ impl NativeFunction {
     /// `arg_array` must be a boxed Mixed indexed array whose elements are boxed
     /// Mixed cells following the descriptor-invoker ABI.
     pub unsafe fn call(&self, arg_array: RuntimeCellHandle) -> RuntimeCellHandle {
+        crate::runtime_hooks::request_invoker_boundary();
         RuntimeCellHandle::from_raw((self.invoker)(
             self.descriptor as *mut c_void,
             arg_array.as_ptr(),

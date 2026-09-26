@@ -2,7 +2,7 @@
 title: "trigger_error() — internals"
 description: "Compiler internals for trigger_error(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 910
+  order: 948
 ---
 
 ## `trigger_error()` — internals
@@ -10,13 +10,13 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:1828](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L1828) (`trigger_error`)
+- **Lowering**: [`src/error_handling_prelude.rs`:792](https://github.com/illegalstudio/elephc/blob/main/src/error_handling_prelude.rs#L792) (`trigger_error`)
 - **Function symbol**: `trigger_error()`
 
 
 ### Lowering notes
 
-- Implemented by the compiler-injected web prelude.
+- Implemented by the compiler-injected error-handling prelude.
 
 ## Semantic descriptor
 

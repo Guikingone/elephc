@@ -28,6 +28,9 @@ pub(super) fn lower(
         RuntimeFnId::Tanh => Some({
             crate::codegen::lower_inst::builtins::math::lower_unary_libm(ctx, inst, "tanh")
         }),
+        RuntimeFnId::ElephcDiagSuppressed => Some({
+            crate::codegen::lower_inst::builtins::object_props::lower_diag_suppressed(ctx, inst)
+        }),
         RuntimeFnId::ElephcObjectIsEnum => Some({
             crate::codegen::lower_inst::builtins::object_props::lower_object_is_enum(ctx, inst)
         }),

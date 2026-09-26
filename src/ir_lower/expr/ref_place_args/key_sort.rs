@@ -79,7 +79,9 @@ fn lower_direct_property_krsort(
     let hash = match property_ty {
         PhpType::Array(element_ty) => {
             let assoc_ty = PhpType::AssocArray {
-                key: Box::new(PhpType::Int),
+                key: Box::new(crate::ir_lower::expr::array_builtin_args::promoted_hash_key_type(
+                    &element_ty,
+                )),
                 value: element_ty,
             };
             ctx.emit_value(

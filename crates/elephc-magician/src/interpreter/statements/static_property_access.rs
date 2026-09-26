@@ -434,7 +434,7 @@ pub(in crate::interpreter) fn eval_class_constant_fetch_result(
 }
 
 /// Whether any context or the compiled program already declares this class-like name.
-fn eval_class_like_is_known(
+pub(in crate::interpreter) fn eval_class_like_is_known(
     class_name: &str,
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,

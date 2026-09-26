@@ -2,7 +2,7 @@
 title: "imagecolorclosesthwb()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 468
+  order: 471
 ---
 
 ## imagecolorclosesthwb()

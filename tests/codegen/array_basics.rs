@@ -1979,6 +1979,55 @@ var_dump(isset($neverIndexed["k"]));
     assert_eq!(out, "bool(false)\n");
 }
 
+/// Verifies `isset()` and a plain read evaluate every dim operand even when an outer level is
+/// missing or null, and that a local assigned there keeps its value. Symfony's
+/// `PhpDumper::generateProxyClasses` reads `$class` right after
+/// `isset($seen[$group][$class = $def->getClass()][...])`.
+#[test]
+fn test_isset_evaluates_dims_past_a_missing_level() {
+    let out = compile_and_run(
+        r#"<?php
+function f(string $s): string { echo "f($s) "; return $s; }
+function probe(array $a): void {
+    var_dump(isset($a['x'][$c = f('c')][$t = f('t')]));
+    echo $c, $t, "\n";
+}
+probe([]);
+probe(['x' => ['c' => []]]);
+$n = null;
+var_dump(isset($n[$d = f('d')]));
+echo $d, "\n";
+$seen = [];
+foreach (['A', 'B', 'A'] as $name) {
+    if (isset($seen[true][$class = strtolower($name)])) {
+        continue;
+    }
+    $seen[true][$class] = true;
+    echo $class;
+}
+echo "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "f(c) f(t) bool(false)\nct\nf(c) f(t) bool(false)\nct\nf(d) bool(false)\nd\nab\n"
+    );
+}
+
+/// Verifies `isset()` and `??` on a string held in a `mixed` value answer false past either end.
+/// The quiet runtime read returned an empty string there, so `isset($value[strlen($value)])`
+/// was true -- `PhpDumper::export()` then appended `.''` to every exported path.
+#[test]
+fn test_isset_on_a_mixed_string_offset_respects_its_length() {
+    let out = compile_and_run(
+        r#"<?php
+function probe(mixed $v, int $i): string { return var_export(isset($v[$i]), true) . ($v[$i] ?? 'D'); }
+echo probe('abc', 2), probe('abc', 3), probe('abc', -3), probe('abc', -4), probe('', 0);
+"#,
+    );
+    assert_eq!(out, "truecfalseDtrueafalseDfalseD");
+}
+
 /// Verifies nested associative unsets write a COW-split child back into its indexed parent.
 ///
 /// The sibling source hash must retain both removed keys, and addressing a missing outer index

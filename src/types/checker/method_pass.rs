@@ -666,7 +666,13 @@ impl Checker {
                             }
                         }
                     }
-                    if Self::is_generic_array_hint(&declared) {
+                    if Self::is_generic_array_hint(&declared)
+                        && !self.method_overridden_by_descendant(
+                            &class.name,
+                            &php_symbol_key(&method.name),
+                            method.is_static,
+                        )
+                    {
                         // Resolved from the individual returns, not from `inferred_return`:
                         // `wider_type` collapses an indexed return joined with a hash one to
                         // `Mixed`, which this guard used to reject, leaving the declared INDEXED
@@ -711,6 +717,28 @@ impl Checker {
             &callable_return_sigs,
             &callable_array_return_sigs,
         );
+    }
+
+    /// Returns whether a descendant class declares its own body for this method.
+    ///
+    /// A generic `array` hint is narrowed to the element type the body returns, and a call typed
+    /// at this class reads elements with that narrowed type. An override narrows independently,
+    /// so a family member must keep the declared contract, whose element reads follow the
+    /// array's runtime value type -- the reading an interface-typed call already uses. Twig's
+    /// `AbstractExpressionParser::getAliases(): array { return []; }` is the shape: narrowed to
+    /// `array<never>`, `[$this->getName(), ...$this->getAliases()]` read DotExpressionParser's
+    /// `['?.']` as null, the operator regex gained an empty alternative, and the lexer looped.
+    fn method_overridden_by_descendant(&self, class_name: &str, method_key: &str, is_static: bool) -> bool {
+        self.classes.iter().any(|(descendant, info)| {
+            let declaring = if is_static {
+                info.static_method_declaring_classes.get(method_key)
+            } else {
+                info.method_declaring_classes.get(method_key)
+            };
+            descendant != class_name
+                && declaring.is_some_and(|declaring| declaring == descendant)
+                && self.is_subclass_of(descendant, class_name)
+        })
     }
 
     /// Keeps an override's return in the storage its parent's vtable slot promises.

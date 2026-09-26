@@ -150,6 +150,26 @@ pub(crate) fn lower_ref_assign_array_elem(
                 span,
             );
         }
+        // An INSTANCE property needs the same republication. Inserting the missing key can grow
+        // the hash to a new allocation, so a reference taken into it points into a container the
+        // property no longer holds unless the property is rewritten: Symfony's
+        // `ContainerBuilder::addObjectResource()` does
+        // `if (null === $interface = &$this->classReflectors[$name]) { $interface = new …; }`,
+        // every write went into a stale table, and the cached reflectors read back as garbage.
+        // Only receivers that can be re-read without side effects are republished.
+        if let ExprKind::PropertyAccess { object, property } = &array.kind {
+            if matches!(object.kind, ExprKind::This | ExprKind::Variable(_)) {
+                let object_value = lower_expr(ctx, object);
+                let data = ctx.intern_string(property);
+                ctx.emit_void(
+                    Op::PropSet,
+                    vec![object_value.value, array_value.value],
+                    Some(Immediate::Data(data)),
+                    Op::PropSet.default_effects(),
+                    Some(span),
+                );
+            }
+        }
     }
     ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
 }

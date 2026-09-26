@@ -2,7 +2,7 @@
 title: "session_cache_expire() — internals"
 description: "Compiler internals for session_cache_expire(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 886
+  order: 922
 ---
 
 ## `session_cache_expire()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3480](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3480) (`session_cache_expire`)
+- **Lowering**: [`src/web_prelude/build.rs`:3468](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3468) (`session_cache_expire`)
 - **Function symbol**: `session_cache_expire()`
 
 

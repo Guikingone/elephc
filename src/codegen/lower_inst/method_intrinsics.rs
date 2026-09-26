@@ -91,7 +91,7 @@ pub(super) fn lower_interface_method_call_with_miss(
         &param_types,
         &ref_params,
         true,
-        crate::codegen::lower_inst::RefArgCellLifetime::CallOnly,
+        crate::codegen::lower_inst::RefArgCellLifetime::for_callee(ctx, &method_name),
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
@@ -384,7 +384,7 @@ pub(super) fn lower_nullable_receiver_method_call(
         &inst.operands,
         &param_types,
         &ref_params,
-        crate::codegen::lower_inst::RefArgCellLifetime::CallOnly,
+        crate::codegen::lower_inst::RefArgCellLifetime::for_callee(ctx, &method_name),
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
@@ -491,7 +491,7 @@ pub(super) fn lower_nullable_receiver_interface_method_call(
         &inst.operands,
         &param_types,
         &ref_params,
-        crate::codegen::lower_inst::RefArgCellLifetime::CallOnly,
+        crate::codegen::lower_inst::RefArgCellLifetime::for_callee(ctx, &method_name),
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);

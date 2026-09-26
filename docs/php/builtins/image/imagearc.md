@@ -2,7 +2,7 @@
 title: "imagearc()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 459
+  order: 462
 ---
 
 ## imagearc()

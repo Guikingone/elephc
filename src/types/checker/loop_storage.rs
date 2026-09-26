@@ -230,7 +230,11 @@ fn apply_assignment_evidence(
                         || (typed
                             && matches!(
                                 existing.codegen_repr(),
-                                PhpType::Bool | PhpType::Int | PhpType::Float | PhpType::Str
+                                PhpType::Bool
+                                    | PhpType::Int
+                                    | PhpType::Float
+                                    | PhpType::Str
+                                    | PhpType::Object(_)
                             )
                             && matches!(incoming.codegen_repr(), PhpType::Mixed | PhpType::Union(_)))
                 }
@@ -594,11 +598,21 @@ fn representation_contract(
             // A plain scalar entry takes the boxed representation itself: the joined fixed type is
             // a precise union, and re-typing the local with it made the body's index reads refuse
             // to compile ("String index must be integer") on values php only knows as mixed.
+            //
+            // An OBJECT entry is the same case: a typed parameter (`Definition $definition`) that
+            // the body rebinds to a gradual value (`$definition = $factory;`). With the object slot
+            // kept, the header's `$definition instanceof Definition` read the box of a null or a
+            // class-name string as a live object -- Symfony's `PhpDumper::getClasses()` then
+            // dispatched `getTag()` through a string's bytes.
             Some(
                 if is_array_like(entry)
                     || matches!(
                         entry_repr,
-                        PhpType::Bool | PhpType::Int | PhpType::Float | PhpType::Str
+                        PhpType::Bool
+                            | PhpType::Int
+                            | PhpType::Float
+                            | PhpType::Str
+                            | PhpType::Object(_)
                     )
                 {
                     PhpType::Mixed

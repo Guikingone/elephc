@@ -2779,3 +2779,40 @@ aot-invoke:EvalReflectClosureMetaAotBox:EvalReflectClosureMetaAotBox:EvalReflect
 eval-static:null:EvalReflectClosureMetaEvalBox:EvalReflectClosureMetaEvalBox:S"
     );
 }
+
+
+/// An eval subclass that redeclares an inherited property default is seen with that default by
+/// its compiled parent's methods, which read the native slot. Symfony's interpreted
+/// `CheckTypeDeclarationsPass` redeclares `$skipScalars = true` over the compiled
+/// `AbstractRecursivePass`, whose `processValue()` kept reading `false`.
+#[test]
+fn test_eval_subclass_redeclared_default_reaches_compiled_parent() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class Base {
+    protected bool $flag = false;
+    protected ?string $name = null;
+    public function show(): string { return var_export($this->flag, true) . ',' . var_export($this->name, true); }
+}
+if (false) { new class extends Base {}; }
+eval('class Child extends Base { protected bool $flag = true; protected ?string $name = "child"; }');
+echo (new Child())->show();
+"#,
+    );
+    assert_eq!(out, "true,'child'");
+}
+
+/// A throw inside a compiled first-class callable called from eval code still reaches the
+/// interpreted `catch`: the invoker's boundary applies when the interpreter is the caller.
+#[test]
+fn test_eval_catches_throw_from_compiled_first_class_callable() {
+    let out = compile_and_run(
+        r#"<?php
+class NotFound extends InvalidArgumentException {}
+function thrower(string $n): string { throw new NotFound("nf:$n"); }
+$GLOBALS['f'] = thrower(...);
+eval('try { ($GLOBALS["f"])("x"); echo "no throw"; } catch (NotFound $e) { echo "caught ", $e->getMessage(); }');
+"#,
+    );
+    assert_eq!(out, "caught nf:x");
+}

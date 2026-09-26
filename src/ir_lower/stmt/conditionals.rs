@@ -225,7 +225,7 @@ fn finish_if_type_join(
         ctx.restore_local_types(arm.types.clone());
         let conversions = arm_conversions(arm, &joined);
         ctx.builder.position_at_end(arm.tail);
-        widen_indexed_arrays_to_mixed(ctx, &conversions, span);
+        convert_arm_arrays(ctx, &conversions, span);
         ctx.builder.terminate(Terminator::Br {
             target: merge,
             args: Vec::new(),
@@ -276,6 +276,31 @@ fn join_arm_types(ctx: &LoweringContext<'_, '_>, arms: &[IfArmExit]) -> TypeEnv 
             continue;
         }
 
+        // One arm promoted the array to hash storage (`$calls[$id] = …` with a string key) and
+        // another left it indexed. The frame slot rule below would join them as boxed `Mixed`,
+        // but the slot -- and a by-reference parameter's cell above all -- holds the raw array
+        // or hash pointer, never a Mixed box: `++$calls[$id][0]` after the branch then handed
+        // that pointer to the Mixed write path and every increment went nowhere. Joining at the
+        // hash both arms can reach keeps the payload honest; the indexed arms convert on their
+        // edge with the same `ArrayToHash` the promoting assignment already applied to the slot.
+        if arm_types.iter().all(|arm_type| match arm_type {
+            PhpType::Array(_) => true,
+            PhpType::AssocArray { value, .. } => value.codegen_repr() == PhpType::Mixed,
+            _ => false,
+        }) && arms
+            .iter()
+            .all(|arm| local_slot_is_hash_convertible(ctx, &name, &arm.initialized))
+        {
+            joined.insert(
+                name,
+                PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(PhpType::Mixed),
+                },
+            );
+            continue;
+        }
+
         // The arms disagree and no in-place array conversion reconciles them:
         // `$i = \strlen('ab'); if (…) { $i = 'si'; }` leaves `int` on one edge and `string` on
         // the other. Falling through with NO joined fact left the merge block reading the
@@ -302,19 +327,23 @@ fn join_arm_types(ctx: &LoweringContext<'_, '_>, arms: &[IfArmExit]) -> TypeEnv 
     joined
 }
 
-/// Returns indexed-array locals whose current arm needs boxing before entering the merge.
-fn arm_conversions(arm: &IfArmExit, joined: &TypeEnv) -> Vec<String> {
+/// Returns indexed-array locals whose current arm needs converting before entering the merge,
+/// each with the joined type it converts to.
+fn arm_conversions(arm: &IfArmExit, joined: &TypeEnv) -> Vec<(String, PhpType)> {
     let mut names = joined
-        .keys()
-        .filter(|name| {
-            matches!(
-                arm.types.get(name.as_str()).map(PhpType::codegen_repr),
-                Some(PhpType::Array(element)) if element.codegen_repr() != PhpType::Mixed
-            )
+        .iter()
+        .filter(|(name, target)| {
+            let Some(PhpType::Array(element)) =
+                arm.types.get(name.as_str()).map(PhpType::codegen_repr)
+            else {
+                return false;
+            };
+            matches!(target, PhpType::AssocArray { .. })
+                || element.codegen_repr() != PhpType::Mixed
         })
-        .cloned()
+        .map(|(name, target)| (name.clone(), target.clone()))
         .collect::<Vec<_>>();
-    names.sort();
+    names.sort_by(|left, right| left.0.cmp(&right.0));
     names
 }
 
@@ -331,20 +360,53 @@ fn local_slot_is_convertible(
             .is_some_and(|slot| initialized.contains(slot))
 }
 
-/// Boxes indexed-array elements on an arm edge so all paths agree at the merge.
-fn widen_indexed_arrays_to_mixed(ctx: &mut LoweringContext<'_, '_>, names: &[String], span: Span) {
-    let mixed_array_ty = PhpType::Array(Box::new(PhpType::Mixed));
-    for name in names {
+/// Returns whether every arm can promote the named local to hash storage on its edge.
+///
+/// Unlike boxing elements in place, promotion is what a string-keyed write already does to the
+/// slot -- a by-reference cell included -- so reference binding does not rule it out.
+fn local_slot_is_hash_convertible(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+    initialized: &HashSet<LocalSlotId>,
+) -> bool {
+    matches!(
+        ctx.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal),
+        LocalKind::PhpLocal | LocalKind::StaticLocal
+    ) && !ctx.local_uses_global_storage(name)
+        && ctx
+            .local_slots
+            .get(name)
+            .is_some_and(|slot| initialized.contains(slot))
+}
+
+/// Converts indexed-array locals on an arm edge so all paths agree at the merge: boxing the
+/// elements for an indexed join, promoting to hash storage for an associative one.
+fn convert_arm_arrays(
+    ctx: &mut LoweringContext<'_, '_>,
+    conversions: &[(String, PhpType)],
+    span: Span,
+) {
+    for (name, target) in conversions {
         let array = ctx.load_local(name, Some(span));
+        let op = if matches!(target, PhpType::AssocArray { .. }) {
+            Op::ArrayToHash
+        } else {
+            Op::ArrayToMixed
+        };
+        let target = if op == Op::ArrayToMixed {
+            PhpType::Array(Box::new(PhpType::Mixed))
+        } else {
+            target.clone()
+        };
         let converted = ctx.emit_value(
-            Op::ArrayToMixed,
+            op.clone(),
             vec![array.value],
             None,
-            mixed_array_ty.clone(),
-            Op::ArrayToMixed.default_effects(),
+            target.clone(),
+            op.default_effects(),
             Some(span),
         );
-        ctx.store_mutated_local(name, converted, mixed_array_ty.clone(), Some(span));
+        ctx.store_mutated_local(name, converted, target, Some(span));
     }
 }
 

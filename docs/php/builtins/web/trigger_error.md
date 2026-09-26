@@ -1,8 +1,8 @@
 ---
 title: "trigger_error()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Implemented by the compiler-injected error-handling prelude."
 sidebar:
-  order: 910
+  order: 948
 ---
 
 ## trigger_error()
@@ -11,7 +11,7 @@ sidebar:
 function trigger_error(string $message, int $error_level = E_USER_NOTICE): bool
 ```
 
-Implemented by the compiler-injected web prelude.
+Implemented by the compiler-injected error-handling prelude.
 
 **Parameters**:
 - `$message` (`string`)
@@ -21,7 +21,7 @@ Implemented by the compiler-injected web prelude.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected error_handling prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._

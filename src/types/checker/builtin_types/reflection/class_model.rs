@@ -302,9 +302,9 @@ pub(super) fn builtin_reflection_class() -> FlattenedClass {
                 "__interface_names",
                 string_array_type(),
             ),
-            builtin_reflection_class_array_method(
+            builtin_reflection_class_objects_from_names_method(
                 "getInterfaces",
-                "__interfaces",
+                "__interface_names",
                 object_array_type("ReflectionClass"),
             ),
             builtin_reflection_class_array_method(
@@ -312,9 +312,9 @@ pub(super) fn builtin_reflection_class() -> FlattenedClass {
                 "__trait_names",
                 string_array_type(),
             ),
-            builtin_reflection_class_array_method(
+            builtin_reflection_class_objects_from_names_method(
                 "getTraits",
-                "__traits",
+                "__trait_names",
                 object_array_type("ReflectionClass"),
             ),
             builtin_reflection_class_array_method(

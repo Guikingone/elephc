@@ -119,6 +119,7 @@ pub(super) fn lower_nullsafe_method_call(
 /// `ContainerBuilder::resolveEnvPlaceholders($value, true)` past `array &$usedEnvs = null`.
 pub(super) fn pad_omitted_by_ref_args(
     ctx: &mut LoweringContext<'_, '_>,
+    method: &str,
     sig: &FunctionSig,
     args: &[Expr],
 ) -> Option<Vec<Expr>> {
@@ -142,9 +143,17 @@ pub(super) fn pad_omitted_by_ref_args(
             padded.push(default?);
             continue;
         }
+        let span = args.last().map(|arg| arg.span).unwrap_or_else(Span::dummy);
+        // A callee whose closure keeps this parameter (`use (&$param)`) needs a cell that
+        // outlives the call, and a synthetic local is this FRAME's slot. Passing the default
+        // itself leaves the cell to the backend, which gives such a callee heap storage
+        // (`RefArgCellLifetime::for_callee`).
+        if crate::ir_lower::context::ref_param_may_escape(method) {
+            padded.push(default.unwrap_or_else(|| Expr::new(ExprKind::Null, span)));
+            continue;
+        }
         let value_type = normalize_value_php_type(param_ty.codegen_repr());
         let temp = ctx.declare_synthetic_php_local(value_type.clone());
-        let span = args.last().map(|arg| arg.span).unwrap_or_else(Span::dummy);
         let seed = match default {
             Some(default) => lower_expr(ctx, &default),
             None => lower_null(ctx, &Expr::new(ExprKind::Null, span)),
@@ -221,7 +230,7 @@ pub(super) fn lower_method_call_with_receiver(
     let padded_args;
     let args = match sig
         .as_ref()
-        .and_then(|signature| pad_omitted_by_ref_args(ctx, signature, args))
+        .and_then(|signature| pad_omitted_by_ref_args(ctx, dispatch_method, signature, args))
     {
         Some(padded) => {
             padded_args = padded;
@@ -289,6 +298,7 @@ pub(in crate::ir_lower) fn lower_dynamic_method_call_with_receiver(
         Some(expr.span),
     );
     let receiver_name = ctx.declare_hidden_temp(receiver_type.clone());
+    let object = acquire_borrowed_for_hidden_temp(ctx, object, expr.span);
     ctx.store_local(&receiver_name, object, receiver_type, Some(expr.span));
     let receiver = Expr::new(ExprKind::Variable(receiver_name), expr.span);
     let callback = Expr::new(
@@ -306,6 +316,24 @@ pub(in crate::ir_lower) fn lower_dynamic_method_call_with_receiver(
         expr.span,
     );
     lower_expr(ctx, &call)
+}
+
+/// Gives a hidden temporary its own reference to a value it would otherwise only borrow.
+///
+/// A hidden temp is released with the frame, so storing a BORROWED value in one hands the
+/// epilogue a release it does not own. `$class->name::getSubscribedServices()` desugars to a
+/// dynamic call whose receiver is the property's own string; the temp holding it freed the
+/// `ReflectionClass`'s name at return, and the next reflection call on it read freed memory
+/// (`ReflectionClassResource::loadFiles()` during every `cache:clear`).
+pub(super) fn acquire_borrowed_for_hidden_temp(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    if ctx.value_is_owning_temporary(value) {
+        return value;
+    }
+    crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
 }
 
 /// Releases normalized call arguments that cannot be returned by this call.
