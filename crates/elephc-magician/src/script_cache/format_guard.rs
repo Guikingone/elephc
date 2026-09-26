@@ -60,7 +60,8 @@ mod tests {
     /// BUMPED TO 5 WITH THIS VALUE: round 13 taught the same search to skip `{$...}`
     /// interpolation. Again no shape change — again the guard's rule.
     /// BUMPED TO 6 WITH THIS VALUE: that skip learned to treat a comment inside `{$...}` as inert.
-    const RECORDED_FINGERPRINT: u64 = 3173998828687365817;
+    /// BUMPED TO 7 WITH THIS VALUE: a doc comment in `segments.rs`, nothing else.
+    const RECORDED_FINGERPRINT: u64 = 10567775947537572183;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

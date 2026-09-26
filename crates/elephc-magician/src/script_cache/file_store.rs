@@ -52,7 +52,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 ///
 /// BUMPED TO 6 likewise: that interpolation skip learned to treat a comment inside `{$...}` as
 /// inert.
-pub(crate) const FORMAT_VERSION: u32 = 6;
+///
+/// BUMPED TO 7 by the guard's rule alone: a doc comment was added to `segments.rs`, whose
+/// source the fingerprint covers. The stored shape did not move.
+pub(crate) const FORMAT_VERSION: u32 = 7;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///
