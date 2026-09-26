@@ -197,7 +197,7 @@ pub(super) fn lower_dynamic_scoped_constant(
             Op::ObjectClassId.default_effects(),
             Some(receiver.span),
         );
-        crate::ir_lower::ownership::release_if_owned(ctx, receiver_value, Some(receiver.span));
+        release_receiver_temporary(ctx, receiver_value, receiver.span);
         return lower_runtime_class_scoped_constant(ctx, &class_name, runtime_class_id, name, expr);
     }
     if matches!(receiver_type.codegen_repr(), PhpType::Str | PhpType::Mixed | PhpType::Union(_)) {
@@ -209,13 +209,23 @@ pub(super) fn lower_dynamic_scoped_constant(
             Op::ClassNameToId.default_effects(),
             Some(receiver.span),
         );
-        crate::ir_lower::ownership::release_if_owned(ctx, receiver_value, Some(receiver.span));
+        release_receiver_temporary(ctx, receiver_value, receiver.span);
         return lower_runtime_named_class_scoped_constant(ctx, runtime_class_id, name, expr);
     }
     panic!(
         "dynamic class constant receiver lost its checked object or class-string type: {receiver_type:?} at {:?}",
         receiver.span
     )
+}
+
+/// Releases a `$value::CONST` receiver only when it is an owning temporary.
+///
+/// A plain local receiver is a borrowed load: releasing it dropped the local's own reference,
+/// and a boxed object then died under the loop still iterating it.
+fn release_receiver_temporary(ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, span: crate::span::Span) {
+    if ctx.value_is_owning_temporary(receiver) {
+        crate::ir_lower::ownership::release_if_owned(ctx, receiver, Some(span));
+    }
 }
 
 /// Returns the class name to use for a scoped constant lookup.

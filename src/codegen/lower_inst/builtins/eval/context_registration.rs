@@ -158,6 +158,14 @@ pub(super) fn register_eval_regex_provider(ctx: &mut FunctionContext<'_>) {
         .target
         .extern_symbol("__elephc_eval_register_regex_provider");
     abi::emit_call_label(ctx.emitter, &register);
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let symbol = ctx.emitter.target.extern_symbol("elephc_pcre2_v1_last_error");
+    abi::emit_symbol_address(ctx.emitter, arg_reg, &symbol);
+    let register = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_register_regex_last_error");
+    abi::emit_call_label(ctx.emitter, &register);
 }
 
 /// Writes the physical eval call site's strict profile before every runtime dispatch.

@@ -1220,6 +1220,11 @@ fn eval_rebound_reflection_class_name(
     let target_name = resolved_name.as_deref().unwrap_or(name);
     if eval_context_declared_class_like(target_name, context) {
         Ok(Some(target_name.to_string()))
+    } else if target_name.trim_start_matches('\\').eq_ignore_ascii_case("Closure") {
+        // The builtin `Closure` is in neither registry, yet its members are known to the
+        // interpreter's reflection; unbound, `getMethods()` read the compiled reflector's
+        // empty slots.
+        Ok(Some("Closure".to_string()))
     } else {
         values.reflection_canonical_class_name(target_name)
     }

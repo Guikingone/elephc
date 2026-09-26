@@ -621,6 +621,9 @@ pub(crate) fn compile(config: CliConfig) {
     // `ErrorHandler` does it for every warning it is configured to throw on, from a class the
     // autoload pass splices in, so the gate has to read the complete program like the rest here.
     let ast = crate::error_exception_prelude::inject_if_used(ast, &mut prelude_inventory);
+    // `Attribute`'s TARGET_* constants are named by every attribute class declaration, including
+    // ones only the interpreter reads at run time.
+    let ast = crate::attribute_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::array_merge_prelude::inject_if_used(ast, &mut prelude_inventory);
     if prelude_inventory.groups.contains_key("array_merge") {
         forced_groups.insert("array_merge".to_string());

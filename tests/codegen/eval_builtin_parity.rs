@@ -756,3 +756,34 @@ echo eval('return var_export([defined("Compiled::X"), defined("Interpreted::Y"),
 
     assert_eq!(out, "array (\n  0 => true,\n  1 => true,\n  2 => false,\n  3 => false,\n)");
 }
+
+/// Verifies php's builtin `Attribute` class: its constants compiled and interpreted, and an
+/// interpreted attribute class whose `#[\Attribute(...)]` flags combine them stays reflectable.
+/// Symfony's `Routing\Attribute\Route` has that shape and is only ever read by the interpreter.
+#[test]
+fn test_attribute_constants_and_interpreted_attribute_flags() {
+    let out = compile_and_run(
+        r#"<?php
+echo \Attribute::TARGET_CLASS, ' ', \Attribute::TARGET_ALL, ' ', (new \Attribute())->flags, "\n";
+eval('#[\Attribute(\Attribute::IS_REPEATABLE | \Attribute::TARGET_METHOD)] final class Flagged {}');
+echo eval('$a = (new \ReflectionClass("Flagged"))->getAttributes()[0]; return $a->getName() . json_encode($a->getArguments());');
+"#,
+    );
+
+    assert_eq!(out, "1 127 127\nAttribute[132]");
+}
+
+/// Verifies `$closure(...)` in eval hands back the same compiled closure, signature intact.
+/// Symfony's `AttributeAutoconfigurationPass` reflects `new \ReflectionFunction($callable(...))`
+/// and read arity 0 from the re-wrapped closure.
+#[test]
+fn test_eval_first_class_callable_of_a_closure_keeps_its_signature() {
+    let out = compile_and_run(
+        r#"<?php
+$c = static function (int $a, string ...$rest): void {};
+echo eval('$r = new \ReflectionFunction($c(...)); return $r->getNumberOfParameters() . ($c(...) === $c ? "same" : "copy");');
+"#,
+    );
+
+    assert_eq!(out, "2same");
+}

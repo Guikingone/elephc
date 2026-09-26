@@ -272,7 +272,7 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_refs_and_defaults(
             ));
         }
         if ref_params[param_index] {
-            materialize_omitted_ref_arg_address(ctx, param_index, arg_temp_bytes, &ref_temp_cells)?;
+            materialize_omitted_ref_arg_address(ctx, param_index, &param_types[param_index], arg_temp_bytes, &ref_temp_cells)?;
             abi::emit_push_result_value(ctx.emitter, &PhpType::Int);
             arg_temp_bytes += call_arg_temp_slot_size(&abi_param_types[param_index]);
             continue;
@@ -537,25 +537,42 @@ fn emit_omitted_ref_cell_seed(ctx: &mut FunctionContext<'_>, cell_ty: &PhpType) 
 fn materialize_omitted_ref_arg_address(
     ctx: &mut FunctionContext<'_>,
     param_index: usize,
+    param_ty: &PhpType,
     arg_temp_bytes: usize,
     temp_cells: &[RefArgTempCell],
 ) -> Result<()> {
-    let cell = temp_cells
+    let Some(cell) = temp_cells
         .iter()
         .find(|cell| cell.param_index == param_index)
-        .ok_or_else(|| {
-            // `plan_ref_arg_temp_cells` plans no cells at all for `MayOutliveCall`, where a
-            // caller-stack cell would be a use-after-free. Refusing is the right answer there.
-            CodegenIrError::unsupported(
-                "receiver-register method call with an unplanned omitted by-reference parameter",
-            )
-        })?;
+    else {
+        // `plan_ref_arg_temp_cells` plans no cells at all for `MayOutliveCall`, where a
+        // caller-stack cell would be a use-after-free: the callee may keep the reference (a
+        // closure's `use (&$param)`), so the omitted position gets heap storage seeded the way
+        // the stack cell would have been.
+        let target_ty = param_ty.codegen_repr();
+        emit_omitted_ref_cell_seed(ctx, &target_ty)?;
+        emit_heap_ref_cell_from_result(ctx, &target_ty);
+        return Ok(());
+    };
     abi::emit_temporary_stack_address(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
         arg_temp_bytes + cell.cell_offset,
     );
     Ok(())
+}
+
+/// Moves the value in the result registers into a fresh 16-byte heap ref cell, leaving the
+/// cell's address in the integer result register.
+fn emit_heap_ref_cell_from_result(ctx: &mut FunctionContext<'_>, target_ty: &PhpType) {
+    abi::emit_push_result_value(ctx.emitter, target_ty);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    let cell_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_pop_reg(ctx.emitter, cell_reg);
+    store_pushed_value_to_ref_cell(ctx, cell_reg, target_ty);
+    move_reg_to_int_result(ctx, cell_reg);
 }
 
 /// Emits the caller-side by-reference cell block: the Mixed writeback cells first, then the
@@ -683,14 +700,7 @@ pub(super) fn materialize_temporary_ref_arg_cell(
     if source_ty.codegen_repr() == target_ty {
         abi::emit_incref_if_refcounted(ctx.emitter, &target_ty);
     }
-    abi::emit_push_result_value(ctx.emitter, &target_ty);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    let cell_reg = abi::symbol_scratch_reg(ctx.emitter);
-    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    abi::emit_pop_reg(ctx.emitter, cell_reg);
-    store_pushed_value_to_ref_cell(ctx, cell_reg, &target_ty);
-    move_reg_to_int_result(ctx, cell_reg);
+    emit_heap_ref_cell_from_result(ctx, &target_ty);
     Ok(())
 }
 

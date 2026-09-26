@@ -50,7 +50,106 @@ pub(crate) fn lower_preg_match(ctx: &mut FunctionContext<'_>, inst: &Instruction
     } else {
         abi::emit_call_label(ctx.emitter, "__rt_preg_match");
     }
+    if result_is_boxed(ctx, inst)? {
+        emit_box_preg_match_result(ctx);
+    }
     super::store_if_result(ctx, inst)
+}
+
+/// Returns whether the checker typed this preg call's result for its failure value.
+fn result_is_boxed(ctx: &FunctionContext<'_>, inst: &Instruction) -> Result<bool> {
+    match inst.result {
+        Some(result) => Ok(matches!(ctx.value_php_type(result)?.codegen_repr(), PhpType::Mixed)),
+        None => Ok(false),
+    }
+}
+
+/// Boxes a `preg_match` count, or `false` when the match failed (php's `preg_last_error()`).
+fn emit_box_preg_match_result(ctx: &mut FunctionContext<'_>) {
+    let failed = ctx.next_label("preg_match_failed");
+    let done = ctx.next_label("preg_match_boxed");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // keep the match count across the error query
+            ctx.emitter.bl_c("elephc_pcre2_v1_last_error");
+            ctx.emitter.instruction("mov x9, x0");                              // the error code decides the result's shape
+            ctx.emitter.instruction("ldr x1, [sp], #16");                       // the match count becomes the int payload
+            ctx.emitter.instruction(&format!("cbnz w9, {failed}"));             // any preg error makes php return false
+            ctx.emitter.instruction("mov x2, #0");                              // int payloads have no high word
+            ctx.emitter.instruction("mov x0, #0");                              // runtime tag 0 is int
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("b {done}"));
+            ctx.emitter.label(&failed);
+            ctx.emitter.instruction("mov x1, #0");                              // false carries no payload
+            ctx.emitter.instruction("mov x2, #0");
+            ctx.emitter.instruction("mov x0, #3");                              // runtime tag 3 is bool
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("push rax");                                // keep the match count across the error query
+            ctx.emitter.instruction("push rax");                                // second slot keeps the C call 16-byte aligned
+            ctx.emitter.bl_c("elephc_pcre2_v1_last_error");
+            ctx.emitter.instruction("mov ecx, eax");                            // the error code decides the result's shape
+            ctx.emitter.instruction("pop rdi");                                 // the match count becomes the int payload
+            ctx.emitter.instruction("pop rdi");
+            ctx.emitter.instruction("test ecx, ecx");                           // any preg error makes php return false
+            ctx.emitter.instruction(&format!("jnz {failed}"));
+            ctx.emitter.instruction("xor esi, esi");                            // int payloads have no high word
+            ctx.emitter.instruction("xor eax, eax");                            // runtime tag 0 is int
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("jmp {done}"));
+            ctx.emitter.label(&failed);
+            ctx.emitter.instruction("xor edi, edi");                            // false carries no payload
+            ctx.emitter.instruction("xor esi, esi");
+            ctx.emitter.instruction("mov eax, 3");                              // runtime tag 3 is bool
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done);
+        }
+    }
+}
+
+/// Boxes a `preg_replace` string, or `null` when the match failed (php's `preg_last_error()`).
+fn emit_box_preg_replace_result(ctx: &mut FunctionContext<'_>) {
+    let failed = ctx.next_label("preg_replace_failed");
+    let done = ctx.next_label("preg_replace_boxed");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // keep the result string across the error query
+            ctx.emitter.bl_c("elephc_pcre2_v1_last_error");
+            ctx.emitter.instruction("mov x9, x0");                              // the error code decides the result's shape
+            ctx.emitter.instruction("ldp x1, x2, [sp], #16");                   // the result string becomes the payload
+            ctx.emitter.instruction(&format!("cbnz w9, {failed}"));             // any preg error makes php return null
+            ctx.emitter.instruction("mov x0, #1");                              // runtime tag 1 is string
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("b {done}"));
+            ctx.emitter.label(&failed);
+            ctx.emitter.instruction("mov x1, #0");                              // null carries no payload
+            ctx.emitter.instruction("mov x2, #0");
+            ctx.emitter.instruction("mov x0, #8");                              // runtime tag 8 is null
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("push rax");                                // keep the result pointer across the error query
+            ctx.emitter.instruction("push rdx");                                // and its length, 16 bytes keeps the C call aligned
+            ctx.emitter.bl_c("elephc_pcre2_v1_last_error");
+            ctx.emitter.instruction("mov ecx, eax");                            // the error code decides the result's shape
+            ctx.emitter.instruction("pop rsi");                                 // the result length becomes the high payload
+            ctx.emitter.instruction("pop rdi");                                 // the result pointer becomes the low payload
+            ctx.emitter.instruction("test ecx, ecx");                           // any preg error makes php return null
+            ctx.emitter.instruction(&format!("jnz {failed}"));
+            ctx.emitter.instruction("mov eax, 1");                              // runtime tag 1 is string
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("jmp {done}"));
+            ctx.emitter.label(&failed);
+            ctx.emitter.instruction("xor edi, edi");                            // null carries no payload
+            ctx.emitter.instruction("xor esi, esi");
+            ctx.emitter.instruction("mov eax, 8");                              // runtime tag 8 is null
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done);
+        }
+    }
 }
 
 /// Lowers `preg_grep(pattern, array, flags = 0)` through the key-preserving mixed filter runtime.
@@ -358,6 +457,9 @@ pub(crate) fn lower_preg_replace(ctx: &mut FunctionContext<'_>, inst: &Instructi
     abi::emit_call_label(ctx.emitter, "__rt_preg_replace");
     if let Some(slot) = count_slot {
         store_preg_replace_count(ctx, slot)?;
+    }
+    if result_is_boxed(ctx, inst)? {
+        emit_box_preg_replace_result(ctx);
     }
     super::store_if_result(ctx, inst)
 }

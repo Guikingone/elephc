@@ -80,6 +80,18 @@ fn eval_first_class_callable_from_value(
     scope: &ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    // A value that already IS a Closure is its own first-class callable: PHP hands back the same
+    // instance, signature and all. Re-wrapping a compiled closure's descriptor made a new
+    // Closure whose reflection had no parameters -- `new ReflectionFunction($callable(...))` in
+    // Symfony's `AttributeAutoconfigurationPass` then saw every configurator as arity 0.
+    if values.type_tag(value)? == EVAL_TAG_CALLABLE
+        || (values.type_tag(value)? == EVAL_TAG_OBJECT
+            && values
+                .object_identity(value)
+                .is_ok_and(|identity| context.closure_object_target(identity).is_some()))
+    {
+        return values.retain(value);
+    }
     let callable = match eval_callable_from_scope(value, context, scope, values) {
         Ok(callable) => callable,
         Err(EvalStatus::UnsupportedConstruct) if values.type_tag(value)? == EVAL_TAG_OBJECT => {

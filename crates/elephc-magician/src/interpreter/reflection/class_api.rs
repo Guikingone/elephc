@@ -602,7 +602,9 @@ pub(in crate::interpreter) fn eval_reflection_class_has_method_result(
     };
     let args = bind_evaluated_function_args(&[String::from("name")], evaluated_args)?;
     let requested_name = eval_reflection_string_arg(args[0], values)?;
-    let exists = if let Some(metadata) =
+    let exists = if eval_reflection_is_builtin_closure(&reflected_name, context) {
+        eval_reflection_builtin_closure_method_metadata(&requested_name).is_some()
+    } else if let Some(metadata) =
         eval_reflection_class_like_attributes(&reflected_name, context)
     {
         let declared = metadata

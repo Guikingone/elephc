@@ -275,6 +275,13 @@ pub(in crate::interpreter) fn execute_stmt(
                     return Ok(EvalControl::Return(values.retain(value)?));
                 }
             }
+            // - a class constant or static property read, which hands out the cell the class
+            //   still holds. `return self::$internalEncoding;` gave the caller that cell as its
+            //   own; `$encoding = mb_internal_encoding(); $encoding = self::getEncoding(...);`
+            //   then released it, and the polyfill's internal encoding read back as "0".
+            if expr_returns_shared_member_cell(expr) {
+                return Ok(EvalControl::Return(values.retain(value)?));
+            }
             Ok(EvalControl::Return(value))
         }
         EvalStmt::Return(None) => Ok(EvalControl::ReturnVoid),
@@ -450,6 +457,36 @@ pub(in crate::interpreter) fn execute_stmt(
 /// The interval is saved and restored around a BLOCK body, because php scopes a block-form
 /// directive to that block: `declare(ticks=1) { … }` ticks inside the braces and nowhere after.
 /// The statement form has no body and simply runs to the end of the scope it was written in.
+/// Returns whether every value a returned expression can produce is a class-held member cell.
+///
+/// A mixed `?:`/`??` (one side a member cell, the other a fresh value or a local) is left alone:
+/// retaining a fresh value would leak it, and a local is transferred by the scope release.
+fn expr_returns_shared_member_cell(expr: &EvalExpr) -> bool {
+    match expr {
+        EvalExpr::ClassConstantFetch { .. }
+        | EvalExpr::DynamicClassConstantFetch { .. }
+        | EvalExpr::DynamicClassConstantNameFetch { .. }
+        | EvalExpr::StaticPropertyGet { .. }
+        | EvalExpr::DynamicStaticPropertyGet { .. }
+        | EvalExpr::DynamicStaticPropertyNameGet { .. } => true,
+        EvalExpr::Unary { op: EvalUnaryOp::ErrorSuppress, expr } => {
+            expr_returns_shared_member_cell(expr)
+        }
+        EvalExpr::Ternary {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expr_returns_shared_member_cell(then_branch.as_deref().unwrap_or(condition))
+                && expr_returns_shared_member_cell(else_branch)
+        }
+        EvalExpr::NullCoalesce { value, default } => {
+            expr_returns_shared_member_cell(value) && expr_returns_shared_member_cell(default)
+        }
+        _ => false,
+    }
+}
+
 fn execute_declare_ticks_stmt(
     every: i64,
     body: Option<&[EvalStmt]>,

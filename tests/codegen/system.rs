@@ -1939,6 +1939,23 @@ echo $cb("/a/", function($m): string { return strtoupper($m[0]); }, "cat");
     assert_eq!(out, "cAt");
 }
 
+/// Verifies a `/u` pattern fails on a subject that is not valid UTF-8 the way php reports it:
+/// `preg_match` answers false and `preg_replace` null, while valid subjects and patterns without
+/// `u` keep their ordinary results.
+#[test]
+fn test_preg_utf8_modifier_fails_on_invalid_subject() {
+    let out = compile_and_run(
+        r#"<?php
+$bin = $argc > 0 ? "ab\xff\xfecd" : 'x';
+var_dump(preg_match('//u', $bin));
+var_dump(preg_replace('/[\p{Cc}\x7F]++/u', '', $bin));
+var_dump(preg_replace('/b/u', 'B', 'abc'), preg_match('/b/u', 'abc'));
+echo strlen(preg_replace('/b/', 'B', $bin)), "\n";
+"#,
+    );
+    assert_eq!(out, "bool(false)\nNULL\nstring(3) \"aBc\"\nint(1)\n6\n");
+}
+
 /// Verifies `preg_match("/xyz/", "hello world")` returns 0 (no match).
 #[test]
 fn test_preg_match_no_match() {

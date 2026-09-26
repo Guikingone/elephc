@@ -236,8 +236,50 @@ pub(super) fn eval_attribute_arg_from_expr(expr: &EvalExpr) -> Option<EvalAttrib
             eval_attribute_class_name_arg(class_name).map(EvalAttributeArg::String)
         }
         EvalExpr::Array(elements) => eval_attribute_array_arg_from_elements(elements),
+        // `#[\Attribute(\Attribute::TARGET_CLASS | \Attribute::IS_REPEATABLE)]` heads every
+        // attribute class declaration. Its operands are builtin constants with fixed values, so
+        // the flag folds to the integer php reflects; without it the whole attribute had no
+        // representable arguments and reflecting the class failed -- Symfony's `Route`, read by
+        // `AttributeAutoconfigurationPass` on every `debug:config`.
+        EvalExpr::ClassConstantFetch {
+            class_name,
+            constant,
+        } => eval_attribute_builtin_class_constant(class_name, constant).map(EvalAttributeArg::Int),
+        EvalExpr::Binary { op, left, right }
+            if matches!(op, EvalBinOp::BitOr | EvalBinOp::BitAnd | EvalBinOp::BitXor) =>
+        {
+            let (Some(EvalAttributeArg::Int(left)), Some(EvalAttributeArg::Int(right))) =
+                (eval_attribute_arg_from_expr(left), eval_attribute_arg_from_expr(right))
+            else {
+                return None;
+            };
+            Some(EvalAttributeArg::Int(match op {
+                EvalBinOp::BitOr => left | right,
+                EvalBinOp::BitAnd => left & right,
+                _ => left ^ right,
+            }))
+        }
         _ => None,
     }
+}
+
+/// Folds php's builtin `Attribute` class constants, whose values are fixed by the language.
+fn eval_attribute_builtin_class_constant(class_name: &str, constant: &str) -> Option<i64> {
+    if !class_name.trim_start_matches('\\').eq_ignore_ascii_case("Attribute") {
+        return None;
+    }
+    Some(match constant {
+        "TARGET_CLASS" => 1,
+        "TARGET_FUNCTION" => 2,
+        "TARGET_METHOD" => 4,
+        "TARGET_PROPERTY" => 8,
+        "TARGET_CLASS_CONSTANT" => 16,
+        "TARGET_PARAMETER" => 32,
+        "TARGET_CONSTANT" => 64,
+        "TARGET_ALL" => 127,
+        "IS_REPEATABLE" => 128,
+        _ => return None,
+    })
 }
 
 /// Converts an eval array literal into retained attribute metadata.

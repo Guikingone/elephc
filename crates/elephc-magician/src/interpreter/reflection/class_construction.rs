@@ -207,7 +207,7 @@ fn eval_reflection_apply_class_doc_comment(
     Ok(object)
 }
 
-/// Builds the minimal ReflectionClass metadata object for PHP's builtin Closure class.
+/// Builds the ReflectionClass metadata object for PHP's builtin Closure class.
 pub(super) fn eval_reflection_builtin_closure_class_object_result(
     owner_kind: u64,
     context: &mut ElephcEvalContext,
@@ -215,13 +215,14 @@ pub(super) fn eval_reflection_builtin_closure_class_object_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let flags = EVAL_REFLECTION_CLASS_FLAG_FINAL | EVAL_REFLECTION_CLASS_FLAG_INTERNAL;
     let modifiers = eval_reflection_class_modifiers(true, false, false, false);
+    let method_names = eval_reflection_builtin_closure_method_names();
     eval_reflection_owner_object(
         owner_kind,
         "Closure",
         &[],
         &[],
         &[],
-        &[],
+        &method_names,
         &[],
         None,
         &[],

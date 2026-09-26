@@ -8491,6 +8491,62 @@ echo $result . ":" . $callbackCount;');
     assert_eq!(out, "xxaa:2:yyy:3:zza:2");
 }
 
+/// Verifies a method returning a static property or class constant hands the caller its own
+/// reference: reassigning the caller's local must not release the class's cell.
+#[test]
+fn test_eval_returned_static_property_survives_the_callers_reassignment() {
+    let out = compile_and_run(
+        r#"<?php
+eval('final class EvalReturnedStatic {
+    private static $enc = "UTF-8";
+    const NAME = "const-" . "cell";
+    public static function get() { return self::$enc; }
+    public static function name() { return self::NAME; }
+    public static function run() {
+        $e = self::get(); $e = "x";
+        $n = self::name(); $n = "y";
+        return self::$enc . "|" . self::NAME;
+    }
+}
+echo EvalReturnedStatic::run(), " ", EvalReturnedStatic::run(), " ", EvalReturnedStatic::get(), "\n";');
+"#,
+    );
+    assert_eq!(out, "UTF-8|const-cell UTF-8|const-cell UTF-8\n");
+}
+
+/// Verifies eval passes an int or null to a compiled function's `?int` parameter as the value,
+/// not as the address of the box holding it.
+#[test]
+fn test_eval_call_passes_a_nullable_int_argument_to_a_compiled_function() {
+    let out = compile_and_run(
+        r#"<?php
+function eval_nullable_int_target(?string $s, ?int $n = 1, ?string $e = null): string {
+    return var_export($s, true) . ':' . var_export($n, true) . ':' . var_export($e, true);
+}
+echo eval_nullable_int_target('a', 2), "\n";
+eval('echo eval_nullable_int_target("b", 2), "\n";
+echo eval_nullable_int_target("c", null, "x"), "\n";
+echo eval_nullable_int_target("d"), "\n";');
+"#,
+    );
+    assert_eq!(out, "'a':2:NULL\n'b':2:NULL\n'c':NULL:'x'\n'd':1:NULL\n");
+}
+
+/// Verifies eval reports a `/u` match on invalid UTF-8 the way php does: `preg_match` false,
+/// `preg_replace` null, while a valid subject keeps its ordinary results.
+#[test]
+fn test_eval_preg_utf8_modifier_fails_on_invalid_subject() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+$bin = $argc > 0 ? "ab\xff\xfecd" : 'x';
+eval('var_dump(preg_match("//u", $bin));
+var_dump(preg_replace("/[\\\\p{Cc}]++/u", "", $bin));
+var_dump(preg_match("/b/u", $bin, $m), count($m), preg_match("/b/u", "abc"));');
+"#,
+    );
+    assert_eq!(out, "bool(false)\nNULL\nbool(false)\nint(0)\nint(1)\n");
+}
+
 /// Verifies dynamic evaluation preserves the `A` modifier's anchored-at-offset semantics.
 #[test]
 fn test_eval_preg_match_anchored_modifier() {
@@ -23810,6 +23866,28 @@ try {
         out.stdout,
         "RBm:runUsEvalAotReflectMethodChild:SP:lockedFUEvalAotReflectMethodBase:4RBL:1S:1H:0:Method EvalAotReflectMethodChild::missing() does not exist"
     );
+}
+
+/// Verifies `getMethod()` on an eval-declared class finds a method its compiled parent declares,
+/// as `hasMethod()` already did, and that the builtin `Closure` reflects its own methods.
+#[test]
+fn test_eval_class_get_method_reaches_its_compiled_parent_and_closure_methods() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalGetMethodBase { public function setName(string $name): static { return $this; } }
+eval('class EvalGetMethodChild extends EvalGetMethodBase { public function own(): void {} }');
+$r = new ReflectionClass('EvalGetMethodChild');
+echo $r->hasMethod('setName') ? 'has' : 'no', ' ';
+$m = $r->getMethod('setName');
+echo $m->class, ' ', $m->getNumberOfParameters(), ' ';
+$c = new ReflectionClass(Closure::class);
+$from = $c->getMethod('fromCallable');
+echo count($c->getMethods()), ' ', $from->isStatic() ? 'static' : 'inst', ' ';
+echo $from->getParameters()[0]->getName(), ':', (string) $from->getReturnType();
+"#,
+    );
+    assert!(out.success, "program failed: stderr={}", out.stderr);
+    assert_eq!(out.stdout, "has EvalGetMethodBase 1 7 static callback:Closure");
 }
 
 /// Verifies eval reports declaring classes for inherited generated/AOT methods and constructors.

@@ -10,6 +10,7 @@
 //!   PHP's public five-parameter signature.
 //! - The checker leaves the counter destination write-only while inferring all
 //!   value inputs, allowing an undefined variable to receive the result.
+//! - A literal pattern with the `u` modifier returns `?string`: an invalid UTF-8 subject fails.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -41,6 +42,9 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             cx.args[4].span,
             "preg_replace() parameter $count must be passed a variable",
         ));
+    }
+    if crate::builtins::system::preg_match::literal_pattern_is_utf8(&cx.args[0]) {
+        return Ok(PhpType::Union(vec![PhpType::Str, PhpType::Void]));
     }
     Ok(PhpType::Str)
 }

@@ -324,6 +324,28 @@ echo read(new Container());
     assert_eq!(out, "7");
 }
 
+/// Verifies a `mixed` receiver holding an object reads its own class's constant, and that the
+/// read leaves the local's reference alone while a method call on the same local is in flight.
+#[test]
+fn test_class_constant_through_a_mixed_object_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+final class Meta {
+    public const K = 2;
+    public function __construct(private string $n) {}
+    public function getName(): string { return $this->n; }
+}
+function items(): mixed { return $GLOBALS['argc'] > 0 ? [new Meta('x'), new Meta('y')] : null; }
+$names = [];
+foreach (items() as $m) {
+    $names[] = $m->getName() . ':' . $m::K;
+}
+echo implode(',', $names);
+"#,
+    );
+    assert_eq!(out, "x:2,y:2");
+}
+
 /// Verifies interface constant.
 #[test]
 fn test_interface_constant() {

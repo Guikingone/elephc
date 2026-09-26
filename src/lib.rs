@@ -39,6 +39,7 @@ pub mod array_reduce_prelude;
 pub mod assert_prelude;
 /// PHP's builtin `ErrorException`, declared as an AST-built class.
 pub mod error_exception_prelude;
+pub mod attribute_prelude;
 /// Whole-program PHP symbol usage collection for conditional prelude injection.
 pub(crate) mod append_vivify;
 pub mod ast_usage;

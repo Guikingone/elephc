@@ -2412,9 +2412,18 @@ fn coerce_result_to_type(
                     Arch::X86_64 => emitter.instruction("mov rax, rdi"),        // move the unboxed container pointer into the integer result
                 }
             }
+            // A nullable int parameter takes the inline tagged-scalar pair, not the box. Passing
+            // the box through handed the callee its ADDRESS as the int: a compiled
+            // `mb_str_split(?string $string, ?int $length = 1, ...)` called from eval read
+            // `$length` as a pointer-sized number.
+            PhpType::TaggedScalar => emit_mixed_result_to_tagged_scalar(emitter, ctx),
             PhpType::Mixed | PhpType::Union(_) => {}
             _ => {}
         }
+    } else if target_ty.codegen_repr() == PhpType::TaggedScalar
+        && matches!(source_ty.codegen_repr(), PhpType::Int)
+    {
+        crate::codegen::sentinels::emit_tagged_scalar_from_int_result(emitter);
     } else if matches!(target_ty, PhpType::Mixed | PhpType::Union(_)) {
         emit_box_current_value_as_mixed(emitter, source_ty);
     } else if *target_ty == PhpType::Str {
@@ -2428,6 +2437,40 @@ fn coerce_result_to_type(
         abi::emit_int_result_to_float_result(emitter);
     } else if *target_ty == PhpType::Int && *source_ty == PhpType::Float {
         abi::emit_float_result_to_int_result(emitter);
+    }
+}
+
+/// Converts the boxed Mixed in the result register into the nullable-int tagged-scalar pair.
+fn emit_mixed_result_to_tagged_scalar(emitter: &mut Emitter, ctx: &mut InvokerEmitContext) {
+    let null_label = ctx.next_label("invoker_tagged_scalar_null");
+    let done_label = ctx.next_label("invoker_tagged_scalar_done");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("str x0, [sp, #-16]!");                         // keep the boxed argument across its tag inspection
+            abi::emit_call_label(emitter, "__rt_mixed_unbox");
+            emitter.instruction("cmp x0, #8");                                  // runtime tag 8 means the argument is null
+            emitter.instruction(&format!("b.eq {}", null_label));
+            emitter.instruction("ldr x0, [sp]");                                // reload the boxed argument for integer coercion
+            abi::emit_call_label(emitter, "__rt_mixed_cast_int");
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rax");                                    // keep the boxed argument across its tag inspection
+            emitter.instruction("push rax");                                    // second slot keeps calls 16-byte aligned
+            abi::emit_call_label(emitter, "__rt_mixed_unbox");
+            emitter.instruction("cmp rax, 8");                                  // runtime tag 8 means the argument is null
+            emitter.instruction(&format!("je {}", null_label));
+            emitter.instruction("mov rax, QWORD PTR [rsp]");                    // reload the boxed argument for integer coercion
+            abi::emit_call_label(emitter, "__rt_mixed_cast_int");
+        }
+    }
+    crate::codegen::sentinels::emit_tagged_scalar_from_int_result(emitter);
+    abi::emit_jump(emitter, &done_label);
+    emitter.label(&null_label);
+    crate::codegen::sentinels::emit_tagged_scalar_null(emitter);
+    emitter.label(&done_label);
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction("add sp, sp, #16"),                // drop the preserved boxed argument
+        Arch::X86_64 => emitter.instruction("add rsp, 16"),                     // drop the preserved boxed argument
     }
 }
 
@@ -2449,9 +2492,13 @@ fn can_coerce_result_to_type(source_ty: &PhpType, target_ty: &PhpType) -> bool {
                 | PhpType::AssocArray { .. }
                 | PhpType::Object(_)
                 | PhpType::Iterable
+                | PhpType::TaggedScalar
                 | PhpType::Mixed
                 | PhpType::Union(_)
         );
+    }
+    if target_ty.codegen_repr() == PhpType::TaggedScalar {
+        return matches!(source_ty.codegen_repr(), PhpType::Int);
     }
     matches!(target_ty, PhpType::Mixed | PhpType::Union(_))
         || *target_ty == PhpType::Str

@@ -122,7 +122,12 @@ pub(in crate::interpreter) fn eval_preg_match_result_at(
     let Some(offset) = eval_preg_start_offset(offset, subject.len(), values)? else {
         return values.bool_value(false);
     };
-    values.int(i64::from(regex.captures_at(&subject, offset).is_some()))
+    let matched = regex.captures_at(&subject, offset).is_some();
+    if !matched && crate::regex_provider::regex_last_error() != 0 {
+        // A failed match (a subject that is not valid UTF-8 under `u`) is false, not 0.
+        return values.bool_value(false);
+    }
+    values.int(i64::from(matched))
 }
 
 /// Returns the match flag plus PHP `$matches` capture array for one regex search.
@@ -169,7 +174,11 @@ pub(in crate::interpreter) fn eval_preg_match_capture_result(
         unmatched_as_null,
         values,
     )?;
-    let matched = values.int(0)?;
+    let matched = if crate::regex_provider::regex_last_error() != 0 {
+        values.bool_value(false)?
+    } else {
+        values.int(0)?
+    };
     Ok((matched, matches))
 }
 

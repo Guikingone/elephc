@@ -119,7 +119,7 @@ pub(super) fn eval_reflection_owner_object_with_members(
     let is_eval_class = class_metadata_owner
         && eval_reflection_class_like_exists(reflected_name, context);
     let method_objects = if class_metadata_owner && include_class_members {
-        if is_eval_class {
+        if is_eval_class || eval_reflection_is_builtin_closure(reflected_name, context) {
             eval_reflection_member_object_array_result(
                 EVAL_REFLECTION_OWNER_METHOD,
                 reflected_name,

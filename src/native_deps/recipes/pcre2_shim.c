@@ -19,6 +19,36 @@ typedef struct elephc_pcre2_v1_handle {
     int anchored;
 } elephc_pcre2_v1_handle;
 
+/* php's preg_last_error() code for the most recent compile or match: 0 none, 1 internal,
+   2 backtrack limit, 3 recursion limit, 4 bad UTF-8, 5 bad UTF-8 offset. A match on a subject
+   that is not valid UTF-8 under /u fails in PCRE2 itself; the runtime helpers read that as
+   "no more matches" and returned the subject, while php returns null (preg_replace) or false
+   (preg_match). Callers typed for the failure read this after the call. */
+static int32_t elephc_pcre2_v1_error = 0;
+
+static int32_t elephc_pcre2_v1_error_from_match(int rc) {
+    if (rc >= 0 || rc == PCRE2_ERROR_NOMATCH) {
+        return 0;
+    }
+    if (rc <= PCRE2_ERROR_UTF8_ERR1 && rc >= PCRE2_ERROR_UTF8_ERR21) {
+        return 4;
+    }
+    if (rc == PCRE2_ERROR_BADUTFOFFSET) {
+        return 5;
+    }
+    if (rc == PCRE2_ERROR_MATCHLIMIT) {
+        return 2;
+    }
+    if (rc == PCRE2_ERROR_DEPTHLIMIT || rc == PCRE2_ERROR_HEAPLIMIT) {
+        return 3;
+    }
+    return 1;
+}
+
+int32_t elephc_pcre2_v1_last_error(void) {
+    return elephc_pcre2_v1_error;
+}
+
 int32_t elephc_pcre2_v1_compile(
     void **handle_out,
     const char *pattern_z,
@@ -33,6 +63,7 @@ int32_t elephc_pcre2_v1_compile(
     int errorcode;
     PCRE2_SIZE erroffset;
 
+    elephc_pcre2_v1_error = 0;
     if (handle_out != NULL) {
         *handle_out = NULL;
     }
@@ -40,6 +71,7 @@ int32_t elephc_pcre2_v1_compile(
         *match_slot_count_out = 0;
     }
     if (handle_out == NULL || match_slot_count_out == NULL || pattern_z == NULL) {
+        elephc_pcre2_v1_error = 1;
         return (int32_t)REG_BADPAT;
     }
 
@@ -77,6 +109,7 @@ int32_t elephc_pcre2_v1_compile(
     code = pcre2_compile((PCRE2_SPTR)pattern_z, PCRE2_ZERO_TERMINATED, native_options, &errorcode, &erroffset, NULL);
     if (code == NULL) {
         free(handle);
+        elephc_pcre2_v1_error = 1;
         return (int32_t)REG_BADPAT;
     }
     match_data = pcre2_match_data_create_from_pattern(code, NULL);
@@ -189,6 +222,7 @@ int32_t elephc_pcre2_v1_exec(
     if ((eflags & REG_NOTEMPTY) != 0) match_options |= PCRE2_NOTEMPTY;
     rc = pcre2_match(code, (PCRE2_SPTR)subject_z, subject_length, match_offset, match_options,
                      match_data, NULL);
+    elephc_pcre2_v1_error = elephc_pcre2_v1_error_from_match(rc);
     if (rc == PCRE2_ERROR_NOMATCH) {
         return (int32_t)REG_NOMATCH;
     }

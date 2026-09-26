@@ -100,6 +100,21 @@ pub(super) fn eval_reflection_method_object_result_if_exists(
     let reflected_name = context
         .resolve_class_like_name(class_name)
         .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
+    if eval_reflection_is_builtin_closure(&reflected_name, context) {
+        let Some((method_name, method)) =
+            eval_reflection_builtin_closure_method_metadata(requested_method_name)
+        else {
+            return Ok(None);
+        };
+        return eval_reflection_member_object_result(
+            EVAL_REFLECTION_OWNER_METHOD,
+            &method_name,
+            &method,
+            context,
+            values,
+        )
+        .map(Some);
+    }
     if !eval_reflection_class_like_exists(&reflected_name, context) {
         // A class's AOT method table holds what it can call, so a PRIVATE method an ancestor
         // declares is missing from it -- yet php reflects it through the descendant, with the

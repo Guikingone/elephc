@@ -33,6 +33,9 @@ pub(crate) type RegexGroupNameFn =
 pub(crate) type RegexLastMarkFn =
     unsafe extern "C" fn(*mut c_void, *mut *const c_char, *mut u64) -> i32;
 
+/// Returns php's `preg_last_error()` code for the most recent compile or match.
+pub(crate) type RegexLastErrorFn = unsafe extern "C" fn() -> i32;
+
 /// Registered callback table for the managed regex implementation.
 #[derive(Clone, Copy)]
 pub(crate) struct RegexProvider {
@@ -71,6 +74,33 @@ pub extern "C" fn __elephc_eval_register_regex_provider(
     i32::from(regex_provider().is_some())
 }
 
+/// Process-wide `preg_last_error()` reader, registered next to the provider table.
+///
+/// A separate registration keeps `__elephc_eval_register_regex_provider` at six arguments, all in
+/// registers on both SysV targets.
+static REGEX_LAST_ERROR: OnceLock<RegexLastErrorFn> = OnceLock::new();
+
+/// Registers the managed PCRE2 shim's `preg_last_error()` reader.
+#[no_mangle]
+pub extern "C" fn __elephc_eval_register_regex_last_error(last_error: RegexLastErrorFn) -> i32 {
+    let _ = REGEX_LAST_ERROR.set(last_error);
+    1
+}
+
+/// Returns php's `preg_last_error()` code for the most recent regex compile or match.
+///
+/// The code is shared with compiled `preg_*` calls, as php's is: the shim holds one value.
+pub(crate) fn regex_last_error() -> i32 {
+    #[cfg(test)]
+    {
+        return test_provider::last_error();
+    }
+    #[cfg(not(test))]
+    {
+        REGEX_LAST_ERROR.get().map_or(0, |last_error| unsafe { last_error() })
+    }
+}
+
 /// Returns whether dynamic eval may expose its regex builtin family.
 pub(crate) fn regex_provider_available() -> bool {
     regex_provider().is_some()
@@ -105,6 +135,32 @@ mod test_provider {
     use libc::size_t;
 
     use super::RegexProvider;
+
+    /// Mirrors the production shim's `elephc_pcre2_v1_error`.
+    static LAST_ERROR: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+    /// Returns the code recorded by the last test compile or match.
+    pub(super) fn last_error() -> i32 {
+        LAST_ERROR.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Maps a `pcre2_match` status to php's `preg_last_error()` code, as the shim does.
+    fn error_from_match(status: c_int) -> i32 {
+        const PCRE2_ERROR_UTF8_ERR21: c_int = -23;
+        const PCRE2_ERROR_UTF8_ERR1: c_int = -3;
+        const PCRE2_ERROR_BADUTFOFFSET: c_int = -36;
+        const PCRE2_ERROR_MATCHLIMIT: c_int = -47;
+        const PCRE2_ERROR_DEPTHLIMIT: c_int = -53;
+        const PCRE2_ERROR_HEAPLIMIT: c_int = -63;
+        match status {
+            status if status >= 0 || status == PCRE2_ERROR_NOMATCH => 0,
+            PCRE2_ERROR_UTF8_ERR21..=PCRE2_ERROR_UTF8_ERR1 => 4,
+            PCRE2_ERROR_BADUTFOFFSET => 5,
+            PCRE2_ERROR_MATCHLIMIT => 2,
+            PCRE2_ERROR_DEPTHLIMIT | PCRE2_ERROR_HEAPLIMIT => 3,
+            _ => 1,
+        }
+    }
 
     const REG_BADPAT: i32 = 3;
     const REG_ESPACE: i32 = 12;
@@ -276,6 +332,7 @@ mod test_provider {
             *handle_out = std::ptr::null_mut();
             *slot_count_out = 0;
         }
+        LAST_ERROR.store(0, std::sync::atomic::Ordering::Relaxed);
         let anchored = flags & ELEPHC_PCRE2_CFLAG_ANCHORED != 0;
 
         // Translate the POSIX-style cflags into native PCRE2 compile options
@@ -448,6 +505,7 @@ mod test_provider {
                 std::ptr::null(),
             )
         };
+        LAST_ERROR.store(error_from_match(status), std::sync::atomic::Ordering::Relaxed);
         if status == PCRE2_ERROR_NOMATCH {
             return REG_NOMATCH;
         }

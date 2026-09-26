@@ -96,6 +96,22 @@ pub(in crate::interpreter) fn eval_reflection_class_get_members_result(
     else {
         return Ok(None);
     };
+    if eval_reflection_is_builtin_closure(&reflected_name, context) {
+        let names = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+            eval_reflection_builtin_closure_method_names()
+        } else {
+            Vec::new()
+        };
+        return eval_reflection_member_object_array_result(
+            owner_kind,
+            "Closure",
+            &names,
+            filter,
+            context,
+            values,
+        )
+        .map(Some);
+    }
     if let Some(metadata) = eval_reflection_class_like_attributes(&reflected_name, context) {
         let is_eval_class = context.class(&reflected_name).is_some();
         let names = if owner_kind != EVAL_REFLECTION_OWNER_METHOD {
@@ -201,28 +217,18 @@ pub(in crate::interpreter) fn eval_reflection_class_get_member_result(
     let Some(member_name) =
         eval_reflection_member_name(owner_kind, &reflected_name, &requested_name, context)
     else {
-        if owner_kind == EVAL_REFLECTION_OWNER_METHOD
-            && !eval_reflection_class_like_exists(&reflected_name, context)
-        {
-            if let Some(member) = eval_reflection_aot_method_metadata_with_signature_if_exists(
+        if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+            // Walks the compiled ancestry, as `hasMethod()` does. An eval class's metadata lists
+            // only its own methods, so one inherited from a compiled parent was missing:
+            // Symfony's `CheckTypeDeclarationsPass` asked `getMethod('setName')` of the
+            // interpreted `AboutCommand` right after `hasMethod` said true.
+            if let Some(method) = eval_reflection_method_object_result_if_exists(
                 &reflected_name,
                 &requested_name,
                 context,
                 values,
             )? {
-                let member_name = eval_reflection_aot_declared_method_name(
-                    &reflected_name,
-                    &requested_name,
-                    values,
-                )?;
-                return eval_reflection_member_object_result(
-                    EVAL_REFLECTION_OWNER_METHOD,
-                    &member_name,
-                    &member,
-                    context,
-                    values,
-                )
-                .map(Some);
+                return Ok(Some(method));
             }
         }
         if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY
@@ -425,6 +431,11 @@ pub(super) fn eval_reflection_member_name(
     requested_name: &str,
     context: &ElephcEvalContext,
 ) -> Option<String> {
+    if owner_kind == EVAL_REFLECTION_OWNER_METHOD
+        && eval_reflection_is_builtin_closure(reflected_name, context)
+    {
+        return eval_reflection_builtin_closure_method_metadata(requested_name).map(|(name, _)| name);
+    }
     let metadata = eval_reflection_class_like_attributes(reflected_name, context)?;
     let names = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
         metadata.method_names

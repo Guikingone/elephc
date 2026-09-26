@@ -144,6 +144,10 @@ pub(in crate::interpreter) fn eval_preg_replace_result_with_count(
         cursor = matched.end();
         replacement_count += 1;
     }
+    if crate::regex_provider::regex_last_error() != 0 {
+        // A failed match (a subject that is not valid UTF-8 under `u`) makes the result null.
+        return Ok((values.null()?, 0));
+    }
     result.extend_from_slice(&subject[cursor..]);
     Ok((values.string_bytes_value(&result)?, replacement_count))
 }

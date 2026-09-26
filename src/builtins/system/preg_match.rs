@@ -14,6 +14,7 @@
 //!   "Undefined variable" error.
 //! - `check` validates that args[2] (when present) is a `Variable` expression; passing
 //!   a non-variable to the by-ref `$matches` param is a compile error.
+//! - A literal pattern with the `u` modifier returns `int|false`: an invalid UTF-8 subject fails.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -54,5 +55,35 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     if cx.args.len() >= 5 {
         cx.checker.infer_type(&cx.args[4], cx.env)?;
     }
+    if literal_pattern_is_utf8(&cx.args[0]) {
+        return Ok(PhpType::Union(vec![PhpType::Int, PhpType::False]));
+    }
     Ok(PhpType::Int)
+}
+
+/// Returns whether a preg pattern is a string literal carrying the `u` modifier.
+///
+/// Under `u` a subject that is not valid UTF-8 makes the call fail, and php reports the failure
+/// in the RESULT: `preg_match` returns false and `preg_replace` null. Symfony's console
+/// `Helper::width()` tells a binary string apart by exactly that null. Only a literal pattern is
+/// widened, so a call whose pattern cannot fail this way keeps its unboxed result.
+pub(crate) fn literal_pattern_is_utf8(pattern: &crate::parser::ast::Expr) -> bool {
+    let crate::parser::ast::ExprKind::StringLiteral(pattern) = &pattern.kind else {
+        return false;
+    };
+    let pattern = pattern.trim_start();
+    let Some(open) = pattern.chars().next() else {
+        return false;
+    };
+    let close = match open {
+        '(' => ')',
+        '{' => '}',
+        '[' => ']',
+        '<' => '>',
+        other => other,
+    };
+    pattern
+        .rfind(close)
+        .filter(|&end| end > 0)
+        .is_some_and(|end| pattern[end + close.len_utf8()..].contains('u'))
 }

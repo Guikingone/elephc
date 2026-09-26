@@ -11,6 +11,7 @@
 //! - Shared metadata types stay here so every Reflection owner uses one contract.
 //! - Generated/AOT targets use focused runtime hooks for supported point lookups.
 
+mod builtin_closure;
 mod callable_api;
 mod class_api;
 mod class_construction;
@@ -41,6 +42,7 @@ use crate::eval_ir::EvalSourceLocation;
 pub(in crate::interpreter) use callable_api::*;
 pub(in crate::interpreter) use class_api::*;
 pub(in crate::interpreter) use class_construction::*;
+use builtin_closure::*;
 use class_lookup::*;
 // Re-exported by NAME rather than by widening the glob above: object construction asks this one
 // predicate to tell a missing builtin (a gap in this build) from a genuinely undefined class
