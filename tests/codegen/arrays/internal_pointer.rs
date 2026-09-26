@@ -363,10 +363,16 @@ for ($i = 0; $i < 20; $i++) {
 }
 echo gettype($c), " ", $c === 42 ? "same" : "diff", "|";
 echo gettype($n), " ", $n === [7] ? "same" : "diff", " ", count($n), " ", $n[0] + 1, "|";
-echo $e === $n ? "same" : "diff";
+echo $e === $n ? "same" : "diff", "|";
+// The returned value now shares the reference's own cell, so a write to it must separate:
+// neither the array nor the reference sees the append.
+$n[] = 1;
+echo count($n), " ", count($m['j']), " ", count($r5), "|";
+reset($m); $last = end($m); $last[9] = 2;
+echo count($last), " ", count($m['j']);
 "#,
     );
-    assert_eq!(out.stdout, "integer same|array same 1 8|same", "stderr: {}", out.stderr);
+    assert_eq!(out.stdout, "integer same|array same 1 8|same|2 1 1|2 1", "stderr: {}", out.stderr);
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected clean heap, got: {}",
