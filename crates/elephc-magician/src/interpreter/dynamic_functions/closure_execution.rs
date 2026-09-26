@@ -105,6 +105,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
         &scope_parameter_is_by_ref,
         &evaluated_args,
     );
+    separate_array_scope_args(&mut function_scope, function.params(), &scope_parameter_is_by_ref, values)?;
     // A body containing `yield` does not run here at all. PHP evaluates the arguments, binds
     // them, and hands back a Generator whose body starts only when it is first asked for a
     // value, so the bound scope becomes the generator's own and outlives this call.
@@ -514,6 +515,7 @@ fn eval_closure_with_optional_binding(
         &scope_parameter_is_by_ref,
         &evaluated_args,
     );
+    separate_array_scope_args(&mut function_scope, function.params(), &scope_parameter_is_by_ref, values)?;
     // A closure whose body contains `yield` is a generator function too: calling it produces the
     // Generator object and runs nothing, and the scope built above — captures, `$this` and the
     // bound arguments — becomes the generator's own.

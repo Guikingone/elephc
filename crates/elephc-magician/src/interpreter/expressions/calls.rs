@@ -343,7 +343,8 @@ pub(in crate::interpreter) fn eval_dynamic_call(
             .object_identity(callback)
             .ok()
             .and_then(|identity| context.closure_object_target(identity))
-            .is_some();
+            .is_some()
+            || eval_foreign_closure_owner(callback, context, values)?.is_some();
         let is_detached_pcntl_handler = context
             .pcntl_foreign_callable_owner(callback)
             .is_some()

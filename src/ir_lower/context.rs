@@ -1059,6 +1059,43 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.store_local(name, borrowed, php_type.clone(), span);
     }
 
+    /// Re-binds a by-value `mixed` parameter to its OWN boxed cell.
+    ///
+    /// The caller hands over its cell at `+0`, and a Mixed element write mutates the cell it is
+    /// given in place: the copy-on-write split replaces the PAYLOAD inside that shared cell, so
+    /// the caller's variable followed along. Symfony's `AbstractRecursivePass::processValue()`
+    /// recurses with each array element and writes `$value[$k]`; the caller's `$v` then equaled
+    /// the result, `$v !== $processedValue` was false, and nested `%param%` placeholders were
+    /// never written back. A clone (the same op `$b = $a;` uses) gives the callee a separate cell
+    /// whose retained payload makes the first write split.
+    pub(crate) fn privatize_mixed_param(
+        &mut self,
+        name: &str,
+        php_type: &PhpType,
+        span: Option<Span>,
+    ) {
+        let borrowed = self.load_local(name, span);
+        let clone = self.emit_value(
+            Op::MixedClone,
+            vec![borrowed.value],
+            None,
+            php_type.clone(),
+            Op::MixedClone.default_effects(),
+            span,
+        );
+        let shadow = self.builder.add_local(
+            Some(format!("{}#cow", name)),
+            value_ir_type(php_type),
+            php_type.clone(),
+            LocalKind::PhpLocal,
+        );
+        self.local_slots.insert(name.to_string(), shadow);
+        self.local_kinds
+            .insert(name.to_string(), LocalKind::PhpLocal);
+        // `store_local` retains the clone for the slot and releases the temporary itself.
+        self.store_local(name, clone, php_type.clone(), span);
+    }
+
     /// Marks a local slot as initialized by caller or synthetic setup.
     pub(crate) fn mark_local_initialized(&mut self, name: &str) {
         if let Some(slot) = self.local_slots.get(name) {

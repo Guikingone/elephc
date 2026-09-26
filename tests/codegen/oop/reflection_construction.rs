@@ -48,6 +48,37 @@ echo (new ReflectionClassConstant($object, "LABEL"))->getValue();
     assert_eq!(out.stdout, "run:value:constant");
 }
 
+/// Verifies a parameter DECLARED `?\ReflectionClass` but holding a class-name string is
+/// reflected by its value, not folded to its declared class (`ReflectionClass` itself).
+#[test]
+fn test_reflection_class_of_a_declared_reflection_param_holding_a_string() {
+    let out = compile_and_run_capture(
+        r#"<?php
+final class ProxyNameSource { public function __construct(private string $cls) {} public function getClass(): ?string { return $this->cls; } }
+final class ProxyNameDumper {
+    public function name(ProxyNameSource $d, ?\ReflectionClass &$class = null): string {
+        $class = 'object' !== $d->getClass() ? $d->getClass() : 'stdClass';
+        $class = new \ReflectionClass($class);
+        return $class->name;
+    }
+}
+function reflected_nullable(?ArrayObject $o, string $fallback): string {
+    if ($o === null) { $o = $fallback; }
+    return (new ReflectionClass($o))->getName();
+}
+$c = null;
+echo (new ProxyNameDumper())->name(new ProxyNameSource('ArrayObject'), $c), " ", $c->name, " ";
+echo reflected_nullable(null, 'Exception'), " ", reflected_nullable(new ArrayObject(), 'x');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "ArrayObject ArrayObject Exception ArrayObject");
+}
+
 /// Verifies ReflectionClass resolves a case-insensitive class name held in a runtime string.
 #[test]
 fn test_reflection_class_accepts_runtime_class_string() {

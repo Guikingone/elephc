@@ -24,13 +24,27 @@ pub(in crate::interpreter) fn eval_builtin_str_replace(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [search, replace, subject] = args else {
-        return Err(EvalStatus::RuntimeFatal);
+    let (search, replace, subject, count) = match args {
+        [search, replace, subject] => (search, replace, subject, None),
+        [search, replace, subject, count] => (search, replace, subject, Some(count)),
+        _ => return Err(EvalStatus::RuntimeFatal),
     };
     let search = eval_expr(search, context, scope, values)?;
     let replace = eval_expr(replace, context, scope, values)?;
     let subject = eval_expr(subject, context, scope, values)?;
-    eval_str_replace_result(name, search, replace, subject, values)
+    // The fourth argument is php's by-reference replacement count. Symfony's `cache:clear`
+    // rewrites every warmed file with `str_replace($search, $replace, $content, $count)` and
+    // writes only when `$count` is non-zero; the three-argument shape alone refused it.
+    let Some(count) = count else {
+        return eval_str_replace_result(name, search, replace, subject, values);
+    };
+    let target = eval_preg_matches_target(count, context, scope, values)?;
+    let mut replacements = 0usize;
+    let result =
+        eval_str_replace_result_counted(name, search, replace, subject, &mut replacements, values)?;
+    let count = values.int(replacements as i64)?;
+    eval_write_preg_matches_target(&target, count, context, values)?;
+    Ok(result)
 }
 
 /// Replaces every non-overlapping occurrence of a needle, over php's four argument shapes.
@@ -65,18 +79,38 @@ pub(in crate::interpreter) fn eval_str_replace_result(
     subject: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut replacements = 0usize;
+    eval_str_replace_result_counted(name, search, replace, subject, &mut replacements, values)
+}
+
+/// Same as [`eval_str_replace_result`], also counting every replacement made.
+fn eval_str_replace_result_counted(
+    name: &str,
+    search: RuntimeCellHandle,
+    replace: RuntimeCellHandle,
+    subject: RuntimeCellHandle,
+    replacements: &mut usize,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     if values.is_array_like(subject)? {
         let len = values.array_len(subject)?;
         let mut result = values.assoc_new(len)?;
         for position in 0..len {
             let key = values.array_iter_key(subject, position)?;
             let element = values.array_get(subject, key)?;
-            let replaced = eval_str_replace_scalar_subject(name, search, replace, element, values)?;
+            let replaced = eval_str_replace_scalar_subject(
+                name,
+                search,
+                replace,
+                element,
+                replacements,
+                values,
+            )?;
             result = values.array_set(result, key, replaced)?;
         }
         return Ok(result);
     }
-    eval_str_replace_scalar_subject(name, search, replace, subject, values)
+    eval_str_replace_scalar_subject(name, search, replace, subject, replacements, values)
 }
 
 /// Applies every search/replacement pair, in order, to one string subject.
@@ -85,6 +119,7 @@ fn eval_str_replace_scalar_subject(
     search: RuntimeCellHandle,
     replace: RuntimeCellHandle,
     subject: RuntimeCellHandle,
+    replacements: &mut usize,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut current = values.string_bytes(subject)?;
@@ -113,7 +148,7 @@ fn eval_str_replace_scalar_subject(
             } else {
                 values.string_bytes(replace)?
             };
-            current = eval_replace_all_in_bytes(name, &current, &needle, &replacement)?;
+            current = eval_replace_all_in_bytes(name, &current, &needle, &replacement, replacements)?;
         }
     } else {
         // php refuses the mixed form outright: `str_replace('a', ['X'], 'aba')` is a TypeError,
@@ -124,7 +159,7 @@ fn eval_str_replace_scalar_subject(
         }
         let needle = values.string_bytes(search)?;
         let replacement = values.string_bytes(replace)?;
-        current = eval_replace_all_in_bytes(name, &current, &needle, &replacement)?;
+        current = eval_replace_all_in_bytes(name, &current, &needle, &replacement, replacements)?;
     }
     values.string_bytes_value(&current)
 }
@@ -135,6 +170,7 @@ fn eval_replace_all_in_bytes(
     subject: &[u8],
     search: &[u8],
     replace: &[u8],
+    replacements: &mut usize,
 ) -> Result<Vec<u8>, EvalStatus> {
     // php leaves the subject untouched for an empty needle rather than splicing the
     // replacement between every byte: `str_replace('', 'X', 'ab')` is `'ab'`.
@@ -146,6 +182,7 @@ fn eval_replace_all_in_bytes(
     while let Some(found) = eval_find_replace_match(name, subject, search, start)? {
         output.extend_from_slice(&subject[start..found]);
         output.extend_from_slice(replace);
+        *replacements += 1;
         start = found + search.len();
     }
     output.extend_from_slice(&subject[start..]);

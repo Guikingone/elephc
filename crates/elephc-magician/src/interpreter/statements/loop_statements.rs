@@ -196,10 +196,16 @@ pub(in crate::interpreter) fn execute_foreach_stmt(
     }
     match array_tag {
         EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => {
+            // A by-value loop iterates the array as it was when the loop started: php's
+            // `foreach ($ids as $k => $id) { unset($ids[$k]); }` still visits every element.
+            // Positions are read from the live payload, so an in-loop write to the same
+            // variable shifted them and later elements came back null (Symfony's
+            // `TextDescriptor::describeContainerServices`). A detached cell retains the payload,
+            // which makes that write split instead of landing under the iteration.
             let iteration_array = if value_by_ref {
                 values.retain(array)?
             } else {
-                array
+                values.copy_value(array)?
             };
             let result = execute_foreach_array_stmt(
                 iteration_array,
@@ -212,9 +218,7 @@ pub(in crate::interpreter) fn execute_foreach_stmt(
                 scope,
                 values,
             );
-            if value_by_ref {
-                values.release(iteration_array)?;
-            }
+            values.release(iteration_array)?;
             // Released on EVERY exit edge, which is why the loop's result is bound rather than
             // propagated with `?`: completion, `break`, `return` and a throw passing through all
             // arrive here.

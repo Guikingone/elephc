@@ -138,12 +138,54 @@ pub(in crate::interpreter) fn eval_callable_with_optional_scope(
         });
     }
     if values.type_tag(callback)? == EVAL_TAG_OBJECT {
+        if let Some(owner) = eval_foreign_closure_owner(callback, context, values)? {
+            let Some(owner_context) = (unsafe { owner.context_ptr().as_ref() }) else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            let callback = eval_object_callable(callback, owner_context, values)?;
+            return Ok(EvaluatedCallable::ForeignContext {
+                callback: Box::new(callback),
+                owner,
+            });
+        }
         return eval_object_callable(callback, context, values);
     }
     if values.is_array_like(callback)? {
         return eval_array_callable(callback, context, lexical_scope, values);
     }
     eval_string_callable(callback, context, lexical_scope, values)
+}
+
+/// Returns a lease on the eval context that owns a `Closure` object this context does not know.
+///
+/// A closure created while one compiled frame's context ran is registered there only. Symfony's
+/// FrameworkBundle `Router` stores `$parameters->get(...)` while the container builds it, and a
+/// cache warmer running under another context later calls `($this->paramFetcher)(...)`: the
+/// object then looked like its `stdClass` carrier and failed as "not callable".
+pub(in crate::interpreter) fn eval_foreign_closure_owner(
+    callback: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<crate::context::pcntl_runtime::EvalPcntlContextLease>, EvalStatus> {
+    let Ok(identity) = values.object_identity(callback) else {
+        return Ok(None);
+    };
+    if context.closure_object_target(identity).is_some() {
+        return Ok(None);
+    }
+    let Some(owner) = crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity) else {
+        return Ok(None);
+    };
+    if std::ptr::eq(owner as *const ElephcEvalContext, context as *const ElephcEvalContext) {
+        return Ok(None);
+    }
+    let Some(owner_context) = (unsafe { owner.as_ref() }) else {
+        return Ok(None);
+    };
+    if owner_context.closure_object_target(identity).is_none() {
+        return Ok(None);
+    }
+    Ok(crate::context::pcntl_runtime::begin_foreign_context_use(owner))
 }
 
 /// Normalizes one invokable eval object for dynamic callable dispatch.

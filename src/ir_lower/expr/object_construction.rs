@@ -196,11 +196,15 @@ pub(super) fn lower_reflection_class_constructor_operands(
     let reflected_arg = reflection_class_constructor_class_arg(ctx, args)?;
     let class_name = instance_callable_object_class(ctx, &reflected_arg)?;
     let lowered = lower_expr(ctx, &reflected_arg);
-    if matches!(
-        ctx.builder.value_php_type(lowered.value).codegen_repr(),
-        PhpType::Object(_)
-    ) {
-        return Some(vec![lowered.value]);
+    match ctx.builder.value_php_type(lowered.value).codegen_repr() {
+        PhpType::Object(_) => return Some(vec![lowered.value]),
+        // A gradual value only CLAIMS the class: a by-reference `?\ReflectionClass &$class`
+        // keeps its declared type while holding the string the body stored into it, and folding
+        // that claim into a constant reflected `ReflectionClass` itself. Symfony's
+        // `LazyServiceDumper::getProxyClass()` is that shape, and every lazy ghost was dumped as
+        // `new \ReflectionClass('ReflectionClass')`. The runtime constructor reads the value.
+        PhpType::Mixed | PhpType::Union(_) => return Some(vec![lowered.value]),
+        _ => {}
     }
     if ctx.value_is_owning_temporary(lowered) {
         crate::ir_lower::ownership::release_if_owned(ctx, lowered, Some(reflected_arg.span));

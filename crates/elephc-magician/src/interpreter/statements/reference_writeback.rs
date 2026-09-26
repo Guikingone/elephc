@@ -112,8 +112,59 @@ pub(in crate::interpreter) fn retain_generator_scope_args(
         if parameter_is_by_ref.get(position).copied().unwrap_or(false) {
             continue;
         }
+        // An array argument already got its own cell from `separate_array_scope_args`.
+        if generator_scope
+            .entry(name)
+            .is_some_and(|entry| entry.flags().ownership == ScopeCellOwnership::Owned)
+        {
+            continue;
+        }
         let retained = values.retain(bound_arg.value)?;
         generator_scope.set(name.clone(), retained, ScopeCellOwnership::Owned);
+    }
+    Ok(())
+}
+
+/// Gives every by-value ARRAY parameter its own cell, so writes in the body stay local.
+///
+/// [`bind_method_scope_args`] binds a by-value parameter as a `Borrowed` view of the caller's
+/// cell, adding no reference. An array write then saw a payload nobody else seemed to share and
+/// mutated it IN PLACE, so the caller's array changed under it -- PHP passes arrays by value:
+///
+///     function f(array $p, int $d) { $p[] = $d; if ($d < 2) f($p, $d + 1); return $p; }
+///     f([], 0);   // php [0]   interpreter [0, 1, 2]
+///
+/// Symfony's `PhpDumper::collectCircularReferences()` recurses with its `$path` exactly like
+/// that, so every loop it found carried nodes from sibling branches: the dumped container lost
+/// its circular-reference guards and inlined services cache:clear then asks for by id.
+///
+/// `copy_value` makes a detached cell that retains the payload, which is what an assignment
+/// `$b = $a;` does: the first write finds the payload shared and copies it, and a body that only
+/// reads pays one cell. BY-REFERENCE parameters are skipped: they alias the caller on purpose.
+pub(in crate::interpreter) fn separate_array_scope_args(
+    scope: &mut ElephcEvalScope,
+    params: &[String],
+    parameter_is_by_ref: &[bool],
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for (position, name) in params.iter().enumerate() {
+        if parameter_is_by_ref.get(position).copied().unwrap_or(false) {
+            continue;
+        }
+        let Some(entry) = scope.entry(name) else {
+            continue;
+        };
+        if entry.flags().by_ref || !entry.flags().is_visible() {
+            continue;
+        }
+        let cell = entry.cell();
+        if !matches!(values.type_tag(cell)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+            continue;
+        }
+        let copied = values.copy_value(cell)?;
+        if let Some(replaced) = scope.set(name.clone(), copied, ScopeCellOwnership::Owned) {
+            values.release(replaced)?;
+        }
     }
     Ok(())
 }

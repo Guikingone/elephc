@@ -1713,8 +1713,8 @@ fn box_tagged_hash_payload_as_mixed_aarch64(ctx: &mut FunctionContext<'_>) {
     emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Iterable);
     ctx.emitter.instruction(&format!("b {}", done));                            // skip the existing Mixed retention path
     ctx.emitter.label(&reuse_box);
-    ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the existing Mixed box before retaining it
-    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the existing Mixed box before detaching it
+    emit_detach_hash_value_box(ctx);
     ctx.emitter.label(&done);
 }
 
@@ -1753,8 +1753,24 @@ fn box_tagged_hash_payload_as_mixed_x86_64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the existing Mixed retention path
     ctx.emitter.label(&reuse_box);
     abi::emit_pop_reg(ctx.emitter, "rax");
-    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    emit_detach_hash_value_box(ctx);
     ctx.emitter.label(&done);
+}
+
+/// Re-boxes the hash slot's own Mixed cell (in the result register) into a fresh cell.
+///
+/// Retaining the slot's cell made the by-value binding an ALIAS of it: `foreach ($all as $tags)
+/// { $tags[0] = 'W'; }` wrote into `$all`, and so did every nested write through `$tags`.
+/// Symfony's `CachePoolPass` iterates `findTaggedServiceIds()` exactly like that and unsets tag
+/// attributes on its copy, which emptied the definitions' own tags. A fresh cell retains the
+/// payload, so the payload is visibly shared and the first write separates it -- the detach the
+/// indexed path already does (`indexed_iter_value_needs_detached_cell`).
+fn emit_detach_hash_value_box(ctx: &mut FunctionContext<'_>) {
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rsi, rdx");                                // adapt the unboxed high payload word to the boxing helper ABI
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
 }
 
 /// Loads a runtime-typed AArch64 indexed-array element and returns it as an owned `Mixed` box.

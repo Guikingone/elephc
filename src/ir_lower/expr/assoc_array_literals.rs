@@ -248,6 +248,13 @@ pub(in crate::ir_lower) fn array_access_expr_value_type_for_ir(
         }
         ExprKind::ArrayLiteral(items) => Some(array_literal_type_for_ir(ctx, items, array)),
         ExprKind::ArrayLiteralAssoc(pairs) => Some(assoc_array_literal_type_for_ir(ctx, pairs, array)),
+        // A nested read (`$tags[0]['reset']`) takes the element type of the inner read. Without
+        // it the literal fell back to the syntactic guess, whose unknown is `int`, and
+        // `['method' => $tags[0]['reset']]` was stamped `array<string, int>` over a string --
+        // Symfony's CachePoolPass tag attribute then read back as `0`.
+        ExprKind::ArrayAccess { array: inner, .. } => {
+            array_access_expr_value_type_for_ir(ctx, inner)
+        }
         _ => None,
     }?
     .codegen_repr();

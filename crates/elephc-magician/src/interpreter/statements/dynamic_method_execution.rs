@@ -222,6 +222,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
         &scope_parameter_is_by_ref,
         &evaluated_args,
     );
+    separate_array_scope_args(&mut method_scope, method.params(), &scope_parameter_is_by_ref, values)?;
     // A method whose body contains `yield` returns a Generator without executing a line, and its
     // activation travels with it: the class scope a later `next()` runs under is this method's,
     // not the resumer's.
@@ -418,6 +419,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
         &scope_parameter_is_by_ref,
         &evaluated_args,
     );
+    separate_array_scope_args(&mut method_scope, method.params(), &scope_parameter_is_by_ref, values)?;
     // A method whose body contains `yield` returns a Generator without executing a line, and its
     // activation travels with it: the class scope a later `next()` runs under is this method's,
     // not the resumer's.

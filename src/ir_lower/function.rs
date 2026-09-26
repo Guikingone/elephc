@@ -1391,6 +1391,12 @@ fn lower_body_into_function(
         if name == "this" {
             continue;
         }
+        if matches!(php_type.codegen_repr(), PhpType::Mixed)
+            && crate::ir_lower::expr::body_writes_local(body, name)
+        {
+            ctx.privatize_mixed_param(name, php_type, None);
+            continue;
+        }
         if !matches!(
             php_type.codegen_repr(),
             PhpType::Array(_) | PhpType::AssocArray { .. }

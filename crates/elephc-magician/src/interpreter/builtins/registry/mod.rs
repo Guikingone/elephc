@@ -281,7 +281,15 @@ pub(in crate::interpreter) fn eval_declared_builtin_direct_call(
     let Some(spec) = eval_declared_builtin_spec(name) else {
         return Ok(None);
     };
-    if let Some(runtime_builtin) = spec.runtime_builtin {
+    // A call that reaches a by-reference parameter (`str_replace(..., $count)`) cannot go
+    // through the by-value runtime builtin: it would read the destination as a value (warning on
+    // an undefined one) and have nowhere to write the result. The direct hook binds it.
+    let reaches_by_ref_param = spec
+        .params
+        .iter()
+        .take(args.len())
+        .any(|param| spec.by_ref_param_names().contains(&param.name));
+    if let Some(runtime_builtin) = spec.runtime_builtin.filter(|_| !reaches_by_ref_param) {
         if runtime_builtin.supports_arity(args.len()) {
             let mut evaluated_args = Vec::with_capacity(args.len());
             for arg in args {

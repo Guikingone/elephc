@@ -2256,4 +2256,61 @@ var_dump(in_array(picked(true), [0]));
     );
 }
 
+/// Verifies a by-value `foreach` over a hash hands the loop variable its own cell: writes and
+/// nested unsets through it must not reach the iterated array (Symfony's CachePoolPass unsets
+/// tag attributes on its copy of `findTaggedServiceIds()`), and a literal built from a nested
+/// read of it keeps the read's type (it was stamped `array<string, int>` and read back `0`).
+#[test]
+fn test_foreach_over_hash_value_writes_stay_in_the_loop_copy() {
+    let out = compile_and_run(
+        r#"<?php
+function tag_source(): array { return ['p' => [['reset' => 'reset', 'n' => 'x']]]; }
+$all = tag_source();
+foreach ($all as $tags) { $tags[0] = 'W'; }
+echo json_encode($all), "\n";
+$all = tag_source();
+foreach ($all as $tags) { unset($tags[0]['n']); }
+echo json_encode($all), "\n";
+$all = tag_source();
+foreach ($all as $tags) {
+    foreach (['reset', 'n'] as $attr) {
+        if ('reset' === $attr) { $kept = ['method' => $tags[0][$attr]]; }
+        unset($tags[0][$attr]);
+    }
+    echo json_encode($kept), " ", json_encode($all), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"p\":[{\"reset\":\"reset\",\"n\":\"x\"}]}\n{\"p\":[{\"reset\":\"reset\",\"n\":\"x\"}]}\n{\"method\":\"reset\"} {\"p\":[{\"reset\":\"reset\",\"n\":\"x\"}]}\n"
+    );
+}
+
+/// Verifies a by-value `mixed` parameter is the callee's own copy: a recursive walk that writes
+/// `$value[$k]` must not rewrite the caller's element, so the caller sees the change and stores
+/// it (Symfony's `AbstractRecursivePass::processValue()` resolving nested placeholders).
+#[test]
+fn test_recursive_mixed_param_writes_do_not_reach_the_caller() {
+    let out = compile_and_run(
+        r#"<?php
+function resolve_placeholders(mixed $value): mixed {
+    if (is_array($value)) {
+        foreach ($value as $k => $v) {
+            if ($v !== $p = resolve_placeholders($v)) { $value[$k] = $p; }
+        }
+        return $value;
+    }
+    return $value === '%p%' ? 'R' : $value;
+}
+$args = [0 => 'a', 2 => ['cache_dir' => '%p%'], 3 => [['%p%']]];
+echo json_encode(resolve_placeholders($args)), " ", json_encode($args), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"0\":\"a\",\"2\":{\"cache_dir\":\"R\"},\"3\":[[\"R\"]]} {\"0\":\"a\",\"2\":{\"cache_dir\":\"%p%\"},\"3\":[[\"%p%\"]]}\n"
+    );
+}
+
 // --- Long-form `array(...)` literal ---

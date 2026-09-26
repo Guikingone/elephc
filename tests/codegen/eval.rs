@@ -8491,6 +8491,67 @@ echo $result . ":" . $callbackCount;');
     assert_eq!(out, "xxaa:2:yyy:3:zza:2");
 }
 
+/// Verifies interpreted by-value array semantics: a parameter written by the callee stays the
+/// callee's copy, and a by-value `foreach` visits every element even when the body unsets
+/// entries of the same variable.
+#[test]
+fn test_eval_by_value_arrays_are_copies_for_params_and_foreach() {
+    let out = compile_and_run(
+        r#"<?php
+eval('function eval_plain_copy(array $p, int $d): array { $p[] = $d; if ($d < 2) { eval_plain_copy($p, $d + 1); } return $p; }
+function eval_sorted_ids(array $ids): array { asort($ids); return $ids; }
+echo implode(",", eval_plain_copy([], 0)), "|";
+$a = ["x", "y", "z"];
+foreach ($a as $k => $v) { if ($k == 0) { unset($a[1]); } echo $v; }
+echo "|";
+$b = eval_sorted_ids(["z", ".h", "a"]);
+foreach ($b as $k => $v) { if ($v[0] === ".") { unset($b[$k]); continue; } echo $v; }
+echo "|", implode(",", $b), "\n";');
+"#,
+    );
+    assert_eq!(out, "0|xyz|az|a,z\n");
+}
+
+/// Verifies a closure created in one compiled frame's eval context is callable from another's,
+/// and that a closure, array or object stored on a stdClass from eval reads back intact.
+#[test]
+fn test_eval_closure_crosses_contexts_and_survives_a_stdclass_property() {
+    let out = compile_and_run_with_regex(
+        r##"<?php
+function eval_ctx_a(): object {
+    eval('class EvalCtxBag { public function get(string $k): string { return "v:" . $k; } }
+    final class EvalCtxHolder { public \Closure $fetch; public function __construct(EvalCtxBag $p) { $this->fetch = $p->get(...); }
+        public function run(): string { return ($this->fetch)("a"); } }');
+    return eval('return new EvalCtxHolder(new EvalCtxBag());');
+}
+function eval_ctx_b(object $h): string {
+    return eval('return $h->run() . "|" . ($h->fetch)("b");');
+}
+echo eval_ctx_b(eval_ctx_a()), "\n";
+eval('$f = static function ($m) { return "<" . $m[1] . ">"; };
+$s = new \stdClass();
+$s->f = $f; $s->arr = [1, 2]; $s->o = new \ArrayObject([1]); $s->i = 5;
+echo gettype($s->f), " ", gettype($s->arr), " ", gettype($s->o), " ", gettype($s->i), " ";
+echo preg_replace_callback("#x(\\d)#", $s->f, "x1"), "\n";');
+"##,
+    );
+    assert_eq!(out, "v:a|v:b\nobject array object integer <1>\n");
+}
+
+/// Verifies eval's `str_replace` / `str_ireplace` write the by-reference replacement count.
+#[test]
+fn test_eval_str_replace_writes_its_count() {
+    let out = compile_and_run(
+        r#"<?php
+eval('namespace EvalCountNs;
+$c = str_replace(["a", "b"], "x", "abcab", $n);
+$e = \str_ireplace("A", "z", "aAa", $k);
+echo $c, " ", $n, " ", $e, " ", $k, "\n";');
+"#,
+    );
+    assert_eq!(out, "xxcxx 4 zzz 3\n");
+}
+
 /// Verifies a method returning a static property or class constant hands the caller its own
 /// reference: reassigning the caller's local must not release the class's cell.
 #[test]
