@@ -46,6 +46,11 @@ Supported forms: `use Foo\Bar;`, `use Foo\Bar as Baz;`, `use function`, `use con
 - A predefined constant can be written fully qualified too, as namespaced code often does to skip
   the namespace lookup: `\PHP_EOL`, `\PHP_INT_MAX`, `\M_PI`, `\STDERR`, `\true`, `\null`. Each
   names the same global constant as its bare spelling
+- A relative name `namespace\helper()` names `helper` in the current namespace: inside
+  `namespace Demo;` it is exactly `\Demo\helper()`, and in the global namespace it is `\helper()`.
+  It works wherever a name does (calls, constants, `new`, static calls, `::class`, `instanceof`,
+  `implements`, type declarations), and inside braced `namespace X { ... }` blocks each block's
+  own name applies
 - Included files keep their own namespace and imports; an include cannot inherit the caller's namespace scope
 
 ## Case sensitivity
