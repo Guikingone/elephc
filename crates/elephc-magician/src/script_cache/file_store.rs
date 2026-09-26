@@ -53,9 +53,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// BUMPED TO 6 likewise: that interpolation skip learned to treat a comment inside `{$...}` as
 /// inert.
 ///
-/// BUMPED TO 7 by the guard's rule alone: a doc comment was added to `segments.rs`, whose
-/// source the fingerprint covers. The stored shape did not move.
-pub(crate) const FORMAT_VERSION: u32 = 7;
+/// Briefly 7, for a doc comment added to `segments.rs`, and put back: `format_guard` no longer
+/// hashes comment lines, and the code lines of every version-6 build are identical to this
+/// one's, so a version-6 directory is still valid. Keeping 7 would have orphaned it, which
+/// under `opcache.file_cache_read_only=1` means re-parsing every script in every worker.
+pub(crate) const FORMAT_VERSION: u32 = 6;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

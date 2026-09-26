@@ -952,10 +952,13 @@ than an error:
 The format version is guarded by a test that fingerprints the IR's own source, so
 a change to the stored shape cannot silently keep an old version number — bincode
 is not self-describing, and a mismatched payload could otherwise decode into a
-plausible but wrong tree.
+plausible but wrong tree. Comment and blank lines are left out of that fingerprint,
+so a documentation-only change never moves the version or orphans a directory.
 
 `opcache.file_cache_read_only` reads entries without ever creating one, which is
-what makes a shared read-only cache directory usable.
+what makes a shared read-only cache directory usable. Such a directory has to be
+re-primed by a writable run after upgrading elephc: a new crate version is a new
+writer directory, exactly as a new PHP build is a new `system_id` in reference.
 
 **The three checks above authenticate the SOURCE, not the writer — so the cache
 directory has to be trusted.** They prove an entry describes the file being
