@@ -410,14 +410,17 @@ enum Bracket {
     },
 }
 
+/// Matches the `[:blank:]` character class: C's `isblank` in the "C" locale.
 fn is_blank(byte: u8) -> bool {
     matches!(byte, b' ' | b'\t')
 }
 
+/// Matches the `[:print:]` character class: C's `isprint` in the "C" locale.
 fn is_print(byte: u8) -> bool {
     byte.is_ascii_graphic() || byte == b' '
 }
 
+/// Matches the `[:space:]` character class: C's `isspace` in the "C" locale.
 fn is_space(byte: u8) -> bool {
     // C's `isspace`, which unlike `u8::is_ascii_whitespace` includes the vertical tab.
     matches!(byte, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r')

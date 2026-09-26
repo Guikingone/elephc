@@ -452,6 +452,7 @@ mod tests {
         }
     }
 
+    /// Verifies a `?>` inside a string interpolation's array key does not close the PHP block.
     #[test]
     fn interpolation_hides_a_nested_close_tag() {
         let sources: [&[u8]; 3] = [

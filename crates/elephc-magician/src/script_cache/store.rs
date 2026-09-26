@@ -854,6 +854,8 @@ pub(crate) fn compile_open_failure_warnings(display: &str, reason: &str) -> [Str
     ]
 }
 
+/// Compiles one file into the cache for `opcache_compile_file()`, serving a warm entry as a hit;
+/// answers whether the file is cached without a parse error.
 fn compile_file_inner(path: &Path) -> bool {
     let config = config();
     if !config.enabled {
