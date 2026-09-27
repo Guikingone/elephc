@@ -19,7 +19,7 @@
 //!   construction, and a size-greedy repack links fine and dies at startup.
 //! - `jobs <= 1` returns the input unchanged, byte for byte. That is the identity gate.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap, FastSet};
 
 use crate::codegen::platform::{AppleVariant, Arch, Platform, Target};
 use crate::codegen::Emit;
@@ -51,7 +51,7 @@ const VISIBILITY_FOOTER_MARKER: &str =
 /// collide, and greppable, so a symbolicated profile explains itself.
 const PROMOTED_PREFIX: &str = "_elephc_xslice_";
 
-/// Result of one collected split (tests only; production streams through `split_assembly_streaming`).
+/// Result of one collected split (tests only; production renders a `SplitPlan` slice by slice).
 #[cfg(test)]
 pub(super) struct SplitOutcome {
     /// Slice bodies in emission order. Exactly one entry when the input was not split.
@@ -124,11 +124,8 @@ impl<'a> Lines<'a> {
     fn new(source: &'a str) -> Self {
         let mut starts = Vec::with_capacity(source.len() / 32 + 2);
         starts.push(0u32);
-        for (index, byte) in source.bytes().enumerate() {
-            if byte == b'\n' {
-                starts.push((index + 1) as u32);
-            }
-        }
+        let newlines = memchr::memchr_iter(b'\n', source.as_bytes());
+        starts.extend(newlines.map(|index| (index + 1) as u32));
         if *starts.last().expect("seeded above") as usize != source.len() {
             starts.push(source.len() as u32);
         }
@@ -182,7 +179,7 @@ struct Analysis<'a> {
     /// Names in first-definition order; the index into this vector is a label id.
     names: Vec<&'a str>,
     /// Label id per name.
-    ids: HashMap<&'a str, usize>,
+    ids: FastMap<&'a str, usize>,
     /// Span per label id, parallel to `names`.
     spans: Vec<LabelSpan>,
     /// Line indices a slice may start at, ascending.
@@ -199,9 +196,9 @@ struct Analysis<'a> {
     /// Names the file-global visibility footer marks, in footer order.
     footer: Vec<&'a str>,
     /// The same names, for membership tests.
-    footer_set: HashSet<&'a str>,
+    footer_set: FastSet<&'a str>,
     /// Names declared `.globl` anywhere in the body.
-    globl: HashSet<&'a str>,
+    globl: FastSet<&'a str>,
 }
 
 impl Analysis<'_> {
@@ -218,8 +215,6 @@ impl Analysis<'_> {
 
 /// What a streamed split produced, without the slice texts themselves.
 pub(super) struct SplitSummary {
-    /// Number of slices handed to the sink.
-    pub(super) slices: usize,
     /// Assembler temporaries renamed because their span crossed a cut.
     pub(super) promoted: Vec<String>,
     /// Plain labels published `.private_extern` because another slice references them.
@@ -250,38 +245,264 @@ pub(super) fn split_assembly(source: &str, jobs: usize, local_prefix: &str) -> S
     }
 }
 
-/// Splits `source` like `split_assembly`, handing each slice to `sink` as soon as it is
-/// rendered instead of collecting them.
+/// Splits `source` like `split_assembly`, handing each slice to `sink` in order.
 ///
 /// Returns `None`, having called `sink` zero times, whenever `split_assembly` would return the
-/// input whole. The caller then assembles the file as it is. On the Symfony `--web` build the
-/// collected slices were a second 1.5 GB copy of the program alive while the first was still
-/// being cut; streamed, only the slice being written is.
+/// input whole.
+#[cfg(test)]
 pub(super) fn split_assembly_streaming(
     source: &str,
     jobs: usize,
     local_prefix: &str,
-    sink: impl FnMut(usize, String) -> std::io::Result<()>,
+    mut sink: impl FnMut(usize, String) -> std::io::Result<()>,
 ) -> std::io::Result<Option<SplitSummary>> {
+    let Some(plan) = plan_split(source, jobs, local_prefix, false) else {
+        return Ok(None);
+    };
+    for part in 0..plan.slices() {
+        let mut out = String::new();
+        plan.render_slice(part, &mut |text| {
+            out.push_str(text);
+            Ok(())
+        })?;
+        sink(part, out)?;
+    }
+    Ok(Some(plan.summary))
+}
+
+/// Decides how `source` is split, or `None` when it has to be assembled whole.
+///
+/// `jobs <= 1`, an input with no legal cut, a promotion name collision, and a visibility footer
+/// naming a symbol the body does not define all return `None`, so the caller's fallback is always
+/// "assemble the file as it is".
+///
+/// `encode` hands the instructions `aarch64_encode` knows to the assembler as `.inst` words.
+pub(super) fn plan_split<'a>(
+    source: &'a str,
+    jobs: usize,
+    local_prefix: &'a str,
+    encode: bool,
+) -> Option<SplitPlan<'a>> {
     // `Lines` stores `u32` offsets; a larger text is assembled whole.
     if jobs <= 1 || source.is_empty() || source.len() >= u32::MAX as usize {
-        return Ok(None);
+        return None;
     }
     let analysis = analyze(source, local_prefix);
     if analysis.footer.iter().any(|name| !analysis.ids.contains_key(name)) {
         // The footer is authoritative about visibility. If a name in it has no
         // definition this pass can find, partitioning it would silently drop a
         // directive; refuse instead.
-        return Ok(None);
+        return None;
     }
     let cuts = match cut_policy() {
         CutPolicy::Balanced => choose_cuts(&analysis, jobs),
         CutPolicy::Stable => choose_cuts_stable(&analysis, jobs),
     };
     if cuts.is_empty() {
-        return Ok(None);
+        return None;
     }
-    render(source, &analysis, &cuts, local_prefix, sink)
+    let slice_of = |line: usize| cuts.partition_point(|&cut| cut <= line);
+    let parts = cuts.len() + 1;
+
+    // HAZARD 2 — a top-level symbol the emitter wrote as a plain `name:` is a
+    // Mach-O local: it is not in the object's symbol table, so a reference to it
+    // from another slice would not resolve. Every such label that IS referenced
+    // from another slice is published `.private_extern` in its defining slice —
+    // external enough for the linker to bind, still not an export, therefore
+    // still not a `-dead_strip` root (src/codegen_support/visibility.rs:18-21).
+    let mut promoted: FastMap<&'a str, String> = FastMap::default();
+    let mut promoted_names: Vec<String> = Vec::new();
+    let mut published: Vec<Vec<&'a str>> = vec![Vec::new(); parts];
+    let mut published_count = 0usize;
+    for (id, &name) in analysis.names.iter().enumerate() {
+        let span = analysis.spans[id];
+        if slice_of(span.lo) == slice_of(span.hi) {
+            continue;
+        }
+        if name.starts_with(local_prefix) {
+            let renamed = format!("{PROMOTED_PREFIX}{name}");
+            if analysis.ids.contains_key(renamed.as_str()) {
+                // A collision would silently merge two symbols. Refuse the split
+                // rather than guess a second name.
+                return None;
+            }
+            published[slice_of(span.def)].push(name);
+            promoted.insert(name, renamed.clone());
+            promoted_names.push(renamed);
+            continue;
+        }
+        if analysis.footer_set.contains(name) || analysis.globl.contains(name) {
+            continue;
+        }
+        published[slice_of(span.def)].push(name);
+        published_count += 1;
+    }
+    promoted_names.sort();
+    Some(SplitPlan {
+        source,
+        analysis,
+        cuts,
+        local_prefix,
+        encode,
+        promoted,
+        published,
+        summary: SplitSummary {
+            promoted: promoted_names,
+            published: published_count,
+        },
+    })
+}
+
+/// Where a split cuts `source`, and what each slice renames and publishes to stay linkable.
+///
+/// Every slice renders from this alone, so slices can be written and assembled independently
+/// and at the same time: rendering them one after another, before any assembler started, was a
+/// serial stretch of the Symfony build's assembly phase.
+pub(super) struct SplitPlan<'a> {
+    source: &'a str,
+    analysis: Analysis<'a>,
+    cuts: Vec<usize>,
+    local_prefix: &'a str,
+    /// Whether AArch64 instructions `aarch64_encode` knows are written as `.inst` words.
+    encode: bool,
+    /// Assembler temporaries renamed because their span crosses a cut.
+    promoted: FastMap<&'a str, String>,
+    /// Per slice, the names it defines that another slice references.
+    published: Vec<Vec<&'a str>>,
+    pub(super) summary: SplitSummary,
+}
+
+impl SplitPlan<'_> {
+    /// Number of slices.
+    pub(super) fn slices(&self) -> usize {
+        self.cuts.len() + 1
+    }
+
+    fn slice_of(&self, line: usize) -> usize {
+        self.cuts.partition_point(|&cut| cut <= line)
+    }
+
+    /// Writes slice `part` through `write`, in order, as a sequence of text chunks.
+    pub(super) fn render_slice(
+        &self,
+        part: usize,
+        write: &mut dyn FnMut(&str) -> std::io::Result<()>,
+    ) -> std::io::Result<()> {
+        let analysis = &self.analysis;
+        let start = if part == 0 { 0 } else { self.cuts[part - 1] };
+        let end = self.cuts.get(part).copied().unwrap_or(analysis.lines.len());
+        let mut out = SliceWriter {
+            write,
+            ends_with_newline: false,
+        };
+        if part > 0 {
+            // HAZARD 4 — `.section`/`.data` state and the `.intel_syntax` switch
+            // are file-global. A slice that starts mid-`.data` would otherwise
+            // assemble its records into `__text`.
+            for directive in &analysis.file_prologue {
+                out.put(directive)?;
+                out.put("\n")?;
+            }
+            let section = section_in_effect(&analysis.sections, start);
+            out.put(section)?;
+            out.put("\n")?;
+            // HAZARD 3 — a `.quad` record whose own alignment directive sits in
+            // the previous slice starts the new object unaligned, and `ld`
+            // rejects the object outright ("pointer not aligned"). Restate the
+            // section's alignment unless the slice already opens with one.
+            let opening = analysis.lines[start].trim_start();
+            if !opening.starts_with(".align") && !opening.starts_with(".p2align") {
+                out.put(if section == ".text" {
+                    ".p2align 2\n"
+                } else {
+                    ".p2align 3\n"
+                })?;
+            }
+        }
+        // `lines` indexes `source` itself, so `source[offset(a)..offset(b)]` IS lines `a..b` joined --
+        // the same bytes the per-line loop pushed, in one copy. On this module that loop ran
+        // 42 million times per build to rebuild a string it already had.
+        //
+        // A line is copied as part of such a run unless it must be renamed or can be handed to the
+        // assembler already encoded. The encoded word is exactly what `as` would produce, so the
+        // object does not change; the assembler only skips matching the instruction, which is
+        // most of its time (see `aarch64_encode`).
+        let mut run = start;
+        let mut rewritten = String::new();
+        for index in start..end {
+            let line = analysis.lines.get(index);
+            let rename = !self.promoted.is_empty() && line.contains(self.local_prefix);
+            let word = if self.encode && !rename {
+                super::aarch64_encode::encode(line)
+            } else {
+                None
+            };
+            if !rename && word.is_none() {
+                continue;
+            }
+            if index > run {
+                out.put(&self.source[analysis.offset(run)..analysis.offset(index)])?;
+            }
+            rewritten.clear();
+            match word {
+                Some(word) => {
+                    use std::fmt::Write as _;
+                    let _ = writeln!(rewritten, "    .inst 0x{word:08x}");
+                }
+                None => push_renamed(&mut rewritten, line, &self.promoted, self.local_prefix),
+            }
+            out.put(&rewritten)?;
+            run = index + 1;
+        }
+        if end > run {
+            out.put(&self.source[analysis.offset(run)..analysis.offset(end)])?;
+        }
+        let footer = self.visibility_footer(part);
+        if !footer.is_empty() {
+            if !out.ends_with_newline {
+                out.put("\n")?;
+            }
+            out.put("\n")?;
+            out.put(VISIBILITY_FOOTER_MARKER)?;
+            out.put("\n")?;
+            out.put(&footer)?;
+        }
+        Ok(())
+    }
+
+    /// This slice's share of the file-global visibility footer, marker excluded.
+    fn visibility_footer(&self, part: usize) -> String {
+        let analysis = &self.analysis;
+        let mut written: FastSet<&str> = FastSet::default();
+        let mut block = String::new();
+        for &name in analysis.footer.iter().chain(self.published[part].iter()) {
+            let Some(&id) = analysis.ids.get(name) else {
+                continue;
+            };
+            if self.slice_of(analysis.spans[id].def) != part || !written.insert(name) {
+                continue;
+            }
+            block.push_str(".private_extern ");
+            block.push_str(self.promoted.get(name).map(String::as_str).unwrap_or(name));
+            block.push('\n');
+        }
+        block
+    }
+}
+
+/// Forwards slice text to a writer, remembering whether it last ended a line.
+struct SliceWriter<'w> {
+    write: &'w mut dyn FnMut(&str) -> std::io::Result<()>,
+    ends_with_newline: bool,
+}
+
+impl SliceWriter<'_> {
+    fn put(&mut self, text: &str) -> std::io::Result<()> {
+        if let Some(&last) = text.as_bytes().last() {
+            self.ends_with_newline = last == b'\n';
+        }
+        (self.write)(text)
+    }
 }
 
 /// Runs the single body scan that every later decision reads.
@@ -289,16 +510,20 @@ fn analyze<'a>(source: &'a str, local_prefix: &str) -> Analysis<'a> {
     let mut lines = Lines::new(source);
     let body_end = footer_start(&lines);
     let footer = footer_names((body_end..lines.len()).map(|index| lines.get(index)));
-    let footer_set: HashSet<&str> = footer.iter().copied().collect();
+    let footer_set: FastSet<&str> = footer.iter().copied().collect();
     lines.truncate(body_end);
 
-    let mut names: Vec<&str> = Vec::new();
-    let mut ids: HashMap<&str, usize> = HashMap::new();
-    let mut spans: Vec<LabelSpan> = Vec::new();
+    // Sized up front: the Symfony body defines about one label per 400 bytes, and growing a
+    // 3.6-million-entry map by doubling rehashes all of it a dozen times.
+    let expected_labels = source.len() / 400;
+    let mut names: Vec<&str> = Vec::with_capacity(expected_labels);
+    let mut ids: FastMap<&str, usize> =
+        FastMap::with_capacity_and_hasher(expected_labels, Default::default());
+    let mut spans: Vec<LabelSpan> = Vec::with_capacity(expected_labels);
     let mut sections: Vec<(usize, &str)> = Vec::new();
     let mut file_prologue: Vec<&str> = Vec::new();
-    let mut globl: HashSet<&str> = HashSet::new();
-    let mut numeric: HashMap<&str, Vec<usize>> = HashMap::new();
+    let mut globl: FastSet<&str> = FastSet::default();
+    let mut numeric: FastMap<&str, Vec<usize>> = FastMap::default();
 
     for (index, raw) in lines.iter().enumerate() {
         let line = raw.trim();
@@ -333,8 +558,119 @@ fn analyze<'a>(source: &'a str, local_prefix: &str) -> Analysis<'a> {
         }
     }
 
+    // Every reference widens its label's span; nothing else in this pass writes. Workers take
+    // blocks of lines from a shared counter, record the lowest and highest line they saw per
+    // label, and those are folded into `spans` by min/max -- which is what the single loop
+    // computed, in any order. This pass was 15 of the 17 seconds the Symfony split took, spent
+    // hashing every token of 44 million lines, mnemonics and registers included. Blocks rather
+    // than one range per thread: an efficiency core given a fixed share finished last.
+    let starts_a_label = label_first_bytes(&names);
+    let threads = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1)
+        .clamp(1, 32);
+    const BLOCK: usize = 1 << 16;
+    let next_block = std::sync::atomic::AtomicUsize::new(0);
+    type Partial = (FastMap<u32, (u32, u32)>, Vec<(usize, usize)>);
+    let partials: Vec<Partial> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..threads)
+            .map(|_| {
+                let (lines, ids, spans, numeric) = (&lines, &ids, &spans, &numeric);
+                let (next_block, starts_a_label) = (&next_block, &starts_a_label);
+                scope.spawn(move || {
+                    let mut touched = FastMap::default();
+                    let mut hard = Vec::new();
+                    loop {
+                        let first =
+                            next_block.fetch_add(BLOCK, std::sync::atomic::Ordering::Relaxed);
+                        if first >= lines.len() {
+                            break;
+                        }
+                        let range = first..(first + BLOCK).min(lines.len());
+                        scan_references(
+                            lines,
+                            range,
+                            ids,
+                            spans,
+                            numeric,
+                            starts_a_label,
+                            &mut touched,
+                            &mut hard,
+                        );
+                    }
+                    (touched, hard)
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .map(|worker| worker.join().expect("reference scan panicked"))
+            .collect()
+    });
     let mut hard: Vec<(usize, usize)> = Vec::new();
-    for (index, raw) in lines.iter().enumerate() {
+    for (touched, intervals) in partials {
+        for (id, (lo, hi)) in touched {
+            let span = &mut spans[id as usize];
+            span.lo = span.lo.min(lo as usize);
+            span.hi = span.hi.max(hi as usize);
+        }
+        hard.extend(intervals);
+    }
+    hard.sort_unstable();
+    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(hard.len());
+    for (lo, hi) in hard {
+        let overlaps = merged.last().is_some_and(|&(_, last_hi)| lo <= last_hi);
+        if overlaps {
+            let last = merged.last_mut().expect("checked non-empty above");
+            last.1 = last.1.max(hi);
+        } else {
+            merged.push((lo, hi));
+        }
+    }
+
+    let (candidates, candidate_names) = boundary_candidates(&lines, local_prefix, &merged);
+    Analysis {
+        lines,
+        names,
+        ids,
+        spans,
+        candidates,
+        candidate_names,
+        sections,
+        file_prologue,
+        footer,
+        footer_set,
+        globl,
+    }
+}
+
+/// Which bytes some defined label begins with; a token starting with any other byte is not one.
+fn label_first_bytes(names: &[&str]) -> [bool; 256] {
+    let mut starts = [false; 256];
+    for name in names {
+        if let Some(&byte) = name.as_bytes().first() {
+            starts[byte as usize] = true;
+        }
+    }
+    starts
+}
+
+/// The reference pass over lines `range`: widens, per label, the lowest and highest line that
+/// references it in `touched`, and adds the hard intervals (conditional branches, numeric locals)
+/// the range opens to `hard`.
+#[allow(clippy::too_many_arguments)]
+fn scan_references(
+    lines: &Lines<'_>,
+    range: std::ops::Range<usize>,
+    ids: &FastMap<&str, usize>,
+    spans: &[LabelSpan],
+    numeric: &FastMap<&str, Vec<usize>>,
+    starts_a_label: &[bool; 256],
+    touched: &mut FastMap<u32, (u32, u32)>,
+    hard: &mut Vec<(usize, usize)>,
+) {
+    for index in range {
+        let raw = lines.get(index);
         let line = raw.trim();
         if line.is_empty() {
             continue;
@@ -346,10 +682,18 @@ fn analyze<'a>(source: &'a str, local_prefix: &str) -> Analysis<'a> {
             && !line.starts_with(".comm ")
         {
             visit_identifiers(raw, |token| {
+                if !starts_a_label[token.as_bytes()[0] as usize] {
+                    return;
+                }
                 if let Some(&id) = ids.get(token) {
-                    let span = &mut spans[id];
-                    span.lo = span.lo.min(index);
-                    span.hi = span.hi.max(index);
+                    let line = index as u32;
+                    touched
+                        .entry(id as u32)
+                        .and_modify(|(lo, hi)| {
+                            *lo = (*lo).min(line);
+                            *hi = (*hi).max(line);
+                        })
+                        .or_insert((line, line));
                 }
             });
         }
@@ -381,32 +725,6 @@ fn analyze<'a>(source: &'a str, local_prefix: &str) -> Analysis<'a> {
             }
         }
     }
-    hard.sort_unstable();
-    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(hard.len());
-    for (lo, hi) in hard {
-        let overlaps = merged.last().is_some_and(|&(_, last_hi)| lo <= last_hi);
-        if overlaps {
-            let last = merged.last_mut().expect("checked non-empty above");
-            last.1 = last.1.max(hi);
-        } else {
-            merged.push((lo, hi));
-        }
-    }
-
-    let (candidates, candidate_names) = boundary_candidates(&lines, local_prefix, &merged);
-    Analysis {
-        lines,
-        names,
-        ids,
-        spans,
-        candidates,
-        candidate_names,
-        sections,
-        file_prologue,
-        footer,
-        footer_set,
-        globl,
-    }
 }
 
 /// Records a first definition of `name` at `index`.
@@ -414,7 +732,7 @@ fn define<'a>(
     name: &'a str,
     index: usize,
     names: &mut Vec<&'a str>,
-    ids: &mut HashMap<&'a str, usize>,
+    ids: &mut FastMap<&'a str, usize>,
     spans: &mut Vec<LabelSpan>,
 ) {
     if name.is_empty() || ids.contains_key(name) {
@@ -793,143 +1111,6 @@ fn choose_cuts(analysis: &Analysis<'_>, jobs: usize) -> Vec<usize> {
     cuts
 }
 
-/// Builds the slice texts, the rename table, and the per-slice visibility footers.
-fn render<'a>(
-    source: &str,
-    analysis: &Analysis<'a>,
-    cuts: &[usize],
-    local_prefix: &str,
-    mut sink: impl FnMut(usize, String) -> std::io::Result<()>,
-) -> std::io::Result<Option<SplitSummary>> {
-    let slice_of = |line: usize| cuts.partition_point(|&cut| cut <= line);
-    let parts = cuts.len() + 1;
-
-    // HAZARD 2 — a top-level symbol the emitter wrote as a plain `name:` is a
-    // Mach-O local: it is not in the object's symbol table, so a reference to it
-    // from another slice would not resolve. Every such label that IS referenced
-    // from another slice is published `.private_extern` in its defining slice —
-    // external enough for the linker to bind, still not an export, therefore
-    // still not a `-dead_strip` root (src/codegen_support/visibility.rs:18-21).
-    let mut promoted: HashMap<&'a str, String> = HashMap::new();
-    let mut promoted_names: Vec<String> = Vec::new();
-    let mut published: Vec<Vec<&'a str>> = vec![Vec::new(); parts];
-    let mut published_count = 0usize;
-    for (id, &name) in analysis.names.iter().enumerate() {
-        let span = analysis.spans[id];
-        if slice_of(span.lo) == slice_of(span.hi) {
-            continue;
-        }
-        if name.starts_with(local_prefix) {
-            let renamed = format!("{PROMOTED_PREFIX}{name}");
-            if analysis.ids.contains_key(renamed.as_str()) {
-                // A collision would silently merge two symbols. Refuse the split
-                // rather than guess a second name.
-                return Ok(None);
-            }
-            published[slice_of(span.def)].push(name);
-            promoted.insert(name, renamed.clone());
-            promoted_names.push(renamed);
-            continue;
-        }
-        if analysis.footer_set.contains(name) || analysis.globl.contains(name) {
-            continue;
-        }
-        published[slice_of(span.def)].push(name);
-        published_count += 1;
-    }
-
-    for part in 0..parts {
-        let start = if part == 0 { 0 } else { cuts[part - 1] };
-        let end = cuts.get(part).copied().unwrap_or(analysis.lines.len());
-        let bytes = analysis.offset(end) - analysis.offset(start);
-        let mut out = String::with_capacity(bytes + 4096);
-        if part > 0 {
-            // HAZARD 4 — `.section`/`.data` state and the `.intel_syntax` switch
-            // are file-global. A slice that starts mid-`.data` would otherwise
-            // assemble its records into `__text`.
-            for directive in &analysis.file_prologue {
-                out.push_str(directive);
-                out.push('\n');
-            }
-            let section = section_in_effect(&analysis.sections, start);
-            out.push_str(section);
-            out.push('\n');
-            // HAZARD 3 — a `.quad` record whose own alignment directive sits in
-            // the previous slice starts the new object unaligned, and `ld`
-            // rejects the object outright ("pointer not aligned"). Restate the
-            // section's alignment unless the slice already opens with one.
-            let opening = analysis.lines[start].trim_start();
-            if !opening.starts_with(".align") && !opening.starts_with(".p2align") {
-                out.push_str(if section == ".text" {
-                    ".p2align 2\n"
-                } else {
-                    ".p2align 3\n"
-                });
-            }
-        }
-        // `lines` indexes `source` itself, so `source[offset(a)..offset(b)]` IS lines `a..b` joined --
-        // the same bytes the per-line loop pushed, in one copy. On this module that loop ran
-        // 42 million times per build to rebuild a string it already had.
-        let mut run = start;
-        for index in start..end {
-            let line = analysis.lines.get(index);
-            if promoted.is_empty() || !line.contains(local_prefix) {
-                continue;
-            }
-            if index > run {
-                out.push_str(&source[analysis.offset(run)..analysis.offset(index)]);
-            }
-            push_renamed(&mut out, line, &promoted);
-            run = index + 1;
-        }
-        if end > run {
-            out.push_str(&source[analysis.offset(run)..analysis.offset(end)]);
-        }
-        append_visibility_footer(&mut out, analysis, &published[part], &promoted, part, &slice_of);
-        sink(part, out)?;
-    }
-    promoted_names.sort();
-    Ok(Some(SplitSummary {
-        slices: parts,
-        promoted: promoted_names,
-        published: published_count,
-    }))
-}
-
-/// Appends this slice's share of the file-global visibility footer.
-fn append_visibility_footer<'a>(
-    out: &mut String,
-    analysis: &Analysis<'a>,
-    published: &[&'a str],
-    promoted: &HashMap<&'a str, String>,
-    part: usize,
-    slice_of: &impl Fn(usize) -> usize,
-) {
-    let mut written: HashSet<&'a str> = HashSet::new();
-    let mut block = String::new();
-    for &name in analysis.footer.iter().chain(published.iter()) {
-        let Some(&id) = analysis.ids.get(name) else {
-            continue;
-        };
-        if slice_of(analysis.spans[id].def) != part || !written.insert(name) {
-            continue;
-        }
-        block.push_str(".private_extern ");
-        block.push_str(promoted.get(name).map(String::as_str).unwrap_or(name));
-        block.push('\n');
-    }
-    if block.is_empty() {
-        return;
-    }
-    if !out.ends_with('\n') {
-        out.push('\n');
-    }
-    out.push('\n');
-    out.push_str(VISIBILITY_FOOTER_MARKER);
-    out.push('\n');
-    out.push_str(&block);
-}
-
 /// Returns the section directive in effect at `line`.
 fn section_in_effect<'a>(sections: &[(usize, &'a str)], line: usize) -> &'a str {
     match sections.binary_search_by(|probe| probe.0.cmp(&line)) {
@@ -944,7 +1125,12 @@ fn section_in_effect<'a>(sections: &[(usize, &'a str)], line: usize) -> &'a str 
 /// Quoted runs are copied verbatim for the same reason `localize_internal_labels`
 /// copies them: a label name that also appears inside a user string constant must
 /// not be rewritten there.
-fn push_renamed(out: &mut String, line: &str, promoted: &HashMap<&str, String>) {
+fn push_renamed(
+    out: &mut String,
+    line: &str,
+    promoted: &FastMap<&str, String>,
+    local_prefix: &str,
+) {
     let bytes = line.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
@@ -968,7 +1154,9 @@ fn push_renamed(out: &mut String, line: &str, promoted: &HashMap<&str, String>) 
                 index += 1;
             }
             let token = &line[start..index];
-            match promoted.get(token) {
+            // Only local labels are ever promoted, so no other token needs a lookup.
+            let renamed = if token.starts_with(local_prefix) { promoted.get(token) } else { None };
+            match renamed {
                 Some(renamed) => out.push_str(renamed),
                 None => out.push_str(token),
             }
@@ -1276,10 +1464,10 @@ mod tests {
     fn quoted_strings_hide_their_contents_from_the_scanner() {
         let line = "    .ascii \"_first b.eq L_second_retry\"\n";
         assert_eq!(identifiers(line), vec![".ascii"]);
-        let mut promoted: HashMap<&str, String> = HashMap::new();
+        let mut promoted: FastMap<&str, String> = FastMap::default();
         promoted.insert("L_second_retry", format!("{PROMOTED_PREFIX}L_second_retry"));
         let mut out = String::new();
-        push_renamed(&mut out, line, &promoted);
+        push_renamed(&mut out, line, &promoted, "L");
         assert_eq!(out, line, "a quoted string must survive a rename verbatim");
     }
 
@@ -1287,13 +1475,13 @@ mod tests {
     /// promoted name must not be rewritten.
     #[test]
     fn renaming_is_whole_token() {
-        let mut promoted: HashMap<&str, String> = HashMap::new();
+        let mut promoted: FastMap<&str, String> = FastMap::default();
         promoted.insert("L_thunk", format!("{PROMOTED_PREFIX}L_thunk"));
         let mut out = String::new();
-        push_renamed(&mut out, "    .quad L_thunk_2\n", &promoted);
+        push_renamed(&mut out, "    .quad L_thunk_2\n", &promoted, "L");
         assert_eq!(out, "    .quad L_thunk_2\n");
         out.clear();
-        push_renamed(&mut out, "    .quad L_thunk@PAGE\n", &promoted);
+        push_renamed(&mut out, "    .quad L_thunk@PAGE\n", &promoted, "L");
         assert_eq!(out, format!("    .quad {PROMOTED_PREFIX}L_thunk@PAGE\n"));
     }
 

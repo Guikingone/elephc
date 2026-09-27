@@ -766,6 +766,7 @@ dependencies = [
  "inventory",
  "libc",
  "lzma-rs",
+ "memchr",
  "rustc-hash",
  "rustls",
  "rustls-pemfile",

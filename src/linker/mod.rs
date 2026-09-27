@@ -11,6 +11,7 @@
 //! - Dependency resolution stays outside this module; the linker consumes typed paths only.
 
 mod archive_dedup;
+mod aarch64_encode;
 mod asm_cache;
 mod asm_split;
 
@@ -119,14 +120,14 @@ pub(crate) fn assemble(target: Target, asm_path: &Path, obj_path: &Path) {
     command::run_tool("Assembler", &mut assembler);
 }
 
-/// Default ceiling on concurrent `as` processes for one user object.
+/// Ceiling on concurrent `as` processes for one user object.
 ///
-/// `as` is single-threaded and the user object is by far the largest input in
-/// the build, so on a Symfony-scale program the one blocking invocation is the
-/// second-biggest phase of a debug compile. Eight is where the measured curve
-/// flattens: the slices stop being the bottleneck and the residual serial tail
-/// (the data section, which is never cut) starts to dominate.
-const MAX_ASSEMBLER_JOBS: usize = 8;
+/// The default is one per core. It used to stop at eight, where the curve had flattened while
+/// the slices were rendered one after another before any assembler started; with every slice
+/// rendered and assembled by its own worker, the Symfony `--web` assembly phase measured 11.7 s
+/// at 12 jobs, 8.5 s at 18 (this machine's core count) and 8.4 s at 24 and 36. Assembler memory
+/// is proportional to the slice, so more, smaller slices do not add to it.
+const MAX_ASSEMBLER_JOBS: usize = 64;
 
 /// Objects produced from one user assembly file, in slice order, plus a note for `--timings`.
 pub(crate) struct AssembledObjects {
@@ -198,86 +199,92 @@ pub(crate) fn assemble_parallel(
         _ => obj_path.with_extension(format!("slice{index}.o")),
     };
 
-    // Consult the slice cache BEFORE writing any `.s`. A hit materializes the
-    // object directly, so a slice that did not change costs neither a file write
-    // nor an assembler process -- which is the whole point on a machine where the
-    // assembler is memory-bound rather than merely slow.
-    let caching = asm_cache::is_enabled();
-    let identity = caching.then(|| asm_cache::assembler_identity(&assembler_command(target)));
-    let mut keys: Vec<u64> = Vec::new();
-    let mut misses: Vec<usize> = Vec::new();
-    let mut rendered = 0usize;
-
-    // Each slice is looked up, written, and dropped as soon as it is rendered, so no second
-    // in-memory copy of the program's text ever exists alongside the source being cut.
-    let streamed = asm_split::split_assembly_streaming(
+    let Some(plan) = asm_split::plan_split(
         source,
         jobs,
         target.platform.local_label_prefix(),
-        |index, slice| {
-            rendered = index + 1;
-            if let Some(identity) = identity.as_ref() {
-                let key = asm_cache::slice_key(&slice, identity);
-                keys.push(key);
-                if asm_cache::reuse(key, &slice_obj(index)) {
-                    return Ok(());
-                }
-            }
-            misses.push(index);
-            std::fs::write(slice_asm(index), &slice)
-        },
-    );
+        target.arch == crate::codegen::platform::Arch::AArch64 && encode_enabled(),
+    ) else {
+        drop(mapped);
+        assemble(target, asm_path, obj_path);
+        return single();
+    };
+    let slice_count = plan.slices();
+
+    // Every slice is rendered, keyed, written and -- unless the cache already holds its object --
+    // assembled by a worker of its own. Rendering every slice before starting any assembler, as
+    // this did, left the assemblers idle for the whole serial render; now the first `as` starts
+    // as soon as its own slice is on disk, and no slice ever exists in memory whole: its cache
+    // key is folded from the same chunks that are written.
+    let caching = asm_cache::is_enabled();
+    let identity = caching.then(|| asm_cache::assembler_identity(&assembler_command(target)));
+    let outcomes: Vec<std::thread::Result<std::io::Result<SliceOutcome>>> =
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..slice_count)
+                .map(|index| {
+                    let (plan, identity) = (&plan, identity.as_deref());
+                    scope.spawn(move || -> std::io::Result<SliceOutcome> {
+                        let asm = slice_asm(index);
+                        let mut key = identity.map(asm_cache::slice_key_seed);
+                        let file = std::fs::File::create(&asm)?;
+                        let mut writer = std::io::BufWriter::with_capacity(1 << 20, file);
+                        plan.render_slice(index, &mut |text| {
+                            if let Some(key) = key.as_mut() {
+                                *key = asm_cache::extend_slice_key(*key, text.as_bytes());
+                            }
+                            std::io::Write::write_all(&mut writer, text.as_bytes())
+                        })?;
+                        std::io::Write::flush(&mut writer)?;
+                        drop(writer);
+                        // A restored object is a HARDLINK to the cache entry, so anything that
+                        // writes to it in place would write through into the cache; `reuse`
+                        // unlinks the name first, which leaves the entry's inode untouched.
+                        if let Some(key) = key {
+                            if asm_cache::reuse(key, &slice_obj(index)) {
+                                let _ = std::fs::remove_file(&asm);
+                                return Ok(SliceOutcome { key: Some(key), assembled: false });
+                            }
+                        }
+                        assemble(target, &asm, &slice_obj(index));
+                        Ok(SliceOutcome { key, assembled: true })
+                    })
+                })
+                .collect();
+            workers.into_iter().map(|worker| worker.join()).collect()
+        });
+    let summary = plan.summary;
     drop(mapped);
 
-    // A restored object is a HARDLINK to the cache entry, so anything that writes
-    // to it in place would write through into the cache. Unlinking the name first
-    // leaves the entry's inode untouched, which is what makes the fallback safe.
-    let drop_partial = |count: usize, misses: &[usize]| {
-        for &cleanup in misses {
-            let _ = std::fs::remove_file(slice_asm(cleanup));
+    let mut keys: Vec<u64> = Vec::with_capacity(slice_count);
+    let mut misses: Vec<usize> = Vec::new();
+    let mut failed_write = false;
+    for (index, outcome) in outcomes.into_iter().enumerate() {
+        match outcome {
+            Ok(Ok(outcome)) => {
+                keys.extend(outcome.key);
+                if outcome.assembled {
+                    misses.push(index);
+                }
+            }
+            Ok(Err(_)) => failed_write = true,
+            Err(_) => {
+                // A worker that failed the tool call already exited the process; a
+                // panicking one has to be reported here rather than linked around.
+                eprintln!("Assembler: a parallel slice panicked");
+                process::exit(1);
+            }
         }
-        for index in 0..count {
+    }
+    if failed_write {
+        // A slice that could not be written leaves nothing to link; assemble the file whole.
+        for index in 0..slice_count {
+            let _ = std::fs::remove_file(slice_asm(index));
             let _ = std::fs::remove_file(slice_obj(index));
         }
-    };
-    let summary = match streamed {
-        Ok(Some(summary)) => summary,
-        Ok(None) => {
-            assemble(target, asm_path, obj_path);
-            return single();
-        }
-        Err(_) => {
-            drop_partial(rendered, &misses);
-            assemble(target, asm_path, obj_path);
-            return single();
-        }
-    };
-    let slice_count = summary.slices;
-    let cached = slice_count - misses.len();
-
-    let failed = std::thread::scope(|scope| {
-        let handles: Vec<_> = misses
-            .iter()
-            .map(|&index| {
-                let asm = slice_asm(index);
-                let obj = slice_obj(index);
-                scope.spawn(move || assemble(target, &asm, &obj))
-            })
-            .collect();
-        // Join every worker, not just up to the first failure: a short-circuit
-        // would leave the rest for the scope to reap with their status unread.
-        let mut failed = false;
-        for handle in handles {
-            failed |= handle.join().is_err();
-        }
-        failed
-    });
-    if failed {
-        // A worker that failed the tool call already exited the process; a
-        // panicking one has to be reported here rather than linked around.
-        eprintln!("Assembler: a parallel slice panicked");
-        process::exit(1);
+        assemble(target, asm_path, obj_path);
+        return single();
     }
+    let cached = slice_count - misses.len();
 
     // Publish only what this build actually assembled. A hit was already published
     // by whoever produced it, and re-publishing it would only move its mtime.
@@ -306,6 +313,20 @@ pub(crate) fn assemble_parallel(
         objects,
         note: Some(note),
     }
+}
+
+/// Whether slices may carry pre-encoded instructions. `ELEPHC_ASM_ENCODE=0` hands `as` the
+/// generated text unchanged, which is also what the object-identity check compares against.
+fn encode_enabled() -> bool {
+    !matches!(std::env::var("ELEPHC_ASM_ENCODE").as_deref(), Ok("0") | Ok("off"))
+}
+
+/// What one slice worker did.
+struct SliceOutcome {
+    /// The slice's cache key, when the cache is on.
+    key: Option<u64>,
+    /// Whether the slice went through `as` (a miss) rather than being restored from the cache.
+    assembled: bool,
 }
 
 /// Packs the compiled objects into a static library with `ar`.

@@ -127,9 +127,22 @@ fn tool_stamp(program: &OsStr) -> String {
 }
 
 /// Returns the cache key for one rendered slice under one assembler.
+#[cfg(test)]
 pub(super) fn slice_key(slice: &str, identity: &str) -> u64 {
-    let seed = fnv1a(FNV_OFFSET_BASIS, identity.as_bytes());
-    fnv1a(seed, slice.as_bytes())
+    extend_slice_key(slice_key_seed(identity), slice.as_bytes())
+}
+
+/// The key of an empty slice under one assembler: what `extend_slice_key` starts from.
+pub(super) fn slice_key_seed(identity: &str) -> u64 {
+    fnv1a(FNV_OFFSET_BASIS, identity.as_bytes())
+}
+
+/// Extends a slice key with the slice's next bytes.
+///
+/// FNV-1a folds one byte at a time, so a slice keyed chunk by chunk as it is written gets the
+/// key the whole text would: a slice no longer has to exist in memory to be looked up.
+pub(super) fn extend_slice_key(key: u64, bytes: &[u8]) -> u64 {
+    fnv1a(key, bytes)
 }
 
 /// Canonical file name for a cached slice object.
