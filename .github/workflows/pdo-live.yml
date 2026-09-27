@@ -197,7 +197,7 @@ jobs:
 
       - name: Live native bridge tests
         if: matrix.suite == 'native-postgres'
-        run: cargo test -p elephc-pdo -- --ignored
+        run: cargo test -p elephc-pdo -- --ignored --test-threads=1
 
       - name: Live native PostgreSQL codegen tests
         if: matrix.suite == 'native-postgres'
@@ -213,7 +213,7 @@ jobs:
 
       - name: Live libpq bridge tests
         if: matrix.suite == 'libpq-postgres'
-        run: cargo test -p elephc-pdo --features mysql-tls,libpq-gss -- --ignored
+        run: cargo test -p elephc-pdo --features mysql-tls,libpq-gss -- --ignored --test-threads=1
 
       - name: Live libpq PostgreSQL codegen tests
         if: matrix.suite == 'libpq-postgres'
