@@ -513,11 +513,16 @@ fn ir_opt_enabled_for_codegen_fixture() -> bool {
 }
 
 /// Returns the process-exit epilogue emitted for a supported test target.
+///
+/// `main` leaves through `__rt_exit_code` with status 0 rather than an inline exit syscall, so
+/// the needle is that tail call; it occurs once per program. The inline-syscall needles it
+/// replaced matched nothing any more, and every harness fixture failed to inject.
 fn main_exit_needle(target: Target) -> &'static str {
     match (target.platform, target.arch) {
-        (Platform::MacOS, Arch::AArch64) => "    mov x0, #0\n    mov x16, #1\n    svc #0x80",
-        (Platform::Linux, Arch::AArch64) => "    mov x0, #0\n    mov x8, #94\n    svc #0",
-        (Platform::Linux, Arch::X86_64) => "    mov edi, 0\n    mov eax, 231\n    syscall",
+        (Platform::MacOS, Arch::AArch64) | (Platform::Linux, Arch::AArch64) => {
+            "    mov x0, #0\n    b __rt_exit_code"
+        }
+        (Platform::Linux, Arch::X86_64) => "    mov edi, 0\n    jmp __rt_exit_code",
         (_, Arch::AArch64) => panic!(
             "main exit harness is not implemented yet for target {}",
             target
@@ -1051,15 +1056,15 @@ mod exit_harness_tests {
     fn main_exit_needles_match_supported_target_abis() {
         assert_eq!(
             main_exit_needle(Target::new(Platform::MacOS, Arch::AArch64)),
-            "    mov x0, #0\n    mov x16, #1\n    svc #0x80"
+            "    mov x0, #0\n    b __rt_exit_code"
         );
         assert_eq!(
             main_exit_needle(Target::new(Platform::Linux, Arch::AArch64)),
-            "    mov x0, #0\n    mov x8, #94\n    svc #0"
+            "    mov x0, #0\n    b __rt_exit_code"
         );
         assert_eq!(
             main_exit_needle(Target::new(Platform::Linux, Arch::X86_64)),
-            "    mov edi, 0\n    mov eax, 231\n    syscall"
+            "    mov edi, 0\n    jmp __rt_exit_code"
         );
     }
 }
