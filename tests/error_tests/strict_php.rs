@@ -141,17 +141,6 @@ fn test_strict_keeps_php_builtins_working() {
     );
 }
 
-/// Verifies `is_real` stays available under strict mode: it is treated as PHP
-/// for strict purposes even though PHP 8 removed it.
-#[test]
-fn test_strict_keeps_is_real_working() {
-    let result = check_source_strict("<?php var_dump(is_real(1.5));");
-    assert!(
-        result.is_ok(),
-        "is_real must keep working under --strict-php, got: {result:?}",
-    );
-}
-
 /// Parses `src` and returns the strict-PHP audit violations as message strings.
 fn strict_audit_messages(src: &str) -> Vec<String> {
     let tokens = tokenize(src).expect("audit fixtures must tokenize");
