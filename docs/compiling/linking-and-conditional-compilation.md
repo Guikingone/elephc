@@ -296,6 +296,10 @@ those locations again. `elephc --print-capabilities` lists every archive this
 binary can need.
 ```
 
+When an exact archive path in the link plan is missing, empty, a directory, or
+a symbolic link, the error names that path in `needs:` and omits `looked in:`.
+The exact-path plan does not run the fallback search.
+
 #### The `eval()` bridge has two archive names
 
 `elephc_magician` is the one bridge whose archive filename depends on the

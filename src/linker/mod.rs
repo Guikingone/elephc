@@ -32,7 +32,7 @@ pub enum LinkError {
     MissingBridge {
         /// Authoritative bridge linker name that could not be materialized.
         name: String,
-        /// Archive this bridge resolves to (`libelephc_web.a`), when known.
+        /// Archive filename or exact path this bridge resolves to, when known.
         ///
         /// A bridge the table does not describe — a `LinkOrigin::Bridge` item whose name is
         /// not in `BRIDGES` — has no archive filename, environment override, or candidate
