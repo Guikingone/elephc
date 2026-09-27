@@ -761,7 +761,8 @@ fn cast_alias(target: &CastType, inner: &Expr, state: &AliasState<'_>) -> Return
 /// leak: `return (string)@$s` over a `string` parameter is elided just as `return (string)$s`
 /// is, so calling its result independent has the caller release the argument's own string.
 /// An already-elided inner `(string)` cast leaves a `Str` behind too, so `(string)(string)$s`
-/// nests the same way.
+/// nests the same way. An assignment expression returns its source value, which must be
+/// inspected just as `expr_alias` inspects it.
 fn expr_keeps_str_slot(inner: &Expr, state: &AliasState<'_>) -> bool {
     match &inner.kind {
         ExprKind::Variable(name) => state.has_str_slot(name),
@@ -769,6 +770,7 @@ fn expr_keeps_str_slot(inner: &Expr, state: &AliasState<'_>) -> bool {
         ExprKind::ErrorSuppress(inner)
         | ExprKind::NamedArg { value: inner, .. }
         | ExprKind::Spread(inner) => expr_keeps_str_slot(inner, state),
+        ExprKind::Assignment { value, .. } => expr_keeps_str_slot(value, state),
         ExprKind::Cast {
             target: CastType::String,
             expr: inner,
@@ -1117,6 +1119,20 @@ mod tests {
             summaries.function("nested"),
             Some(&ReturnArgAlias::Parameters(BTreeSet::from([0])))
         );
+    }
+
+    /// An assignment expression returns its string source, so an elided cast borrows it.
+    #[test]
+    fn string_cast_sees_through_assignment_expression() {
+        let program = parse(
+            "<?php function assign(string $a, string $b): string { return (string)($a = $b); } function widened(string $a, mixed $b): string { return (string)($a = $b); }",
+        );
+        let summaries = collect_return_alias_summaries(&program);
+        assert_eq!(
+            summaries.function("assign"),
+            Some(&ReturnArgAlias::Parameters(BTreeSet::from([1])))
+        );
+        assert_eq!(summaries.function("widened"), Some(&ReturnArgAlias::None));
     }
 
     /// Verifies every parameter spelling other than exactly `string` makes the cast COPY.
