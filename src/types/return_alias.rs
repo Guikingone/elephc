@@ -645,7 +645,17 @@ fn expr_alias(expr: &Expr, state: &AliasState<'_>) -> ReturnArgAlias {
             }
             alias
         }
-        ExprKind::Assignment { value, .. } => expr_alias(value, state),
+        ExprKind::Assignment {
+            value,
+            result_target,
+            prelude,
+            ..
+        } => {
+            let mut after_prelude = state.clone();
+            let mut ignored_return = ReturnArgAlias::None;
+            analyze_body(prelude, &mut after_prelude, &mut ignored_return);
+            expr_alias(result_target.as_deref().unwrap_or(value), &after_prelude)
+        }
         ExprKind::ArrayLiteral(_)
         | ExprKind::ArrayLiteralAssoc(_)
         | ExprKind::ArrayLiteralMixed(_)
@@ -762,7 +772,8 @@ fn cast_alias(target: &CastType, inner: &Expr, state: &AliasState<'_>) -> Return
 /// is, so calling its result independent has the caller release the argument's own string.
 /// An already-elided inner `(string)` cast leaves a `Str` behind too, so `(string)(string)$s`
 /// nests the same way. A variable assignment returns a reload of its target slot, so both
-/// the target and source must retain bare `Str` storage before its result can borrow.
+/// target and source must retain bare `Str` storage. A simple non-local assignment returns
+/// its explicit result target, which can be the source even after target stabilization.
 fn expr_keeps_str_slot(inner: &Expr, state: &AliasState<'_>) -> bool {
     match &inner.kind {
         ExprKind::Variable(name) => state.has_str_slot(name),
@@ -773,12 +784,24 @@ fn expr_keeps_str_slot(inner: &Expr, state: &AliasState<'_>) -> bool {
         ExprKind::Assignment {
             target,
             value,
-            result_target: None,
+            result_target,
+            prelude,
             conditional_value_temp: None,
             ..
         } => {
-            matches!(&target.kind, ExprKind::Variable(name) if state.has_str_slot(name))
-                && expr_keeps_str_slot(value, state)
+            let mut after_prelude = state.clone();
+            let mut ignored_return = ReturnArgAlias::None;
+            analyze_body(prelude, &mut after_prelude, &mut ignored_return);
+            match &target.kind {
+                ExprKind::Variable(name) if result_target.is_none() => {
+                    after_prelude.has_str_slot(name)
+                        && expr_keeps_str_slot(value, &after_prelude)
+                }
+                _ if result_target.as_deref().is_some_and(|result| result == value.as_ref()) => {
+                    expr_keeps_str_slot(value, &after_prelude)
+                }
+                _ => false,
+            }
         }
         ExprKind::Cast {
             target: CastType::String,
@@ -947,6 +970,14 @@ fn apply_expr_effects(expr: &Expr, state: &mut AliasState<'_>) {
         ExprKind::NamedArg { value, .. } => apply_expr_effects(value, state),
         ExprKind::BufferNew { len, .. } => apply_expr_effects(len, state),
         ExprKind::ObjectClassName { object } => apply_expr_effects(object, state),
+        ExprKind::PreIncrement(name)
+        | ExprKind::PostIncrement(name)
+        | ExprKind::PreDecrement(name)
+        | ExprKind::PostDecrement(name) => {
+            // EIR stores a boxed Mixed result even when this was a bare string slot.
+            state.str_slot_locals.remove(name);
+            state.locals.insert(name.clone(), ReturnArgAlias::Unknown);
+        }
         ExprKind::Yield { key, value } => {
             if let Some(key) = key {
                 apply_expr_effects(key, state);
@@ -966,10 +997,6 @@ fn apply_expr_effects(expr: &Expr, state: &mut AliasState<'_>) {
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
         | ExprKind::Variable(_)
-        | ExprKind::PreIncrement(_)
-        | ExprKind::PostIncrement(_)
-        | ExprKind::PreDecrement(_)
-        | ExprKind::PostDecrement(_)
         | ExprKind::ConstRef(_)
         | ExprKind::ScopedConstantAccess { .. }
         | ExprKind::This
@@ -1134,7 +1161,7 @@ mod tests {
     #[test]
     fn string_cast_sees_through_assignment_expression() {
         let program = parse(
-            "<?php function assign(string $a, string $b): string { return (string)($a = $b); } function widened(string $a, mixed $b): string { return (string)($a = $b); } function boxed(mixed $a, string $b): string { return (string)($a = $b); }",
+            "<?php function assign(string $a, string $b): string { return (string)($a = $b); } function widened(string $a, mixed $b): string { return (string)($a = $b); } function boxed(mixed $a, string $b): string { return (string)($a = $b); } function element(array $a, string $b): string { return (string)($a[0] = $b); } function incremented(string $a, string $b): string { ++$a; return (string)($a = $b); }",
         );
         let summaries = collect_return_alias_summaries(&program);
         assert_eq!(
@@ -1143,6 +1170,11 @@ mod tests {
         );
         assert_eq!(summaries.function("widened"), Some(&ReturnArgAlias::None));
         assert_eq!(summaries.function("boxed"), Some(&ReturnArgAlias::None));
+        assert_eq!(
+            summaries.function("element"),
+            Some(&ReturnArgAlias::Parameters(BTreeSet::from([1])))
+        );
+        assert_eq!(summaries.function("incremented"), Some(&ReturnArgAlias::None));
     }
 
     /// Verifies every parameter spelling other than exactly `string` makes the cast COPY.

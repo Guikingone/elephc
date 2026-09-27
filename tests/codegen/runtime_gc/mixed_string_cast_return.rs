@@ -258,6 +258,68 @@ echo $n;
     );
 }
 
+/// A non-local assignment returns its bare string source and must keep it borrowed.
+#[test]
+fn test_string_cast_over_array_assignment_result_keeps_source_alive() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function store(array $a, string $b): string { return (string)($a[0] = $b); }
+$result = store([], str_repeat("a", 3));
+echo $result, ":", strlen($result);
+"#,
+    );
+    assert_eq!(out.stdout, "aaa:3", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "an array assignment result must retain its borrowed source: {}",
+        out.stderr
+    );
+}
+
+/// An index prelude still leaves the assignment result tied to its string source.
+#[test]
+fn test_string_cast_over_stabilized_array_assignment_result_keeps_source_alive() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function index_value(): int { return 0; }
+function store(array $a, string $b): string { return (string)($a[index_value()] = $b); }
+$result = store([], str_repeat("a", 3));
+echo $result, ":", strlen($result);
+"#,
+    );
+    assert_eq!(out.stdout, "aaa:3", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "a stabilized array assignment result must retain its source: {}",
+        out.stderr
+    );
+}
+
+/// Incrementing a string parameter boxes its slot before a later assignment result is read.
+#[test]
+fn test_string_cast_over_incremented_assignment_target_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function incremented(string $a, string $b): string {
+    ++$a;
+    return (string)($a = $b);
+}
+$n = 0;
+for ($i = 0; $i < 40; $i++) {
+    $value = str_repeat("b", 3);
+    $n += strlen(incremented("1", $value));
+}
+echo $n;
+"#,
+    );
+    assert_eq!(out.stdout, "120", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "an incremented assignment target must not hide an owned cast copy: {}",
+        out.stderr
+    );
+}
+
 /// Guard: a wrapper around the operand must not turn an elided cast into a copy.
 ///
 /// `lower_cast` elides on the operand's IR type, and `@$s` and `(string)$s` both leave a
