@@ -69,6 +69,9 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
             link_libs: sig.library.iter().cloned().collect(),
         })
         .collect();
+    // The checker keys these in a hash map; the module lists them in name order so every table
+    // built from the list (function_exists candidates, link libraries) is the same on every run.
+    module.extern_decls.sort_by(|left, right| left.name.cmp(&right.name));
     module.required_runtime_features =
         crate::codegen::runtime_features_for_program_and_classes(program, &check_result.classes);
 }

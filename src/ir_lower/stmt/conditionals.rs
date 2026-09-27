@@ -455,11 +455,20 @@ pub(super) fn apply_loop_storage_contracts(
     loop_span: Span,
     span: Option<Span>,
 ) {
-    let contracts = ctx
+    // Name order, not the map's: each local converts independently, but the conversions are
+    // emitted in this order, and a per-process hash seed made the same source lower to
+    // differently ordered code on every run.
+    let mut contracts: Vec<(String, PhpType)> = ctx
         .loop_storage_types
         .get(&(ctx.loop_storage_scope.clone(), loop_span))
-        .cloned()
+        .map(|contracts| {
+            contracts
+                .iter()
+                .map(|(name, ty)| (name.clone(), ty.clone()))
+                .collect()
+        })
         .unwrap_or_default();
+    contracts.sort_by(|left, right| left.0.cmp(&right.0));
     for (name, target_ty) in contracts {
         if !ctx.local_slots.contains_key(&name) {
             continue;

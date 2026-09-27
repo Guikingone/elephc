@@ -75,7 +75,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_scope_set(
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
     let symbol = ir_global_symbol(&name);
     ctx.data.add_comm(symbol.clone(), 8);
-    if crate::superglobals::uses_shared_ref_cell(ctx.module, &name) {
+    if ctx.shared.uses_shared_ref_cell(ctx.module, &name) {
         super::super::super::globals_constants::lower_store_shared_global(ctx, &symbol, &PhpType::Mixed)?;
     } else {
         abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Mixed, true);

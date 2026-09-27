@@ -316,7 +316,7 @@ pub(super) fn flush_eval_globals_to_local_scope(ctx: &mut FunctionContext<'_>, g
 pub(super) fn load_global_to_result(ctx: &mut FunctionContext<'_>, global: &EvalSyncGlobal) {
     let symbol = ir_global_symbol(&global.name);
     let ty = global.ty.codegen_repr();
-    if crate::superglobals::uses_shared_ref_cell(ctx.module, &global.name) {
+    if ctx.shared.uses_shared_ref_cell(ctx.module, &global.name) {
         super::super::super::globals_constants::load_shared_global_to_result(ctx, &symbol);
         return;
     }

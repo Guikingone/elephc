@@ -162,13 +162,31 @@ fn emit_runtime_call_wrapper_inline(
     let key = format!("{}:{}:{:?}:{}", label_prefix, name, sig, strictness);
     let label = ctx.keyed_global_label(&key, label_prefix);
     let done_label = ctx.next_label(&format!("{}_done", label_prefix));
-    let mut wrapper_module = ctx.module.clone();
-    let wrapper = build_runtime_call_wrapper_function(&mut wrapper_module, &label, name, sig, kind)?;
+    // Only an extern wrapper's body names its callee, by the data id of the function name; a
+    // builtin's lowering needs nothing from the module. So the wrapper is emitted against the
+    // module itself, and a copy is made only for an extern whose name was never interned.
+    // Copying it for every wrapper — every body, every class — was 60% of the Symfony codegen
+    // phase, spent on a module that differed from this one by at most one string.
+    let module = ctx.module;
+    let interned_module;
+    let (wrapper_module, extern_name) = match kind {
+        RuntimeCallWrapperKind::Builtin { .. } => (module, None),
+        RuntimeCallWrapperKind::Extern => match module.data.function_name_id(name) {
+            Some(id) => (module, Some(id)),
+            None => {
+                let mut owned = module.clone();
+                let id = owned.data.intern_function_name(name);
+                interned_module = owned;
+                (&interned_module, Some(id))
+            }
+        },
+    };
+    let wrapper = build_runtime_call_wrapper_function(&label, name, sig, kind, extern_name)?;
     let enclosing = ctx.emitter.current_text_section();
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emit_keyed_helper(&key, |ctx| {
         super::super::block_emit::emit_synthetic_function_with_label(
-            &wrapper_module,
+            wrapper_module,
             &wrapper,
             &label,
             ctx.emitter,
@@ -192,12 +210,15 @@ fn emit_runtime_call_wrapper_inline(
 }
 
 /// Builds the EIR body for a PHP-ABI wrapper around a builtin or extern call.
+///
+/// `extern_name` is the data id of `name` in the module the wrapper is emitted against; only an
+/// extern wrapper reads it.
 fn build_runtime_call_wrapper_function(
-    module: &mut Module,
     label: &str,
     name: &str,
     sig: &FunctionSig,
     kind: RuntimeCallWrapperKind,
+    extern_name: Option<DataId>,
 ) -> Result<Function> {
     let return_php_type = wrapper_return_php_type(&sig.return_type);
     let mut function = Function::new(
@@ -217,7 +238,6 @@ fn build_runtime_call_wrapper_function(
         );
     }
 
-    let data = module.data.intern_function_name(name);
     let mut builder = Builder::new(&mut function);
     let entry = builder.create_named_block("entry", Vec::new());
     builder.set_entry(entry);
@@ -254,7 +274,12 @@ fn build_runtime_call_wrapper_function(
         RuntimeCallWrapperKind::Extern => builder.emit(
             Op::ExternCall,
             operands,
-            Some(Immediate::Data(data)),
+            Some(Immediate::Data(extern_name.ok_or_else(|| {
+                CodegenIrError::invalid_module(format!(
+                    "callable wrapper for extern {} has no interned name",
+                    name,
+                ))
+            })?)),
             wrapper_return_ir_type(&return_php_type),
             return_php_type.clone(),
             Ownership::for_php_type(&return_php_type),

@@ -291,6 +291,14 @@ impl DataPool {
         intern_string_vec(&mut self.function_names, value)
     }
 
+    /// Returns the identifier of an already interned function name, without interning it.
+    pub fn function_name_id(&self, value: &str) -> Option<DataId> {
+        self.function_names
+            .iter()
+            .position(|existing| existing == value)
+            .map(|idx| DataId::from_raw(idx as u32))
+    }
+
     /// Interns a class name and returns its stable data identifier.
     pub fn intern_class_name(&mut self, value: &str) -> DataId {
         intern_string_vec(&mut self.class_names, value)

@@ -12,7 +12,7 @@
 //!   everywhere silently under-aligns every common symbol on ELF, which the assembler accepts and
 //!   the linker then rejects with `relocation truncated to fit` for any 64-bit access.
 
-use std::collections::HashMap;
+use crate::fast_hash::FastMap;
 
 use crate::codegen_support::platform::{Platform, Target};
 use crate::types::PhpType;
@@ -111,12 +111,12 @@ pub struct DataSection {
     /// Distinguishes the generated labels of one shard from another's, so two sections built
     /// independently can be merged without renaming anything. Empty for a whole-module section.
     label_shard: String,
-    dedup: HashMap<Vec<u8>, String>,
-    float_dedup: HashMap<u64, String>,
-    word_dedup: HashMap<Vec<DataWord>, String>,
-    comm_dedup: HashMap<String, String>,
+    dedup: FastMap<Vec<u8>, String>,
+    float_dedup: FastMap<u64, String>,
+    word_dedup: FastMap<Vec<DataWord>, String>,
+    comm_dedup: FastMap<String, String>,
     static_locals: Vec<StaticLocalRecord>,
-    static_local_dedup: HashMap<String, usize>,
+    static_local_dedup: FastMap<String, usize>,
 }
 
 impl DataSection {
@@ -129,12 +129,12 @@ impl DataSection {
             comm_entries: Vec::new(),
             counter: 0,
             label_shard: String::new(),
-            dedup: HashMap::new(),
-            float_dedup: HashMap::new(),
-            word_dedup: HashMap::new(),
-            comm_dedup: HashMap::new(),
+            dedup: FastMap::default(),
+            float_dedup: FastMap::default(),
+            word_dedup: FastMap::default(),
+            comm_dedup: FastMap::default(),
             static_locals: Vec::new(),
-            static_local_dedup: HashMap::new(),
+            static_local_dedup: FastMap::default(),
         }
     }
 

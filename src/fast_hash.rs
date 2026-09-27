@@ -26,12 +26,15 @@ use rustc_hash::FxHasher;
 ///
 /// WHY IT IS SAFE TO SWAP, and this is the part that has to be argued rather than assumed, because
 /// changing a hasher changes ITERATION ORDER. It is safe because the order is ALREADY not
-/// deterministic: std's `RandomState` seeds itself per PROCESS, so two runs of today's compiler
-/// iterate these maps differently. Two `--emit-asm` runs of the same input nevertheless produce
-/// `cmp`-identical assembly — measured repeatedly, six separate invocations of one fixture all
-/// giving sha256 76cf50e5… — which PROVES the emitted assembly does not depend on map order. A
-/// deterministic hasher only replaces a random order with a fixed one; it cannot make an
-/// order-independent output order-dependent.
+/// deterministic: std's `RandomState` seeds every map separately, so two runs of the compiler —
+/// or two maps in one run — iterate differently. A deterministic hasher only replaces a random
+/// order with a fixed one; it cannot make an order-independent output order-dependent.
+///
+/// This comment once went further and called the emitted assembly order-independent, because six
+/// `--emit-asm` runs of one fixture were `cmp`-identical. The fixture was too small: two builds of
+/// the Symfony app differed in three places that emitted in a map's order — the loop storage
+/// contracts, the extern declarations and the source-activation table. They sort now, and
+/// `ir_lower::tests::lowering_is_deterministic_across_runs` guards the first.
 ///
 /// The one place order is known to leak today is diagnostics: two runs emit the same "Unused
 /// variable" warnings in different sequence. That is a pre-existing defect, it is why gates in

@@ -17,9 +17,9 @@ use crate::codegen::{
 };
 use crate::intrinsics::{IntrinsicCall, IntrinsicCallKind};
 use crate::ir::{
-    BlockId, Builder, CmpPredicate, Function, FunctionParam, Immediate, InstId, Instruction,
-    IrType, LocalKind, LocalSlotId, Module, NominalObjectBoundary, Op, Ownership, Terminator,
-    ValueDef, ValueId,
+    BlockId, Builder, CmpPredicate, DataId, Function, FunctionParam, Immediate, InstId,
+    Instruction, IrType, LocalKind, LocalSlotId, NominalObjectBoundary, Op, Ownership,
+    Terminator, ValueDef, ValueId,
 };
 use crate::names::{
     function_symbol, ir_global_symbol, method_symbol, php_symbol_key,

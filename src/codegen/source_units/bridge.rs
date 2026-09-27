@@ -207,7 +207,10 @@ fn emit_source_activate(module: &Module, emitter: &mut Emitter, data: &mut DataS
     for (path, cell) in preincluded_interface_activation_cells(module) {
         add(data, &path, cell);
     }
-    for (name, file) in &module.declared_class_source_files {
+    // Name order: the map's own order changes with every process's hash seed, and so did the table.
+    let mut declared = module.declared_class_source_files.iter().collect::<Vec<_>>();
+    declared.sort();
+    for (name, file) in declared {
         let folded = name.trim_start_matches('\\').to_ascii_lowercase();
         if !module.deferred_class_loads.contains(&folded) {
             continue;

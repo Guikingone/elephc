@@ -151,6 +151,54 @@ fn lowering_source_catalog_preserves_original_entry() {
     assert_eq!(entries[0].1.mode, crate::source::SourceMode::Php);
 }
 
+/// Verifies lowering the same program twice gives the same EIR.
+///
+/// Every std hash map draws its own seed, including two built by the same process, so a pass
+/// that emits code in a map's order gives a different body each time. The loop storage contract
+/// here holds eight locals, so two runs agreeing by chance is unlikely; it was the order in which
+/// `apply_loop_storage_contracts` boxed them, and it made Symfony's assembly differ between builds.
+#[test]
+fn lowering_is_deterministic_across_runs() {
+    let source = r#"<?php
+function more(): bool
+{
+    static $left = 3;
+    return --$left > 0;
+}
+
+function consume(string $line, int &$cursor): bool
+{
+    $a = 0;
+    $b = 0;
+    $c = 0;
+    $d = 0;
+    $e = 0;
+    $g = 0;
+    do {
+        $n = strspn($line, " ", $cursor);
+        $a += $n;
+        $b += $n;
+        $c += $n;
+        $d += $n;
+        $e += $n;
+        $g += $n;
+        $cursor += $n;
+        if (isset($line[$cursor])) {
+            return 0 < $a + $b + $c + $d + $e + $g;
+        }
+    } while (more());
+    return false;
+}
+
+$c = 0;
+var_dump(consume("   x", $c), $c);
+"#;
+    let first = print_module(&lower_source(source));
+    for _ in 0..3 {
+        assert_eq!(print_module(&lower_source(source)), first);
+    }
+}
+
 /// Verifies lowering emits valid EIR for functions, arrays, foreach, and loops.
 #[test]
 fn lowers_control_flow_arrays_and_functions() {
