@@ -13,7 +13,6 @@ use crate::ir::block::{BasicBlock, BlockId};
 use crate::ir::instr::{InstId, Instruction};
 use crate::ir::types::IrType;
 use crate::ir::value::{Value, ValueId};
-use crate::parser::ast::Stmt;
 use crate::types::{AttrArgEntry, FunctionSig, PhpType};
 
 /// Module-local identifier for an EIR function.
@@ -65,7 +64,6 @@ pub struct Function {
     pub signature: Option<FunctionSig>,
     pub attribute_names: Vec<String>,
     pub attribute_args: Vec<Option<Vec<AttrArgEntry>>>,
-    pub generator_source: Option<GeneratorSource>,
     /// PHP lexical class scope inherited by methods and closures declared inside them.
     pub lexical_class: Option<String>,
     pub flags: FunctionFlags,
@@ -99,7 +97,6 @@ impl Function {
             signature: None,
             attribute_names: Vec::new(),
             attribute_args: Vec::new(),
-            generator_source: None,
             lexical_class: None,
             flags: FunctionFlags::default(),
             no_epilogue_cleanup_slots: std::collections::HashSet::new(),
@@ -154,13 +151,6 @@ impl Function {
     pub fn set_id(&mut self, id: FunctionId) {
         self.id = id;
     }
-}
-
-/// Source metadata retained for generator functions during the Phase 04 EIR backend bridge.
-#[derive(Debug, Clone)]
-pub struct GeneratorSource {
-    pub body: Vec<Stmt>,
-    pub visible_param_count: usize,
 }
 
 /// Caller-visible function parameter metadata.

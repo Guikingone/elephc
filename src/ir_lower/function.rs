@@ -10,7 +10,7 @@
 //! - Every lowered function leaves all blocks terminated before validation.
 
 use crate::ir::{
-    Builder, Function, FunctionFlags, FunctionParam, GeneratorSource, Immediate, IrType, Module,
+    Builder, Function, FunctionFlags, FunctionParam, Immediate, IrType, Module,
     Op, Ownership, Terminator,
 };
 use crate::ir_lower::context::{
@@ -206,10 +206,9 @@ pub(crate) fn lower_user_function(
         .get(name)
         .cloned()
         .unwrap_or_else(|| collect_attribute_args(attributes));
-    attach_generator_source_if_needed(
+    mark_generator_if_needed(
         &mut function,
         body,
-        eir_signature.params.len(),
         signature.is_generator,
     );
     let closures = lower_body_into_function(
@@ -329,10 +328,9 @@ pub(crate) fn lower_class_method(
         body_params.insert(0, ("this".to_string(), this_type));
     }
     function.params.extend(function_params(&signature));
-    attach_generator_source_if_needed(
+    mark_generator_if_needed(
         &mut function,
         body,
-        body_params.len(),
         signature.is_generator,
     );
     let closures = lower_body_into_function(
@@ -1534,10 +1532,9 @@ fn lower_closure_function_with_signature(
     function.params.extend(closure_capture_params(captures));
     function.source_signature = Some(source_signature(name, &signature));
     function.signature = Some(eir_runtime_metadata_signature(&signature));
-    attach_generator_source_if_needed(
+    mark_generator_if_needed(
         &mut function,
         body,
-        signature.params.len(),
         signature.is_generator,
     );
     let env = env_with_closure_captures(&signature, captures, parent.web);
@@ -1821,11 +1818,10 @@ fn add_closures(module: &mut Module, closures: Vec<Function>) {
     }
 }
 
-/// Retains generator source metadata until the EIR backend has native generator-state lowering.
-fn attach_generator_source_if_needed(
+/// Marks a function as a generator using its checked classification and remaining yield tokens.
+fn mark_generator_if_needed(
     function: &mut Function,
     body: &[Stmt],
-    visible_param_count: usize,
     is_generator: bool,
 ) {
     // `is_generator` is the bit the CHECKER recorded from the source body, before any pass ran.
@@ -1845,10 +1841,6 @@ fn attach_generator_source_if_needed(
         return;
     }
     function.flags.is_generator = true;
-    function.generator_source = Some(GeneratorSource {
-        body: body.to_vec(),
-        visible_param_count,
-    });
 }
 
 /// Returns the EIR return type to lower a function body with.
