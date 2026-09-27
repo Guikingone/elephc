@@ -362,7 +362,18 @@ pub(super) fn lower_mixed_key_array_set(
         Op::ArraySetMixedKey.default_effects(),
         Some(span),
     );
+    // The helper hands back the reference the slot will own: the receiver retained when it wrote
+    // in place, or the hash it promoted to. Either way the slot's previous reference would be
+    // orphaned by the raw store, and leaving it made every in-place write a fake alias -- the
+    // next write took the copy-on-write clone path and the old array leaked with every value in
+    // it (20000 writes of a 600-byte string into a loop-widened `array<mixed>` exhausted an 8 MB
+    // heap with zero frees). It is dropped while the slot still holds it.
+    ctx.release_replaced_local_owner(array, Some(span));
     ctx.store_mutated_local(array, result, mixed_array_ty, Some(span));
+    // The boxed key is only read by the helper, so a key boxed for this write is dropped here.
+    if ctx.value_is_owning_temporary(index) {
+        crate::ir_lower::ownership::release_if_owned(ctx, index, Some(span));
+    }
 }
 
 /// Returns the associative type produced by a string-key write to an indexed array.

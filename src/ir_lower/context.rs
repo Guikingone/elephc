@@ -2578,6 +2578,37 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.store_mutated_local_impl(name, value, php_type, span, true, true)
     }
 
+    /// Drops the reference a plain local holds before a mutation op's result replaces it.
+    ///
+    /// For an op whose result carries the reference the slot will own (the receiver retained
+    /// when it wrote in place, or a freshly built replacement), storing that result would leave
+    /// the slot's PREVIOUS reference with no owner: `StoreLocal` is a raw store. Call this after
+    /// the op and BEFORE the storeback, while the slot still holds the previous pointer.
+    ///
+    /// Only a plain local with concrete (non-boxed) storage is handled here; a boxed slot's
+    /// previous owner is released by the storeback itself, and ref-bound or global storage keep
+    /// their own ownership rules.
+    pub(crate) fn release_replaced_local_owner(&mut self, name: &str, span: Option<Span>) {
+        let kind = self
+            .local_kinds
+            .get(name)
+            .copied()
+            .unwrap_or(LocalKind::PhpLocal);
+        if self.uses_global_storage(name, kind) || self.is_ref_bound_local(name) {
+            return;
+        }
+        let Some(slot) = self.local_slots.get(name).copied() else {
+            return;
+        };
+        if matches!(
+            self.builder.local_php_type(slot).codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        ) {
+            return;
+        }
+        self.release_stored_local_value(name, slot, span);
+    }
+
     /// Stores a by-reference call's internal array normalization without hoisting it.
     ///
     /// Call lowering deliberately captures the operand's concrete representation before adapting

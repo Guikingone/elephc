@@ -295,3 +295,30 @@ foreach ($items as $v) {
     );
     assert_eq!(out, "12|123");
 }
+
+/// Verifies a runtime-keyed write into a loop-widened `array<mixed>` releases the reference the
+/// slot held before the helper's result replaced it.
+///
+/// Regression: the helper returns the receiver retained (or a promoted hash) for the storeback,
+/// but the raw store left the slot's previous reference owned by nobody. Every write then saw a
+/// fake alias, took the copy-on-write clone path and leaked the old array with every value in
+/// it: these 20000 writes of a 600-byte string exhausted the 8 MB heap with zero frees.
+#[test]
+fn test_runtime_key_write_into_widened_array_does_not_leak_the_previous_array() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+$b = [];
+for ($round = 0; $round < 20000; $round++) {
+    $slot = ($round * 31) % 97;
+    if ($argc > 9) {
+        $b[$slot] = str_repeat('y', 600);
+    } else {
+        $a[$slot] = str_repeat('x', 600);
+    }
+}
+echo count($a) + count($b), "|", strlen($a[5]);
+"#,
+    );
+    assert_eq!(out, "97|600");
+}
