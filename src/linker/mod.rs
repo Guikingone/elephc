@@ -13,6 +13,7 @@
 mod archive_dedup;
 mod asm_cache;
 mod asm_split;
+
 mod bridges;
 mod command;
 mod pdo;
@@ -160,6 +161,9 @@ fn assembler_jobs() -> usize {
 /// dSYM debug map has to name one object per compilation unit and is not worth
 /// re-deriving for a build the developer is about to step through), an
 /// unreadable `.s`, an assembly with no legal cut, or a failed slice write.
+///
+/// The source text is freed as soon as the split is done, and each slice once it is written, so
+/// the assemblers run beside the compiler's residual heap instead of the text plus every slice.
 pub(crate) fn assemble_parallel(
     target: Target,
     emit: Emit,
@@ -176,18 +180,17 @@ pub(crate) fn assemble_parallel(
         assemble(target, asm_path, obj_path);
         return single();
     }
-    let Ok(source) = std::fs::read_to_string(asm_path) else {
+    // Map the `.s` instead of reading it: the pages are clean and file-backed, so the kernel can
+    // drop them under pressure instead of the build holding a 1.5 GB private copy of the text.
+    let Some(mapped) = crate::mapped_file::MappedFile::open(asm_path) else {
         assemble(target, asm_path, obj_path);
         return single();
     };
-    let outcome =
-        asm_split::split_assembly(&source, jobs, target.platform.local_label_prefix());
-    if !outcome.is_split() {
-        drop(source);
+    let Ok(source) = std::str::from_utf8(mapped.bytes()) else {
+        drop(mapped);
         assemble(target, asm_path, obj_path);
         return single();
-    }
-    drop(source);
+    };
 
     let slice_asm = |index: usize| obj_path.with_extension(format!("slice{index}.s"));
     let slice_obj = |index: usize| match index {
@@ -200,44 +203,57 @@ pub(crate) fn assemble_parallel(
     // nor an assembler process -- which is the whole point on a machine where the
     // assembler is memory-bound rather than merely slow.
     let caching = asm_cache::is_enabled();
-    let keys: Vec<u64> = if caching {
-        let identity = asm_cache::assembler_identity(&assembler_command(target));
-        outcome
-            .slices
-            .iter()
-            .map(|slice| asm_cache::slice_key(slice, &identity))
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let identity = caching.then(|| asm_cache::assembler_identity(&assembler_command(target)));
+    let mut keys: Vec<u64> = Vec::new();
     let mut misses: Vec<usize> = Vec::new();
-    for index in 0..outcome.slices.len() {
-        if caching && asm_cache::reuse(keys[index], &slice_obj(index)) {
-            continue;
-        }
-        misses.push(index);
-    }
-    let cached = outcome.slices.len() - misses.len();
+    let mut rendered = 0usize;
+
+    // Each slice is looked up, written, and dropped as soon as it is rendered, so no second
+    // in-memory copy of the program's text ever exists alongside the source being cut.
+    let streamed = asm_split::split_assembly_streaming(
+        source,
+        jobs,
+        target.platform.local_label_prefix(),
+        |index, slice| {
+            rendered = index + 1;
+            if let Some(identity) = identity.as_ref() {
+                let key = asm_cache::slice_key(&slice, identity);
+                keys.push(key);
+                if asm_cache::reuse(key, &slice_obj(index)) {
+                    return Ok(());
+                }
+            }
+            misses.push(index);
+            std::fs::write(slice_asm(index), &slice)
+        },
+    );
+    drop(mapped);
 
     // A restored object is a HARDLINK to the cache entry, so anything that writes
     // to it in place would write through into the cache. Unlinking the name first
     // leaves the entry's inode untouched, which is what makes the fallback safe.
-    let drop_restored = || {
-        for index in 0..outcome.slices.len() {
+    let drop_partial = |count: usize, misses: &[usize]| {
+        for &cleanup in misses {
+            let _ = std::fs::remove_file(slice_asm(cleanup));
+        }
+        for index in 0..count {
             let _ = std::fs::remove_file(slice_obj(index));
         }
     };
-
-    for &index in &misses {
-        if std::fs::write(slice_asm(index), &outcome.slices[index]).is_err() {
-            for &cleanup in &misses {
-                let _ = std::fs::remove_file(slice_asm(cleanup));
-            }
-            drop_restored();
+    let summary = match streamed {
+        Ok(Some(summary)) => summary,
+        Ok(None) => {
             assemble(target, asm_path, obj_path);
             return single();
         }
-    }
+        Err(_) => {
+            drop_partial(rendered, &misses);
+            assemble(target, asm_path, obj_path);
+            return single();
+        }
+    };
+    let slice_count = summary.slices;
+    let cached = slice_count - misses.len();
 
     let failed = std::thread::scope(|scope| {
         let handles: Vec<_> = misses
@@ -275,15 +291,15 @@ pub(crate) fn assemble_parallel(
     // The slice sources are derived files: the `.s` the developer asked for is
     // still on disk untouched. A failing `as` exits before this point, so a
     // slice that could not be assembled is always left behind for inspection.
-    let objects: Vec<PathBuf> = (0..outcome.slices.len()).map(|index| slice_obj(index)).collect();
+    let objects: Vec<PathBuf> = (0..slice_count).map(|index| slice_obj(index)).collect();
     for &index in &misses {
         let _ = std::fs::remove_file(slice_asm(index));
     }
     let note = format!(
         "Assembler: {} parallel slices ({} temporaries promoted, {} locals published, {} reused from cache)",
         objects.len(),
-        outcome.promoted.len(),
-        outcome.published,
+        summary.promoted.len(),
+        summary.published,
         cached
     );
     AssembledObjects {

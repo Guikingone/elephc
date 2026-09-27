@@ -200,6 +200,10 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
 
     crate::progress::phase("codegen");
     let phase_started = Instant::now();
+    // Completed text leaves memory in 32 MB steps; the spill file becomes the `.s` itself.
+    let mut spill_path = output_paths.asm.clone().into_os_string();
+    spill_path.push(".spill");
+    let spill_path = std::path::PathBuf::from(spill_path);
     let user_asm = match codegen::generate_user_asm_from_ir_with_options(
         &ir_module,
         gc_stats,
@@ -213,6 +217,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         regalloc_linear,
         web,
         web_isolation,
+        Some(&spill_path),
     ) {
         Ok(asm) => asm,
         Err(err) => {
@@ -222,15 +227,24 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         }
     };
     let user_asm = if emit_debug_info {
-        debug_info::inject_line_directives(&user_asm, filename, target.platform)
+        codegen::UserAssembly::from_text(debug_info::inject_line_directives(
+            &user_asm.into_string(),
+            filename,
+            target.platform,
+        ))
     } else {
         user_asm
     };
     timings.record_since("codegen", phase_started);
+    // The EIR module is not read past this point (only its probe key is), and it is one of the
+    // largest live structures: freeing it here lets the phases below reuse its pages instead of
+    // growing the heap past them.
+    let probe_key = ir_module.probe_key;
+    drop(ir_module);
 
     crate::progress::phase("write-asm");
     let phase_started = Instant::now();
-    if let Err(e) = fs::write(&output_paths.asm, &user_asm) {
+    if let Err(e) = user_asm.write_to(&output_paths.asm) {
         crate::progress::clear();
         eprintln!("Error writing '{}': {}", output_paths.asm.display(), e);
         process::exit(1);
@@ -240,6 +254,15 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     if emit_source_map {
         crate::progress::phase("source-map");
         let phase_started = Instant::now();
+        // The text is on disk now; this rare path reads it back rather than keeping a copy.
+        let user_asm = match fs::read_to_string(&output_paths.asm) {
+            Ok(text) => text,
+            Err(err) => {
+                crate::progress::clear();
+                eprintln!("Source map error: {}", err);
+                process::exit(1);
+            }
+        };
         if let Err(err) =
             source_map::write_source_map(
                 &user_asm,
@@ -450,7 +473,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
 
     // Write the build key next to the binary: `elephc monitor <address> --key`
     // reads it to run the HMAC handshake. Keep it like a `.env` secret.
-    if let Some(key) = ir_module.probe_key {
+    if let Some(key) = probe_key {
         let sidecar = output_paths.bin.with_extension("key");
         if let Err(err) = fs::write(&sidecar, crate::probe_key::to_hex(&key)) {
             eprintln!("warning: could not write the build key {}: {err}", sidecar.display());

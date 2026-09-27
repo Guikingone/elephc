@@ -13,6 +13,7 @@ mod call_graph;
 mod cli;
 mod cli_entry;
 mod debug_info;
+mod mapped_file;
 mod eager_globals;
 mod link_planning;
 mod linker;

@@ -10,6 +10,8 @@
 //! - `crate::codegen_support` owns shared target, runtime, ABI, and metadata helpers.
 
 mod aarch64_relax;
+mod user_assembly;
+pub use user_assembly::UserAssembly;
 mod block_emit;
 mod classlike_activation;
 mod source_units;
@@ -211,6 +213,15 @@ pub struct CodegenIrError {
 }
 
 impl CodegenIrError {
+    /// Creates an error for a failed file operation of the code generator itself.
+    fn io(context: &str, error: std::io::Error) -> Self {
+        Self {
+            message: format!("{context}: {error}"),
+            location: None,
+            deferred: false,
+        }
+    }
+
     /// Creates an error for an EIR shape that is malformed or missing required metadata.
     pub(super) fn invalid_module(message: impl Into<String>) -> Self {
         Self {
@@ -312,7 +323,9 @@ pub fn generate_user_asm_from_ir(
         true,
         false,
         WebIsolation::Worker,
+        None,
     )
+    .map(UserAssembly::into_string)
 }
 
 /// Generates user-code assembly from EIR using the same artifact options as the CLI pipeline.
@@ -338,7 +351,8 @@ pub fn generate_user_asm_from_ir_with_options(
     regalloc_linear: bool,
     web: bool,
     web_isolation: WebIsolation,
-) -> Result<String> {
+    spill_path: Option<&std::path::Path>,
+) -> Result<UserAssembly> {
     let mut emitter = match emit {
         Emit::Cdylib => Emitter::new_cdylib(module.target),
         // A staticlib joins the executable path: it is linked once into the host
@@ -347,6 +361,11 @@ pub fn generate_user_asm_from_ir_with_options(
         Emit::Staticlib => Emitter::new_staticlib(module.target),
         Emit::Executable => Emitter::new(module.target),
     };
+    if let Some(path) = spill_path {
+        emitter
+            .enable_spill(path)
+            .map_err(|error| CodegenIrError::io("cannot create the assembly spill file", error))?;
+    }
     if module.target.arch == Arch::X86_64 {
         emitter.emit_text_prelude();
     }
@@ -366,14 +385,14 @@ pub fn generate_user_asm_from_ir_with_options(
         web,
         web_isolation,
     )?;
-    Ok(finalize_user_asm(
+    finalize_user_asm(
         module,
         emitter,
         data,
         emit,
         exported_functions,
         heap_debug,
-    ))
+    )
 }
 
 /// Appends literal data and the minimal user-runtime metadata needed by linked helpers.
@@ -384,7 +403,7 @@ fn finalize_user_asm(
     emit: Emit,
     exported_functions: &HashMap<String, ExportedFunction>,
     heap_debug: bool,
-) -> String {
+) -> Result<UserAssembly> {
     let eval_bridge = module.required_runtime_features.eval_bridge;
     let emit_eval_reflection_metadata =
         eval_bridge || module.required_runtime_features.eval_scope;
@@ -503,7 +522,13 @@ fn finalize_user_asm(
     }
 
     let data_output = data.emit(module.target);
-    let mut user_asm = emitter.output();
+    // The emitted text is the whole program (1.5 GB on the Symfony build). Everything below is
+    // appended to a separate, small tail: pushing it onto the text reallocated that buffer, and
+    // the realloc briefly held two copies of it.
+    let (spilled, text) = emitter
+        .finish()
+        .map_err(|error| CodegenIrError::io("cannot spill the user assembly to disk", error))?;
+    let mut user_asm = String::new();
     if !data_output.is_empty() {
         user_asm.push('\n');
         user_asm.push_str(&data_output);
@@ -567,7 +592,11 @@ fn finalize_user_asm(
         user_asm.push('\n');
         user_asm.push_str(&runtime::emit_member_exists_registry_data(module));
     }
-    let user_asm = aarch64_relax::relax_conditional_branches(user_asm, module.target);
+    // The late passes read the spilled prefix through a clean, file-backed mapping.
+    let prefix = user_assembly::PrefixView::open(spilled.as_ref())
+        .map_err(|error| CodegenIrError::io("cannot read the spilled user assembly", error))?;
+    let edits =
+        aarch64_relax::conditional_branch_relaxations(&[prefix.as_str(), &text], module.target);
     let mut exported: HashSet<String> = exported_functions
         .values()
         .map(|export| module.target.extern_symbol(&export.c_name))
@@ -602,12 +631,16 @@ fn finalize_user_asm(
     } else {
         &[]
     };
-    crate::codegen::visibility::append_hidden_directives_with_extras(
-        &user_asm,
+    let footer = crate::codegen::visibility::hidden_directives_suffix(
+        &[prefix.as_str(), &text, &user_asm],
         &exported,
         module.target.platform,
         additional_internal,
-    )
+    );
+    drop(prefix);
+    let mut suffix = user_asm;
+    suffix.push_str(&footer);
+    Ok(UserAssembly::new(spilled, text, edits, suffix))
 }
 
 #[cfg(test)]

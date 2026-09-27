@@ -55,6 +55,44 @@ fn append_visibility_directives(
     directive: &str,
     additional_internal: &[&str],
 ) -> String {
+    let hidden = hidden_symbols(&[asm], exported, additional_internal);
+    let suffix = visibility_suffix(asm.ends_with('\n'), &hidden, directive);
+    let mut out = String::with_capacity(asm.len() + suffix.len());
+    out.push_str(asm);
+    out.push_str(&suffix);
+    out
+}
+
+/// Returns only the block `append_hidden_directives_with_extras` would append to the
+/// concatenation of `pieces` (which must each end on a line boundary, except the last).
+///
+/// The user program's text is 1.5 GB on the Symfony build; returning a copy of it with the
+/// footer appended kept two copies live. `UserAssembly` appends this suffix while streaming.
+pub(crate) fn hidden_directives_suffix(
+    pieces: &[&str],
+    exported: &HashSet<String>,
+    platform: crate::codegen_support::platform::Platform,
+    additional_internal: &[&str],
+) -> String {
+    let directive = match platform {
+        crate::codegen_support::platform::Platform::MacOS => ".private_extern",
+        _ => ".hidden",
+    };
+    let hidden = hidden_symbols(pieces, exported, additional_internal);
+    let ends_with_newline = pieces
+        .iter()
+        .rev()
+        .find(|piece| !piece.is_empty())
+        .map_or(true, |piece| piece.ends_with('\n'));
+    visibility_suffix(ends_with_newline, &hidden, directive)
+}
+
+/// Returns the declared global symbols to hide, deduplicated in first-declaration order.
+fn hidden_symbols(
+    pieces: &[&str],
+    exported: &HashSet<String>,
+    additional_internal: &[&str],
+) -> Vec<String> {
     let mut seen = HashSet::<String>::new();
     let mut hidden = Vec::<String>::new();
     for symbol in additional_internal {
@@ -62,7 +100,7 @@ fn append_visibility_directives(
             hidden.push((*symbol).to_string());
         }
     }
-    for line in asm.lines() {
+    for line in pieces.iter().flat_map(|piece| piece.lines()) {
         let trimmed = line.trim_start();
         let symbol = if let Some(rest) = trimmed.strip_prefix(".globl ") {
             rest.trim()
@@ -76,19 +114,23 @@ fn append_visibility_directives(
         }
         hidden.push(symbol.to_string());
     }
+    hidden
+}
+
+/// Formats the visibility footer for `hidden`, empty when there is nothing to hide.
+fn visibility_suffix(ends_with_newline: bool, hidden: &[String], directive: &str) -> String {
     if hidden.is_empty() {
-        return asm.to_string();
+        return String::new();
     }
-    let mut out = String::with_capacity(asm.len() + hidden.len() * 16);
-    out.push_str(asm);
-    if !out.ends_with('\n') {
+    let mut out = String::with_capacity(hidden.len() * 24 + 64);
+    if !ends_with_newline {
         out.push('\n');
     }
     out.push_str("\n// -- internal symbols are local to the cdylib public ABI --\n");
     for symbol in hidden {
         out.push_str(directive);
         out.push(' ');
-        out.push_str(&symbol);
+        out.push_str(symbol);
         out.push('\n');
     }
     out

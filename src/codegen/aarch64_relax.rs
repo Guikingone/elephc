@@ -27,9 +27,24 @@ struct ConditionalBranch<'a> {
 }
 
 /// Rewrites only symbolic AArch64 conditional branches whose targets are conservatively far.
+#[cfg(test)]
 pub(super) fn relax_conditional_branches(assembly: String, target: Target) -> String {
+    let edits = conditional_branch_relaxations(&[&assembly], target);
+    super::user_assembly::UserAssembly::new(None, assembly, edits, String::new()).into_string()
+}
+
+/// Returns the out-of-range conditional branches of the concatenation of `pieces` as
+/// replacement edits, with offsets into that concatenation. Each piece ends on a line boundary.
+///
+/// Edits instead of a rewritten copy: the text is the whole user program (1.5 GB on the Symfony
+/// build), and a copy made while the original is still live doubles the code generator's peak.
+/// `UserAssembly` applies the edits while streaming the text to disk.
+pub(super) fn conditional_branch_relaxations(
+    pieces: &[&str],
+    target: Target,
+) -> Vec<super::user_assembly::TextEdit> {
     if target.arch != Arch::AArch64 {
-        return assembly;
+        return Vec::new();
     }
 
     // The house hasher, not SipHash: this map takes one insert per label in a 1.4 GB listing
@@ -37,7 +52,7 @@ pub(super) fn relax_conditional_branches(assembly: String, target: Target) -> St
     // sample of the late codegen window caught `sip::Hasher::write` here.
     let mut labels = HashMap::default();
     let mut source_offset = 0usize;
-    for line in assembly.split_inclusive('\n') {
+    for line in pieces.iter().flat_map(|piece| piece.split_inclusive('\n')) {
         let trimmed = line.trim();
         if let Some(label) = trimmed.strip_suffix(':') {
             if is_symbol(label) {
@@ -47,14 +62,10 @@ pub(super) fn relax_conditional_branches(assembly: String, target: Target) -> St
         source_offset += line.len();
     }
 
-    let mut relaxed = None::<String>;
-    // Start of the stretch of `assembly` not yet copied into `relaxed`. Once one branch has been
-    // relaxed the old loop pushed every REMAINING line one at a time -- tens of millions of
-    // `push_str` calls to rebuild text it already had. Only the relaxed branches differ, so the
-    // stretches between them are copied whole.
-    let mut verbatim_from = 0usize;
+    // Only the relaxed branches differ from the text; each becomes one edit covering its line.
+    let mut edits = Vec::new();
     source_offset = 0;
-    for line in assembly.split_inclusive('\n') {
+    for line in pieces.iter().flat_map(|piece| piece.split_inclusive('\n')) {
         let expansion = maybe_conditional_branch(line)
             .then(|| parse_conditional_branch(line))
             .flatten()
@@ -65,20 +76,17 @@ pub(super) fn relax_conditional_branches(assembly: String, target: Target) -> St
             });
 
         if let Some((branch, distance)) = expansion {
-            let output = relaxed
-                .get_or_insert_with(|| String::with_capacity(assembly.len() + 4096));
-            output.push_str(&assembly[verbatim_from..source_offset]);
-            emit_relaxed_branch(output, &branch, target, source_offset, distance);
-            verbatim_from = source_offset + line.len();
+            let mut replacement = String::new();
+            emit_relaxed_branch(&mut replacement, &branch, target, source_offset, distance);
+            edits.push(super::user_assembly::TextEdit {
+                start: source_offset,
+                end: source_offset + line.len(),
+                replacement,
+            });
         }
         source_offset += line.len();
     }
-    if let Some(output) = relaxed.as_mut() {
-        output.push_str(&assembly[verbatim_from..]);
-    }
-
-    drop(labels);
-    relaxed.unwrap_or(assembly)
+    edits
 }
 
 /// Returns whether a line could possibly be one of the branches the parser accepts.

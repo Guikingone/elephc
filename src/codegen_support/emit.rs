@@ -51,6 +51,28 @@ pub struct Emitter {
     /// Only ELF splits text per symbol; Mach-O keeps one flat `__text`, so this
     /// stays `None` there and reopening is a no-op.
     current_text_section: Option<String>,
+    /// Where completed text goes once the buffer grows past `SPILL_THRESHOLD`, when enabled.
+    spill: Option<Spill>,
+}
+
+/// Buffer size past which `spill_completed_text` moves the text to disk.
+const SPILL_THRESHOLD: usize = 32 << 20;
+
+/// The on-disk prefix of an emitter's output.
+struct Spill {
+    path: std::path::PathBuf,
+    writer: std::io::BufWriter<std::fs::File>,
+    bytes: usize,
+    error: Option<std::io::Error>,
+}
+
+/// Text an emitter moved to disk, in order, ahead of what it still holds in memory.
+#[derive(Debug)]
+pub struct SpilledText {
+    /// The file holding the spilled prefix.
+    pub path: std::path::PathBuf,
+    /// Its length in bytes.
+    pub len: usize,
 }
 
 impl Emitter {
@@ -65,6 +87,7 @@ impl Emitter {
             dead_strip: false,
             internal_labels: HashSet::default(),
             current_text_section: None,
+            spill: None,
         }
     }
 
@@ -245,6 +268,7 @@ impl Emitter {
             dead_strip: self.dead_strip,
             internal_labels: HashSet::default(),
             current_text_section: None,
+            spill: None,
         }
     }
 
@@ -263,8 +287,85 @@ impl Emitter {
     }
 
     /// Returns the accumulated assembly output as a String.
+    ///
+    /// An emitter that spilled reads its prefix back, so this always returns the whole text; the
+    /// user-program path calls `finish` instead to keep the prefix on disk.
     pub fn output(self) -> String {
-        self.buf
+        match self.finish() {
+            Ok((None, text)) => text,
+            Ok((Some(spilled), text)) => {
+                let mut whole = std::fs::read_to_string(&spilled.path)
+                    .expect("spilled assembly is readable");
+                let _ = std::fs::remove_file(&spilled.path);
+                whole.push_str(&text);
+                whole
+            }
+            Err(error) => panic!("could not spill assembly to disk: {error}"),
+        }
+    }
+
+    /// Sends completed text to `path` whenever `spill_completed_text` finds the buffer large.
+    ///
+    /// The user program's text is 1.5 GB on the Symfony `--web` build. Held in one growing
+    /// buffer it was the largest live allocation of the whole compile, and on macOS a freed
+    /// allocation never leaves the process footprint, so its high-water mark set the build's
+    /// peak. Spilled in 32 MB steps it never occupies more than one step of memory.
+    pub fn enable_spill(&mut self, path: &std::path::Path) -> std::io::Result<()> {
+        let file = std::fs::File::create(path)?;
+        self.spill = Some(Spill {
+            path: path.to_path_buf(),
+            writer: std::io::BufWriter::with_capacity(1 << 20, file),
+            bytes: 0,
+            error: None,
+        });
+        Ok(())
+    }
+
+    /// Moves the buffered text to the spill file when spilling is on and the buffer is large.
+    ///
+    /// Callers invoke it only where no checkpoint is held — between function bodies — because a
+    /// spill empties the buffer that checkpoints index into. The buffer must also end on a line
+    /// boundary, so the spilled prefix is always whole lines.
+    pub fn spill_completed_text(&mut self) {
+        let Some(spill) = self.spill.as_mut() else {
+            return;
+        };
+        if self.buf.len() < SPILL_THRESHOLD || spill.error.is_some() || !self.buf.ends_with('\n') {
+            return;
+        }
+        use std::io::Write as _;
+        match spill.writer.write_all(self.buf.as_bytes()) {
+            Ok(()) => {
+                spill.bytes += self.buf.len();
+                self.buf.clear();
+            }
+            Err(error) => spill.error = Some(error),
+        }
+    }
+
+    /// Returns the spilled prefix (if any) and the text still in memory, in that order.
+    pub fn finish(self) -> std::io::Result<(Option<SpilledText>, String)> {
+        let Some(spill) = self.spill else {
+            return Ok((None, self.buf));
+        };
+        if let Some(error) = spill.error {
+            return Err(error);
+        }
+        if spill.bytes == 0 {
+            drop(spill.writer);
+            let _ = std::fs::remove_file(&spill.path);
+            return Ok((None, self.buf));
+        }
+        let file = spill.writer.into_inner().map_err(|error| error.into_error())?;
+        file.sync_data().ok();
+        drop(file);
+        Ok((
+            Some(SpilledText {
+                path: spill.path,
+                len: spill.bytes,
+            }),
+            self.buf,
+        ))
     }
 
     /// Records the current end of the output buffer for a possible rollback.

@@ -77,8 +77,10 @@ fn generate_project_asm(
         regalloc_linear,
         false,
         elephc::codegen::WebIsolation::Worker,
+        None, // spill: fixtures are small enough to stay in memory
     )
-    .expect("EIR backend codegen failed for project fixture");
+    .expect("EIR backend codegen failed for project fixture")
+    .into_string();
     let runtime_features = ir_module.required_runtime_features;
     let runtime_asm =
         elephc::codegen::generate_runtime_with_features(heap_size, target(), runtime_features);

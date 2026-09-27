@@ -216,6 +216,7 @@ pub(super) fn emit_module(
         for worker in workers {
             for (_, text) in worker.emitted {
                 emitter.append_block(&drop_duplicate_helpers(&text, &mut seen_helpers));
+                emitter.spill_completed_text();
             }
             data.merge(worker.data);
         }
@@ -245,6 +246,8 @@ pub(super) fn emit_module(
             emitter.rollback_to(body_started);
             emitter.append_block(&deduped);
         }
+        // Between bodies no checkpoint is held, so completed text may leave memory here.
+        emitter.spill_completed_text();
         if count_shared_touches {
             bodies_total += 1;
             if shared.cache_touches() != touches_before {

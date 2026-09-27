@@ -51,7 +51,8 @@ const VISIBILITY_FOOTER_MARKER: &str =
 /// collide, and greppable, so a symbolicated profile explains itself.
 const PROMOTED_PREFIX: &str = "_elephc_xslice_";
 
-/// Result of one split: the slice texts plus what had to be published to make them link.
+/// Result of one collected split (tests only; production streams through `split_assembly_streaming`).
+#[cfg(test)]
 pub(super) struct SplitOutcome {
     /// Slice bodies in emission order. Exactly one entry when the input was not split.
     pub(super) slices: Vec<String>,
@@ -62,6 +63,7 @@ pub(super) struct SplitOutcome {
     pub(super) published: usize,
 }
 
+#[cfg(test)]
 impl SplitOutcome {
     /// Returns the untouched input as a single slice.
     fn unsplit(source: &str) -> Self {
@@ -105,12 +107,78 @@ struct LabelSpan {
     hi: usize,
 }
 
+/// The body's lines as byte offsets into the source.
+///
+/// One `u32` per line instead of a `&str` (16 bytes) plus a separate `usize` offset table: the
+/// Symfony `--web` build has 44.7 million lines, and the two `Vec<&str>` copies and the offset
+/// table this replaces cost 1.8 GB of the assembly phase's peak. Sources of 4 GiB or more are
+/// not split (`split_assembly` returns them whole), which is what makes `u32` enough.
+struct Lines<'a> {
+    source: &'a str,
+    /// Start of every line, plus one final entry: the end of the last line.
+    starts: Vec<u32>,
+}
+
+impl<'a> Lines<'a> {
+    /// Indexes every line of `source`, `\n` included.
+    fn new(source: &'a str) -> Self {
+        let mut starts = Vec::with_capacity(source.len() / 32 + 2);
+        starts.push(0u32);
+        for (index, byte) in source.bytes().enumerate() {
+            if byte == b'\n' {
+                starts.push((index + 1) as u32);
+            }
+        }
+        if *starts.last().expect("seeded above") as usize != source.len() {
+            starts.push(source.len() as u32);
+        }
+        Self { source, starts }
+    }
+
+    /// Number of lines.
+    fn len(&self) -> usize {
+        self.starts.len() - 1
+    }
+
+    /// Line `index`, `\n` included.
+    fn get(&self, index: usize) -> &'a str {
+        &self.source[self.starts[index] as usize..self.starts[index + 1] as usize]
+    }
+
+    /// Byte offset of line `index`; `offset(len())` is the end of the body.
+    fn offset(&self, index: usize) -> usize {
+        self.starts[index] as usize
+    }
+
+    /// Lines in order.
+    fn iter(&self) -> impl Iterator<Item = &'a str> + '_ {
+        (0..self.len()).map(move |index| self.get(index))
+    }
+
+    /// Lines `range.start..range.end` in order.
+    #[cfg(test)]
+    fn range(&self, range: std::ops::Range<usize>) -> impl Iterator<Item = &'a str> + '_ {
+        range.map(move |index| self.get(index))
+    }
+
+    /// Keeps only the first `len` lines.
+    fn truncate(&mut self, len: usize) {
+        self.starts.truncate(len + 1);
+    }
+}
+
+impl std::ops::Index<usize> for Lines<'_> {
+    type Output = str;
+
+    fn index(&self, index: usize) -> &str {
+        self.get(index)
+    }
+}
+
 /// Everything one scan of the body hands to cut selection and rendering.
 struct Analysis<'a> {
     /// Body lines, `\n` included, in emission order. Concatenating them reproduces the body.
-    lines: Vec<&'a str>,
-    /// Byte offset of each line plus a final total, so cuts can be balanced by size.
-    offsets: Vec<usize>,
+    lines: Lines<'a>,
     /// Names in first-definition order; the index into this vector is a label id.
     names: Vec<&'a str>,
     /// Label id per name.
@@ -136,48 +204,93 @@ struct Analysis<'a> {
     globl: HashSet<&'a str>,
 }
 
+impl Analysis<'_> {
+    /// Byte offset of body line `index`; `offset(lines.len())` is the body's size.
+    fn offset(&self, index: usize) -> usize {
+        self.lines.offset(index)
+    }
+
+    /// The body's size in bytes.
+    fn total(&self) -> usize {
+        self.lines.offset(self.lines.len())
+    }
+}
+
+/// What a streamed split produced, without the slice texts themselves.
+pub(super) struct SplitSummary {
+    /// Number of slices handed to the sink.
+    pub(super) slices: usize,
+    /// Assembler temporaries renamed because their span crossed a cut.
+    pub(super) promoted: Vec<String>,
+    /// Plain labels published `.private_extern` because another slice references them.
+    pub(super) published: usize,
+}
+
 /// Splits one finished assembly text into at most `jobs` contiguous slices.
 ///
 /// `jobs <= 1`, an input with no legal cut, a promotion name collision, and a
 /// visibility footer naming a symbol the body does not define all return the
 /// input as a single slice, so the caller's fallback is always "do exactly what
 /// we do today".
+#[cfg(test)]
 pub(super) fn split_assembly(source: &str, jobs: usize, local_prefix: &str) -> SplitOutcome {
-    if jobs <= 1 || source.is_empty() {
-        return SplitOutcome::unsplit(source);
+    let mut slices = Vec::new();
+    let streamed = split_assembly_streaming(source, jobs, local_prefix, |_, slice| {
+        slices.push(slice);
+        Ok(())
+    })
+    .expect("collecting slices cannot fail");
+    match streamed {
+        Some(summary) => SplitOutcome {
+            slices,
+            promoted: summary.promoted,
+            published: summary.published,
+        },
+        None => SplitOutcome::unsplit(source),
+    }
+}
+
+/// Splits `source` like `split_assembly`, handing each slice to `sink` as soon as it is
+/// rendered instead of collecting them.
+///
+/// Returns `None`, having called `sink` zero times, whenever `split_assembly` would return the
+/// input whole. The caller then assembles the file as it is. On the Symfony `--web` build the
+/// collected slices were a second 1.5 GB copy of the program alive while the first was still
+/// being cut; streamed, only the slice being written is.
+pub(super) fn split_assembly_streaming(
+    source: &str,
+    jobs: usize,
+    local_prefix: &str,
+    sink: impl FnMut(usize, String) -> std::io::Result<()>,
+) -> std::io::Result<Option<SplitSummary>> {
+    // `Lines` stores `u32` offsets; a larger text is assembled whole.
+    if jobs <= 1 || source.is_empty() || source.len() >= u32::MAX as usize {
+        return Ok(None);
     }
     let analysis = analyze(source, local_prefix);
     if analysis.footer.iter().any(|name| !analysis.ids.contains_key(name)) {
         // The footer is authoritative about visibility. If a name in it has no
         // definition this pass can find, partitioning it would silently drop a
         // directive; refuse instead.
-        return SplitOutcome::unsplit(source);
+        return Ok(None);
     }
     let cuts = match cut_policy() {
         CutPolicy::Balanced => choose_cuts(&analysis, jobs),
         CutPolicy::Stable => choose_cuts_stable(&analysis, jobs),
     };
     if cuts.is_empty() {
-        return SplitOutcome::unsplit(source);
+        return Ok(None);
     }
-    render(source, &analysis, &cuts, local_prefix)
+    render(source, &analysis, &cuts, local_prefix, sink)
 }
 
 /// Runs the single body scan that every later decision reads.
 fn analyze<'a>(source: &'a str, local_prefix: &str) -> Analysis<'a> {
-    let all: Vec<&str> = source.split_inclusive('\n').collect();
-    let body_end = footer_start(&all);
-    let footer = footer_names(&all[body_end..]);
+    let mut lines = Lines::new(source);
+    let body_end = footer_start(&lines);
+    let footer = footer_names((body_end..lines.len()).map(|index| lines.get(index)));
     let footer_set: HashSet<&str> = footer.iter().copied().collect();
-    let lines: Vec<&str> = all[..body_end].to_vec();
-
-    let mut offsets = Vec::with_capacity(lines.len() + 1);
-    let mut total = 0usize;
-    for line in &lines {
-        offsets.push(total);
-        total += line.len();
-    }
-    offsets.push(total);
+    lines.truncate(body_end);
 
     let mut names: Vec<&str> = Vec::new();
     let mut ids: HashMap<&str, usize> = HashMap::new();
@@ -187,7 +300,7 @@ fn analyze<'a>(source: &'a str, local_prefix: &str) -> Analysis<'a> {
     let mut globl: HashSet<&str> = HashSet::new();
     let mut numeric: HashMap<&str, Vec<usize>> = HashMap::new();
 
-    for (index, raw) in lines.iter().copied().enumerate() {
+    for (index, raw) in lines.iter().enumerate() {
         let line = raw.trim();
         if line.is_empty() {
             continue;
@@ -221,7 +334,7 @@ fn analyze<'a>(source: &'a str, local_prefix: &str) -> Analysis<'a> {
     }
 
     let mut hard: Vec<(usize, usize)> = Vec::new();
-    for (index, raw) in lines.iter().copied().enumerate() {
+    for (index, raw) in lines.iter().enumerate() {
         let line = raw.trim();
         if line.is_empty() {
             continue;
@@ -283,7 +396,6 @@ fn analyze<'a>(source: &'a str, local_prefix: &str) -> Analysis<'a> {
     let (candidates, candidate_names) = boundary_candidates(&lines, local_prefix, &merged);
     Analysis {
         lines,
-        offsets,
         names,
         ids,
         spans,
@@ -318,18 +430,16 @@ fn define<'a>(
 }
 
 /// Returns the line index at which the file-global visibility footer starts.
-fn footer_start(lines: &[&str]) -> usize {
-    lines
-        .iter()
-        .rposition(|line| line.trim() == VISIBILITY_FOOTER_MARKER)
+fn footer_start(lines: &Lines<'_>) -> usize {
+    (0..lines.len())
+        .rev()
+        .find(|&index| lines.get(index).trim() == VISIBILITY_FOOTER_MARKER)
         .unwrap_or(lines.len())
 }
 
 /// Returns the symbols named by a visibility footer, in footer order.
-fn footer_names<'a>(footer: &[&'a str]) -> Vec<&'a str> {
+fn footer_names<'a>(footer: impl Iterator<Item = &'a str>) -> Vec<&'a str> {
     footer
-        .iter()
-        .copied()
         .filter_map(|line| {
             let line = line.trim();
             line.strip_prefix(".private_extern ")
@@ -464,13 +574,13 @@ fn numeric_references(line: &str) -> Vec<(&str, u8)> {
 /// opens. The name is what the stable cut policy hashes, so it has to be carried
 /// out of here rather than recovered from the line later.
 fn boundary_candidates<'a>(
-    lines: &[&'a str],
+    lines: &Lines<'a>,
     local_prefix: &str,
     hard: &[(usize, usize)],
 ) -> (Vec<usize>, Vec<&'a str>) {
     let mut candidates: Vec<usize> = Vec::new();
     let mut candidate_names: Vec<&'a str> = Vec::new();
-    for (index, raw) in lines.iter().copied().enumerate() {
+    for (index, raw) in lines.iter().enumerate() {
         if raw.starts_with(' ') || raw.starts_with('\t') {
             continue;
         }
@@ -502,7 +612,7 @@ fn boundary_candidates<'a>(
 }
 
 /// Returns whether control cannot reach the label defined at `index` by falling through.
-fn cannot_fall_through(lines: &[&str], index: usize) -> bool {
+fn cannot_fall_through(lines: &Lines<'_>, index: usize) -> bool {
     let mut cursor = index;
     while cursor > 0 {
         cursor -= 1;
@@ -616,7 +726,7 @@ fn name_hash(name: &str) -> u64 {
 ///   cut fell — but it fires only on that pathological run, so it bounds the damage
 ///   instead of spreading it.
 fn choose_cuts_stable(analysis: &Analysis<'_>, jobs: usize) -> Vec<usize> {
-    let total = *analysis.offsets.last().unwrap_or(&0);
+    let total = analysis.total();
     if total == 0 || analysis.candidates.is_empty() || jobs <= 1 {
         return Vec::new();
     }
@@ -631,12 +741,12 @@ fn choose_cuts_stable(analysis: &Analysis<'_>, jobs: usize) -> Vec<usize> {
             continue;
         }
         let chosen = name_hash(analysis.candidate_names[position]) % stride == 0;
-        let oversized = analysis.offsets[candidate].saturating_sub(slice_start) >= cap;
+        let oversized = analysis.offset(candidate).saturating_sub(slice_start) >= cap;
         if !chosen && !oversized {
             continue;
         }
         cuts.push(candidate);
-        slice_start = analysis.offsets[candidate];
+        slice_start = analysis.offset(candidate);
     }
     cuts
 }
@@ -656,7 +766,7 @@ fn stable_stride(candidates: usize, jobs: usize) -> u64 {
 /// Picks up to `jobs - 1` cut lines, each as close as the legal boundaries allow
 /// to an equal split of the body's bytes.
 fn choose_cuts(analysis: &Analysis<'_>, jobs: usize) -> Vec<usize> {
-    let total = *analysis.offsets.last().unwrap_or(&0);
+    let total = analysis.total();
     if total == 0 || analysis.candidates.is_empty() {
         return Vec::new();
     }
@@ -668,9 +778,9 @@ fn choose_cuts(analysis: &Analysis<'_>, jobs: usize) -> Vec<usize> {
             if cuts.last().is_some_and(|&last| candidate <= last) {
                 continue;
             }
-            let distance = analysis.offsets[candidate].abs_diff(ideal);
+            let distance = analysis.offset(candidate).abs_diff(ideal);
             let keep = best.is_some_and(|current| {
-                analysis.offsets[current].abs_diff(ideal) <= distance
+                analysis.offset(current).abs_diff(ideal) <= distance
             });
             if !keep {
                 best = Some(candidate);
@@ -689,7 +799,8 @@ fn render<'a>(
     analysis: &Analysis<'a>,
     cuts: &[usize],
     local_prefix: &str,
-) -> SplitOutcome {
+    mut sink: impl FnMut(usize, String) -> std::io::Result<()>,
+) -> std::io::Result<Option<SplitSummary>> {
     let slice_of = |line: usize| cuts.partition_point(|&cut| cut <= line);
     let parts = cuts.len() + 1;
 
@@ -713,7 +824,7 @@ fn render<'a>(
             if analysis.ids.contains_key(renamed.as_str()) {
                 // A collision would silently merge two symbols. Refuse the split
                 // rather than guess a second name.
-                return SplitOutcome::unsplit(source);
+                return Ok(None);
             }
             published[slice_of(span.def)].push(name);
             promoted.insert(name, renamed.clone());
@@ -727,11 +838,10 @@ fn render<'a>(
         published_count += 1;
     }
 
-    let mut slices: Vec<String> = Vec::with_capacity(parts);
     for part in 0..parts {
         let start = if part == 0 { 0 } else { cuts[part - 1] };
         let end = cuts.get(part).copied().unwrap_or(analysis.lines.len());
-        let bytes = analysis.offsets[end] - analysis.offsets[start];
+        let bytes = analysis.offset(end) - analysis.offset(start);
         let mut out = String::with_capacity(bytes + 4096);
         if part > 0 {
             // HAZARD 4 — `.section`/`.data` state and the `.intel_syntax` switch
@@ -757,34 +867,33 @@ fn render<'a>(
                 });
             }
         }
-        // `lines` comes from `source.split_inclusive('\n')` and `offsets[i]` is line `i`'s byte
-        // position in `source`, so `source[offsets[a]..offsets[b]]` IS lines `a..b` joined --
+        // `lines` indexes `source` itself, so `source[offset(a)..offset(b)]` IS lines `a..b` joined --
         // the same bytes the per-line loop pushed, in one copy. On this module that loop ran
         // 42 million times per build to rebuild a string it already had.
         let mut run = start;
         for index in start..end {
-            let line = analysis.lines[index];
+            let line = analysis.lines.get(index);
             if promoted.is_empty() || !line.contains(local_prefix) {
                 continue;
             }
             if index > run {
-                out.push_str(&source[analysis.offsets[run]..analysis.offsets[index]]);
+                out.push_str(&source[analysis.offset(run)..analysis.offset(index)]);
             }
             push_renamed(&mut out, line, &promoted);
             run = index + 1;
         }
         if end > run {
-            out.push_str(&source[analysis.offsets[run]..analysis.offsets[end]]);
+            out.push_str(&source[analysis.offset(run)..analysis.offset(end)]);
         }
         append_visibility_footer(&mut out, analysis, &published[part], &promoted, part, &slice_of);
-        slices.push(out);
+        sink(part, out)?;
     }
     promoted_names.sort();
-    SplitOutcome {
-        slices,
+    Ok(Some(SplitSummary {
+        slices: parts,
         promoted: promoted_names,
         published: published_count,
-    }
+    }))
 }
 
 /// Appends this slice's share of the file-global visibility footer.
@@ -969,12 +1078,12 @@ mod tests {
         for part in 0..=cuts.len() {
             let start = if part == 0 { 0 } else { cuts[part - 1] };
             let end = cuts.get(part).copied().unwrap_or(analysis.lines.len());
-            for line in &analysis.lines[start..end] {
+            for line in analysis.lines.range(start..end) {
                 rebuilt.push_str(line);
             }
         }
-        let all: Vec<&str> = source.split_inclusive('\n').collect();
-        let body: String = all[..footer_start(&all)].concat();
+        let all = Lines::new(&source);
+        let body: String = all.range(0..footer_start(&all)).collect();
         assert_eq!(rebuilt, body);
     }
 
@@ -1311,13 +1420,13 @@ mod tests {
         let analysis = analyze(&source, MACOS_LOCAL);
         let jobs = 8;
         let cuts = choose_cuts_stable(&analysis, jobs);
-        let total = *analysis.offsets.last().expect("offsets end with the total");
+        let total = analysis.total();
         let cap = (total / jobs).saturating_mul(2).max(1);
         let mut start = 0usize;
         for &cut in &cuts {
-            let size = analysis.offsets[cut] - start;
+            let size = analysis.offset(cut) - start;
             assert!(size <= cap, "slice of {size} bytes exceeds the cap of {cap}");
-            start = analysis.offsets[cut];
+            start = analysis.offset(cut);
         }
     }
 
@@ -1381,8 +1490,9 @@ mod tests {
         assert_eq!(analysis.candidates.len(), analysis.candidate_names.len());
         for (position, &candidate) in analysis.candidates.iter().enumerate() {
             let name = analysis.candidate_names[position];
-            let opens = analysis.lines[candidate..]
-                .iter()
+            let opens = analysis
+                .lines
+                .range(candidate..analysis.lines.len())
                 .any(|line| line.trim() == format!("{name}:"));
             assert!(opens, "candidate at line {candidate} does not open {name}");
         }
