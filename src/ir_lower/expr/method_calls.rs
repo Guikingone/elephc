@@ -190,6 +190,15 @@ pub(super) fn lower_method_call(
     };
     let result_type = method_call_result_type(ctx, object.value, dispatch_method, op, expr);
     let sig = method_call_argument_signature(ctx, object_expr, object.value, dispatch_method);
+    // An override wider than the signature this site is typed against needs its defaults padded;
+    // see `override_arity`.
+    if op == Op::MethodCall && dispatch_method == method {
+        if let Some(call) =
+            lower_wider_override_dispatch(ctx, object, method, args, sig.as_ref(), expr)
+        {
+            return call;
+        }
+    }
     if let Some(call) = lower_runtime_spread_method_call(
         ctx,
         object,

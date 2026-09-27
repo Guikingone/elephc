@@ -1384,8 +1384,16 @@ fn lower_body_into_function(
     //
     // By-reference parameters are excluded by definition: `array &$a` must alias, not copy.
     // `$this` is excluded because it is an object, never a container.
+    //
+    // NOT when the body can hand its scope to code the compiler does not see (`eval`, a runtime
+    // `include`/`require`). The shadow slot is named `{name}#cow`, and both the eval-scope bridge
+    // and the prologue find a parameter's slot BY NAME, so included code read the ORIGINAL slot:
+    // `$file .= '.php'; require $dir.$file;` showed the included file the pre-write `$file`, and in
+    // Symfony's generated `Container::load()` the stale slot fed `$class::do($this, $lazyLoad)` a
+    // dangling reference that crashed `--web` workers depending on memory layout.
+    let exposes_scope = crate::ir_lower::body_contains_eval_call(body);
     for (index, (name, php_type)) in params.iter().enumerate() {
-        if by_ref_params.get(index).copied().unwrap_or(false) {
+        if by_ref_params.get(index).copied().unwrap_or(false) || exposes_scope {
             continue;
         }
         if name == "this" {

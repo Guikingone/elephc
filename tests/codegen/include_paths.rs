@@ -560,3 +560,78 @@ fn test_include_function_variant_keeps_error_when_call_does_not_respecialize() {
         "main.php",
     ));
 }
+
+/// Verifies a runtime include sees a by-value parameter the function WROTE before including.
+///
+/// Written `mixed` and array parameters are re-bound to a private copy on entry, and that copy
+/// lived in a differently named slot the include's scope bridge never looked up: the included
+/// file read the pre-write value (`part` instead of `part.php`, `a` instead of `a,added`). This
+/// is the shape of Symfony's generated `Container::load()`, where the stale slot then crashed
+/// `--web` workers. `php -n` 8.5 prints the expected line.
+#[test]
+fn test_runtime_include_sees_written_by_value_params() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php
+function viaMixed($file) {
+    $file .= '.php';
+    return require __DIR__ . '/' . $file;
+}
+function viaArray(array $items, $path) {
+    $items[] = 'added';
+    return require $path;
+}
+echo viaMixed('part'), '|', viaArray(['a'], __DIR__ . '/items.php');",
+            ),
+            ("part.php", "<?php return 'included:' . $file;"),
+            ("items.php", "<?php return implode(',', $items);"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "included:part.php|a,added");
+}
+
+/// Verifies a `?int` parameter reached through a dynamic static call keeps its tag.
+///
+/// A function that can `require` exposes its locals, so `$class::take($n, ...)` hands the
+/// runtime callable invoker by-reference argument cells. Coercing such a cell to the `?int`
+/// payload/tag pair and then releasing the temporary box restored only the payload register: the
+/// tag was whatever the release call left behind, and php's `n=42 none=NULL` printed `n= none=`.
+/// In Symfony's generated container the same garbage tag crashed `--web` workers.
+#[test]
+fn test_dynamic_static_call_keeps_nullable_int_tag_through_ref_cells() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php
+namespace App;
+
+class Target {
+    public static function take(?int $x, $label) {
+        return $label . '=' . var_export($x, true);
+    }
+}
+
+function run($class, $n, $file) {
+    if ($file !== '') {
+        require __DIR__ . '/' . $file;
+    }
+    $out = $class::take($n, 'n');
+    $none = null;
+    $out .= ' ' . $class::take($none, 'none');
+    return $out;
+}
+
+$class = $argc > 5 ? 'Nope' : __NAMESPACE__ . '\\\\Target';
+$n = $argc > 5 ? 1 : 42;
+echo run($class, $n, ''), '|', run($class, $n, 'empty.php');",
+            ),
+            ("empty.php", "<?php\n"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "n=42 none=NULL|n=42 none=NULL");
+}

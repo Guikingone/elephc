@@ -2600,6 +2600,15 @@ fn restore_pushed_value_after_release(emitter: &mut Emitter, pushed_ty: &PhpType
             let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
             abi::emit_pop_reg_pair(emitter, ptr_reg, len_reg);
         }
+        // A `?int` argument is a payload/tag PAIR. Popping only the payload left the tag register
+        // holding whatever the decref call above left in it, so every `?int` parameter reached
+        // through a by-reference argument cell arrived with a garbage tag — which crashed the
+        // Symfony `--web` worker on `POST /echo` in about one memory layout in five.
+        PhpType::TaggedScalar => abi::emit_pop_reg_pair(
+            emitter,
+            abi::int_result_reg(emitter),
+            crate::codegen_support::sentinels::tagged_scalar_tag_reg(emitter),
+        ),
         PhpType::Void | PhpType::Never => {}
         _ => abi::emit_pop_reg(emitter, abi::int_result_reg(emitter)),
     }

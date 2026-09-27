@@ -878,3 +878,31 @@ echo (new ParentCls())->viaSelf();
     );
     assert_eq!(out, "Sa:T");
 }
+
+/// Verifies an ancestor-typed call reaches an override that declares MORE parameters with the
+/// override's defaults, instead of reading the extra parameters from uninitialized registers.
+///
+/// Symfony's generated container overrides `Container::load(string $file)` as
+/// `load($file, $lazyLoad = true)`, and `Container::make()` calls it through the base type: the
+/// site passed one argument and the override crashed or saw garbage. A class that does not widen
+/// the method keeps the ordinary virtual call.
+#[test]
+fn test_ancestor_typed_call_pads_a_wider_override() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    protected function load(string $file) { return "base:$file"; }
+    public static function make(self $c, string $id) { return $c->load($id); }
+}
+class Child extends Base {
+    protected function load($file, $lazyLoad = true, int $n = 7, ?array $opts = null) {
+        return "child:$file:" . var_export($lazyLoad, true) . ":$n:" . var_export($opts, true);
+    }
+}
+class GrandChild extends Child {}
+class Plain extends Base {}
+echo Base::make(new Child(), 'a'), "|", Base::make(new GrandChild(), 'b'), "|", Base::make(new Plain(), 'c');
+"#,
+    );
+    assert_eq!(out, "child:a:true:7:NULL|child:b:true:7:NULL|base:c");
+}
