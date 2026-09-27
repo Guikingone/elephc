@@ -3606,3 +3606,33 @@ fn test_by_ref_param_that_keeps_its_type_is_not_widened() {
         out.stderr
     );
 }
+
+/// Verifies a local that holds `false` on one path and an `int` on another keeps both types.
+///
+/// Regression: the frame slot widened `bool` into `int` (same I64 storage), so below a branch that
+/// something kept from being duplicated into its arms, `var_dump($p)` printed `int(0)` for php's
+/// `bool(false)` and `$p === false` answered false. The second branch is what keeps the tail
+/// shared. Expected output is php 8.5's.
+#[test]
+fn test_bool_and_int_on_different_paths_keep_their_types() {
+    let out = compile_and_run(
+        r#"<?php
+$p = false;
+if ($argc > 5) {
+    $p = 3;
+}
+var_dump($p, $p === false);
+$t = true;
+if ($argc > 5) {
+    $t = 5;
+}
+var_dump($t);
+$q = 1;
+if ($argc > 6) {
+    $q = 2;
+}
+echo $q;
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(true)\nbool(true)\n1");
+}

@@ -768,22 +768,21 @@ fn widened_local_storage_type(current: &PhpType, incoming: &PhpType) -> PhpType 
     if current == incoming {
         return current;
     }
+    // `bool` and `int` share the I64 representation but are different PHP values, so a slot that
+    // has held both must keep the tag: widening one into the other made
+    // `$p = false; if (…) { $p = 3; }` read back `int(0)` below the branch, `$p === false` answer
+    // false, and `$x = require_once F;` turn php's `true` for a repeat inclusion into `int(1)`.
+    // `TaggedScalar` is `int|null` only (its tag has no bool), so a bool meeting it is boxed too.
     match (&current, &incoming) {
         (current, PhpType::Void | PhpType::Never) => current.clone(),
-        (
-            PhpType::TaggedScalar,
-            PhpType::Int | PhpType::Bool | PhpType::TaggedScalar,
-        )
+        (PhpType::TaggedScalar, PhpType::Int | PhpType::TaggedScalar)
         | (
-            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
+            PhpType::Int | PhpType::Void | PhpType::Never,
             PhpType::TaggedScalar,
         ) => PhpType::TaggedScalar,
         (PhpType::Array(_), PhpType::Array(_)) => incoming,
         (PhpType::AssocArray { .. }, PhpType::AssocArray { .. }) => incoming,
-        (
-            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
-            PhpType::Int | PhpType::Bool,
-        ) => incoming,
+        (PhpType::Void | PhpType::Never, PhpType::Int | PhpType::Bool) => incoming,
         _ => PhpType::Mixed,
     }
 }
