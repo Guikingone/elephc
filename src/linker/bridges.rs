@@ -417,7 +417,7 @@ where
         } = item
         {
             if let Some(bridge) = bridge_for_library(name) {
-                bridge.validate_archive(path.clone())?;
+                validate_archive_path(name, path.clone())?;
                 metadata.record(bridge);
             } else {
                 validate_archive_path(name, path.clone())?;
@@ -528,6 +528,7 @@ impl BridgeLinkMetadata {
 }
 
 /// Accepts only non-empty regular archive files without following symbolic links.
+/// Exact-path failures report that path without unrelated fallback search directories.
 fn validate_archive_path(name: &str, archive: PathBuf) -> Result<PathBuf, LinkError> {
     let valid = std::fs::symlink_metadata(&archive)
         .map(|metadata| metadata.file_type().is_file() && metadata.len() > 0)
@@ -535,19 +536,13 @@ fn validate_archive_path(name: &str, archive: PathBuf) -> Result<PathBuf, LinkEr
     if valid {
         Ok(archive)
     } else {
-        Err(bridge_for_library(name).map_or_else(
-            // A `LinkOrigin::Bridge` item the table does not describe: no archive filename,
-            // override, or candidate list exists for it, so the diagnostic stays the bare
-            // first line rather than inventing any of the three.
-            || LinkError::MissingBridge {
-                name: name.to_string(),
-                archive: None,
-                env_var: None,
-                searched: Vec::new(),
-                override_dir: None,
-            },
-            BridgeStaticlib::missing_error,
-        ))
+        Err(LinkError::MissingBridge {
+            name: name.to_string(),
+            archive: Some(archive.display().to_string()),
+            env_var: None,
+            searched: Vec::new(),
+            override_dir: None,
+        })
     }
 }
 
@@ -893,9 +888,33 @@ impl BridgeStaticlib {
         Ok(())
     }
 
-    /// Validates that a configured bridge archive path names a regular file.
+    /// Validates a fallback-discovered archive and retains the search context on failure.
     fn validate_archive(&self, archive: PathBuf) -> Result<PathBuf, LinkError> {
-        validate_archive_path(self.lib_name, archive)
+        validate_archive_path(self.lib_name, archive.clone())
+            .map_err(|_| self.invalid_discovered_archive_error(&archive))
+    }
+
+    /// Names the invalid archive and only the fallback directories reached before finding it.
+    fn invalid_discovered_archive_error(&self, archive: &Path) -> LinkError {
+        let filename = archive.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+        let directories = self.archive_search_dirs();
+        let searched = directories
+            .iter()
+            .position(|directory| directory.join(filename).as_path() == archive)
+            .map(|last| {
+                directories[..=last]
+                    .iter()
+                    .map(|directory| directory.display().to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        LinkError::MissingBridge {
+            name: self.lib_name.to_string(),
+            archive: Some(archive.display().to_string()),
+            env_var: Some(self.env_var.to_string()),
+            searched,
+            override_dir: None,
+        }
     }
 
     /// Creates the structured error used by discovery and invalid environment overrides.
@@ -1851,22 +1870,50 @@ mod tests {
         );
     }
 
-    /// Verifies nonexistent and non-file override targets use the same structured bridge error.
+    /// Verifies exact archive paths report the path without unvisited fallback locations.
     #[test]
-    fn invalid_override_archive_is_structured_error() {
-        let bridge = bridge_for_library("elephc_tls").expect("tls bridge");
+    fn invalid_archive_reports_exact_path_without_fallbacks() {
         let nonexistent = std::env::temp_dir().join(format!(
             "elephc-missing-bridge-{}/libelephc_tls.a",
             std::process::id()
         ));
+        let missing = validate_archive_path("elephc_tls", nonexistent.clone()).unwrap_err().to_string();
+        assert!(missing.contains(&nonexistent.display().to_string()));
+        assert!(!missing.contains("looked in:"));
+        assert!(!missing.contains("ELEPHC_TLS_LIB_DIR"));
+
+        let directory = std::env::temp_dir();
+        let invalid = validate_archive_path("elephc_tls", directory.clone()).unwrap_err().to_string();
+        assert!(invalid.contains(&directory.display().to_string()));
+        assert!(!invalid.contains("looked in:"));
+    }
+
+    /// A fallback-discovered bad archive retains its path, reached directories, and repair hint.
+    #[test]
+    fn invalid_discovered_archive_retains_reached_search_context() {
+        let bridge = bridge_for_library("elephc_tls").expect("tls bridge");
+        let directories = bridge.archive_search_dirs();
+        let archive = directories[1].join(bridge.archive_filename());
+        let error = bridge.invalid_discovered_archive_error(&archive);
+        let LinkError::MissingBridge { searched, .. } = &error;
         assert_eq!(
-            bridge.validate_archive(nonexistent),
-            Err(bridge.missing_error())
+            searched,
+            &directories[..=1]
+                .iter()
+                .map(|directory| directory.display().to_string())
+                .collect::<Vec<_>>()
         );
-        assert_eq!(
-            bridge.validate_archive(std::env::temp_dir()),
-            Err(bridge.missing_error())
-        );
+        let rendered = error.to_string();
+        assert!(rendered.contains(&format!("needs: {}", archive.display())));
+        assert!(rendered.contains(&format!("\n    {}", directories[0].display())));
+        assert!(rendered.contains(&format!("\n    {}", directories[1].display())));
+        assert!(rendered.contains("Replace invalid archive"));
+        assert!(rendered.contains("ELEPHC_TLS_LIB_DIR"));
+
+        let invalid_path = std::env::temp_dir();
+        let invalid = bridge.validate_archive(invalid_path.clone()).unwrap_err().to_string();
+        assert!(invalid.contains(&invalid_path.display().to_string()));
+        assert!(invalid.contains("Replace invalid archive"));
     }
 
     /// Issue #517: the diagnostic has to say how to fix it, not just which bridge is gone.
@@ -1962,9 +2009,7 @@ mod tests {
         assert!(!rendered.contains("needs: libelephc_magician.a"));
     }
 
-    /// A `LinkOrigin::Bridge` item the table does not describe has no archive, override or
-    /// candidate list, so the diagnostic stays the bare first line rather than inventing any
-    /// of the three.
+    /// An unknown named bridge has no archive or search metadata, so only its name is rendered.
     #[test]
     fn missing_bridge_outside_the_table_renders_only_its_name() {
         let error = LinkError::MissingBridge {
@@ -1978,6 +2023,20 @@ mod tests {
             error.to_string(),
             "required Elephc bridge `elephc_not_a_bridge` could not be found"
         );
+
+        let path = std::env::temp_dir();
+        let plan = LinkPlan::from_items(vec![LinkItem::bridge_archive(
+            &path,
+            "elephc_not_a_bridge",
+            false,
+        )]);
+        let rendered = resolve_with(&plan, &[], Platform::Linux, |_| {
+            panic!("an exact path must not invoke discovery")
+        })
+        .expect_err("an unknown bridge with a missing exact archive must fail")
+        .to_string();
+        assert!(rendered.contains(&format!("needs: {}", path.display())));
+        assert!(!rendered.contains("looked in:"));
     }
 
     /// Verifies exact bridge items reject empty files and symbolic links before rendering.
@@ -1995,19 +2054,22 @@ mod tests {
             "elephc_tls",
             false,
         )]);
-        assert!(matches!(
-            resolve_with(&empty_plan, &[], Platform::Linux, |_| panic!("exact path must not invoke locator")),
-            Err(LinkError::MissingBridge { name, .. }) if name == "elephc_tls"
-        ));
+        let invalid = resolve_with(&empty_plan, &[], Platform::Linux, |_| {
+            panic!("exact path must not invoke locator")
+        })
+        .expect_err("empty exact-path archive must fail");
+        assert!(invalid.to_string().contains(&empty.display().to_string()));
+        assert!(!invalid.to_string().contains("looked in:"));
 
         let symlink = base.join("symlink.a");
         let _ = std::fs::remove_file(&symlink);
         std::os::unix::fs::symlink(std::env::current_exe().expect("test executable"), &symlink)
             .expect("create archive symlink fixture");
-        assert!(matches!(
-            validate_archive_path("elephc_tls", symlink.clone()),
-            Err(LinkError::MissingBridge { name, .. }) if name == "elephc_tls"
-        ));
+        let invalid = validate_archive_path("elephc_tls", symlink.clone())
+            .expect_err("a symlink is not a regular archive")
+            .to_string();
+        assert!(invalid.contains(&symlink.display().to_string()));
+        assert!(!invalid.contains("looked in:"));
 
         let _ = std::fs::remove_file(empty);
         let _ = std::fs::remove_file(symlink);
