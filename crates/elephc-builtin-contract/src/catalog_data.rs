@@ -21387,7 +21387,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             ParamSpec {
                 name: "base",
                 ty: TypeSpec::Float,
-                default: Some(DefaultSpec::Float(2.718281828459045)),
+                default: Some(DefaultSpec::Float(std::f64::consts::E)),
                 by_ref: false,
             },
         ],
