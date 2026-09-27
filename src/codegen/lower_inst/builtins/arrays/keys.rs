@@ -20,6 +20,9 @@ use crate::types::PhpType;
 
 use super::super::super::{expect_operand, store_if_result};
 
+/// Each supported `array_keys()` result element occupies one 8-byte slot.
+const INDEXED_KEY_ELEMENT_SIZE: usize = 8;
+
 /// Lowers `array_keys()` for indexed arrays and associative arrays.
 pub(super) fn lower_array_keys(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "array_keys", 1)?;
@@ -237,7 +240,7 @@ fn lower_indexed_array_keys_aarch64(
     ctx: &mut FunctionContext<'_>,
     result_elem_ty: &PhpType,
 ) -> Result<()> {
-    let elem_size = indexed_key_element_size(result_elem_ty);
+    let elem_size = INDEXED_KEY_ELEMENT_SIZE;
     ctx.emitter.instruction("ldr x9, [x0]");                                    // load the source indexed-array length for exact result allocation
     ctx.emitter.instruction("str x9, [sp, #-16]!");                             // preserve the source length for the fill loop and final length stamp
     ctx.emitter.instruction("mov x0, x9");                                      // pass the source length as the result array capacity
@@ -275,7 +278,7 @@ fn lower_indexed_array_keys_x86_64(
     ctx: &mut FunctionContext<'_>,
     result_elem_ty: &PhpType,
 ) -> Result<()> {
-    let elem_size = indexed_key_element_size(result_elem_ty);
+    let elem_size = INDEXED_KEY_ELEMENT_SIZE;
     ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                        // load the source indexed-array length for exact result allocation
     ctx.emitter.instruction("sub rsp, 16");                                     // reserve a temporary slot for the source indexed-array length
     ctx.emitter.instruction("mov QWORD PTR [rsp], r10");                        // preserve the source length for the fill loop and final length stamp
@@ -383,7 +386,7 @@ fn lower_assoc_array_keys_aarch64(
     result_elem_ty: &PhpType,
 ) -> Result<()> {
     abi::emit_push_reg(ctx.emitter, "x0");
-    let elem_size = indexed_key_element_size(result_elem_ty);
+    let elem_size = INDEXED_KEY_ELEMENT_SIZE;
     ctx.emitter.instruction("ldr x0, [x0]");                                    // load the associative-array entry count to size the keys result exactly
     ctx.emitter.instruction(&format!("mov x1, #{}", elem_size));                // choose the indexed-array element size for the key payload representation
     abi::emit_call_label(ctx.emitter, "__rt_array_new");
@@ -417,7 +420,7 @@ fn lower_assoc_array_keys_x86_64(
     result_elem_ty: &PhpType,
 ) -> Result<()> {
     abi::emit_push_reg(ctx.emitter, "rax");
-    let elem_size = indexed_key_element_size(result_elem_ty);
+    let elem_size = INDEXED_KEY_ELEMENT_SIZE;
     ctx.emitter.instruction("mov rdi, QWORD PTR [rax]");                        // load the associative-array entry count to size the keys result exactly
     ctx.emitter.instruction(&format!("mov rsi, {}", elem_size));                // choose the indexed-array element size for the key payload representation
     abi::emit_call_label(ctx.emitter, "__rt_array_new");
@@ -592,15 +595,6 @@ fn emit_append_word_key_x86_64(ctx: &mut FunctionContext<'_>, value_reg: &str) {
     );                                                                          // store the key payload into the next result keys slot
     ctx.emitter.instruction("add r11, 1");                                      // increment the result keys length after the append
     ctx.emitter.instruction("mov QWORD PTR [r10], r11");                        // persist the updated result keys length in the array header
-}
-
-/// Returns the indexed-array element width needed for this key type.
-fn indexed_key_element_size(key_ty: &PhpType) -> usize {
-    if matches!(key_ty, PhpType::Str) {
-        16
-    } else {
-        8
-    }
 }
 
 /// Returns the result array element type that controls the physical keys layout.
