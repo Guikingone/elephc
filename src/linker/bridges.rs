@@ -1907,12 +1907,13 @@ mod tests {
         assert!(rendered.contains(&format!("needs: {}", archive.display())));
         assert!(rendered.contains(&format!("\n    {}", directories[0].display())));
         assert!(rendered.contains(&format!("\n    {}", directories[1].display())));
-        assert!(rendered.contains("Set ELEPHC_TLS_LIB_DIR"));
+        assert!(rendered.contains("Replace invalid archive"));
+        assert!(rendered.contains("ELEPHC_TLS_LIB_DIR"));
 
-        let missing = std::env::temp_dir().join("elephc-discovered-invalid-archive.a");
-        let invalid = bridge.validate_archive(missing.clone()).unwrap_err().to_string();
-        assert!(invalid.contains(&missing.display().to_string()));
-        assert!(invalid.contains("Set ELEPHC_TLS_LIB_DIR"));
+        let invalid_path = std::env::temp_dir();
+        let invalid = bridge.validate_archive(invalid_path.clone()).unwrap_err().to_string();
+        assert!(invalid.contains(&invalid_path.display().to_string()));
+        assert!(invalid.contains("Replace invalid archive"));
     }
 
     /// Issue #517: the diagnostic has to say how to fix it, not just which bridge is gone.
@@ -2023,7 +2024,7 @@ mod tests {
             "required Elephc bridge `elephc_not_a_bridge` could not be found"
         );
 
-        let path = std::env::temp_dir().join("elephc-unknown-bridge-exact-path.a");
+        let path = std::env::temp_dir();
         let plan = LinkPlan::from_items(vec![LinkItem::bridge_archive(
             &path,
             "elephc_not_a_bridge",

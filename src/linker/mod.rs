@@ -96,12 +96,27 @@ impl std::fmt::Display for LinkError {
                          those locations again. `elephc --print-capabilities` lists every \
                          archive this binary can need."
                     ),
-                    None => write!(
-                        formatter,
-                        "\n\nSet {env_var} to a directory containing {archive}, or keep the \
-                         bridge archives next to the elephc binary (or in a sibling lib/). \
-                         `elephc --print-capabilities` lists every archive this binary can need."
-                    ),
+                    None => {
+                        if let Some(filename) = Path::new(archive)
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .filter(|name| *name != archive.as_str())
+                        {
+                            return write!(
+                                formatter,
+                                "\n\nReplace invalid archive {archive} with a non-empty regular \
+                                 file, or set {env_var} to a directory containing a valid \
+                                 {filename}. `elephc --print-capabilities` lists every archive \
+                                 this binary can need."
+                            );
+                        }
+                        write!(
+                            formatter,
+                            "\n\nSet {env_var} to a directory containing {archive}, or keep the \
+                             bridge archives next to the elephc binary (or in a sibling lib/). \
+                             `elephc --print-capabilities` lists every archive this binary can need."
+                        )
+                    }
                 }
             }
         }
