@@ -25,7 +25,7 @@ use crate::codegen::Emit;
 use crate::codegen::WebIsolation;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::codegen_support::DeferredFiberWrapper;
-use crate::ir::{BasicBlock, Function, InstId, Module};
+use crate::ir::{BasicBlock, Function, InstId, Module, Op};
 use crate::names::{
     function_epilogue_symbol, function_symbol, method_symbol, php_symbol_key,
     static_method_symbol, static_property_symbol,
@@ -1909,6 +1909,14 @@ fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
     ctx.emitter.comment(&format!("@block name={}", block.name));
     let block_label = ctx.block_label_for_id(block.id)?;
     ctx.emitter.label(&block_label);
+    // Async signal handlers run at safe points, where php's VM checks for an interrupt: after a
+    // call returns and on a backward jump. A block start covers every back edge (and forward
+    // branches, which costs little); `signal_safe_point_after` covers the calls. Checking after
+    // EVERY instruction, as this used to, put a million dispatch calls into the Symfony build and
+    // spent 3.4% of a request in them.
+    if ctx.uses_pcntl_async_signals() {
+        abi::emit_call_label(ctx.emitter, "__rt_pcntl_async_dispatch_preserving");
+    }
     for inst_id in &block.instructions {
         emit_instruction_source_marker(ctx, *inst_id)?;
         lower_inst::lower_instruction(ctx, *inst_id).map_err(|error| {
@@ -1920,7 +1928,7 @@ fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
         if ctx.shared.must_defer() {
             return Err(CodegenIrError::deferred_body());
         }
-        if ctx.uses_pcntl_async_signals() {
+        if ctx.uses_pcntl_async_signals() && signal_safe_point_after(ctx, *inst_id) {
             abi::emit_call_label(ctx.emitter, "__rt_pcntl_async_dispatch_preserving");
         }
     }
@@ -1928,6 +1936,48 @@ fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
         CodegenIrError::invalid_module(format!("block '{}' has no terminator", block.name))
     })?;
     lower_term::lower_terminator(ctx, terminator)
+}
+
+/// Returns whether an async signal may be dispatched right after this instruction.
+///
+/// These are the instructions that run PHP code or a builtin, the places php's VM checks for a
+/// pending interrupt once the callee returns: calls of every shape, constructions (which run a
+/// constructor), eval and include entries, and generator resumption. Everything else is a
+/// bounded step between two such points.
+fn signal_safe_point_after(ctx: &FunctionContext<'_>, inst_id: InstId) -> bool {
+    let Some(inst) = ctx.function.instruction(inst_id) else {
+        return false;
+    };
+    matches!(
+        inst.op,
+        Op::Call
+            | Op::FunctionVariantCall
+            | Op::MethodCall
+            | Op::NullsafeMethodCall
+            | Op::StaticMethodCall
+            | Op::IteratorMethodCall
+            | Op::ClosureCall
+            | Op::ExprCall
+            | Op::PipeCall
+            | Op::CallableDescriptorInvoke
+            | Op::LanguageConstructCall
+            | Op::RuntimeCall
+            | Op::SplRuntimeCall
+            | Op::ExternCall
+            | Op::FiberRuntimeCall
+            | Op::ObjectNew
+            | Op::DynamicObjectNew
+            | Op::DynamicObjectNewMixed
+            | Op::DynamicObjectNewWithoutConstructorMixed
+            | Op::DynamicPdoStatementConstructorCall
+            | Op::EvalObjectNew
+            | Op::EvalStaticMethodCall
+            | Op::EvalLiteralCall
+            | Op::EvalFunctionCall
+            | Op::EvalFunctionCallArray
+            | Op::GeneratorYield
+            | Op::GeneratorYieldFrom
+    )
 }
 
 /// Describes the source line and opcode associated with an EIR instruction.

@@ -573,23 +573,17 @@ fn emit_pcntl_async_dispatch_preserving_aarch64(emitter: &mut Emitter) {
     emitter.raw("    .p2align 2");
     emitter.comment("--- runtime: pcntl async dispatch preserving registers ---");
     emitter.label_global("__rt_pcntl_async_dispatch_preserving");
-    emitter.instruction("sub sp, sp, #32");                                     // reserve a minimal flag-test frame
-    emitter.instruction("stp x9, x10, [sp]");                                   // preserve both scratch registers used by the fast path
-    emitter.instruction("mrs x9, nzcv");                                        // preserve condition flags before testing async state
-    emitter.instruction("str x9, [sp, #16]");                                   // park the original condition flags
+    // The fast path runs at every safe point, so it must be cheap: none of stp/adrp/add/ldr/cbnz
+    // touches NZCV, so the caller's flags survive it without the mrs/msr pair it used to spend
+    // (3.2% of a Symfony request went to this helper). The slow path saves the flags itself.
+    emitter.instruction("stp x9, x10, [sp, #-16]!");                            // preserve both scratch registers used by the fast path
     abi::emit_symbol_address(emitter, "x9", "__rt_pcntl_async_enabled");
     emitter.instruction("ldr x10, [x9]");                                       // read async state before spilling the full register file
     emitter.instruction("cbnz x10, __rt_pcntl_async_slow");                     // enter the expensive path only while async dispatch is enabled
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the caller's condition flags
-    emitter.instruction("msr nzcv, x9");                                        // restore flags on the disabled fast path
-    emitter.instruction("ldp x9, x10, [sp]");                                   // restore scratch registers on the disabled fast path
-    emitter.instruction("add sp, sp, #32");                                     // release the minimal flag-test frame
+    emitter.instruction("ldp x9, x10, [sp], #16");                              // restore scratch registers on the disabled fast path
     emitter.instruction("ret");                                                 // return without the 800-byte spill when async mode is off
     emitter.label("__rt_pcntl_async_slow");
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload flags before the complete preserving wrapper
-    emitter.instruction("msr nzcv, x9");                                        // restore the caller's condition flags
-    emitter.instruction("ldp x9, x10, [sp]");                                   // restore scratch registers before the complete spill
-    emitter.instruction("add sp, sp, #32");                                     // release the fast-path frame before the regular frame
+    emitter.instruction("ldp x9, x10, [sp], #16");                              // restore scratch registers before the complete spill
     emitter.instruction("sub sp, sp, #800");                                    // reserve the complete register and FP-state spill
     for register in (0..32).step_by(2) {
         emitter.instruction(&format!(                                           // preserve one pair of SIMD registers
@@ -658,13 +652,17 @@ fn emit_pcntl_async_dispatch_preserving_x86_64(emitter: &mut Emitter) {
     emitter.raw("    .p2align 4");
     emitter.comment("--- runtime: pcntl async dispatch preserving registers ---");
     emitter.label_global("__rt_pcntl_async_dispatch_preserving");
-    emitter.instruction("pushfq");                                              // preserve caller flags around the direct state comparison
-    emitter.instruction("cmp QWORD PTR [rip + __rt_pcntl_async_enabled], 0");   // test async state before spilling registers and vectors
-    emitter.instruction("jne __rt_pcntl_async_slow_x86");                       // enter the expensive path only while async dispatch is enabled
-    emitter.instruction("popfq");                                               // restore flags on the disabled fast path
+    // Flag-free fast path (see the AArch64 arm): mov, push/pop and jrcxz leave RFLAGS alone,
+    // where the pushfq/popfq pair it replaced was the costly part of every safe point.
+    emitter.instruction("push rcx");                                            // preserve the one scratch register the fast path needs
+    emitter.instruction("mov rcx, QWORD PTR [rip + __rt_pcntl_async_enabled]"); // read async state without touching the caller's flags
+    emitter.instruction("jrcxz __rt_pcntl_async_off_x86");                      // disabled: return without the complete spill
+    emitter.instruction("pop rcx");                                             // restore the scratch register before the complete spill
+    emitter.instruction("jmp __rt_pcntl_async_slow_x86");                       // enabled: take the preserving dispatch path
+    emitter.label("__rt_pcntl_async_off_x86");
+    emitter.instruction("pop rcx");                                             // restore the scratch register on the disabled fast path
     emitter.instruction("ret");                                                 // return without the complete spill when async mode is off
     emitter.label("__rt_pcntl_async_slow_x86");
-    emitter.instruction("popfq");                                               // restore flags before the complete preserving wrapper
     emitter.instruction("pushfq");                                              // preserve caller flags across asynchronous dispatch
     for register in REGISTERS {
         emitter.instruction(&format!("push {register}"));                       // preserve one general register
