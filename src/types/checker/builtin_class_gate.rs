@@ -408,8 +408,8 @@ mod tests {
         }
     }
 
-    /// Spelling the type is the other route, and a declared `Generator` return type is what makes
-    /// a body a generator in elephc even before its `yield` is reached.
+    /// Spelling the type also registers `Generator`. A declared return type alone does not
+    /// make the function a generator; its body needs a `yield` token.
     #[test]
     fn naming_generator_registers_it() {
         assert!(program_may_reference_generator(&parse(
