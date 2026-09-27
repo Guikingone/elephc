@@ -251,7 +251,7 @@ AArch64 saturates to exactly PHP's cap and x86_64 only has to correct a positive
 `PHP_INT_MAX`.
 
 **Input:** `d0` / `xmm0` = source double
-**Output:** `x9` / `r11` = PHP integer value (the cap helper); `x0` / `rax` (the wrapping helper)
+**Output:** Both helpers return the PHP integer value in `x9` / `r11`.
 
 ### `__rt_str_eq` — String equality
 
