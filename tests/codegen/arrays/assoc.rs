@@ -949,3 +949,34 @@ echo $a[null] ?? "miss";
     );
     assert_eq!(out, "miss");
 }
+
+/// Verifies a write finds its key past a tombstone instead of inserting a duplicate.
+///
+/// Regression: the hash insert claimed the first tombstone on the probe path, so once an unset
+/// left one ahead of a live key, writing that key stored it a second time. `count()` then saw
+/// both copies and `array_keys()` listed the key twice. The keys are driven by an LCG so the
+/// unsets land between live keys' home slots; the expected answer is php's.
+#[test]
+fn test_hash_write_after_unset_updates_the_key_past_a_tombstone() {
+    let out = compile_and_run(
+        r#"<?php
+$seed = 12345;
+$strs = [];
+for ($round = 0; $round < 800; $round++) {
+    $seed = ($seed * 1103515245 + 12345) % 2147483648;
+    $slot = $seed % 97;
+    if (intdiv($seed, 97) % 7 < 2) {
+        $strs[$slot] = str_repeat('a', intdiv($seed, 679) % 700 * 2);
+    } else {
+        unset($strs[$slot]);
+    }
+}
+ksort($strs);
+echo count($strs), ":", implode(",", array_keys($strs));
+"#,
+    );
+    assert_eq!(
+        out,
+        "32:2,3,5,7,10,12,19,20,25,26,27,32,35,39,41,48,49,50,52,54,56,57,58,61,63,65,74,75,83,86,91,92"
+    );
+}
