@@ -20,7 +20,7 @@
 //!   `docs/php/strings.md` for why the two cannot disagree on anything that is an address
 //!   (issue #1160).
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch, platform::Platform};
+use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// The longest textual address this helper accepts, not counting the NUL.
 ///
@@ -32,18 +32,6 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch, platform::Platf
 /// that parses.
 const MAX_ADDRESS_BYTES: i64 = 255;
 
-/// The `AF_INET6` value of the target's own headers.
-///
-/// Darwin and Linux disagree, and passing the wrong one makes `inet_pton(3)` answer `-1`
-/// (`EAFNOSUPPORT`) for every IPv6 address rather than parsing it.
-fn af_inet6(platform: Platform) -> i64 {
-    match platform {
-        Platform::MacOS => 30,
-        Platform::Linux => 10,
-        Platform::Windows => 23,
-    }
-}
-
 /// inet_pton: pack a textual IPv4 or IPv6 address into its network-order binary form.
 /// Input:  x0 = string pointer, x1 = string length
 /// Output: x1 = binary pointer (0 when invalid), x2 = length (4 for IPv4, 16 for IPv6)
@@ -53,7 +41,7 @@ pub fn emit_inet_pton(emitter: &mut Emitter) {
         return;
     }
 
-    let inet6 = af_inet6(emitter.platform);
+    let inet6 = emitter.platform.af_inet6();
 
     emitter.blank();
     emitter.comment("--- runtime: inet_pton ---");
@@ -136,7 +124,7 @@ pub fn emit_inet_pton(emitter: &mut Emitter) {
 
 /// Emits the Linux x86_64 string runtime helper for inet pton.
 fn emit_inet_pton_linux_x86_64(emitter: &mut Emitter) {
-    let inet6 = af_inet6(emitter.platform);
+    let inet6 = emitter.platform.af_inet6();
 
     emitter.blank();
     emitter.comment("--- runtime: inet_pton ---");
