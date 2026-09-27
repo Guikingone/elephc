@@ -66,7 +66,7 @@ pub fn set_entry_script(path: &str) {
 }
 
 /// Returns the entry source path, or an empty string when none was recorded.
-fn entry_script() -> String {
+pub(crate) fn entry_script() -> String {
     ENTRY_SCRIPT.with(|cell| cell.borrow().clone())
 }
 

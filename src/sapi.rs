@@ -37,6 +37,11 @@ pub(crate) fn set_web(web: bool) {
     WEB_SAPI.with(|flag| flag.set(web));
 }
 
+/// Returns the compile mode published for this thread's front end.
+pub(crate) fn is_web() -> bool {
+    WEB_SAPI.with(|flag| flag.get())
+}
+
 /// Whether a leading `#!` line is removed from every compiled file, as PHP's CLI does.
 pub(crate) fn skips_leading_shebang() -> bool {
     WEB_SAPI.with(|flag| !flag.get())

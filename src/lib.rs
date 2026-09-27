@@ -14,6 +14,7 @@ mod cli;
 mod cli_entry;
 mod debug_info;
 mod mapped_file;
+mod compile_thread_context;
 mod eager_globals;
 mod link_planning;
 mod linker;

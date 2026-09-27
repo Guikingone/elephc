@@ -25,6 +25,11 @@ pub(crate) fn set(names: HashSet<String>) {
     EAGER_GLOBAL_FUNCTIONS.with(|cell| *cell.borrow_mut() = names);
 }
 
+/// Returns the recorded set, for a thread that must answer `declares` like this one.
+pub(crate) fn snapshot() -> HashSet<String> {
+    EAGER_GLOBAL_FUNCTIONS.with(|cell| cell.borrow().clone())
+}
+
 /// Whether an eager file declared this GLOBAL function.
 ///
 /// The name is the bare spelling as written at the call site. A qualified name is never a

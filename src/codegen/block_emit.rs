@@ -152,6 +152,13 @@ pub(super) fn emit_module(
         &mut shared,
         regalloc_linear,
     )?;
+    super::lower_inst::emit_shared_eval_registration_helper(
+        module,
+        emitter,
+        data,
+        &mut shared,
+        regalloc_linear,
+    )?;
     // In `--web` builds the reset routine references every request superglobal.
     // If a superglobal is never read or written by user/prelude code, the symbol
     // would otherwise be missing from the object, so reserve storage up front.
@@ -180,46 +187,59 @@ pub(super) fn emit_module(
     collect_helper_keys(emitter.text_from(0), &mut seen_helpers);
     let mut parallel_ran = false;
     if jobs > 1
+        && bodies.len() >= parallel_min_bodies()
         && !survey
         && !inventory.is_enabled()
         && !counters
         && !instrumented
     {
         let worker_pass_started = Instant::now();
-        let workers = emit_bodies_in_parallel(module, &bodies, emitter, jobs, regalloc_linear)?;
+        let preset = shared.module_preset();
+        let template = emitter.fresh();
+        let mut data_index = data.merge_index();
+        let data_base = data.base();
+        let (mut kept, mut deferred_bytes) = (0usize, 0usize);
+        serial_bodies.clear();
+        // Chunks arrive in any order and are merged in chunk order, each as soon as every earlier
+        // one is in: the text reaches the spill file while the workers are still running, instead
+        // of the whole program's text waiting in memory for the last worker.
+        emit_bodies_in_parallel(
+            module,
+            &bodies,
+            &template,
+            &preset,
+            &data_base,
+            jobs,
+            regalloc_linear,
+            |chunk| {
+                kept += chunk.text.len();
+                deferred_bytes += chunk.deferred_bytes;
+                serial_bodies.extend(chunk.deferred.iter().copied());
+                // A helper reached by two chunks was emitted twice, spelling the same symbols
+                // both times. Keep the first copy and drop the rest, or the assembler sees a
+                // duplicate definition; every reference resolves to the survivor either way.
+                match drop_duplicate_helpers(&chunk.text, &mut seen_helpers) {
+                    Some(deduped) => emitter.append_block(&deduped),
+                    None => emitter.append_block(&chunk.text),
+                }
+                emitter.spill_completed_text();
+                data.merge_indexed(chunk.data, &mut data_index);
+            },
+        )?;
         let worker_pass = worker_pass_started.elapsed();
         if count_shared_touches {
             eprintln!(
                 "[elephc-codegen-shared] worker_pass={:.2}s",
                 worker_pass.as_secs_f64()
             );
-        }
-        if count_shared_touches {
-            let kept: usize = workers.iter().map(|worker| worker.kept_bytes).sum();
-            let deferred: usize = workers.iter().map(|worker| worker.deferred_bytes).sum();
             eprintln!(
                 "[elephc-codegen-shared] parallel_bytes={} deferred_bytes={} deferred_share={:.1}%",
                 kept,
-                deferred,
-                100.0 * deferred as f64 / (kept + deferred).max(1) as f64,
+                deferred_bytes,
+                100.0 * deferred_bytes as f64 / (kept + deferred_bytes).max(1) as f64,
             );
         }
-        serial_bodies.clear();
-        for worker in &workers {
-            serial_bodies.extend(worker.deferred.iter().copied());
-        }
-        serial_bodies.sort_unstable();
-        // A helper reached by two workers was emitted twice, spelling the same symbols both
-        // times. Keep the first copy and drop the rest, or the assembler sees a duplicate
-        // definition; every reference resolves to the survivor either way.
         parallel_ran = true;
-        for worker in workers {
-            for (_, text) in worker.emitted {
-                emitter.append_block(&drop_duplicate_helpers(&text, &mut seen_helpers));
-                emitter.spill_completed_text();
-            }
-            data.merge(worker.data);
-        }
         // The appended bodies carried their own section directives; put the emitter back on a
         // known one before the serial pass continues after them.
         emitter.reopen_text_section(None);
@@ -242,9 +262,12 @@ pub(super) fn emit_module(
         if parallel_ran {
             // This body's shared state is empty of whatever the workers emitted, so it may have
             // produced a second copy of a helper they already hold.
-            let deduped = drop_duplicate_helpers(emitter.text_from(body_started), &mut seen_helpers);
-            emitter.rollback_to(body_started);
-            emitter.append_block(&deduped);
+            if let Some(deduped) =
+                drop_duplicate_helpers(emitter.text_from(body_started), &mut seen_helpers)
+            {
+                emitter.rollback_to(body_started);
+                emitter.append_block(&deduped);
+            }
         }
         // Between bodies no checkpoint is held, so completed text may leave memory here.
         emitter.spill_completed_text();
@@ -292,6 +315,7 @@ pub(super) fn emit_module(
         .iter()
         .find(|function| is_main(function))
         .ok_or_else(|| CodegenIrError::invalid_module("EIR module has no main function"))?;
+    let main_started = emitter.checkpoint();
     inventory.run_with_shared(emitter, &mut shared, &main.name, |emitter, shared| {
         emit_main_function(
             module,
@@ -307,6 +331,16 @@ pub(super) fn emit_module(
             web_isolation,
         )
     })?;
+    if parallel_ran {
+        // main is emitted against the compiling thread's caches, which hold none of what the
+        // workers emitted, so it can repeat a helper a worker already produced.
+        if let Some(deduped) =
+            drop_duplicate_helpers(emitter.text_from(main_started), &mut seen_helpers)
+        {
+            emitter.rollback_to(main_started);
+            emitter.append_block(&deduped);
+        }
+    }
     inventory.finish()?;
     // Generate the per-request reset routine only for `--web`, and only after the
     // handler body is emitted so every function static local (including any in the
@@ -339,69 +373,93 @@ fn collect_helper_keys(text: &str, seen: &mut HashSet<String>) {
 /// Its symbols come from its cache key, so the copies are interchangeable: the first one seen
 /// stays and the others are dropped. Regions nest (a helper may reach another), so the scan
 /// tracks depth and only decides at depth zero.
-fn drop_duplicate_helpers(text: &str, seen: &mut HashSet<String>) -> String {
-    if !text.contains(crate::codegen::context::HELPER_MARKER_OPEN) {
-        return text.to_string();
+fn drop_duplicate_helpers(text: &str, seen: &mut HashSet<String>) -> Option<String> {
+    use crate::codegen::context::{HELPER_MARKER_CLOSE, HELPER_MARKER_OPEN};
+    // The markers are rare against the text they sit in, so they are found with `memmem` and
+    // only their own lines are looked at; the rest is copied as whole runs. Scanning every line
+    // for both markers was most of the cost of merging a parallel pass's output.
+    let bytes = text.as_bytes();
+    let opens = memchr::memmem::find_iter(bytes, HELPER_MARKER_OPEN.as_bytes())
+        .map(|at| (at, true));
+    let closes = memchr::memmem::find_iter(bytes, HELPER_MARKER_CLOSE.as_bytes())
+        .map(|at| (at, false));
+    let mut markers: Vec<(usize, bool)> = opens.chain(closes).collect();
+    if markers.is_empty() {
+        return None;
     }
-    let mut out = String::with_capacity(text.len());
+    markers.sort_unstable();
+    let line_start = |at: usize| memchr::memrchr(b'\n', &bytes[..at]).map_or(0, |nl| nl + 1);
+    let line_end = |at: usize| {
+        memchr::memchr(b'\n', &bytes[at..]).map_or(bytes.len(), |nl| at + nl + 1)
+    };
+    let mut out: Option<String> = None;
+    let mut copied_until = 0usize;
     let mut depth = 0usize;
     let mut dropping = false;
-    for line in text.split_inclusive('\n') {
-        if let Some(position) = line.find(crate::codegen::context::HELPER_MARKER_OPEN) {
-            let key = line[position + crate::codegen::context::HELPER_MARKER_OPEN.len()..]
-                .trim()
-                .to_string();
+    for (at, open) in markers {
+        if open {
             if depth == 0 {
-                dropping = !seen.insert(key);
+                let end = line_end(at);
+                let key = text[at + HELPER_MARKER_OPEN.len()..end].trim();
+                dropping = !seen.insert(key.to_string());
+                if dropping {
+                    let start = line_start(at);
+                    out.get_or_insert_with(|| String::with_capacity(text.len()))
+                        .push_str(&text[copied_until..start]);
+                }
             }
             depth += 1;
-            if dropping {
-                continue;
-            }
-        } else if line.contains(crate::codegen::context::HELPER_MARKER_CLOSE) {
+        } else {
             depth = depth.saturating_sub(1);
-            if dropping {
-                if depth == 0 {
-                    dropping = false;
-                }
-                continue;
+            if dropping && depth == 0 {
+                dropping = false;
+                copied_until = line_end(at);
             }
-        } else if dropping {
-            continue;
         }
-        out.push_str(line);
     }
-    out
+    let mut out = out?;
+    if !dropping {
+        out.push_str(&text[copied_until..]);
+    }
+    Some(out)
 }
 
-/// How many workers may emit bodies at once. One by default; see below for why.
+/// How many threads may emit bodies at once: one per core, up to `MAX_CODEGEN_JOBS`.
 ///
-/// WHY THE DEFAULT IS SERIAL. A body that reaches a shared codegen cache cannot be emitted by a
-/// worker, and the bodies that reach one are exactly the EXPENSIVE ones: anything with a
-/// callable, a descriptor or a dispatch table. On the Symfony `--web` module, 7 396 of 8 786
-/// bodies are worker-eligible and they are all small. Measured back to back:
+/// This was one for a long time, for a measured reason: a body that reached a shared codegen
+/// cache had to be emitted serially, and those were the expensive bodies, so a parallel pass
+/// spent eight threads on the cheap ones and made the build slower. What changed is that no
+/// family of those caches forces a body serial any more when the helpers emitted ahead of the
+/// bodies already filled it (`ModulePreset`), the eval registration helper is one of those, and
+/// the keyed helpers merge; on the Symfony `--web` module 111 of 9 005 bodies still defer.
+/// Measured on that module, codegen 13.3 s serial, 9.4 s at 8 jobs, 8.8 s at 12; the peak
+/// footprint goes from 1.75 GB to 2.2 GB, which is what the ceiling holds down.
 ///
-/// | | `jobs=8` | `jobs=1` |
-/// |---|---|---|
-/// | codegen | 214.41 s | **130.42 s** |
-/// | whole build, wall | 470 s | **315 s** |
-/// | whole build, user CPU | 512.29 s | **457.63 s** |
-/// | emitted assembly | 43 359 381 lines | **43 206 352 lines** |
-///
-/// The serial pass emits ALL 8 786 bodies in 93.48 s; the same pass under `jobs=8` takes 98.35 s
-/// for the 1 390 deferred ones ALONE. So the parallel pass spends its whole wall time, and eight
-/// threads of CPU, producing what costs the serial pass approximately nothing — and it emits
-/// 153 029 lines MORE, because two workers that reach the same host-scoped helper each keep a
-/// copy the merge cannot recognise.
-///
-/// The machinery stays, behind `ELEPHC_CODEGEN_JOBS`, because the shape that would make it pay
-/// is known: the caches would have to be populated before the workers start, so that no body
-/// defers. Until then, asking for workers costs more than it saves.
+/// `ELEPHC_CODEGEN_JOBS` overrides it; `ELEPHC_CODEGEN_JOBS=1` is the serial pass.
 fn codegen_jobs() -> usize {
     if let Ok(value) = std::env::var("ELEPHC_CODEGEN_JOBS") {
         return value.trim().parse::<usize>().unwrap_or(1).clamp(1, 64);
     }
-    1
+    std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1)
+        .clamp(1, MAX_CODEGEN_JOBS)
+}
+
+/// Ceiling on `codegen_jobs`: past it the phase stops getting faster and only uses more memory.
+const MAX_CODEGEN_JOBS: usize = 12;
+
+/// Fewest bodies a module needs before its bodies are emitted in parallel.
+///
+/// Below it the pass costs more than it saves -- threads to start, a fresh cache state per chunk,
+/// helpers emitted once per chunk and merged -- and a small program keeps the output the serial
+/// pass gives it. `ELEPHC_CODEGEN_PARALLEL_MIN` overrides it, which is how a test run sends every
+/// small fixture through the parallel pass.
+fn parallel_min_bodies() -> usize {
+    std::env::var("ELEPHC_CODEGEN_PARALLEL_MIN")
+        .ok()
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(256)
 }
 
 /// Which lowering one emittable body takes.
@@ -457,101 +515,156 @@ fn emit_module_body(
     }
 }
 
-/// What one worker produced: the assembly of the bodies it could emit alone, and the indexes of
-/// the ones that reached a shared cache and must be re-emitted serially.
-struct WorkerOutput {
-    /// Assembly bytes the worker kept, and bytes it emitted for bodies it then deferred.
-    ///
-    /// Body COUNT is not work: if the deferred sixth of the bodies produces most of the text,
-    /// the serial tail dominates however many workers there are. These two numbers are what say
-    /// whether widening the parallel pass can help at all.
-    kept_bytes: usize,
+/// How many chunks the parallel pass cuts the bodies into, whatever the number of threads.
+///
+/// Fixed so that the output does not depend on the machine: each chunk starts from the same
+/// state and emits the same text whichever thread runs it, and chunks are merged in order, so a
+/// build is byte-identical at any job count. Many more chunks than threads keeps a thread from
+/// being handed one slow stretch of the module, and keeps each chunk's text small while it waits
+/// to be merged: 256 chunks peaked 90 MB below 64 on the Symfony module, at the same speed.
+const CODEGEN_CHUNKS: usize = 256;
+
+/// What one chunk produced: the text of the bodies it could emit alone, and the indexes of the
+/// ones that reached a shared cache and must be re-emitted serially.
+struct ChunkOutput {
+    /// The kept bodies' assembly, in module order.
+    text: String,
+    /// Bytes emitted for bodies that were then deferred; see `ELEPHC_CODEGEN_SHARED_TOUCHES`.
     deferred_bytes: usize,
-    /// `(body index, assembly)` for the bodies that needed nothing shared, in the order the
-    /// worker met them — which is module order within its chunk.
-    emitted: Vec<(usize, String)>,
     /// Body indexes that reached a shared cache, in module order.
     deferred: Vec<usize>,
-    /// The worker's data-section shard, merged into the module's in worker order.
+    /// The chunk's data-section shard.
     data: DataSection,
 }
 
-/// Emits every body it can on `jobs` workers, returning their output in module order.
+/// Emits every body it can on `jobs` threads and hands each chunk's output to `merge`, in chunk
+/// order, on the calling thread.
 ///
-/// Each worker owns its emitter, its data shard and its own empty `SharedCodegenState`, so
-/// nothing is shared mutably and the borrow checker — not a convention — is what guarantees it.
-/// A body whose emission touches its worker's cache is rolled back and deferred, because the
-/// helper it would emit belongs to the module exactly once.
+/// Each chunk owns its emitter, its data shard and its own `SharedCodegenState` started from
+/// `preset`, so nothing is shared mutably and the borrow checker -- not a convention -- is what
+/// guarantees it. A body whose emission reaches a cache outside the preset is rolled back and
+/// deferred, because the helper behind that cache belongs to the module exactly once.
 fn emit_bodies_in_parallel<'a>(
     module: &'a Module,
     bodies: &[ModuleBody<'a>],
     template: &Emitter,
+    preset: &std::sync::Arc<super::shared_state::ModulePreset>,
+    data_base: &std::sync::Arc<crate::codegen::data_section::DataBase>,
     jobs: usize,
     regalloc_linear: bool,
-) -> Result<Vec<WorkerOutput>> {
-    let chunk = bodies.len().div_ceil(jobs.max(1));
-    let mut outputs: Vec<Result<WorkerOutput>> = Vec::new();
+    mut merge: impl FnMut(ChunkOutput),
+) -> Result<()> {
+    let chunk_len = bodies.len().div_ceil(CODEGEN_CHUNKS).max(1);
+    let chunks: Vec<&[ModuleBody<'a>]> = bodies.chunks(chunk_len).collect();
+    let next_chunk = std::sync::atomic::AtomicUsize::new(0);
+    // The compile's thread-local facts, which a new thread would otherwise read as defaults.
+    let context = crate::compile_thread_context::CompileThreadContext::capture();
+    let (sender, receiver) = std::sync::mpsc::channel::<(usize, Result<ChunkOutput>)>();
     std::thread::scope(|scope| {
-        let mut handles = Vec::new();
-        for (worker, slice) in bodies.chunks(chunk.max(1)).enumerate() {
-            let base = worker * chunk.max(1);
-            handles.push(scope.spawn(move || {
-                let mut emitter = template.fresh();
-                let mut data = DataSection::for_shard(worker);
-                let mut shared = SharedCodegenState::for_module(module);
-                let mut emitted = Vec::new();
-                let mut deferred = Vec::new();
-                let mut kept_bytes = 0usize;
-                let mut deferred_bytes = 0usize;
-                for (offset, body) in slice.iter().enumerate() {
-                    let index = base + offset;
-                    let start = emitter.checkpoint();
-                    // Data is rolled back with the text: a callable descriptor is a data entry
-                    // that points at a text label this body defines, so keeping one without the
-                    // other hands the assembler a reference with no definition.
-                    let data_start = data.checkpoint();
-                    // The CACHE is deliberately not rolled back with them. Undoing a deferred
-                    // body's entries makes every following body re-emit the helpers it needs,
-                    // and the watch below does not bound that: one instruction's lowering can
-                    // emit thousands of descriptors, so the abort cannot land inside it.
-                    // Measured on the Symfony module, adding the rollback took the discarded
-                    // text from 2 101 439 143 bytes to 29 397 554 561 and the worker pass from
-                    // 40 s to 121 s.
-                    shared.arm_deferral_watch();
-                    let outcome = emit_module_body(
-                        module,
-                        *body,
-                        &mut emitter,
-                        &mut data,
-                        &mut shared,
-                        regalloc_linear,
-                    );
-                    shared.disarm_deferral_watch();
-                    match outcome {
-                        Ok(()) => {
-                            let text = emitter.text_from(start);
-                            kept_bytes += text.len();
-                            emitted.push((index, text.to_string()));
-                        }
-                        Err(error) if error.is_deferred_body() => {
-                            deferred_bytes += emitter.text_from(start).len();
-                            deferred.push(index);
-                            data.rollback_to(data_start);
-                        }
-                        Err(error) => return Err(error),
-                    }
-                    emitter.rollback_to(start);
+        for _ in 0..jobs.min(chunks.len()) {
+            let sender = sender.clone();
+            let (chunks, next_chunk, context) = (&chunks, &next_chunk, &context);
+            scope.spawn(move || {
+                context.install();
+                loop {
+                let index = next_chunk.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(chunk) = chunks.get(index) else {
+                    break;
+                };
+                let output = emit_chunk(
+                    module,
+                    chunk,
+                    index * chunk_len,
+                    index,
+                    template,
+                    preset,
+                    data_base,
+                    regalloc_linear,
+                );
+                if sender.send((index, output)).is_err() {
+                    break;
                 }
-                Ok(WorkerOutput { kept_bytes, deferred_bytes, emitted, deferred, data })
-            }));
+                }
+            });
         }
-        for handle in handles {
-            outputs.push(handle.join().unwrap_or_else(|_| {
+        drop(sender);
+        let mut pending: std::collections::BTreeMap<usize, Result<ChunkOutput>> =
+            std::collections::BTreeMap::new();
+        let mut next_merge = 0usize;
+        let mut failure = None;
+        for (index, output) in receiver {
+            pending.insert(index, output);
+            while let Some(output) = pending.remove(&next_merge) {
+                next_merge += 1;
+                match output {
+                    Ok(output) if failure.is_none() => merge(output),
+                    Ok(_) => {}
+                    Err(error) => {
+                        failure.get_or_insert(error);
+                    }
+                }
+            }
+        }
+        match failure {
+            Some(error) => Err(error),
+            None if next_merge < chunks.len() => {
                 Err(CodegenIrError::invalid_module("a codegen worker panicked"))
-            }));
+            }
+            None => Ok(()),
         }
-    });
-    outputs.into_iter().collect()
+    })
+}
+
+/// Emits one chunk of bodies from a fresh state; see `emit_bodies_in_parallel`.
+fn emit_chunk<'a>(
+    module: &'a Module,
+    chunk: &[ModuleBody<'a>],
+    base: usize,
+    shard: usize,
+    template: &Emitter,
+    preset: &std::sync::Arc<super::shared_state::ModulePreset>,
+    data_base: &std::sync::Arc<crate::codegen::data_section::DataBase>,
+    regalloc_linear: bool,
+) -> Result<ChunkOutput> {
+    let mut emitter = template.fresh();
+    let mut data = DataSection::for_shard(shard, Some(std::sync::Arc::clone(data_base)));
+    let mut shared = SharedCodegenState::for_module(module);
+    shared.apply_module_preset(preset);
+    let mut deferred = Vec::new();
+    let mut deferred_bytes = 0usize;
+    for (offset, body) in chunk.iter().enumerate() {
+        let start = emitter.checkpoint();
+        // Data is rolled back with the text: a callable descriptor is a data entry that points
+        // at a text label this body defines, so keeping one without the other hands the
+        // assembler a reference with no definition.
+        let data_start = data.checkpoint();
+        // The CACHE is deliberately not rolled back with them. Undoing a deferred body's entries
+        // makes every following body re-emit the helpers it needs, and the watch below does not
+        // bound that: one instruction's lowering can emit thousands of descriptors, so the abort
+        // cannot land inside it. Measured on the Symfony module, adding the rollback took the
+        // discarded text from 2 101 439 143 bytes to 29 397 554 561 and the worker pass from 40 s
+        // to 121 s.
+        shared.arm_deferral_watch();
+        let outcome =
+            emit_module_body(module, *body, &mut emitter, &mut data, &mut shared, regalloc_linear);
+        shared.disarm_deferral_watch();
+        match outcome {
+            Ok(()) => {}
+            Err(error) if error.is_deferred_body() => {
+                deferred_bytes += emitter.text_from(start).len();
+                deferred.push(base + offset);
+                data.rollback_to(data_start);
+                emitter.rollback_to(start);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(ChunkOutput {
+        text: emitter.text_from(0).to_string(),
+        deferred_bytes,
+        deferred,
+        data,
+    })
 }
 
 /// Emits sparse, opt-in progress records while a large module is lowered to assembly.

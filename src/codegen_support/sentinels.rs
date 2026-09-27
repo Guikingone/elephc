@@ -57,6 +57,11 @@ pub fn set_null_repr(repr: NullRepr) {
     NULL_REPR.with(|cell| cell.set(repr));
 }
 
+/// Returns the null representation installed for the compilation on this thread.
+pub(crate) fn null_repr() -> NullRepr {
+    NULL_REPR.with(|cell| cell.get())
+}
+
 /// Returns true when the active compilation uses the tagged null representation.
 pub(crate) fn null_repr_is_tagged() -> bool {
     NULL_REPR.with(|cell| cell.get()) == NullRepr::Tagged

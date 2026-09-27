@@ -130,6 +130,7 @@ pub(super) use call_operands::{
     load_value_to_first_int_arg, resolve_int_operand_to_result,
 };
 pub(in crate::codegen) use builtins::emit_count_countable_guard_from_result;
+pub(in crate::codegen) use builtins::eval::emit_shared_eval_registration_helper;
 pub(in crate::codegen) use conversions::{
     emit_mixed_string_dispatch_from_result, MixedStringContextMode,
 };

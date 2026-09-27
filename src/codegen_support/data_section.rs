@@ -70,6 +70,62 @@ pub enum DataWord {
     Symbol(String),
 }
 
+/// A section's interned contents, shared read-only by the shards of a parallel pass.
+pub struct DataBase {
+    strings: FastMap<Vec<u8>, String>,
+    floats: FastMap<u64, String>,
+    words: FastMap<Vec<DataWord>, String>,
+}
+
+/// Labels already in a section, by kind, for `DataSection::merge_indexed`.
+pub struct DataMergeIndex {
+    entries: FastMap<String, usize>,
+    floats: FastMap<String, u64>,
+    words: FastMap<String, usize>,
+}
+
+/// 64-bit FNV-1a of `tag` then `bytes`: the name a content-addressed entry is given.
+///
+/// FNV rather than the compiler's hash-map hasher because the value is spelled into the assembly
+/// and has to be identical on every run and host. A collision cannot pass silently: two entries
+/// of one section would define the same label twice, which `as` rejects, and two sections are
+/// compared by `merge` before one copy is dropped.
+fn content_label(tag: &[u8], bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in tag.iter().chain(bytes) {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+/// `content_label` of a word table, over an unambiguous encoding of its words.
+fn words_content_label(words: &[DataWord]) -> u64 {
+    let mut encoded = Vec::with_capacity(words.len() * 9);
+    for word in words {
+        match word {
+            DataWord::U64(value) => {
+                encoded.push(0);
+                encoded.extend_from_slice(&value.to_le_bytes());
+            }
+            DataWord::Symbol(symbol) => {
+                encoded.push(1);
+                encoded.extend_from_slice(&(symbol.len() as u64).to_le_bytes());
+                encoded.extend_from_slice(symbol.as_bytes());
+            }
+        }
+    }
+    content_label(b"w", &encoded)
+}
+
+/// Stops the build when one label names two different contents across merged sections.
+fn assert_same_content<T: PartialEq + ?Sized>(label: &str, kept: &T, other: &T) {
+    assert!(
+        kept == other,
+        "data label {label} names two different contents: content-address collision"
+    );
+}
+
 /// Symbol-backed metadata for one function static local recorded during EIR
 /// lowering: the value symbol, the one-time init-marker symbol, and the codegen
 /// PHP type. Consumed only by the `--web` `__rt_web_reset` generator, which must
@@ -111,6 +167,12 @@ pub struct DataSection {
     /// Distinguishes the generated labels of one shard from another's, so two sections built
     /// independently can be merged without renaming anything. Empty for a whole-module section.
     label_shard: String,
+    /// Name strings, tables and floats after their CONTENT instead of a counter. Set for the
+    /// sections of parallel codegen workers: two workers that build the same table then spell the
+    /// same label, and `merge` keeps one copy instead of one per worker. See `content_label`.
+    content_labels: bool,
+    /// The main section's contents as they stood when a parallel pass began; see `DataBase`.
+    base: Option<std::sync::Arc<DataBase>>,
     dedup: FastMap<Vec<u8>, String>,
     float_dedup: FastMap<u64, String>,
     word_dedup: FastMap<Vec<DataWord>, String>,
@@ -129,6 +191,8 @@ impl DataSection {
             comm_entries: Vec::new(),
             counter: 0,
             label_shard: String::new(),
+            content_labels: false,
+            base: None,
             dedup: FastMap::default(),
             float_dedup: FastMap::default(),
             word_dedup: FastMap::default(),
@@ -143,11 +207,29 @@ impl DataSection {
     /// The prefix is what makes two sections mergeable without renaming: `_str_s3_17` belongs to
     /// shard 3 and cannot be `_str_s4_17`. Caller-named entries (`.comm`, named symbols, static
     /// locals) are untouched — they are already unique by name, and `merge` dedups them.
-    pub fn for_shard(shard: usize) -> Self {
+    ///
+    /// `base` is what the main section already holds: content found there resolves to its label
+    /// instead of becoming a second copy under a content address.
+    pub fn for_shard(shard: usize, base: Option<std::sync::Arc<DataBase>>) -> Self {
         Self {
             label_shard: format!("s{}_", shard),
+            content_labels: true,
+            base,
             ..Self::new()
         }
+    }
+
+    /// Captures this section's interned contents for the shards of a parallel pass.
+    ///
+    /// The helpers emitted ahead of the bodies intern the module's big tables into the main
+    /// section under counter labels; a shard that built the same table again would name it by
+    /// content, the two labels would differ, and the merge would keep both.
+    pub fn base(&self) -> std::sync::Arc<DataBase> {
+        std::sync::Arc::new(DataBase {
+            strings: self.dedup.clone(),
+            floats: self.float_dedup.clone(),
+            words: self.word_dedup.clone(),
+        })
     }
 
     /// Records the current size of every collection, for a possible rollback.
@@ -212,15 +294,67 @@ impl DataSection {
     /// rewriting that text. Everything keyed by a caller-chosen name is deduplicated instead:
     /// two shards declaring the same `.comm`, the same named symbol or the same function static
     /// is a duplicate DEFINITION, and the first one wins.
+    ///
+    /// A content-addressed label (see `content_label`) that both sections define names the same
+    /// bytes by construction, so it is kept once: that is what stops every codegen worker from
+    /// contributing its own copy of the same lookup table. Should two different contents ever
+    /// share one, that is a hash collision and the build stops rather than merge them.
     pub fn merge(&mut self, other: Self) {
+        let mut index = self.merge_index();
+        self.merge_indexed(other, &mut index);
+    }
+
+    /// Indexes this section's labels for a run of `merge_indexed` calls.
+    ///
+    /// Built once for a whole parallel pass: rebuilding it per merged shard would cost the
+    /// section's size again for every one of them.
+    pub fn merge_index(&self) -> DataMergeIndex {
+        DataMergeIndex {
+            entries: self
+                .entries
+                .iter()
+                .enumerate()
+                .map(|(index, (label, _))| (label.clone(), index))
+                .collect(),
+            floats: self.float_entries.iter().cloned().collect(),
+            words: self
+                .word_entries
+                .iter()
+                .enumerate()
+                .map(|(index, (label, _))| (label.clone(), index))
+                .collect(),
+        }
+    }
+
+    /// `merge`, against an index this section has not changed behind the back of.
+    pub fn merge_indexed(&mut self, other: Self, index: &mut DataMergeIndex) {
+        let labels = &mut index.entries;
         for (label, bytes) in other.entries {
-            if self.entries.iter().any(|(existing, _)| existing == &label) {
+            if let Some(&index) = labels.get(&label) {
+                assert_same_content(&label, &self.entries[index].1, &bytes);
                 continue;
             }
+            labels.insert(label.clone(), self.entries.len());
             self.entries.push((label, bytes));
         }
-        self.float_entries.extend(other.float_entries);
-        self.word_entries.extend(other.word_entries);
+        let float_labels = &mut index.floats;
+        for (label, bits) in other.float_entries {
+            if let Some(existing) = float_labels.get(&label) {
+                assert_same_content(&label, existing, &bits);
+                continue;
+            }
+            float_labels.insert(label.clone(), bits);
+            self.float_entries.push((label, bits));
+        }
+        let word_labels = &mut index.words;
+        for (label, words) in other.word_entries {
+            if let Some(&index) = word_labels.get(&label) {
+                assert_same_content(&label, &self.word_entries[index].1, &words);
+                continue;
+            }
+            word_labels.insert(label.clone(), self.word_entries.len());
+            self.word_entries.push((label, words));
+        }
         for (label, size) in other.comm_entries {
             if self.comm_dedup.contains_key(&label) {
                 continue;
@@ -259,8 +393,16 @@ impl DataSection {
         if let Some(label) = self.float_dedup.get(&bits) {
             return label.clone();
         }
-        let label = format!("_float_{}{}", self.label_shard, self.counter);
-        self.counter += 1;
+        if let Some(label) = self.base.as_ref().and_then(|base| base.floats.get(&bits)) {
+            return label.clone();
+        }
+        let label = if self.content_labels {
+            format!("_float_h{bits:016x}")
+        } else {
+            let label = format!("_float_{}{}", self.label_shard, self.counter);
+            self.counter += 1;
+            label
+        };
         self.float_dedup.insert(bits, label.clone());
         self.float_entries.push((label.clone(), bits));
         label
@@ -272,9 +414,17 @@ impl DataSection {
         if let Some(label) = self.dedup.get(bytes) {
             return (label.clone(), bytes.len());
         }
+        if let Some(label) = self.base.as_ref().and_then(|base| base.strings.get(bytes)) {
+            return (label.clone(), bytes.len());
+        }
 
-        let label = format!("_str_{}{}", self.label_shard, self.counter);
-        self.counter += 1;
+        let label = if self.content_labels {
+            format!("_str_h{:016x}", content_label(&[b's'], bytes))
+        } else {
+            let label = format!("_str_{}{}", self.label_shard, self.counter);
+            self.counter += 1;
+            label
+        };
         let owned = bytes.to_vec();
         self.dedup.insert(owned.clone(), label.clone());
         self.entries.push((label.clone(), owned));
@@ -313,8 +463,16 @@ impl DataSection {
         if let Some(label) = self.word_dedup.get(&words) {
             return label.clone();
         }
-        let label = format!("_data_{}{}", self.label_shard, self.counter);
-        self.counter += 1;
+        if let Some(label) = self.base.as_ref().and_then(|base| base.words.get(&words)) {
+            return label.clone();
+        }
+        let label = if self.content_labels {
+            format!("_data_h{:016x}", words_content_label(&words))
+        } else {
+            let label = format!("_data_{}{}", self.label_shard, self.counter);
+            self.counter += 1;
+            label
+        };
         self.word_dedup.insert(words.clone(), label.clone());
         self.word_entries.push((label.clone(), words));
         label
@@ -464,19 +622,38 @@ mod tests {
             .contains(".comm _heap_buf, 1024, 16\n"));
     }
 
-    /// Verifies two shards generate labels that cannot collide, so their sections can be merged
-    /// without repointing the assembly each already emitted.
+    /// Verifies shards name what they intern by its content: two shards building the same
+    /// string, table or float spell the same label, and different contents different ones.
     #[test]
-    fn test_shards_generate_labels_that_cannot_collide() {
-        let mut first = DataSection::for_shard(0);
-        let mut second = DataSection::for_shard(1);
+    fn test_shards_name_contents_by_address() {
+        let mut first = DataSection::for_shard(0, None);
+        let mut second = DataSection::for_shard(1, None);
         let (first_label, _) = first.add_string(b"same bytes");
         let (second_label, _) = second.add_string(b"same bytes");
-        assert_ne!(first_label, second_label);
-        assert_eq!(first_label, "_str_s0_0");
-        assert_eq!(second_label, "_str_s1_0");
-        assert_eq!(first.add_float(1.5), "_float_s0_1");
-        assert_eq!(second.add_words(vec![DataWord::U64(7)]), "_data_s1_1");
+        assert_eq!(first_label, second_label);
+        assert!(first_label.starts_with("_str_h"));
+        assert_ne!(first.add_string(b"other bytes").0, first_label);
+        assert_eq!(first.add_float(1.5), second.add_float(1.5));
+        assert_eq!(
+            first.add_words(vec![DataWord::U64(7), DataWord::Symbol("_x".to_string())]),
+            second.add_words(vec![DataWord::U64(7), DataWord::Symbol("_x".to_string())])
+        );
+        assert_ne!(
+            first.add_words(vec![DataWord::U64(7)]),
+            first.add_words(vec![DataWord::U64(8)])
+        );
+    }
+
+    /// Verifies a shard resolves content the main section already holds to the main label,
+    /// without a copy of its own.
+    #[test]
+    fn test_a_shard_reuses_what_the_main_section_holds() {
+        let mut main = DataSection::new();
+        let (main_label, _) = main.add_string(b"interned ahead of the bodies");
+        let mut shard = DataSection::for_shard(0, Some(main.base()));
+        assert_eq!(shard.add_string(b"interned ahead of the bodies").0, main_label);
+        main.merge(shard);
+        assert_eq!(main.emit(macos()).matches("interned ahead of the bodies").count(), 1);
     }
 
     /// Verifies a whole-module section still emits the labels it emits today: the shard prefix
@@ -488,13 +665,12 @@ mod tests {
         assert_eq!(data.add_float(2.5), "_float_1");
     }
 
-    /// Verifies merge keeps both shards' generated entries — including two copies of the same
-    /// blob, which is the deliberate cost of not rewriting emitted assembly — while collapsing
-    /// everything named by the caller.
+    /// Verifies merge keeps one copy of what two shards both interned, and collapses everything
+    /// named by the caller.
     #[test]
-    fn test_merge_keeps_generated_entries_and_collapses_named_ones() {
-        let mut first = DataSection::for_shard(0);
-        let mut second = DataSection::for_shard(1);
+    fn test_merge_keeps_one_copy_and_collapses_named_entries() {
+        let mut first = DataSection::for_shard(0, None);
+        let mut second = DataSection::for_shard(1, None);
         first.add_string(b"shared blob");
         second.add_string(b"shared blob");
         first.add_comm("_request_slot".to_string(), 8);
@@ -503,9 +679,21 @@ mod tests {
 
         first.merge(second);
         let emitted = first.emit(macos());
-        assert_eq!(emitted.matches("shared blob").count(), 2);
+        assert_eq!(emitted.matches("shared blob").count(), 1);
         assert_eq!(emitted.matches(".comm _request_slot").count(), 1);
         assert!(emitted.contains(".comm _second_only"));
         assert!(first.has_comm("_second_only"));
+    }
+
+    /// Verifies one label naming two different contents stops the merge instead of silently
+    /// keeping one of them: that would be a content-address collision.
+    #[test]
+    #[should_panic(expected = "content-address collision")]
+    fn test_merge_refuses_one_label_for_two_contents() {
+        let mut first = DataSection::for_shard(0, None);
+        let mut second = DataSection::for_shard(1, None);
+        let (label, _) = first.add_string(b"one content");
+        second.entries.push((label, b"another content".to_vec()));
+        first.merge(second);
     }
 }

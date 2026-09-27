@@ -341,6 +341,7 @@ use symbol_queries::*;
 use argument_results::*;
 #[allow(unused_imports)]
 use context_registration::*;
+pub(in crate::codegen) use context_registration::emit_shared_eval_registration_helper;
 #[allow(unused_imports)]
 use registration_collection::*;
 #[allow(unused_imports)]

@@ -21,7 +21,11 @@ thread_local! {
 /// Stores the declaration order of classes, interfaces, and traits so that
 /// `declared_class_names()` / `declared_interface_names()` / `declared_trait_names()`
 /// can reproduce it for class-id ordering in user assembly.
-fn set_declared_name_order(classes: Vec<String>, interfaces: Vec<String>, traits: Vec<String>) {
+pub(crate) fn set_declared_name_order(
+    classes: Vec<String>,
+    interfaces: Vec<String>,
+    traits: Vec<String>,
+) {
     DECLARED_CLASS_NAMES.with(|names| *names.borrow_mut() = classes);
     DECLARED_INTERFACE_NAMES.with(|names| *names.borrow_mut() = interfaces);
     DECLARED_TRAIT_NAMES.with(|names| *names.borrow_mut() = traits);

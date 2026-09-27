@@ -36,12 +36,14 @@ pub(super) fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
     if let Some(label) = ctx.shared.eval_registration_helper() {
         abi::emit_call_label(ctx.emitter, &label);
     } else {
+        // Only reached when `module_needs_eval_registration` said no and a body still built an
+        // eval context; the helper then lives inline in the first such body, as it always did.
         let label = ctx.next_label("eval_register_module");
         ctx.shared.cache_eval_registration_helper(label.clone());
         abi::emit_call_label(ctx.emitter, &label);
         let helper_done = ctx.next_label("eval_register_module_done");
         abi::emit_jump(ctx.emitter, &helper_done);
-        emit_eval_registration_helper(ctx, &label)?;
+        emit_eval_registration_helper(ctx, &label, false)?;
         ctx.emitter.label(&helper_done);
     }
     ctx.emitter.label(&ready);
@@ -71,15 +73,99 @@ pub(super) fn load_eval_context_or_null(ctx: &mut FunctionContext<'_>) -> Result
     Ok(())
 }
 
+/// Label of the module-wide eval registration helper when it is emitted ahead of the bodies.
+pub(in crate::codegen) const EVAL_REGISTRATION_LABEL: &str = "_eir_shared_eval_register_module";
+
+/// Returns whether some body of `module` can build an eval context, which is what calls the
+/// registration helper.
+///
+/// A context is built only through the body's own `EvalContext` local (`eval_context_slot`), so
+/// a module with no such local never needs the helper; and every call it contains is to the eval
+/// bridge, so without the bridge there is nothing to emit it against.
+fn module_needs_eval_registration(module: &Module) -> bool {
+    module.required_runtime_features.eval_bridge
+        && module
+            .functions
+            .iter()
+            .chain(module.class_methods.iter())
+            .chain(module.closures.iter())
+            .chain(module.fiber_wrappers.iter())
+            .chain(module.callback_wrappers.iter())
+            .chain(module.extern_callback_trampolines.iter())
+            .chain(module.runtime_callable_invokers.iter())
+            .any(|function| {
+                function
+                    .locals
+                    .iter()
+                    .any(|local| local.kind == LocalKind::EvalContext)
+            })
+}
+
+/// Emits the eval registration helper ahead of every body, when the module can need it.
+///
+/// Its body depends on the module alone -- declared symbols, native functions, method
+/// signatures, the global sync hooks -- yet it used to be emitted inside the first body that
+/// built an eval context, under a label minted by that body. Any other body then had to READ
+/// that label from the shared state, which a parallel codegen worker may not do: on the Symfony
+/// module it was the first shared access of 1 164 of the 1 541 bodies the workers gave back.
+/// Emitted here, its label is a constant and every body can call it from any thread.
+pub(in crate::codegen) fn emit_shared_eval_registration_helper(
+    module: &Module,
+    emitter: &mut crate::codegen::emit::Emitter,
+    data: &mut crate::codegen::data_section::DataSection,
+    shared: &mut crate::codegen::shared_state::SharedCodegenState,
+    regalloc_linear: bool,
+) -> Result<()> {
+    if !module_needs_eval_registration(module) {
+        return Ok(());
+    }
+    let mut function = crate::ir::Function::new(
+        EVAL_REGISTRATION_LABEL.to_string(),
+        crate::ir::IrType::Void,
+        PhpType::Void,
+    );
+    function.flags.is_synthetic = true;
+    let entry = crate::ir::BlockId::from_raw(0);
+    function
+        .blocks
+        .push(crate::ir::BasicBlock::new(entry, "entry".to_string(), Vec::new()));
+    function.entry = entry;
+    let layout = crate::codegen::frame::layout_for_function(
+        &function,
+        emitter.target,
+        regalloc_linear,
+        false,
+    );
+    let mut ctx = FunctionContext::new(
+        module, &function, emitter, data, shared, layout, false, false, false, None,
+    );
+    ctx.emitter.blank();
+    ctx.emitter
+        .comment(&format!("--- shared eval registration: {EVAL_REGISTRATION_LABEL} ---"));
+    emit_eval_registration_helper(&mut ctx, EVAL_REGISTRATION_LABEL, true)?;
+    drop(ctx);
+    shared.preset_eval_registration_helper(EVAL_REGISTRATION_LABEL.to_string());
+    Ok(())
+}
+
 /// Emits the single module-wide body that registers all generated eval metadata.
 ///
-/// The helper is called once after each distinct context allocation, but its
-/// assembly body is emitted only at the first eval site. A dedicated ABI frame
-/// preserves both the incoming context handle and the caller's return address.
-fn emit_eval_registration_helper(ctx: &mut FunctionContext<'_>, label: &str) -> Result<()> {
+/// The helper is called once after each distinct context allocation. A dedicated ABI frame
+/// preserves both the incoming context handle and the caller's return address. `top_level`
+/// says it is its own function rather than a stretch inside another body's text, which is what
+/// decides between a plain label and an `.alt_entry`.
+fn emit_eval_registration_helper(
+    ctx: &mut FunctionContext<'_>,
+    label: &str,
+    top_level: bool,
+) -> Result<()> {
     let native_to_eval = ctx.next_label("eval_globals_from_native");
     let eval_to_native = ctx.next_label("eval_globals_to_native");
-    ctx.emitter.label_shared(label);
+    if top_level {
+        ctx.emitter.label(label);
+    } else {
+        ctx.emitter.label_shared(label);
+    }
     abi::emit_frame_prologue(ctx.emitter, EVAL_CONTEXT_HELPER_FRAME_SIZE);
     let context_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     abi::store_at_offset(ctx.emitter, context_arg, EVAL_CONTEXT_HELPER_LOCAL_OFFSET);

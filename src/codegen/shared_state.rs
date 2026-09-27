@@ -25,15 +25,23 @@ use crate::types::{FunctionSig, PhpType};
 
 use super::shared_reflection::SharedReflectionState;
 
+/// Cached string-callable cases: argument type, candidate names, strictness, and the cases.
+type StringCasesEntry = (Option<PhpType>, Option<Vec<String>>, bool, Vec<RuntimeCallableCase>);
+
+/// Cached static-method callable cases for one candidate-name set.
+type StaticCasesEntry = (Option<Vec<String>>, Vec<RuntimeStaticMethodCallableCase>);
+
+/// Receiver-captured descriptor templates, bucketed by `instance_descriptor_bucket`.
+type InstanceDescriptorMap =
+    crate::fast_hash::FastMap<u64, Vec<RuntimeInstanceMethodDescriptorCacheEntry>>;
+
 /// Module-wide artifacts emitted once and reused by every function lowering context.
 pub(crate) struct SharedCodegenState {
     pub(super) reflection: SharedReflectionState,
     emitted_instance_methods: HashSet<(String, String)>,
     emitted_static_methods: HashSet<(String, String)>,
-    runtime_string_descriptor_cases:
-        Vec<(Option<PhpType>, Option<Vec<String>>, bool, Vec<RuntimeCallableCase>)>,
-    runtime_static_method_descriptor_cases:
-        Vec<(Option<Vec<String>>, Vec<RuntimeStaticMethodCallableCase>)>,
+    runtime_string_descriptor_cases: Vec<StringCasesEntry>,
+    runtime_static_method_descriptor_cases: Vec<StaticCasesEntry>,
     runtime_static_method_descriptor_case_entries: Vec<RuntimeStaticMethodCallableCase>,
     /// Receiver-captured descriptor templates, bucketed by a hash of theirthree--part name key.
     ///
@@ -49,6 +57,14 @@ pub(crate) struct SharedCodegenState {
         crate::fast_hash::FastMap<u64, Vec<RuntimeInstanceMethodDescriptorCacheEntry>>,
     runtime_callable_invokers: Vec<RuntimeCallableInvokerCacheEntry>,
     eval_registration_helper: Option<String>,
+    /// Set when the eval registration helper was emitted ahead of the bodies: its label is then
+    /// a constant, and reading it is not a shared access a worker must avoid.
+    eval_registration_preset: bool,
+    /// What the helpers emitted ahead of the bodies cached, for a codegen worker's chunk. Looked
+    /// up before the chunk's own caches: a hit there reads something emitted once, in the main
+    /// text, so it is not a shared access; only a miss (which emits) can defer a body. Shared by
+    /// reference, not copied, because every chunk of the parallel pass starts from it.
+    preset: Option<std::sync::Arc<ModulePreset>>,
     runtime_builtin_wrappers: Vec<RuntimeCallWrapperCacheEntry>,
     runtime_extern_wrappers: Vec<RuntimeCallWrapperCacheEntry>,
     /// Memoized sharing decision for open Mixed callable dispatch by strictness profile.
@@ -138,6 +154,21 @@ pub(crate) struct SharedCodegenState {
     instr_registry: Vec<String>,
 }
 
+/// The shared caches as the helpers emitted ahead of the bodies left them; see
+/// `SharedCodegenState::module_preset`.
+#[derive(Default)]
+pub(crate) struct ModulePreset {
+    eval_registration_helper: Option<String>,
+    string_cases: Vec<StringCasesEntry>,
+    static_cases: Vec<StaticCasesEntry>,
+    static_case_entries: Vec<RuntimeStaticMethodCallableCase>,
+    instance_descriptors:
+        crate::fast_hash::FastMap<u64, Vec<RuntimeInstanceMethodDescriptorCacheEntry>>,
+    invokers: Vec<RuntimeCallableInvokerCacheEntry>,
+    builtin_wrappers: Vec<RuntimeCallWrapperCacheEntry>,
+    extern_wrappers: Vec<RuntimeCallWrapperCacheEntry>,
+}
+
 /// Reusable static descriptor template for one public instance method.
 #[derive(Clone)]
 pub(super) struct RuntimeInstanceMethodDescriptorTemplate {
@@ -145,6 +176,7 @@ pub(super) struct RuntimeInstanceMethodDescriptorTemplate {
 }
 
 /// Cache key and emitted template for one receiver-class/method/signature shape.
+#[derive(Clone)]
 struct RuntimeInstanceMethodDescriptorCacheEntry {
     class_name: String,
     method_key: String,
@@ -154,6 +186,7 @@ struct RuntimeInstanceMethodDescriptorCacheEntry {
 }
 
 /// Cache key and label for one signature-compatible descriptor invoker body.
+#[derive(Clone)]
 struct RuntimeCallableInvokerCacheEntry {
     signature: FunctionSig,
     captures: Vec<(String, PhpType, bool)>,
@@ -161,6 +194,7 @@ struct RuntimeCallableInvokerCacheEntry {
 }
 
 /// Cache key and label for one synthetic builtin or extern entry wrapper.
+#[derive(Clone)]
 struct RuntimeCallWrapperCacheEntry {
     name: String,
     signature: FunctionSig,
@@ -209,6 +243,8 @@ impl SharedCodegenState {
             runtime_instance_method_descriptors: crate::fast_hash::FastMap::default(),
             runtime_callable_invokers: Vec::new(),
             eval_registration_helper: None,
+            eval_registration_preset: false,
+            preset: None,
             runtime_builtin_wrappers: Vec::new(),
             runtime_extern_wrappers: Vec::new(),
             mixed_string_sharing: [None; 2],
@@ -309,14 +345,8 @@ impl SharedCodegenState {
     /// Records one access to a cache whose helper symbols are derived from the cache key.
     ///
     /// Such a helper can be emitted by any worker: every copy spells the same symbols, so the
-    /// merge keeps one and drops the rest, and the body does not have to go serial.
-    ///
-    /// No family uses this yet. Two are ready for it — the callable invoker and the
-    /// builtin/extern wrappers now mint their symbols from their cache keys — but opting them in
-    /// while the OTHER families still defer is what made deferral quadratic, because a deferred
-    /// body has to undo its cache entries and the next body then re-emits everything. It pays
-    /// once every family can be reached in parallel.
-    #[allow(dead_code)]
+    /// merge keeps one and drops the rest, and the body does not have to go serial. The callable
+    /// invokers and the builtin/extern wrappers are those families.
     fn touch_cache_keyed(&self) {
         self.cache_touches.set(self.cache_touches.get() + 1);
     }
@@ -509,15 +539,20 @@ impl SharedCodegenState {
         candidate_names: Option<&[String]>,
         strict_php: bool,
     ) -> Option<Vec<RuntimeCallableCase>> {
+        let matches = |(cached_ty, cached_names, cached_strict_php, _): &&StringCasesEntry| {
+            cached_ty.as_ref() == source_arg_ty
+                && cached_names.as_deref() == candidate_names
+                && *cached_strict_php == strict_php
+        };
+        let preset = self.preset.as_ref();
+        if let Some(entry) = preset.and_then(|preset| preset.string_cases.iter().find(matches)) {
+            return Some(entry.3.clone());
+        }
         self.touch_cache();
         self.runtime_string_descriptor_cases
             .iter()
-            .find(|(cached_ty, cached_names, cached_strict_php, _)| {
-                cached_ty.as_ref() == source_arg_ty
-                    && cached_names.as_deref() == candidate_names
-                    && *cached_strict_php == strict_php
-            })
-            .map(|(_, _, _, cases)| cases.clone())
+            .find(matches)
+            .map(|entry| entry.3.clone())
     }
 
     /// Stores runtime string-callable cases after their global wrappers are emitted.
@@ -542,11 +577,17 @@ impl SharedCodegenState {
         &self,
         candidate_names: Option<&[String]>,
     ) -> Option<Vec<RuntimeStaticMethodCallableCase>> {
+        let matches =
+            |(cached_names, _): &&StaticCasesEntry| cached_names.as_deref() == candidate_names;
+        let preset = self.preset.as_ref();
+        if let Some(entry) = preset.and_then(|preset| preset.static_cases.iter().find(matches)) {
+            return Some(entry.1.clone());
+        }
         self.touch_cache();
         self.runtime_static_method_descriptor_cases
             .iter()
-            .find(|(cached_names, _)| cached_names.as_deref() == candidate_names)
-            .map(|(_, cases)| cases.clone())
+            .find(matches)
+            .map(|entry| entry.1.clone())
     }
 
     /// Stores public static-method descriptors for reuse by later call sites.
@@ -567,10 +608,20 @@ impl SharedCodegenState {
         &self,
         php_name: &str,
     ) -> Option<RuntimeStaticMethodCallableCase> {
+        let matches = |case: &&RuntimeStaticMethodCallableCase| {
+            case.case.php_name.as_deref() == Some(php_name)
+        };
+        if let Some(case) = self
+            .preset
+            .as_ref()
+            .and_then(|preset| preset.static_case_entries.iter().find(matches))
+        {
+            return Some(case.clone());
+        }
         self.touch_cache();
         self.runtime_static_method_descriptor_case_entries
             .iter()
-            .find(|case| case.case.php_name.as_deref() == Some(php_name))
+            .find(matches)
             .cloned()
     }
 
@@ -592,17 +643,24 @@ impl SharedCodegenState {
         impl_class: &str,
         signature: &FunctionSig,
     ) -> Option<RuntimeInstanceMethodDescriptorTemplate> {
+        let bucket = instance_descriptor_bucket(class_name, method_key, impl_class);
+        let find = |map: &InstanceDescriptorMap| {
+            map.get(&bucket)?
+                .iter()
+                .find(|entry| {
+                    entry.class_name == class_name
+                        && entry.method_key == method_key
+                        && entry.impl_class == impl_class
+                        && entry.signature == *signature
+                })
+                .map(|entry| entry.template.clone())
+        };
+        let preset = self.preset.as_ref();
+        if let Some(template) = preset.and_then(|preset| find(&preset.instance_descriptors)) {
+            return Some(template);
+        }
         self.touch_cache();
-        self.runtime_instance_method_descriptors
-            .get(&instance_descriptor_bucket(class_name, method_key, impl_class))?
-            .iter()
-            .find(|entry| {
-                entry.class_name == class_name
-                    && entry.method_key == method_key
-                    && entry.impl_class == impl_class
-                    && entry.signature == *signature
-            })
-            .map(|entry| entry.template.clone())
+        find(&self.runtime_instance_method_descriptors)
     }
 
     /// Stores a receiver-captured descriptor template after first emission.
@@ -633,10 +691,17 @@ impl SharedCodegenState {
         signature: &FunctionSig,
         captures: &[(String, PhpType, bool)],
     ) -> Option<String> {
-        self.touch_cache();
+        let matches = |entry: &&RuntimeCallableInvokerCacheEntry| {
+            entry.signature == *signature && entry.captures == captures
+        };
+        let preset = self.preset.as_ref();
+        if let Some(entry) = preset.and_then(|preset| preset.invokers.iter().find(matches)) {
+            return Some(entry.label.clone());
+        }
+        self.touch_cache_keyed();
         self.runtime_callable_invokers
             .iter()
-            .find(|entry| entry.signature == *signature && entry.captures == captures)
+            .find(matches)
             .map(|entry| entry.label.clone())
     }
 
@@ -647,7 +712,7 @@ impl SharedCodegenState {
         captures: &[(String, PhpType, bool)],
         label: &str,
     ) {
-        self.touch_cache();
+        self.touch_cache_keyed();
         self.runtime_callable_invokers
             .push(RuntimeCallableInvokerCacheEntry {
                 signature: signature.clone(),
@@ -658,8 +723,49 @@ impl SharedCodegenState {
 
     /// Returns the module-wide eval metadata registration helper label, if emitted.
     pub(super) fn eval_registration_helper(&self) -> Option<String> {
+        if self.eval_registration_preset {
+            return self.eval_registration_helper.clone();
+        }
         self.touch_cache();
         self.eval_registration_helper.clone()
+    }
+
+    /// Records the helper emitted ahead of the bodies; see `emit_shared_eval_registration_helper`.
+    pub(super) fn preset_eval_registration_helper(&mut self, label: String) {
+        self.eval_registration_helper = Some(label);
+        self.eval_registration_preset = true;
+    }
+
+    /// Captures what the helpers emitted ahead of the bodies left in the caches.
+    ///
+    /// Taken once, after those helpers and before any body. Everything in it names text that is
+    /// already in the main emitter -- a descriptor, an invoker, a wrapper -- so a worker that
+    /// starts from it reuses those symbols instead of emitting its own copies. That matters for
+    /// more than speed: a callable descriptor is compared by address at run time, so the
+    /// module-wide static-method table must exist exactly once, which is why a worker could
+    /// never build its own and had to hand every body that reached it back to the serial pass.
+    pub(super) fn module_preset(&self) -> std::sync::Arc<ModulePreset> {
+        std::sync::Arc::new(ModulePreset {
+            eval_registration_helper: self
+                .eval_registration_preset
+                .then(|| self.eval_registration_helper.clone())
+                .flatten(),
+            string_cases: self.runtime_string_descriptor_cases.clone(),
+            static_cases: self.runtime_static_method_descriptor_cases.clone(),
+            static_case_entries: self.runtime_static_method_descriptor_case_entries.clone(),
+            instance_descriptors: self.runtime_instance_method_descriptors.clone(),
+            invokers: self.runtime_callable_invokers.clone(),
+            builtin_wrappers: self.runtime_builtin_wrappers.clone(),
+            extern_wrappers: self.runtime_extern_wrappers.clone(),
+        })
+    }
+
+    /// Starts a codegen worker's chunk from `preset`; see `module_preset`.
+    pub(super) fn apply_module_preset(&mut self, preset: &std::sync::Arc<ModulePreset>) {
+        if let Some(label) = &preset.eval_registration_helper {
+            self.preset_eval_registration_helper(label.clone());
+        }
+        self.preset = Some(std::sync::Arc::clone(preset));
     }
 
     /// Publishes the module-wide eval metadata registration helper label.
@@ -676,7 +782,12 @@ impl SharedCodegenState {
         signature: &FunctionSig,
         strict_php: bool,
     ) -> Option<String> {
-        self.touch_cache();
+        if let Some(label) = self.preset.as_ref().and_then(|preset| {
+            cached_runtime_call_wrapper(&preset.builtin_wrappers, name, signature, strict_php)
+        }) {
+            return Some(label);
+        }
+        self.touch_cache_keyed();
         cached_runtime_call_wrapper(
             &self.runtime_builtin_wrappers,
             name,
@@ -693,7 +804,7 @@ impl SharedCodegenState {
         strict_php: bool,
         label: &str,
     ) {
-        self.touch_cache();
+        self.touch_cache_keyed();
         cache_runtime_call_wrapper(
             &mut self.runtime_builtin_wrappers,
             name,
@@ -709,7 +820,12 @@ impl SharedCodegenState {
         name: &str,
         signature: &FunctionSig,
     ) -> Option<String> {
-        self.touch_cache();
+        if let Some(label) = self.preset.as_ref().and_then(|preset| {
+            cached_runtime_call_wrapper(&preset.extern_wrappers, name, signature, false)
+        }) {
+            return Some(label);
+        }
+        self.touch_cache_keyed();
         cached_runtime_call_wrapper(&self.runtime_extern_wrappers, name, signature, false)
     }
 
@@ -720,7 +836,7 @@ impl SharedCodegenState {
         signature: &FunctionSig,
         label: &str,
     ) {
-        self.touch_cache();
+        self.touch_cache_keyed();
         cache_runtime_call_wrapper(
             &mut self.runtime_extern_wrappers,
             name,
