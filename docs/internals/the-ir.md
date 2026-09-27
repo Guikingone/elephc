@@ -904,6 +904,18 @@ Class, interface, trait, enum, packed-class, property, method, constant, and
 attribute declarations primarily contribute metadata to the module. Method and
 closure bodies lower as normal `Function` values.
 
+For a closure whose body is exactly `return <expr>;`,
+`direct_closure_return_expr_type` in `src/ir_lower/function.rs` determines the
+return storage type before lowering that body. When the expression is a direct
+user-function call, it looks up the callee in the `functions` signature map
+instead of taking `infer_expr_type_syntactic`'s `Int` fallback. It then uses
+`eir_user_function_return_type`, the same resolver as ordinary call lowering.
+For an inferred array or associative-array return, that resolver widens the
+element or value type to `Mixed` whenever the callee has any untyped,
+by-value parameter, even if the returned container does not use that parameter.
+This keeps the closure's return slot aligned with ordinary call lowering.
+Builtin calls use the checker's result recorded for their call span.
+
 ### Calls and Callables
 
 | Op | Operands | Result | Effects |
