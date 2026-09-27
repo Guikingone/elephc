@@ -9,6 +9,19 @@
 
 use crate::support::*;
 
+/// Keeps a class constant's integer storage type when it initializes an indexed array.
+#[test]
+fn test_indexed_array_class_constant_element_type() {
+    let out = compile_and_run(
+        r#"<?php
+class Message { public const NUMBER = 42; }
+$values = [Message::NUMBER];
+echo is_int($values[0]) ? "int" : "other";
+"#,
+    );
+    assert_eq!(out, "int");
+}
+
 // --- Phase 14: Multi-dimensional arrays ---
 
 /// Compiles a 2D numeric array literal and verifies indexed access to all four elements.

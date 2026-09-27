@@ -614,6 +614,9 @@ pub(super) fn array_literal_element_type_for_ir(
             .constant_value(name.as_str())
             .map(|(_, ty)| ir_array_storage_type(ty))
             .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            scoped_constant_value_type_for_ir(ctx, receiver, name, item)
+        }
         ExprKind::Variable(name) => ir_array_storage_type(
             ctx.local_types
                 .get(name)
