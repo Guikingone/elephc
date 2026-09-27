@@ -38,8 +38,10 @@ pub(crate) fn emit_load_free_mark(emitter: &mut Emitter, reg: &str) {
 /// just decrement the bump pointer instead of adding to the free list. This makes free
 /// loops O(1) with zero fragmentation.
 ///
-/// Otherwise, small blocks (≤64 bytes payload) go into segregated size-class bins.
-/// Larger blocks join the ordered coalescing free list.
+/// Otherwise, a block whose payload fits an exact size class (16 to `HEAP_SIZE_CLASS_MAX`
+/// bytes) is parked at the head of its class in O(1). Larger blocks join the ordered
+/// coalescing free list. Parked class blocks are merged back by the allocator's defragment
+/// pass before it would report exhaustion.
 ///
 /// Input: `x0` = user pointer (as returned by `heap_alloc`)
 ///
@@ -176,56 +178,31 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     // -- bump reset: block is at end of heap, just shrink the bump pointer --
     emitter.instruction("sub x14, x9, x15");                                   // x14 = header - heap_buf = new offset
     emitter.instruction("str x14, [x13]");                                     // heap_off = header offset (shrink heap)
-
-    // -- drop cached small blocks the rewind just put above the bump --
-    emitter.instruction("add x12, x15, x14");                                  // x12 = the new live heap end
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_small_bins");
-    emitter.instruction("mov x16, #0");                                        // x16 = current small-bin class index
-    emitter.label("__rt_heap_free_purge_bin");
-    emitter.instruction("cmp x16, #4");                                        // have all four size classes been purged?
-    emitter.instruction("b.ge __rt_heap_free_trim_tail");                      // yes — continue with the ordered free list
-    emitter.instruction("add x17, x10, x16, lsl #3");                          // x17 = address of this bin's head pointer
-    emitter.label("__rt_heap_free_purge_scan");
-    emitter.instruction("ldr x11, [x17]");                                     // x11 = cached block in this bin, or null at its end
-    emitter.instruction("cbz x11, __rt_heap_free_purge_next");                 // this bin is exhausted
-    emitter.instruction("cmp x11, x12");                                       // does the cached block sit above the new bump?
-    emitter.instruction("b.lo __rt_heap_free_purge_keep");                     // no — it still describes live arena
-    emitter.instruction("ldr x9, [x11, #16]");                                 // x9 = cached_block->next
-    emitter.instruction("str x9, [x17]");                                      // unlink the stale entry from its bin
-    emitter.instruction("b __rt_heap_free_purge_scan");                        // re-examine the new occupant of this slot
-    emitter.label("__rt_heap_free_purge_keep");
-    emitter.instruction("add x17, x11, #16");                                  // advance to this block's next pointer
-    emitter.instruction("b __rt_heap_free_purge_scan");                        // keep walking the bin
-    emitter.label("__rt_heap_free_purge_next");
-    emitter.instruction("add x16, x16, #1");                                   // move on to the next size class
-    emitter.instruction("b __rt_heap_free_purge_bin");                         // purge the remaining bins
-
+    // No size-class block can sit above the new bump: this rewind passes over the freed tail
+    // block only, and the trim below passes only over ordered-list blocks, so a parked class
+    // block stops every rewind at its own end. The scan of every class that used to follow
+    // here therefore never removed anything, and it ran on every tail free.
     emitter.instruction("b __rt_heap_free_trim_tail");                          // trim any newly-exposed free tail blocks too
 
-    // -- small non-tail blocks go through segregated bins first --
+    // -- a non-tail block small enough for an exact size class is parked there --
     emitter.label("__rt_heap_free_cache_small");
-    emitter.instruction("cmp x11, #64");                                        // does this payload fit in the segregated small-bin cache?
-    emitter.instruction("b.hi __rt_heap_free_insert");                          // no — keep using the general coalescing free list
+    emitter.instruction("cmp x11, #16");                                        // is the payload below the smallest size class?
+    emitter.instruction("b.lo __rt_heap_free_insert");                          // yes — keep using the general coalescing free list
+    emitter.instruction(&format!(
+        "cmp x11, #{}",
+        super::heap_alloc::HEAP_SIZE_CLASS_MAX
+    ));                                                                         // is the payload above the largest size class?
+    emitter.instruction("b.hi __rt_heap_free_insert");                          // yes — keep using the general coalescing free list
+    emitter.instruction("lsr x12, x11, #4");                                    // x12 = payload in 16-byte units
+    emitter.instruction("sub x12, x12, #1");                                    // x12 = the block's size-class index
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_small_bins");
-    emitter.instruction("mov x12, #0");                                         // default to the <=8-byte bin offset
-    emitter.instruction("cmp x11, #8");                                         // does the freed payload fit in the smallest class?
-    emitter.instruction("b.ls __rt_heap_free_cache_small_ready");               // yes — keep the <=8-byte bin offset
-    emitter.instruction("mov x12, #8");                                         // otherwise target the <=16-byte bin
-    emitter.instruction("cmp x11, #16");                                        // does the freed payload fit in the <=16-byte class?
-    emitter.instruction("b.ls __rt_heap_free_cache_small_ready");               // yes — keep the <=16-byte bin offset
-    emitter.instruction("mov x12, #16");                                        // otherwise target the <=32-byte bin
-    emitter.instruction("cmp x11, #32");                                        // does the freed payload fit in the <=32-byte class?
-    emitter.instruction("b.ls __rt_heap_free_cache_small_ready");               // yes — keep the <=32-byte bin offset
-    emitter.instruction("mov x12, #24");                                        // the remaining cached case is the <=64-byte bin
-    emitter.label("__rt_heap_free_cache_small_ready");
-    emitter.instruction("add x10, x10, x12");                                   // x10 = address of the chosen small-bin head slot
+    emitter.instruction("add x10, x10, x12, lsl #3");                           // x10 = address of the block's class head slot
     // The chain scan that used to stand here is gone: the free mark written into the header at
     // `__rt_heap_free_live_checked` answers "is this block already parked?" in one compare at
-    // the top of the helper, for every block, not only the ones that land in a small bin.
-    emitter.label("__rt_heap_free_cache_small_insert");
-    emitter.instruction("ldr x12, [x10]");                                      // x12 = current small-bin head before insertion
-    emitter.instruction("str x12, [x9, #16]");                                  // cached_block->next = previous small-bin head
-    emitter.instruction("str x9, [x10]");                                       // publish the freed block as the new head of the selected bin
+    // the top of the helper, for every block, not only the ones that land in a size class.
+    emitter.instruction("ldr x12, [x10]");                                      // x12 = current class head before insertion
+    emitter.instruction("str x12, [x9, #16]");                                  // cached_block->next = previous class head
+    emitter.instruction("str x9, [x10]");                                       // publish the freed block as the new head of its class
     emitter.instruction("b __rt_heap_free_post_validate");                      // finish through the common debug validation and free counting path
 
     // -- larger blocks still use the ordered free list for coalescing --
@@ -383,7 +360,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
 /// Mirrors the ARM64 `emit_heap_free` logic for the x86_64 SYSV ABI:
 /// - Validates pointer is a live heap block via the `crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32` marker
 /// - Bump-reset for tail blocks (O(1))
-/// - Segregated small-bin cache for ≤64-byte payloads
+/// - Exact size-class parking for payloads up to `HEAP_SIZE_CLASS_MAX` bytes
 /// - Ordered coalescing free list for larger blocks
 /// - Optional payload poisoning and debug validation when `_heap_debug_enabled`
 ///
@@ -508,57 +485,28 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, r9");                                         // preserve the freed block header address while converting it back into a bump offset
     emitter.instruction("sub rdx, r10");                                        // compute the new bump offset from the heap base to the reclaimed block header
     emitter.instruction("mov QWORD PTR [r8], rdx");                             // shrink the bump pointer back to the start of the freed tail block
-
-    // -- drop cached small blocks the rewind just put above the bump (see the AArch64 arm) --
-    emitter.instruction("lea rcx, [r10 + rdx]");                                // rcx = the new live heap end
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_small_bins");
-    emitter.instruction("xor esi, esi");                                        // rsi = current small-bin class index
-    emitter.label("__rt_heap_free_purge_bin");
-    emitter.instruction("cmp rsi, 4");                                          // have all four size classes been purged?
-    emitter.instruction("jae __rt_heap_free_trim_tail");                        // yes — continue with the ordered free list
-    emitter.instruction("lea rdi, [r11 + rsi*8]");                              // rdi = address of this bin's head pointer
-    emitter.label("__rt_heap_free_purge_scan");
-    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // r9 = cached block in this bin, or null at its end
-    emitter.instruction("test r9, r9");                                         // is this bin exhausted?
-    emitter.instruction("jz __rt_heap_free_purge_next");                        // yes — move to the next class
-    emitter.instruction("cmp r9, rcx");                                         // does the cached block sit above the new bump?
-    emitter.instruction("jb __rt_heap_free_purge_keep");                        // no — it still describes live arena
-    emitter.instruction("mov rdx, QWORD PTR [r9 + 16]");                        // rdx = cached_block->next
-    emitter.instruction("mov QWORD PTR [rdi], rdx");                            // unlink the stale entry from its bin
-    emitter.instruction("jmp __rt_heap_free_purge_scan");                       // re-examine the new occupant of this slot
-    emitter.label("__rt_heap_free_purge_keep");
-    emitter.instruction("lea rdi, [r9 + 16]");                                  // advance to this block's next pointer
-    emitter.instruction("jmp __rt_heap_free_purge_scan");                       // keep walking the bin
-    emitter.label("__rt_heap_free_purge_next");
-    emitter.instruction("inc rsi");                                             // move on to the next size class
-    emitter.instruction("jmp __rt_heap_free_purge_bin");                        // purge the remaining bins
-
+    // No size-class block can sit above the new bump (see the AArch64 arm), so nothing is purged.
     emitter.instruction("jmp __rt_heap_free_trim_tail");                        // trim any newly exposed free tail blocks too before returning
 
-    // -- small non-tail blocks go through segregated bins first --
+    // -- a non-tail block small enough for an exact size class is parked there --
     emitter.label("__rt_heap_free_cache_small");
-    emitter.instruction("cmp r11, 64");                                         // does the freed payload fit in the segregated small-bin cache?
-    emitter.instruction("ja __rt_heap_free_insert");                            // larger payloads still use the ordered coalescing free list
+    emitter.instruction("cmp r11, 16");                                         // is the payload below the smallest size class?
+    emitter.instruction("jb __rt_heap_free_insert");                            // yes — keep using the ordered coalescing free list
+    emitter.instruction(&format!(
+        "cmp r11, {}",
+        super::heap_alloc::HEAP_SIZE_CLASS_MAX
+    ));                                                                         // is the payload above the largest size class?
+    emitter.instruction("ja __rt_heap_free_insert");                            // yes — keep using the ordered coalescing free list
+    emitter.instruction("mov rcx, r11");                                        // rcx = payload size, to derive the class index
+    emitter.instruction("shr rcx, 4");                                          // rcx = payload in 16-byte units
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_small_bins");
-    emitter.instruction("xor rcx, rcx");                                        // default to the <=8-byte bin offset
-    emitter.instruction("cmp r11, 8");                                          // does the freed payload fit in the smallest cached class?
-    emitter.instruction("jbe __rt_heap_free_cache_small_ready");                // yes — keep the <=8-byte bin offset
-    emitter.instruction("mov rcx, 8");                                          // otherwise target the <=16-byte bin offset
-    emitter.instruction("cmp r11, 16");                                         // does the freed payload fit in the <=16-byte class?
-    emitter.instruction("jbe __rt_heap_free_cache_small_ready");                // yes — keep the <=16-byte bin offset
-    emitter.instruction("mov rcx, 16");                                         // otherwise target the <=32-byte bin offset
-    emitter.instruction("cmp r11, 32");                                         // does the freed payload fit in the <=32-byte class?
-    emitter.instruction("jbe __rt_heap_free_cache_small_ready");                // yes — keep the <=32-byte bin offset
-    emitter.instruction("mov rcx, 24");                                         // remaining cached payloads belong to the <=64-byte bin offset
-    emitter.label("__rt_heap_free_cache_small_ready");
-    emitter.instruction("add r10, rcx");                                        // r10 = address of the selected small-bin head slot
+    emitter.instruction("lea r10, [r10 + rcx*8 - 8]");                          // r10 = address of the block's class head slot (index = units - 1)
     // The chain scan that used to stand here is gone: the free mark written into the header at
     // `__rt_heap_free_live_checked` answers "is this block already parked?" in one compare at
-    // the top of the helper, for every block, not only the ones that land in a small bin.
-    emitter.label("__rt_heap_free_cache_small_insert");
-    emitter.instruction("mov rdx, QWORD PTR [r10]");                            // load the previous cached head for this small-bin size class
-    emitter.instruction("mov QWORD PTR [r9 + 16], rdx");                        // splice the freed block onto the front of the selected small-bin chain
-    emitter.instruction("mov QWORD PTR [r10], r9");                             // publish the freed block as the new small-bin head
+    // the top of the helper, for every block, not only the ones that land in a size class.
+    emitter.instruction("mov rdx, QWORD PTR [r10]");                            // load the previous head of this size class
+    emitter.instruction("mov QWORD PTR [r9 + 16], rdx");                        // splice the freed block onto the front of its class
+    emitter.instruction("mov QWORD PTR [r10], r9");                             // publish the freed block as the new class head
     emitter.instruction("jmp __rt_heap_free_post_validate");                    // finish through the shared post-mutation validation and free-counting path
 
     // -- larger blocks still use the ordered free list for coalescing --

@@ -458,7 +458,11 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_heap_off", 8, target));
     out.push_str(&comm_directive("_heap_stats_hash_origin", 8, target));
     out.push_str(&comm_directive("_heap_free_list", 8, target));
-    out.push_str(&comm_directive("_heap_small_bins", 32, target));
+    out.push_str(&comm_directive(
+        "_heap_small_bins",
+        crate::codegen_support::runtime::HEAP_SIZE_CLASS_COUNT * 8,
+        target,
+    ));
     out.push_str(&comm_directive("_heap_debug_enabled", 8, target));
     out.push_str(&comm_directive("_web_heap_guard_enabled", 8, target));
     out.push_str(".globl _error_log_nl\n_error_log_nl:\n    .ascii \"\\n\"\n");

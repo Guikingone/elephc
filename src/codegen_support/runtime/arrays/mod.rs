@@ -490,6 +490,8 @@ pub use hash_unset::emit_hash_unset;
 /// Emit hash unset (single-key removal) helper.
 pub use heap_alloc::emit_heap_alloc;
 /// Emit heap allocation helper.
+pub(crate) use heap_alloc::HEAP_SIZE_CLASS_COUNT;
+/// The allocator's exact size classes, shared with the class storage and its readers.
 pub use heap_debug_check_live::emit_heap_debug_check_live;
 /// Emit heap debug live check helper.
 pub use heap_debug_fail::emit_heap_debug_fail;

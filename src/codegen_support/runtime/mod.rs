@@ -65,6 +65,9 @@ pub(crate) fn curl_abi_slots() -> &'static [(&'static str, &'static str)] {
 /// `codegen::lower_inst::exceptions` that report their own synthesized errors without ever
 /// reaching `__rt_report_uncaught_exception`.
 pub(crate) use exceptions::UNCAUGHT_EXIT_STATUS;
+/// The allocator's exact size classes: `_heap_small_bins` holds one head per class, and the
+/// `--web` request boundary empties every one of them.
+pub(crate) use arrays::HEAP_SIZE_CLASS_COUNT;
 /// The PHP object-handle pool: binding a handle at allocation and reading one back.
 /// Every object-allocation site in codegen calls `emit_acquire_object_handle`.
 pub(crate) use objects::{

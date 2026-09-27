@@ -461,10 +461,12 @@ fn emit_heap_arena_reset(emitter: &mut Emitter) {
     // leak summary's `live_blocks` is derived from their difference.
     abi::emit_store_zero_to_symbol(emitter, "_gc_live", 0);
     abi::emit_store_zero_to_symbol(emitter, "_heap_free_list", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 8);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 16);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 24);
+    // Every size class is emptied too: the blocks parked in them are gone with the arena.
+    let classes = abi::int_arg_reg_name(emitter.target, 0);
+    abi::emit_symbol_address(emitter, classes, "_heap_small_bins");
+    for class in 0..crate::codegen_support::runtime::HEAP_SIZE_CLASS_COUNT {
+        abi::emit_store_zero_to_address(emitter, classes, class * 8);
+    }
 }
 
 /// Clears the runtime flags whose PHP-visible lifetime is one REQUEST, not one process.
