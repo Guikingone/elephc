@@ -38,7 +38,7 @@ pub(crate) use builder::local_load_types_share_storage;
 pub(crate) use builder::local_load_coercion_owns_result;
 pub use effects::Effects;
 pub use function::{
-    Function, FunctionFlags, FunctionId, FunctionParam, GeneratorSource, LocalKind, LocalSlot,
+    Function, FunctionFlags, FunctionId, FunctionParam, LocalKind, LocalSlot,
     LocalSlotId,
 };
 pub use instr::{
