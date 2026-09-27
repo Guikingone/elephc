@@ -761,8 +761,8 @@ fn cast_alias(target: &CastType, inner: &Expr, state: &AliasState<'_>) -> Return
 /// leak: `return (string)@$s` over a `string` parameter is elided just as `return (string)$s`
 /// is, so calling its result independent has the caller release the argument's own string.
 /// An already-elided inner `(string)` cast leaves a `Str` behind too, so `(string)(string)$s`
-/// nests the same way. An assignment expression returns its source value, which must be
-/// inspected just as `expr_alias` inspects it.
+/// nests the same way. A variable assignment returns a reload of its target slot, so both
+/// the target and source must retain bare `Str` storage before its result can borrow.
 fn expr_keeps_str_slot(inner: &Expr, state: &AliasState<'_>) -> bool {
     match &inner.kind {
         ExprKind::Variable(name) => state.has_str_slot(name),
@@ -770,7 +770,16 @@ fn expr_keeps_str_slot(inner: &Expr, state: &AliasState<'_>) -> bool {
         ExprKind::ErrorSuppress(inner)
         | ExprKind::NamedArg { value: inner, .. }
         | ExprKind::Spread(inner) => expr_keeps_str_slot(inner, state),
-        ExprKind::Assignment { value, .. } => expr_keeps_str_slot(value, state),
+        ExprKind::Assignment {
+            target,
+            value,
+            result_target: None,
+            conditional_value_temp: None,
+            ..
+        } => {
+            matches!(&target.kind, ExprKind::Variable(name) if state.has_str_slot(name))
+                && expr_keeps_str_slot(value, state)
+        }
         ExprKind::Cast {
             target: CastType::String,
             expr: inner,
@@ -1121,11 +1130,11 @@ mod tests {
         );
     }
 
-    /// An assignment expression returns its string source, so an elided cast borrows it.
+    /// A string-slot assignment returns its source, while a boxed target requires a cast copy.
     #[test]
     fn string_cast_sees_through_assignment_expression() {
         let program = parse(
-            "<?php function assign(string $a, string $b): string { return (string)($a = $b); } function widened(string $a, mixed $b): string { return (string)($a = $b); }",
+            "<?php function assign(string $a, string $b): string { return (string)($a = $b); } function widened(string $a, mixed $b): string { return (string)($a = $b); } function boxed(mixed $a, string $b): string { return (string)($a = $b); }",
         );
         let summaries = collect_return_alias_summaries(&program);
         assert_eq!(
@@ -1133,6 +1142,7 @@ mod tests {
             Some(&ReturnArgAlias::Parameters(BTreeSet::from([1])))
         );
         assert_eq!(summaries.function("widened"), Some(&ReturnArgAlias::None));
+        assert_eq!(summaries.function("boxed"), Some(&ReturnArgAlias::None));
     }
 
     /// Verifies every parameter spelling other than exactly `string` makes the cast COPY.

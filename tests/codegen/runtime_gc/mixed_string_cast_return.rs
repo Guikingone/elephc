@@ -236,6 +236,28 @@ echo $out;
     );
 }
 
+/// A boxed assignment target reloads as Mixed, so the outer string cast creates a copy.
+#[test]
+fn test_string_cast_over_boxed_assignment_result_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function boxed(mixed $a, string $b): string { return (string)($a = $b); }
+$n = 0;
+for ($i = 0; $i < 40; $i++) {
+    $value = str_repeat("b", 3);
+    $n += strlen(boxed(null, $value));
+}
+echo $n;
+"#,
+    );
+    assert_eq!(out.stdout, "120", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "a cast over a boxed assignment result must be owned by the caller: {}",
+        out.stderr
+    );
+}
+
 /// Guard: a wrapper around the operand must not turn an elided cast into a copy.
 ///
 /// `lower_cast` elides on the operand's IR type, and `@$s` and `(string)$s` both leave a
