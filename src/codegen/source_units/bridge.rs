@@ -8,6 +8,10 @@ use crate::ir::Module;
 const LOOKUP: &str = "__rt_source_include_lookup";
 const RESET: &str = "__rt_source_include_reset";
 const PRIME: &str = "__rt_source_include_prime";
+/// Non-zero while every compiler-included guard is known raised, so a repeated prime is a load
+/// and a branch. The prime sets it; `__rt_source_include_reset` and the `--web` request reset,
+/// the only writers that ever lower a guard, clear it.
+pub(in crate::codegen) const PRIMED: &str = "_source_include_primed";
 /// C-ABI name: Magician calls this one by symbol, so it carries the platform prefix.
 const CLASS_LOOKUP: &str = "__elephc_eval_class_deferred_lookup";
 const CLASS_RESET: &str = "__rt_class_deferred_reset";
@@ -166,8 +170,9 @@ pub(in crate::codegen) fn emit_state_helpers(module: &Module, emitter: &mut Emit
     }
     let count = words.len() / 4;
     let table = data.add_words(words);
+    data.add_comm(PRIMED.to_string(), 8);
     emit_lookup(emitter, LOOKUP, "source_lookup", &table, count, OnMatch::Return);
-    emit_reset(emitter, RESET, "source_reset", &table, count);
+    emit_reset(emitter, RESET, "source_reset", &table, count, Some(PRIMED));
     emit_prime(emitter, &table, count);
     emit_deferred_class_helpers(module, emitter, data);
     emit_source_activate(module, emitter, data);
@@ -286,7 +291,7 @@ fn emit_deferred_class_helpers(module: &Module, emitter: &mut Emitter, data: &mu
     let table = data.add_words(words);
     let lookup_symbol = emitter.target.extern_symbol(CLASS_LOOKUP);
     emit_lookup(emitter, &lookup_symbol, "class_lookup", &table, count, OnMatch::Return);
-    emit_reset(emitter, CLASS_RESET, "class_reset", &table, count);
+    emit_reset(emitter, CLASS_RESET, "class_reset", &table, count, None);
 }
 
 /// Encodes one lowercase class name into an assembly-safe, collision-free flag symbol.
@@ -397,7 +402,16 @@ fn emit_lookup(emitter: &mut Emitter, symbol: &str, tag: &str, table: &str, coun
     abi::emit_return(emitter);
 }
 
-fn emit_reset(emitter: &mut Emitter, symbol: &str, tag: &str, table: &str, count: usize) {
+/// Emits a reset callback clearing every guard of `table`, and `primed_flag` too when given (a
+/// lowered guard makes the next prime do real work again).
+fn emit_reset(
+    emitter: &mut Emitter,
+    symbol: &str,
+    tag: &str,
+    table: &str,
+    count: usize,
+    primed_flag: Option<&str>,
+) {
     let prefix = emitter.target.platform.local_label_prefix();
     let again = format!("{prefix}{tag}_again");
     let done = format!("{prefix}{tag}_done");
@@ -407,6 +421,9 @@ fn emit_reset(emitter: &mut Emitter, symbol: &str, tag: &str, table: &str, count
     if emitter.target.arch == Arch::AArch64 { emitter.raw(".align 2"); }
     emitter.label_global(symbol);
     abi::emit_frame_prologue(emitter, 16);
+    if let Some(flag) = primed_flag {
+        abi::emit_store_zero_to_symbol(emitter, flag, 0);
+    }
     abi::emit_symbol_address(emitter, cursor, table);
     abi::emit_load_int_immediate(emitter, remaining, count as i64);
     emitter.label(&again);
@@ -444,17 +461,32 @@ fn emit_reset(emitter: &mut Emitter, symbol: &str, tag: &str, table: &str, count
 ///
 /// Only raises flags — never clears one — so it is safe to repeat at every entry that installs
 /// the include state.
+///
+/// It runs at every eval entry, and the table holds every source of the closed world (thousands
+/// for Symfony), so a repeat walked it all to raise guards that were already raised: 2.4% of a
+/// Symfony request. `PRIMED` records that nothing lowered a guard since the last walk.
 fn emit_prime(emitter: &mut Emitter, table: &str, count: usize) {
     let prefix = emitter.target.platform.local_label_prefix();
     let again = format!("{prefix}source_prime_again");
     let next = format!("{prefix}source_prime_next");
     let done = format!("{prefix}source_prime_done");
+    let already = format!("{prefix}source_prime_already");
     let cursor = abi::int_result_reg(emitter);
     let remaining = abi::int_arg_reg_name(emitter.target, 1);
     let cell = abi::temp_int_reg(emitter.target);
     let flag = abi::int_arg_reg_name(emitter.target, 2);
     if emitter.target.arch == Arch::AArch64 { emitter.raw(".align 2"); }
     emitter.label_global(PRIME);
+    abi::emit_load_symbol_to_reg(emitter, cell, PRIMED, 0);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cbnz {cell}, {already}"));            // every compiler-included guard is still raised
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("test {cell}, {cell}"));               // has a reset lowered a guard since the last walk?
+            emitter.instruction(&format!("jnz {already}"));                     // no — every compiler-included guard is still raised
+        }
+    }
     abi::emit_frame_prologue(emitter, 16);
     abi::emit_symbol_address(emitter, cursor, table);
     abi::emit_load_int_immediate(emitter, remaining, count as i64);
@@ -485,6 +517,8 @@ fn emit_prime(emitter: &mut Emitter, table: &str, count: usize) {
     }
     abi::emit_jump(emitter, &again);
     emitter.label(&done);
+    abi::emit_store_imm_to_symbol(emitter, PRIMED, 0, 1);
     abi::emit_frame_restore(emitter, 16);
+    emitter.label(&already);
     abi::emit_return(emitter);
 }

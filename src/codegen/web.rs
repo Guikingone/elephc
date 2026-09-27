@@ -348,6 +348,10 @@ fn emit_native_include_resets(emitter: &mut Emitter, module: &Module, data: &Dat
             if data.has_comm(&label) { abi::emit_store_zero_to_symbol(emitter, &label, 0); }
         }
     }
+    // The guards just went down, so the next prime has real work again.
+    if data.has_comm(super::source_units::PRIMED) {
+        abi::emit_store_zero_to_symbol(emitter, super::source_units::PRIMED, 0);
+    }
 }
 
 /// Clears the LOAD flag of every class the closed world carries only to answer a probe.
