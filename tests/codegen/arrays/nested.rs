@@ -49,6 +49,36 @@ echo is_array($values[0]) ? "array" : "other", ":", $values[0][0];
     assert_eq!(out, "array:5");
 }
 
+/// Keeps a nested scoped constant's integer element type through an untyped arrow return.
+#[test]
+fn test_indexed_array_nested_class_constant_in_untyped_arrow_return() {
+    let out = compile_and_run(
+        r#"<?php
+class NumberValue { public const N = 5; }
+class NumberList { public const ITEMS = [NumberValue::N]; }
+$make = fn() => [NumberList::ITEMS];
+$values = $make();
+echo gettype($values[0][0]), ":", $values[0][0];
+"#,
+    );
+    assert_eq!(out, "integer:5");
+}
+
+/// Keeps a nested scoped constant's integer element type through an untyped closure return.
+#[test]
+fn test_indexed_array_nested_class_constant_in_untyped_closure_return() {
+    let out = compile_and_run(
+        r#"<?php
+class NumberValue { public const N = 5; }
+class NumberList { public const ITEMS = [NumberValue::N]; }
+$make = function () { return [NumberList::ITEMS]; };
+$values = $make();
+echo gettype($values[0][0]), ":", $values[0][0];
+"#,
+    );
+    assert_eq!(out, "integer:5");
+}
+
 // --- Phase 14: Multi-dimensional arrays ---
 
 /// Compiles a 2D numeric array literal and verifies indexed access to all four elements.

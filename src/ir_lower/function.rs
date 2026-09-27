@@ -2293,7 +2293,7 @@ fn direct_closure_return_type(
 /// `return $obj->prop` where `$obj` is a captured/parameter object of a known class adopts
 /// the property's declared type, so a `fn &() => $o->items` closure returns the array type
 /// rather than the syntactic integer default. An array literal built out of those same
-/// variables resolves its element/value slots the same way (see
+/// variables and scoped constants resolves its element/value slots the same way (see
 /// `direct_closure_return_array_type`).
 fn direct_closure_return_expr_type(
     expr: &crate::parser::ast::Expr,
@@ -2371,7 +2371,14 @@ fn direct_closure_return_expr_type(
             .get(normalized)
             .and_then(|class_info| class_info.constants.get(name))
         {
-            return crate::types::checker::infer_expr_type_syntactic(value);
+            return direct_closure_return_expr_type(
+                value,
+                captures,
+                params,
+                classes,
+                functions,
+                builtin_call_types,
+            );
         }
     }
     if let ExprKind::Variable(name) = &expr.kind {
