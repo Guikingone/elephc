@@ -315,7 +315,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     StrSplit,
     /// Dispatches `str_word_count(...)`.
     StrWordCount,
-    /// Dispatches the whole `iconv*` extension family.
+    /// Dispatches the whole `iconv*` extension family and the `elephc-iconv`-backed
+    /// `mb_strtoupper(...)` / `mb_strtolower(...)` pair.
     Iconv,
     /// Dispatches `strlen(...)` and `mb_strlen(...)`.
     Strlen,

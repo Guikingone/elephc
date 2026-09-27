@@ -787,3 +787,52 @@ echo eval('$r = new \ReflectionFunction($c(...)); return $r->getNumberOfParamete
 
     assert_eq!(out, "2same");
 }
+
+/// Verifies `mb_strtoupper()` / `mb_strtolower()` give eval and compiled code the same bytes.
+///
+/// Both backends call the same `elephc-iconv` engine, so a divergence here means the AOT
+/// staging or the Magician binding changed an argument on its way in (a null encoding cast
+/// to `""`, say) rather than a difference in the case tables.
+#[test]
+fn test_eval_mb_case_mapping_matches_compiled() {
+    let out = compile_and_run(
+        r#"<?php
+$compiled = [
+    mb_strtoupper("abc"),
+    mb_strtoupper("straße éà ǆ ﬁ"),
+    mb_strtolower("İSTANBUL ΣΑΣ"),
+    mb_strtoupper("a\xffb"),
+    mb_strtoupper("héllo", "utf8"),
+    mb_strtoupper("\xe9t\xe9", "ISO-8859-1"),
+    mb_strtolower("ÀB", null),
+];
+$evaluated = eval('return [
+    mb_strtoupper("abc"),
+    mb_strtoupper("straße éà ǆ ﬁ"),
+    mb_strtolower("İSTANBUL ΣΑΣ"),
+    mb_strtoupper("a\xffb"),
+    mb_strtoupper("héllo", "utf8"),
+    mb_strtoupper("\xe9t\xe9", "ISO-8859-1"),
+    mb_strtolower("ÀB", null),
+];');
+foreach ($compiled as $index => $value) {
+    echo $value === $evaluated[$index] ? "=" : "!", bin2hex($evaluated[$index]), "\n";
+}
+echo eval('try { mb_strtoupper("a", "nope"); } catch (ValueError $e) { return get_class($e) . ": " . $e->getMessage(); }'), "\n";
+echo eval('return function_exists("mb_strtoupper") && function_exists("MB_STRTOLOWER") ? "visible" : "hidden";');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "=414243\n\
+=5354524153534520c389c38020c784204649\n\
+=69cc877374616e62756c20cf83ceb1cf82\n\
+=413f42\n\
+=48c3894c4c4f\n\
+=c954c9\n\
+=c3a062\n\
+ValueError: mb_strtoupper(): Argument #2 ($encoding) must be a valid encoding, \"nope\" given\n\
+visible"
+    );
+}

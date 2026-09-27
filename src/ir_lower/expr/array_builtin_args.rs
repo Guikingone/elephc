@@ -162,6 +162,9 @@ pub(super) fn lower_builtin_call_args(
         crate::builtins::semantics::BuiltinArgumentLowering::Getenv => {
             lower_getenv_args(ctx, sig, args)
         }
+        crate::builtins::semantics::BuiltinArgumentLowering::NullableStringOperands => {
+            lower_nullable_string_operand_args(ctx, &canonical, sig, args)
+        }
         crate::builtins::semantics::BuiltinArgumentLowering::PcntlPreserveOmitted => {
             lower_args_with_signature_trimming_trailing_defaults(ctx, sig, args)
         }
@@ -621,6 +624,35 @@ fn lower_getenv_args(
     let mut sig = sig.cloned();
     if let Some(sig) = sig.as_mut() {
         crate::ir::RuntimeFnId::Getenv.refine_first_class_callable_sig(sig);
+    }
+    if !crate::types::call_args::has_named_args(args) && !args.iter().any(is_spread_arg) {
+        lower_positional_builtin_args_with_signature(ctx, sig.as_ref(), args)
+    } else {
+        lower_args_with_signature(ctx, sig.as_ref(), args)
+    }
+}
+
+/// Lowers a builtin's declared `?string` parameters as `string|null` so a runtime `null`
+/// is not cast to `""` before the backend can tell the two apart.
+fn lower_nullable_string_operand_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    canonical: &str,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    let mut sig = sig.cloned();
+    if let (Some(sig), Some(def)) = (sig.as_mut(), crate::builtins::registry::lookup(canonical)) {
+        for (index, param) in def.spec.params.iter().enumerate() {
+            let elephc_builtin_contract::TypeSpec::Nullable(inner) = param.ty else {
+                continue;
+            };
+            if !matches!(inner, elephc_builtin_contract::TypeSpec::Str) {
+                continue;
+            }
+            if let Some((_, ty)) = sig.params.get_mut(index) {
+                *ty = PhpType::Union(vec![PhpType::Str, PhpType::Void]);
+            }
+        }
     }
     if !crate::types::call_args::has_named_args(args) && !args.iter().any(is_spread_arg) {
         lower_positional_builtin_args_with_signature(ctx, sig.as_ref(), args)

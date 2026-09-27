@@ -2,7 +2,7 @@
 title: "ucwords() — internals"
 description: "Compiler internals for ucwords(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 879
+  order: 881
 ---
 
 ## `ucwords()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/ucwords.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/ucwords.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:668](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L668) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

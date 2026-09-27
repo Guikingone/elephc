@@ -2,7 +2,7 @@
 title: "xmlwriter_end_dtd_entity()"
 description: "Ends the current DTD entity declaration."
 sidebar:
-  order: 982
+  order: 984
 ---
 
 ## xmlwriter_end_dtd_entity()

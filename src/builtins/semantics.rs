@@ -178,6 +178,14 @@ pub enum BuiltinArgumentLowering {
     JsonDecode,
     /// Preserve getenv's nullable name until runtime selects lookup or enumeration.
     Getenv,
+    /// Keep every `?string` operand nullable so a runtime `null` still reaches the backend.
+    ///
+    /// The registry signature erases `?string` to `string`, which makes argument planning
+    /// cast a boxed operand to a string and turns a runtime `null` into `""`. For a builtin
+    /// whose backend gives `null` a meaning of its own (`mb_strtoupper()` selects the default
+    /// encoding for `null` but rejects `""`), the declared `?string` parameters are lowered as
+    /// `string|null` instead and the backend tests the boxed tag itself.
+    NullableStringOperands,
     /// Keep source-sensitive omitted PCNTL defaults absent after named/spread planning.
     PcntlPreserveOmitted,
     /// Lower a statically known callback descriptor before its subject.

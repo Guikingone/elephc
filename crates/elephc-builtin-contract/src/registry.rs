@@ -166,7 +166,8 @@ mod tests {
         // `__elephc_diag_suppressed` landed without moving this count, and the sodium surface adds
         // six (the four `sodium_crypto_box_*` declarations and `__elephc_sodium_box` /
         // `__elephc_sodium_status`). Two more have no catalog change since 1071 to name them.
-        assert_eq!(contracts().len(), 1084 + curl_surface);
+        // mbstring case mapping adds `mb_strtolower` and `mb_strtoupper`.
+        assert_eq!(contracts().len(), 1086 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

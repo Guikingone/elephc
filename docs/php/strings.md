@@ -160,6 +160,8 @@ documented divergence (PHP's `E_DEPRECATED` notices are not emitted).
 |---|---|---|
 | `strlen()` | `strlen($str): int` | Returns string length |
 | `mb_strlen()` | `mb_strlen($str, $encoding = null): int` | Character count in the given encoding. An omitted or `null` encoding counts UTF-8, grouping malformed sequences like mbstring; `8bit`/`binary`/`7bit` return the byte length; other encodings are decoded through the system `iconv`. An unknown encoding name throws `\ValueError` |
+| `mb_strtoupper()` | `mb_strtoupper($str, $encoding = null): string` | Uppercase with mbstring's full Unicode case mapping (`ß` becomes `SS`). An omitted or `null` encoding means UTF-8; an unknown encoding name throws `\ValueError`. See [the case-mapping notes](#mb_strtoupper-and-mb_strtolower) |
+| `mb_strtolower()` | `mb_strtolower($str, $encoding = null): string` | Lowercase with mbstring's full Unicode case mapping, including the Greek final-sigma rule (`ΣΑΣ` becomes `σας`) |
 | `iconv_strlen()` | `iconv_strlen($str, $encoding = null): int\|false` | Character count through the platform `iconv`. See [iconv](./iconv.md) for the whole extension |
 | `substr()` | `substr($str, $start [, $len]): string` | Extract a substring. Negative `$start` counts from the end; a negative `$len` omits that many trailing bytes from the selected suffix, matching PHP |
 | `strpos()` | `strpos($haystack, $needle, $offset = 0): int\|false` | Find first occurrence at or after `$offset`. A negative `$offset` counts from the end; one outside the haystack raises `ValueError`. Returns `false` if not found |
@@ -249,6 +251,44 @@ documented divergence (PHP's `E_DEPRECATED` notices are not emitted).
 | `ctype_digit()` | `ctype_digit($str): bool` | All chars are 0-9 |
 | `ctype_alnum()` | `ctype_alnum($str): bool` | All chars are alphanumeric |
 | `ctype_space()` | `ctype_space($str): bool` | All chars are whitespace |
+
+#### `mb_strtoupper()` and `mb_strtolower()`
+
+Both functions reproduce php 8.5's mbstring byte for byte, in compiled code and inside
+`eval()` alike (the two backends share one implementation):
+
+- **Full case mapping.** Mappings follow Unicode's SpecialCasing rules, so a character can
+  expand: `mb_strtoupper("straße ﬁ")` is `"STRASSE FI"` and `mb_strtolower("İ")` is `"i̇"`
+  (`i` plus U+0307). Titlecase digraphs map to their pair (`ǅ` uppercases to `Ǆ`).
+- **Final sigma.** `mb_strtolower()` turns a capital sigma into `ς` when a cased letter
+  precedes it and none follows (skipping case-ignorable characters such as `'` or `.`), and
+  into `σ` otherwise: `mb_strtolower("ΣΑΣ")` is `"σας"`.
+- **Invalid input.** Each maximal invalid UTF-8 subpart becomes one `?`:
+  `mb_strtoupper("a\xFFb")` is `"A?B"`, and a truncated `"\xE2\x82"` is a single `?`.
+- **Encodings.** Omitted or `null` means UTF-8 (elephc has no `mb_internal_encoding()`).
+  Names are matched against mbstring's list, case-insensitively, with its aliases (`utf8`,
+  `latin1`, `cp1252`, ...). The result is exact for UTF-8, ASCII, `7bit`, `8bit`/`binary`,
+  every single-byte encoding mbstring ships (`ISO-8859-*`, `Windows-1251/1252/1254`,
+  `CP866`, `CP850`, `KOI8-R`, `KOI8-U`, `ArmSCII-8`), and the UTF-16, UTF-32, UCS-2 and UCS-4
+  families (BOM detection included). A character the target encoding cannot hold becomes `?`
+  (`mb_strtoupper("\xFF", "ISO-8859-1")` is `"?"`, because `Ÿ` is not in Latin-1), and
+  ISO-8859-9 applies the Turkish dotted/dotless `i` rules.
+- **Unknown names** throw `\ValueError` with php's message, quoting the name:
+  `mb_strtoupper(): Argument #2 ($encoding) must be a valid encoding, "nope" given`.
+
+Two documented differences remain:
+
+- The CJK encodings `EUC-JP`, `SJIS`, `eucJP-win`, `EUC-JP-2004`, `SJIS-2004`, `CP932`,
+  `SJIS-win`, `GB18030`, `EUC-CN`, `CP936`, `BIG-5`, `CP950`, `EUC-KR` and `UHC` go through
+  the platform `iconv`. Valid text converts exactly as in php, but a byte the platform
+  rejects always becomes one `?` where mbstring may map or group it differently, and a
+  platform whose `iconv` lacks the charset throws the unsupported-encoding `\ValueError`
+  below.
+- The remaining names mbstring accepts (`UTF-7`, `UTF7-IMAP`, `HZ`, `EUC-TW`, the
+  `ISO-2022-*`/`JIS`/`CP5022x` family, the `SJIS-mac` and carrier `SJIS-Mobile#*` /
+  `UTF-8-Mobile#*` variants, and the deprecated `BASE64`, `UUENCODE`, `HTML-ENTITIES` and
+  `Quoted-Printable` pseudo-encodings) throw `\ValueError`:
+  `... Argument #2 ($encoding) must be an encoding elephc supports, "UTF-7" given`.
 
 #### `explode()` and the `$limit` argument
 

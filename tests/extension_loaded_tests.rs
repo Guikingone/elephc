@@ -643,14 +643,14 @@ fn extension_surface_completeness_matches_php_baseline() {
 fn partially_covered_extensions_report_not_loaded() {
     let dir = make_test_dir("ext_partial");
     let src = "<?php \
-        var_dump(extension_loaded('mbstring'), function_exists('mb_strlen'), function_exists('mb_strtoupper')); \
+        var_dump(extension_loaded('mbstring'), function_exists('mb_strtoupper'), function_exists('mb_substr')); \
         var_dump(extension_loaded('ctype'), function_exists('ctype_alnum'), function_exists('ctype_upper')); \
         var_dump(extension_loaded('iconv'), function_exists('iconv'), function_exists('iconv_strlen'));";
     let bin = compile_with_flags(&dir, src, "app", &[]);
     let out = run_binary(&bin);
     assert_eq!(
         out,
-        // mbstring: 2 of php's 65, so not loaded even though `mb_strlen` is real.
+        // mbstring: 4 of php's 65, so not loaded even though `mb_strtoupper` is real.
         // ctype: 4 of php's 11, same shape.
         // iconv: 10 of php's 10, so loaded, with no gap behind it.
         "bool(false)\nbool(true)\nbool(false)\n\

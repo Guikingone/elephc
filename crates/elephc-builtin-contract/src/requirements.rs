@@ -172,6 +172,9 @@ pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement]
             "iconv_strpos",
             "iconv_strrpos",
             "iconv_substr",
+            // mbstring's case mapping lives in the same bridge crate.
+            "mb_strtolower",
+            "mb_strtoupper",
         ],
     ) {
         return ICONV_BRIDGE;

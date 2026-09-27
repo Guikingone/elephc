@@ -2,7 +2,7 @@
 title: "sodium_crypto_box_seal_open() — internals"
 description: "Compiler internals for sodium_crypto_box_seal_open(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 842
+  order: 844
 ---
 
 ## `sodium_crypto_box_seal_open()` — internals

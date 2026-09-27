@@ -17,6 +17,8 @@ mod transform;
 mod encoding;
 #[path = "strings/iconv.rs"]
 mod iconv;
+#[path = "strings/mb_case.rs"]
+mod mb_case;
 #[path = "strings/formatting.rs"]
 mod formatting;
 #[path = "strings/interpolation_and_hashes.rs"]

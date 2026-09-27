@@ -2,7 +2,7 @@
 title: "session_register_shutdown()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 939
+  order: 941
 ---
 
 ## session_register_shutdown()

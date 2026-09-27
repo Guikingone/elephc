@@ -2,7 +2,7 @@
 title: "session_encode() — internals"
 description: "Compiler internals for session_encode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 932
+  order: 934
 ---
 
 ## `session_encode()` — internals

@@ -2,7 +2,7 @@
 title: "is_real()"
 description: "Alias of is_float()."
 sidebar:
-  order: 909
+  order: 911
 ---
 
 ## is_real()

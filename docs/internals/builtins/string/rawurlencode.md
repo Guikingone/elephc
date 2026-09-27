@@ -2,7 +2,7 @@
 title: "rawurlencode() — internals"
 description: "Compiler internals for rawurlencode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 836
+  order: 838
 ---
 
 ## `rawurlencode()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/rawurlencode.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/rawurlencode.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:668](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L668) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -2,7 +2,7 @@
 title: "__elephc_curl_share_init() — internals"
 description: "Compiler internals for __elephc_curl_share_init(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1056
+  order: 1058
 ---
 
 ## `__elephc_curl_share_init()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_share_init.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_share_init.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:668](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L668) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

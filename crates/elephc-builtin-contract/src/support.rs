@@ -440,8 +440,9 @@ mod tests {
         // These counts had drifted before the sodium surface landed: the catalog grew and eval
         // homes landed (the thirteen names taken out of `EVAL_IMPLEMENTATION_PENDING`, among
         // them) without the numbers moving. Only the sodium share is named per count below.
-        // Sodium: the four `sodium_crypto_box_*` eval homes.
-        assert_eq!(eval_registry, 633 + curl_surface);
+        // Sodium: the four `sodium_crypto_box_*` eval homes. mbstring case mapping: the
+        // `mb_strtoupper` / `mb_strtolower` homes.
+        assert_eq!(eval_registry, 635 + curl_surface);
         // 82 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use. Sodium: `__elephc_sodium_box` and
         // `__elephc_sodium_status`.
@@ -455,8 +456,9 @@ mod tests {
         // internal `__elephc_curl_*` entry points, and the ten `ext/xml` registry
         // builtins (`xml_parse_into_struct` plus the nine handler setters).
         // Twenty of this branch's 23 added contracts are registry-backed here.
-        // Sodium: `__elephc_sodium_box` and `__elephc_sodium_status`.
-        assert_eq!(aot_registry, 657);
+        // Sodium: `__elephc_sodium_box` and `__elephc_sodium_status`. mbstring case mapping:
+        // `mb_strtoupper` and `mb_strtolower`.
+        assert_eq!(aot_registry, 659);
         // Constructs, dedicated syntax and hash surfaces, the prelude-provided and
         // name-resolver-rewritten contracts (54 of them the xml prelude, seven the `--web`
         // handler stack this branch contracted), and the curl prelude when published.
@@ -518,7 +520,7 @@ mod tests {
         assert_eq!(shared_runtime, 20);
         assert_eq!(hybrid_adapter, 2);
         // Moves in step with `eval_registry` above: every newly bound eval home is an adapter.
-        assert_eq!(interpreter_adapter, 611 + curl_surface);
+        assert_eq!(interpreter_adapter, 613 + curl_surface);
         // Drifted with the counts in `every_contract_has_a_backend_support_record`; sodium's
         // share is its two internal builtins, which eval never exposes.
         assert_eq!(unsupported, 451);

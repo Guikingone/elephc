@@ -60,6 +60,18 @@ expect_builtin_arity_error!(
     "mb_strlen() takes 1 or 2 arguments"
 );
 
+expect_builtin_arity_error!(
+    test_error_mb_strtoupper_wrong_args,
+    "<?php mb_strtoupper();",
+    "mb_strtoupper() takes 1 or 2 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_mb_strtolower_too_many_args,
+    "<?php mb_strtolower('a', 'UTF-8', 1);",
+    "mb_strtolower() takes 1 or 2 arguments"
+);
+
 /// Verifies the OpenSSL IV-length helper rejects a missing cipher name.
 #[test]
 fn test_error_openssl_cipher_iv_length_wrong_args() {
@@ -102,6 +114,24 @@ fn test_error_mb_strlen_encoding_type() {
     expect_error(
         "<?php mb_strlen('abc', 123);",
         "mb_strlen() encoding argument must be string or null",
+    );
+}
+
+/// Verifies that `mb_strtoupper()` rejects a statically non-string subject.
+#[test]
+fn test_error_mb_strtoupper_string_type() {
+    expect_error(
+        "<?php mb_strtoupper([1, 2]);",
+        "mb_strtoupper() string argument must be string",
+    );
+}
+
+/// Verifies that `mb_strtolower()` accepts only string or null encoding arguments.
+#[test]
+fn test_error_mb_strtolower_encoding_type() {
+    expect_error(
+        "<?php mb_strtolower('abc', [1]);",
+        "mb_strtolower() encoding argument must be string or null",
     );
 }
 

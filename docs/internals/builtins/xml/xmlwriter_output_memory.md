@@ -2,7 +2,7 @@
 title: "xmlwriter_output_memory() — internals"
 description: "Compiler internals for xmlwriter_output_memory(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 989
+  order: 991
 ---
 
 ## `xmlwriter_output_memory()` — internals

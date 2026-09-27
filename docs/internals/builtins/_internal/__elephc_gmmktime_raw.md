@@ -2,7 +2,7 @@
 title: "__elephc_gmmktime_raw() — internals"
 description: "Compiler internals for __elephc_gmmktime_raw(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1063
+  order: 1065
 ---
 
 ## `__elephc_gmmktime_raw()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_gmmktime_raw.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_gmmktime_raw.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:668](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L668) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

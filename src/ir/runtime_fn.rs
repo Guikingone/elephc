@@ -598,6 +598,8 @@ pub enum RuntimeFnId {
     Ltrim,
     MbEregMatch,
     MbStrlen,
+    MbStrtolower,
+    MbStrtoupper,
     Md5,
     NumberFormat,
     Ord,
@@ -884,6 +886,12 @@ impl RuntimeFnId {
                 // Preserve null in both direct operands and generated callable wrappers.
                 if let Some((_, name_ty)) = sig.params.get_mut(0) {
                     *name_ty = PhpType::Union(vec![PhpType::Str, PhpType::Void]);
+                }
+            }
+            RuntimeFnId::MbStrtolower | RuntimeFnId::MbStrtoupper => {
+                // A null `$encoding` selects UTF-8 while `""` is rejected, so keep it nullable.
+                if let Some((_, encoding_ty)) = sig.params.get_mut(1) {
+                    *encoding_ty = PhpType::Union(vec![PhpType::Str, PhpType::Void]);
                 }
             }
             RuntimeFnId::PregReplaceCallback => {
@@ -1312,6 +1320,16 @@ impl RuntimeFnId {
                         | crate::ir::Effects::MAY_WARN.bits(),
                 )
             }
+            // mbstring's case mapping reads the subject and encoding name, allocates the
+            // result, and throws a `ValueError` for a refused encoding; it touches no process
+            // state and prints nothing, so an unused call may only go once it cannot throw.
+            RuntimeFnId::MbStrtolower | RuntimeFnId::MbStrtoupper => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_HEAP.bits()
+                        | crate::ir::Effects::ALLOC_HEAP.bits()
+                        | crate::ir::Effects::MAY_THROW.bits(),
+                )
+            }
             // The iconv family reads string payloads, allocates its results, consults and
             // updates the process-wide encoding trio, prints php-src's diagnostics, and can
             // throw the out-of-range `$offset` ValueError.
@@ -1494,6 +1512,8 @@ impl RuntimeFnId {
             | RuntimeFnId::IconvStrpos
             | RuntimeFnId::IconvStrrpos
             | RuntimeFnId::IconvSubstr
+            | RuntimeFnId::MbStrtolower
+            | RuntimeFnId::MbStrtoupper
             | RuntimeFnId::Md5
             | RuntimeFnId::Sha1
             | RuntimeFnId::SodiumBox
@@ -1612,7 +1632,9 @@ impl RuntimeFnId {
             | RuntimeFnId::IconvStrlen
             | RuntimeFnId::IconvStrpos
             | RuntimeFnId::IconvStrrpos
-            | RuntimeFnId::IconvSubstr => &[
+            | RuntimeFnId::IconvSubstr
+            | RuntimeFnId::MbStrtolower
+            | RuntimeFnId::MbStrtoupper => &[
                 BuiltinRequirement::Bridge("elephc_iconv"),
                 BuiltinRequirement::MacOsLibrary("iconv"),
             ],
@@ -1860,6 +1882,9 @@ impl RuntimeFnId {
                 | RuntimeFnId::IconvStrpos
                 | RuntimeFnId::IconvStrrpos
                 | RuntimeFnId::IconvSubstr
+                // mbstring's case mapping persists a new runtime string for every call.
+                | RuntimeFnId::MbStrtolower
+                | RuntimeFnId::MbStrtoupper
         ) {
             return BuiltinResultOwnership::Fresh;
         }
@@ -2633,6 +2658,8 @@ impl RuntimeFnId {
             RuntimeFnId::Ltrim => "ltrim",
             RuntimeFnId::MbEregMatch => "mb_ereg_match",
             RuntimeFnId::MbStrlen => "mb_strlen",
+            RuntimeFnId::MbStrtolower => "mb_strtolower",
+            RuntimeFnId::MbStrtoupper => "mb_strtoupper",
             RuntimeFnId::Md5 => "md5",
             RuntimeFnId::NumberFormat => "number_format",
             RuntimeFnId::Octdec => "octdec",

@@ -188,6 +188,7 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
         BuiltinArgumentLowering::Date => "date",
         BuiltinArgumentLowering::JsonDecode => "json_decode",
         BuiltinArgumentLowering::Getenv => "getenv",
+        BuiltinArgumentLowering::NullableStringOperands => "nullable_string_operands",
         BuiltinArgumentLowering::PcntlPreserveOmitted => "pcntl_preserve_omitted",
         BuiltinArgumentLowering::PregReplaceCallback => "preg_replace_callback",
         BuiltinArgumentLowering::PositionalRegex => "positional_regex",

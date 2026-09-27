@@ -450,7 +450,7 @@ crates/
 ├── elephc-bcmath/             Pure-Rust arbitrary-precision decimal bridge for PHP `bc*()` functions
 ├── elephc-crypto/             Pure-Rust hashing/HMAC bridge staticlib behind PHP `hash()` / `hash_hmac()`
 ├── elephc-curl/               Static libcurl easy, multi, share, callback, and multipart bridge
-├── elephc-iconv/              Charset-conversion and RFC 2047 MIME bridge staticlib behind PHP `iconv*()`
+├── elephc-iconv/              Charset-conversion and RFC 2047 MIME bridge staticlib behind PHP `iconv*()` and `mb_strtoupper()`/`mb_strtolower()`
 ├── elephc-image/              Pure-Rust image bridge staticlib (GD, Exif, Imagick, Gmagick, Cairo C ABI)
 ├── elephc-instr/              Exact profiling instrumentation runtime
 ├── elephc-magician/           Optional EvalIR parser/interpreter staticlib for dynamic eval

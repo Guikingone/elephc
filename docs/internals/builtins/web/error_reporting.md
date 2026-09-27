@@ -2,7 +2,7 @@
 title: "error_reporting() — internals"
 description: "Compiler internals for error_reporting(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 917
+  order: 919
 ---
 
 ## `error_reporting()` — internals

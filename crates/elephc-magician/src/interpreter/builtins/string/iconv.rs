@@ -1,6 +1,6 @@
 //! Purpose:
 //! Declarative eval registry entry for PHP's `iconv()` plus the glue every iconv eval
-//! builtin shares.
+//! builtin shares, including the mbstring case pair the same engine crate implements.
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::string` and the sibling `iconv_*` home files.
@@ -204,6 +204,20 @@ pub(in crate::interpreter) fn eval_iconv_values(
         ("iconv_set_encoding", 2) => super::iconv_set_encoding::eval_iconv_set_encoding_result(
             evaluated_args[0],
             evaluated_args[1],
+            values,
+        ),
+        ("mb_strtoupper", 1..=2) => super::mb_strtoupper::eval_mb_convert_case_result(
+            elephc_iconv::CaseMode::Upper,
+            evaluated_args[0],
+            argument(1),
+            context,
+            values,
+        ),
+        ("mb_strtolower", 1..=2) => super::mb_strtoupper::eval_mb_convert_case_result(
+            elephc_iconv::CaseMode::Lower,
+            evaluated_args[0],
+            argument(1),
+            context,
             values,
         ),
         _ => Err(EvalStatus::RuntimeFatal),

@@ -2,7 +2,7 @@
 title: "sodium_crypto_box_publickey() — internals"
 description: "Compiler internals for sodium_crypto_box_publickey(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 840
+  order: 842
 ---
 
 ## `sodium_crypto_box_publickey()` — internals

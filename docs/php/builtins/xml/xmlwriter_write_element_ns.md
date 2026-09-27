@@ -2,7 +2,7 @@
 title: "xmlwriter_write_element_ns()"
 description: "Writes a complete namespaced element."
 sidebar:
-  order: 1014
+  order: 1016
 ---
 
 ## xmlwriter_write_element_ns()

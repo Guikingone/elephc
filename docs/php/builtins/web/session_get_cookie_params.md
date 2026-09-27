@@ -2,7 +2,7 @@
 title: "session_get_cookie_params()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 934
+  order: 936
 ---
 
 ## session_get_cookie_params()
