@@ -19,16 +19,7 @@
 //!   at the scratch cursor would run off the end of the 64 KiB buffer once an earlier result
 //!   has pushed the cursor near it.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch, platform::Platform};
-
-/// The `AF_INET6` value of the target's own headers; see `inet_pton`'s copy for why it matters.
-fn af_inet6(platform: Platform) -> i64 {
-    match platform {
-        Platform::MacOS => 30,
-        Platform::Linux => 10,
-        Platform::Windows => 23,
-    }
-}
+use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// inet_ntop: render a 4-byte IPv4 or 16-byte IPv6 binary address as text.
 /// Input:  x0 = binary pointer, x1 = binary length
@@ -39,7 +30,7 @@ pub fn emit_inet_ntop(emitter: &mut Emitter) {
         return;
     }
 
-    let inet6 = af_inet6(emitter.platform);
+    let inet6 = emitter.platform.af_inet6();
 
     emitter.blank();
     emitter.comment("--- runtime: inet_ntop ---");
@@ -121,7 +112,7 @@ pub fn emit_inet_ntop(emitter: &mut Emitter) {
 
 /// Emits the Linux x86_64 string runtime helper for inet ntop.
 fn emit_inet_ntop_linux_x86_64(emitter: &mut Emitter) {
-    let inet6 = af_inet6(emitter.platform);
+    let inet6 = emitter.platform.af_inet6();
 
     emitter.blank();
     emitter.comment("--- runtime: inet_ntop ---");
