@@ -29698,7 +29698,7 @@
     "eval_only": false,
     "examples": [],
     "in_catalog": true,
-    "is_extension": false,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -54321,7 +54321,7 @@
     "eval_only": false,
     "examples": [],
     "in_catalog": true,
-    "is_extension": false,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -72278,7 +72278,7 @@
     "eval_only": false,
     "examples": [],
     "in_catalog": true,
-    "is_extension": false,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -77040,7 +77040,7 @@
     "eval_only": false,
     "examples": [],
     "in_catalog": true,
-    "is_extension": false,
+    "is_extension": true,
     "is_internal": false,
     "lowering": {
       "checker_file": null,

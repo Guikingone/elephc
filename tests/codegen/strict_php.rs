@@ -135,10 +135,14 @@ function ptr_get(int $x): int { return $x; }
 echo var_export(function_exists('ptr_get'), true), "\n";
 echo var_export(function_exists('zval_pack'), true), "\n";
 echo var_export(function_exists('buffer_new'), true), "\n";
+echo var_export(function_exists('clamp'), true), "\n";
+echo var_export(function_exists('log2'), true), "\n";
+echo var_export(function_exists('grapheme_strrev'), true), "\n";
+echo var_export(function_exists('is_real'), true), "\n";
 echo var_export(function_exists('strlen'), true), "\n";
 "#,
     );
-    assert_eq!(out, "true\nfalse\nfalse\ntrue\n");
+    assert_eq!(out, "true\nfalse\nfalse\nfalse\nfalse\nfalse\nfalse\ntrue\n");
 }
 
 /// Verifies the same `function_exists()` probes report the extension builtins
@@ -149,10 +153,14 @@ fn test_default_mode_function_exists_keeps_extensions() {
         r#"<?php
 echo var_export(function_exists('zval_pack'), true), "\n";
 echo var_export(function_exists('buffer_new'), true), "\n";
+echo var_export(function_exists('clamp'), true), "\n";
+echo var_export(function_exists('log2'), true), "\n";
+echo var_export(function_exists('grapheme_strrev'), true), "\n";
+echo var_export(function_exists('is_real'), true), "\n";
 "#,
         &[],
     );
-    assert_eq!(out, "true\ntrue\n");
+    assert_eq!(out, "true\ntrue\ntrue\ntrue\ntrue\ntrue\n");
 }
 
 /// Verifies a call to an extension builtin fails under strict mode with the

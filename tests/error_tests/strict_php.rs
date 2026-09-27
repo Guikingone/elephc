@@ -47,6 +47,22 @@ fn test_strict_error_extension_builtin_call_is_undefined() {
     expect_strict_error("<?php $x = ptr_get(1);", "Undefined function: ptr_get");
 }
 
+/// Verifies the four Elephc-only catalog functions are unavailable in strict PHP mode.
+#[test]
+fn test_strict_error_elephc_only_catalog_functions_are_undefined() {
+    for (call, name) in [
+        ("clamp(1, 0, 2)", "clamp"),
+        ("log2(8)", "log2"),
+        ("grapheme_strrev('abc')", "grapheme_strrev"),
+        ("is_real(1.0)", "is_real"),
+    ] {
+        expect_strict_error(
+            &format!("<?php {call};"),
+            &format!("Undefined function: {name}"),
+        );
+    }
+}
+
 /// Verifies the undefined-function diagnostic names the disabled extension so
 /// users understand why a working non-strict program stopped compiling.
 #[test]
