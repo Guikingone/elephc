@@ -59,13 +59,21 @@ fn test_emit_frame_helpers_small_frame() {
 }
 
 /// Verifies the frame prologue rejects a frame too small to hold the x29/x30 footer
-/// (`frame_size < 16`) with a clear assertion message in debug builds, instead of
+/// (`frame_size < 16`) with a clear assertion message in every build, instead of
 /// underflowing the `frame_size - 16` footer-offset subtraction into a corrupt offset.
 #[test]
 #[should_panic(expected = "frame_size must reserve the 16-byte frame footer")]
 fn test_emit_frame_prologue_rejects_undersized_frame() {
     let mut emitter = test_emitter();
     emit_frame_prologue(&mut emitter, 8);
+}
+
+/// Verifies frame restore also rejects a frame smaller than its fixed footer in release builds.
+#[test]
+#[should_panic(expected = "frame_size must reserve the 16-byte frame footer")]
+fn test_emit_frame_restore_rejects_undersized_frame() {
+    let mut emitter = test_emitter();
+    emit_frame_restore(&mut emitter, 8);
 }
 
 /// Routes process-exit helpers through the active cdylib exception boundary on both targets.
