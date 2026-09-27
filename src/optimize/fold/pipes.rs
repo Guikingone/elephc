@@ -52,6 +52,10 @@ pub(super) fn try_fold_pure_pipe(value: &Expr, callable: &Expr) -> Option<ExprKi
         CallableTarget::Function(name) => name.as_str(),
         _ => return None,
     };
+    let canonical = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+    if crate::types::checker::builtins::strict_php_hidden_builtin(&canonical) {
+        return None;
+    }
     match (name, &value.kind) {
         // -- length / arithmetic conversions ----------------------------------
         ("strlen", ExprKind::StringLiteral(s)) => {
