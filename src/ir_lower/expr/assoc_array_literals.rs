@@ -206,7 +206,17 @@ pub(super) fn scoped_constant_value_type_for_ir(
         return PhpType::Mixed;
     }
     if let Some(const_expr) = ctx.scoped_constant_value(&class_name, member) {
-        return ir_array_storage_type(infer_expr_type_syntactic(&const_expr));
+        // Keep the existing scalar classification, but resolve containers through the same
+        // literal helpers that lower them. Syntactic inference reports Void for null and can
+        // mistake nested scoped constants for strings inside an array initializer.
+        return match &const_expr.kind {
+            ExprKind::Null => PhpType::Mixed,
+            ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, &const_expr),
+            ExprKind::ArrayLiteralAssoc(pairs) => {
+                assoc_array_literal_type_for_ir(ctx, pairs, &const_expr)
+            }
+            _ => ir_array_storage_type(infer_expr_type_syntactic(&const_expr)),
+        };
     }
     ir_array_storage_type(infer_expr_type_syntactic(value))
 }

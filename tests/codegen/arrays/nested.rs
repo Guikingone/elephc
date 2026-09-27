@@ -22,6 +22,33 @@ echo is_int($values[0]) ? "int" : "other";
     assert_eq!(out, "int");
 }
 
+/// Stores a null class constant as a nullable array element.
+#[test]
+fn test_indexed_array_null_class_constant_element_type() {
+    let out = compile_and_run(
+        r#"<?php
+class EmptyValue { public const NOTHING = null; }
+$values = [EmptyValue::NOTHING];
+echo count($values), ":", is_null($values[0]) ? "null" : "other";
+"#,
+    );
+    assert_eq!(out, "1:null");
+}
+
+/// Resolves nested class constants before stamping the outer array element storage.
+#[test]
+fn test_indexed_array_nested_class_constant_element_type() {
+    let out = compile_and_run(
+        r#"<?php
+class NumberValue { public const N = 5; }
+class NumberList { public const ITEMS = [NumberValue::N]; }
+$values = [NumberList::ITEMS];
+echo is_array($values[0]) ? "array" : "other", ":", $values[0][0];
+"#,
+    );
+    assert_eq!(out, "array:5");
+}
+
 // --- Phase 14: Multi-dimensional arrays ---
 
 /// Compiles a 2D numeric array literal and verifies indexed access to all four elements.
