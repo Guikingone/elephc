@@ -34,9 +34,9 @@ pub enum LinkError {
         name: String,
         /// Archive filename or exact path this bridge resolves to, when known.
         ///
-        /// A bridge the table does not describe — a `LinkOrigin::Bridge` item whose name is
-        /// not in `BRIDGES` — has no archive filename, environment override, or candidate
-        /// list to report, so it renders the bare first line and nothing else.
+        /// An unknown named bridge has no archive path or discovery metadata and renders
+        /// only the first line. An unknown bridge with an exact archive path reports that
+        /// path in `needs:` without inventing fallback locations.
         archive: Option<String>,
         /// Per-bridge directory override that takes priority over every search location.
         env_var: Option<String>,

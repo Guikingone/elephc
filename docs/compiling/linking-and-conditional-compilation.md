@@ -299,6 +299,8 @@ binary can need.
 When an exact archive path in the link plan is missing, empty, a directory, or
 a symbolic link, the error names that path in `needs:` and omits `looked in:`.
 The exact-path plan does not run the fallback search.
+An invalid archive found by fallback discovery also names its path, and retains
+the locations reached before it was found plus the directory override guidance.
 
 #### The `eval()` bridge has two archive names
 
