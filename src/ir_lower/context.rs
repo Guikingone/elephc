@@ -107,6 +107,52 @@ pub(crate) struct ClosureCapture {
     pub value: ValueId,
 }
 
+/// The program's global constants as one body sees them: the prescanned table, borrowed, plus
+/// the constants this body's own `define()` calls registered.
+///
+/// Every body used to start from a CLONE of the whole table so that it could add to it, and every
+/// speculative snapshot cloned it again; on the Symfony build that copying was about 5% of
+/// lowering. A `define()` never replaces a prescanned constant (`register` keeps the first
+/// value), so the two maps never share a key and a lookup may try them in either order.
+#[derive(Clone)]
+pub(crate) struct ConstantScope<'m> {
+    base: &'m HashMap<String, (ExprKind, PhpType)>,
+    added: HashMap<String, (ExprKind, PhpType)>,
+}
+
+impl<'m> ConstantScope<'m> {
+    fn new(base: &'m HashMap<String, (ExprKind, PhpType)>) -> Self {
+        Self {
+            base,
+            added: HashMap::new(),
+        }
+    }
+
+    fn get(&self, name: &str) -> Option<&(ExprKind, PhpType)> {
+        self.base.get(name).or_else(|| self.added.get(name))
+    }
+
+    fn register(&mut self, name: String, value: (ExprKind, PhpType)) {
+        if !self.base.contains_key(&name) {
+            self.added.entry(name).or_insert(value);
+        }
+    }
+
+    /// The table a nested body starts from: this one's base when nothing was added, else a
+    /// merged copy for the caller to lend.
+    pub(crate) fn nested(&self) -> Option<HashMap<String, (ExprKind, PhpType)>> {
+        (!self.added.is_empty()).then(|| {
+            let mut merged = self.base.clone();
+            merged.extend(self.added.iter().map(|(name, value)| (name.clone(), value.clone())));
+            merged
+        })
+    }
+
+    pub(crate) fn base(&self) -> &'m HashMap<String, (ExprKind, PhpType)> {
+        self.base
+    }
+}
+
 /// Rollback point for a speculative statement lowering.
 pub(crate) struct LoweringSnapshot {
     function: Function,
@@ -116,6 +162,7 @@ pub(crate) struct LoweringSnapshot {
     local_kinds: HashMap<String, LocalKind>,
     local_types: TypeEnv,
     initialized_slots: HashSet<LocalSlotId>,
+    /// Only this body's `define()` additions; the prescanned table is borrowed and never changes.
     constants: HashMap<String, (ExprKind, PhpType)>,
     loop_stack: Vec<LoopFrame>,
     finally_stack: Vec<FinallyFrame>,
@@ -325,7 +372,7 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub mixed_storage_store_sites: &'m HashMap<Span, HashSet<String>>,
     /// Function-like scope key paired with loop spans for storage-contract lookup.
     pub loop_storage_scope: String,
-    pub constants: HashMap<String, (ExprKind, PhpType)>,
+    pub constants: ConstantScope<'m>,
     pub top_level_env: TypeEnv,
     pub current_class: Option<String>,
     pub loop_stack: Vec<LoopFrame>,
@@ -493,7 +540,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             retype_sites,
             mixed_storage_store_sites,
             loop_storage_scope,
-            constants: constants.clone(),
+            constants: ConstantScope::new(constants),
             top_level_env,
             current_class,
             loop_stack: Vec::new(),
@@ -552,7 +599,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             local_kinds: self.local_kinds.clone(),
             local_types: self.local_types.clone(),
             initialized_slots: self.initialized_slots.clone(),
-            constants: self.constants.clone(),
+            constants: self.constants.added.clone(),
             loop_stack: self.loop_stack.clone(),
             finally_stack: self.finally_stack.clone(),
             try_handler_stack: self.try_handler_stack.clone(),
@@ -596,7 +643,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.local_kinds = snapshot.local_kinds;
         self.local_types = snapshot.local_types;
         self.initialized_slots = snapshot.initialized_slots;
-        self.constants = snapshot.constants;
+        self.constants.added = snapshot.constants;
         self.loop_stack = snapshot.loop_stack;
         self.finally_stack = snapshot.finally_stack;
         self.try_handler_stack = snapshot.try_handler_stack;
@@ -817,7 +864,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Records a constant discovered while lowering source-order `define()` calls.
     pub(crate) fn register_constant(&mut self, name: String, value: ExprKind, ty: PhpType) {
-        self.constants.entry(name).or_insert((value, ty));
+        self.constants.register(name, (value, ty));
     }
 
     /// Updates the current known PHP type for a local.

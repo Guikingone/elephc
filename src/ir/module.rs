@@ -259,12 +259,23 @@ pub struct DataPool {
     pub class_names: Vec<String>,
     pub method_names: Vec<String>,
     pub property_names: Vec<String>,
+    /// Where each interned name sits in its vector. See `intern_indexed`.
+    index: InternIndex,
+}
+
+/// Position of every interned value, per interned vector.
+#[derive(Debug, Clone, Default)]
+struct InternIndex {
+    strings: crate::fast_hash::FastMap<String, u32>,
+    global_names: crate::fast_hash::FastMap<String, u32>,
+    function_names: crate::fast_hash::FastMap<String, u32>,
+    class_names: crate::fast_hash::FastMap<String, u32>,
 }
 
 impl DataPool {
     /// Interns a string literal and returns its stable data identifier.
     pub fn intern_string(&mut self, value: &str) -> DataId {
-        intern_string_vec(&mut self.strings, value)
+        intern_indexed(&mut self.strings, &mut self.index.strings, value)
     }
 
     /// Interns a floating-point literal by exact bit pattern.
@@ -283,36 +294,55 @@ impl DataPool {
 
     /// Interns a global symbol name and returns its stable data identifier.
     pub fn intern_global_name(&mut self, value: &str) -> DataId {
-        intern_string_vec(&mut self.global_names, value)
+        intern_indexed(&mut self.global_names, &mut self.index.global_names, value)
     }
 
     /// Interns a function name and returns its stable data identifier.
     pub fn intern_function_name(&mut self, value: &str) -> DataId {
-        intern_string_vec(&mut self.function_names, value)
+        intern_indexed(&mut self.function_names, &mut self.index.function_names, value)
     }
 
     /// Returns the identifier of an already interned function name, without interning it.
     pub fn function_name_id(&self, value: &str) -> Option<DataId> {
-        self.function_names
-            .iter()
-            .position(|existing| existing == value)
-            .map(|idx| DataId::from_raw(idx as u32))
+        indexed_id(&self.function_names, &self.index.function_names, value)
     }
 
     /// Interns a class name and returns its stable data identifier.
     pub fn intern_class_name(&mut self, value: &str) -> DataId {
-        intern_string_vec(&mut self.class_names, value)
+        intern_indexed(&mut self.class_names, &mut self.index.class_names, value)
     }
 }
 
+/// Returns the position of `value` in `values` when the index knows it.
+///
+/// An index entry is only believed when the vector still holds that value there: speculative
+/// lowering rolls the pool back by truncating the vectors, which leaves entries pointing past the
+/// end or at a value interned since. Checking on read is what lets a rollback stay a truncate.
+fn indexed_id(
+    values: &[String],
+    index: &crate::fast_hash::FastMap<String, u32>,
+    value: &str,
+) -> Option<DataId> {
+    let id = *index.get(value)?;
+    (values.get(id as usize).map(String::as_str) == Some(value)).then(|| DataId::from_raw(id))
+}
+
 /// Interns `value` into a string vector and returns its zero-based index.
-fn intern_string_vec(values: &mut Vec<String>, value: &str) -> DataId {
-    if let Some(idx) = values.iter().position(|existing| existing == value) {
-        return DataId::from_raw(idx as u32);
+///
+/// Finding an existing value by scanning the vector made interning quadratic in the number of
+/// distinct literals, which the Symfony build felt in lowering; the index answers in one lookup.
+fn intern_indexed(
+    values: &mut Vec<String>,
+    index: &mut crate::fast_hash::FastMap<String, u32>,
+    value: &str,
+) -> DataId {
+    if let Some(id) = indexed_id(values, index, value) {
+        return id;
     }
-    let id = DataId::from_raw(values.len() as u32);
+    let id = values.len() as u32;
     values.push(value.to_string());
-    id
+    index.insert(value.to_string(), id);
+    DataId::from_raw(id)
 }
 
 /// C-facing extern function declaration referenced by EIR.

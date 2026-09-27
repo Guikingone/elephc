@@ -13,7 +13,7 @@ use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver, TypeExpr};
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
-use super::super::super::Checker;
+use super::super::super::{Checker, MethodOwnerIndex};
 use super::super::syntactic::wider_type_syntactic;
 
 impl Checker {
@@ -236,9 +236,14 @@ impl Checker {
     /// class declares the method at all.
     fn mixed_receiver_method_return_type(&self, method: &str, arg_count: usize) -> Option<PhpType> {
         let method_key = php_symbol_key(method);
+        let owners = self.method_owners_of(&method_key)?;
         let mut arity_matched: Vec<PhpType> = Vec::new();
-        for class_info in self.classes.values() {
-            let Some(sig) = class_info.methods.get(&method_key) else {
+        for class_name in owners.iter() {
+            let Some(sig) = self
+                .classes
+                .get(class_name)
+                .and_then(|class_info| class_info.methods.get(&method_key))
+            else {
                 continue;
             };
             if !Self::signature_accepts_argument_count(sig, arg_count) {
@@ -249,6 +254,39 @@ impl Checker {
                 arity_matched.push(ty);
             }
         }
+        self.mixed_receiver_candidates_type(arity_matched)
+    }
+
+    /// The classes declaring instance method `method_key`, in `classes` iteration order.
+    ///
+    /// The scans that ask this used to visit every class of the program per call, and the method
+    /// pass repeats those calls on every round: on the Symfony build the mixed-receiver scan alone
+    /// was 1.2 million calls and 23% of type checking. Which classes DECLARE a method is fixed
+    /// once the class table is built (the pass changes signatures, which callers read fresh), so
+    /// the owners are indexed per table, in the table's own order: the order the scans visited.
+    pub(crate) fn method_owners_of(&self, method_key: &str) -> Option<std::sync::Arc<[String]>> {
+        let mut index = self.method_owners.borrow_mut();
+        if index.as_ref().is_none_or(|index| index.class_count != self.classes.len()) {
+            let mut owners: crate::fast_hash::FastMap<String, Vec<String>> =
+                crate::fast_hash::FastMap::default();
+            for (class_name, class_info) in &self.classes {
+                for key in class_info.methods.keys() {
+                    owners.entry(key.clone()).or_default().push(class_name.clone());
+                }
+            }
+            *index = Some(MethodOwnerIndex {
+                class_count: self.classes.len(),
+                owners: owners
+                    .into_iter()
+                    .map(|(key, classes)| (key, std::sync::Arc::from(classes)))
+                    .collect(),
+            });
+        }
+        index.as_ref().and_then(|index| index.owners.get(method_key)).cloned()
+    }
+
+    /// Turns the arity-matched return types of same-named methods into the call's type.
+    fn mixed_receiver_candidates_type(&self, arity_matched: Vec<PhpType>) -> Option<PhpType> {
         // A candidate that cannot be CALLED with this many arguments is not a candidate. The
         // fallback to `any_matched` existed because the arity test used to compare `params.len()`
         // exactly and was therefore empty far too often; now that it accepts the callable range,
@@ -733,8 +771,13 @@ impl Checker {
         method_key: &str,
     ) -> usize {
         let mut widest = 0;
-        for (class_name, class_info) in &self.classes {
-            let Some(sig) = class_info.methods.get(method_key) else {
+        let owners = self.method_owners_of(method_key).unwrap_or_default();
+        for class_name in owners.iter() {
+            let Some(sig) = self
+                .classes
+                .get(class_name)
+                .and_then(|class_info| class_info.methods.get(method_key))
+            else {
                 continue;
             };
             let is_compatible = class_name == receiver_type
@@ -749,8 +792,13 @@ impl Checker {
 
     fn subtype_dispatch_return_types(&self, receiver_type: &str, method_key: &str) -> Vec<PhpType> {
         let mut return_types = Vec::new();
-        for (class_name, class_info) in &self.classes {
-            let Some(sig) = class_info.methods.get(method_key) else {
+        let owners = self.method_owners_of(method_key).unwrap_or_default();
+        for class_name in owners.iter() {
+            let Some(sig) = self
+                .classes
+                .get(class_name)
+                .and_then(|class_info| class_info.methods.get(method_key))
+            else {
                 continue;
             };
             let is_compatible = class_name == receiver_type

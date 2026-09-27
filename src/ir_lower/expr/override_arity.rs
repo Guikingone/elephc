@@ -129,8 +129,11 @@ fn wider_override_classes(
     site_arity: usize,
 ) -> Vec<(String, u64)> {
     let mut found = Vec::new();
+    // This runs for every method call on an object receiver, over every class: the cheap map
+    // lookups go first, and the hierarchy walk (which allocates per level) only for the rare
+    // class that declares a wider override. In the other order it was 10% of lowering Symfony.
     for (name, info) in ctx.classes.iter() {
-        if info.is_abstract || !class_is_or_implements(ctx, name, base) {
+        if info.is_abstract {
             continue;
         }
         let Some(sig) = info.methods.get(method_key) else {
@@ -144,7 +147,7 @@ fn wider_override_classes(
             .get(site_arity..)
             .is_some_and(|defaults| defaults.iter().all(Option::is_some));
         let extra_by_value = sig.ref_params.iter().skip(site_arity).all(|by_ref| !by_ref);
-        if extra_defaulted && extra_by_value {
+        if extra_defaulted && extra_by_value && class_is_or_implements(ctx, name, base) {
             found.push((name.to_string(), info.class_id));
         }
     }

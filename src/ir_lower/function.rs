@@ -1217,6 +1217,8 @@ fn lower_closure_function_with_signature(
             .map(|(capture_name, _, _)| capture_name.clone())
             .collect(),
     });
+    let nested_constants = parent.constants.nested();
+    let constants = nested_constants.as_ref().unwrap_or(parent.constants.base());
     let closures = lower_body_into_function(
         parent.source_catalog.clone(),
         parent.runtime_bound_functions.clone(),
@@ -1246,7 +1248,7 @@ fn lower_closure_function_with_signature(
         parent.retype_sites,
         parent.mixed_storage_store_sites,
         loop_storage_scope,
-        &parent.constants,
+        constants,
         parent.current_class.clone(),
         closure_body_return_type.clone(),
         signature.declared_return,

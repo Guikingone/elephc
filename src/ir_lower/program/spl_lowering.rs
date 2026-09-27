@@ -57,6 +57,13 @@ pub(in crate::ir_lower) fn class_method_already_lowered(
 ) -> bool {
     module.class_methods.iter().any(|function| {
         function.flags.is_static == is_static
+            // A match starts with `class_name::`, and testing that first skips the reverse
+            // search and the key allocation for every other body. The scan runs once per lowered
+            // method against every body lowered before it: 4% of lowering Symfony without this.
+            && function
+                .name
+                .strip_prefix(class_name)
+                .is_some_and(|rest| rest.starts_with("::"))
             && function
                 .name
                 .rsplit_once("::")

@@ -65,6 +65,13 @@ use schema::propagate_abstract_return_types;
 /// Checker carries program-wide type-checking state including function signatures,
 /// class/interface/enum definitions, variable environments, and warnings collected
 /// during type checking.
+/// Classes declaring each instance method name, for calls whose receiver is not a known class.
+pub(crate) struct MethodOwnerIndex {
+    /// `classes.len()` when the index was built; a different length means classes were added.
+    pub(crate) class_count: usize,
+    pub(crate) owners: crate::fast_hash::FastMap<String, std::sync::Arc<[String]>>,
+}
+
 pub(crate) struct Checker {
     /// Target platform for codegen (affects ABI, sizes, and platform checks).
     /// Full compilation target. `platform` drives OS constants; `apple_variant`
@@ -136,6 +143,9 @@ pub(crate) struct Checker {
     pub interface_doc_comments: HashMap<String, String>,
     /// Class definitions collected during the first pass, keyed by canonical name.
     pub classes: crate::fast_hash::FastMap<String, ClassInfo>,
+    /// Instance method name -> the classes declaring it, in `classes` iteration order, with the
+    /// `classes.len()` it was built at. See `method_owners_of`.
+    pub(crate) method_owners: std::cell::RefCell<Option<MethodOwnerIndex>>,
     /// Canonical class names declared in the program, available for forward references
     /// before the full class definitions are available.
     pub declared_classes: HashSet<String>,

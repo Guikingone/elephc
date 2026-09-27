@@ -68,6 +68,9 @@ impl Checker {
             // Only the LAST round's answer counts: a seed that looked unrefined on an early round
             // can be specialized by a call site the same round walks later.
             self.unspecialized_seed_params.clear();
+            // Rebuilt once per round, although no round adds a method: a stale owner list would
+            // silently narrow a mixed receiver's candidates.
+            *self.method_owners.borrow_mut() = None;
 
             for class in flattened_classes {
                 for method in &class.methods {

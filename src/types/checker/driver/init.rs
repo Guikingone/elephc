@@ -73,6 +73,7 @@ impl Checker {
             interfaces: HashMap::new(),
             interface_doc_comments: HashMap::new(),
             classes: crate::fast_hash::FastMap::default(),
+            method_owners: std::cell::RefCell::new(None),
             declared_classes: HashSet::new(),
             declared_class_parents: HashMap::new(),
             declared_class_interfaces: HashMap::new(),
