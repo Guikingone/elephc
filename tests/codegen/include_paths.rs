@@ -635,3 +635,70 @@ echo run($class, $n, ''), '|', run($class, $n, 'empty.php');",
     );
     assert_eq!(out, "n=42 none=NULL|n=42 none=NULL");
 }
+
+/// Verifies an include evaluated first inside a condition or expression is compiled, with php's
+/// values: the file's `return` on a first `require_once`, `true` on a repeat, and caller scope.
+///
+/// Composer's `autoload_runtime.php` opens with `if (true === (require_once __DIR__.'/autoload.php')
+/// || …)`; left as a runtime include, the whole Composer bootstrap ran in the interpreter on every
+/// Symfony request. Includes that something with an effect precedes, or that sit where they may
+/// not run (the right of `||`), keep their runtime form. Expected output is php 8.5's.
+///
+/// The output alone cannot tell a compiled include from an interpreted one (both are correct), so
+/// the binary also runs with `ELEPHC_EVAL_TRACE=1`: `lib.php` must never reach the interpreter,
+/// and the one include an effect precedes (`strtoupper(…) . include …`) must.
+#[test]
+fn test_include_evaluated_first_in_an_expression_is_compiled_with_php_values() {
+    let files: &[(&str, &str)] = &[
+            (
+                "main.php",
+                r#"<?php
+if (true === (require_once __DIR__ . '/lib.php') || $argc > 99) {
+    echo "first:skipped|";
+} else {
+    echo "first:ran|";
+}
+echo $fromLib ?? 'unset', "|";
+if (true === (require_once __DIR__ . '/lib.php') || $argc > 99) {
+    echo "second:skipped|";
+}
+echo "a" . (require __DIR__ . '/side.php') . "|";
+if (!(include __DIR__ . '/side.php')) {
+    echo "never|";
+}
+if ($argc > 0 || (require __DIR__ . '/side.php')) {
+    echo "short-circuit|";
+}
+echo strtoupper("x") . (include __DIR__ . '/side.php');
+"#,
+            ),
+            ("lib.php", "<?php echo '[lib]'; $fromLib = 'set-by-lib'; return 5;"),
+            ("side.php", "<?php echo '[side]'; return 'S';"),
+    ];
+    let dir = make_cli_test_dir("elephc_hoisted_include");
+    for (path, content) in files {
+        std::fs::write(dir.join(path), content).unwrap();
+    }
+    let main_path = dir.join("main.php");
+    let compile = elephc_cli_command(&dir).arg(&main_path).output().expect("failed to run elephc CLI");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = std::process::Command::new(main_path.with_extension(""))
+        .current_dir(&dir)
+        .env("ELEPHC_EVAL_TRACE", "1")
+        .output()
+        .expect("failed to run the compiled program");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "[lib]first:ran|set-by-lib|second:skipped|[side]aS|[side]short-circuit|[side]XS"
+    );
+    let trace = String::from_utf8_lossy(&run.stderr);
+    let interpreted = |file: &str| {
+        trace
+            .lines()
+            .filter(|line| line.contains("kind=include") && line.contains(file))
+            .count()
+    };
+    assert_eq!(interpreted("lib.php"), 0, "lib.php reached the interpreter:\n{trace}");
+    assert!(interpreted("side.php") > 0, "the effect-preceded include was compiled:\n{trace}");
+}

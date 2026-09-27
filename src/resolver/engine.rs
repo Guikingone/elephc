@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use crate::errors::CompileError;
 use crate::names::{canonical_name_for_decl, Name, NameKind, DYNAMIC_INCLUDE_FUNCTION};
-use crate::parser::ast::{CatchClause, ClassMethod, Expr, ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, CatchClause, ClassMethod, Expr, ExprKind, Stmt, StmtKind};
 
 use super::discovery::FunctionVariantRegistry;
 use super::engine_includes::{expand_value_include, resolve_include_stmt, IncludeValueCapture};
@@ -108,6 +108,91 @@ fn try_expand_value_include(
     Ok(Some(expanded))
 }
 
+/// Splits a statically resolvable include out of the statement that evaluates it FIRST.
+///
+/// `try_expand_value_include` compiles an include written as `$x = require X;` or
+/// `return require X;`; in any other position the include stayed a runtime call and the file ran
+/// in the interpreter on every execution. Composer's generated `autoload_runtime.php` opens with
+/// `if (true === (require_once __DIR__.'/autoload.php') || …)`, so the whole Composer bootstrap
+/// (`autoload.php`, `ComposerAutoloaderInit…::getLoader()`) was interpreted on every Symfony
+/// request: about 11% of `/`.
+///
+/// When nothing the statement evaluates before the include can have an effect, running the
+/// include first as `$tmp = require X;` and then the statement with `$tmp` in its place is the
+/// same program, and the assignment form is the one `try_expand_value_include` compiles. What
+/// may be passed on the way to the include is therefore limited to literals, and the walk never
+/// enters an operand that might not be evaluated (the right side of `&&`, `||`, `??`), nor a
+/// loop condition, nor an `elseif`, which only run conditionally or repeatedly.
+fn hoist_leading_value_include(stmt: &Stmt) -> Option<Vec<Stmt>> {
+    let mut rewritten = stmt.clone();
+    let tmp = format!(
+        "__elephc_inc_hoist_{}",
+        HOISTED_INCLUDE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let include = match &mut rewritten.kind {
+        StmtKind::If { condition, .. } => take_leading_include(condition, &tmp)?,
+        StmtKind::ExprStmt(expr) | StmtKind::Echo(expr) => take_leading_include(expr, &tmp)?,
+        // A direct `$x = require X;` / `return require X;` is already compiled as it stands.
+        StmtKind::Assign { value, .. } | StmtKind::Return(Some(value))
+            if !matches!(value.kind, ExprKind::IncludeValue { .. }) =>
+        {
+            take_leading_include(value, &tmp)?
+        }
+        _ => return None,
+    };
+    let hoisted = Stmt::new(
+        StmtKind::Assign {
+            name: tmp,
+            value: include,
+        },
+        stmt.span,
+    );
+    Some(vec![hoisted, rewritten])
+}
+
+/// Numbers the temporaries `hoist_leading_value_include` introduces.
+static HOISTED_INCLUDE_COUNTER: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Replaces the include `expr` evaluates first with `$tmp` and returns it, or leaves `expr`
+/// untouched when an effect could precede the include (see `hoist_leading_value_include`).
+fn take_leading_include(expr: &mut Expr, tmp: &str) -> Option<Expr> {
+    match &mut expr.kind {
+        ExprKind::IncludeValue { path, .. } if !is_runtime_dynamic_include_path(path) => {
+            let variable = Expr::new(ExprKind::Variable(tmp.to_string()), expr.span);
+            Some(std::mem::replace(expr, variable))
+        }
+        ExprKind::BinaryOp { left, op, right } => {
+            if let Some(include) = take_leading_include(left, tmp) {
+                return Some(include);
+            }
+            let right_always_runs = !matches!(op, BinOp::And | BinOp::Or | BinOp::NullCoalesce);
+            if right_always_runs && is_effect_free_literal(left) {
+                take_leading_include(right, tmp)
+            } else {
+                None
+            }
+        }
+        ExprKind::Not(inner)
+        | ExprKind::Negate(inner)
+        | ExprKind::BitNot(inner)
+        | ExprKind::Cast { expr: inner, .. } => take_leading_include(inner, tmp),
+        _ => None,
+    }
+}
+
+/// Whether evaluating `expr` can have no effect at all, so an include after it may run first.
+fn is_effect_free_literal(expr: &Expr) -> bool {
+    matches!(
+        expr.kind,
+        ExprKind::BoolLiteral(_)
+            | ExprKind::IntLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::StringLiteral(_)
+            | ExprKind::Null
+    )
+}
+
 /// Resolves a statement list by expanding includes, resolving expression-position
 /// includes, and preserving include-once/function-variant bookkeeping.
 pub(super) fn resolve_stmts(
@@ -122,6 +207,17 @@ pub(super) fn resolve_stmts(
 
     for stmt in stmts {
         let _source_mode = crate::source::scoped_parse_mode(stmt.profile());
+        if let Some(split) = hoist_leading_value_include(&stmt) {
+            result.extend(resolve_stmts(
+                split,
+                base_dir,
+                declared_once,
+                include_chain,
+                state,
+                function_variants,
+            )?);
+            continue;
+        }
         // Expression-position includes (`$x = require X;` / `return require X;`) are expanded
         // before generic expression resolution so the included file's statements are inlined into
         // the caller's scope rather than resolved as an opaque sub-expression.
