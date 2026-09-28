@@ -335,6 +335,47 @@ return function_exists("html_entity_decode");"#,
         );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies eval `htmlspecialchars()` and `htmlentities()` honour `$flags` like the compiled
+/// helper: `"` only under `ENT_COMPAT`, `'` only under `ENT_HTML_QUOTE_SINGLE` (1), and the
+/// single quote as `&apos;` under the XML1, XHTML and HTML5 doctypes.
+///
+/// Eval ignored `$flags` and always escaped both quotes as under `ENT_QUOTES`, so it disagreed
+/// with the compiled program (#1464). `$encoding` stays accepted and unused, as it is there.
+/// Expectations are PHP 8.5.
+#[test]
+fn execute_program_html_entity_encoders_honour_flags() {
+    let program = parse_fragment(
+        br#"$s = "<a href=\"x\">O'Neil & co</a>";
+echo htmlspecialchars($s, ENT_NOQUOTES); echo "|";
+echo htmlspecialchars($s, ENT_COMPAT); echo "|";
+echo htmlspecialchars($s, ENT_QUOTES | ENT_HTML5); echo "|";
+echo htmlspecialchars($s, ENT_QUOTES | ENT_XML1); echo "|";
+echo htmlspecialchars($s, ENT_QUOTES | ENT_XHTML); echo "|";
+echo htmlspecialchars("'\"", 1); echo "|";
+echo htmlentities("'\"<", ENT_NOQUOTES); echo "|";
+echo htmlentities(string: "'\"", flags: ENT_COMPAT | ENT_HTML5); echo "|";
+echo call_user_func("htmlspecialchars", "'\"", ENT_NOQUOTES); echo "|";
+echo call_user_func_array("htmlentities", ["'", ENT_QUOTES | ENT_XML1, "UTF-8"]); echo "|";
+return htmlspecialchars("'\"", ENT_QUOTES, "UTF-8");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "&lt;a href=\"x\"&gt;O'Neil &amp; co&lt;/a&gt;\
+         |&lt;a href=&quot;x&quot;&gt;O'Neil &amp; co&lt;/a&gt;\
+         |&lt;a href=&quot;x&quot;&gt;O&apos;Neil &amp; co&lt;/a&gt;\
+         |&lt;a href=&quot;x&quot;&gt;O&apos;Neil &amp; co&lt;/a&gt;\
+         |&lt;a href=&quot;x&quot;&gt;O&apos;Neil &amp; co&lt;/a&gt;\
+         |&#039;\"|'\"&lt;|'&quot;|'\"|&apos;|"
+    );
+    assert_eq!(values.get(result), FakeValue::String("&#039;&quot;".to_string()));
+}
 /// Verifies eval URL codec builtins dispatch through direct, named, and callable paths.
 #[test]
 fn execute_program_dispatches_url_codec_builtins() {

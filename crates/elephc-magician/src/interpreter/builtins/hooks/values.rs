@@ -470,18 +470,24 @@ impl EvalValuesHook {
             },
             Self::Hex2Bin => one_arg(evaluated_args, values, eval_hex2bin_result),
             Self::HtmlEntity => {
-                // htmlspecialchars/htmlentities accept optional flags/encoding args;
-                // like the static runtime they are accepted without effect (ENT_QUOTES).
-                let value = match (name, evaluated_args) {
-                    (_, [value]) => *value,
-                    ("htmlspecialchars" | "htmlentities", [value, _flags]) => *value,
-                    ("htmlspecialchars" | "htmlentities", [value, _flags, _encoding]) => *value,
+                // htmlspecialchars/htmlentities accept optional flags/encoding args; the
+                // flags select quote handling like the compiled helper, the encoding is unused.
+                let (value, flags) = match (name, evaluated_args) {
+                    (_, [value]) => (*value, None),
+                    ("htmlspecialchars" | "htmlentities", [value, flags])
+                    | ("htmlspecialchars" | "htmlentities", [value, flags, _]) => {
+                        (*value, Some(*flags))
+                    }
                     _ => return Err(EvalStatus::RuntimeFatal),
+                };
+                let flags = match flags {
+                    Some(flags) => eval_int_value(flags, values)?,
+                    None => ENT_DEFAULT_FLAGS,
                 };
                 match name {
                     "html_entity_decode" => eval_html_entity_decode_result(value, values),
-                    "htmlentities" => eval_htmlentities_result(value, values),
-                    "htmlspecialchars" => eval_htmlspecialchars_result(value, values),
+                    "htmlentities" => eval_htmlentities_result(value, flags, values),
+                    "htmlspecialchars" => eval_htmlspecialchars_result(value, flags, values),
                     _ => Err(EvalStatus::RuntimeFatal),
                 }
             }
