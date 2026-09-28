@@ -2317,6 +2317,7 @@ fn test_cli_source_map_keeps_long_included_line_ends() {
                 wide.push(entry);
             }
         };
+        /// Visits `value`, then every array item and object field nested inside it, depth first.
         fn walk(value: &serde_json::Value, visit: &mut dyn FnMut(&serde_json::Value)) {
             visit(value);
             match value {
