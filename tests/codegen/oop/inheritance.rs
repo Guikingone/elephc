@@ -906,3 +906,49 @@ echo Base::make(new Child(), 'a'), "|", Base::make(new GrandChild(), 'b'), "|", 
     );
     assert_eq!(out, "child:a:true:7:NULL|child:b:true:7:NULL|base:c");
 }
+
+/// A child may redeclare a PRIVATE parent property with the other staticness: a private member
+/// is not inherited, so `B::$enc` (instance) and `A::$enc` (static) are two properties, and the
+/// same holds the other way round for `$inst`. `symfony/mime`'s `ParameterizedHeader` is this
+/// shape. Expected output is php 8.5's; the build used to fail with "Cannot redeclare static
+/// property as instance property".
+#[test]
+fn test_private_parent_property_may_be_redeclared_with_other_staticness() {
+    let out = compile_and_run(
+        r#"<?php
+class A {
+    private static $enc = "s";
+    private $inst = "i";
+    static function g() { return self::$enc; }
+    function h() { return $this->inst; }
+}
+class B extends A {
+    private $enc = "b";
+    private static $inst = "t";
+    function f() { return $this->enc . self::$inst; }
+}
+$b = new B;
+echo A::g(), $b->h(), $b->f(), "\n";
+"#,
+    );
+    assert_eq!(out, "sibt\n");
+}
+
+/// A child that shadows a private parent property with a CLASS-CONSTANT default is validated
+/// like every other property default: the constant is typed once class constants exist. The
+/// shadowing path used the plain validator and read `K::NONE` as a string ("default expects Int,
+/// got Str"), which dropped `symfony/validator`'s `ClassMetadata` from the build. Expected output
+/// is php 8.5's.
+#[test]
+fn test_private_parent_property_shadow_accepts_class_constant_default() {
+    let out = compile_and_run(
+        r#"<?php
+class G { private int $s = K::NONE; function g() { return $this->s; } }
+class C extends G { private int $s = K::CASCADE; function f() { return $this->s; } }
+class K { public const NONE = 1; public const CASCADE = 2; }
+$c = new C;
+echo $c->f(), $c->g(), "\n";
+"#,
+    );
+    assert_eq!(out, "21\n");
+}
