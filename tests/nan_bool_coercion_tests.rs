@@ -522,6 +522,28 @@ echo (string)m(), "\n";
     );
 }
 
+/// A NAN that reaches `%s` as a boxed or array value, and a float array passed to `implode()`,
+/// warn too. `%s` of a float record is formatted through the `%G` path rather than
+/// `__rt_ftoa_coerce`, so it carries its own probe. Reference PHP 8.5 prints six warnings.
+#[test]
+fn printf_and_implode_of_a_boxed_nan_warn() {
+    assert_run(
+        "nan_string_printf",
+        r#"<?php
+function m(): mixed { return NAN; }
+function fl(): array { return [1.5, NAN]; }
+printf("%s|%s\n", m(), 2.5);
+echo vsprintf("%s,%s", [NAN, 1.25]), "\n";
+echo sprintf("%5s|%-5s|", m(), m()), "\n";
+echo implode(",", fl()), "\n";
+$a = fl();
+echo sprintf("%s", $a[1]), "\n";
+"#,
+        "NAN|2.5\nNAN,1.25\n  NAN|NAN  |\n1.5,NAN\nNAN\n",
+        &string_warnings(6),
+    );
+}
+
 /// `--php-version 8.4` converts a NAN to string silently, as php 8.4 does.
 #[test]
 fn php_84_coerces_nan_to_string_silently() {

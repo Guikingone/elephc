@@ -449,6 +449,13 @@ fn emit_string_conversion(emitter: &mut Emitter) {
     emitter.instruction("str x9, [sp, #104]");                                  // drop the string precision
     emitter.instruction("cmp x5, #2");                                          // is the payload a double?
     emitter.instruction("b.ne __rt_sprintf_str_int");                           // no → render it as a signed integer
+    if crate::codegen_support::runtime::nan_bool_coercion_warning_enabled() {
+        emitter.instruction("fmov d0, x3");                                     // the float %s is about to coerce to string
+        emitter.instruction("fcmp d0, d0");                                     // a NAN is the only value unordered with itself
+        emitter.instruction("b.vc __rt_sprintf_str_flt_ok");                    // ordered values coerce silently
+        emitter.instruction("bl __rt_warn_nan_coerced_string");                 // report PHP 8.5's NAN-to-string coercion warning
+        emitter.label("__rt_sprintf_str_flt_ok");
+    }
     emitter.instruction("mov x9, #14");                                         // PHP renders floats with 14 significant digits
     emitter.instruction("str x9, [sp, #104]");                                  // use that as the conversion precision
     emitter.instruction("mov w12, #71");                                        // reuse the 'G' float conversion

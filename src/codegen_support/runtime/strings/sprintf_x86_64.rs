@@ -425,6 +425,13 @@ fn emit_string_conversion(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 80], -1");                        // the %s precision must not reach the numeric path
     emitter.instruction("cmp rax, 2");                                          // is the payload a double?
     emitter.instruction("jne __rt_sprintf_str_int_x64");                        // no → render it as a signed integer
+    if crate::codegen_support::runtime::nan_bool_coercion_warning_enabled() {
+        emitter.instruction("movq xmm0, r10");                                  // the float %s is about to coerce to string
+        emitter.instruction("ucomisd xmm0, xmm0");                              // a NAN is the only value unordered with itself
+        emitter.instruction("jnp __rt_sprintf_str_flt_ok_x64");                 // ordered values coerce silently
+        emitter.instruction("call __rt_warn_nan_coerced_string");               // report PHP 8.5's NAN-to-string coercion warning
+        emitter.label("__rt_sprintf_str_flt_ok_x64");
+    }
     emitter.instruction("mov QWORD PTR [rbp - 80], 14");                        // PHP renders floats with 14 significant digits
     emitter.instruction("mov r8d, 71");                                         // reuse the 'G' float conversion
     emitter.instruction("mov QWORD PTR [rbp - 104], r8");                       // record the substituted conversion character

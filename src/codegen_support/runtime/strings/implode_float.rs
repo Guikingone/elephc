@@ -76,7 +76,7 @@ pub fn emit_implode_float(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #40]");                                  // reload current element index
     emitter.instruction("add x3, x3, #24");                                     // skip 24-byte array header to reach data
     emitter.instruction("ldr d0, [x3, x11, lsl #3]");                           // load the float element at index (8 bytes each)
-    emitter.instruction("bl __rt_ftoa");                                        // append its PHP text at concat_off and advance the offset
+    emitter.instruction("bl __rt_ftoa_coerce");                                 // append its PHP text at concat_off and advance the offset
     emitter.instruction("ldr x11, [sp, #40]");                                  // reload element index
     emitter.instruction("add x11, x11, #1");                                    // increment element index
     emitter.instruction("str x11, [sp, #40]");                                  // save updated index
@@ -149,7 +149,7 @@ fn emit_implode_float_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // reload the loop cursor
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the indexed-array pointer
     emitter.instruction("movsd xmm0, QWORD PTR [r10 + r11 * 8 + 24]");          // load the current float element into the ftoa input register
-    emitter.instruction("call __rt_ftoa");                                      // append its PHP text at concat_off and advance the offset
+    emitter.instruction("call __rt_ftoa_coerce");                               // append its PHP text at concat_off and advance the offset
     emitter.instruction("add QWORD PTR [rbp - 48], 1");                         // advance the loop cursor to the next element
     emitter.instruction("jmp __rt_implode_float_loop");                         // continue joining elements
 
