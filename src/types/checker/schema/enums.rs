@@ -318,6 +318,7 @@ pub(crate) fn insert_enum_metadata(
     let mut static_method_visibilities = HashMap::new();
     let mut static_method_declaring_classes = HashMap::new();
     let mut static_method_impl_classes = HashMap::new();
+    let mut abstract_static_methods = HashSet::new();
     static_methods.insert(
         "cases".to_string(),
         FunctionSig {
@@ -382,6 +383,7 @@ pub(crate) fn insert_enum_metadata(
     let mut method_visibilities = HashMap::new();
     let mut method_declaring_classes = HashMap::new();
     let mut method_impl_classes = HashMap::new();
+    let mut abstract_methods = HashSet::new();
     for method in user_methods {
         // Clone + rewrite self/static on this enum method (enums have no parent).
         // Must happen before build_method_sig because bare "self" is rejected later.
@@ -402,7 +404,13 @@ pub(crate) fn insert_enum_metadata(
             }
             static_method_visibilities.insert(key.clone(), method.visibility.clone());
             static_method_declaring_classes.insert(key.clone(), name.to_string());
-            static_method_impl_classes.insert(key, name.to_string());
+            if method.is_abstract {
+                static_method_impl_classes.remove(&key);
+                abstract_static_methods.insert(key);
+            } else {
+                static_method_impl_classes.insert(key.clone(), name.to_string());
+                abstract_static_methods.remove(&key);
+            }
         } else {
             methods.insert(key.clone(), sig);
             if let Some(return_type) = late_static_return {
@@ -410,7 +418,13 @@ pub(crate) fn insert_enum_metadata(
             }
             method_visibilities.insert(key.clone(), method.visibility.clone());
             method_declaring_classes.insert(key.clone(), name.to_string());
-            method_impl_classes.insert(key, name.to_string());
+            if method.is_abstract {
+                method_impl_classes.remove(&key);
+                abstract_methods.insert(key);
+            } else {
+                method_impl_classes.insert(key.clone(), name.to_string());
+                abstract_methods.remove(&key);
+            }
         }
         // Codegen emits both instance and static method bodies from `method_decls`.
         method_decls.push(method);
@@ -525,20 +539,14 @@ pub(crate) fn insert_enum_metadata(
             final_methods: HashSet::new(),
             method_declaring_classes,
             method_impl_classes,
-            // Empty on purpose, and empty by what this builder does rather than by a
-            // rule it enforces: it never inspects `method.is_abstract` and inserts every
-            // user method into `method_impl_classes` unconditionally below, so the old
-            // emission-derived inference also answered "not abstract" for all of them.
-            // If this builder ever starts injecting unimplemented interface methods into
-            // `methods`, they need an entry here or they will report as concrete.
-            abstract_methods: HashSet::new(),
+            abstract_methods,
             vtable_methods: Vec::new(),
             vtable_slots: HashMap::new(),
             static_method_visibilities,
             final_static_methods: HashSet::new(),
             static_method_declaring_classes,
             static_method_impl_classes,
-            abstract_static_methods: HashSet::new(),
+            abstract_static_methods,
             static_vtable_methods: Vec::new(),
             static_vtable_slots: HashMap::new(),
             interfaces,

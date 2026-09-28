@@ -32,11 +32,11 @@ pub enum LinkError {
     MissingBridge {
         /// Authoritative bridge linker name that could not be materialized.
         name: String,
-        /// Archive this bridge resolves to (`libelephc_web.a`), when known.
+        /// Archive filename or exact path this bridge resolves to, when known.
         ///
-        /// A bridge the table does not describe — a `LinkOrigin::Bridge` item whose name is
-        /// not in `BRIDGES` — has no archive filename, environment override, or candidate
-        /// list to report, so it renders the bare first line and nothing else.
+        /// An unknown named bridge has no archive path or discovery metadata and renders
+        /// only the first line. An unknown bridge with an exact archive path reports that
+        /// path in `needs:` without inventing fallback locations.
         archive: Option<String>,
         /// Per-bridge directory override that takes priority over every search location.
         env_var: Option<String>,
@@ -96,12 +96,27 @@ impl std::fmt::Display for LinkError {
                          those locations again. `elephc --print-capabilities` lists every \
                          archive this binary can need."
                     ),
-                    None => write!(
-                        formatter,
-                        "\n\nSet {env_var} to a directory containing {archive}, or keep the \
-                         bridge archives next to the elephc binary (or in a sibling lib/). \
-                         `elephc --print-capabilities` lists every archive this binary can need."
-                    ),
+                    None => {
+                        if let Some(filename) = Path::new(archive)
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .filter(|name| *name != archive.as_str())
+                        {
+                            return write!(
+                                formatter,
+                                "\n\nReplace invalid archive {archive} with a non-empty regular \
+                                 file, or set {env_var} to a directory containing a valid \
+                                 {filename}. `elephc --print-capabilities` lists every archive \
+                                 this binary can need."
+                            );
+                        }
+                        write!(
+                            formatter,
+                            "\n\nSet {env_var} to a directory containing {archive}, or keep the \
+                             bridge archives next to the elephc binary (or in a sibling lib/). \
+                             `elephc --print-capabilities` lists every archive this binary can need."
+                        )
+                    }
                 }
             }
         }

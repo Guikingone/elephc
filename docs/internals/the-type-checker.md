@@ -574,7 +574,8 @@ alongside the provenance map:
   `string` parameter still lowers through `mixed_box` — so no assignment can add a name.
 - It **shrinks** when a `string` parameter is assigned something that is not itself bare-`Str`
   (a `mixed` parameter, or a boxed local such as `$c ? $p : $q`), and when the name is bound by
-  reference, since `&` writes are not visible as ordinary assignments.
+  reference, since `&` writes are not visible as ordinary assignments. `++` and `--` also
+  remove the name because EIR stores their result in a boxed `Mixed` slot.
 - It is **intersected** at every control-flow merge: a slot counts as bare `Str` after an `if`
   only if it was one on every path into that point.
 
@@ -583,6 +584,15 @@ lookup sees through exactly the wrappers `expr_alias` treats as transparent — 
 argument, a spread, and an already-elided inner `(string)` — so `return (string)@$s` and
 `(string)(string)$s` behave like `return (string)$s`. If the two disagreed about which
 expression "the operand" is, the result would be a use-after-free rather than a leak.
+
+Assignment expressions require their result storage to be checked as well. For a variable
+target, EIR reloads the target after storing the source; `(string)($a = $b)` borrows `$b` only
+when `$a` still has a bare `Str` slot and `$b` also supplies bare `Str` storage. A boxed target
+such as a `mixed` parameter, or a `string` parameter boxed by an earlier increment, causes the
+outer cast to copy. For a simple array element or other non-local target, EIR reads the
+explicit result target after the write; when that is the original bare `Str` source, it
+remains borrowed. The provenance analysis applies any target-stabilization prelude before
+classifying that result target.
 
 Passing that gate is necessary but not sufficient, because the slot can be bare `Str` while
 holding a DIFFERENT parameter's storage:
