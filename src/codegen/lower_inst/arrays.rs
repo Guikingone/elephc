@@ -159,7 +159,10 @@ pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
     let array = expect_operand(inst, 0)?;
     require_php_array(ctx.value_php_type(array)?.codegen_repr(), inst)?;
     let result_value_ty = require_array_to_hash_result(&inst.result_php_type.codegen_repr(), inst)?;
-    let release_source = ctx.value_can_transfer_ownership_to_consumer(array)?;
+    // `Immediate::Bool(true)` marks a local promotion that MOVES the slot's reference into the
+    // conversion (`LoweringContext::emit_local_array_to_hash_move`).
+    let release_source = matches!(inst.immediate, Some(Immediate::Bool(true)))
+        || ctx.value_can_transfer_ownership_to_consumer(array)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             let already_hash = ctx.next_label("array_to_hash_already_hash");
@@ -754,6 +757,15 @@ pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let value_ty = effective_array_set_value_type(&elem_ty, &raw_value_ty, inst)?;
     require_integer_like_index(ctx.value_php_type(index)?, inst)?;
     let source_local = source_load_local_slot(ctx, array)?;
+    // A local whose frame slot is BOXED lends this write an unboxed array carrying its own
+    // reference, and the storeback below boxes the result anew. Dropping the old box first is
+    // the protocol every other container mutation follows (`lower_slot_detach`, the hash
+    // writes): without it the old box and the extra reference both outlived the write, so
+    // `$a = []; $a[0] = 'x';` in a local another branch assigns `mixed` leaked two blocks each
+    // time.
+    if let Some(slot) = source_local {
+        ctx.release_mutated_source_local_owner(slot, array)?;
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_array_set_aarch64(ctx, array, index, value, &raw_value_ty, &value_ty)?,
         Arch::X86_64 => lower_array_set_x86_64(ctx, array, index, value, &raw_value_ty, &value_ty)?,

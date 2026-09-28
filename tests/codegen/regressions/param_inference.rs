@@ -402,3 +402,33 @@ echo implode(',', $out2);
     );
     assert_eq!(out, "2,4;2,4");
 }
+
+/// A parameter first called with a string and then with a closure is `mixed`. Callable arguments
+/// were left out of the widening, so it stayed `string` and the closure was read as one: `gettype()`
+/// answered "string", `$cb('x')` and a forwarded `preg_replace_callback()` fataled.
+#[test]
+fn test_untyped_param_called_with_string_then_closure_is_mixed() {
+    let out = compile_and_run_capture_with_regex(
+        r#"<?php
+function kind($cb) { return gettype($cb); }
+function call($cb) { return $cb('x'); }
+function forward($cb) { return preg_replace_callback('/P/', $cb, 'APPLE'); }
+class K { public static function up($m) { return strtoupper($m[0]); } public function low($m) { return strtolower($m[0]); } }
+$c = fn() => 1;
+var_dump(kind('x'), kind($c));
+var_dump(call('strtoupper'), call(fn($s) => $s . '!'));
+var_dump(forward('K::up'), forward(fn($m) => '#'));
+var_dump(forward([new K, 'low']), forward(fn($m) => '#'));
+"#,
+    );
+    assert_eq!(out.stdout, r#"string(6) "string"
+string(6) "object"
+string(1) "X"
+string(2) "x!"
+string(5) "APPLE"
+string(5) "A##LE"
+string(5) "AppLE"
+string(5) "A##LE"
+"#, "stderr: {}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "stderr: {}", out.stderr);
+}

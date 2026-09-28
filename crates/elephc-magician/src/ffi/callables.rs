@@ -416,17 +416,21 @@ fn eval_callable_owner_context(
     ) {
         return eval_declared_callable_name_context(callback, &mut values);
     }
+    // The key and the element come back as OWNED cells. Dropping them without a release leaked
+    // both -- and this probe runs for every `is_callable()` on an array callable in a program
+    // that links the eval bridge, found or not.
     if let Ok(key) = values.array_iter_key(callback, 0) {
-        if let Ok(receiver) = values.array_get(callback, key) {
-            if let Ok(identity) = values.object_identity(receiver) {
-                if let Some(context) =
-                    crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)
-                {
-                    return Some(context);
-                }
-            }
-            if let Some(context) = eval_declared_callable_name_context(receiver, &mut values) {
-                return Some(context);
+        let receiver = values.array_get(callback, key);
+        let _ = values.release(key);
+        if let Ok(receiver) = receiver {
+            let context = values
+                .object_identity(receiver)
+                .ok()
+                .and_then(crate::ffi::dynamic_destructors::dynamic_object_owner_context)
+                .or_else(|| eval_declared_callable_name_context(receiver, &mut values));
+            let _ = values.release(receiver);
+            if context.is_some() {
+                return context;
             }
         }
     }

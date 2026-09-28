@@ -465,14 +465,8 @@ pub(super) fn lower_local_parent_fetch_for_write(
                     let array_value = ctx.load_local(name, Some(span));
                     let assoc_ty = promoted_assoc_array_type(local_ty, PhpType::Mixed);
                     ctx.prepare_mutated_local_owner(name, array_value, assoc_ty.clone(), Some(span));
-                    let hash = ctx.emit_value(
-                        Op::ArrayToHash,
-                        vec![array_value.value],
-                        None,
-                        assoc_ty.clone(),
-                        Op::ArrayToHash.default_effects(),
-                        Some(span),
-                    );
+                    let hash =
+                        ctx.emit_local_array_to_hash_move(name, array_value, assoc_ty.clone(), span);
                     Some(lower_hash_parent_fetch_for_write(ctx, name, hash, assoc_ty, index, span))
                 }
                 PhpType::Mixed | PhpType::Union(_) => {

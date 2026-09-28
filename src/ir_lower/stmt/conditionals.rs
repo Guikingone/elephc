@@ -539,6 +539,15 @@ pub(super) fn apply_loop_storage_contracts(
             (_, PhpType::Mixed) => {
                 let converted = ctx.box_value_as_mixed(source, target_ty.clone(), span);
                 ctx.store_local(&name, converted, target_ty, span);
+                // This store makes the slot's frame storage boxed for the whole function, so the
+                // `string` load above is an unboxing COPY (`__rt_mixed_cast_string`) -- and
+                // boxing a loaded string copies it again. Nothing else owns that first copy:
+                // `$r = $s; foreach ($ps as $p) { $r = $p; }` leaked one copy of `$s` per call.
+                if source_ty == PhpType::Str
+                    && ctx.builder.value_defining_op(source.value) == Some(Op::LoadLocal)
+                {
+                    crate::ir_lower::ownership::release_if_owned(ctx, source, span);
+                }
             }
             // The contract cannot be materialized for the representation this local actually
             // holds — the only remaining shapes disagree on container kind (an `AssocArray`

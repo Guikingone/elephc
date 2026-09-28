@@ -168,7 +168,7 @@ fn planned_omitted_default_slots(
 
 /// Returns whether a normalized slot still carries the exact declaration
 /// default inserted by an earlier planner pass.
-fn is_injected_declared_default(
+pub(super) fn is_injected_declared_default(
     sig: &FunctionSig,
     param_idx: usize,
     arg: &Expr,
@@ -510,6 +510,54 @@ impl Checker {
             false,
             true,
         false,
+        )
+    }
+
+    /// `check_known_callable_call` for a closure literal the engine invokes with a fixed argument
+    /// list: surplus arguments are ignored, as PHP ignores them for any userland function.
+    pub(crate) fn check_known_userland_callable_call(
+        &mut self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        caller_env: &TypeEnv,
+        callee_desc: &str,
+    ) -> Result<PhpType, CompileError> {
+        self.check_known_callable_call_with_options(
+            sig,
+            args,
+            span,
+            caller_env,
+            callee_desc,
+            false,
+            false,
+            true,
+        )
+    }
+
+    /// `check_engine_invoked_callback_call` for a callback known to be USERLAND code.
+    ///
+    /// PHP passes a userland function every argument the engine supplies and lets it ignore the
+    /// ones it does not declare: `preg_replace_callback('/x/', fn() => 'y', $s)` and
+    /// `array_map(fn() => 1, $a)` are ordinary PHP. Only an INTERNAL function rejects surplus
+    /// arguments, which is why this is not the default for every callback.
+    pub(crate) fn check_engine_invoked_userland_callback_call(
+        &mut self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        caller_env: &TypeEnv,
+        callee_desc: &str,
+    ) -> Result<PhpType, CompileError> {
+        self.check_known_callable_call_with_options(
+            sig,
+            args,
+            span,
+            caller_env,
+            callee_desc,
+            false,
+            true,
+            true,
         )
     }
 

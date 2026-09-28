@@ -334,6 +334,17 @@ pub(super) fn lower_property_array_assign(
                 Op::ArraySetMixedKey.default_effects(),
                 Some(span),
             );
+            // The helper stores its own reference to the value, exactly as on the local path
+            // (`array_write_core::lower_mixed_key_array_set`): a boxed temporary and a fresh
+            // string are still this write's to drop.
+            if matches!(
+                ctx.builder.value_php_type(value.value).codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
+            ) && ctx.value_is_owning_temporary(value)
+            {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+            }
+            release_persisted_string_operand(ctx, value, span);
             ctx.emit_void(
                 Op::PropSet,
                 vec![object.value, rewritten.value],
@@ -410,6 +421,18 @@ pub(super) fn lower_property_array_assign(
             Some(span),
         );
         release_property_array_insert_value_after_retain(ctx, &property_ty, value, span);
+        // That helper releases only a value stored into CONCRETE element slots. A hash stores a
+        // string by copying it, as on the promotion path above, so a fresh string key or value
+        // is still this write's to drop: `$this->a[$k] = (string) $v` leaked the cast's copy on
+        // every call.
+        let helper_released_value = indexed_property_array_element_type(&property_ty)
+            .is_some_and(|element| {
+                !matches!(element.codegen_repr(), PhpType::Mixed | PhpType::Callable)
+            });
+        release_persisted_string_operand(ctx, index, span);
+        if !helper_released_value {
+            release_persisted_string_operand(ctx, value, span);
+        }
         ctx.emit_void(
             Op::PropSet,
             vec![object.value, property_value.value],

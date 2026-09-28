@@ -3484,6 +3484,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 return_alias.may_alias_parameter(*parameter_index)
                     && !return_alias.proven_aliases_parameter(*parameter_index)
                     && self.call_result_may_alias_arg(**argument, result)
+                    && !self.boxed_param_cannot_become_result(function_name, *parameter_index, result)
                     // An owned argument that comes back unchanged transfers its reference
                     // to the result: argument cleanup already skips that alias. Suppressing
                     // result cleanup after a retaining store as well would leak the owner.
@@ -3518,6 +3519,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             .any(|(parameter_index, argument)| {
                 if !return_alias.proven_aliases_parameter(parameter_index)
                     || !self.call_result_may_alias_arg(*argument, result)
+                    || self.boxed_param_cannot_become_result(function_name, parameter_index, result)
                 {
                     return false;
                 }
@@ -3527,6 +3529,47 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 };
                 !self.value_is_owning_temporary(argument)
             })
+    }
+
+    /// Returns whether user function `function_name` receives parameter `index` as a boxed cell
+    /// that its STRING result cannot be.
+    ///
+    /// The callee sees a box -- one made at the call boundary when the argument is concrete -- and
+    /// every way a body turns a box into a string hands back its own reference (see
+    /// `arg_and_result_types_can_alias`). The summary cannot tell: it is built from the AST, where
+    /// `return (string) $x;` returns `$x`. Believing it declared the result BORROWED from the
+    /// argument, so the caller never released it: `function f($x) { return (string) $x; }`
+    /// leaked the cast's copy on every call made with a variable or a literal.
+    ///
+    /// A parameter is boxed when it is declared `mixed`, and when it is an untyped by-value one:
+    /// `ir_lower::program::metadata::dynamic_untyped_param_names` gives those the boxed ABI
+    /// whatever type the checker inferred from the call sites.
+    fn boxed_param_cannot_become_result(
+        &self,
+        function_name: &str,
+        index: usize,
+        result: ValueId,
+    ) -> bool {
+        if self.builder.value_php_type(result).codegen_repr() != PhpType::Str {
+            return false;
+        }
+        let Some(signature) = self.functions.get(function_name) else {
+            return false;
+        };
+        let Some((name, php_type)) = signature.params.get(index) else {
+            return false;
+        };
+        if matches!(php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+            return true;
+        }
+        let declared = signature.declared_params.get(index).copied().unwrap_or(false);
+        let by_ref = signature.ref_params.get(index).copied().unwrap_or(false);
+        let variadic = signature.variadic.as_deref() == Some(name.as_str());
+        let callable = matches!(php_type.codegen_repr(), PhpType::Callable)
+            || self
+                .callable_param_sigs
+                .contains_key(&(function_name.to_string(), name.clone()));
+        !declared && !by_ref && !variadic && !callable
     }
 
     /// Returns whether a call result can legally reuse one argument's refcounted payload.
@@ -3575,6 +3618,19 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return false;
         }
         match (&argument_type, &result_type) {
+            // A string result is never a boxed argument's storage: every way a body turns a
+            // boxed value into a string hands back its OWN reference -- `__rt_mixed_cast_string`
+            // persists a copy of a string payload and formats every other tag into scratch, and
+            // `MixedUnbox` increfs the payload it returns. Answering "may alias" here made the
+            // caller skip releasing the box it created at the call boundary, so
+            // `function f(mixed $x) { return (string) $x; }` leaked the box and its payload on
+            // every call.
+            (PhpType::Mixed | PhpType::Union(_), PhpType::Str) => false,
+            // The converse holds for the same reason: boxing a string always persists a copy the
+            // box owns (`__rt_mixed_from_value_string`), so a boxed result never IS a string
+            // argument's storage. A prelude helper returning its `string $subject` parameter in
+            // a `mixed` result kept the caller from releasing the `(string)` copy it passed.
+            (PhpType::Str, PhpType::Mixed | PhpType::Union(_)) => false,
             (PhpType::Mixed | PhpType::Union(_), _)
             | (_, PhpType::Mixed | PhpType::Union(_)) => true,
             (PhpType::Object(_), PhpType::Object(_)) => true,
@@ -4067,6 +4123,39 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// first written, so the seed belongs in main's entry exactly as for any other local.
     pub(crate) fn uses_global_storage_for_seeding(&self, name: &str) -> bool {
         crate::superglobals::is_superglobal(name) || crate::globals_array::is_alias(name)
+    }
+
+    /// Promotes local `name`'s indexed array to a hash, MOVING the slot's reference into the
+    /// conversion.
+    ///
+    /// The promotion stores the hash back through `store_prepared_mutated_local`, which releases
+    /// nothing: it expects the conversion to have consumed the reference the slot held. A plain
+    /// `ArrayToHash` consumes only an operand the codegen can prove owned, and a slot load is
+    /// not one, so the slot's old array leaked on every first string-key write --
+    /// `$out = []; $out['a'] = 1;` lost the empty array each time it ran. The immediate says the
+    /// operand IS the slot's reference. A global keeps the plain form: its store releases the
+    /// previous value itself.
+    pub(crate) fn emit_local_array_to_hash_move(
+        &mut self,
+        name: &str,
+        array_value: LoweredValue,
+        assoc_ty: PhpType,
+        span: Span,
+    ) -> LoweredValue {
+        let kind = self
+            .local_kinds
+            .get(name)
+            .copied()
+            .unwrap_or(LocalKind::PhpLocal);
+        let moves_slot_reference = !self.uses_global_storage(name, kind);
+        self.emit_value(
+            Op::ArrayToHash,
+            vec![array_value.value],
+            moves_slot_reference.then_some(Immediate::Bool(true)),
+            assoc_ty,
+            Op::ArrayToHash.default_effects(),
+            Some(span),
+        )
     }
 
     fn uses_global_storage(&self, name: &str, kind: LocalKind) -> bool {

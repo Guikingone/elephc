@@ -317,14 +317,7 @@ pub(super) fn lower_string_key_array_promotion(
     let value_ty = ctx.builder.value_php_type(value.value);
     let assoc_ty = promoted_assoc_array_type(current_ty, value_ty);
     ctx.prepare_mutated_local_owner(array, array_value, assoc_ty.clone(), Some(span));
-    let hash = ctx.emit_value(
-        Op::ArrayToHash,
-        vec![array_value.value],
-        None,
-        assoc_ty.clone(),
-        Op::ArrayToHash.default_effects(),
-        Some(span),
-    );
+    let hash = ctx.emit_local_array_to_hash_move(array, array_value, assoc_ty.clone(), span);
     ctx.emit_void(
         Op::HashSet,
         vec![hash.value, index.value, value.value],
@@ -383,6 +376,10 @@ pub(super) fn lower_mixed_key_array_set(
     {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }
+    // A string value is boxed for the slot by COPYING it, as on the `HashSet` path above, so a
+    // fresh string -- `$out[$key] = (string) $value` -- is still this write's to drop. Without
+    // it every such element leaked the string the cast had made.
+    release_persisted_string_operand(ctx, value, span);
 }
 
 /// Returns the associative type produced by a string-key write to an indexed array.

@@ -264,9 +264,14 @@ impl Checker {
                 };
                 changed = true;
             }
+            // A callable argument widens like any other. Excluding it left a parameter first
+            // called with a string at `string` when a later call passed a closure, so the body
+            // read the closure's descriptor as a string: `gettype()` answered "string", and a
+            // `preg_replace_callback()` forwarding it fataled with `Call to undefined function`.
+            // The reverse order already came out `mixed`, through the first-call adoption above.
             if seen_idx < regular_param_count
                 && !declared
-                && !matches!(actual_ty, PhpType::Never | PhpType::Callable)
+                && !matches!(actual_ty, PhpType::Never)
                 && (!matches!(actual_ty, PhpType::Void)
                     || crate::codegen::sentinels::null_repr_is_tagged())
             {

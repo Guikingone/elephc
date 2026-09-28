@@ -353,7 +353,15 @@ impl Checker {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
-                    if !self.is_by_ref_argument_lvalue(arg, caller_env)? {
+                    // A by-reference parameter a named argument SKIPPED receives its own
+                    // declared default, which is no caller expression at all: php binds it to a
+                    // fresh variable (see `call_validation::is_injected_declared_default`).
+                    let injected_default = decl
+                        .defaults
+                        .get(arg_idx)
+                        .and_then(Option::as_ref)
+                        .is_some_and(|default| default.span == arg.span && default == arg);
+                    if !injected_default && !self.is_by_ref_argument_lvalue(arg, caller_env)? {
                         let param_name = decl
                             .params
                             .get(arg_idx)
