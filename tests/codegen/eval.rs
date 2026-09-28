@@ -115,7 +115,7 @@ eval($code);
     )
     .unwrap();
 
-    let compile = elephc_cli_command(&dir)
+    let compile = elephc_cli_command_with_managed_pcre2(&dir)
         .args(["--quiet", "main.php"])
         .output()
         .expect("failed to invoke elephc CLI");
@@ -4401,7 +4401,7 @@ echo STRLEN("abcd");
 echo ":";
 echo \strlen("xy");
 echo ":";
-echo ChOp("value\f");
+echo ChOp("value\v");
 "#;
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
@@ -22727,6 +22727,53 @@ Error:Cannot unset protected(set) property EvalDeclaredAsymErrorBox::$protectedV
     );
 }
 
+/// Verifies eval-declared promoted constructor properties accept PHP 8.4 asymmetric visibility
+/// (issue #823): owner and subclass writes follow the `set` visibility, Reflection reports the
+/// same flags as a declared property, and an outside write throws. Expected output from PHP 8.5.
+#[test]
+fn test_eval_declared_promoted_asymmetric_property_visibility() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalPromotedAsymBase {
+    public function __construct(
+        private(set) int $privateValue,
+        public protected(set) string $protectedName = "base",
+        protected(set) readonly int $id = 3
+    ) {}
+    public function ownerWrite($value) {
+        $this->privateValue = $value;
+    }
+}
+class EvalPromotedAsymChild extends EvalPromotedAsymBase {
+    public function childWrite($name) {
+        $this->protectedName = $name;
+    }
+}
+$box = new EvalPromotedAsymChild(1);
+echo $box->privateValue . ":" . $box->protectedName . ":" . $box->id . ":";
+$box->ownerWrite(7);
+$box->childWrite("child");
+echo $box->privateValue . ":" . $box->protectedName . ":";
+$private = new ReflectionProperty("EvalPromotedAsymBase", "privateValue");
+echo ($private->isPrivateSet() ? "P" : "p") . ($private->isPromoted() ? "R" : "r");
+echo $private->getModifiers() . ":";
+$id = new ReflectionProperty("EvalPromotedAsymBase", "id");
+echo ($id->isProtectedSet() ? "T" : "t") . $id->getModifiers() . ":";
+try {
+    $box->privateValue = 9;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
+"#,
+    );
+    assert_eq!(
+        out,
+        "1:base:3:7:child:PR4129:T2177:Error:Cannot modify private(set) property \
+EvalPromotedAsymBase::$privateValue from global scope"
+    );
+}
+
 /// Verifies eval-declared inherited properties preserve PHP redeclaration invariants.
 #[test]
 fn test_eval_declared_inherited_property_redeclaration_contracts() {
@@ -26869,10 +26916,12 @@ eval('class EvalCycleDropBox {
     public function __construct($name) { $this->name = $name; }
     public function __destruct() { echo "drop:" . $this->name . ":"; }
 }
+gc_disable();
 $box = new EvalCycleDropBox("A");
 $box->self = $box;
 unset($box);
 $collected = gc_collect_cycles();
+gc_enable();
 echo $collected > 0 ? "collected:" : "uncollected:";
 echo "after";');
 "#,

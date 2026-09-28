@@ -11,6 +11,32 @@
 
 use crate::support::*;
 
+/// Keeps an `array_map()` result as an array inside an indexed literal.
+#[test]
+fn test_indexed_literal_of_array_map_result() {
+    let out = compile_and_run(
+        r#"<?php
+function suffix(string $value): string { return $value . '!'; }
+$outer = [array_map('suffix', ['ab', 'cd'])];
+echo count($outer[0]), ':', $outer[0][0], ',', $outer[0][1];
+"#,
+    );
+    assert_eq!(out, "2:ab!,cd!");
+}
+
+/// Keeps the same `array_map()` result as an associative literal value.
+#[test]
+fn test_assoc_literal_of_array_map_result() {
+    let out = compile_and_run(
+        r#"<?php
+function suffix(string $value): string { return $value . '!'; }
+$outer = ['values' => array_map('suffix', ['xy', 'z'])];
+echo count($outer['values']), ':', $outer['values'][0], ',', $outer['values'][1];
+"#,
+    );
+    assert_eq!(out, "2:xy!,z!");
+}
+
 /// Pins issue #1096's own repro: two `array_slice()` calls in an indexed literal stay arrays.
 ///
 /// The element type came from `infer_expr_type_syntactic`, whose builtin allowlist does not

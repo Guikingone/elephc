@@ -116,6 +116,9 @@ Classes implementing `ArrayAccess` can use PHP subscript syntax:
 `offsetSet()`, `$obj[] = $value` (and `$this[] = $value` inside the class)
 dispatches to `offsetSet(null, $value)`, `isset($obj[$key])` dispatches to
 `offsetExists()`, and `unset($obj[$key])` dispatches to `offsetUnset()`.
+`empty($obj[$key])` asks `offsetExists()` first and calls `offsetGet()` to
+test the value only when the offset exists, evaluating the object and the key
+once.
 
 `Serializable` is intentionally not provided: it is deprecated since
 PHP 8.1. Use the `__serialize` / `__unserialize` magic methods instead.
@@ -184,7 +187,7 @@ $target = "Button";
 echo ($item instanceof $target) ? "yes" : "no";     // yes
 ```
 
-The runtime check uses emitted class metadata, so subclasses match parent classes and implemented interfaces. The left-hand side may be a direct object or a boxed `mixed` / nullable / union value; non-object payloads return `false` once any dynamic target has been validated. Supported targets are named classes/interfaces, `self`, `parent`, late-bound `static`, dynamic class/interface strings, and dynamic object expressions.
+The runtime check uses emitted class metadata, so subclasses match parent classes and implemented interfaces. The left-hand side may be a direct object or a boxed `mixed` / nullable / union value; non-object payloads return `false` once any dynamic target has been validated. Supported targets are named classes/interfaces, `self`, `parent`, late-bound `static`, dynamic class/interface strings, and dynamic object expressions. A dynamic target can be any variable expression holding the class name or object, not just a local: `$value instanceof $this->className`, `$value instanceof $map['type']`, `$value instanceof self::$fallback`.
 
 ## Abstract classes
 ```php
@@ -311,6 +314,7 @@ Rules:
 - The property must be typed, and the modifier is not allowed on static properties.
 - Indirect writes through an array element (`$obj->items[] = x`, `$obj->items['k'] = x`) are writes too, so they honor the `set` visibility — not the (wider) read visibility.
 - Abstract and interface property hook contracts may carry asymmetric write visibility on writable (`{ set; }`) contracts. `private(set)` contracts are final and cannot be implemented or redeclared by a concrete child property.
+- Promoted constructor properties accept the same modifiers (`public private(set) int $x`, `protected(set) readonly string $label`), with the same rules, write checks, and Reflection flags as the equivalent declared property. See [Constructor](#constructor).
 
 ### Property redeclaration
 
@@ -492,6 +496,22 @@ echo $user->name();  // Ada
 ```
 
 Promoted properties support `public`, `protected`, `private`, `readonly`, nullable and union type declarations, constructor parameter defaults, and by-reference parameters. Variadic promotion is rejected, matching PHP.
+
+Promoted properties also accept PHP 8.4 [asymmetric visibility](#asymmetric-visibility-privateset). A `(set)` modifier alone is enough to promote the parameter, and it leaves the read visibility at `public`:
+
+```php
+<?php
+class Money {
+    public function __construct(
+        private(set) int $amount,                  // read: public, write: private
+        public protected(set) string $currency = "EUR",
+    ) {}
+}
+
+$m = new Money(5);
+echo $m->amount;    // 5
+// $m->amount = 9;  // rejected: write is private
+```
 
 By-reference promoted properties are supported when the constructor argument is a variable:
 
@@ -1364,7 +1384,7 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionFunction::getName()` | `new ReflectionFunction($function_name)` | Return the canonical user or supported callable-builtin function name |
 | `ReflectionFunction::getShortName()` / `getNamespaceName()` / `inNamespace()` | `new ReflectionFunction($function_name)` | Return namespace-aware name metadata for the reflected user or supported callable-builtin function |
 | `ReflectionFunction::isInternal()` / `isUserDefined()` | `new ReflectionFunction($function_name)` | Return origin predicates for supported reflected functions |
-| `ReflectionFunction::isClosure()` / `isDeprecated()` / `returnsReference()` / `isGenerator()` | `new ReflectionFunction($function_name)` | Return retained function predicates; AOT reflection reports `false` for closures and return-by-reference, uses `#[Deprecated]` metadata, and reports generator functions from lowered generator flags |
+| `ReflectionFunction::isClosure()` / `isDeprecated()` / `returnsReference()` / `isGenerator()` | `new ReflectionFunction($function_name)` | Return retained function predicates; AOT reflection reports `false` for closures, derives `returnsReference()` from the function's declared return-by-reference flag, uses `#[Deprecated]` metadata, and reports generator functions from lowered generator flags |
 | `ReflectionFunction::hasTentativeReturnType()` / `getTentativeReturnType()` / `isDisabled()` | `new ReflectionFunction($function_name)` | Return PHP-compatible defaults for supported functions: no tentative return type and not disabled |
 | `ReflectionFunction::getAttributes()` | `new ReflectionFunction($function_name)` | Return `ReflectionAttribute` objects for function attributes, optionally filtered to one attribute class by `$name` |
 | `ReflectionFunction::getParameters()` | `new ReflectionFunction($function_name)` | Return `ReflectionParameter` objects for the reflected function parameters |
@@ -1377,7 +1397,7 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionMethod::getName()` | `new ReflectionMethod($class_name, $method_name)` or deprecated `new ReflectionMethod("ClassName::method")` | Return the reflected method name, as DECLARED: lookup is case-insensitive, so `new ReflectionMethod(Box::class, "mAtCh")` finds a method written `Match` and reports `Match`, not the lookup text. Every path agrees — the constructor, `ReflectionClass::getMethod()`/`getMethods()`, `getPrototype()`, a parameter's `getDeclaringFunction()`, `get_class_methods()`, and the same reflection inside `eval()` |
 | `ReflectionMethod::getShortName()` / `getNamespaceName()` / `inNamespace()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Return PHP method-name metadata; methods report an empty namespace and `false` for `inNamespace()` |
 | `ReflectionMethod::isInternal()` / `isUserDefined()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Return origin predicates for supported reflected methods |
-| `ReflectionMethod::isClosure()` / `isDeprecated()` / `returnsReference()` / `isGenerator()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Return retained method predicates; AOT reflection reports `false` for closures and return-by-reference, uses `#[Deprecated]` metadata, and reports generator methods from lowered generator flags |
+| `ReflectionMethod::isClosure()` / `isDeprecated()` / `returnsReference()` / `isGenerator()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Return retained method predicates; AOT reflection reports `false` for closures, derives `returnsReference()` from the method's declared return-by-reference flag for class and interface methods (trait methods still report `false`), uses `#[Deprecated]` metadata, and reports generator methods from lowered generator flags |
 | `ReflectionMethod::hasTentativeReturnType()` / `getTentativeReturnType()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Return PHP-compatible defaults for supported user methods: no tentative return type |
 | `ReflectionMethod::hasPrototype()` / `getPrototype()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Return retained parent/interface prototype metadata for supported reflected method overrides and interface implementations |
 | `ReflectionMethod::getDeclaringClass()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Return a `ReflectionClass` object for the class-like symbol that declares the reflected method |

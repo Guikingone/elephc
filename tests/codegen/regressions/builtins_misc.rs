@@ -319,39 +319,39 @@ fn test_trim_mask() {
     assert_eq!(out, "hello");
 }
 
-/// Verifies default trim masks include form-feed bytes on both sides.
+/// Verifies default trim masks remove vertical tabs but preserve form-feed bytes.
 #[test]
-fn test_trim_default_mask_includes_form_feed() {
-    let out = compile_and_run(r#"<?php echo "[" . trim("\f value \f") . "]";"#);
-    assert_eq!(out, "[value]");
+fn test_trim_default_mask_preserves_form_feed() {
+    let out = compile_and_run(r#"<?php echo "[" . trim("\x0b\x0c value \x0c\x0b") . "]";"#);
+    assert_eq!(out, "[\x0c value \x0c]");
 }
 
-/// Verifies default ltrim masks include leading form-feed bytes.
+/// Verifies default ltrim masks remove a leading vertical tab but preserve form feed.
 #[test]
-fn test_ltrim_default_mask_includes_form_feed() {
-    let out = compile_and_run(r#"<?php echo "[" . ltrim("\f value") . "]";"#);
-    assert_eq!(out, "[value]");
+fn test_ltrim_default_mask_preserves_form_feed() {
+    let out = compile_and_run(r#"<?php echo "[" . ltrim("\x0b\x0c value") . "]";"#);
+    assert_eq!(out, "[\x0c value]");
 }
 
-/// Verifies default rtrim masks include trailing form-feed bytes.
+/// Verifies default rtrim masks remove a trailing vertical tab but preserve form feed.
 #[test]
-fn test_rtrim_default_mask_includes_form_feed() {
-    let out = compile_and_run(r#"<?php echo "[" . rtrim("value \f") . "]";"#);
-    assert_eq!(out, "[value]");
+fn test_rtrim_default_mask_preserves_form_feed() {
+    let out = compile_and_run(r#"<?php echo "[" . rtrim("value \x0c\x0b") . "]";"#);
+    assert_eq!(out, "[value \x0c]");
 }
 
 /// Verifies explicit trim masks remain exact and do not strip form-feed unless requested.
 #[test]
 fn test_trim_explicit_mask_keeps_form_feed_when_omitted() {
-    let out = compile_and_run(r#"<?php echo "[" . trim("\f value \f", " ") . "]";"#);
+    let out = compile_and_run(r#"<?php echo "[" . trim("\x0c value \x0c", " ") . "]";"#);
     assert_eq!(out, "[\x0c value \x0c]");
 }
 
-/// Verifies `chop()` behaves as PHP's alias for `rtrim()` and strips form-feed by default.
+/// Verifies `chop()` behaves as PHP's alias for `rtrim()` for its default vertical-tab mask.
 #[test]
-fn test_chop_alias_trims_default_form_feed() {
-    let out = compile_and_run(r#"<?php echo "[" . chop("value\f") . "]";"#);
-    assert_eq!(out, "[value]");
+fn test_chop_alias_preserves_default_form_feed() {
+    let out = compile_and_run(r#"<?php echo "[" . chop("value\x0c\x0b") . "]";"#);
+    assert_eq!(out, "[value\x0c]");
 }
 
 /// Verifies `chop()` participates in case-insensitive namespaced builtin fallback.
@@ -360,7 +360,7 @@ fn test_chop_case_insensitive_namespaced_builtin() {
     let out = compile_and_run(
         r#"<?php
 namespace Demo;
-echo ChOp("value\f");
+echo ChOp("value\x0b");
 "#,
     );
     assert_eq!(out, "value");
@@ -469,4 +469,56 @@ echo date_diff(1, 2), "|", timezone_name_get(5);
 "#,
     );
     assert_eq!(out, "user:3|tz:5");
+}
+
+/// `implode()` over a homogeneous float array joins each element in PHP's `precision = 14` text,
+/// for indexed and associative arrays, `join()`, a long separator, runtime values, exponents and
+/// infinities. The raw 8-byte doubles were read through the string-slot layout, and the call is
+/// now refused at compile time instead of printing nothing. Regression for #640.
+#[test]
+fn test_implode_joins_a_float_array() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$r = [1.5, 2.5];
+echo implode(",", $r), "\n";
+echo implode(", ", [1.5, 2.5, 3.5]), "\n";
+echo join([0.1, 0.2]), "\n";
+$scale = $argc + 0.5;
+$vals = [$scale, $scale * 3, -$scale / 7, 1e20 * $scale, 1.0e-7 * $scale, 100.0];
+echo implode(" | ", $vals), "\n";
+echo implode("<long separator of many bytes>", [INF, -INF, 0.0, -0.0]), "\n";
+$assoc = ["a" => 1.25, "b" => 2.75];
+echo implode("-", $assoc), "\n";
+echo "[" . implode(",", []) . "]\n";
+$f = [];
+for ($i = 0; $i < 5; $i++) { $f[] = $i / 4; }
+echo implode(";", $f), "\n";
+$total = 0;
+for ($i = 0; $i < 40; $i++) { $total += strlen(implode("/", [$i + 0.5, $i * 1.5])); }
+echo $total, "\n";
+echo strtoupper(implode("x", [1.5, 2.0])) . "!" . "\n";
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "1.5,2.5\n",
+            "1.5, 2.5, 3.5\n",
+            "0.10.2\n",
+            "1.5 | 4.5 | -0.21428571428571 | 1.5E+20 | 1.5E-7 | 100\n",
+            "INF<long separator of many bytes>-INF<long separator of many bytes>0<long separator of many bytes>-0\n",
+            "1.25-2.75\n",
+            "[]\n",
+            "0;0.25;0.5;0.75;1\n",
+            "303\n",
+            "1.5X2!\n",
+        ),
+        "stderr: {}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
 }

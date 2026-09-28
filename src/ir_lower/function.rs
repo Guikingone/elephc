@@ -10,7 +10,7 @@
 //! - Every lowered function leaves all blocks terminated before validation.
 
 use crate::ir::{
-    Builder, Function, FunctionFlags, FunctionParam, GeneratorSource, Immediate, IrType, Module,
+    Builder, Function, FunctionFlags, FunctionParam, Immediate, IrType, Module,
     Op, Ownership, Terminator,
 };
 use crate::ir_lower::context::{
@@ -206,10 +206,9 @@ pub(crate) fn lower_user_function(
         .get(name)
         .cloned()
         .unwrap_or_else(|| collect_attribute_args(attributes));
-    attach_generator_source_if_needed(
+    mark_generator_if_needed(
         &mut function,
         body,
-        eir_signature.params.len(),
         signature.is_generator,
     );
     let closures = lower_body_into_function(
@@ -329,10 +328,9 @@ pub(crate) fn lower_class_method(
         body_params.insert(0, ("this".to_string(), this_type));
     }
     function.params.extend(function_params(&signature));
-    attach_generator_source_if_needed(
+    mark_generator_if_needed(
         &mut function,
         body,
-        body_params.len(),
         signature.is_generator,
     );
     let closures = lower_body_into_function(
@@ -1534,10 +1532,9 @@ fn lower_closure_function_with_signature(
     function.params.extend(closure_capture_params(captures));
     function.source_signature = Some(source_signature(name, &signature));
     function.signature = Some(eir_runtime_metadata_signature(&signature));
-    attach_generator_source_if_needed(
+    mark_generator_if_needed(
         &mut function,
         body,
-        signature.params.len(),
         signature.is_generator,
     );
     let env = env_with_closure_captures(&signature, captures, parent.web);
@@ -1738,9 +1735,10 @@ fn lower_body_into_function(
     // array, so `__rt_array_ensure_unique` (which only splits at refcount >= 2) stayed inert and
     // every write in the callee landed in the CALLER's storage. Re-bind each by-value container
     // parameter to an owning shadow slot, which restores the refcount the copy-on-write split
-    // depends on. This one site is the single funnel for free functions, methods, static methods
-    // and closures, so every call flavour — including `call_user_func`, dynamic `$f(...)` and
-    // recursion — is covered without any per-flavour code.
+    // depends on. Exact PHP `array` parameters carry a boxed Mixed cell, so the shadow clones that
+    // wrapper as well as retaining its payload. This one site is the single funnel for free
+    // functions, methods, static methods and closures, so every call flavour, including
+    // `call_user_func`, dynamic `$f(...)` and recursion, is covered without per-flavour code.
     //
     // Mixed parameters also need an owning cell: native return values must outlive an eval
     // caller's temporary arguments, and a boxed array mutation must not replace the caller's
@@ -1767,12 +1765,18 @@ fn lower_body_into_function(
         }
     }
     terminate_open_block(&mut ctx);
+    // Cleanup-only loads must follow the final frame representation after every
+    // source-order store has had a chance to widen its local slot.
+    ctx.builder.repair_owned_local_cleanup_load_types();
     // Final storage types are now known: erase deferred loop-store releases that
     // guard slots which never widened to lifetime-tracked storage (issue #534).
     ctx.builder.prune_untracked_release_local_slot_ops();
     // Likewise, erase provisional releases for concrete local loads unless a
     // later store widened their final frame slot to Mixed (issue #538).
     ctx.builder.prune_borrowed_local_load_release_ops();
+    // Provisional exception guards obey the same final-storage boundary. A
+    // concrete slot remains the owner and must survive a throwing call.
+    ctx.builder.prune_borrowed_local_load_guard_ops();
     // Publish the lowering-time ownership proof after provisional local-load
     // releases have been pruned, so codegen can consume EIR metadata instead of
     // maintaining a second producer allow-list (issue #595).
@@ -1814,11 +1818,10 @@ fn add_closures(module: &mut Module, closures: Vec<Function>) {
     }
 }
 
-/// Retains generator source metadata until the EIR backend has native generator-state lowering.
-fn attach_generator_source_if_needed(
+/// Marks a function as a generator using its checked classification and remaining yield tokens.
+fn mark_generator_if_needed(
     function: &mut Function,
     body: &[Stmt],
-    visible_param_count: usize,
     is_generator: bool,
 ) {
     // `is_generator` is the bit the CHECKER recorded from the source body, before any pass ran.
@@ -1838,10 +1841,6 @@ fn attach_generator_source_if_needed(
         return;
     }
     function.flags.is_generator = true;
-    function.generator_source = Some(GeneratorSource {
-        body: body.to_vec(),
-        visible_param_count,
-    });
 }
 
 /// Returns the EIR return type to lower a function body with.

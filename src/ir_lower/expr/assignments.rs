@@ -48,6 +48,16 @@ pub(super) fn lower_assignment_expr(
             ctx.mark_local_initialized(name);
         }
     }
+    if assigned_name.is_none() {
+        if let Some(result_target) = result_target {
+            // The non-local write evaluates the value itself. Lowering it beforehand leaves
+            // an unused read (or repeats a side effect) before the target is written.
+            lower_non_local_assignment_write_with_diagnosed_key(
+                ctx, target, value, expr.span, key_already_diagnosed,
+            );
+            return lower_expr(ctx, result_target);
+        }
+    }
     let static_callable = assigned_name.and_then(|_| static_callable_binding_for_expr(ctx, value));
     let reflected_class = assigned_name.and_then(|_| reflection_class_binding_for_expr(ctx, value));
     let reflected_function =
@@ -67,6 +77,7 @@ pub(super) fn lower_assignment_expr(
         .unwrap_or_else(|| lower_expr(ctx, value));
     let mut result = lowered;
     if let ExprKind::Variable(name) = &target.kind {
+        let lowered = crate::ir_lower::ownership::copy_assignment_value(ctx, lowered, Some(expr.span));
         // For static locals and ref-bound locals, keep the declared type to
         // avoid widening Int→Mixed. The codegen narrows Mixed→Int when the slot
         // is Int-typed. Without this, ref cells would hold Mixed boxes instead

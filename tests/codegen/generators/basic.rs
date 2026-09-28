@@ -436,7 +436,7 @@ echo ":", $a->getReturn(), ",", $b->getReturn(), "\n";
 /// Reflection already answered this correctly, and still does.
 ///
 /// `ReflectionFunction::isGenerator()` reads `flags.is_generator`, which was ALWAYS set from the
-/// token — the disjunct removed from `attach_generator_source_if_needed` tested a field that had
+/// token — the disjunct removed from `mark_generator_if_needed` tested a field that had
 /// by then been rewritten to the coroutine's `Mixed` body return, so it could never fire. That is
 /// the shape of the bug: the flag said "not a generator" while `generator_body_return_type` said
 /// "generator", and the factory got a coroutine's body return type without the coroutine.
