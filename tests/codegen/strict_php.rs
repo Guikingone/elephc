@@ -135,10 +135,14 @@ function ptr_get(int $x): int { return $x; }
 echo var_export(function_exists('ptr_get'), true), "\n";
 echo var_export(function_exists('zval_pack'), true), "\n";
 echo var_export(function_exists('buffer_new'), true), "\n";
+echo var_export(function_exists('clamp'), true), "\n";
+echo var_export(function_exists('log2'), true), "\n";
+echo var_export(function_exists('grapheme_strrev'), true), "\n";
+echo var_export(function_exists('is_real'), true), "\n";
 echo var_export(function_exists('strlen'), true), "\n";
 "#,
     );
-    assert_eq!(out, "true\nfalse\nfalse\ntrue\n");
+    assert_eq!(out, "true\nfalse\nfalse\nfalse\nfalse\nfalse\nfalse\ntrue\n");
 }
 
 /// Verifies the same `function_exists()` probes report the extension builtins
@@ -149,10 +153,14 @@ fn test_default_mode_function_exists_keeps_extensions() {
         r#"<?php
 echo var_export(function_exists('zval_pack'), true), "\n";
 echo var_export(function_exists('buffer_new'), true), "\n";
+echo var_export(function_exists('clamp'), true), "\n";
+echo var_export(function_exists('log2'), true), "\n";
+echo var_export(function_exists('grapheme_strrev'), true), "\n";
+echo var_export(function_exists('is_real'), true), "\n";
 "#,
         &[],
     );
-    assert_eq!(out, "true\ntrue\n");
+    assert_eq!(out, "true\ntrue\ntrue\ntrue\ntrue\ntrue\n");
 }
 
 /// Verifies a call to an extension builtin fails under strict mode with the
@@ -168,6 +176,28 @@ fn test_strict_php_extension_call_fails_with_hint() {
             && stderr.contains("disabled by --strict-php"),
         "unexpected stderr: {stderr}",
     );
+}
+
+/// Keeps a hidden extension builtin from being replaced by the pipe constant folder.
+#[test]
+fn test_strict_php_pipe_rejects_hidden_is_real() {
+    let stderr = compile_cli_expect_error(
+        "<?php echo 1.5 |> is_real(...);",
+        &["--strict-php"],
+    );
+    assert!(
+        stderr.contains("Undefined function for first-class callable: is_real"),
+        "unexpected stderr: {stderr}",
+    );
+}
+
+/// Dispatches a strict-mode pipe to a user function that shadows the hidden builtin.
+#[test]
+fn test_strict_php_pipe_uses_user_declared_is_real() {
+    let out = compile_strict_cli_and_run(
+        "<?php function is_real(float $value): bool { return false; } echo (int)(1.5 |> is_real(...));",
+    );
+    assert_eq!(out, "0");
 }
 
 /// Verifies extension syntax fails under strict mode with the audit diagnostic.
@@ -286,6 +316,27 @@ echo eval('$b = buffer_new(4); return buffer_len($b);');
         out.contains("eval() fragment uses an unsupported construct"),
         "unexpected output: {out}",
     );
+}
+
+/// Keeps literal eval from folding a strict-hidden extension builtin into a boolean.
+#[test]
+fn test_strict_php_literal_eval_rejects_hidden_is_real() {
+    let out = compile_strict_cli_and_run_expect_failure(
+        "<?php echo eval('return is_real(1.5);');",
+    );
+    assert!(
+        out.contains("eval() fragment uses an unsupported construct"),
+        "unexpected output: {out}",
+    );
+}
+
+/// Resolves a literal eval call to a user function instead of folding the hidden builtin.
+#[test]
+fn test_strict_php_literal_eval_uses_user_declared_is_real() {
+    let out = compile_strict_cli_and_run(
+        "<?php function is_real(float $value): bool { return false; } echo (int) eval('return is_real(1.5);');",
+    );
+    assert_eq!(out, "0");
 }
 
 /// Verifies introspection inside dynamic eval agrees with the AOT surface

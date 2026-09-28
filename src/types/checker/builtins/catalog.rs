@@ -282,12 +282,23 @@ mod tests {
             "strict must hide buffer_new"
         );
         assert!(
+            crate::builtins::registry::lookup("is_real")
+                .is_some_and(|definition| definition.spec.extension),
+            "is_real must carry its shared extension contract"
+        );
+        assert!(
+            canonical_builtin_function_name("is_real").is_none(),
+            "strict must hide is_real"
+        );
+        assert!(
             !is_php_visible_builtin_function("buffer_new"),
             "strict must hide buffer_new from PHP visibility"
         );
         let names = supported_builtin_function_names();
         assert!(
-            !names.contains(&"ptr_get") && !names.contains(&"buffer_new"),
+            !names.contains(&"ptr_get")
+                && !names.contains(&"buffer_new")
+                && !names.contains(&"is_real"),
             "strict must drop extension names from the supported set"
         );
     }
@@ -301,11 +312,6 @@ mod tests {
         assert_eq!(
             canonical_builtin_function_name("strlen"),
             Some("strlen".to_string())
-        );
-        assert_eq!(
-            canonical_builtin_function_name("is_real"),
-            Some("is_real".to_string()),
-            "is_real is treated as PHP for strict purposes"
         );
         assert!(
             canonical_builtin_function_name("__elephc_ptr_read_string").is_some(),

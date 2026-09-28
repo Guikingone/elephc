@@ -76,7 +76,12 @@ where
             }
         }
         ExprKind::FunctionCall { name, args } => {
-            fold_static_builtin_int_call(name.as_str().trim_start_matches('\\'), args).is_some()
+            fold_static_builtin_int_call(
+                name.as_str().trim_start_matches('\\'),
+                args,
+                support.strict_php(),
+            )
+            .is_some()
         }
         _ => false,
     }
