@@ -1,4 +1,4 @@
-// Lot 2 of IOS_TARGET_SPEC.md: a native SwiftUI host driven entirely by
+// Lot 2 of .plans/ios-target.md: a native SwiftUI host driven entirely by
 // compiled PHP, on macOS and on iOS.
 //
 // This file contains no application logic. It asks the elephc-compiled library
