@@ -6,6 +6,9 @@
 //!   `crate::types::checker::driver::functions` when it records `mixed` for a function no
 //!   direct call site ever passed arguments to.
 //! - `crate::ir_lower::program::metadata` when it normalizes method ABIs for EIR.
+//! - `crate::ir_lower::expr::eir_user_function_return_type`, through `caller_visible_return_type`,
+//!   and `Checker::caller_visible_direct_call_return` in
+//!   `crate::types::checker::callables::closures`, through the two predicates it is built from.
 //!
 //! Key details:
 //! - An untyped parameter starts as the checker's `Int` PLACEHOLDER, which direct call sites
@@ -20,6 +23,11 @@
 //!   pass-through shapes (ternary, `??`, `match`, `@`, assignment), counts. A body that computes
 //!   its own result keeps its inferred type, so this is not a blanket widening of every untyped
 //!   declaration.
+//! - `caller_visible_return_type` is the other half of that agreement: a callee with an untyped
+//!   by-value parameter receives it as a boxed Mixed cell, so a container it builds from that
+//!   parameter holds Mixed elements whatever element type the placeholder inferred. EIR call
+//!   lowering and the checker's typing of a closure that returns such a call both read that rule
+//!   here.
 
 use std::collections::{HashMap, HashSet};
 
@@ -177,5 +185,54 @@ pub fn expr_exposes_dynamic_param(expr: &Expr, dynamic_params: &HashSet<String>)
         ExprKind::ErrorSuppress(inner) => expr_exposes_dynamic_param(inner, dynamic_params),
         ExprKind::Assignment { value, .. } => expr_exposes_dynamic_param(value, dynamic_params),
         _ => false,
+    }
+}
+
+/// Returns the return type a CALLER of a user function observes.
+///
+/// A declared return type is authoritative. So is the inferred type of a callee whose parameters
+/// are all typed, by reference, or variadic. An untyped by-value parameter, however, reaches the
+/// callee as a boxed Mixed cell, so an array the callee builds from it holds Mixed elements even
+/// when the checker inferred `array<int>` from the placeholder: the container element is widened
+/// to Mixed. Scalars are left alone; `return_exposes_dynamic_param` owns the pass-through case.
+///
+/// EIR call lowering (`crate::ir_lower::expr::eir_user_function_return_type`) uses this, and the
+/// checker's typing of a closure whose body is `return <user call>;` applies the same two
+/// predicates, so the element the caller reads has one type on both sides (issue #1270).
+pub fn caller_visible_return_type(signature: &FunctionSig) -> PhpType {
+    if signature.declared_return || !signature_has_dynamic_untyped_param(signature) {
+        return signature.return_type.clone();
+    }
+    dynamic_param_container_return_type(&signature.return_type)
+}
+
+/// Returns true when a signature has a parameter EIR must receive as a boxed Mixed cell: an
+/// untyped, by-value, non-variadic parameter.
+pub fn signature_has_dynamic_untyped_param(signature: &FunctionSig) -> bool {
+    signature.params.iter().enumerate().any(|(index, (name, _))| {
+        let declared = signature.declared_params.get(index).copied().unwrap_or(false);
+        let by_ref = signature.ref_params.get(index).copied().unwrap_or(false);
+        let variadic = signature.variadic.as_deref() == Some(name.as_str());
+        !declared && !by_ref && !variadic
+    })
+}
+
+/// Widens the element of an inferred container return type to Mixed, member by member for a
+/// union, because the container may be built from boxed dynamic parameters. Non-container types
+/// are returned unchanged (in their codegen representation).
+pub fn dynamic_param_container_return_type(return_type: &PhpType) -> PhpType {
+    match return_type.codegen_repr() {
+        PhpType::Array(_) => PhpType::Array(Box::new(PhpType::Mixed)),
+        PhpType::AssocArray { key, .. } => PhpType::AssocArray {
+            key,
+            value: Box::new(PhpType::Mixed),
+        },
+        PhpType::Union(members) => PhpType::Union(
+            members
+                .iter()
+                .map(dynamic_param_container_return_type)
+                .collect(),
+        ),
+        other => other,
     }
 }

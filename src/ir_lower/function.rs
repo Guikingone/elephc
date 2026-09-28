@@ -2048,7 +2048,9 @@ pub(crate) fn eir_signature_with_php_param_contracts(
         }
     }
     if has_dynamic_untyped_param && !signature.declared_return {
-        eir_signature.return_type = dynamic_param_container_return_type(&eir_signature.return_type);
+        eir_signature.return_type = crate::types::dynamic_params::dynamic_param_container_return_type(
+            &eir_signature.return_type,
+        );
     }
     eir_signature
 }
@@ -2113,24 +2115,6 @@ fn magic_method_param_keeps_eir_contract(
                     ))
         }
         _ => false,
-    }
-}
-
-/// Widens inferred container return elements that may be built from dynamic params.
-fn dynamic_param_container_return_type(return_type: &PhpType) -> PhpType {
-    match return_type.codegen_repr() {
-        PhpType::Array(_) => PhpType::Array(Box::new(PhpType::Mixed)),
-        PhpType::AssocArray { key, .. } => PhpType::AssocArray {
-            key,
-            value: Box::new(PhpType::Mixed),
-        },
-        PhpType::Union(members) => PhpType::Union(
-            members
-                .iter()
-                .map(dynamic_param_container_return_type)
-                .collect(),
-        ),
-        other => other,
     }
 }
 
@@ -2274,7 +2258,8 @@ fn direct_closure_return_type(
 /// the property's declared type, so a `fn &() => $o->items` closure returns the array type
 /// rather than the syntactic integer default. An array literal built out of those same
 /// variables and scoped constants resolves its element/value slots the same way (see
-/// `direct_closure_return_array_type`).
+/// `direct_closure_return_array_type`). A call resolves through the same metadata ordinary
+/// call lowering uses, and a call whose callee is only known at runtime is boxed `Mixed`.
 fn direct_closure_return_expr_type(
     expr: &crate::parser::ast::Expr,
     captures: &[(String, PhpType, bool)],
@@ -2283,6 +2268,11 @@ fn direct_closure_return_expr_type(
 ) -> PhpType {
     if matches!(expr.kind, ExprKind::Null) {
         return PhpType::Mixed;
+    }
+    // A postfix chain holding `?->` is lowered as one lazy unit whose short-circuit and success
+    // paths share one boxed result, so that box is what the body returns.
+    if let Some(storage) = crate::ir_lower::expr::nullsafe_chain_result_storage_type(expr) {
+        return storage;
     }
     if let ExprKind::FunctionCall { name, .. } = &expr.kind {
         if let Some(ty) = ctx.builtin_call_types.get(&expr.span) {
@@ -2304,6 +2294,40 @@ fn direct_closure_return_expr_type(
         if let Some(sig) = ctx.functions.get(name.as_str()) {
             return crate::ir_lower::expr::eir_user_function_return_type(sig);
         }
+    }
+    // The other call shapes fell to the same syntactic fallback, whose answer for a call it does
+    // not recognize is `Int`: `function () use ($o) { return $o->name(); }` returned a string
+    // through an int slot and printed 0 (issue #1269), and a captured closure, an expression
+    // call or a pipe did the same (issue #1272). Methods resolve through the metadata their call
+    // lowering reads; a callee chosen at runtime hands back a boxed result.
+    match &expr.kind {
+        ExprKind::MethodCall { object, method, .. } => {
+            let receiver_ty = match &object.kind {
+                ExprKind::This => captures
+                    .iter()
+                    .find(|(capture_name, _, _)| capture_name == "this")
+                    .map(|(_, ty, _)| ty.clone())
+                    .unwrap_or(PhpType::Mixed),
+                _ => direct_closure_return_expr_type(object, captures, params, ctx),
+            };
+            return crate::ir_lower::expr::closure_return_method_call_type(
+                ctx,
+                &receiver_ty,
+                method,
+                expr,
+            );
+        }
+        ExprKind::StaticMethodCall { receiver, method, .. } => {
+            return crate::ir_lower::expr::static_method_call_expr_type_for_ir(
+                ctx, receiver, method,
+            )
+            .unwrap_or(PhpType::Mixed);
+        }
+        ExprKind::ClosureCall { .. }
+        | ExprKind::ExprCall { .. }
+        | ExprKind::Pipe { .. }
+        | ExprKind::NullsafeDynamicMethodCall { .. } => return PhpType::Mixed,
+        _ => {}
     }
     // An array literal returned directly is stamped with this inferred type and its elements
     // are coerced into it by `lower_return_expr`, so its slots must be resolved against the
