@@ -57,6 +57,8 @@ pub fn parse_stmt(tokens: &[SpannedToken], pos: &mut usize) -> Result<Stmt, Comp
     }
     let span = tokens[*pos].1.span;
 
+    // Counts statement nesting, so a namespace declaration can tell it is not at the top level.
+    let _nesting = crate::parser::enter_statement();
     let stmt = parse_stmt_dispatch(tokens, pos, span)?;
     attach_attributes_to_stmt(stmt, attributes, span)
 }

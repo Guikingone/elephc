@@ -32,6 +32,16 @@ pub(super) fn parse_namespace_stmt(
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
+    // PHP refuses a namespace declaration anywhere but the top level of a file ("syntax
+    // error, unexpected token namespace"). The resolver would scope one inside a function or
+    // `if` body to that body while the relative-name tracking below is file-wide, so the two
+    // could disagree on what `namespace\X` means after it.
+    if !crate::parser::at_top_level_statement() {
+        return Err(CompileError::new(
+            span,
+            "Namespace declarations are only allowed at the top level of a file, not inside a block, a function or another namespace",
+        ));
+    }
     *pos += 1; // consume namespace
 
     let name = if *pos < tokens.len() && tokens[*pos].0 == Token::LBrace {

@@ -851,4 +851,25 @@ fn test_error_relative_name_has_no_global_fallback_and_needs_a_name() {
         "<?php namespace App; echo namespace\\;",
         "Expected identifier after '\\' in qualified name",
     );
+    // Inside a namespace, `namespace\PHP_EOL` is that namespace's constant, not the global one.
+    expect_error(
+        "<?php namespace App; echo namespace\\PHP_EOL;",
+        "Undefined constant: App\\PHP_EOL",
+    );
+}
+
+/// Verifies a namespace declaration is refused anywhere but the top level of a file (#825
+/// review), as PHP refuses it ("unexpected token namespace"). Accepted inside a function or `if`
+/// body, it moved the parser's relative-name namespace for the rest of the file while the
+/// resolver scoped it to that body, so a later `namespace\X` could bind to the wrong class.
+#[test]
+fn test_error_nested_namespace_declaration() {
+    for source in [
+        "<?php namespace App; function g() { namespace Other; }",
+        "<?php if (true) { namespace Other; }",
+        "<?php namespace App { namespace Other; }",
+        "<?php $f = function () { namespace Other { } };",
+    ] {
+        expect_error(source, "only allowed at the top level of a file");
+    }
 }

@@ -24,7 +24,8 @@ mod stmt;
 
 pub(crate) use attributes::{consume_attribute_lists, parse_attribute_lists};
 pub(crate) use relative_names::{
-    current_namespace_parts, enter_namespace, relative_name_starts_at, restore_namespace,
+    at_top_level_statement, current_namespace_parts, enter_namespace, enter_statement,
+    relative_name_starts_at, restore_namespace,
 };
 
 /// Re-exports the root AST node for a parsed PHP file, containing all top-level statements.

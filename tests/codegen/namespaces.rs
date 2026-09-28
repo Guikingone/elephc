@@ -910,3 +910,37 @@ namespace {
         )
     );
 }
+
+/// A relative name works in the three positions the second review found refused: an
+/// `insteadof` list (`namespace\A::m insteadof namespace\B`), the static-property form of
+/// `instanceof` (`$x instanceof namespace\Cfg::$cls`), and a constant the lexer gives its own
+/// token. Inside a namespace `namespace\NAN` is that namespace's constant; in the global
+/// namespace `namespace\PHP_EOL`, `namespace\true`, `namespace\null`, `namespace\INF` and
+/// `namespace\M_PI` are the global constants. Regression for #825; expected output is PHP 8.5's.
+#[test]
+fn test_relative_names_in_insteadof_instanceof_and_constant_tokens() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App {
+    trait A { public function m() { return "a"; } }
+    trait B { public function m() { return "b"; } }
+    class C { use namespace\A, namespace\B { namespace\A::m insteadof namespace\B; } }
+    echo (new C())->m(), "\n";
+    class Cfg { public static $cls = "Exception"; }
+    $x = new \Exception();
+    var_dump($x instanceof namespace\Cfg::$cls);
+    const NAN = "App NAN";
+    echo namespace\NAN, "\n";
+}
+namespace {
+    echo "[", namespace\PHP_EOL, "]\n";
+    var_dump(namespace\true, namespace\null, namespace\INF);
+    echo namespace\M_PI > 3 ? "pi" : "no", "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "a\nbool(true)\nApp NAN\n[\n]\nbool(true)\nNULL\nfloat(INF)\npi\n"
+    );
+}

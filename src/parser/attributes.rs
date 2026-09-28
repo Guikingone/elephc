@@ -105,7 +105,8 @@ fn parse_one_group(
 
 /// Parse a single attribute name (possibly namespaced) and optionally
 /// parenthesized arguments. Sets `fully_qualified` if the name started
-/// with `\`. Returns the `Attribute` with its name, parsed arguments, and span.
+/// with `\`, or with the relative prefix `namespace\`, which is resolved here against the
+/// current namespace. Returns the `Attribute` with its name, parsed arguments, and span.
 fn parse_one_attribute(
     tokens: &[SpannedToken],
     pos: &mut usize,
