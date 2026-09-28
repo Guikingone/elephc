@@ -13,6 +13,11 @@ on:
     - cron: '0 3 * * *'
   workflow_dispatch:
 
+# Least privilege for every job: the repository default token is read-write,
+# and the live suites only check out and build the repository.
+permissions:
+  contents: read
+
 concurrency:
   group: pdo-live-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true

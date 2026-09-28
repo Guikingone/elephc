@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+# Least privilege for every job: the repository default token is read-write,
+# and no job here writes anything through it. `packages: read` lets the Linux
+# jobs pull `ghcr.io/illegalstudio/elephc-ci` with the workflow token.
+permissions:
+  contents: read
+  packages: read
+
 # Cancel superseded runs for the same ref (e.g. when a branch is force-pushed or
 # rebased) so stale jobs stop consuming runners the moment a newer commit lands.
 concurrency:
