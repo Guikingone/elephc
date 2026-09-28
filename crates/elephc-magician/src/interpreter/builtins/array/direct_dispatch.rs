@@ -57,6 +57,9 @@ pub(in crate::interpreter) fn eval_builtin_array_declared_call(
         "current" => super::current::eval_current_declared_call(args, context, scope, values),
         "key" => super::key::eval_key_declared_call(args, context, scope, values),
         "range" => super::range::eval_range_declared_call(args, context, scope, values),
+        name if super::array_ucompare::is_array_ucompare_builtin(name) => {
+            super::array_ucompare::eval_array_ucompare_declared_call(name, args, context, scope, values)
+        }
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }

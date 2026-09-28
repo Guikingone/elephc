@@ -293,6 +293,7 @@ fn try_compile_source_to_asm_with_defines_repr(
     let resolved = elephc::sodium_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::password_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::array_edge_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::array_ucompare_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::curl_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::xml_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
@@ -318,6 +319,7 @@ fn try_compile_source_to_asm_with_defines_repr(
     let resolved = elephc::sodium_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::password_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::array_edge_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::array_ucompare_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::attribute_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::array_merge_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::array_reduce_prelude::inject_if_used(resolved);

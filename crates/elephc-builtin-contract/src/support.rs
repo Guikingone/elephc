@@ -191,8 +191,16 @@ pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
 /// `spec.rs` asserts every binding has an execution route, so the interpreter aborts at startup.
 const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] = &[
     "addcslashes",
+    "array_diff_uassoc",
+    "array_diff_ukey",
     "array_first",
+    "array_intersect_uassoc",
+    "array_intersect_ukey",
     "array_last",
+    "array_udiff_assoc",
+    "array_udiff_uassoc",
+    "array_uintersect_assoc",
+    "array_uintersect_uassoc",
     "file",
     "hash_copy",
     "hash_final",
@@ -379,14 +387,10 @@ fn is_eval_only_reflection(id: BuiltinId) -> bool {
 const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "array_all",
     "array_any",
-    "array_diff_assoc",
     "array_find",
-    "array_intersect_assoc",
     "array_merge_recursive",
     "array_multisort",
     "array_replace_recursive",
-    "array_udiff",
-    "array_uintersect",
     "header_remove",
     "zval_free",
     "zval_pack",
@@ -445,16 +449,19 @@ mod tests {
         // them) without the numbers moving. Only the sodium share is named per count below.
         // Sodium: the four `sodium_crypto_box_*` eval homes. mbstring case mapping: the
         // `mb_strtoupper` / `mb_strtolower` homes. Regex: the four new contracts' eval homes plus
-        // `preg_grep`, out of `EVAL_IMPLEMENTATION_PENDING`.
-        assert_eq!(eval_registry, 640 + curl_surface);
+        // `preg_grep`, out of `EVAL_IMPLEMENTATION_PENDING`. Array builtins: `array_first` /
+        // `array_last`, the eight user-comparator set functions, and `array_diff_assoc`,
+        // `array_intersect_assoc`, `array_udiff`, `array_uintersect` out of the pending list.
+        assert_eq!(eval_registry, 654 + curl_surface);
         // 82 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use. Sodium: `__elephc_sodium_box` and
         // `__elephc_sodium_status`.
         assert_eq!(eval_internal, 102);
         // Registry builtins awaiting eval homes, plus the PHP-visible prelude-provided and
         // name-resolver-rewritten functions eval does not reach (see `eval_support`). `preg_grep`
-        // left it when its eval home landed.
-        assert_eq!(eval_pending, 348);
+        // left it when its eval home landed. The five `password_*` prelude contracts joined it,
+        // and `array_diff_assoc`, `array_intersect_assoc`, `array_udiff`, `array_uintersect` left.
+        assert_eq!(eval_pending, 349);
         // Main's BCMath registry adds fourteen AOT contracts; this branch also
         // promotes get_object_vars from an external surface into the registry and
         // adds the ten iconv contracts, thirty-five PCNTL contracts, forty-three
@@ -474,8 +481,11 @@ mod tests {
         // compiled side has no counterpart for. It is the same contract on the other side of the
         // `aot_unsupported` count below, which drops by the same one.
         // Sodium: the four `sodium_crypto_box_*` prelude declarations. Regex: `preg_filter` and
-        // `preg_replace_callback_array`, built by `crate::preg_array_prelude`.
-        assert_eq!(aot_external, 424 + curl_surface);
+        // `preg_replace_callback_array`, built by `crate::preg_array_prelude`. Password: the
+        // five `password_*` functions of `crate::password_prelude`. Arrays: `array_first` /
+        // `array_last` (`crate::array_edge_prelude`) and the eight user-comparator set
+        // functions (`crate::array_ucompare_prelude`).
+        assert_eq!(aot_external, 439 + curl_surface);
         // `get_called_class`, `get_class_methods` and `get_class_vars` from main, plus this
         // branch's `register_tick_function` and `unregister_tick_function`.
         assert_eq!(aot_unsupported, 5);
@@ -526,10 +536,11 @@ mod tests {
         assert_eq!(shared_runtime, 20);
         assert_eq!(hybrid_adapter, 2);
         // Moves in step with `eval_registry` above: every newly bound eval home is an adapter.
-        assert_eq!(interpreter_adapter, 618 + curl_surface);
+        assert_eq!(interpreter_adapter, 632 + curl_surface);
         // Drifted with the counts in `every_contract_has_a_backend_support_record`; sodium's
         // share is its two internal builtins, which eval never exposes. `preg_grep` left it.
-        assert_eq!(unsupported, 450);
+        // Password: five in; array builtins with new eval homes: four out.
+        assert_eq!(unsupported, 451);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

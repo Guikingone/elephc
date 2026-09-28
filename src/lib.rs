@@ -43,6 +43,7 @@ pub mod assert_prelude;
 pub mod error_exception_prelude;
 pub mod password_prelude;
 pub mod array_edge_prelude;
+pub mod array_ucompare_prelude;
 pub mod sodium_prelude;
 pub mod attribute_prelude;
 /// Whole-program PHP symbol usage collection for conditional prelude injection.
