@@ -38,7 +38,7 @@ pub(crate) use builder::local_load_types_share_storage;
 pub(crate) use builder::local_load_coercion_owns_result;
 pub use effects::Effects;
 pub use function::{
-    Function, FunctionFlags, FunctionId, FunctionParam, GeneratorSource, LocalKind, LocalSlot,
+    Function, FunctionFlags, FunctionId, FunctionParam, LocalKind, LocalSlot,
     LocalSlotId,
 };
 pub use instr::{
@@ -53,7 +53,7 @@ pub use module::{
 pub use pcntl_runtime::{PcntlRuntime, PcntlTargetSupport};
 pub use print::{print_function, print_module};
 pub use runtime_call::{
-    ArrayKeySort, RuntimeCallSignature, RuntimeCallTarget, UnaryStringRuntime,
+    ArrayKeySort, RuntimeArgumentLayout, RuntimeCallSignature, RuntimeCallTarget, UnaryStringRuntime,
 };
 pub use types::{IrHeapKind, IrType};
 pub use validator::{validate_function, validate_module, ValidationError};

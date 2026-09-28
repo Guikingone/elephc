@@ -21,3 +21,6 @@ echo call_user_func("\\Demo\\Support\\format_user", $user) . "\n";
 // A namespaced constant may reuse a predefined constant's name.
 const NAN = "not-a-number";
 echo \constant(__NAMESPACE__ . "\\NAN") . "\n";
+
+// Predefined constants can be written fully qualified, as namespaced code often does.
+echo "max int digits: " . strlen((string) \PHP_INT_MAX) . \PHP_EOL;

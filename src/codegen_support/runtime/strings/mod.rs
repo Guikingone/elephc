@@ -27,6 +27,7 @@ mod strcopy;
 mod str_inc_dec;
 mod str_persist;
 mod strtolower;
+mod ascii_case;
 mod strtoupper;
 mod trim;
 mod ltrim;
@@ -50,6 +51,7 @@ mod explode;
 mod implode;
 mod implode_cast;
 mod implode_bool;
+mod implode_float;
 mod implode_int;
 mod ucwords;
 mod str_ireplace;
@@ -92,7 +94,7 @@ mod md5;
 mod sha1;
 mod crc32;
 mod iconv;
-mod mb_strlen;
+mod mbstring;
 mod hash;
 pub(crate) mod hash_algos;
 mod hash_context;
@@ -191,6 +193,8 @@ pub use implode_int::emit_implode_int;
 /// Emit integer-optimized implode helper.
 pub use implode_bool::emit_implode_bool;
 /// Emit bool-element implode helper (`true` → `"1"`, `false` → `""`).
+pub use implode_float::emit_implode_float;
+/// Emit float-element implode helper (each element in PHP's `precision = 14` text).
 pub use ucwords::emit_ucwords;
 /// Emit uppercase-words helper.
 pub use str_ireplace::emit_str_ireplace;
@@ -268,9 +272,9 @@ pub use md5::emit_md5;
 pub use sha1::emit_sha1;
 /// Emit CRC-32 checksum helper.
 pub use crc32::emit_crc32;
-/// Emit mb_strlen UTF-8 code-point-count helper.
+/// Emits the optional shared mbstring bridge result adapters.
 pub use iconv::emit_iconv;
-pub use mb_strlen::emit_mb_strlen;
+pub use mbstring::emit_mbstring;
 /// Emit SHA1 hash helper.
 pub use hash::emit_hash;
 /// Emit generic hash helper.

@@ -603,6 +603,9 @@ fn implode_element_runtime_label(elem_ty: &PhpType) -> Result<&'static str> {
         // own renderer. `PhpType::False` reaches this arm as `Bool` through `codegen_repr`.
         PhpType::Bool => Ok("__rt_implode_bool"),
         PhpType::Int => Ok("__rt_implode_int"),
+        // A float array stores raw doubles, which neither the string-slot nor the integer walk
+        // can read (#640); each element is rendered through `__rt_ftoa`.
+        PhpType::Float => Ok("__rt_implode_float"),
         // An empty array literal carries an uninhabited element type (`Never`, or
         // `Void` once it has gone through `codegen_repr`). Neither renderer can ever
         // dereference an element, so the generic string helper is the safe choice and
@@ -627,7 +630,8 @@ fn implode_normalized_value_type(
     array_index: usize,
 ) -> Result<Option<PhpType>> {
     let array = expect_operand(inst, array_index)?;
-    match ctx.value_php_type(array)? {
+    let array_ty = ctx.value_php_type(array)?;
+    match array_ty {
         PhpType::AssocArray { value, .. } => Ok(Some(value.codegen_repr())),
         PhpType::Mixed | PhpType::Union(_) => Ok(Some(PhpType::Mixed)),
         PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => Ok(Some(PhpType::Mixed)),

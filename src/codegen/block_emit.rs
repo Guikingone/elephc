@@ -10,6 +10,8 @@
 //!   constructors are synthetic, while their bodies carry PHP debug locations.
 //! - The main prologue initializes supported static-property storage before
 //!   user blocks run.
+//! - Executable and library PHP frames publish local cleanup activations so a throw
+//!   releases abandoned frame owners before control reaches the surviving catch.
 use std::fmt::Write as _;
 
 use crate::codegen::abi;
@@ -86,6 +88,7 @@ pub(super) fn emit_module(
         }
     }
     function_variants::emit_dispatchers(module, emitter, data);
+    super::shared_mbstring_callable::emit(module, emitter, data, &mut shared)?;
     // Emitted before the module's own bodies so every string context that calls them is
     // lowered against helpers that already exist.
     super::shared_mixed_string::emit_shared_mixed_string_helpers(
@@ -381,7 +384,7 @@ fn is_property_init_thunk(function: &Function) -> bool {
     function.name.starts_with("_class_propinit_")
 }
 
-/// Emits a class method using the legacy runtime metadata symbol shape.
+/// Emits a class method and gives runtime-called destructors exceptional local cleanup.
 fn emit_class_method(
     module: &Module,
     function: &Function,
@@ -510,6 +513,8 @@ enum GenParamKind {
     Float,
     /// Two integer registers: string pointer followed by length.
     Str,
+    /// Two integer registers: tagged-scalar payload followed by its runtime tag.
+    TaggedScalar,
     /// An already-boxed Mixed cell pointer forwarded as-is.
     Mixed,
 }
@@ -519,6 +524,7 @@ fn gen_param_kind(ty: &PhpType) -> GenParamKind {
     match ty {
         PhpType::Float => GenParamKind::Float,
         PhpType::Str => GenParamKind::Str,
+        PhpType::TaggedScalar => GenParamKind::TaggedScalar,
         PhpType::Mixed | PhpType::Union(_) => GenParamKind::Mixed,
         _ => GenParamKind::IntLike,
     }
@@ -642,6 +648,18 @@ fn emit_generator_constructor(
                     abi::load_at_offset(emitter, "rax", slot);
                     abi::load_at_offset(emitter, "rdx", slot - 8);
                     crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::Str);
+                }
+            },
+            GenParamKind::TaggedScalar => match target.arch {
+                Arch::AArch64 => {
+                    abi::load_at_offset(emitter, "x0", slot);
+                    abi::load_at_offset(emitter, "x1", slot - 8);
+                    crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::TaggedScalar);
+                }
+                Arch::X86_64 => {
+                    abi::load_at_offset(emitter, "rax", slot);
+                    abi::load_at_offset(emitter, "rdx", slot - 8);
+                    crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::TaggedScalar);
                 }
             },
             GenParamKind::IntLike => {
@@ -807,6 +825,14 @@ fn emit_generator_callback(
                 abi::store_at_offset(emitter, "rdi", slot);
                 abi::store_at_offset(emitter, "rdx", slot - 8);
             }
+            (GenParamKind::TaggedScalar, Arch::AArch64) => {
+                abi::store_at_offset(emitter, "x1", slot); // preserve the payload word
+                abi::store_at_offset(emitter, "x0", slot - 8); // preserve the Mixed runtime tag
+            }
+            (GenParamKind::TaggedScalar, Arch::X86_64) => {
+                abi::store_at_offset(emitter, "rdi", slot); // preserve the payload word
+                abi::store_at_offset(emitter, "rax", slot - 8); // preserve the Mixed runtime tag
+            }
             (_, Arch::AArch64) => abi::store_at_offset(emitter, "x1", slot),
             (_, Arch::X86_64) => abi::store_at_offset(emitter, "rdi", slot),
         }
@@ -829,14 +855,14 @@ fn emit_generator_callback(
                 abi::load_at_offset(emitter, freg, slot);
                 abi::emit_push_float_reg(emitter, freg); // stage the float parameter on the temporary call stack
             }
-            GenParamKind::Str => {
+            GenParamKind::Str | GenParamKind::TaggedScalar => {
                 let (lo, hi) = match target.arch {
                     Arch::AArch64 => ("x9", "x10"),
                     Arch::X86_64 => ("r10", "r11"),
                 };
                 abi::load_at_offset(emitter, lo, slot);
                 abi::load_at_offset(emitter, hi, slot - 8);
-                abi::emit_push_reg_pair(emitter, lo, hi); // stage the string pointer/length pair on the temporary call stack
+                abi::emit_push_reg_pair(emitter, lo, hi); // stage the two-word string/tagged-scalar argument
             }
             GenParamKind::IntLike | GenParamKind::Mixed => {
                 let reg = match target.arch {
@@ -950,6 +976,14 @@ fn emit_main_function(
     }
     if requires_elephc_tls {
         crate::codegen::tls::publish_tls_function_pointers(ctx.emitter);
+    }
+    if module.required_runtime_features.mbstring || module.required_runtime_features.eval_bridge {
+        if module.mbstring_startup.is_some() {
+            abi::emit_call_label(ctx.emitter, "__rt_mbstring_startup");
+        }
+        // This entry runs once per CLI invocation or once per web request. Eval fragments
+        // enter below it, preserving the same request settings and encoding lookup cache.
+        abi::emit_call_label(ctx.emitter, "__rt_mbstring_request_reset");
     }
     // Enum cases are NOT initialized here any more: each case now materializes on
     // its first evaluation through `super::enum_singletons`, so a case that user
@@ -1198,9 +1232,6 @@ fn emit_static_property_default_value(
         LiteralDefaultValue::EmptyAssocArray { value_type } => {
             emit_empty_assoc_array_literal_to_result(ctx, value_type);
         }
-        LiteralDefaultValue::BoxedAssocArray { value_type, entries } => {
-            super::literal_defaults::emit_boxed_assoc_array_literal_to_result(ctx, value_type, entries)?;
-        }
         LiteralDefaultValue::BoxedArray {
             elem_type,
             elements,
@@ -1212,6 +1243,19 @@ fn emit_static_property_default_value(
             crate::codegen::emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Array(Box::new(elem_type.clone())),
+            );
+        }
+        LiteralDefaultValue::BoxedAssocArray {
+            value_type,
+            entries,
+        } => {
+            emit_assoc_array_literal_default_to_result(ctx, value_type, entries)?;
+            crate::codegen::emit_box_current_owned_value_as_mixed(
+                ctx.emitter,
+                &PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(value_type.clone()),
+                },
             );
         }
     }
