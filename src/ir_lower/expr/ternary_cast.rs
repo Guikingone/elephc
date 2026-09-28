@@ -120,6 +120,15 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
         return lower_object_cast(ctx, value, expr);
     }
     let source_type = ctx.builder.value_php_type(value.value);
+    // `(array)` of an `array<mixed>` is that same array: the backend passes the pointer through
+    // without retaining it. Wrapping an owned temporary in the cast and then releasing the source
+    // below freed the array the cast had just returned, so `foreach ((array) f() as ...)` walked
+    // freed storage -- null once the allocator handed the block to the next allocation.
+    if matches!(target, CastType::Array)
+        && matches!(source_type.codegen_repr(), PhpType::Array(ref element) if element.codegen_repr() == PhpType::Mixed)
+    {
+        return value;
+    }
     let php_type = cast_php_type(target, &source_type);
     let result = ctx.emit_value(
         Op::Cast,
