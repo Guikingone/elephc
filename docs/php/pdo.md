@@ -1076,7 +1076,8 @@ exposing a non-PHP constructor shape:
   the driver-specific integer remains available in `errorInfo[1]`. The SQLSTATE form needs a
   receiver the compiler knows is a `PDOException` (a `catch (PDOException $e)` block or a
   `PDOException`-typed value): called through a `Throwable`, `Exception`, or
-  `RuntimeException` receiver, `getCode()` currently returns the driver's integer code instead.
+  `RuntimeException` receiver, `getCode()` currently returns the driver's integer code instead,
+  a known incompatibility listed in [Types](./types.md#known-incompatibilities-with-php).
 - **`getPrevious()`** returns the stored previous Throwable. The same value is also exposed
   as `$e->previous` because elephc's base Throwable layout has no private previous slot.
 - **Subclasses** (`class DriverError extends PDOException {}`, as Doctrine DBAL and many

@@ -836,6 +836,35 @@ pub struct ClassInfo {
 
 `vtable_methods` / `vtable_slots` drive ordinary inherited instance dispatch, while `static_vtable_methods` / `static_vtable_slots` carry the parallel metadata used by `static::method()` late static binding. `allow_dynamic_properties` records the PHP 8.2 `#[\AllowDynamicProperties]` attribute so codegen can route undeclared property storage through a per-object side table. The `*_attribute_names` / `*_attribute_args` fields carry PHP 8 attribute metadata for the class, its methods, its properties, and its constants so the Reflection codegen path can materialize `ReflectionAttribute` objects. `abstract_property_hooks` records PHP 8.4 property hook contracts that concrete subclasses must satisfy, and `property_set_visibilities` records PHP 8.4 asymmetric write visibility (e.g. `public private(set)`) for properties whose write visibility differs from their read visibility. The per-slot vectors (`property_declared_slots`, `property_reference_slots`) follow the physical `properties` layout by index so hidden private parent slots keep their metadata when a child declares a same-named property.
 
+### Declaring and implementing classes
+
+Two maps answer "whose method is this?", and they answer different questions:
+
+- `method_declaring_classes` (and `static_method_declaring_classes`) names the class PHP
+  REPORTS as declaring the method: `ReflectionMethod::getDeclaringClass()` and the class in
+  `Cannot override final method X::m`. An inherited method keeps its ancestor, and a trait
+  method names the class that uses the trait.
+- `method_impl_classes` (and `static_method_impl_classes`) names the class whose BODY a call
+  runs, which is the method symbol dispatch tables and runtime hook tables point at. Codegen
+  trims it to the bodies it actually emitted, so a missing entry does not mean the method is
+  abstract (see `abstract_methods`).
+
+The two agree almost everywhere. They differ where a compiler-injected body keeps an inherited
+final method's declarer: the PDO prelude gives `PDOException` its own `getCode()` body, which
+returns the SQLSTATE string, while PHP reports that method as the final `Exception::getCode()`.
+`injected_exception_final_override` (`schema/classes/methods.rs`) accepts that one dummy-span
+override and records `PDOException` as the implementing class but `Exception` as the declaring
+class; a source class, even one named `PDOException`, never takes that path.
+
+Each consumer reads the map that matches its question:
+
+| Consumer | Map | Why |
+|---|---|---|
+| `schema::classes::interfaces::validate_interface_method` | declaring, implementing, and the class itself | the SQLSTATE `getCode(): string\|int` contract is accepted wherever the inherited body comes from, so a subclass of `PDOException` is not re-validated against `Throwable::getCode(): int` |
+| AOT reflection (`reflection_method_declaring_class_name`) | declaring | what PHP prints |
+| eval reflection rows (`eval_reflection_instance_method_declaring_class`, `eval_reflection_static_method_declaring_class`) and eval attribute registration (`eval_native_method_declaring_class`) | declaring first, implementing as a fallback | eval must report the same owner as AOT, and attributes are keyed by that owner |
+| dispatch tables, `_class_*_ptrs` hook tables | implementing | the body that runs |
+
 ### Constructor ownership
 
 A PRIVATE method is not inherited, so `ClassInfo::methods` deliberately carries no
