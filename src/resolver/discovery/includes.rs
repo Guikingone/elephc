@@ -19,7 +19,9 @@ use super::stmts::discover_stmts;
 use super::super::declarations::extract_discoverable_declarations;
 use super::super::engine::resolve_stmts;
 use super::super::files::{parse_file, resolve_path};
-use super::super::include_path::{fold_include_path, is_runtime_dynamic_include_path};
+use super::super::include_path::{
+    fold_include_path, is_runtime_dynamic_include_path, is_stream_wrapper_path,
+};
 use super::super::state::ResolveState;
 
 /// Processes a statically resolvable `include`/`require` statement.
@@ -67,6 +69,10 @@ pub(super) fn discover_include(
         Err(_) if is_runtime_dynamic_include_path(path) => return Ok(()),
         Err(msg) => return Err(CompileError::new(span, &msg)),
     };
+    // A stream-wrapper URL (`phar://…`) is opened by the runtime when the statement runs.
+    if is_stream_wrapper_path(&path_str) {
+        return Ok(());
+    }
     let resolved = resolve_path(&path_str, base_dir);
     let canonical = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
 

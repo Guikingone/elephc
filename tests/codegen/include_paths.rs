@@ -702,3 +702,52 @@ echo strtoupper("x") . (include __DIR__ . '/side.php');
     assert_eq!(interpreted("lib.php"), 0, "lib.php reached the interpreter:\n{trace}");
     assert!(interpreted("side.php") > 0, "the effect-preceded include was compiled:\n{trace}");
 }
+
+/// A `require` whose path folds to a stream-wrapper URL (`phar://…`) stays a RUNTIME include:
+/// php opens it through the wrapper when the statement executes, and a `require` that never
+/// executes never fails. `phpstan/phpstan`'s Composer bootstrap requires
+/// `'phar://' . __DIR__ . '/phpstan.phar/vendor/autoload.php'` inside a branch a web request never
+/// takes, and the build used to fail with "Required file not found". Expected output is php's.
+#[test]
+fn test_stream_wrapper_require_in_an_untaken_branch_does_not_stop_the_build() {
+    let out = compile_and_run(
+        r#"<?php
+function load_tool() { return require 'phar://' . __DIR__ . '/tool.phar/vendor/autoload.php'; }
+if ($argc > 5) {
+    require_once 'phar:///nonexistent/tool.phar/bootstrap.php';
+    load_tool();
+}
+echo "ok\n";
+"#,
+    );
+    assert_eq!(out, "ok\n");
+}
+
+/// A static property assigned from an include in VALUE position, inside `??`, type-checks and
+/// runs: `self::$data ?? self::$data = require __DIR__ . '/data.php'` is how
+/// `symfony/polyfill-intl-icu` loads its currency tables. The include contributes an
+/// `IncludeOnceMark` to the assignment's prelude, and the checker panicked with "non-assignment
+/// statement routed to assignment checker". Expected output is php 8.5's.
+#[test]
+fn test_static_property_assigned_from_a_value_include_inside_coalesce() {
+    let out = compile_and_run_files(
+        &[
+            ("data.php", "<?php\nreturn ['a' => 'x', 'b' => 'y'];\n"),
+            (
+                "main.php",
+                r#"<?php
+class C {
+    private static $data;
+    public static function get(string $k) {
+        $d = self::$data ?? self::$data = require __DIR__ . '/data.php';
+        return $d[$k];
+    }
+}
+echo C::get("a"), C::get("b"), "\n";
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "xy\n");
+}
