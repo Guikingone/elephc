@@ -343,7 +343,7 @@ pub(super) fn check_types_impl(
         );
         building_interfaces.clear();
         if let Err(error) = result {
-            errors.extend(error.flatten());
+            errors.extend(error.within_declaration(interface_name.as_str()).flatten());
         }
     }
 

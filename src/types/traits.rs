@@ -155,10 +155,12 @@ pub fn flatten_classes(
                 methods,
                 constants,
             } => {
+                // Every error below names the class it was raised for, so `pipeline` can map it
+                // back to the file that declared it (see `CompileError::declaration`).
                 if let Err(error) =
                     validation::validate_direct_members(properties, methods, stmt.span, name)
                 {
-                    errors.extend(error.flatten());
+                    errors.extend(error.within_declaration(name.as_str()).flatten());
                     continue;
                 }
                 let (imported_props, imported_methods, imported_constants) =
@@ -172,7 +174,7 @@ pub fn flatten_classes(
                     ) {
                         Ok(result) => result,
                         Err(error) => {
-                            errors.extend(error.flatten());
+                            errors.extend(error.within_declaration(name.as_str()).flatten());
                             continue;
                         }
                     };
@@ -185,7 +187,7 @@ pub fn flatten_classes(
                 ) {
                     Ok(props) => props,
                     Err(error) => {
-                        errors.extend(error.flatten());
+                        errors.extend(error.within_declaration(name.as_str()).flatten());
                         continue;
                     }
                 };
@@ -197,7 +199,7 @@ pub fn flatten_classes(
                 ) {
                     Ok(methods) => methods,
                     Err(error) => {
-                        errors.extend(error.flatten());
+                        errors.extend(error.within_declaration(name.as_str()).flatten());
                         continue;
                     }
                 };
@@ -210,7 +212,7 @@ pub fn flatten_classes(
                 ) {
                     Ok(constants) => constants,
                     Err(error) => {
-                        errors.extend(error.flatten());
+                        errors.extend(error.within_declaration(name.as_str()).flatten());
                         continue;
                     }
                 };

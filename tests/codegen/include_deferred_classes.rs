@@ -208,3 +208,48 @@ fn test_class_exists_without_autoload_reports_a_probe_only_class_as_unloaded() {
         "before=false\nprobe=true\nafter=true\nused=optional/true\n"
     );
 }
+
+/// The Composer-shaped autoloader these tests share: an object whose `loadClass` includes the
+/// class file through a path built at run time.
+const DEFERRAL_LOADER: &str = r#"<?php
+class Loader {
+    public function __construct(private string $dir) {}
+    public function loadClass($class) {
+        $file = $this->dir . "/src/" . $class . ".php";
+        if (is_file($file)) { include $file; return true; }
+        return null;
+    }
+}
+$l = new Loader(__DIR__);
+spl_autoload_register([$l, "loadClass"], true, true);
+echo (new Good())->hi(), "|", (new Lazy())->hi(), "|", (new Refs())->hi(), "\n";
+"#;
+
+/// An autoloaded class file the compiler cannot type-check or parse is handed to the runtime
+/// autoloader instead of failing the build, and its classes still work.
+///
+/// php parses a class file only when something asks for the class. `Lazy` has a method php
+/// accepts and only fails when CALLED (`: int` returning a string); elephc's checker refuses it
+/// at compile time. `Refs` uses a construct elephc's parser refuses (a reference element in an
+/// array literal). Both used to stop the whole build — for the Symfony demo, one such file among
+/// hundreds (`Translator.php`) did. Now each is left out of the compiled world with a warning,
+/// the runtime autoloader includes it, and the interpreter runs it. Expected output is php 8.5's.
+#[test]
+fn test_autoloaded_class_the_compiler_refuses_is_loaded_at_run_time() {
+    let out = compile_cli_files_and_run(
+        &[
+            ("main.php", DEFERRAL_LOADER),
+            ("src/Good.php", "<?php\nclass Good { public function hi() { return \"good\"; } }\n"),
+            (
+                "src/Lazy.php",
+                "<?php\nclass Lazy {\n    public function bad(): int { return \"not an int\"; }\n    public function hi() { return \"lazy\"; }\n}\n",
+            ),
+            (
+                "src/Refs.php",
+                "<?php\nclass Refs { public function hi() { $x = \"refs\"; $a = [&$x]; $a[0] .= \"!\"; return $x; } }\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "good|lazy|refs!\n");
+}

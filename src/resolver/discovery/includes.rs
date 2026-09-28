@@ -100,7 +100,12 @@ pub(super) fn discover_include(
         ));
     }
 
-    let included_stmts = parse_file(&resolved, span, &state.conditional_defines)?;
+    let included_stmts = match parse_file(&resolved, span, &state.conditional_defines) {
+        Ok(parsed) => parsed,
+        // Discovery reads ahead of resolution; the resolution pass reports the skip.
+        Err(_) if super::super::skipping_unparseable_includes() => return Ok(()),
+        Err(error) => return Err(error),
+    };
 
     let included_dir = resolved.parent().unwrap_or(base_dir);
     let mut declaration_state = state.clone();

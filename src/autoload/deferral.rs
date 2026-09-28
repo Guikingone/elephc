@@ -1,0 +1,455 @@
+//! Purpose:
+//! Hands an autoloaded class file the type checker refuses back to the runtime autoloader,
+//! instead of refusing the whole program.
+//!
+//! Called from:
+//! - `crate::pipeline::compile()`, around the type-check phase.
+//!
+//! Key details:
+//! - php parses and binds a class file only when something asks for the class. A closed-world
+//!   compiler takes every class the program can reach, including ones a request never touches,
+//!   so one construct it cannot type yet in one vendor class used to stop the build. Deferring
+//!   the FILE keeps php's contract: the runtime autoloader includes it, the interpreter runs it.
+//! - Only files the autoload pass loaded for a CLASS are deferrable. The entry program, its
+//!   static includes, Composer's eager `files` and preloaded files still fail the build, because
+//!   nothing at run time would load them again.
+//! - An error is deferrable only when the checker named the declaration it was raised in
+//!   (`CompileError::declaration`) and that declaration maps to such a file.
+
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
+
+use crate::errors::CompileError;
+use crate::names::php_symbol_key;
+use crate::parser::ast::{Program, StmtKind};
+
+/// Looks up the file that declares class-like `name`.
+///
+/// An anonymous class is recorded under whatever name the pass that saw it had: the resolver
+/// records it before namespaces are applied (`class@anonymous#6`), the name resolver afterwards
+/// (`Twig\class@anonymous#6`). Its counter suffix is unique in the process, so the bare suffix is
+/// tried when the qualified name is not found.
+fn class_file<'a>(class_files: &'a HashMap<String, String>, name: &str) -> Option<&'a String> {
+    let name = name.trim_start_matches('\\');
+    class_files.get(&php_symbol_key(name)).or_else(|| {
+        let (_, anonymous) = name.rsplit_once('\\')?;
+        anonymous
+            .starts_with("class@anonymous")
+            .then(|| class_files.get(&php_symbol_key(anonymous)))
+            .flatten()
+    })
+}
+
+/// Maps each deferrable class file named by `error` (and its related errors) to the first
+/// message raised in it. Errors that name no declaration, or a declaration outside
+/// `deferrable_files`, are not returned: the caller still reports them.
+pub fn deferrable_class_files(
+    error: &CompileError,
+    class_files: &HashMap<String, String>,
+    deferrable_files: &HashSet<PathBuf>,
+) -> BTreeMap<String, String> {
+    let mut files = BTreeMap::new();
+    for error in std::iter::once(error).chain(error.related.iter()) {
+        let Some(declaration) = error.declaration.as_deref() else {
+            continue;
+        };
+        let Some(path) = class_file(class_files, declaration) else {
+            continue;
+        };
+        if !deferrable_files.contains(&canonical(Path::new(path))) {
+            continue;
+        }
+        files
+            .entry(path.clone())
+            .or_insert_with(|| error.message.clone());
+    }
+    files
+}
+
+/// Extends `deferred` with every deferrable file declaring a class-like that extends, implements
+/// or uses one a deferred file declares, transitively, and returns the files it added.
+///
+/// A compiled class cannot inherit from one the runtime supplies, so a subclass has to follow
+/// its parent out of the compiled world. Doing it here, rather than waiting for the checker to
+/// refuse the orphan, also covers subclasses whose refusal names no declaration: an anonymous
+/// `new class(...) extends BinaryOperatorExpressionParser` inside `twig/twig`'s `ExtensionSet.php`
+/// is hoisted into that file, and its "unknown parent" refusal could not be mapped back to it.
+pub fn propagate_to_subclasses(
+    program: &Program,
+    class_files: &HashMap<String, String>,
+    deferrable: &HashSet<PathBuf>,
+    deferred: &mut HashSet<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut edges: Vec<(String, Vec<String>)> = Vec::new();
+    collect_class_parents(program, &mut edges);
+    let file_of =
+        |name: &str| class_file(class_files, name).map(|path| canonical(Path::new(path)));
+    let mut added = Vec::new();
+    loop {
+        let mut changed = false;
+        for (class, parents) in &edges {
+            let Some(file) = file_of(class) else {
+                continue;
+            };
+            if deferred.contains(&file) || !deferrable.contains(&file) {
+                continue;
+            }
+            let orphaned = parents
+                .iter()
+                .any(|parent| file_of(parent).is_some_and(|path| deferred.contains(&path)));
+            if orphaned {
+                deferred.insert(file.clone());
+                added.push(file);
+                changed = true;
+            }
+        }
+        if !changed {
+            return added;
+        }
+    }
+}
+
+/// Collects each class-like declaration with the names it extends, implements or uses.
+fn collect_class_parents(program: &Program, out: &mut Vec<(String, Vec<String>)>) {
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::ClassDecl { name, extends, implements, trait_uses, .. } => {
+                let mut parents: Vec<String> =
+                    extends.iter().map(|name| name.as_str().to_string()).collect();
+                parents.extend(implements.iter().map(|name| name.as_str().to_string()));
+                parents.extend(
+                    trait_uses
+                        .iter()
+                        .flat_map(|trait_use| trait_use.trait_names.iter())
+                        .map(|name| name.as_str().to_string()),
+                );
+                out.push((name.clone(), parents));
+            }
+            StmtKind::InterfaceDecl { name, extends, .. } => {
+                out.push((
+                    name.clone(),
+                    extends.iter().map(|name| name.as_str().to_string()).collect(),
+                ));
+            }
+            StmtKind::NamespaceBlock { body, .. }
+            | StmtKind::Synthetic(body)
+            | StmtKind::IncludeOnceGuard { body, .. } => collect_class_parents(body, out),
+            // `if (!class_exists(Base::class)) { throw …; } else { class X extends Base {} }` is
+            // how `symfony/security-core` declares its `ExpressionLanguage`.
+            StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
+                collect_class_parents(then_body, out);
+                for (_, body) in elseif_clauses {
+                    collect_class_parents(body, out);
+                }
+                if let Some(body) = else_body {
+                    collect_class_parents(body, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Removes every class-like declaration a deferred file made, and the activation events the
+/// autoload pass placed for them, so the checker and the backend no longer see the classes.
+pub fn remove_deferred_declarations(
+    program: Program,
+    class_files: &HashMap<String, String>,
+    deferred: &HashSet<PathBuf>,
+) -> Program {
+    let is_deferred = |name: &str| {
+        class_file(class_files, name)
+            .is_some_and(|path| deferred.contains(&canonical(Path::new(path))))
+    };
+    filter_statements(program, &is_deferred, deferred)
+}
+
+/// Filters one statement list, descending into the file-level wrappers the autoload pass and
+/// the resolver put around spliced files.
+fn filter_statements(
+    program: Program,
+    is_deferred: &dyn Fn(&str) -> bool,
+    deferred: &HashSet<PathBuf>,
+) -> Program {
+    let mut kept = Vec::with_capacity(program.len());
+    for mut stmt in program {
+        match &mut stmt.kind {
+            StmtKind::ClassDecl { name, .. }
+            | StmtKind::InterfaceDecl { name, .. }
+            | StmtKind::TraitDecl { name, .. }
+            | StmtKind::EnumDecl { name, .. }
+            | StmtKind::PackedClassDecl { name, .. } => {
+                if is_deferred(name) {
+                    continue;
+                }
+            }
+            StmtKind::ClassLikeActivate { source_path, .. } => {
+                if deferred.contains(&canonical(source_path)) {
+                    continue;
+                }
+            }
+            StmtKind::NamespaceBlock { body, .. }
+            | StmtKind::Synthetic(body)
+            | StmtKind::IncludeOnceGuard { body, .. } => {
+                *body = filter_statements(std::mem::take(body), is_deferred, deferred);
+            }
+            StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
+                *then_body = filter_statements(std::mem::take(then_body), is_deferred, deferred);
+                for (_, body) in elseif_clauses.iter_mut() {
+                    *body = filter_statements(std::mem::take(body), is_deferred, deferred);
+                }
+                if let Some(body) = else_body {
+                    *body = filter_statements(std::mem::take(body), is_deferred, deferred);
+                }
+            }
+            _ => {}
+        }
+        kept.push(stmt);
+    }
+    kept
+}
+
+/// Canonicalizes a path for comparison, keeping it as written when it cannot be resolved.
+fn canonical(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Environment variable carrying, into a re-run of the compiler, the class files an earlier
+/// round of the same build already handed to the runtime (newline-separated paths).
+const DEFERRED_FILES_ENV: &str = "ELEPHC_DEFERRED_CLASS_FILES";
+
+/// Environment variable counting re-runs, so a build that keeps finding new files still ends.
+const DEFERRAL_ROUND_ENV: &str = "ELEPHC_DEFERRAL_ROUND";
+
+/// The most re-runs one build may take before the backend's refusal is reported as it is.
+const MAX_DEFERRAL_ROUNDS: u32 = 6;
+
+/// The class files an earlier round of this build handed to the runtime, if any.
+pub fn inherited_deferred_files() -> Vec<PathBuf> {
+    std::env::var(DEFERRED_FILES_ENV)
+        .map(|joined| {
+            joined
+                .lines()
+                .filter(|line| !line.is_empty())
+                .map(PathBuf::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// What the backend needs to hand a class file it cannot lower back to the runtime.
+///
+/// Only the backend knows which bodies it cannot emit, and it learns that after the checker has
+/// accepted the program. A body belongs to a class; when that class came from a deferrable file,
+/// the build is run again with the file handed to the runtime autoloader from the start.
+pub struct BackendDeferral {
+    /// EIR function name to the deferrable class file its body belongs to.
+    pub body_files: HashMap<String, PathBuf>,
+    /// The files this round has already handed back.
+    pub already_deferred: HashSet<PathBuf>,
+    /// For a body that cannot be handed back, the class it belongs to and why, for the report.
+    pub owners: HashMap<String, String>,
+}
+
+impl BackendDeferral {
+    /// Maps every body of `module` to the deferrable class file of the class it belongs to.
+    ///
+    /// A method is named `Class::method`; a closure carries the class it was written in
+    /// (`lexical_class`); a property-initializer thunk is `_class_propinit_<class id>`. A body
+    /// whose class is not deferrable (compiler-generated reflection bodies, the entry program)
+    /// is left out, and its refusal is still reported.
+    pub fn for_module(
+        module: &crate::ir::Module,
+        class_files: &HashMap<String, String>,
+        deferrable: &HashSet<PathBuf>,
+        already_deferred: &HashSet<PathBuf>,
+    ) -> Self {
+        let class_by_id: HashMap<u64, &str> = module
+            .class_infos
+            .iter()
+            .map(|(name, info)| (info.class_id, name.as_str()))
+            .collect();
+        let mut body_files = HashMap::new();
+        let mut owners = HashMap::new();
+        for function in module
+            .functions
+            .iter()
+            .chain(module.class_methods.iter())
+            .chain(module.closures.iter())
+            .chain(module.fiber_wrappers.iter())
+            .chain(module.callback_wrappers.iter())
+        {
+            let owner = if let Some(id) = function.name.strip_prefix("_class_propinit_") {
+                id.parse::<u64>().ok().and_then(|id| class_by_id.get(&id).map(|name| name.to_string()))
+            } else if let Some((class, _)) = function.name.rsplit_once("::") {
+                Some(class.to_string())
+            } else {
+                function.lexical_class.clone()
+            };
+            let Some(owner) = owner else {
+                continue;
+            };
+            let Some(path) = class_file(class_files, &owner) else {
+                owners.insert(function.name.clone(), format!("{owner} (no recorded file)"));
+                continue;
+            };
+            let path = canonical(Path::new(path));
+            if deferrable.contains(&path) {
+                body_files.insert(function.name.clone(), path);
+            } else {
+                owners.insert(
+                    function.name.clone(),
+                    format!("{owner} in {} (not an autoloaded or preloaded class file)", path.display()),
+                );
+            }
+        }
+        Self {
+            body_files,
+            already_deferred: already_deferred.clone(),
+            owners,
+        }
+    }
+
+    /// Re-runs the build with the files the refused bodies belong to handed to the runtime, and
+    /// exits with the re-run's status. Returns only when there is nothing new to hand back or the
+    /// round limit is reached, so the caller reports the refusal as it is.
+    pub fn rerun_without_refused_bodies(&self, failed_bodies: &[(String, String)]) {
+        let round: u32 = std::env::var(DEFERRAL_ROUND_ENV)
+            .ok()
+            .and_then(|round| round.parse().ok())
+            .unwrap_or(0);
+        if round >= MAX_DEFERRAL_ROUNDS {
+            return;
+        }
+        let mut new_files: BTreeMap<PathBuf, (&str, &str)> = BTreeMap::new();
+        let mut kept = 0usize;
+        for (body, detail) in failed_bodies {
+            match self.body_files.get(body) {
+                Some(path) if !self.already_deferred.contains(path) => {
+                    new_files
+                        .entry(path.clone())
+                        .or_insert((body.as_str(), detail.as_str()));
+                }
+                _ => kept += 1,
+            }
+        }
+        if new_files.is_empty() {
+            return;
+        }
+        for (path, (body, detail)) in &new_files {
+            crate::errors::report_warning(&crate::errors::CompileWarning::new(
+                crate::span::Span::dummy(),
+                &format!(
+                    "autoload: '{}' is not compiled (the backend cannot lower `{}`: {}); its \
+                     classes are loaded at run time by the autoloader instead",
+                    path.display(),
+                    body,
+                    detail
+                ),
+            ));
+        }
+        if kept > 0 {
+            // Bodies no runtime autoloader can supply (generated reflection helpers, the entry
+            // program) will still fail the next round; name them now so the log says why.
+            for (body, detail) in failed_bodies {
+                if !self.body_files.contains_key(body) {
+                    let owner = self
+                        .owners
+                        .get(body)
+                        .map(String::as_str)
+                        .unwrap_or("no owning class");
+                    eprintln!("note: backend refusal not deferrable: {body} [{owner}]: {detail}");
+                }
+            }
+        }
+        let all: Vec<String> = self
+            .already_deferred
+            .iter()
+            .chain(new_files.keys())
+            .map(|path| path.display().to_string())
+            .collect();
+        crate::progress::clear();
+        eprintln!(
+            "note: recompiling with {} class file(s) left to the runtime autoloader (round {})",
+            all.len(),
+            round + 1
+        );
+        let Ok(executable) = std::env::current_exe() else {
+            return;
+        };
+        let status = std::process::Command::new(executable)
+            .args(std::env::args_os().skip(1))
+            .env(DEFERRED_FILES_ENV, all.join("\n"))
+            .env(DEFERRAL_ROUND_ENV, (round + 1).to_string())
+            .status();
+        match status {
+            Ok(status) => std::process::exit(status.code().unwrap_or(1)),
+            Err(_) => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Parses and name-resolves a small program for the removal tests.
+    fn program(source: &str) -> Program {
+        let tokens = crate::lexer::tokenize(source).expect("tokenize");
+        let parsed = crate::parser::parse(&tokens).expect("parse");
+        crate::name_resolver::resolve(parsed).expect("resolve")
+    }
+
+    /// Only errors naming a declaration from a deferrable file are returned, keyed by file.
+    #[test]
+    fn deferrable_files_come_from_attributed_errors_only() {
+        let dir = std::env::temp_dir().join(format!("elephc-deferral-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let class_file = dir.join("Broken.php");
+        std::fs::write(&class_file, "<?php").expect("write");
+        let class_files = HashMap::from([(
+            php_symbol_key("App\\Broken"),
+            class_file.display().to_string(),
+        )]);
+        let deferrable = HashSet::from([canonical(&class_file)]);
+
+        let mut primary = CompileError::new(crate::span::Span::dummy(), "first");
+        primary.declaration = Some("App\\Broken".to_string());
+        let mut entry = CompileError::new(crate::span::Span::dummy(), "entry");
+        entry.declaration = Some("App\\Entry".to_string());
+        primary.related.push(entry);
+        primary
+            .related
+            .push(CompileError::new(crate::span::Span::dummy(), "unattributed"));
+
+        let files = deferrable_class_files(&primary, &class_files, &deferrable);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files.values().next().map(String::as_str), Some("first"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Removing a deferred file drops its classes and keeps every other statement.
+    #[test]
+    fn removal_drops_only_the_deferred_classes() {
+        let deferred_path = PathBuf::from("/nonexistent/Deferred.php");
+        let class_files = HashMap::from([(
+            php_symbol_key("Deferred"),
+            deferred_path.display().to_string(),
+        )]);
+        let deferred = HashSet::from([deferred_path]);
+        let kept = remove_deferred_declarations(
+            program("<?php class Deferred {} class Kept {} echo 1;"),
+            &class_files,
+            &deferred,
+        );
+        let names: Vec<&str> = kept
+            .iter()
+            .filter_map(|stmt| match &stmt.kind {
+                StmtKind::ClassDecl { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, vec!["Kept"]);
+        assert_eq!(kept.len(), 2, "the echo statement stays");
+    }
+}

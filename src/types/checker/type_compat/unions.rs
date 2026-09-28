@@ -182,6 +182,12 @@ impl Checker {
                         || self.interface_extends_interface(actual_name, expected_name)
                         || (expected_name == "Throwable"
                             && self.object_type_implements_throwable(actual_name))
+                        // A class the closed world does not have (one the runtime autoloader
+                        // supplies) cannot be PROVEN incompatible: its parents and interfaces are
+                        // unknown here, and php checks the relation when the value arrives.
+                        // Refusing it invents an answer where the closed world has none.
+                        || self.absent_class_defers_to_runtime(actual_name)
+                        || self.absent_class_defers_to_runtime(expected_name)
                 }
                 _ => false,
             },

@@ -41,6 +41,9 @@ pub(super) struct BackendInputs<'a> {
     pub(super) emit_source_map: bool,
     pub(super) emit_asm: bool,
     pub(super) timings: &'a mut CompileTimings,
+    /// Present when bodies the backend refuses may belong to class files the runtime autoloader
+    /// can load instead; see `autoload::deferral::BackendDeferral`.
+    pub(super) deferral: Option<crate::autoload::deferral::BackendDeferral>,
 }
 
 /// Generates user assembly, resolves native requirements, and links the requested artifact.
@@ -85,6 +88,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         emit_source_map,
         emit_asm,
         timings,
+        deferral,
     } = inputs;
 
     // Dynamic source is opaque to AOT feature detection. `--with-regex`
@@ -221,6 +225,11 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     ) {
         Ok(asm) => asm,
         Err(err) => {
+            // Bodies of a class php would have autoloaded lazily are handed to the runtime and
+            // the build runs again; this returns only when nothing new can be handed back.
+            if let Some(deferral) = &deferral {
+                deferral.rerun_without_refused_bodies(err.failed_bodies());
+            }
             crate::progress::clear();
             eprintln!("EIR backend error: {}", err);
             process::exit(1);

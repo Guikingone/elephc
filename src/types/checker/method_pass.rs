@@ -289,7 +289,13 @@ impl Checker {
                     pass_errors.extend(method_errors);
 
                     if !method_has_errors {
+                        let first_return_error = pass_errors.len();
                         self.update_method_return_type(class, method, &method_env, &mut pass_errors);
+                        for error in &mut pass_errors[first_return_error..] {
+                            if error.declaration.is_none() {
+                                error.declaration = Some(class.name.clone());
+                            }
+                        }
                     }
                     self.current_class = None;
                     self.current_method = None;
