@@ -3014,32 +3014,13 @@ fn test_concatenation_evidence_does_not_survive_a_disqualifying_write() {
 /// mixed-storage path.
 ///
 /// A lowering fixture that quietly fell out of the marking would still compile and print the
-/// right answer for the branch the harness happens to take (`argc == 1`), so "it passes" proves
-/// nothing on its own. Each source below is the VERBATIM fixture text; the assertion is that the
-/// checker really marked it.
+/// right answer for the arms the harness runs, so "it passes" proves nothing on its own. The
+/// sources come from `locals_retype_fixtures`, the module the end-to-end fixtures compile, so
+/// a new fixture or an edited body cannot leave a stale copy here (issue #787); the assertion is
+/// that the checker really marked each one.
 #[test]
 fn test_every_lowering_fixture_takes_the_mixed_storage_path() {
-    for source in [
-        "<?php if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } echo $a;",
-        "<?php $a = 41; if ($argc > 0) { $a = \"ciao\"; } echo $a;",
-        "<?php $a = 41; if ($argc > 5) { $a = \"ciao\"; } echo $a;",
-        "<?php $a = 0; for ($i = 0; $i < $argc; $i++) { $a = \"s\" . $i; } echo $a;",
-        "<?php if ($argc > 1) { $a = 42; } else { $a = \"hello\"; } echo strlen($a);",
-        "<?php\nif ($argc > 1) { $a = 42; } else { $a = \"hello\"; }\necho strlen($a), \"|\", strtoupper($a), \"|\", gettype($a), \"|\";\nvar_dump(is_string($a));",
-        "<?php $a = 123456789; for ($i = 1; $i < $argc; $i++) { $a = \"s\"; } var_dump($a);",
-        "<?php\nfunction q() { global $a; $a = 42; }\nif ($argc > 1) { $a = 0; } else { $a = \"hello\"; }\necho $a, \"|\";\nq();\necho $a, \"|\";\nvar_dump($a);",
-        "<?php\nclass W { public function w() { global $a; $a = 42; } }\nif ($argc > 1) { $a = 0; } else { $a = \"hello\"; }\necho $a, \"|\";\n(new W())->w();\necho $a, \"|\";\nvar_dump($a);",
-        "<?php $a = 0; for ($i = 0; $i < $argc + 3; $i++) { $a = \"s\" . $i; } echo $a;",
-        "<?php if ($argc > 1) { $a = 42; } else { $a = \"hello\" . $argc; } echo $a;",
-        "<?php\nif ($argc > 1) { $m = 1; } else { $m = \"z\"; }\n$f = function (int $n) use ($m) {\n    if ($n > 1) { $m = 0; } else { $m = \"s\"; }\n    return $m;\n};\nvar_dump($f($argc));\n$g = function () use ($m) { return $m; };\nvar_dump($g());",
-        "<?php\nfunction q() { global $a; var_dump($a); }\nif ($argc > 1) { $a = 0; } else { $a = \"hello\"; }\nq();\n$a = 42;\nq();",
-        "<?php\n$w = function () { global $a; $a = 42; };\nif ($argc > 1) { $a = 0; } else { $a = \"hello\"; }\necho $a, \"|\";\n$w();\necho $a, \"|\";",
-        "<?php\nif ($argc > 1) { $a = 42; } else { $a = \"hello\"; }\n$a = 99;\necho strlen($a);",
-        "<?php\nif ($argc > 1) { $a = 42; } else { $a = \"hello\"; }\n$a = 99;\necho str_repeat($a, 2), \"|\", strlen($a), \"|\", strtoupper($a), \"|\", gettype($a), \"|\";\nvar_dump($a);",
-        "<?php\n$a = 0;\nif ($argc > 1) { $a = \"s\" . $argc; }\n$a = 5;\necho strlen($a), \"|\", strtoupper($a), \"|\";\nvar_dump($a);",
-        "<?php\nfunction f(int $n) {\n    if ($n > 1) { $a = 42; } else { $a = \"hello\"; }\n    $a = 7;\n    return strlen($a) . \"|\" . strtoupper($a) . \"|\" . gettype($a);\n}\necho f($argc), \"\\n\";\nif ($argc > 1) { $c = 1; } else { $c = \"x\"; }\n$c = 3;\nswitch ($c) { case 3: echo \"three|\"; break; default: echo \"other|\"; }\necho ($c == 3 ? \"eq\" : \"ne\"), \"|\", $c + 1, \"|\";\nvar_dump($c);",
-        "<?php $a = 0; switch ($argc) { case 1: echo \"one|\"; default: $a = \"ciao\" . $argc; } echo $a, \"|\"; var_dump($a);",
-    ] {
+    for source in crate::locals_retype_fixtures::MIXED_STORAGE_FIXTURES.iter().copied() {
         let result = check_source_full(source)
             .unwrap_or_else(|error| panic!("fixture must type-check: {}\n{}", error.message, source));
         assert!(

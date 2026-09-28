@@ -7,7 +7,11 @@
 //! Key details:
 //! - Every fixture derives its value from `$argc` so constant folding cannot erase the
 //!   construct under test before lowering sees it.
+//! - The mixed-storage fixtures take their PHP sources from `locals_retype_fixtures`, which the
+//!   checker-side marking meta-test iterates too, and the branch-divergent ones run the same
+//!   binary once per argument vector so every arm the harness can reach executes (issue #787).
 
+use crate::locals_retype_fixtures as fixtures;
 use crate::support::*;
 
 /// unset kills the int binding; the string reassignment gets a fresh heap-typed slot.
@@ -1500,29 +1504,51 @@ echo $b, "|", $a[0], "|", $a[1];"#,
 // boxed slot and every read of the name is a boxed read. Every fixture below is verified to
 // actually GO THROUGH that path by a sibling assertion in `error_tests::type_system` that the
 // program warns "compiled as boxed mixed storage" — a fixture that silently fell back to the
-// error path would otherwise look like a pass here.
+// error path would otherwise look like a pass here. Both sides read the same sources from
+// `locals_retype_fixtures`, and each fixture whose outcome depends on `$argc` also runs with
+// arguments, so the arm a bare run never takes executes too.
 // ---------------------------------------------------------------------------
 
-/// Branch-divergent local: the else arm runs (argc == 1) and prints the string.
+/// Pins the argument-vector runner the branch-divergent fixtures below rely on: each run of the
+/// one compiled binary sees `$argc` and `$argv` for its own argument vector, so a fixture's second
+/// run really executes the other arm. Reference PHP 8.5 prints `1|` and `3|a,b`.
 #[test]
-fn test_branch_divergent_local_runs_else_arm() {
-    let out = compile_and_run("<?php if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } echo $a;");
-    assert_eq!(out, "ciao");
+fn test_per_argv_runner_hands_each_run_its_arguments() {
+    let out = compile_and_run_per_argv(
+        "<?php echo $argc, \"|\", implode(\",\", array_slice($argv, 1));",
+        &[&[], &["a", "b"]],
+    );
+    assert_eq!(out, ["1|", "3|a,b"]);
+}
+
+/// Branch-divergent local: the else arm runs (argc == 1) and prints the string, and one argument
+/// takes the int arm, whose boxed int prints as `0`.
+#[test]
+fn test_branch_divergent_local_runs_either_arm() {
+    let out = compile_and_run_per_argv(fixtures::BRANCH_DIVERGENT_LOCAL, &[&[], &["x"]]);
+    assert_eq!(out, ["ciao", "0"]);
 }
 
 /// Single-branch retype, branch taken: the Mixed slot holds the string.
+///
+/// Only this arm can run: `$argc` is at least 1 for any program started from the command line,
+/// so the not-taken outcome is `test_single_branch_retype_not_taken`'s job.
 #[test]
 fn test_single_branch_retype_taken() {
-    let out = compile_and_run("<?php $a = 41; if ($argc > 0) { $a = \"ciao\"; } echo $a;");
+    let out = compile_and_run(fixtures::SINGLE_BRANCH_RETYPE_TAKEN);
     assert_eq!(out, "ciao");
 }
 
 /// Single-branch retype, branch NOT taken: the Mixed slot still holds the boxed int.
-/// This is the load-bearing test — both dynamic outcomes flow through one slot.
+/// This is the load-bearing test: both dynamic outcomes flow through one slot, and five
+/// arguments take the branch, so the string outcome runs through the same binary too.
 #[test]
 fn test_single_branch_retype_not_taken() {
-    let out = compile_and_run("<?php $a = 41; if ($argc > 5) { $a = \"ciao\"; } echo $a;");
-    assert_eq!(out, "41");
+    let out = compile_and_run_per_argv(
+        fixtures::SINGLE_BRANCH_RETYPE_NOT_TAKEN,
+        &[&[], &["1", "2", "3", "4", "5"]],
+    );
+    assert_eq!(out, ["41", "ciao"]);
 }
 
 /// Heterogeneous loop-carried local: each iteration re-boxes; previous value released.
@@ -1532,8 +1558,8 @@ fn test_single_branch_retype_not_taken() {
 /// right (see the heap-debug fixture below).
 #[test]
 fn test_loop_carried_heterogeneous_local() {
-    let out = compile_and_run("<?php $a = 0; for ($i = 0; $i < $argc; $i++) { $a = \"s\" . $i; } echo $a;");
-    assert_eq!(out, "s0");
+    let out = compile_and_run_per_argv(fixtures::LOOP_CARRIED_HETEROGENEOUS_LOCAL, &[&[], &["x"]]);
+    assert_eq!(out, ["s0", "s1"]);
 }
 
 /// A marked local reaching a CHECKED builtin, whose lowering demands one concrete operand
@@ -1547,23 +1573,26 @@ fn test_loop_carried_heterogeneous_local() {
 /// that way — is what hands the builtin an operand it can lower on either path.
 #[test]
 fn test_branch_divergent_local_reaches_a_checked_builtin() {
-    let out = compile_and_run(
-        "<?php if ($argc > 1) { $a = 42; } else { $a = \"hello\"; } echo strlen($a);",
+    // One argument takes the `int` arm, which reaches `strlen` as a boxed int: `strlen(42)`.
+    let out = compile_and_run_per_argv(
+        fixtures::BRANCH_DIVERGENT_LOCAL_INTO_A_CHECKED_BUILTIN,
+        &[&[], &["x"]],
     );
-    assert_eq!(out, "5");
+    assert_eq!(out, ["5", "2"]);
 }
 
 /// The same shape through more builtin/inspection surfaces, so the boxed operand is not a
 /// one-builtin accident.
 #[test]
 fn test_branch_divergent_local_through_several_builtins() {
-    let out = compile_and_run(
-        r#"<?php
-if ($argc > 1) { $a = 42; } else { $a = "hello"; }
-echo strlen($a), "|", strtoupper($a), "|", gettype($a), "|";
-var_dump(is_string($a));"#,
+    let out = compile_and_run_per_argv(
+        fixtures::BRANCH_DIVERGENT_LOCAL_THROUGH_SEVERAL_BUILTINS,
+        &[&[], &["x"]],
     );
-    assert_eq!(out, "5|HELLO|string|bool(true)\n");
+    assert_eq!(
+        out,
+        ["5|HELLO|string|bool(true)\n", "2|42|integer|bool(false)\n"]
+    );
 }
 
 /// A loop whose body never runs must leave the entry binding's VALUE AND TYPE intact.
@@ -1575,10 +1604,12 @@ var_dump(is_string($a));"#,
 /// one.
 #[test]
 fn test_zero_trip_loop_keeps_the_entry_binding_type() {
-    let out = compile_and_run(
-        "<?php $a = 123456789; for ($i = 1; $i < $argc; $i++) { $a = \"s\"; } var_dump($a);",
+    // One argument runs the loop body once, so the string store replaces the boxed int.
+    let out = compile_and_run_per_argv(
+        fixtures::ZERO_TRIP_LOOP_KEEPS_THE_ENTRY_BINDING,
+        &[&[], &["x"]],
     );
-    assert_eq!(out, "int(123456789)\n");
+    assert_eq!(out, ["int(123456789)\n", "string(1) \"s\"\n"]);
 }
 
 /// A marked TOP-LEVEL local that another body writes through `global $a`.
@@ -1595,31 +1626,21 @@ fn test_zero_trip_loop_keeps_the_entry_binding_type() {
 /// like the unmarked one.
 #[test]
 fn test_marked_top_level_local_written_through_a_global_alias() {
-    let out = compile_and_run(
-        r#"<?php
-function q() { global $a; $a = 42; }
-if ($argc > 1) { $a = 0; } else { $a = "hello"; }
-echo $a, "|";
-q();
-echo $a, "|";
-var_dump($a);"#,
+    let out = compile_and_run_per_argv(
+        fixtures::WRITTEN_THROUGH_A_FUNCTION_GLOBAL_ALIAS,
+        &[&[], &["x"]],
     );
-    assert_eq!(out, "hello|42|int(42)\n");
+    assert_eq!(out, ["hello|42|int(42)\n", "0|42|int(42)\n"]);
 }
 
 /// The same cross-body write from a METHOD, which `collect_global_var_names` also walks.
 #[test]
 fn test_marked_top_level_local_written_through_a_method_global_alias() {
-    let out = compile_and_run(
-        r#"<?php
-class W { public function w() { global $a; $a = 42; } }
-if ($argc > 1) { $a = 0; } else { $a = "hello"; }
-echo $a, "|";
-(new W())->w();
-echo $a, "|";
-var_dump($a);"#,
+    let out = compile_and_run_per_argv(
+        fixtures::WRITTEN_THROUGH_A_METHOD_GLOBAL_ALIAS,
+        &[&[], &["x"]],
     );
-    assert_eq!(out, "hello|42|int(42)\n");
+    assert_eq!(out, ["hello|42|int(42)\n", "0|42|int(42)\n"]);
 }
 
 /// The other direction: MAIN writes the marked `global`-aliased name and the callee READS it,
@@ -1635,15 +1656,8 @@ var_dump($a);"#,
 /// from the parent commit. Output correctness is what this fixture pins.
 #[test]
 fn test_marked_top_level_local_read_back_through_a_global_alias() {
-    let out = compile_and_run(
-        r#"<?php
-function q() { global $a; var_dump($a); }
-if ($argc > 1) { $a = 0; } else { $a = "hello"; }
-q();
-$a = 42;
-q();"#,
-    );
-    assert_eq!(out, "string(5) \"hello\"\nint(42)\n");
+    let out = compile_and_run_per_argv(fixtures::READ_BACK_THROUGH_A_GLOBAL_ALIAS, &[&[], &["x"]]);
+    assert_eq!(out, ["string(5) \"hello\"\nint(42)\n", "int(0)\nint(42)\n"]);
 }
 
 /// Control for the leak note above: a `global`-aliased read with NO marking anywhere leaks the
@@ -1702,14 +1716,11 @@ q();"#,
 /// not change it. If the hole is ever closed, both sides move together or this test says so.
 #[test]
 fn test_marked_and_unmarked_agree_on_a_closure_declared_global() {
-    let marked = compile_and_run(
-        r#"<?php
-$w = function () { global $a; $a = 42; };
-if ($argc > 1) { $a = 0; } else { $a = "hello"; }
-echo $a, "|";
-$w();
-echo $a, "|";"#,
-    );
+    let [marked, marked_int_arm] = <[String; 2]>::try_from(compile_and_run_per_argv(
+        fixtures::CLOSURE_DECLARED_GLOBAL,
+        &[&[], &["x"]],
+    ))
+    .expect("one output per argument vector");
     let unmarked = compile_and_run(
         r#"<?php
 $w = function () { global $a; $a = 42; };
@@ -1725,6 +1736,8 @@ echo $a, "|";"#,
     // The closure's write reaches main's storage now that the shared walk sees closure bodies:
     // both programs print PHP's answer.
     assert_eq!(marked, "hello|42|");
+    // The marked program's other arm: the boxed int is replaced by the closure's write.
+    assert_eq!(marked_int_arm, "0|42|");
 }
 
 /// A loop-carried marked local whose every iteration allocates a fresh heap string: the
@@ -1732,32 +1745,39 @@ echo $a, "|";"#,
 /// at frame teardown.
 #[test]
 fn test_loop_carried_heterogeneous_local_leaves_a_clean_heap() {
-    let out = compile_and_run_with_heap_debug(
-        "<?php $a = 0; for ($i = 0; $i < $argc + 3; $i++) { $a = \"s\" . $i; } echo $a;",
+    let runs = compile_and_run_with_heap_debug_per_argv(
+        fixtures::LOOP_CARRIED_HEAP_STRINGS,
+        &[&[], &["x"]],
     );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "s3");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a clean heap, got: {}",
-        out.stderr
-    );
+    for (out, expected) in runs.iter().zip(["s3", "s4"]) {
+        assert!(out.success, "program failed: {}", out.stderr);
+        assert_eq!(out.stdout, expected);
+        assert!(
+            out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+            "expected a clean heap, got: {}",
+            out.stderr
+        );
+    }
 }
 
 /// The branch-divergent shape holds a heap string on one path and a raw int on the other, so
 /// the frame teardown has to release exactly one of them.
 #[test]
 fn test_branch_divergent_local_leaves_a_clean_heap() {
-    let out = compile_and_run_with_heap_debug(
-        "<?php if ($argc > 1) { $a = 42; } else { $a = \"hello\" . $argc; } echo $a;",
+    // Both arms: the heap string on the else arm, and with one argument the raw int.
+    let runs = compile_and_run_with_heap_debug_per_argv(
+        fixtures::BRANCH_DIVERGENT_HEAP_STRING,
+        &[&[], &["x"]],
     );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "hello1");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a clean heap, got: {}",
-        out.stderr
-    );
+    for (out, expected) in runs.iter().zip(["hello1", "42"]) {
+        assert!(out.success, "program failed: {}", out.stderr);
+        assert_eq!(out.stdout, expected);
+        assert!(
+            out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+            "expected a clean heap, got: {}",
+            out.stderr
+        );
+    }
 }
 
 /// A marked local captured BY VALUE by a closure that overwrites it, with the enclosing frame
@@ -1773,24 +1793,24 @@ fn test_branch_divergent_local_leaves_a_clean_heap() {
 /// ran to completion but leaked two blocks, 96 bytes.
 #[test]
 fn test_marked_local_captured_by_value_and_overwritten_in_a_closure() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-if ($argc > 1) { $m = 1; } else { $m = "z"; }
-$f = function (int $n) use ($m) {
-    if ($n > 1) { $m = 0; } else { $m = "s"; }
-    return $m;
-};
-var_dump($f($argc));
-$g = function () use ($m) { return $m; };
-var_dump($g());"#,
+    // One argument takes the int arm in BOTH frames: the outer `$m` and the closure's own copy.
+    let runs = compile_and_run_with_heap_debug_per_argv(
+        fixtures::CAPTURED_BY_VALUE_AND_OVERWRITTEN_IN_A_CLOSURE,
+        &[&[], &["x"]],
     );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "string(1) \"s\"\nstring(1) \"z\"\n");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a clean heap, got: {}",
-        out.stderr
-    );
+    let expected = [
+        "string(1) \"s\"\nstring(1) \"z\"\n",
+        "int(0)\nint(1)\n",
+    ];
+    for (out, expected) in runs.iter().zip(expected) {
+        assert!(out.success, "program failed: {}", out.stderr);
+        assert_eq!(out.stdout, expected);
+        assert!(
+            out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+            "expected a clean heap, got: {}",
+            out.stderr
+        );
+    }
 }
 
 /// A marked local re-assigned to a LITERAL after the divergent branch, then read by a checked
@@ -1804,13 +1824,12 @@ var_dump($g());"#,
 /// marking. The pass is now told which names the checker boxed and records no fact for them.
 #[test]
 fn test_marked_local_reassigned_to_a_literal_reaches_a_checked_builtin() {
-    let out = compile_and_run(
-        r#"<?php
-if ($argc > 1) { $a = 42; } else { $a = "hello"; }
-$a = 99;
-echo strlen($a);"#,
+    // Both arms store before the literal overwrites them, so the output is the same.
+    let out = compile_and_run_per_argv(
+        fixtures::REASSIGNED_TO_A_LITERAL_INTO_A_CHECKED_BUILTIN,
+        &[&[], &["x"]],
     );
-    assert_eq!(out, "2");
+    assert_eq!(out, ["2", "2"]);
 }
 
 /// The same shape through the builtins whose lowering failed in OTHER ways: `strtoupper` failed
@@ -1818,35 +1837,22 @@ echo strlen($a);"#,
 /// panicking, and `str_repeat` failed in the backend.
 #[test]
 fn test_marked_local_reassigned_to_a_literal_through_several_builtins() {
-    let out = compile_and_run(
-        r#"<?php
-if ($argc > 1) { $a = 42; } else { $a = "hello"; }
-$a = 99;
-echo str_repeat($a, 2), "|", strlen($a), "|", strtoupper($a), "|", gettype($a), "|";
-var_dump($a);"#,
+    let out = compile_and_run_per_argv(
+        fixtures::REASSIGNED_TO_A_LITERAL_THROUGH_SEVERAL_BUILTINS,
+        &[&[], &["x"]],
     );
-    assert_eq!(out, "9999|2|99|integer|int(99)\n");
+    assert_eq!(out, ["9999|2|99|integer|int(99)\n"; 2]);
 }
 
 /// The same shape inside a FUNCTION body, and read by the non-builtin consumers a propagated
 /// literal would also have narrowed: a `switch` subject, a comparison and an arithmetic operand.
 #[test]
 fn test_marked_local_reassigned_to_a_literal_inside_a_function_body() {
-    let out = compile_and_run(
-        r#"<?php
-function f(int $n) {
-    if ($n > 1) { $a = 42; } else { $a = "hello"; }
-    $a = 7;
-    return strlen($a) . "|" . strtoupper($a) . "|" . gettype($a);
-}
-echo f($argc), "\n";
-if ($argc > 1) { $c = 1; } else { $c = "x"; }
-$c = 3;
-switch ($c) { case 3: echo "three|"; break; default: echo "other|"; }
-echo ($c == 3 ? "eq" : "ne"), "|", $c + 1, "|";
-var_dump($c);"#,
+    let out = compile_and_run_per_argv(
+        fixtures::REASSIGNED_TO_A_LITERAL_INSIDE_A_FUNCTION_BODY,
+        &[&[], &["x"]],
     );
-    assert_eq!(out, "1|7|integer\nthree|eq|4|int(3)\n");
+    assert_eq!(out, ["1|7|integer\nthree|eq|4|int(3)\n"; 2]);
 }
 
 /// The concat-widened form of the same shape.
@@ -1856,15 +1862,11 @@ var_dump($c);"#,
 /// so widening the whitelist is what admitted it into the crash family in the first place.
 #[test]
 fn test_concat_marked_local_reassigned_to_a_literal_reaches_a_checked_builtin() {
-    let out = compile_and_run(
-        r#"<?php
-$a = 0;
-if ($argc > 1) { $a = "s" . $argc; }
-$a = 5;
-echo strlen($a), "|", strtoupper($a), "|";
-var_dump($a);"#,
+    let out = compile_and_run_per_argv(
+        fixtures::CONCAT_MARKED_REASSIGNED_TO_A_LITERAL,
+        &[&[], &["x"]],
     );
-    assert_eq!(out, "1|5|int(5)\n");
+    assert_eq!(out, ["1|5|int(5)\n"; 2]);
 }
 
 /// Only the CLOSURE's `$m` is marked here; the enclosing one is `mixed` by ordinary inference.
@@ -2314,8 +2316,7 @@ fn test_marked_local_across_switch_arms_warns_and_is_strict_rejected() {
 /// mixed-storage warning and still prints PHP's answer.
 #[test]
 fn test_marked_local_stored_in_a_fallthrough_switch_default() {
-    const SOURCE: &str =
-        "<?php $a = 0; switch ($argc) { case 1: echo \"one|\"; default: $a = \"ciao\" . $argc; } echo $a, \"|\"; var_dump($a);";
+    const SOURCE: &str = fixtures::STORED_IN_A_FALLTHROUGH_SWITCH_DEFAULT;
 
     let warnings = check_files_diagnostics(&[("main.php", SOURCE)], "main.php", false)
         .expect("the fallthrough switch fixture must type-check");
@@ -2326,14 +2327,21 @@ fn test_marked_local_stored_in_a_fallthrough_switch_default() {
         ],
     );
 
-    let out = compile_and_run_with_heap_debug(SOURCE);
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "one|ciao1|string(5) \"ciao1\"\n");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a clean heap, got: {}",
-        out.stderr
-    );
+    // One argument skips the `case 1` echo and lands straight in the `default` store.
+    let runs = compile_and_run_with_heap_debug_per_argv(SOURCE, &[&[], &["x"]]);
+    let expected = [
+        "one|ciao1|string(5) \"ciao1\"\n",
+        "ciao2|string(5) \"ciao2\"\n",
+    ];
+    for (out, expected) in runs.iter().zip(expected) {
+        assert!(out.success, "program failed: {}", out.stderr);
+        assert_eq!(out.stdout, expected);
+        assert!(
+            out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+            "expected a clean heap, got: {}",
+            out.stderr
+        );
+    }
 }
 
 /// The veto above really fires, measured on the SAME source with the CHECKER's own spans.
@@ -2345,8 +2353,7 @@ fn test_marked_local_stored_in_a_fallthrough_switch_default() {
 /// store site. The second half is the anti-vacuity proof that this shape is the cloning one.
 #[test]
 fn test_the_single_case_switch_rewrite_vetoes_itself_on_a_marked_default() {
-    const SOURCE: &str =
-        "<?php $a = 0; switch ($argc) { case 1: echo \"one|\"; default: $a = \"ciao\" . $argc; } echo $a, \"|\"; var_dump($a);";
+    const SOURCE: &str = fixtures::STORED_IN_A_FALLTHROUGH_SWITCH_DEFAULT;
 
     /// Runs the pipeline's post-typecheck AST phases, optionally handing them the decision spans.
     fn optimize(with_decisions: bool) -> Vec<elephc::parser::ast::Stmt> {

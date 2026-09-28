@@ -261,6 +261,8 @@ fn resolver_error(src: &str) -> elephc::errors::CompileError {
     result.expect_err("expected resolver to fail")
 }
 
+#[path = "support/locals_retype_fixtures.rs"]
+mod locals_retype_fixtures;
 #[path = "error_tests/syntax.rs"]
 mod syntax;
 #[path = "error_tests/recovery.rs"]
