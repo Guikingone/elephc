@@ -1788,6 +1788,13 @@ fn emit_static_property_default_value(
     value: &LiteralDefaultValue,
 ) -> Result<()> {
     match value {
+        // Only object allocation builds an enum-case default; a static property never gets one.
+        LiteralDefaultValue::EnumCase { .. } | LiteralDefaultValue::InitThunk { .. } => {
+            return Err(CodegenIrError::unsupported(format!(
+                "enum case default for static property {}::${}",
+                class_name, property
+            )));
+        }
         LiteralDefaultValue::Int(value) => {
             let int_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_load_int_immediate(ctx.emitter, int_reg, *value);

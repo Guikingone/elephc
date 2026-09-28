@@ -36,6 +36,20 @@ use super::{CodegenIrError, Result};
 /// Literal default value that the EIR backend can write directly.
 #[derive(Clone)]
 pub(crate) enum LiteralDefaultValue {
+    /// An enum case (`private QueryType $type = QueryType::SELECT;`): the case singleton, read
+    /// through its lazy materializer and retained by the slot. Only the object-allocation path
+    /// builds one (`objects::property_defaults::collect_property_defaults`), because only it can
+    /// check the enum declares the case.
+    EnumCase {
+        enum_name: String,
+        case_name: String,
+    },
+    /// Some default of the class has no literal form here (an array of enum cases, say): after
+    /// the literal ones are written, the class's `_class_propinit_<id>` thunk runs and assigns
+    /// every default the way compiled PHP would. Always the last entry of its list.
+    InitThunk {
+        class_id: u64,
+    },
     Int(i64),
     Bool(bool),
     Float(f64),
@@ -154,6 +168,24 @@ pub(crate) fn resolve_literal_default_global_constants(
                     })
                     .collect(),
             ),
+            // `JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE`: resolved operand by operand and
+            // folded by `literal_default_value`.
+            ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
+                left: Box::new(Expr::new(resolve(&left.kind, global_constants, visiting), left.span)),
+                op: op.clone(),
+                right: Box::new(Expr::new(
+                    resolve(&right.kind, global_constants, visiting),
+                    right.span,
+                )),
+            },
+            ExprKind::Negate(inner) => ExprKind::Negate(Box::new(Expr::new(
+                resolve(&inner.kind, global_constants, visiting),
+                inner.span,
+            ))),
+            ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(Expr::new(
+                resolve(&inner.kind, global_constants, visiting),
+                inner.span,
+            ))),
             other => other.clone(),
         }
     }
@@ -190,6 +222,15 @@ pub(crate) fn literal_default_value(
     expr: &ExprKind,
     op_name: &str,
 ) -> Result<LiteralDefaultValue> {
+    // A constant EXPRESSION over integers is as literal as its value: php evaluates
+    // `self::CHECK_A | self::CHECK_B` once, when the class is linked. By the time a default gets
+    // here its class and global constants are already substituted, so what is left to do is the
+    // arithmetic itself.
+    if matches!(expr, ExprKind::BinaryOp { .. } | ExprKind::BitNot(_)) {
+        if let Some(value) = fold_int_constant_expr(expr) {
+            return literal_default_value(context, php_type, &ExprKind::IntLiteral(value), op_name);
+        }
+    }
     match (php_type, expr) {
         (PhpType::Int, ExprKind::IntLiteral(value)) => Ok(LiteralDefaultValue::Int(*value)),
         (PhpType::Int, ExprKind::Negate(inner)) => match &inner.kind {
@@ -1183,6 +1224,34 @@ fn array_element_size(elem_type: &PhpType) -> Result<i64> {
             "array default element PHP type {:?}",
             other
         ))),
+    }
+}
+
+/// Evaluates an integer constant expression built from integer literals with php's integer
+/// operators, or returns `None` when any operand is not an integer literal or the operation
+/// would not stay an integer (overflow, a negative or oversized shift, division).
+fn fold_int_constant_expr(expr: &ExprKind) -> Option<i64> {
+    use crate::parser::ast::BinOp;
+    match expr {
+        ExprKind::IntLiteral(value) => Some(*value),
+        ExprKind::Negate(inner) => fold_int_constant_expr(&inner.kind)?.checked_neg(),
+        ExprKind::BitNot(inner) => Some(!fold_int_constant_expr(&inner.kind)?),
+        ExprKind::BinaryOp { left, op, right } => {
+            let left = fold_int_constant_expr(&left.kind)?;
+            let right = fold_int_constant_expr(&right.kind)?;
+            match op {
+                BinOp::BitOr => Some(left | right),
+                BinOp::BitAnd => Some(left & right),
+                BinOp::BitXor => Some(left ^ right),
+                BinOp::Add => left.checked_add(right),
+                BinOp::Sub => left.checked_sub(right),
+                BinOp::Mul => left.checked_mul(right),
+                BinOp::ShiftLeft if (0..64).contains(&right) => Some(left << right),
+                BinOp::ShiftRight if (0..64).contains(&right) => Some(left >> right),
+                _ => None,
+            }
+        }
+        _ => None,
     }
 }
 

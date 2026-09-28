@@ -17,6 +17,7 @@ pub(super) fn collect_property_defaults(
     inst: &Instruction,
 ) -> Result<Vec<PropertyDefault>> {
     let mut defaults = Vec::new();
+    let mut needs_init_thunk = false;
     for (index, (property, php_type)) in class_info.properties.iter().enumerate() {
         let Some(default_expr) = class_info.defaults.get(index).and_then(Option::as_ref) else {
             continue;
@@ -39,18 +40,105 @@ pub(super) fn collect_property_defaults(
             &resolved,
             &module.global_constants,
         );
+        if let Some((enum_name, case_name)) = enum_case_default(module, class_name, php_type, &resolved)
+        {
+            defaults.push(PropertyDefault {
+                offset,
+                value: LiteralDefaultValue::EnumCase { enum_name, case_name },
+                is_reference: class_info.owned_reference_properties.contains(property),
+            });
+            continue;
+        }
+        match literal_default_value(
+            &format!("property {}::${}", class_name, property),
+            php_type,
+            &resolved,
+            inst.op.name(),
+        ) {
+            Ok(value) => defaults.push(PropertyDefault {
+                offset,
+                value,
+                is_reference: class_info.owned_reference_properties.contains(property),
+            }),
+            // No literal form (an array of enum cases, a constant this path cannot fold): the
+            // class's property-initializer thunk assigns it, as `new $name` already does.
+            Err(_) => needs_init_thunk = true,
+        }
+    }
+    if needs_init_thunk {
         defaults.push(PropertyDefault {
-            offset,
-            value: literal_default_value(
-                &format!("property {}::${}", class_name, property),
-                php_type,
-                &resolved,
-                inst.op.name(),
-            )?,
-            is_reference: class_info.owned_reference_properties.contains(property),
+            offset: 0,
+            value: LiteralDefaultValue::InitThunk {
+                class_id: class_info.class_id,
+            },
+            is_reference: false,
         });
     }
     Ok(defaults)
+}
+
+/// Returns the enum and case a property default names, when the default is an enum case the
+/// module declares and the property stores an object: php 8.1 allows
+/// `private QueryType $type = QueryType::SELECT;`, and `doctrine/dbal`, `monolog` and
+/// `symfony/html-sanitizer` all declare one.
+fn enum_case_default(
+    module: &crate::ir::Module,
+    class_name: &str,
+    php_type: &PhpType,
+    expr: &crate::parser::ast::ExprKind,
+) -> Option<(String, String)> {
+    use crate::parser::ast::{ExprKind, StaticReceiver};
+    if !matches!(php_type.codegen_repr(), PhpType::Object(_)) {
+        return None;
+    }
+    let ExprKind::ScopedConstantAccess { receiver, name } = expr else {
+        return None;
+    };
+    let enum_name = match receiver {
+        StaticReceiver::Named(enum_name) => enum_name.as_str().trim_start_matches('\\').to_string(),
+        StaticReceiver::Self_ | StaticReceiver::Static => class_name.to_string(),
+        StaticReceiver::Parent => return None,
+    };
+    let enum_info = module.enum_infos.get(enum_name.as_str())?;
+    // Without a runtime class shape there is no materializer, and the slot would read null.
+    module.class_infos.get(enum_name.as_str())?;
+    enum_info
+        .cases
+        .iter()
+        .any(|case| case.name == *name)
+        .then(|| (enum_name, name.clone()))
+}
+
+/// Calls `_class_propinit_<class_id>(object)` through `_class_propinit_ptrs`, the table
+/// `__rt_new_by_name` already uses, when the class has a thunk (a zero entry means none).
+///
+/// `object_reg` holds the object on entry and again on exit; the thunk is an ordinary compiled
+/// function, so the object is kept on the stack across the call.
+fn emit_property_init_thunk_call(ctx: &mut FunctionContext<'_>, object_reg: &str, class_id: u64) {
+    let skip = ctx.next_label("propinit_thunk_done");
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // The object moves to the argument register FIRST: `object_reg` may be one of the
+            // scratch registers the table lookup below uses.
+            ctx.emitter.instruction(&format!("mov x0, {}", object_reg)); // this = the new object (first argument)
+            abi::emit_symbol_address(ctx.emitter, "x10", "_class_propinit_ptrs");
+            abi::emit_load_int_immediate(ctx.emitter, "x11", class_id as i64);
+            ctx.emitter.instruction("ldr x10, [x10, x11, lsl #3]");             // _class_propinit_ptrs[class_id] (0 = no thunk)
+            ctx.emitter.instruction(&format!("cbz x10, {}", skip)); // no thunk: the literal defaults are all there is
+            ctx.emitter.instruction("blr x10");                                 // _class_propinit_<id>(this) assigns every default
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov rdi, {}", object_reg)); // this = the new object (first SysV argument)
+            abi::emit_symbol_address(ctx.emitter, "r10", "_class_propinit_ptrs");
+            ctx.emitter.instruction(&format!("mov r10, QWORD PTR [r10 + {}]", class_id * 8)); // _class_propinit_ptrs[class_id] (0 = no thunk)
+            ctx.emitter.instruction("test r10, r10");                           // does this class have a property-init thunk?
+            ctx.emitter.instruction(&format!("jz {}", skip)); // no thunk: the literal defaults are all there is
+            ctx.emitter.instruction("call r10");                                // _class_propinit_<id>(this) assigns every default
+        }
+    }
+    ctx.emitter.label(&skip);
+    abi::emit_pop_reg(ctx.emitter, object_reg);
 }
 
 /// Writes all supported property defaults into the newly allocated object.
@@ -86,6 +174,20 @@ pub(super) fn emit_property_default(
     default: &PropertyDefault,
 ) -> Result<()> {
     match &default.value {
+        LiteralDefaultValue::InitThunk { class_id } => {
+            emit_property_init_thunk_call(ctx, object_reg, *class_id);
+        }
+        LiteralDefaultValue::EnumCase { enum_name, case_name } => {
+            abi::emit_push_reg(ctx.emitter, object_reg);
+            crate::codegen::enum_singletons::emit_lazy_case_load(ctx, enum_name, case_name);
+            // The slot holds its own reference to the process-lifetime singleton, as every
+            // other case read site hands one out (`scoped_constants::lower_scoped_constant_get`).
+            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Object(enum_name.clone()));
+            abi::emit_pop_reg(ctx.emitter, object_reg);
+            let int_reg = abi::int_result_reg(ctx.emitter);
+            abi::emit_store_to_address(ctx.emitter, int_reg, object_reg, default.offset);
+            abi::emit_store_zero_to_address(ctx.emitter, object_reg, default.offset + 8);
+        }
         LiteralDefaultValue::Int(value) => {
             let int_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_load_int_immediate(ctx.emitter, int_reg, *value);
