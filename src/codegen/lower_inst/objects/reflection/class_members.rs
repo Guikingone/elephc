@@ -186,32 +186,91 @@ pub(super) fn reflection_class_constant_members(
     Ok(members)
 }
 
+/// Returns how far above `class_name` the class that declares a property sits: 0 for the class
+/// itself, 1 for its parent, and so on. An unknown declaring class counts as the class itself.
+///
+/// The class's property lists follow the inherited storage layout, which puts an ancestor's
+/// properties first; PHP's Reflection lists a class's own properties before its parent's.
+fn reflection_property_declaring_depth(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    declaring_class: Option<&String>,
+) -> usize {
+    let Some(declaring_class) = declaring_class else {
+        return 0;
+    };
+    let wanted = php_symbol_key(declaring_class);
+    let mut current = Some(class_name.to_string());
+    let mut depth = 0;
+    while let Some(name) = current {
+        if php_symbol_key(&name) == wanted {
+            return depth;
+        }
+        current = resolve_reflection_class(ctx, &name).and_then(|(_, info)| info.parent.clone());
+        depth += 1;
+    }
+    0
+}
+
 /// Returns materializable property defaults for `ReflectionClass::getDefaultProperties()`.
+///
+/// PHP lists the static properties first, then the instance ones; each group has the class's
+/// own properties before its ancestors', in declaration order.
 pub(super) fn reflection_class_default_property_members(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
     info: &crate::types::ClassInfo,
     property_names: &[String],
 ) -> Vec<ReflectionDefaultPropertyMember> {
-    property_names
+    let mut ranked: Vec<(bool, usize, usize, ReflectionDefaultPropertyMember)> = property_names
         .iter()
-        .filter_map(|property_name| {
+        .enumerate()
+        .filter_map(|(position, property_name)| {
+            let is_static = info.static_properties.iter().any(|(name, _)| name == property_name);
+            let declaring_class = if is_static {
+                info.static_property_declaring_classes.get(property_name)
+            } else {
+                info.property_declaring_classes.get(property_name)
+            };
+            let depth = reflection_property_declaring_depth(ctx, class_name, declaring_class);
             reflection_property_default_value(info, property_name).map(|value| {
-                ReflectionDefaultPropertyMember {
+                let member = ReflectionDefaultPropertyMember {
                     name: property_name.clone(),
                     value,
-                }
+                };
+                (!is_static, depth, position, member)
             })
         })
-        .collect()
+        .collect();
+    ranked.sort_by_key(|(instance, depth, position, _)| (*instance, *depth, *position));
+    ranked.into_iter().map(|(_, _, _, member)| member).collect()
 }
 
 /// Returns static-property storage slots for `ReflectionClass::getStaticProperties()`.
+///
+/// An ancestor's private static is not part of the class, as PHP reports it; the class's own
+/// statics come before its ancestors', in declaration order.
 pub(super) fn reflection_class_static_property_members(
+    ctx: &FunctionContext<'_>,
     class_name: &str,
     info: &crate::types::ClassInfo,
 ) -> Vec<ReflectionStaticPropertyMember> {
-    info.static_properties
+    let mut visible: Vec<(usize, usize, &(String, PhpType))> = info
+        .static_properties
         .iter()
-        .map(|(property_name, php_type)| {
+        .enumerate()
+        .filter(|(_, (property_name, _))| {
+            reflection_property_visible_from_class(info, class_name, property_name, true)
+        })
+        .map(|(position, entry)| {
+            let declaring_class = info.static_property_declaring_classes.get(&entry.0);
+            (reflection_property_declaring_depth(ctx, class_name, declaring_class), position, entry)
+        })
+        .collect();
+    visible.sort_by_key(|(depth, position, _)| (*depth, *position));
+    visible
+        .into_iter()
+        .map(|(_, _, (property_name, php_type))| {
             let declaring_class_name = info
                 .static_property_declaring_classes
                 .get(property_name)
