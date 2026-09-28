@@ -119,9 +119,24 @@ pub(super) fn lower_const_ref(
     if let Some((value, php_type)) = ctx.constant_value(name.as_str()) {
         return lower_constant_value(ctx, value, php_type, expr);
     }
-    if ctx.has_eval_barrier() || ctx.eval_executed() {
-        // Barrier-free AOT evals can still define constants dynamically; the
-        // fetch needs the eval context, so make sure its slot exists.
+    // php's fallback for an unqualified name in a namespace: the global constant.
+    if let Some(global) = name.function_fallback() {
+        if let Some((value, php_type)) = ctx.constant_value(global) {
+            return lower_constant_value(ctx, value, php_type, expr);
+        }
+    }
+    // Neither form is known at compile time. The runtime lookup uses the GLOBAL form of an
+    // unqualified name: `define()` takes a string and so creates global constants, which is how
+    // a runtime-loaded polyfill supplies `IDNA_DEFAULT` to namespaced callers.
+    let name = &name
+        .function_fallback()
+        .map(Name::unqualified)
+        .unwrap_or_else(|| name.clone());
+    if ctx.has_eval_barrier() || ctx.eval_executed() || ctx.can_resolve_runtime_dynamic_functions()
+    {
+        // Barrier-free AOT evals can still define constants dynamically, and so can a file the
+        // program includes at run time; the fetch needs the eval context, so make sure its slot
+        // exists.
         ctx.declare_eval_context_local();
         let data = ctx.intern_global_name(name.as_str());
         return ctx.emit_value(

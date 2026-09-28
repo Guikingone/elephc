@@ -161,10 +161,20 @@ impl Checker {
                 {
                     self.require_builtin_library("elephc_pcntl");
                 }
+                // A constant the closed world cannot see is still a constant the RUNTIME can
+                // define when the program loads PHP at run time: a Composer `files` polyfill the
+                // autoload pass handed to the runtime (`symfony/polyfill-intl-idn` defines
+                // `IDNA_DEFAULT` behind `if (!defined(...))`), or any runtime include. php looks
+                // the name up when the expression executes, so the fetch is lowered as a runtime
+                // lookup (`Op::EvalConstantFetch`) rather than refused here.
                 self.constants
                     .get(name.as_str())
+                    .or_else(|| name.function_fallback().and_then(|global| self.constants.get(global)))
                     .cloned()
-                    .or_else(|| self.eval_barrier_active.then_some(PhpType::Mixed))
+                    .or_else(|| {
+                        (self.eval_barrier_active || self.program_defers_unknown_classes)
+                            .then_some(PhpType::Mixed)
+                    })
                     .ok_or_else(|| {
                         CompileError::new(expr.span, &format!("Undefined constant: {}", name))
                     })

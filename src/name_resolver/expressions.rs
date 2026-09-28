@@ -251,12 +251,24 @@ pub(super) fn resolve_expr(
                 .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
                 .collect(),
         },
-        ExprKind::ConstRef(name) => ExprKind::ConstRef(resolved_name(resolve_constant_name(
-            name,
-            current_namespace,
-            imports,
-            symbols,
-        ))),
+        ExprKind::ConstRef(name) => {
+            let resolved = resolve_constant_name(name, current_namespace, imports, symbols);
+            // An unqualified name this file cannot bind keeps php's global fallback: the
+            // namespaced constant is tried first and the global one after it, so a constant only
+            // another file (or the runtime) defines still resolves. See `Name::function_fallback`.
+            let keeps_global_fallback = name.is_unqualified()
+                && resolved.contains('\\')
+                && !symbols.has_constant(&resolved)
+                && name
+                    .last_segment()
+                    .is_none_or(|segment| !imports.constants.contains_key(segment));
+            let resolved = resolved_name(resolved);
+            ExprKind::ConstRef(if keeps_global_fallback {
+                resolved.with_function_fallback()
+            } else {
+                resolved
+            })
+        }
         ExprKind::NewObject { class_name, args } => ExprKind::NewObject {
             class_name: resolved_name(resolve_special_or_class_name(
                 class_name,
