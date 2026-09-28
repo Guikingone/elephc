@@ -308,3 +308,47 @@ try {
     );
     assert_eq!(out, "Lib\\Native\ncaught: Amp needs MissingDep, which is not installed\n");
 }
+
+/// An enum the runtime autoloader declares is usable, case for case and by identity, from a
+/// class another autoloaded file declares.
+///
+/// Each file a compiled autoloader includes runs in an eval context of its own. The enum's
+/// declaration reached the other contexts, its case singletons did not, so Symfony's
+/// `ReflectionExtractor::MAP_TYPES = ['integer' => TypeIdentifier::INT->value, ...]` died on
+/// "unsupported ClassConstantFetch expression". Expected output is php 8.5.10's.
+#[test]
+fn test_enum_cases_are_shared_between_autoloaded_files() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "src/TypeId.php",
+                "<?php\nnamespace Lib;\n\nenum TypeId: string {\n    case INT = 'int';\n    case FLOAT = 'float';\n}\n",
+            ),
+            (
+                "src/Extractor.php",
+                "<?php\nnamespace Lib;\n\nclass Extractor {\n    private const MAP_TYPES = [\n        'integer' => TypeId::INT->value,\n        'double' => TypeId::FLOAT->value,\n    ];\n    public static function map(): array { return self::MAP_TYPES; }\n    public static function int(): TypeId { return TypeId::INT; }\n}\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+class Loader {
+    public function __construct(private string $dir) {}
+    public function loadClass($class) {
+        $file = $this->dir . '/src/' . substr($class, 4) . '.php';
+        if (str_starts_with($class, 'Lib\\') && is_file($file)) {
+            require $file;
+        }
+    }
+}
+spl_autoload_register([new Loader(__DIR__), 'loadClass']);
+$code = 'echo implode(",", \Lib\Extractor::map()), "\n";'
+    . 'var_dump(\Lib\Extractor::int() === \Lib\TypeId::INT, \Lib\TypeId::from("float") === \Lib\TypeId::FLOAT);'
+    . ($argc > 5 ? '' : '');
+eval($code);
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "int,float\nbool(true)\nbool(true)\n");
+}

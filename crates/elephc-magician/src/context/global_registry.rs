@@ -150,6 +150,11 @@ pub(super) struct GlobalEvalClassRegistry {
     pub(super) declared_trait_names: Vec<String>,
     pub(super) enums: HashMap<String, EvalEnum>,
     pub(super) declared_enum_names: Vec<String>,
+    /// Each eval enum case's singleton and backing value (raw cell addresses), keyed by the
+    /// normalized enum and case names. A context imports an enum's DECLARATION through the sync
+    /// above, but the case objects are made once, in the declaring context; without this a
+    /// second context could see the enum and still not answer `Enum::CASE`.
+    pub(super) enum_cases: HashMap<(String, String), (usize, Option<usize>)>,
     pub(super) aliases: HashMap<String, EvalClassAlias>,
 }
 
@@ -731,6 +736,62 @@ pub(super) fn register_global_eval_enum(enum_decl: &EvalEnum) {
         }
         registry.enums.insert(key, enum_decl.clone());
     }
+}
+
+/// Publishes one eval enum case singleton for every other context, keeping any published
+/// backing value.
+///
+/// The cells live in the request arena like every other eval value, and the registry is
+/// emptied at the same request boundary (`reset_global_eval_classes`), so a published address
+/// never outlives its storage.
+#[cfg(not(test))]
+pub(super) fn register_global_eval_enum_case(
+    enum_key: String,
+    case_key: String,
+    case: RuntimeCellHandle,
+) {
+    if let Ok(mut registry) = global_eval_classes().lock() {
+        registry
+            .enum_cases
+            .entry((enum_key, case_key))
+            .or_insert((0, None))
+            .0 = case.as_ptr() as usize;
+    }
+}
+
+/// Publishes one eval enum case's backing value, keeping any published singleton.
+#[cfg(not(test))]
+pub(super) fn register_global_eval_enum_case_value(
+    enum_key: String,
+    case_key: String,
+    value: RuntimeCellHandle,
+) {
+    if let Ok(mut registry) = global_eval_classes().lock() {
+        registry
+            .enum_cases
+            .entry((enum_key, case_key))
+            .or_insert((0, None))
+            .1 = Some(value.as_ptr() as usize);
+    }
+}
+
+/// Returns an eval enum case singleton another context published, and its backing value.
+#[cfg(not(test))]
+pub(super) fn global_eval_enum_case(
+    enum_key: &str,
+    case_key: &str,
+) -> Option<(RuntimeCellHandle, Option<RuntimeCellHandle>)> {
+    let registry = global_eval_classes().lock().ok()?;
+    let (case, value) = *registry
+        .enum_cases
+        .get(&(enum_key.to_string(), case_key.to_string()))?;
+    if case == 0 {
+        return None;
+    }
+    Some((
+        RuntimeCellHandle::from_raw(case as *mut RuntimeCell),
+        value.map(|value| RuntimeCellHandle::from_raw(value as *mut RuntimeCell)),
+    ))
 }
 
 /// Records one eval-defined class-like alias for later generated eval contexts.
