@@ -183,6 +183,18 @@ pub(super) fn lower_array_access_with_missing_warning(
     } else {
         lower_subscript_receiver_silently(ctx, array)
     };
+    lower_array_access_from_receiver(ctx, array_value, index, expr, warn_on_missing)
+}
+
+/// Lowers array access over an already evaluated receiver, taking the null-safe route when
+/// the receiver may be null.
+pub(super) fn lower_array_access_from_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_value: LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+    warn_on_missing: bool,
+) -> LoweredValue {
     if value_is_nullable(ctx, array_value.value) {
         return lower_nullable_array_access(ctx, array_value, index, expr, warn_on_missing);
     }
