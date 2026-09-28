@@ -4544,3 +4544,54 @@ backed:{\"name\":\"Case\",\"class\":\"PublicViewBacked\"}|{\"name\":\"Case\",\"c
 subclass:{\"name\":\"PublicViewChild\",\"\\u0000PublicViewReflectionChild\\u0000custom\":\"user\"}|{\"name\":\"PublicViewChild\"}\n"
     );
 }
+
+/// User subclasses of ReflectionClass, ReflectionObject, and ReflectionEnum are populated by
+/// the Reflection owner path, so they must carry the builtin's patched member types: with the
+/// unpatched indexed-array tags, `getInterfaces()` failed to type-check and releasing the object
+/// freed its name-keyed maps as packed arrays. Expected output measured on PHP 8.5.
+#[test]
+fn test_reflection_user_subclasses_share_builtin_member_types() {
+    let out = compile_and_run(
+        r#"<?php
+interface SubclassMarker {}
+trait SubclassHelper { public function help() {} }
+class SubclassTarget implements SubclassMarker {
+    use SubclassHelper;
+    public int $field = 1;
+    public static int $count = 3;
+    public function go(int $a) {}
+}
+enum SubclassBacked: string { case One = 'one'; }
+class SubclassOfClass extends ReflectionClass { private string $mine = 'c'; }
+class SubclassOfObject extends ReflectionObject {}
+class SubclassOfEnum extends ReflectionEnum {}
+$values = [
+    'class' => new SubclassOfClass('SubclassTarget'),
+    'object' => new SubclassOfObject(new SubclassTarget()),
+    'enum' => new SubclassOfEnum('SubclassBacked'),
+];
+foreach ($values as $label => $value) {
+    echo $label, ' ', get_class($value), ' ', $value->name, ' ', $value->getName(), ' ',
+        json_encode(get_object_vars($value)), "\n";
+}
+$class = $values['class'];
+echo json_encode(array_keys($class->getInterfaces())), ' ',
+    json_encode(array_keys($class->getTraits())), ' ',
+    json_encode($class->getStaticProperties()), ' ', count($class->getMethods()), "\n";
+echo json_encode(array_keys($values['object']->getInterfaces())), "\n";
+unset($values, $class);
+$bare = new SubclassOfClass('SubclassTarget');
+unset($bare);
+echo "done\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "class SubclassOfClass SubclassTarget SubclassTarget {\"name\":\"SubclassTarget\"}\n\
+object SubclassOfObject SubclassTarget SubclassTarget {\"name\":\"SubclassTarget\"}\n\
+enum SubclassOfEnum SubclassBacked SubclassBacked {\"name\":\"SubclassBacked\"}\n\
+[\"SubclassMarker\"] [\"SubclassHelper\"] {\"count\":3} 2\n\
+[\"SubclassMarker\"]\n\
+done\n"
+    );
+}

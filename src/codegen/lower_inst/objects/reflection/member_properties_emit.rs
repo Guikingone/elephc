@@ -196,7 +196,7 @@ pub(super) fn emit_reflection_declaring_class_property(
     let declaring_class_offset = class_info.property_offsets.get("__declaring_class").copied();
     let public_class_name_offset = class_info.property_offsets.get("class").copied();
     if let (Some(offset), Some(name)) = (public_class_name_offset, declaring_class_name) {
-        emit_reflection_string_property(ctx, name, offset, offset + 8);
+        emit_reflection_literal_string_property(ctx, name, offset, offset + 8);
     }
     let Some(low_offset) = declaring_class_offset else {
         return Ok(());
