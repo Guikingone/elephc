@@ -33573,3 +33573,39 @@ echo "end\n";
     );
     assert_eq!(out, "a=ok\nab=ok\nw=ok\nwb=ok\nthrough-stdout\nagain\nend\n");
 }
+
+/// Verifies compiled `method_exists()` / `property_exists()` see the members of an object whose
+/// class the interpreter declared.
+///
+/// A compiled frame with no eval context of its own answered from the native class tables, which
+/// only know the compiled parent. Twig's compiled `Template::getTemplateForMacro()` asks
+/// `method_exists($this, 'macro_render_language_selector')` of a template class loaded at run
+/// time, so every page using a macro failed with "Macro ... is not defined". Expected output is
+/// php 8.5.10's.
+#[test]
+fn test_compiled_member_exists_sees_an_interpreted_subclass() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class Template {
+    public function has(string $name): bool { return method_exists($this, $name); }
+    abstract public function name(): string;
+}
+function probe(object $o, string $m): string { return method_exists($o, $m) ? "y" : "n"; }
+function prop(object $o, string $p): string { return property_exists($o, $p) ? "y" : "n"; }
+$code = 'class Tpl_abc extends Template {
+    public $shown = 1;
+    public function name(): string { return "tpl"; }
+    public function macro_render(): string { return "macro!"; }
+    private function secret(): void {}
+}
+return new Tpl_abc();' . ($argc > 5 ? '' : '');
+$t = eval($code);
+echo $t->name(), " ", $t->has('macro_render') ? "has" : "missing", " ", $t->has('nope') ? "has" : "missing", "\n";
+echo probe($t, 'macro_render'), probe($t, 'name'), probe($t, 'secret'), probe($t, 'has'), probe($t, 'zzz'), "\n";
+echo prop($t, 'shown'), prop($t, 'hidden'), "\n";
+class Plain { public $p; public function m() {} }
+echo probe(new Plain(), 'm'), probe(new Plain(), 'x'), prop(new Plain(), 'p'), "\n";
+"#,
+    );
+    assert_eq!(out, "tpl has missing\nyyyyn\nyn\nyny\n");
+}

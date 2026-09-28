@@ -437,10 +437,31 @@ unsafe fn eval_member_exists_inner(
     member: *mut RuntimeCell,
     lookup_kind: u64,
 ) -> i32 {
-    let Some(context) = ctx.as_mut() else {
+    if target.is_null() || member.is_null() {
         return 0;
+    }
+    // A null context asks about an OBJECT from a compiled frame that has no eval context of its
+    // own: the object's owner context answers when an eval context made it, and 0 otherwise,
+    // which sends the caller to its native class tables. Twig's compiled
+    // `Template::getTemplateForMacro()` runs `method_exists($this, 'macro_x')` on a template
+    // class the interpreter declared; the native tables only know the compiled parent.
+    let context = if let Some(context) = ctx.as_mut() {
+        context
+    } else {
+        let mut values = ElephcRuntimeOps::with_context(std::ptr::null());
+        let Ok(identity) = values.object_identity(RuntimeCellHandle::from_raw(target)) else {
+            return 0;
+        };
+        let Some(owner) = crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)
+        else {
+            return 0;
+        };
+        let Some(context) = owner.as_mut() else {
+            return 0;
+        };
+        context
     };
-    if context.abi_version() != ABI_VERSION || target.is_null() || member.is_null() {
+    if context.abi_version() != ABI_VERSION {
         return 0;
     }
     let lookup = match lookup_kind {
