@@ -156,7 +156,6 @@ pub(super) fn lower_late_static_scoped_constant(ctx: &mut LoweringContext<'_, '_
         return lower_scoped_constant_fallback(ctx, "static", name, expr);
     };
     let fallback_value = ctx.scoped_constant_value(&base_class, name);
-    let result_type = fallback_expr_type(expr);
     let candidates = late_static_constant_candidates(ctx, &base_class, name);
     if candidates.is_empty() {
         if let Some(value) = fallback_value {
@@ -164,6 +163,8 @@ pub(super) fn lower_late_static_scoped_constant(ctx: &mut LoweringContext<'_, '_
         }
         return lower_scoped_constant_fallback(ctx, "static", name, expr);
     }
+    // Descendants can override a constant with a different PHP type.
+    let result_type = PhpType::Mixed;
     let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let split_initialized = ctx.initialized_slots_snapshot();
     let merge = ctx.builder.create_named_block("static_const.merge", Vec::new());

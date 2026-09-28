@@ -1425,9 +1425,7 @@ pub(crate) fn lower_closure_function(
         return_type,
         body,
         signature_captures,
-        parent.classes,
-        parent.functions,
-        parent.builtin_call_types,
+        parent,
     );
     signature.by_ref_return = by_ref_return;
     lower_closure_function_with_signature(
@@ -1474,9 +1472,7 @@ pub(crate) fn lower_closure_function_with_context(
         return_type,
         body,
         signature_captures,
-        parent.classes,
-        parent.functions,
-        parent.builtin_call_types,
+        parent,
     );
     signature.by_ref_return = by_ref_return;
     if let Some(contextual_return_type) = contextual_return_type {
@@ -2231,9 +2227,7 @@ fn closure_signature_from_ast(
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    functions: &std::collections::HashMap<String, FunctionSig>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    ctx: &LoweringContext<'_, '_>,
 ) -> FunctionSig {
     let mut signature =
         signature_from_ast_with_variadic(params, return_type, variadic, variadic_by_ref);
@@ -2248,9 +2242,7 @@ fn closure_signature_from_ast(
                 body,
                 captures,
                 &signature.params,
-                classes,
-                functions,
-                builtin_call_types,
+                ctx,
             )
         {
             signature.return_type = return_ty;
@@ -2266,9 +2258,7 @@ fn direct_closure_return_type(
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    functions: &std::collections::HashMap<String, FunctionSig>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    ctx: &LoweringContext<'_, '_>,
 ) -> Option<PhpType> {
     let [stmt] = body else {
         return None;
@@ -2280,9 +2270,7 @@ fn direct_closure_return_type(
         expr,
         captures,
         params,
-        classes,
-        functions,
-        builtin_call_types,
+        ctx,
     ))
 }
 
@@ -2299,12 +2287,13 @@ fn direct_closure_return_expr_type(
     expr: &crate::parser::ast::Expr,
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    functions: &std::collections::HashMap<String, FunctionSig>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    ctx: &LoweringContext<'_, '_>,
 ) -> PhpType {
+    if matches!(expr.kind, ExprKind::Null) {
+        return PhpType::Mixed;
+    }
     if let ExprKind::FunctionCall { name, .. } = &expr.kind {
-        if let Some(ty) = builtin_call_types.get(&expr.span) {
+        if let Some(ty) = ctx.builtin_call_types.get(&expr.span) {
             return ty.clone();
         }
         // A USER function is not in `builtin_call_types` -- that map only records builtin call
@@ -2320,7 +2309,7 @@ fn direct_closure_return_expr_type(
         // says. Copying the raw type here stamped `array<string>` on a call that really produces
         // `array<mixed>`, and the caller then read the boxed element with the wrong layout: the
         // element came back as its own pointer printed as an integer. Raised in review.
-        if let Some(sig) = functions.get(name.as_str()) {
+        if let Some(sig) = ctx.functions.get(name.as_str()) {
             return crate::ir_lower::expr::eir_user_function_return_type(sig);
         }
     }
@@ -2333,9 +2322,7 @@ fn direct_closure_return_expr_type(
                 items,
                 captures,
                 params,
-                classes,
-                functions,
-                builtin_call_types,
+                ctx,
             );
         }
     }
@@ -2345,9 +2332,7 @@ fn direct_closure_return_expr_type(
                 pairs,
                 captures,
                 params,
-                classes,
-                functions,
-                builtin_call_types,
+                ctx,
             );
         }
     }
@@ -2356,29 +2341,25 @@ fn direct_closure_return_expr_type(
             entries,
             captures,
             params,
-            classes,
-            functions,
-            builtin_call_types,
+            ctx,
         );
     }
-    if let ExprKind::ScopedConstantAccess {
-        receiver: crate::parser::ast::StaticReceiver::Named(class_name),
-        name,
-    } = &expr.kind
-    {
-        let normalized = class_name.as_str().trim_start_matches('\\');
-        if let Some(value) = classes
-            .get(normalized)
-            .and_then(|class_info| class_info.constants.get(name))
+    if let ExprKind::ScopedConstantAccess { receiver, name } = &expr.kind {
+        // A descendant can override static::CONST with a different storage type.
+        if matches!(receiver, crate::parser::ast::StaticReceiver::Static) {
+            return PhpType::Mixed;
+        }
+        if let Some(class_name) =
+            crate::ir_lower::expr::static_receiver_class_name(ctx, receiver)
         {
-            return direct_closure_return_expr_type(
-                value,
-                captures,
-                params,
-                classes,
-                functions,
-                builtin_call_types,
-            );
+            if ctx.enums.get(&class_name).is_some_and(|enum_info| {
+                enum_info.cases.iter().any(|case| case.name.as_str() == name.as_str())
+            }) {
+                return PhpType::Mixed;
+            }
+            if let Some(value) = ctx.scoped_constant_value(&class_name, name) {
+                return direct_closure_return_expr_type(&value, captures, params, ctx);
+            }
         }
     }
     if let ExprKind::Variable(name) = &expr.kind {
@@ -2411,7 +2392,7 @@ fn direct_closure_return_expr_type(
                 });
             match receiver_ty {
                 Some(PhpType::Object(class)) => {
-                    if let Some(info) = classes.get(class.trim_start_matches('\\')) {
+                    if let Some(info) = ctx.classes.get(class.trim_start_matches('\\')) {
                         if let Some((_, ty)) =
                             info.properties.iter().find(|(name, _)| name == property)
                         {
@@ -2455,9 +2436,7 @@ fn direct_closure_return_array_type(
     items: &[crate::parser::ast::Expr],
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    functions: &std::collections::HashMap<String, FunctionSig>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    ctx: &LoweringContext<'_, '_>,
 ) -> PhpType {
     let mut elem_ty = PhpType::Never;
     let mut has_hash_spread = false;
@@ -2468,9 +2447,7 @@ fn direct_closure_return_array_type(
                     inner,
                     captures,
                     params,
-                    classes,
-                    functions,
-                    builtin_call_types,
+                    ctx,
                 )
                 .codegen_repr(),
                 PhpType::AssocArray { .. } | PhpType::Mixed
@@ -2482,9 +2459,7 @@ fn direct_closure_return_array_type(
                 item,
                 captures,
                 params,
-                classes,
-                functions,
-                builtin_call_types,
+                ctx,
             ),
         );
     }
@@ -2504,18 +2479,14 @@ fn direct_closure_return_array_item_type(
     item: &crate::parser::ast::Expr,
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    functions: &std::collections::HashMap<String, FunctionSig>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    ctx: &LoweringContext<'_, '_>,
 ) -> PhpType {
     if let ExprKind::Spread(inner) = &item.kind {
         let source = direct_closure_return_array_item_type(
             inner,
             captures,
             params,
-            classes,
-            functions,
-            builtin_call_types,
+            ctx,
         );
         return match source.codegen_repr() {
             PhpType::Array(elem) => match elem.codegen_repr() {
@@ -2535,9 +2506,7 @@ fn direct_closure_return_array_item_type(
         item,
         captures,
         params,
-        classes,
-        functions,
-        builtin_call_types,
+        ctx,
     ))
 }
 
@@ -2552,9 +2521,7 @@ fn direct_closure_return_assoc_literal_type(
     pairs: &[(crate::parser::ast::Expr, crate::parser::ast::Expr)],
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    functions: &std::collections::HashMap<String, FunctionSig>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    ctx: &LoweringContext<'_, '_>,
 ) -> PhpType {
     let mut key_ty = PhpType::Never;
     let mut value_ty = PhpType::Never;
@@ -2567,9 +2534,7 @@ fn direct_closure_return_assoc_literal_type(
             value,
             captures,
             params,
-            classes,
-            functions,
-            builtin_call_types,
+            ctx,
         );
         key_ty = if matches!(key_ty, PhpType::Never) {
             next_key
@@ -2593,9 +2558,7 @@ fn direct_closure_return_mixed_literal_type(
     entries: &[crate::parser::ast::ArrayEntry],
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    functions: &std::collections::HashMap<String, FunctionSig>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    ctx: &LoweringContext<'_, '_>,
 ) -> PhpType {
     let mut value_ty = PhpType::Never;
     for entry in entries {
@@ -2605,9 +2568,7 @@ fn direct_closure_return_mixed_literal_type(
                     source,
                     captures,
                     params,
-                    classes,
-                    functions,
-                    builtin_call_types,
+                    ctx,
                 )
                 .1
             }
@@ -2616,9 +2577,7 @@ fn direct_closure_return_mixed_literal_type(
                 value,
                 captures,
                 params,
-                classes,
-                functions,
-                builtin_call_types,
+                ctx,
             ),
         };
         value_ty = crate::ir_lower::expr::merge_ir_assoc_value_type(value_ty, next_value);
@@ -2638,17 +2597,13 @@ fn direct_closure_return_assoc_spread_entry_types(
     inner: &crate::parser::ast::Expr,
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    functions: &std::collections::HashMap<String, FunctionSig>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    ctx: &LoweringContext<'_, '_>,
 ) -> (PhpType, PhpType) {
     let source = direct_closure_return_array_item_type(
         inner,
         captures,
         params,
-        classes,
-        functions,
-        builtin_call_types,
+        ctx,
     );
     match source.codegen_repr() {
         PhpType::Array(elem) => (PhpType::Int, elem.codegen_repr()),

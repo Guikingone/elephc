@@ -342,7 +342,7 @@ pub(super) fn assoc_array_literal_type_from_entries(
     for entry in entries {
         let next = match entry {
             ArrayEntry::Spread(inner) => {
-                match infer_expr_type_syntactic(inner).codegen_repr() {
+                match array_literal_spread_source_type_for_ir(ctx, inner).codegen_repr() {
                     PhpType::Array(elem) => elem.codegen_repr(),
                     PhpType::AssocArray { value, .. } => value.codegen_repr(),
                     _ => PhpType::Mixed,

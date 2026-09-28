@@ -215,6 +215,9 @@ pub(super) fn scoped_constant_value_type_for_ir(
             ExprKind::ArrayLiteralAssoc(pairs) => {
                 assoc_array_literal_type_for_ir(ctx, pairs, &const_expr)
             }
+            ExprKind::ArrayLiteralMixed(entries) => {
+                assoc_array_literal_type_from_entries(ctx, entries, &const_expr)
+            }
             _ => ir_array_storage_type(infer_expr_type_syntactic(&const_expr)),
         };
     }
