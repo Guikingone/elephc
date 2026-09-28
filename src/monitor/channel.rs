@@ -58,7 +58,7 @@ pub(crate) fn serve_one_request(mut stream: std::net::TcpStream, path: &str) -> 
 pub(crate) fn compile_php_monitored(source: &str) -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| format!("cannot locate elephc: {e}"))?;
     let status = process::Command::new(exe)
-        .args(["--with-monitoring", source])
+        .args(["build", "--with-monitoring", source])
         .status()
         .map_err(|e| format!("cannot run elephc: {e}"))?;
     if !status.success() {
