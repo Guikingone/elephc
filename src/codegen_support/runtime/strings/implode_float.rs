@@ -9,9 +9,10 @@
 //! - A homogeneous float array stores raw 8-byte doubles after the 24-byte array header, so
 //!   neither the string-slot walk of `__rt_implode` nor the integer walk of `__rt_implode_int`
 //!   can read it (#640).
-//! - `__rt_ftoa` appends its text at `_concat_off` and advances it. This helper keeps
+//! - `__rt_ftoa_coerce` (which warns on a NAN on PHP 8.5, then runs `__rt_ftoa`) appends its
+//!   text at `_concat_off` and advances it. This helper keeps
 //!   `_concat_off` equal to the output cursor: glue bytes are written at `_concat_off` and the
-//!   offset is advanced past them, then `__rt_ftoa` appends the element in place. Nothing is
+//!   offset is advanced past them, then `__rt_ftoa_coerce` appends the element in place. Nothing is
 //!   copied, so the conversion can never overwrite glue already written.
 
 use crate::codegen_support::emit::Emitter;
@@ -99,7 +100,8 @@ pub fn emit_implode_float(emitter: &mut Emitter) {
 
 /// Emits `__rt_implode_float` runtime helper for Linux x86_64.
 /// ABI: rdi/rsi=glue_ptr/glue_len, rdx=array_ptr → rax=result_ptr, rdx=result_len.
-/// Same scheme as the ARM64 body: glue and each `__rt_ftoa` text are appended at `_concat_off`.
+/// Same scheme as the ARM64 body: glue and each `__rt_ftoa_coerce` text are appended at
+/// `_concat_off`.
 fn emit_implode_float_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: implode_float ---");

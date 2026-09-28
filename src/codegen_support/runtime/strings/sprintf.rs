@@ -418,6 +418,8 @@ fn emit_conversion_dispatch(emitter: &mut Emitter) {
 /// A string record is emitted straight from its pointer/length pair (so the result is
 /// binary safe and not capped at any scratch-buffer size); precision truncates it. A
 /// record carrying another tag is rendered numerically instead of being dereferenced.
+/// A float record is a string coercion, so on PHP 8.5 a NAN first raises the
+/// `coerced to string` warning through `__rt_warn_nan_coerced_string`.
 fn emit_string_conversion(emitter: &mut Emitter) {
     emitter.label("__rt_sprintf_t_str");
     emitter.instruction("str xzr, [sp, #152]");                                 // this conversion owns no temporary string yet

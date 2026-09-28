@@ -84,15 +84,16 @@ fn message_len(symbol: &str) -> usize {
 /// Returns true when the active compile profile reports NAN-to-bool and NAN-to-string
 /// coercions.
 ///
-/// The diagnostic landed in PHP 8.5 (RFC `warnings-php-8-5`); 8.2, 8.3 and 8.4 coerce NAN to
-/// `true` silently. Every call site — the three `src/codegen/lower_inst` float truthiness
-/// emitters and the two boxed-Mixed runtime helpers — consults this before emitting its probe,
-/// so a `--php-version 8.4` build carries neither the test nor the call.
+/// The diagnostics landed in PHP 8.5 (RFC `warnings-php-8-5`); 8.2, 8.3 and 8.4 coerce NAN
+/// silently. Every probe consults this before it is emitted: the three `src/codegen/lower_inst`
+/// float truthiness emitters, the two boxed-Mixed runtime helpers, `__rt_ftoa_coerce`, and the
+/// `%s` float branch of both `__rt_sprintf` emitters. A `--php-version 8.4` build therefore
+/// carries neither the test nor the call.
 ///
 /// Reading the thread-local compile profile from a runtime emitter is safe with respect to the
-/// runtime object cache: `crate::runtime_cache::prepare_runtime_object` keys the cache on a hash
-/// of the GENERATED ASSEMBLY TEXT, so a profile that changes the emitted runtime necessarily
-/// changes the cache key too.
+/// runtime object cache: `crate::runtime_cache::prepare_runtime_object` includes the PHP
+/// profile's `version_id` in the cache key, so a runtime built for another profile is never
+/// reused.
 pub fn nan_bool_coercion_warning_enabled() -> bool {
     crate::codegen_support::compile_php_version().version_id() >= 80500
 }

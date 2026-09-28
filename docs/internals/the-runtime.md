@@ -178,6 +178,9 @@ applying the two fixups where C's `%G` differs from `zend_gcvt`: exponential for
 keeps a mantissa fraction (`1.0E+300`, not `1E+300`) and the exponent is written without
 zero padding (`1.0E-7`, not `1E-07`). `NAN` is emitted unsigned, since glibc renders a
 negative quiet NaN as `-NAN` and PHP never does. `INF` / `-INF` pass through unchanged.
+It never warns: string coercions reach it through `__rt_ftoa_coerce` (below), and it is
+called directly only by formatting PHP does not treat as a coercion (a comparison against a
+non-numeric string, backtrace arguments, the mbstring float callback).
 
 **Input:** `d0` = float value
 **Output:** `x1` = pointer to string, `x2` = length
