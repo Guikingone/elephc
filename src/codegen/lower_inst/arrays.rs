@@ -892,9 +892,8 @@ fn lower_array_set_mixed_key_aarch64(
     }
     abi::emit_push_reg(ctx.emitter, "x0");
     ctx.load_value_to_reg(array, "x0")?;
-    // The helper borrows the source while deciding whether its runtime representation is indexed
-    // or hash-backed. Retaining here would make the hash path observe a fake COW alias and clone
-    // on every dynamic-key write; the helper returns an owned replacement for storeback instead.
+    // The helper consumes the slot's reference and returns the one the storeback installs.
+    // Retaining here would make it observe a fake COW alias and clone on every dynamic-key write.
     ctx.load_value_to_reg(key, "x1")?;
     abi::emit_pop_reg(ctx.emitter, "x2");
     abi::emit_call_label(ctx.emitter, "__rt_array_set_mixed_key");
@@ -917,7 +916,7 @@ fn lower_array_set_mixed_key_x86_64(
     }
     abi::emit_push_reg(ctx.emitter, "rax");
     ctx.load_value_to_reg(array, "rax")?;
-    ctx.emitter.instruction("mov rdi, rax");                                    // publish the borrowed array while the helper selects its runtime storage path
+    ctx.emitter.instruction("mov rdi, rax");                                    // hand the slot's array to the helper, which consumes its reference
     ctx.load_value_to_reg(key, "rsi")?;
     abi::emit_pop_reg(ctx.emitter, "rdx");
     abi::emit_call_label(ctx.emitter, "__rt_array_set_mixed_key");

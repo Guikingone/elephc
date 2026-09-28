@@ -354,6 +354,12 @@ pub(super) fn lower_mixed_key_array_set(
     span: Span,
 ) {
     let mixed_array_ty = PhpType::Array(Box::new(PhpType::Mixed));
+    // The helper consumes the slot's reference and hands back the one the slot will own -- the
+    // same array written in place, a grown or split copy, or the hash it promoted to -- so this is
+    // the consuming-mutation protocol `lower_string_key_array_promotion` uses: a boxed owner is
+    // dropped before the write, and the result is stored without releasing the old pointer, which
+    // the growth may already have freed or the split left to its other owner.
+    ctx.prepare_mutated_local_owner(array, array_value, mixed_array_ty.clone(), Some(span));
     let result = ctx.emit_value(
         Op::ArraySetMixedKey,
         vec![array_value.value, index.value, value.value],
@@ -362,17 +368,20 @@ pub(super) fn lower_mixed_key_array_set(
         Op::ArraySetMixedKey.default_effects(),
         Some(span),
     );
-    // The helper hands back the reference the slot will own: the receiver retained when it wrote
-    // in place, or the hash it promoted to. Either way the slot's previous reference would be
-    // orphaned by the raw store, and leaving it made every in-place write a fake alias -- the
-    // next write took the copy-on-write clone path and the old array leaked with every value in
-    // it (20000 writes of a 600-byte string into a loop-widened `array<mixed>` exhausted an 8 MB
-    // heap with zero frees). It is dropped while the slot still holds it.
-    ctx.release_replaced_local_owner(array, Some(span));
-    ctx.store_mutated_local(array, result, mixed_array_ty, Some(span));
+    ctx.store_prepared_mutated_local(array, result, mixed_array_ty, Some(span));
     // The boxed key is only read by the helper, so a key boxed for this write is dropped here.
     if ctx.value_is_owning_temporary(index) {
         crate::ir_lower::ownership::release_if_owned(ctx, index, Some(span));
+    }
+    // A boxed value is retained by the store for the slot, so a boxed temporary -- an element just
+    // read with `$values[$i]` -- keeps its own reference too and is dropped here. Without it
+    // `$chunk[$k] = $values[$k]` in a loop that had widened `$k` leaked one box per iteration.
+    if matches!(
+        ctx.builder.value_php_type(value.value).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) && ctx.value_is_owning_temporary(value)
+    {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }
 }
 
