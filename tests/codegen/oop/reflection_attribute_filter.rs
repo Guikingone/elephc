@@ -932,3 +932,64 @@ eval('foreach ([
          constant:2:1:Marker:const\n"
     );
 }
+
+/// A top-level function's parameter attribute answers `newInstance()` with the built attribute,
+/// reached through `ReflectionFunction::getParameters()` and through a directly constructed
+/// `ReflectionParameter`, filtered or not; a parameter without attributes answers empty. Function
+/// parameters feed the attribute factories through their own path, separate from method
+/// parameters. Expected output measured on PHP 8.5.10.
+#[test]
+fn test_function_parameter_attribute_new_instance_builds_the_attribute() {
+    let out = compile_and_run(
+        r#"<?php
+#[Attribute(Attribute::TARGET_ALL)]
+class Marker { public function __construct(public string $tag = "none") {} }
+#[Attribute(Attribute::TARGET_ALL)]
+class Other {}
+function tagged(#[Marker("fparam"), Other] int $x, int $plain = 0) {}
+
+$params = (new ReflectionFunction('tagged'))->getParameters();
+$first = $params[0]->getAttributes();
+echo count($first), " ", $first[0]->getName(), " ", $first[0]->newInstance()->tag, "\n";
+echo count($params[1]->getAttributes()), "\n";
+$direct = new ReflectionParameter('tagged', 'x');
+$filtered = $direct->getAttributes(Marker::class);
+echo count($filtered), " ", $filtered[0]->newInstance()->tag, "\n";
+"#,
+    );
+    assert_eq!(out, "2 Marker fparam\n0\n1 fparam\n");
+}
+
+/// An enum method's own attributes are reported, filtered, and instantiated, for an instance
+/// method, a static method, and in the class's `getMethods()` listing; a method without
+/// attributes answers empty, and the method still runs. Expected output measured on PHP 8.5.10.
+#[test]
+fn test_enum_method_get_attributes_reports_declared_attributes() {
+    let out = compile_and_run(
+        r#"<?php
+#[Attribute(Attribute::TARGET_ALL)]
+class Marker { public function __construct(public string $tag = "none") {} }
+#[Attribute(Attribute::TARGET_ALL)]
+class Other {}
+enum Suit {
+    case Hearts;
+    #[Marker("label"), Other] public function label(): string { return "hearts"; }
+    #[Marker("make")] public static function make(): self { return self::Hearts; }
+    public function plain(): string { return "plain"; }
+}
+$label = new ReflectionMethod(Suit::class, 'label');
+$all = $label->getAttributes();
+echo count($all), " ", $all[0]->getName(), " ", $all[1]->getName(), "\n";
+$filtered = $label->getAttributes(Marker::class);
+echo count($filtered), " ", $filtered[0]->newInstance()->tag, "\n";
+$make = new ReflectionMethod(Suit::class, 'make');
+echo count($make->getAttributes()), " ", $make->getAttributes()[0]->newInstance()->tag, "\n";
+echo count((new ReflectionMethod(Suit::class, 'plain'))->getAttributes()), "\n";
+foreach ((new ReflectionClass(Suit::class))->getMethods() as $method) {
+    if ($method->getName() === 'label') { echo "listed ", count($method->getAttributes()), "\n"; }
+}
+echo Suit::Hearts->label(), "\n";
+"#,
+    );
+    assert_eq!(out, "2 Marker Other\n1 label\n1 make\n0\nlisted 2\nhearts\n");
+}

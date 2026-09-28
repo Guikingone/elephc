@@ -164,25 +164,44 @@ pub(crate) fn collect_attribute_factories_with_extra(
         .collect()
 }
 
-/// Returns the factory id for an attribute, considering classes plus extra
-/// metadata sources such as top-level function attributes retained by EIR.
-pub(crate) fn attribute_factory_id_with_extra(
-    classes: &HashMap<String, ClassInfo>,
-    extra_attrs: &[AttributeMetadataSource<'_>],
-    attr_name: &str,
-    attr_args: &[AttrArgEntry],
-) -> i64 {
-    // Non-class attributes are registered under their raw name (see
-    // `collect_from_attribute_lists`), so fall back to it when the name does
-    // not resolve to a real class.
-    let lookup_name = resolve_class_name(classes, attr_name)
-        .map(|resolved| resolved.to_string())
-        .unwrap_or_else(|| attr_name.to_string());
-    collect_attribute_factories_with_extra(classes, extra_attrs)
-        .into_iter()
-        .find(|factory| factory.class_name == lookup_name && factory.args == attr_args)
-        .map(|factory| factory.id)
-        .unwrap_or(0)
+/// The attribute factory ids of one program, keyed by resolved attribute name and captured
+/// arguments.
+///
+/// Numbering the factories walks every class and every lowered function, so a caller that
+/// materializes several attributes builds this table once and looks each attribute up in it,
+/// instead of renumbering the whole program per attribute.
+pub(crate) struct AttributeFactoryIds<'a> {
+    classes: &'a HashMap<String, ClassInfo>,
+    ids: HashMap<(String, Vec<AttrArgEntry>), i64>,
+}
+
+impl<'a> AttributeFactoryIds<'a> {
+    /// Numbers the factories of `classes` plus `extra_attrs` exactly as the synthetic
+    /// `ReflectionAttribute` bodies do, so the ids agree with `newInstance()`'s dispatch.
+    pub(crate) fn new(
+        classes: &'a HashMap<String, ClassInfo>,
+        extra_attrs: &[AttributeMetadataSource<'_>],
+    ) -> Self {
+        let ids = collect_attribute_factories_with_extra(classes, extra_attrs)
+            .into_iter()
+            .map(|factory| ((factory.class_name, factory.args), factory.id))
+            .collect();
+        Self { classes, ids }
+    }
+
+    /// Returns the factory id of one attribute, or `0` when no factory matches it.
+    pub(crate) fn id(&self, attr_name: &str, attr_args: &[AttrArgEntry]) -> i64 {
+        // Non-class attributes are registered under their raw name (see
+        // `collect_from_attribute_lists`), so fall back to it when the name does
+        // not resolve to a real class.
+        let lookup_name = resolve_class_name(self.classes, attr_name)
+            .map(|resolved| resolved.to_string())
+            .unwrap_or_else(|| attr_name.to_string());
+        self.ids
+            .get(&(lookup_name, attr_args.to_vec()))
+            .copied()
+            .unwrap_or(0)
+    }
 }
 
 /// Builds the synthetic `ReflectionAttribute::newInstance()` body using class
