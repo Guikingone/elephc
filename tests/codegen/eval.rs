@@ -33588,6 +33588,7 @@ fn test_compiled_member_exists_sees_an_interpreted_subclass() {
         r#"<?php
 abstract class Template {
     public function has(string $name): bool { return method_exists($this, $name); }
+    public function has2(string $name): bool { eval('$x = 1;'); return method_exists($this, $name); }
     abstract public function name(): string;
 }
 function probe(object $o, string $m): string { return method_exists($o, $m) ? "y" : "n"; }
@@ -33605,7 +33606,8 @@ echo probe($t, 'macro_render'), probe($t, 'name'), probe($t, 'secret'), probe($t
 echo prop($t, 'shown'), prop($t, 'hidden'), "\n";
 class Plain { public $p; public function m() {} }
 echo probe(new Plain(), 'm'), probe(new Plain(), 'x'), prop(new Plain(), 'p'), "\n";
+echo $t->has2('macro_render') ? "has2" : "missing2", "\n";
 "#,
     );
-    assert_eq!(out, "tpl has missing\nyyyyn\nyn\nyny\n");
+    assert_eq!(out, "tpl has missing\nyyyyn\nyn\nyny\nhas2\n");
 }
