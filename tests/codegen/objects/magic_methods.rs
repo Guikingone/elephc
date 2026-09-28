@@ -474,6 +474,7 @@ fn test_example_magic_methods_compiles_and_runs() {
             "[missing]\n",
             "role=admin;visits=3;\n",
             "nahime:active\n",
+            "nahime:self\n",
             "missing displayName(short)\n",
             "active\n",
             "inactive\n",

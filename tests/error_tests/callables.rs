@@ -301,6 +301,22 @@ fn test_error_call_non_callable_variable() {
     expect_error(r#"<?php $x = 5; $x(1);"#, "not a callable");
 }
 
+/// `$this(...)` in a class without `__invoke` is refused even when the class defines `__call`:
+/// PHP never routes an object invocation through `__call`.
+#[test]
+fn test_error_invoke_this_without_invoke_ignores_call() {
+    expect_error(
+        r#"<?php
+class B {
+    public function __call($m, $a) { return $m; }
+    public function run() { return $this(1); }
+}
+echo (new B())->run();
+"#,
+        "not a callable",
+    );
+}
+
 /// Boxed runtime dispatch still rejects unpacking after an explicit named argument.
 #[test]
 fn test_error_boxed_direct_callable_spread_after_named_argument() {
