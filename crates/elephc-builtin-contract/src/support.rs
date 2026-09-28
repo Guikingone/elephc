@@ -191,6 +191,8 @@ pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
 /// `spec.rs` asserts every binding has an execution route, so the interpreter aborts at startup.
 const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] = &[
     "addcslashes",
+    "array_first",
+    "array_last",
     "file",
     "hash_copy",
     "hash_final",

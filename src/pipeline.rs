@@ -399,6 +399,8 @@ pub(crate) fn compile(config: CliConfig) {
     // `password_hash()`/`password_verify()` and friends, bcrypt over `elephc_crypto`; the late
     // gate below covers a call only an autoloaded class makes.
     let ast = crate::password_prelude::inject_if_used(ast, &mut prelude_inventory);
+    // php 8.5's `array_first()`/`array_last()`; the late gate below covers autoloaded callers.
+    let ast = crate::array_edge_prelude::inject_if_used(ast, &mut prelude_inventory);
     timings.record_since("hash-prelude", phase_started);
 
     // Inject the `ext/curl` prelude (the `CurlHandle` class and the `curl_*` wrappers over
@@ -637,6 +639,7 @@ pub(crate) fn compile(config: CliConfig) {
     // Symfony's `NativePasswordHasher` is autoloaded, so its `password_verify()` call is only
     // visible here.
     let ast = crate::password_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::array_edge_prelude::inject_if_used(ast, &mut prelude_inventory);
     // `Attribute`'s TARGET_* constants are named by every attribute class declaration, including
     // ones only the interpreter reads at run time.
     let ast = crate::attribute_prelude::inject_if_used(ast, &mut prelude_inventory);
