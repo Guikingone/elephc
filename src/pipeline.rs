@@ -396,6 +396,9 @@ pub(crate) fn compile(config: CliConfig) {
     // functions and folds a differently cased call (`\SODIUM_CRYPTO_BOX_SEAL()`) onto them.
     // The late gate after autoload expansion covers code only an autoloaded class reaches.
     let ast = crate::sodium_prelude::inject_if_used(ast, &mut prelude_inventory);
+    // `password_hash()`/`password_verify()` and friends, bcrypt over `elephc_crypto`; the late
+    // gate below covers a call only an autoloaded class makes.
+    let ast = crate::password_prelude::inject_if_used(ast, &mut prelude_inventory);
     timings.record_since("hash-prelude", phase_started);
 
     // Inject the `ext/curl` prelude (the `CurlHandle` class and the `curl_*` wrappers over
@@ -628,6 +631,9 @@ pub(crate) fn compile(config: CliConfig) {
     // `ext/sodium` sealed boxes: Symfony's `SodiumVault` is autoloaded, so this gate reads the
     // complete program too, and it keeps `SodiumException` for code the interpreter runs.
     let ast = crate::sodium_prelude::inject_if_used(ast, &mut prelude_inventory);
+    // Symfony's `NativePasswordHasher` is autoloaded, so its `password_verify()` call is only
+    // visible here.
+    let ast = crate::password_prelude::inject_if_used(ast, &mut prelude_inventory);
     // `Attribute`'s TARGET_* constants are named by every attribute class declaration, including
     // ones only the interpreter reads at run time.
     let ast = crate::attribute_prelude::inject_if_used(ast, &mut prelude_inventory);
