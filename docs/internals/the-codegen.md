@@ -160,8 +160,9 @@ walks metadata to print it:
 
 - The text follows PHP 8.5. The one exception is the `@@ <file> <line> - <line>` header: a compiled
   binary cannot honestly name a source that need not exist where it runs.
-- A union type prints its members in PHP's order, which is the rank table
-  (`elephc_builtin_contract::union_member_rank`) the property dump and eval share.
+- A union type prints its members in PHP's order, not the declared one. The rank is
+  `reflection_union_member_rank` in `property_members.rs`, which the compiled property dump shares.
+  The eval bridge still prints the declared order (#1117).
 - A function or method is marked internal by the same answer `isInternal()` gives, and its module
   comes from the builtin contract.
 - `getDeclaringFunction()` reflectors are built without parameters, to avoid an infinite
