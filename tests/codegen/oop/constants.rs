@@ -679,3 +679,30 @@ $r = (new ReflectionClass("Handler"))->newInstanceWithoutConstructor(); $r->show
     );
     assert_eq!(out, "16=Error;32=Debug;h\n16=Error;32=Debug;h\n16=Error;32=Debug;h\n");
 }
+
+/// Verifies `Enum::Case->value` inside an array literal keeps the enum's backing type.
+///
+/// The element type was guessed syntactically as int, so a string-backed value was stored as
+/// its string POINTER: Symfony's `ReflectionExtractor::MAP_TYPES = ['integer' =>
+/// TypeIdentifier::INT->value, ...]` printed `4321534512`. Expected output is php 8.5.10's.
+#[test]
+fn test_enum_case_value_in_an_array_constant_keeps_its_backing_type() {
+    let out = compile_and_run(
+        r#"<?php
+enum Kind: string { case Int = 'int'; case Bool = 'bool'; }
+enum Num: int { case One = 1; }
+class Map {
+    const TYPES = ['integer' => Kind::Int->value, 'one' => Num::One->value];
+    const LIST = [Kind::Int->value, Kind::Bool->name];
+}
+var_dump(Map::TYPES, Map::LIST);
+$x = [Kind::Bool->value, 'k' => Num::One->value];
+echo $x[0], $x['k'], Map::TYPES['integer'], "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(2) {\n  [\"integer\"]=>\n  string(3) \"int\"\n  [\"one\"]=>\n  int(1)\n}\n\
+         array(2) {\n  [0]=>\n  string(3) \"int\"\n  [1]=>\n  string(4) \"Bool\"\n}\nbool1int\n"
+    );
+}
