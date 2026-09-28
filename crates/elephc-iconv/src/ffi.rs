@@ -13,7 +13,9 @@
 //! - Apple's iconv (Citrus-based since macOS 14) stores the `//TRANSLIT` and `//IGNORE`
 //!   options on the converter it shares between every descriptor of one charset pair, and
 //!   each `iconv_open()` overwrites them. Each call therefore re-applies its own descriptor's
-//!   options through `iconvctl()` first, under a process-wide lock (#811).
+//!   options through `iconvctl()` first, under a process-wide lock (#811). The compiler's
+//!   `convert.iconv` write filter, which keeps its own descriptor open across writes, restores
+//!   its options the same way (`codegen_support::stream_filters::iconv_write`).
 //! - `Converter::convert_all` grows its own output buffer, so callers never handle `E2BIG`.
 //! - A charset name containing an interior NUL can never reach libc, and is reported as
 //!   an unusable charset exactly like an unknown name.

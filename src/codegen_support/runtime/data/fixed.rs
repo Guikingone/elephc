@@ -37,7 +37,7 @@ use crate::codegen_support::runtime::strings::{
     B64_DECODE_INVALID, B64_DECODE_SKIP, B64_DECODE_WHITESPACE,
 };
 use crate::codegen_support::data_section::comm_directive_aligned;
-use crate::codegen_support::platform::Target;
+use crate::codegen_support::platform::{Platform, Target};
 use crate::php_version::PhpVersion;
 use crate::types::checker::builtins::{
     all_supported_builtin_function_names, supported_builtin_function_names_for_profile,
@@ -906,6 +906,12 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_iconv_handles", 2048, target));
     out.push_str(&comm_directive("_iconv_fwrite_fn", 8, target));
     out.push_str(&comm_directive("_iconv_close_fn", 8, target));
+    // Apple iconv shares //TRANSLIT and //IGNORE per charset pair, so Apple targets record
+    // each write filter's own option bits per fd (256 fds x 1B) for the fwrite helper to
+    // restore before converting; glibc keeps them per descriptor and needs no table.
+    if target.platform == Platform::MacOS {
+        out.push_str(&comm_directive("_iconv_write_options", 256, target));
+    }
     out.push_str(&comm_directive("_ftp_resp_buf", 4096, target));
     out.push_str(&comm_directive("_ftp_data_addr", 64, target));
     // _ftp_use_tls: set to 1 by fopen("ftps://...") before __rt_ftp_open is
@@ -1736,6 +1742,24 @@ mod tests {
                 "expected the fixed runtime data to declare its usual common symbols, saw {}",
                 seen
             );
+        }
+    }
+
+    /// The per-fd `convert.iconv` write-filter option table exists only on Apple targets,
+    /// whose iconv shares `//TRANSLIT` and `//IGNORE` per charset pair (#811).
+    #[test]
+    fn test_iconv_write_options_table_is_apple_only() {
+        for (target, expected) in [
+            (Target::new(Platform::MacOS, Arch::AArch64), true),
+            (
+                Target::new_apple(Arch::AArch64, crate::codegen_support::platform::AppleVariant::IOS),
+                true,
+            ),
+            (Target::new(Platform::Linux, Arch::AArch64), false),
+            (Target::new(Platform::Linux, Arch::X86_64), false),
+        ] {
+            let asm = emit_runtime_data_fixed(8_388_608, target, PhpVersion::Php85);
+            assert_eq!(asm.contains("_iconv_write_options"), expected, "{target:?}");
         }
     }
 

@@ -1206,6 +1206,8 @@ The first table covers the file/filesystem core; the subsections after it cover 
 
 Userspace `streamWrapper` classes registered with `stream_wrapper_register()` dispatch through a vtable of `__rt_user_wrapper_*` routines (`fopen`/`fread`/`fwrite`/`fclose`/`feof`/`fseek`/`ftell`/`fflush`/`fstat`/`ftruncate`/`flock`/`set_option`/`stream_cast`, the `dir_*` family, `path_op`, and `rename`), each bridging the synthetic descriptor back to PHP method calls on the wrapper instance. Stream filters use `__rt_stream_filter_register`, `__rt_apply_stream_filter` / `__rt_apply_user_stream_filter`, `__rt_stream_filter_attach_user`, `__rt_resolve_user_filter_id`, `__rt_user_filter_brigade_invoke`, and `__rt_user_filter_release_fd` to run built-in (`zlib.*`, `bzip2.*`, `convert.iconv.*`, `string.*`) and user-defined filter chains over stream reads and writes.
 
+A `convert.iconv.*` write filter keeps its libc `iconv_t` open across writes. Apple's iconv (Citrus-based since macOS 14) stores the `//TRANSLIT` and `//IGNORE` options on the converter it shares between every descriptor of one charset pair, and any `iconv_open()` for that pair, the iconv bridge's included, rewrites them. On Apple targets the attach therefore records the filter's own option bits in `_iconv_write_options[fd]`, and the write helper restores them with `iconvctl()` before each conversion, the same protocol the `elephc-iconv` bridge follows. The read transform needs no restore: it opens its descriptor immediately before its only conversion and closes it right after. glibc keeps the options per descriptor, so Linux code has neither step.
+
 ### Phar archive routines
 
 | Routine | What it does |
