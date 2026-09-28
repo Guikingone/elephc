@@ -62,12 +62,14 @@ const PHP_EOL = "<eol>";
 
 var_dump(is_nan(PHP_NAN));
 var_dump(\defined('Demo\NAN'));
+var_dump(is_nan(\constant('Demo\NAN')));
 var_dump(\constant('Demo\PHP_EOL'));
 "#,
     );
     assert_eq!(
         out,
         concat!(
+            "bool(true)\n",
             "bool(true)\n",
             "bool(true)\n",
             "string(5) \"<eol>\"\n",
