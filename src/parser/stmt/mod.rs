@@ -33,7 +33,8 @@ pub use blocks::{parse_block, parse_body};
 pub(crate) use oop::parse_anonymous_class;
 pub(crate) use params::{looks_like_typed_param, parse_type_expr};
 pub(crate) use assign::{
-    can_replay_assignment_target, lower_postfix_incdec_assignment, update_index_needs_snapshot,
+    can_replay_assignment_target, lower_postfix_incdec_assignment,
+    update_dimension_base_is_snapshotted, update_index_needs_snapshot,
 };
 pub(crate) use blocks::{expect_semicolon, expect_token};
 pub(crate) use names::{name_part_from_token, name_starts_at, parse_name, parse_unqualified_name};

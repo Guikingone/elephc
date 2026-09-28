@@ -174,6 +174,9 @@ pub(super) fn lower_static_property_array_push(
 }
 
 /// Lowers `Class::$prop[index] = value`.
+///
+/// A desugared `??=` becomes a probe plus a conditional insert, and a desugared compound update
+/// writes with the key its own read already converted (see `ElementUpdate`).
 pub(super) fn lower_static_property_array_assign(
     ctx: &mut LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
@@ -182,12 +185,64 @@ pub(super) fn lower_static_property_array_assign(
     value: &Expr,
     span: Span,
 ) {
+    let update = desugared_element_update(value, span, |read| {
+        reads_static_property_array_element(read, receiver, property, index)
+    });
+    if let Some(ElementUpdate::NullCoalesce { read, default }) = update {
+        crate::ir_lower::expr::lower_null_coalesce_update_stmt(ctx, read, default, span);
+        return;
+    }
+    lower_static_property_array_assign_with_diagnosed_key(
+        ctx,
+        receiver,
+        property,
+        index,
+        value,
+        span,
+        update.is_some(),
+    );
+}
+
+/// Returns whether `read` is the element `Class::$property[index]` a statement writes.
+fn reads_static_property_array_element(
+    read: &Expr,
+    receiver: &StaticReceiver,
+    property: &str,
+    index: &Expr,
+) -> bool {
+    matches!(
+        &read.kind,
+        ExprKind::ArrayAccess { array, index: read_index }
+            if read_index.as_ref() == index
+                && matches!(
+                    &array.kind,
+                    ExprKind::StaticPropertyAccess { receiver: read_receiver, property: read_property }
+                        if read_receiver == receiver && read_property == property
+                )
+    )
+}
+
+/// Lowers `Class::$prop[index] = value`, optionally reusing a float-key diagnosis.
+///
+/// `key_already_diagnosed` marks the write half of a compound update whose read of the same
+/// element already reported the float key's conversion. An `ArrayAccess` receiver gets the key
+/// unconverted, so its `offsetSet` call never consults the flag.
+pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &str,
+    index: &Expr,
+    value: &Expr,
+    span: Span,
+    key_already_diagnosed: bool,
+) {
+    let key_marker = key_already_diagnosed.then_some(Immediate::Bool(true));
     if let Some(array) = separate_php_array_static_property(ctx, receiver, property, span) {
         let (index, value) = array_write_core::lower_write_key_and_value(ctx, index, value);
         ctx.emit_void(
             Op::RuntimeCall,
             vec![array.value, index.value, value.value],
-            None,
+            key_marker,
             effects_lookup::runtime_effects(),
             Some(span),
         );
@@ -208,7 +263,8 @@ pub(super) fn lower_static_property_array_assign(
         // the same source line.
         let (index, value) =
             crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
-        let index = coerce_array_key_to_int_at_span(ctx, index, Some(span), false);
+        let index =
+            coerce_array_key_to_int_at_span(ctx, index, Some(span), key_already_diagnosed);
         let value = coerce_indexed_array_set_value(ctx, &array_ty, value, Some(span));
         ctx.emit_void(
             Op::ArraySet,
@@ -221,9 +277,11 @@ pub(super) fn lower_static_property_array_assign(
         return;
     }
 
-    let property_value = if let Some(property_ty) = static_property_type(ctx, receiver, property)
-        .filter(|ty| type_satisfies_array_access_for_ir(ctx, ty))
-    {
+    let array_access_ty = static_property_type(ctx, receiver, property)
+        .filter(|ty| type_satisfies_array_access_for_ir(ctx, ty));
+    // `offsetSet` receives the original key, so only a boxed array receiver has a key to rebuild.
+    let key_marker = if array_access_ty.is_some() { None } else { key_marker };
+    let property_value = if let Some(property_ty) = array_access_ty {
         load_static_property_as(ctx, receiver, property, property_ty, span)
     } else {
         load_static_property(ctx, receiver, property, span)
@@ -238,7 +296,7 @@ pub(super) fn lower_static_property_array_assign(
         ctx.emit_void(
             Op::RuntimeCall,
             vec![property_value.value, index.value, value.value],
-            None,
+            key_marker,
             effects_lookup::runtime_effects(),
             Some(span),
         );
@@ -248,7 +306,7 @@ pub(super) fn lower_static_property_array_assign(
     ctx.emit_void(
         Op::RuntimeCall,
         vec![property_value.value, index.value, value.value],
-        None,
+        key_marker,
         effects_lookup::runtime_effects(),
         Some(span),
     );
