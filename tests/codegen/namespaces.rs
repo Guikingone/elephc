@@ -771,3 +771,88 @@ namespace Demo\Namespace {
         )
     );
 }
+
+/// A qualified name whose FIRST segment is a reserved word, as in `Default\Theme\Palette`,
+/// must work everywhere a name can stand: calls, static calls and properties, class constants,
+/// typed and nullable parameters, return and property types, `implements`, `catch`, `new`,
+/// `instanceof`, `::class`, attributes, and plain, comma and group `use` imports whose first
+/// segment is `function`. Before the fix these reached the keyword's own parser (statement
+/// dispatch, expression prefix, type and catch parsing) and failed. A keyword separated from
+/// `\` by a space stays the keyword, so `\strlen()` after `+` and `new \X` keep working.
+/// Regression for #826. Expected output is PHP 8.5's.
+#[test]
+fn test_reserved_word_first_segments_work_in_every_name_position() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Function\Lib { class Foo {} function g() { return __FUNCTION__; } const K = 3; }
+namespace Default\Theme {
+    #[\Attribute]
+    class Attr { }
+    class Palette { public static $hits = 0; public static function accent() { return "teal"; } const X = 1; }
+    interface I {}
+    class E extends \Exception {}
+}
+namespace Static\Kit { class Factory { public function make() { return "made"; } } }
+namespace Main {
+use Function\Lib\Foo;
+use Default\Theme\Palette, Function\Lib\Foo as Foo2;
+use Default\Theme\{Attr, I};
+echo get_class(new Foo), " ", get_class(new Foo2), "\n";
+echo \Default\Theme\Palette::accent(), "\n";
+function t(\Default\Theme\Palette $p): \Default\Theme\Palette { return $p; }
+echo get_class(t(new Palette)), "\n";
+}
+namespace {
+#[Default\Theme\Attr]
+function attributed() { return "attr ok"; }
+echo attributed(), "\n";
+echo Default\Theme\Palette::accent(), "\n";
+echo Default\Theme\Palette::X, "\n";
+echo Function\Lib\g(), "\n";
+echo Function\Lib\K, "\n";
+Default\Theme\Palette::$hits = 5;
+Default\Theme\Palette::$hits++;
+echo Default\Theme\Palette::$hits, "\n";
+function t2(Default\Theme\Palette $p): Default\Theme\Palette { return $p; }
+echo get_class(t2(new Default\Theme\Palette)), "\n";
+function t3(?Default\Theme\Palette $p = null): string { return $p === null ? "null" : "set"; }
+echo t3(), " ", t3(new Default\Theme\Palette), "\n";
+class Z implements Default\Theme\I {}
+var_dump(new Z instanceof Default\Theme\I);
+try { throw new Default\Theme\E("x"); } catch (Default\Theme\E $e) { echo "caught ", get_class($e), "\n"; }
+$n = Default\Theme\Palette::class; echo $n, "\n";
+echo (new Static\Kit\Factory())->make(), "\n";
+var_dump((new Static\Kit\Factory()) instanceof Static\Kit\Factory);
+class Holder { public Default\Theme\Palette $p; public function __construct() { $this->p = new Default\Theme\Palette; } }
+echo get_class((new Holder)->p), "\n";
+$f = fn(Default\Theme\Palette $p) => get_class($p);
+echo $f(new Default\Theme\Palette), "\n";
+echo strlen("x") + \strlen("yz"), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "Function\\Lib\\Foo Function\\Lib\\Foo\n",
+            "teal\n",
+            "Default\\Theme\\Palette\n",
+            "attr ok\n",
+            "teal\n",
+            "1\n",
+            "Function\\Lib\\g\n",
+            "3\n",
+            "6\n",
+            "Default\\Theme\\Palette\n",
+            "null set\n",
+            "bool(true)\n",
+            "caught Default\\Theme\\E\n",
+            "Default\\Theme\\Palette\n",
+            "made\n",
+            "bool(true)\n",
+            "Default\\Theme\\Palette\n",
+            "Default\\Theme\\Palette\n",
+            "3\n",
+        )
+    );
+}

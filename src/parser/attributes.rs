@@ -14,7 +14,8 @@
 //! ```text
 //! attribute-group     = "#[" attribute ("," attribute)* "]"
 //! attribute           = qualified-name [ "(" arg-list? ")" ]
-//! qualified-name      = ["\"] identifier ("\" identifier)*
+//! qualified-name      = ["\"] segment ("\" segment)*   (a reserved word is a segment
+//!                       only inside a qualified name, as in PHP 8)
 //! arg-list            = expr ("," expr)*
 //! ```
 
@@ -23,6 +24,7 @@ use crate::lexer::{SpannedToken, Token};
 use crate::names::{Name, NameKind};
 use crate::parser::ast::{Attribute, AttributeGroup};
 use crate::parser::expr::parse_args;
+use crate::parser::stmt::qualified_segment_at;
 
 /// Parse zero or more `#[...]` attribute groups starting at `*pos`.
 ///
@@ -117,12 +119,14 @@ fn parse_one_attribute(
         *pos += 1;
         fully_qualified = true;
     }
-    match tokens.get(*pos).map(|(t, _)| t) {
-        Some(Token::Identifier(ident)) => {
-            parts.push(ident.clone());
+    // A reserved word is an ordinary segment of a qualified attribute name, as in
+    // `#[Vendor\Default\Attr]` (#826); alone it is still refused, as in PHP.
+    match qualified_segment_at(tokens, *pos, fully_qualified) {
+        Some(part) => {
+            parts.push(part);
             *pos += 1;
         }
-        _ => {
+        None => {
             return Err(CompileError::new(
                 span,
                 "Expected attribute name (identifier)",
@@ -131,9 +135,9 @@ fn parse_one_attribute(
     }
     while *pos < tokens.len() && matches!(tokens[*pos].0, Token::Backslash) {
         *pos += 1;
-        match tokens.get(*pos).map(|(t, _)| t) {
-            Some(Token::Identifier(ident)) => {
-                parts.push(ident.clone());
+        match qualified_segment_at(tokens, *pos, true) {
+            Some(part) => {
+                parts.push(part);
                 *pos += 1;
             }
             _ => {

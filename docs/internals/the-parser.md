@@ -173,6 +173,7 @@ At statement level, parsing is split between `parser/mod.rs` and the `stmt/` sub
 
 | Current token | Parse as |
 |---|---|
+| Any reserved word glued to `\` and a further segment (`Default\Palette::accent();`) | The first segment of a qualified name, so an expression statement; checked before every keyword arm below. `stmt::keyword_starts_qualified_name()` requires the three tokens to touch in the source, as PHP 8's single name token does, and never counts `namespace` (a leading `namespace\` is the relative-name prefix). Expression prefixes, types, `new`, `instanceof`, attributes and `use` apply the same check |
 | `Class` / `Abstract Class` / `Final Class` / `Readonly Class` / combined class modifiers | Class declaration |
 | `Enum` followed by a name | Enum declaration (`enum` is a soft keyword: without a following name it falls through to the expression-statement arm) |
 | `Packed` | Packed-class declaration |

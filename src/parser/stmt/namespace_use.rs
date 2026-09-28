@@ -95,15 +95,7 @@ pub(super) fn parse_use_stmt(
 ) -> Result<Stmt, CompileError> {
     *pos += 1; // consume use
 
-    let default_kind = if *pos < tokens.len() && tokens[*pos].0 == Token::Function {
-        *pos += 1;
-        UseKind::Function
-    } else if *pos < tokens.len() && tokens[*pos].0 == Token::Const {
-        *pos += 1;
-        UseKind::Const
-    } else {
-        UseKind::Class
-    };
+    let default_kind = consume_use_kind(tokens, pos).unwrap_or(UseKind::Class);
 
     let prefix = parse_use_name(
         tokens,
@@ -128,15 +120,7 @@ pub(super) fn parse_use_stmt(
     let mut all_imports = imports;
     while *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
         *pos += 1;
-        let item_kind = if *pos < tokens.len() && tokens[*pos].0 == Token::Function {
-            *pos += 1;
-            UseKind::Function
-        } else if *pos < tokens.len() && tokens[*pos].0 == Token::Const {
-            *pos += 1;
-            UseKind::Const
-        } else {
-            default_kind.clone()
-        };
+        let item_kind = consume_use_kind(tokens, pos).unwrap_or_else(|| default_kind.clone());
         let name = parse_use_name(
             tokens,
             pos,
@@ -156,6 +140,24 @@ pub(super) fn parse_use_stmt(
         },
         span,
     ))
+}
+
+/// Consumes a `function` or `const` import-kind prefix and returns its kind.
+///
+/// Returns `None`, consuming nothing, when no prefix is there. A `function` or `const` glued
+/// to a following `\` is not a prefix but the first segment of a class import, as in
+/// `use Function\Registry;`, which PHP 8 lexes as one qualified name (#826).
+fn consume_use_kind(tokens: &[SpannedToken], pos: &mut usize) -> Option<UseKind> {
+    let kind = match tokens.get(*pos).map(|(token, _)| token) {
+        Some(Token::Function) => UseKind::Function,
+        Some(Token::Const) => UseKind::Const,
+        _ => return None,
+    };
+    if super::names::keyword_starts_qualified_name(tokens, *pos) {
+        return None;
+    }
+    *pos += 1;
+    Some(kind)
 }
 
 /// Parses an optional `as Alias` clause after a use item name.
@@ -226,15 +228,7 @@ fn parse_group_use_items(
             )?;
         }
 
-        let kind = if *pos < tokens.len() && tokens[*pos].0 == Token::Function {
-            *pos += 1;
-            UseKind::Function
-        } else if *pos < tokens.len() && tokens[*pos].0 == Token::Const {
-            *pos += 1;
-            UseKind::Const
-        } else {
-            default_kind.clone()
-        };
+        let kind = consume_use_kind(tokens, pos).unwrap_or_else(|| default_kind.clone());
 
         let suffix = parse_use_name(
             tokens,

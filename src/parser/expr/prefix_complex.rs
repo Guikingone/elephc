@@ -877,7 +877,10 @@ pub(super) fn parse_new_object(
     if anonymous_readonly {
         *pos += 1; // consume `readonly`; `parse_anonymous_class` consumes `class`
     }
-    if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Class)) {
+    // `new Static\Factory()` and `new Class\Loader()` name a class whose first segment is a
+    // reserved word (#826), so neither the anonymous-class nor the scoped-receiver form applies.
+    let glued_name = crate::parser::stmt::keyword_starts_qualified_name(tokens, *pos);
+    if !glued_name && matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Class)) {
         return parse_anonymous_class(tokens, pos, span, anonymous_readonly);
     }
 
@@ -885,6 +888,7 @@ pub(super) fn parse_new_object(
     // factory pattern. Parsed as a NewScopedObject so codegen can apply LSB
     // for `static`.
     let scoped_receiver = match tokens.get(*pos).map(|(t, _)| t) {
+        _ if glued_name => None,
         Some(Token::Self_) => Some(StaticReceiver::Self_),
         Some(Token::Static) => Some(StaticReceiver::Static),
         Some(Token::Parent) => Some(StaticReceiver::Parent),

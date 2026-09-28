@@ -48,7 +48,11 @@ Supported forms: `use Foo\Bar;`, `use Foo\Bar as Baz;`, `use function`, `use con
   names the same global constant as its bare spelling
 - A reserved word is an ordinary segment inside a qualified name, as in PHP 8:
   `namespace Vendor\Default\Theme;`, `use Demo\Namespace\Subject;`, `new \Vendor\List\Item()`.
-  Standing alone it is still the keyword, so `namespace Namespace;` is refused
+  It can be the first segment too, in any position a name can stand: `Default\Palette::accent()`,
+  `function f(Default\Palette $p)`, `catch (Default\Failure $e)`, `#[Default\Attr]`,
+  `use Function\Registry;`. As in PHP, the word must touch the `\` (`new \Foo()` is still `new`).
+  Standing alone it is still the keyword, so `namespace Namespace;` is refused, and a leading
+  `namespace\` is the relative-name prefix, never a segment spelled `namespace`
 - Included files keep their own namespace and imports; an include cannot inherit the caller's namespace scope
 
 ## Case sensitivity

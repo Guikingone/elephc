@@ -36,7 +36,10 @@ pub(crate) use assign::{
     can_replay_assignment_target, lower_postfix_incdec_assignment, update_index_needs_snapshot,
 };
 pub(crate) use blocks::{expect_semicolon, expect_token};
-pub(crate) use names::{name_part_from_token, name_starts_at, parse_name, parse_unqualified_name};
+pub(crate) use names::{
+    keyword_starts_qualified_name, name_part_from_token, name_starts_at, parse_name,
+    parse_unqualified_name, qualified_segment_at,
+};
 pub(crate) use assign::{parse_destructuring_pattern_unpack, starts_destructuring_pattern};
 pub(crate) use namespace_use::token_as_import_name;
 pub(crate) use recovery::recover_to_statement_boundary;
@@ -111,6 +114,12 @@ fn parse_stmt_dispatch(
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
+    // `Default\Palette::accent();` and `Function\run();` start with a reserved word that is
+    // really the first segment of a qualified name (#826), so the keyword arms below must not
+    // claim it.
+    if keyword_starts_qualified_name(tokens, *pos) {
+        return parse_expression_led_stmt(tokens, pos, span);
+    }
     match &tokens[*pos].0 {
         Token::Echo => simple::parse_echo(tokens, pos, span),
         Token::Print => simple::parse_expr_stmt(tokens, pos, span),
@@ -223,32 +232,7 @@ fn parse_stmt_dispatch(
         | Token::New
         | Token::LParen
         | Token::LBracket
-        | Token::Match => {
-            if matches!(&tokens[*pos].0, Token::Identifier(name) if name.eq_ignore_ascii_case("list"))
-                && matches!(tokens.get(*pos + 1).map(|(token, _)| token), Some(Token::LParen))
-            {
-                return assign::parse_list_construct_unpack(tokens, pos, span);
-            }
-            if assign::looks_like_typed_assign(tokens, *pos) {
-                return assign::parse_typed_assign(tokens, pos, span);
-            }
-            if statement_lhs_contains_double_colon(tokens, *pos) {
-                if let Some(stmt) =
-                    assign::try_parse_scoped_property_assignment(tokens, pos, span)?
-                {
-                    return Ok(stmt);
-                }
-                if let Some(stmt) = assign::try_parse_scoped_postfix_incdec(tokens, pos, span)? {
-                    return Ok(stmt);
-                }
-            }
-            if let Some(stmt) = assign::try_parse_postfix_assignment(tokens, pos, span)? {
-                return Ok(stmt);
-            }
-            let expr = parse_expr(tokens, pos)?;
-            expect_semicolon(tokens, pos)?;
-            Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
-        }
+        | Token::Match => parse_expression_led_stmt(tokens, pos, span),
         // Control flow — delegated to control.rs
         Token::Switch => control::parse_switch(tokens, pos, span),
         Token::If => control::parse_if(tokens, pos, span),
@@ -275,6 +259,38 @@ fn parse_stmt_dispatch(
             &format!("Unexpected token at statement position: {:?}", other),
         )),
     }
+}
+
+/// Parses a statement that starts with a name or an expression rather than a keyword:
+/// `list(...) = ...`, a typed local, a static property assignment or increment, a postfix
+/// assignment, or an expression statement ending in `;`.
+fn parse_expression_led_stmt(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    if matches!(&tokens[*pos].0, Token::Identifier(name) if name.eq_ignore_ascii_case("list"))
+        && matches!(tokens.get(*pos + 1).map(|(token, _)| token), Some(Token::LParen))
+    {
+        return assign::parse_list_construct_unpack(tokens, pos, span);
+    }
+    if assign::looks_like_typed_assign(tokens, *pos) {
+        return assign::parse_typed_assign(tokens, pos, span);
+    }
+    if statement_lhs_contains_double_colon(tokens, *pos) {
+        if let Some(stmt) = assign::try_parse_scoped_property_assignment(tokens, pos, span)? {
+            return Ok(stmt);
+        }
+        if let Some(stmt) = assign::try_parse_scoped_postfix_incdec(tokens, pos, span)? {
+            return Ok(stmt);
+        }
+    }
+    if let Some(stmt) = assign::try_parse_postfix_assignment(tokens, pos, span)? {
+        return Ok(stmt);
+    }
+    let expr = parse_expr(tokens, pos)?;
+    expect_semicolon(tokens, pos)?;
+    Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
 }
 
 /// Distinguishes bracket destructuring from array expressions by the matching closing bracket.

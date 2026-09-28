@@ -66,6 +66,13 @@ pub(super) fn parse_prefix(
         }
     }
 
+    // `Default\Palette::accent()`, `Function\run()`, `List\SIZE`: a reserved word glued to a
+    // `\` is the first segment of a qualified name (#826), not the keyword the arms below
+    // would dispatch on.
+    if crate::parser::stmt::keyword_starts_qualified_name(tokens, *pos) {
+        return parse_named_expr(tokens, pos, span);
+    }
+
     match &tokens[*pos].0 {
         Token::Minus => parse_unary(tokens, pos, span, ExprKind::Negate, 35),
         Token::Bang => parse_unary(tokens, pos, span, ExprKind::Not, 35),
