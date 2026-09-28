@@ -13,7 +13,11 @@
 //!   frame is already set up, with the trimmed ptr at `[sp+48]` and trimmed len at `[sp+56]`.
 //! - The value is a literal UNIX timestamp (UTC), so it is returned directly without `mktime`.
 //!   A negative value with a non-zero fraction floors (`@-5.5` is `-6`), and a magnitude outside
-//!   the `i64` range fails, both as in PHP.
+//!   the `i64` range fails, both as in PHP. The floor is a wrapping one-second subtraction on
+//!   purpose: timelib floors the same way, so PHP 8.5 answers `9223372036854775807` for
+//!   `@-9223372036854775808.5`, and this parser answers the same (pinned by
+//!   `test_strtotime_epoch_range_edges_match_php`). `i64::MIN` itself is a valid result: the
+//!   shared epilogue reports success through a flag, not through the value.
 //! - PHP parses whatever follows the number with its full grammar, and because the timestamp
 //!   already set a timezone, one more timezone token only raises a warning. The tail accepted here
 //!   is exactly that: `[ \t,.]` separators around one optional `(`? letters{1,6} `)`? token.
@@ -142,6 +146,7 @@ fn emit_epoch_arm64(emitter: &mut Emitter) {
     emitter.instruction("cbz x4, __rt_strtotime_epoch_tail");                   // a positive fraction just truncates
     emitter.instruction("cbz x6, __rt_strtotime_epoch_tail");                   // an all-zero fraction changes nothing
     emitter.instruction("ldr x0, [sp, #80]");                                   // reload the negative timestamp
+    // -- floor: wraps below i64::MIN exactly as PHP/timelib does (see the module docs) --
     emitter.instruction("sub x0, x0, #1");                                      // floor: @-5.5 is one second before -5
     emitter.instruction("str x0, [sp, #80]");                                   // keep the floored timestamp
 
@@ -302,6 +307,7 @@ fn emit_epoch_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_strtotime_epoch_tail_linux_x86_64");           // a positive fraction just truncates
     emitter.instruction("test r11, r11");                                       // any non-zero fraction digit?
     emitter.instruction("jz __rt_strtotime_epoch_tail_linux_x86_64");           // an all-zero fraction changes nothing
+    // -- floor: wraps below i64::MIN exactly as PHP/timelib does (see the module docs) --
     emitter.instruction("sub QWORD PTR [rbp - 48], 1");                         // floor: @-5.5 is one second before -5
 
     // -- tail: separators, one optional timezone token, separators, end of input --

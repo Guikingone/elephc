@@ -580,6 +580,44 @@ foreach (["@123.", "@123.123456", "@123.1234567", "@+5", "@ 5", "@-5.5", "@-5.00
     );
 }
 
+/// Verifies `@<timestamp>` at the edges of the 64-bit range answers exactly what PHP 8.5.10
+/// answers there.
+///
+/// Two of these are easy to get wrong. A genuine `i64::MIN` result (`@-9223372036854775808`,
+/// and `@-9223372036854775807.5` flooring onto it) is a timestamp, not the runtime's failure
+/// sentinel, so it must not turn into `false`. And a fraction below `i64::MIN`
+/// (`@-9223372036854775808.5`) is `9223372036854775807` in PHP: timelib floors it by taking one
+/// more second off `i64::MIN`, which wraps, and this pins that PHP value. The results are echoed
+/// rather than `var_export()`ed because PHP writes `PHP_INT_MIN` there as `-9223372036854775807-1`.
+#[test]
+fn test_strtotime_epoch_range_edges_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["@9223372036854775807", "@9223372036854775807.5", "@9223372036854775807.999999",
+    "@-9223372036854775807", "@-9223372036854775807.5", "@-9223372036854775807.000001",
+    "@-9223372036854775808", "@-9223372036854775808.000000", "@-9223372036854775808.5",
+    "@-9223372036854775808.000001", "@-9223372036854775808.9 UTC"] as $s) {
+    $r = strtotime($s);
+    echo $s, "=", $r === false ? "false" : $r, "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "@9223372036854775807=9223372036854775807\n\
+         @9223372036854775807.5=9223372036854775807\n\
+         @9223372036854775807.999999=9223372036854775807\n\
+         @-9223372036854775807=-9223372036854775807\n\
+         @-9223372036854775807.5=-9223372036854775808\n\
+         @-9223372036854775807.000001=-9223372036854775808\n\
+         @-9223372036854775808=-9223372036854775808\n\
+         @-9223372036854775808.000000=-9223372036854775808\n\
+         @-9223372036854775808.5=9223372036854775807\n\
+         @-9223372036854775808.000001=9223372036854775807\n\
+         @-9223372036854775808.9 UTC=9223372036854775807\n"
+    );
+}
+
 /// Verifies ISO dates with a one-digit month or day (`2020-1-5`, issue #390), alone and with the
 /// time and zone suffixes the padded form accepts, keeping PHP's field bounds and normalization.
 /// Every expected line is PHP 8.5.10's (in UTC).
