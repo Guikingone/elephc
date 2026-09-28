@@ -253,3 +253,58 @@ fn test_autoloaded_class_the_compiler_refuses_is_loaded_at_run_time() {
     );
     assert_eq!(out, "good|lazy|refs!\n");
 }
+
+/// A class file whose top-level guard throws because an optional package is missing is loaded
+/// only when something asks for its class, and the exception it throws then is catchable.
+///
+/// This is Symfony's `AmpHttpClient.php` (`if (!interface_exists(DelegateHttpClient::class))
+/// { throw new \LogicException(...); }`), named by `HttpClient::create()` behind a probe that
+/// is false without amphp. Compiled into the program, the guard ran at boot and every request of
+/// the Symfony demo died on "the amphp/http-client package is not installed". The file is now
+/// left to the runtime autoloader, and the exception it throws when a `new` does demand it
+/// reaches the caller's `catch`, as in php. Expected output is php 8.5's.
+#[test]
+fn test_class_file_whose_guard_throws_loads_only_on_demand() {
+    let out = compile_cli_files_and_run(
+        &[
+            ("composer.json", r#"{"autoload":{"psr-4":{"Lib\\":"src/"}}}"#),
+            (
+                "src/Amp.php",
+                "<?php\nnamespace Lib;\n\nif (!interface_exists(MissingDep::class)) {\n    throw new \\LogicException('Amp needs MissingDep, which is not installed');\n}\n\nfinal class Amp implements Client {}\n",
+            ),
+            ("src/Native.php", "<?php\nnamespace Lib;\n\nfinal class Native implements Client {}\n"),
+            ("src/Client.php", "<?php\nnamespace Lib;\n\ninterface Client {}\n"),
+            (
+                "main.php",
+                r#"<?php
+class Loader {
+    public function __construct(private string $dir) {}
+    public function loadClass($class) {
+        $file = $this->dir . '/src/' . substr($class, 4) . '.php';
+        if (str_starts_with($class, 'Lib\\') && is_file($file)) {
+            require $file;
+        }
+    }
+}
+spl_autoload_register([new Loader(__DIR__), 'loadClass']);
+
+function make_client(bool $fancy): Lib\Client {
+    if ($fancy) {
+        return new Lib\Amp();
+    }
+    return new Lib\Native();
+}
+
+echo get_class(make_client($argc > 5)), "\n";
+try {
+    make_client($argc < 5);
+} catch (\LogicException $e) {
+    echo "caught: ", $e->getMessage(), "\n";
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "Lib\\Native\ncaught: Amp needs MissingDep, which is not installed\n");
+}

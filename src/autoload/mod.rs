@@ -562,6 +562,125 @@ fn autoload_target_can_bind(
     })
 }
 
+/// Returns the class-like a file's top-level `if (!interface_exists(X::class)) { throw ...; }`
+/// guard demands when nothing can supply it: not declared by the file, not already known, and not
+/// resolvable by the autoloader.
+///
+/// php runs such a guard when the autoloader first includes the file, so loading it THROWS, and
+/// only code that actually asks for the class ever sees that. Symfony's `HttpClient::create()`
+/// names `AmpHttpClient` behind `class_exists(AmpRequest::class)`; `AmpHttpClient.php` opens with
+/// `if (!interface_exists(DelegateHttpClient::class)) { throw new \LogicException(...); }`.
+/// Compiled into the program, its file-scope statements ran at boot and every request died on
+/// "the amphp/http-client package is not installed" although nothing ever constructed the client.
+/// Such a file is left to the runtime autoloader, which throws the same exception at the same
+/// moment php would.
+fn unsatisfiable_file_scope_guard(
+    program: &Program,
+    declared: &HashSet<String>,
+    registry: &Registry,
+) -> Option<String> {
+    let local = collect_declared_fqns(program)
+        .into_iter()
+        .map(|name| crate::names::php_symbol_key(&name))
+        .collect::<HashSet<_>>();
+    let available = |name: &str| {
+        let key = crate::names::php_symbol_key(name);
+        local.contains(&key)
+            || declared
+                .iter()
+                .any(|declared| crate::names::php_symbol_key(declared) == key)
+            || resolve_class(name, registry).is_some()
+    };
+    file_scope_guard_classes(program)
+        .into_iter()
+        .find(|name| !available(name))
+}
+
+/// Collects the class-likes named by top-level `if (!class_exists(X::class)) { throw ...; }`
+/// guards (also `interface_exists`, `trait_exists`, `enum_exists`, and a literal class name),
+/// looking through namespace blocks. Only a guard whose body throws and that has no other branch
+/// counts: anything else is ordinary conditional code.
+fn file_scope_guard_classes(program: &[Stmt]) -> Vec<String> {
+    let mut out = Vec::new();
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::NamespaceBlock { body, .. } => out.extend(file_scope_guard_classes(body)),
+            StmtKind::If {
+                condition,
+                then_body,
+                elseif_clauses,
+                else_body,
+            } if elseif_clauses.is_empty()
+                && else_body.is_none()
+                && then_body.first().is_some_and(stmt_throws) =>
+            {
+                if let Some(name) = negated_existence_probe(condition) {
+                    out.push(name);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Returns true for a `throw` statement.
+fn stmt_throws(stmt: &Stmt) -> bool {
+    match &stmt.kind {
+        StmtKind::Throw(_) => true,
+        StmtKind::ExprStmt(expr) => matches!(expr.kind, ExprKind::Throw(_)),
+        _ => false,
+    }
+}
+
+/// Returns `X` for `!class_exists(X::class)` and its siblings, when the probe autoloads.
+fn negated_existence_probe(condition: &Expr) -> Option<String> {
+    let ExprKind::Not(inner) = &condition.kind else {
+        return None;
+    };
+    let ExprKind::FunctionCall { name, args } = &inner.kind else {
+        return None;
+    };
+    let function = name.as_canonical().trim_start_matches('\\').to_ascii_lowercase();
+    if !matches!(
+        function.as_str(),
+        "class_exists" | "interface_exists" | "trait_exists" | "enum_exists"
+    ) {
+        return None;
+    }
+    // `class_exists(X::class, false)` does not run the autoloader, and whether X exists then
+    // depends on load order the compiler does not model.
+    let autoloads = match args.get(1).map(|arg| &arg.kind) {
+        None => true,
+        Some(ExprKind::BoolLiteral(value)) => *value,
+        Some(_) => false,
+    };
+    if !autoloads {
+        return None;
+    }
+    let class = match &args.first()?.kind {
+        ExprKind::ClassConstant {
+            receiver: crate::parser::ast::StaticReceiver::Named(name),
+        } => name.as_canonical().trim_start_matches('\\').to_string(),
+        ExprKind::StringLiteral(name) => name.trim_start_matches('\\').to_string(),
+        _ => return None,
+    };
+    (!class.is_empty()).then_some(class)
+}
+
+/// Reports a class file whose file-scope guard would throw, left to the runtime autoloader.
+fn report_throwing_class_file(path: &Path, missing: &str) {
+    crate::errors::report_warning(&crate::errors::CompileWarning::new(
+        Span::dummy(),
+        &format!(
+            "autoload: '{}' is not compiled (its file-scope guard throws: '{}' is not \
+             available); its classes are loaded at run time by the autoloader instead",
+            path.display(),
+            missing
+        ),
+    ));
+}
+
 /// Finds the direct class-like dependencies of the requested declaration in one loaded source.
 fn direct_binding_dependencies(program: &Program, target: &str) -> Option<Vec<String>> {
     let target_key = crate::names::php_symbol_key(target.trim_start_matches('\\'));
@@ -686,6 +805,11 @@ fn load_autoloaded_bundle(
             Err(AutoloadFileError::Fatal(error)) => return Err(error),
         };
     if !autoload_target_can_bind(&loaded, fqn, declared, registry) {
+        return Ok(Vec::new());
+    }
+    if let Some(missing) = unsatisfiable_file_scope_guard(&loaded, declared, registry) {
+        report_throwing_class_file(canonical, &missing);
+        deferred.push(canonical.to_path_buf());
         return Ok(Vec::new());
     }
 
