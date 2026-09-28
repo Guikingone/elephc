@@ -249,16 +249,24 @@ pub(super) fn widen_hash_local_for_value(
         key,
         value: Box::new(PhpType::Mixed),
     };
-    ctx.prepare_mutated_local_owner_for_backend_retire(array, array_value, storage_ty.clone(), Some(span));
+    // HashToMixed consumes its input owner at the copy-on-write boundary. A reference-bound
+    // local loads the cell's payload borrowed, so the conversion gets its own owner first, the
+    // way `promote_by_ref_foreach_source` does; the store-back then retires the cell's old one.
+    let source = if ctx.is_ref_bound_local(array) {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, array_value, Some(span))
+    } else {
+        array_value
+    };
+    ctx.prepare_mutated_local_owner(array, source, storage_ty.clone(), Some(span));
     let widened = ctx.emit_value(
         Op::HashToMixed,
-        vec![array_value.value],
+        vec![source.value],
         None,
         storage_ty.clone(),
         Op::HashToMixed.default_effects(),
         Some(span),
     );
-    ctx.store_prepared_mutated_local(array, widened, storage_ty, Some(span));
+    ctx.store_mutated_local(array, widened, storage_ty, Some(span));
     load_array_local_for_write(ctx, array, span)
 }
 

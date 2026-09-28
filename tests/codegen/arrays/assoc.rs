@@ -1090,3 +1090,25 @@ echo $t, "\n";
     assert_eq!(out.stdout, "60\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Widening a hash through a reference alias (`$b = &$a; $b[] = 5;`) leaves another variable that
+/// shares the original hash intact: the conversion takes its own owner of the borrowed cell
+/// payload, so the store-back retires the old owner once. Regression for #1508.
+#[test]
+fn test_mismatched_value_write_through_reference_alias_keeps_shared_copy() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function f() {
+    $a = ["x" => "s"];
+    $g = $a;
+    $b = &$a;
+    $b[] = 5;
+    return $g;
+}
+var_dump(f());
+"#,
+    );
+    assert!(out.success, "program exited non-zero: {}", out.stderr);
+    assert_eq!(out.stdout, "array(1) {\n  [\"x\"]=>\n  string(1) \"s\"\n}\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
