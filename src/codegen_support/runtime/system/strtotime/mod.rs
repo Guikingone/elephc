@@ -34,6 +34,7 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::codegen_support::abi;
 
 pub(crate) use data::emit_strtotime_data;
+pub(crate) use iso_date::ISO_PAD_BUF_LEN as STRTOTIME_ISO_PAD_BUF_LEN;
 
 /// Emits the `__rt_strtotime` runtime entry point, dispatcher, and all strategy emitters
 /// (ISO date, time-only, offsets, keywords, weekdays, shared helpers) for the current target.
@@ -147,11 +148,11 @@ fn emit_dispatcher_arm64(emitter: &mut Emitter) {
     emitter.instruction("ldrb w11, [sp, #65]");                                 // lc16[1] (second char)
     emitter.instruction("cmp w11, #47");                                        // lc16[1] == '/' (M/D/... slash date) ?
     emitter.instruction("b.eq __rt_strtotime_slash_entry");                     // → slash-date strategy
-    emitter.instruction("cmp x2, #10");                                         // ISO date needs ≥ 10 chars
+    emitter.instruction("cmp x2, #8");                                          // ISO date needs ≥ 8 chars (YYYY-M-D)
     emitter.instruction("b.lt __rt_strtotime_textual_entry");                   // too short for ISO → try textual (D Month Y), else offsets
     emitter.instruction("ldrb w11, [sp, #68]");                                 // lc16[4] (offset 4 of date)
     emitter.instruction("cmp w11, #45");                                        // '-' ?
-    emitter.instruction("b.eq __rt_strtotime_iso_entry");                       // YYYY-MM-DD → ISO
+    emitter.instruction("b.eq __rt_strtotime_iso_entry");                       // YYYY-M(M)-D(D) → ISO
     emitter.instruction("b __rt_strtotime_textual_entry");                      // default for digit-starting: try textual (D Month Y), else offsets
 
     emitter.label("__rt_strtotime_classify_alpha");
@@ -372,11 +373,11 @@ fn emit_dispatcher_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("movzx r8d, BYTE PTR [rbp - 63]");                      // lc16[1]
     emitter.instruction("cmp r8b, 47");                                         // lc16[1] == '/' (M/D/... slash date) ?
     emitter.instruction("je __rt_strtotime_slash_entry_linux_x86_64");          // → slash-date strategy
-    emitter.instruction("cmp rsi, 10");                                         // ISO date needs ≥ 10 chars
+    emitter.instruction("cmp rsi, 8");                                          // ISO date needs ≥ 8 chars (YYYY-M-D)
     emitter.instruction("jl __rt_strtotime_textual_entry_linux_x86_64");        // too short for ISO → try textual (D Month Y), else offsets
     emitter.instruction("movzx r8d, BYTE PTR [rbp - 60]");                      // lc16[4] (offset 4 of date)
     emitter.instruction("cmp r8b, 45");                                         // '-' ?
-    emitter.instruction("je __rt_strtotime_iso_entry_linux_x86_64");            // YYYY-MM-DD → ISO
+    emitter.instruction("je __rt_strtotime_iso_entry_linux_x86_64");            // YYYY-M(M)-D(D) → ISO
     emitter.instruction("jmp __rt_strtotime_textual_entry_linux_x86_64");       // default for digit-starting: try textual (D Month Y), else offsets
 
     emitter.label("__rt_strtotime_classify_alpha_linux_x86_64");

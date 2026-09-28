@@ -531,6 +531,84 @@ fn test_strtotime_epoch_invalid() {
     assert_eq!(out, "F");
 }
 
+/// Verifies what may follow the digits of an `@<timestamp>` (issue #390).
+///
+/// PHP parses the tail with its full grammar, and because the timestamp already set the zone,
+/// one more timezone token (`(`? letters{1,6} `)`?) is only a warning and the timestamp stands;
+/// separators (` `, `,`, `.`) are skipped. A second token, a digit, 7+ letters, or an empty
+/// parenthesis is an error. Every expected line is PHP 8.5.10's.
+#[test]
+fn test_strtotime_epoch_accepts_one_trailing_timezone_token() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["@123abc", "@1579089600 UTC", "@123.45abc", "@123 456", "@12.9.9", "@123 abc", "@123x",
+    "@123 (UTC)", "@123(UTC", "@123UTC)", "@123 abcdef", "@123.45.", "@123 .", "@123,", "@123 UTC .",
+    "@123 abcdefg", "@123 foo bar", "@123a1", "@123 (", "@123 ()", "@123 UTC(", "@-5abc"] as $s) {
+    echo $s, "=", var_export(strtotime($s), true), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "@123abc=123\n@1579089600 UTC=1579089600\n@123.45abc=123\n@123 456=false\n\
+         @12.9.9=false\n@123 abc=123\n@123x=123\n@123 (UTC)=123\n@123(UTC=123\n\
+         @123UTC)=123\n@123 abcdef=123\n@123.45.=123\n@123 .=123\n@123,=123\n\
+         @123 UTC .=123\n@123 abcdefg=false\n@123 foo bar=false\n@123a1=false\n\
+         @123 (=false\n@123 ()=false\n@123 UTC(=false\n@-5abc=-5\n"
+    );
+}
+
+/// Verifies the number rules of `@<timestamp>` (issue #390): only a `-` sign, a fraction of 1 to
+/// 6 digits, a negative fractional value flooring (`@-5.5` is `-6`), and a magnitude outside the
+/// `i64` range answering `false`. Every expected line is PHP 8.5.10's.
+#[test]
+fn test_strtotime_epoch_sign_fraction_and_range_rules() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["@123.", "@123.123456", "@123.1234567", "@+5", "@ 5", "@-5.5", "@-5.000000", "@-0.5", "@-0",
+    "@9223372036854775807", "@9223372036854775808", "@-9223372036854775809", "@18446744073709551616"] as $s) {
+    echo $s, "=", var_export(strtotime($s), true), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "@123.=false\n@123.123456=123\n@123.1234567=false\n@+5=false\n@ 5=false\n\
+         @-5.5=-6\n@-5.000000=-5\n@-0.5=-1\n@-0=0\n\
+         @9223372036854775807=9223372036854775807\n@9223372036854775808=false\n\
+         @-9223372036854775809=false\n@18446744073709551616=false\n"
+    );
+}
+
+/// Verifies ISO dates with a one-digit month or day (`2020-1-5`, issue #390), alone and with the
+/// time and zone suffixes the padded form accepts, keeping PHP's field bounds and normalization.
+/// Every expected line is PHP 8.5.10's (in UTC).
+#[test]
+fn test_strtotime_accepts_one_digit_month_and_day() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set('UTC');
+foreach (["2020-1-5", "2020-01-5", "2020-1-05", "2020-9-9 23:59:59", "2020-1-5 10:30", "2020-1-5T10:30",
+    "2020-1-5t10:30:15", "2020-1-5 10:30 UTC", "2020-1-5 10:30:15 +02:00", "2020-1-5Z", "2020-0-5",
+    "2020-1-0", "2020-2-30", "2020-13-5", "2020-1-32", "2020-1-5 25:00", "2020-1-", "2020--5", "2020-1-005"] as $s) {
+    $r = strtotime($s);
+    echo $s, "=", $r === false ? "false" : gmdate("Y-m-d H:i:s", $r), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "2020-1-5=2020-01-05 00:00:00\n2020-01-5=2020-01-05 00:00:00\n\
+         2020-1-05=2020-01-05 00:00:00\n2020-9-9 23:59:59=2020-09-09 23:59:59\n\
+         2020-1-5 10:30=2020-01-05 10:30:00\n2020-1-5T10:30=2020-01-05 10:30:00\n\
+         2020-1-5t10:30:15=2020-01-05 10:30:15\n2020-1-5 10:30 UTC=2020-01-05 10:30:00\n\
+         2020-1-5 10:30:15 +02:00=2020-01-05 08:30:15\n2020-1-5Z=2020-01-05 00:00:00\n\
+         2020-0-5=2019-12-05 00:00:00\n2020-1-0=2019-12-31 00:00:00\n\
+         2020-2-30=2020-03-01 00:00:00\n2020-13-5=false\n2020-1-32=false\n\
+         2020-1-5 25:00=false\n2020-1-=false\n2020--5=false\n2020-1-005=false\n"
+    );
+}
+
 /// Verifies the American `MM/DD/YYYY` slash-date form. The result is built with `mktime` and
 /// reformatted with `date()`, so the date round-trips through the local zone (machine-independent).
 #[test]
