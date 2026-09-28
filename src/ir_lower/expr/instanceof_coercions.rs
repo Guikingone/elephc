@@ -132,6 +132,19 @@ pub(in crate::ir_lower) fn instanceof_branch_local_type(
     let narrowed = match current_type {
         Some(PhpType::Object(current)) => crate::types::instanceof_intersection::
             narrow_object_to_instanceof(ctx.classes, ctx.interfaces, &current, &class_name),
+        // A scalar or array local is never an instance of anything, so the branch is dead, and
+        // retyping its slot as an object only makes the dead read unloadable (Twig's compiled
+        // `($tmp = !$x) && $tmp instanceof Markup ? (string) $tmp : $tmp`). The checker keeps the
+        // same type on that edge (`stmt_check::narrowing`).
+        Some(
+            PhpType::Int
+            | PhpType::Float
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Str
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. },
+        ) => return None,
         _ => None,
     };
     Some((

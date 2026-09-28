@@ -615,3 +615,23 @@ echo (new RedirectableCompiled())->match('/x');
     );
     assert_eq!(out, "/x/2:H:2");
 }
+
+/// `instanceof` on a local that holds a scalar leaves its type alone on the (dead) true edge.
+///
+/// Twig compiles `{{ ... ? ' has-error' : '' }}` over a boolean to
+/// `($tmp = !$x) && $tmp instanceof Markup ? (string) $tmp : $tmp`; narrowing the `bool` slot to
+/// `Markup` made the backend refuse the read ("local load from PHP type Bool as Object"), which
+/// failed every Twig form theme block. Expected output is php 8.5's.
+#[test]
+fn test_instanceof_on_a_scalar_local_keeps_its_storage_type() {
+    let out = compile_and_run(
+        r#"<?php
+class Markup { public function __toString(): string { return "m"; } }
+function f($c) { return ((($tmp = !($c["valid"] ?? null)) && $tmp instanceof Markup ? (string) $tmp : $tmp)) ? " has-error" : ""; }
+var_dump(f(["valid" => $argc > 5]), f(["valid" => true]));
+function g($n) { $t = $n + 1; return $t instanceof Markup ? (string) $t : $t; }
+var_dump(g($argc));
+"#,
+    );
+    assert_eq!(out, "string(10) \" has-error\"\nstring(0) \"\"\nint(2)\n");
+}
