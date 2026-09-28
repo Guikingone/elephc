@@ -9,8 +9,8 @@
 //! Key details:
 //! - Expected output was produced by php 8.5 on the same source.
 //! - A declared `array` property, an associative property and a boxed `Mixed` property lower
-//!   directly; an `ArrayAccess` property dispatches to `offsetUnset()` after the key, and a
-//!   readonly array property throws. The refusals of a packed-list property and an untyped
+//!   directly; an `ArrayAccess` property dispatches to `offsetUnset()` after the key (also when
+//!   the object sits in a boxed `mixed` cell), and a readonly array property throws. The refusals of a packed-list property and an untyped
 //!   static array are EIR lowering diagnostics, pinned in
 //!   `src/ir_lower/tests/property_element_unset.rs`.
 
@@ -504,6 +504,84 @@ try { unset($w->any["p"]); echo "ok\n"; } catch (Error $e) { echo get_class($e),
         out,
         "offsetUnset\nok\nError: Cannot use object of type stdClass as array\n"
     );
+}
+
+/// An `ArrayAccess` object reached through a boxed `mixed` or untyped property, or a by-reference
+/// `mixed` local, has its `offsetUnset()` called. That covers a PHP class (with an inherited
+/// method), `SplFixedArray` and `SplDoublyLinkedList`, while a `stdClass` still raises PHP's
+/// class-naming `Error`. A typed `ArrayAccess` property that was never initialized is left alone,
+/// as PHP's quiet unset fetch does. Runs under `--heap-debug`: a PHP method borrows the boxed
+/// offset and the SPL helpers consume it. Review follow-up for #750.
+#[test]
+fn test_unset_offset_of_array_access_object_in_boxed_cell_calls_offset_unset() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Bag implements ArrayAccess {
+    public array $d = ["a" => 1, "b" => 2, 3 => "three"];
+    public function offsetExists(mixed $o): bool { return isset($this->d[$o]); }
+    public function offsetGet(mixed $o): mixed { return $this->d[$o]; }
+    public function offsetSet(mixed $o, mixed $v): void { $this->d[$o] = $v; }
+    public function offsetUnset(mixed $o): void { echo "offsetUnset(", var_export($o, true), ")\n"; unset($this->d[$o]); }
+}
+class SubBag extends Bag {}
+class Typed { public Bag $bag; }
+class Loose { public $bag; public mixed $m; }
+function drop_key(mixed &$r, $k): void { unset($r[$k]); }
+
+$t = new Typed();
+unset($t->bag["a"]);
+echo "typed uninitialized: no-op\n";
+$t->bag = new Bag();
+unset($t->bag["a"]);
+
+$l = new Loose();
+$l->bag = new SubBag();
+$l->m = new Bag();
+unset($l->bag["b"], $l->bag[3]);
+unset($l->m["a"]);
+echo implode(",", array_keys($l->bag->d)), "|", implode(",", array_keys($l->m->d)), "\n";
+
+$fixed = new SplFixedArray(3);
+$fixed[0] = "x"; $fixed[1] = "y";
+$l->m = $fixed;
+unset($l->m[1]);
+var_dump($fixed[1]);
+
+$list = new SplDoublyLinkedList();
+$list->push("p"); $list->push("q"); $list->push("r");
+$l->m = $list;
+unset($l->m[0]);
+echo count($list), " ", $list[0], "\n";
+
+$l->m = new stdClass();
+try { unset($l->m["k"]); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+
+$r = new Bag();
+drop_key($r, "b");
+echo implode(",", array_keys($r->d)), "\n";
+
+$n = 0;
+for ($i = 0; $i < 50 + ($argc > 5 ? 1 : 0); $i++) {
+    $l->m = new Bag();
+    ob_start();
+    unset($l->m["a"], $l->m[3]);
+    ob_end_clean();
+    $n += count($l->m->d);
+}
+echo $n, "\n";
+"#,
+    );
+    assert!(out.success, "program exited non-zero: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "typed uninitialized: no-op\noffsetUnset('a')\noffsetUnset('b')\noffsetUnset(3)\n",
+            "offsetUnset('a')\na|b,3\nNULL\n2 q\n",
+            "Error: Cannot use object of type stdClass as array\n",
+            "offsetUnset('b')\na,3\n50\n",
+        )
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Removing an offset of a `false` held in a boxed `mixed` property leaves it `false`. PHP also

@@ -7,7 +7,8 @@
 //! Key details:
 //! - EIR publishes a detached cell before this lowering promotes and publishes its unique hash.
 //! - Destructors can throw or replace the array; no receiver writeback follows value release.
-//! - A non-array payload gets PHP's answer: null/false are a no-op, strings and scalars throw.
+//! - A non-array payload gets PHP's answer: null/false are a no-op, strings and scalars throw,
+//!   and an `ArrayAccess` object has its `offsetUnset()` called.
 
 use crate::codegen::{abi, CodegenIrError, Result};
 use crate::codegen::context::FunctionContext;
@@ -21,10 +22,9 @@ use super::{expect_operand, hashes};
 ///
 /// A cell that holds no array gets PHP's answer instead: null and false are left alone, a string
 /// raises `Error("Cannot unset string offsets")`, an object raises `Error("Cannot use object of
-/// type C as array")` through `__rt_throw_object_not_array`, and any other payload raises
-/// `Error("Cannot unset offset in a non-array variable")`. The object message is PHP's answer for
-/// a non-`ArrayAccess` object only; an `ArrayAccess` object held in a boxed cell is not
-/// dispatched to its `offsetUnset()` here.
+/// type C as array")` unless it is `ArrayAccess`, and any other payload raises `Error("Cannot
+/// unset offset in a non-array variable")`. An object goes to `__rt_mixed_object_offset_unset`,
+/// which calls its `offsetUnset()` (an SPL container or a PHP class) or raises that `Error`.
 pub(super) fn lower_offset_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let cell = expect_operand(inst, 0)?;
     let key = expect_operand(inst, 1)?;
@@ -82,13 +82,22 @@ pub(super) fn lower_offset_unset(ctx: &mut FunctionContext<'_>, inst: &Instructi
     ctx.emitter.label(&object);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x0, [x9, #8]");                        // pass the object so the Error can name its class
+            ctx.emitter.instruction("ldr x9, [x9, #8]");                        // load the unboxed object
+            abi::emit_push_reg(ctx.emitter, "x9");
+            hashes::materialize_hash_key_aarch64(ctx, key)?;
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_object_offset_unset");
+            ctx.emitter.instruction(&format!("b {done}"));                      // the object answered through offsetUnset or threw
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");            // pass the object so the Error can name its class
+            ctx.emitter.instruction("mov r10, QWORD PTR [r10 + 8]");            // load the unboxed object
+            abi::emit_push_reg(ctx.emitter, "r10");
+            hashes::materialize_hash_key_x86_64(ctx, key)?;
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_object_offset_unset");
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // the object answered through offsetUnset or threw
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_throw_object_not_array");
     ctx.emitter.label(&string_offset);
     super::exceptions::emit_error(ctx, "Cannot unset string offsets");
     ctx.emitter.label(&non_array);

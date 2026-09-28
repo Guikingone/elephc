@@ -152,9 +152,9 @@ pub(super) fn unset_array_access_property_array_type(
 /// for example), a `mixed` property, and a union such as `?array`. Its element is removed through
 /// the same `PropGetForWrite` + `OffsetUnset` pair as a declared `array` property; the backend
 /// answers PHP's no-op for a null cell and PHP's `Error` for a scalar. A union that can hold an
-/// object (a class, `iterable`, `callable`) keeps the `ArrayAccess` or unsupported paths, because
-/// `OffsetUnset` cannot dispatch to an object's `offsetUnset()`. A bare `Mixed` can hold one too;
-/// that shape is shared with a by-reference `Mixed` local and documented as a gap.
+/// object (a class, `iterable`, `callable`) keeps the `ArrayAccess` or unsupported paths. A bare
+/// `Mixed` can hold an object too: `OffsetUnset` hands it to `__rt_mixed_object_offset_unset`,
+/// which calls its `offsetUnset()`, as it does for a by-reference `Mixed` local.
 fn boxed_property_may_hold_array(property_ty: &PhpType) -> bool {
     match property_ty {
         PhpType::Mixed => true,
@@ -518,7 +518,9 @@ fn lower_unset_static_property_array_element(
 /// NEW object. A plain `$object->prop->offsetUnset($key)` call would read the property before
 /// the argument, so the receiver and the key are evaluated here and parked in hidden owner slots,
 /// and the call is built over those slots. A variable, `$this` or a literal is read where it
-/// stands, which is what PHP does with a compiled variable too.
+/// stands, which is what PHP does with a compiled variable too. A typed property that was never
+/// initialized (or was unset) is left alone, as PHP's quiet unset fetch does, instead of reaching
+/// the read's uninitialized-property `Error`.
 fn lower_unset_array_access_property_offset(
     ctx: &mut LoweringContext<'_, '_>,
     array: &Expr,
@@ -527,9 +529,39 @@ fn lower_unset_array_access_property_offset(
     index: &Expr,
     expr: &Expr,
 ) {
+    let typed = unset_receiver_property_is_typed(ctx, object, property);
     let mut owners = Vec::new();
     let receiver = park_unset_operand(ctx, object, &mut owners);
     let key = park_unset_operand(ctx, index, &mut owners);
+    let join_block = if typed {
+        let object_value = lower_expr(ctx, &receiver);
+        let data = ctx.intern_string(property);
+        let initialized = ctx.emit_value(
+            Op::PropInitialized,
+            vec![object_value.value],
+            Some(Immediate::Data(data)),
+            PhpType::Bool,
+            Op::PropInitialized.default_effects(),
+            Some(expr.span),
+        );
+        let call_block = ctx
+            .builder
+            .create_named_block("unset.array_access_property.call", Vec::new());
+        let join_block = ctx
+            .builder
+            .create_named_block("unset.array_access_property.done", Vec::new());
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: initialized.value,
+            then_target: call_block,
+            then_args: Vec::new(),
+            else_target: join_block,
+            else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(call_block);
+        Some(join_block)
+    } else {
+        None
+    };
     let fetch = Expr::new(
         ExprKind::PropertyAccess {
             object: Box::new(receiver),
@@ -540,6 +572,7 @@ fn lower_unset_array_access_property_offset(
     // The fetched object is parked too. An `offsetUnset()` that throws would otherwise strand
     // the reference the property read took, because the unwinder only sees owner slots.
     let fetched = lower_expr(ctx, &fetch);
+    let guarded_from = owners.len();
     let container = park_lowered_unset_operand(ctx, fetched, array.span, &mut owners);
     let call = Expr::new(
         ExprKind::MethodCall {
@@ -550,6 +583,19 @@ fn lower_unset_array_access_property_offset(
         expr.span,
     );
     lower_expr(ctx, &call);
+    if let Some(join_block) = join_block {
+        // The container slot is written only on the initialized path, so it is retired there.
+        for slot in owners.split_off(guarded_from).into_iter().rev() {
+            retire_owned_call_operand(ctx, slot, expr.span);
+        }
+        if !ctx.builder.insertion_block_is_terminated() {
+            ctx.builder.terminate(Terminator::Br {
+                target: join_block,
+                args: Vec::new(),
+            });
+        }
+        ctx.builder.position_at_end(join_block);
+    }
     for slot in owners.into_iter().rev() {
         retire_owned_call_operand(ctx, slot, expr.span);
     }
