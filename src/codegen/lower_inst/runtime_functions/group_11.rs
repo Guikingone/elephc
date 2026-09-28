@@ -124,6 +124,12 @@ pub(super) fn lower(
         RuntimeFnId::PregGrep => Some({
             crate::codegen::lower_inst::builtins::regex::lower_preg_grep(ctx, inst)
         }),
+        RuntimeFnId::PregLastError => Some({
+            crate::codegen::lower_inst::builtins::regex::lower_preg_last_error(ctx, inst)
+        }),
+        RuntimeFnId::PregLastErrorMsg => Some({
+            crate::codegen::lower_inst::builtins::regex::lower_preg_last_error_msg(ctx, inst)
+        }),
         RuntimeFnId::PregMatch => Some({
             crate::codegen::lower_inst::builtins::regex::lower_preg_match(ctx, inst)
         }),

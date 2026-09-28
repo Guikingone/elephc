@@ -2,7 +2,7 @@
 title: "sleep() — internals"
 description: "Compiler internals for sleep(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 746
+  order: 750
 ---
 
 ## `sleep()` — internals

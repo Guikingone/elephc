@@ -65,6 +65,8 @@ pub mod json_decode;
 pub mod json_encode;
 pub mod json_last_error;
 pub mod json_last_error_msg;
+pub mod preg_last_error;
+pub mod preg_last_error_msg;
 pub mod json_support;
 pub mod json_validate;
 pub mod localtime;

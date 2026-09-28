@@ -77,7 +77,11 @@ sidebar:
 | [`phpversion()`](./misc/phpversion.md) | `(?string $extension = null): string|false` | `string|false` | ✓ | ✓ |
 | [`posix_setpgid()`](./misc/posix_setpgid.md) | `(int $process_id, int $process_group_id): bool` | `bool` | ✓ | ✓ |
 | [`posix_setsid()`](./misc/posix_setsid.md) | `(): int` | `int` | ✓ | ✓ |
-| [`preg_grep()`](./misc/preg_grep.md) | `(string $pattern, mixed $array, int $flags = 0): array` | `array` | ✓ | — |
+| [`preg_filter()`](./misc/preg_filter.md) | `(mixed $pattern, mixed $replacement, mixed $subject, int $limit = -1, mixed $count = null): mixed` | `mixed` | ✓ | ✓ |
+| [`preg_grep()`](./misc/preg_grep.md) | `(string $pattern, mixed $array, int $flags = 0): mixed` | `mixed` | ✓ | ✓ |
+| [`preg_last_error()`](./misc/preg_last_error.md) | `(): int` | `int` | ✓ | ✓ |
+| [`preg_last_error_msg()`](./misc/preg_last_error_msg.md) | `(): string` | `string` | ✓ | ✓ |
+| [`preg_replace_callback_array()`](./misc/preg_replace_callback_array.md) | `(mixed $pattern, mixed $subject, int $limit = -1, mixed $count = null, int $flags = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`print_r()`](./misc/print_r.md) | `(mixed $value, bool $return = false): mixed` | `mixed` | ✓ | ✓ |
 | [`register_tick_function()`](./misc/register_tick_function.md) | `(mixed $callback, ...$args): bool` | `bool` | — | ✓ |
 | [`serialize()`](./misc/serialize.md) | `(mixed $value): string` | `string` | ✓ | ✓ |

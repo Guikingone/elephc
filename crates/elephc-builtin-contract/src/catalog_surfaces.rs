@@ -41,6 +41,14 @@ macro_rules! param {
             by_ref: true,
         }
     };
+    (ref $name:literal, $ty:ident = $default:expr) => {
+        ParamSpec {
+            name: $name,
+            ty: TypeSpec::$ty,
+            default: Some($default),
+            by_ref: true,
+        }
+    };
 }
 
 macro_rules! surface {
@@ -350,6 +358,42 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         None,
         Str,
         "Quotes the listed characters with C-style backslash escapes."
+    ),
+    // `PreludeProvided` for the same asymmetry as `levenshtein` above: the AOT side BUILDS both as
+    // prelude declarations over the native one-pattern calls (`src/preg_array_prelude.rs`), and
+    // the INTERPRETER has its own implementations (`interpreter::builtins::regex::preg_filter`,
+    // `::preg_replace_callback_array`).
+    surface!(
+        "preg_filter",
+        System,
+        Pcre,
+        PreludeProvided,
+        [
+            param!("pattern", Mixed),
+            param!("replacement", Mixed),
+            param!("subject", Mixed),
+            param!("limit", Int = DefaultSpec::Int(-1)),
+            param!(ref "count", Mixed = DefaultSpec::Null),
+        ],
+        None,
+        Mixed,
+        "Performs a regular expression search and replace, keeping only the subjects that matched."
+    ),
+    surface!(
+        "preg_replace_callback_array",
+        Callables,
+        Pcre,
+        PreludeProvided,
+        [
+            param!("pattern", Mixed),
+            param!("subject", Mixed),
+            param!("limit", Int = DefaultSpec::Int(-1)),
+            param!(ref "count", Mixed = DefaultSpec::Null),
+            param!("flags", Int = DefaultSpec::Int(0)),
+        ],
+        None,
+        Mixed,
+        "Performs a regular expression search and replace using one callback per pattern."
     ),
     // `PreludeProvided` for the same asymmetry as `levenshtein` above: the AOT side declares
     // `parse_str` as a conditionally injected prelude (`src/parse_str_prelude.rs`) rather than a

@@ -1,0 +1,461 @@
+//! Purpose:
+//! Regression tests for the array and flag forms of php's replacement builtins --
+//! `preg_replace()`, `preg_replace_callback()`, `preg_filter()`, `preg_replace_callback_array()`
+//! -- and for `preg_grep()`, compiled and interpreted.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Every expected output is `php -n` 8.5's own output for the same fixture (warnings lose php's
+//!   "in FILE on line N" suffix, which a compiled binary cannot name).
+//! - The compiled side reaches these forms through `src/preg_array_prelude.rs`; the interpreter
+//!   through `interpreter::builtins::regex::preg_array`. The eval fixtures run the SAME programs
+//!   inside `eval()`, so a difference between the two is a failure of one of them.
+
+use crate::support::*;
+
+/// Asserts stderr carries each of php's diagnostics, in php's order.
+fn assert_diagnostics(stderr: &str, expected: &[&str]) {
+    let mut rest = stderr;
+    for diagnostic in expected {
+        let Some(at) = rest.find(diagnostic) else {
+            panic!("missing {diagnostic:?} in stderr: {stderr}");
+        };
+        rest = &rest[at + diagnostic.len()..];
+    }
+}
+
+/// An array subject is replaced element by element under its own key, each element converted to a
+/// string first. The native runtime replaces one string, so the call refused to compile.
+#[test]
+fn test_preg_replace_array_subject_keeps_keys_and_converts_elements() {
+    let out = compile_and_run_capture_with_regex(
+        r#"<?php
+var_dump(preg_replace('/e/', 'E', ['a' => 'apple', 'b' => 'berry', 'n' => null, 'i' => 5, 7 => 'eel']));
+"#,
+    );
+    assert_eq!(out.stdout, r#"array(5) {
+  ["a"]=>
+  string(5) "applE"
+  ["b"]=>
+  string(5) "bErry"
+  ["n"]=>
+  string(0) ""
+  ["i"]=>
+  string(1) "5"
+  [7]=>
+  string(3) "EEl"
+}
+"#, "stderr: {}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "stderr: {}", out.stderr);
+}
+
+/// An array replacement pairs with the patterns in ITERATION order -- its keys are ignored -- and
+/// runs out as the empty string; a scalar replacement serves every pattern.
+#[test]
+fn test_preg_replace_array_replacement_is_positional() {
+    let out = compile_and_run_capture_with_regex(
+        r#"<?php
+var_dump(preg_replace(['k1' => '/a/', 'k2' => '/b/'], ['z' => 'X', 'y' => 'Y'], 'ab'));
+var_dump(preg_replace(['/a/', '/b/'], ['x'], 'ab'));
+var_dump(preg_replace(['/a/', '/e/'], 'X', 'apple pie'));
+var_dump(preg_replace(['/a/', '/e/'], ['1'], ['apple', 'pear'], -1, $count), $count);
+"#,
+    );
+    assert_eq!(out.stdout, r#"string(2) "XY"
+string(1) "x"
+string(9) "XpplX piX"
+array(2) {
+  [0]=>
+  string(4) "1ppl"
+  [1]=>
+  string(3) "p1r"
+}
+int(4)
+"#, "stderr: {}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "stderr: {}", out.stderr);
+}
+
+/// php refuses an array replacement against a single pattern with a TypeError naming the function
+/// the program called.
+#[test]
+fn test_preg_replace_scalar_pattern_with_array_replacement_throws() {
+    let out = compile_and_run_capture_with_regex(
+        r#"<?php
+try { preg_replace('/a/', ['x'], 'a'); } catch (TypeError $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+try { preg_filter('/a/', ['x'], 'a'); } catch (TypeError $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(out.stdout, r#"TypeError: preg_replace(): Argument #1 ($pattern) must be of type array when argument #2 ($replacement) is an array, string given
+TypeError: preg_filter(): Argument #1 ($pattern) must be of type array when argument #2 ($replacement) is an array, string given
+"#, "stderr: {}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "stderr: {}", out.stderr);
+}
+
+/// A pattern that fails makes a scalar subject null and DROPS an array element, while `$count` still
+/// totals the replacements made before the failure (php 8.5: one).
+#[test]
+fn test_preg_replace_failed_pattern_drops_subjects_and_keeps_count() {
+    let out = compile_and_run_capture_with_regex(
+        r#"<?php
+var_dump(@preg_replace(['/a/', '/(/'], 'x', 'ab'));
+var_dump(@preg_replace(['/a/', '/(/'], 'x', ['k' => 'ab', 'j' => 'cd'], -1, $c), $c);
+"#,
+    );
+    assert_eq!(out.stdout, r#"NULL
+array(0) {
+}
+int(1)
+"#, "stderr: {}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "stderr: {}", out.stderr);
+}
+
+/// `preg_filter()` is `preg_replace()` that drops a subject no pattern matched: null for a scalar
+/// one, a missing key for an array element.
+#[test]
+fn test_preg_filter_keeps_only_matched_subjects() {
+    let out = compile_and_run_capture_with_regex(
+        r#"<?php
+var_dump(preg_filter('/a/', 'x', 'bcd'), preg_filter('/a/', 'x', 'abc'));
+var_dump(preg_filter(['/a/', '/b/'], 'x', ['aa', 'cc', 'bb', 'k' => 'ab'], 1, $c), $c);
+var_dump(preg_filter('/a/', 'x', ['apple', 'kiwi'], -1, $fresh), $fresh);
+"#,
+    );
+    assert_eq!(out.stdout, r#"NULL
+string(3) "xbc"
+array(3) {
+  [0]=>
+  string(2) "xa"
+  [2]=>
+  string(2) "xb"
+  ["k"]=>
+  string(2) "xx"
+}
+int(4)
+array(1) {
+  [0]=>
+  string(5) "xpple"
+}
+int(1)
+"#, "stderr: {}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "stderr: {}", out.stderr);
+}
+
+/// Each `pattern => callback` entry runs over the subject the previous one produced, for a scalar
+/// or an array subject, with `$limit` per pattern and `$count` totalled across them; an array
+/// callable is as good as a closure.
+#[test]
+fn test_preg_replace_callback_array_applies_each_pattern_in_turn() {
+    let out = compile_and_run_capture_with_regex(
+        r#"<?php
+class Lower { public function low($m) { return strtolower($m[0]); } }
+$k = new Lower;
+var_dump(preg_replace_callback_array(['/a/' => fn($m) => 'A', '/b/' => fn($m) => 'B'], 'aabbc', -1, $c), $c);
+var_dump(preg_replace_callback_array(['/a/' => fn($m) => 'A', '/b/' => fn($m) => 'B'], ['x' => 'ab', 'y' => 'cc'], 1, $c), $c);
+var_dump(preg_replace_callback_array(['/B/' => [$k, 'low'], '/a/' => fn($m) => 'A'], 'aBc', -1, $n), $n);
+try { preg_replace_callback_array(['/a/' => 'no_such_function'], 'aa'); } catch (TypeError $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(out.stdout, r#"string(5) "AABBc"
+int(4)
+array(2) {
+  ["x"]=>
+  string(2) "AB"
+  ["y"]=>
+  string(2) "cc"
+}
+int(2)
+string(3) "Abc"
+int(2)
+TypeError: preg_replace_callback_array(): Argument #1 ($pattern) must contain only valid callbacks
+"#, "stderr: {}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "stderr: {}", out.stderr);
+}
+
+/// `$flags` reach the callback: PREG_OFFSET_CAPTURE hands it `[text, offset]` pairs and
+/// PREG_UNMATCHED_AS_NULL keeps a group that did not participate as null. Both were ignored.
+#[test]
+fn test_preg_replace_callback_flags_shape_the_matches() {
+    let out = compile_and_run_capture_with_regex(
+        r#"<?php
+var_dump(preg_replace_callback('/(a)(x)?/', fn($m) => json_encode($m), 'za', -1, $c, PREG_OFFSET_CAPTURE));
+var_dump(preg_replace_callback('/(a)(x)?/', fn($m) => json_encode($m), 'za', -1, $c, PREG_UNMATCHED_AS_NULL));
+var_dump(preg_replace_callback('/(a)(x)?/', fn($m) => json_encode($m), 'zaza', 1, $c, PREG_OFFSET_CAPTURE), $c);
+"#,
+    );
+    assert_eq!(out.stdout, r#"string(18) "z[["a",1],["a",1]]"
+string(15) "z["a","a",null]"
+string(20) "z[["a",1],["a",1]]za"
+int(1)
+"#, "stderr: {}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "stderr: {}", out.stderr);
+}
+
+/// `preg_replace_callback()` with several patterns, or several subjects, applies them the way
+/// `preg_replace()` does.
+#[test]
+fn test_preg_replace_callback_array_patterns_and_subjects() {
+    let out = compile_and_run_capture_with_regex(
+        r#"<?php
+var_dump(preg_replace_callback(['/a/', '/b/'], fn($m) => strtoupper($m[0]), ['ab', 'ba'], -1, $c), $c);
+var_dump(preg_replace_callback('/r+/', fn($m) => strtoupper($m[0]), ['a' => 'apple', 'b' => 'berry'], -1, $n), $n);
+var_dump(preg_replace_callback('/\d+/', fn($m) => $m[0] * 2, ['x1', 'y22'], 1, $c), $c);
+"#,
+    );
+    assert_eq!(out.stdout, r#"array(2) {
+  [0]=>
+  string(2) "AB"
+  [1]=>
+  string(2) "BA"
+}
+int(4)
+array(2) {
+  ["a"]=>
+  string(5) "apple"
+  ["b"]=>
+  string(5) "beRRy"
+}
+int(1)
+array(2) {
+  [0]=>
+  string(2) "x2"
+  [1]=>
+  string(3) "y44"
+}
+int(2)
+"#, "stderr: {}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "stderr: {}", out.stderr);
+}
+
+/// Named arguments reach the same forms: `flags:` skipping `$count`, array operands out of order,
+/// and `preg_filter()` by name. A named call bailed out before the redirect and lost its flags.
+#[test]
+fn test_named_arguments_reach_the_array_and_flag_forms() {
+    let out = compile_and_run_capture_with_regex(
+        r#"<?php
+var_dump(preg_replace_callback('/a/', fn($m) => 'A', 'za', flags: 0));
+var_dump(preg_replace_callback(pattern: '/(a)(x)?/', callback: fn($m) => json_encode($m), subject: 'za', flags: PREG_OFFSET_CAPTURE));
+var_dump(preg_replace(subject: ['k' => 'hello'], pattern: ['/l/', '/o/'], replacement: ['L', 'O']));
+var_dump(preg_filter(subject: ['hello', 'x'], pattern: '/l/', replacement: 'L'));
+"#,
+    );
+    assert_eq!(out.stdout, r#"string(2) "zA"
+string(18) "z[["a",1],["a",1]]"
+array(1) {
+  ["k"]=>
+  string(5) "heLLO"
+}
+array(1) {
+  [0]=>
+  string(5) "heLLo"
+}
+"#, "stderr: {}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "stderr: {}", out.stderr);
+}
+
+/// A call through `call_user_func()` / `call_user_func_array()` reaches the same forms; the static
+/// callable lowering handed `preg_replace()` a hash subject.
+#[test]
+fn test_dynamic_calls_reach_the_array_forms() {
+    let out = compile_and_run_capture_with_regex(
+        r#"<?php
+var_dump(call_user_func('preg_filter', '/e/', 'E', ['hello', 'xyz']));
+var_dump(call_user_func_array('preg_replace', ['/e/', 'E', ['a' => 'hello']]));
+"#,
+    );
+    assert_eq!(out.stdout, r#"array(1) {
+  [0]=>
+  string(5) "hEllo"
+}
+array(1) {
+  ["a"]=>
+  string(5) "hEllo"
+}
+"#, "stderr: {}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "stderr: {}", out.stderr);
+}
+
+/// A literal pattern PCRE2 rejects when it compiles -- an unbalanced group -- makes `preg_grep()`
+/// answer false, so the call must be typed for it. It answered an empty array.
+#[test]
+fn test_preg_grep_literal_pattern_that_cannot_compile_is_false() {
+    let out = compile_and_run_capture_with_regex(
+        r#"<?php
+var_dump(@preg_grep('/(/', ['a']));
+var_dump(@preg_match('/a)/', 'a'));
+var_dump(preg_grep('/^a/', ['x' => 'apple', 'y' => 'berry', 3 => 'avocado', 4 => 12]));
+var_dump(preg_grep('/^a/', ['apple', 'berry', 'avocado'], PREG_GREP_INVERT));
+"#,
+    );
+    assert_eq!(out.stdout, r#"bool(false)
+bool(false)
+array(2) {
+  ["x"]=>
+  string(5) "apple"
+  [3]=>
+  string(7) "avocado"
+}
+array(1) {
+  [1]=>
+  string(5) "berry"
+}
+"#, "stderr: {}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "stderr: {}", out.stderr);
+}
+
+/// A `preg_replace_callback()` whose pattern is a variable returns `?string`, boxed in the result
+/// register -- which releasing the callback's descriptor reloaded, so the call returned the
+/// descriptor's address: `var_dump` printed an `int`.
+#[test]
+fn test_boxed_callback_result_survives_descriptor_release() {
+    let out = compile_and_run_capture_with_regex(
+        r#"<?php
+class K { public static function up($m) { return strtoupper($m[0]); } public function low($m) { return strtolower($m[0]); } }
+function viaPattern($cb, $p) { $r = preg_replace_callback($p, $cb, 'APPLE'); return [$r]; }
+var_dump(viaPattern([new K, 'low'], '/P/'));
+var_dump(viaPattern('K::up', '/P/'));
+"#,
+    );
+    assert_eq!(out.stdout, r#"array(1) {
+  [0]=>
+  string(5) "AppLE"
+}
+array(1) {
+  [0]=>
+  string(5) "APPLE"
+}
+"#, "stderr: {}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "stderr: {}", out.stderr);
+}
+
+/// The interpreter answers the array and flag forms exactly as compiled code does, down to the
+/// function a warning names.
+#[test]
+fn test_eval_preg_array_forms_match_compiled() {
+    let out = compile_and_run_capture_with_regex(
+        r#"<?php
+preg_match('/warm/', 'warm');
+$code = <<<'PHP'
+class Lower { public function low($m) { return strtolower($m[0]); } }
+$k = new Lower;
+var_dump(preg_replace(['k1' => '/a/', 'k2' => '/b/'], ['z' => 'X', 'y' => 'Y'], 'ab'));
+try { preg_replace('/a/', ['x'], 'a'); } catch (TypeError $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+var_dump(preg_replace(['/a/', '/(/'], 'x', ['k' => 'ab', 'j' => 'cd'], -1, $c), $c);
+var_dump(preg_replace('/a/', 'x', ['k' => 'ab', 'j' => 5, 'n' => null]));
+var_dump(preg_filter(['/a/', '/b/'], 'x', ['aa', 'cc', 'bb', 'k' => 'ab'], 1, $c), $c);
+var_dump(preg_replace_callback_array(['/B/' => [$k, 'low'], '/a/' => fn($m) => 'A'], ['x' => 'aBc'], -1, $n), $n);
+var_dump(preg_replace_callback_array(['/(/' => fn($m) => 'A'], 'aa'));
+var_dump(preg_replace_callback('/(a)(x)?/', fn($m) => json_encode($m), 'za', -1, $c, PREG_OFFSET_CAPTURE));
+var_dump(preg_replace_callback(pattern: '/(a)(x)?/', callback: fn($m) => json_encode($m), subject: 'za', flags: PREG_UNMATCHED_AS_NULL));
+var_dump(preg_grep('/^a/', ['x' => 'apple', 'y' => 'berry'], PREG_GREP_INVERT));
+var_dump(@preg_grep('/(/', ['a']));
+var_dump(preg_replace(['/a/'], 'x', [['nested'], 'a']));
+PHP;
+eval($code);
+"#,
+    );
+    assert_eq!(out.stdout, r#"string(2) "XY"
+TypeError: preg_replace(): Argument #1 ($pattern) must be of type array when argument #2 ($replacement) is an array, string given
+array(0) {
+}
+int(1)
+array(3) {
+  ["k"]=>
+  string(2) "xb"
+  ["j"]=>
+  string(1) "5"
+  ["n"]=>
+  string(0) ""
+}
+array(3) {
+  [0]=>
+  string(2) "xa"
+  [2]=>
+  string(2) "xb"
+  ["k"]=>
+  string(2) "xx"
+}
+int(4)
+array(1) {
+  ["x"]=>
+  string(3) "Abc"
+}
+int(2)
+NULL
+string(18) "z[["a",1],["a",1]]"
+string(15) "z["a","a",null]"
+array(1) {
+  ["y"]=>
+  string(5) "berry"
+}
+bool(false)
+array(2) {
+  [0]=>
+  string(5) "Arrxy"
+  [1]=>
+  string(1) "x"
+}
+"#, "stderr: {}", out.stderr);
+    assert_diagnostics(
+        &out.stderr,
+        &[
+            r#"Warning: preg_replace(): Compilation failed: missing closing parenthesis at offset 1"#,
+            r#"Warning: preg_replace(): Compilation failed: missing closing parenthesis at offset 1"#,
+            r#"Warning: preg_replace_callback_array(): Compilation failed: missing closing parenthesis at offset 1"#,
+            r#"Warning: Array to string conversion"#,
+        ],
+    );
+}
+
+/// `@` in eval silences a warning that the runtime, not the interpreter, raises -- a builtin's
+/// helper or the regex shim -- as php's `@` does.
+#[test]
+fn test_eval_error_suppression_silences_runtime_warnings() {
+    let out = compile_and_run_capture_with_regex(
+        r#"<?php
+preg_match('/warm/', 'warm');
+$code = <<<'PHP'
+var_dump(@hex2bin('abc'));
+var_dump(@preg_match('/(/', 'x'));
+$x = @preg_match('/(/', 'x');
+var_dump($x);
+PHP;
+eval($code);
+"#,
+    );
+    assert_eq!(out.stdout, r#"bool(false)
+bool(false)
+bool(false)
+"#, "stderr: {}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "stderr: {}", out.stderr);
+}
+
+/// Binding `$matches` by reference DEFINES it as null before the pattern is compiled, so a rejected
+/// pattern leaves it null rather than undefined.
+#[test]
+fn test_eval_rejected_pattern_still_defines_matches() {
+    let out = compile_and_run_capture_with_regex(
+        r#"<?php
+preg_match('/warm/', 'warm');
+$code = <<<'PHP'
+var_dump(@preg_match_all('/a/Q', 'abc', $all), $all);
+var_dump(@preg_match('/(/', 'x', $m), $m);
+$keep = ['keep'];
+var_dump(@preg_match('/(/', 'x', $keep), $keep);
+PHP;
+eval($code);
+"#,
+    );
+    assert_eq!(out.stdout, r#"bool(false)
+NULL
+bool(false)
+NULL
+bool(false)
+array(1) {
+  [0]=>
+  string(4) "keep"
+}
+"#, "stderr: {}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "stderr: {}", out.stderr);
+}

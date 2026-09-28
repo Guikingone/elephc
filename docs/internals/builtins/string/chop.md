@@ -2,7 +2,7 @@
 title: "chop() — internals"
 description: "Compiler internals for chop(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 778
+  order: 782
 ---
 
 ## `chop()` — internals

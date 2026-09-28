@@ -26083,6 +26083,12 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
                 default: Some(DefaultSpec::Null),
                 by_ref: true,
             },
+            ParamSpec {
+                name: "flags",
+                ty: TypeSpec::Int,
+                default: Some(DefaultSpec::Int(0)),
+                by_ref: false,
+            },
         ],
         variadic: None,
         min_args: None,

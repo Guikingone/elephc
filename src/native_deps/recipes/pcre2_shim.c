@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #define PCRE2_CODE_UNIT_WIDTH 8
@@ -124,6 +125,135 @@ int32_t elephc_pcre2_v1_last_error(void) {
     return elephc_pcre2_v1_error;
 }
 
+/* Forgets the previous call's error. `preg_grep()` compiles once per ELEMENT, so over an empty
+   array nothing would reset the code the call's own result is decided by. */
+void elephc_pcre2_v1_clear_error(void) {
+    elephc_pcre2_v1_error = 0;
+}
+
+/* php's preg_last_error_msg() text for each preg_last_error() code. */
+void elephc_pcre2_v1_last_error_msg(const char **message_out, uint64_t *length_out) {
+    static const char *const messages[] = {
+        "No error",
+        "Internal error",
+        "Backtrack limit exhausted",
+        "Recursion limit exhausted",
+        "Malformed UTF-8 characters, possibly incorrectly encoded",
+        "The offset did not correspond to the beginning of a valid UTF-8 code point",
+        "JIT stack limit exhausted",
+    };
+    const char *message = "Internal error";
+
+    if (elephc_pcre2_v1_error >= 0
+        && (size_t)elephc_pcre2_v1_error < sizeof(messages) / sizeof(messages[0])) {
+        message = messages[elephc_pcre2_v1_error];
+    }
+    if (message_out != NULL) {
+        *message_out = message;
+    }
+    if (length_out != NULL) {
+        *length_out = (uint64_t)strlen(message);
+    }
+}
+
+/* Why the most recent compile failed, as PCRE2 words it, or an empty string when it did not.
+   php reports a pattern PCRE2 rejects as `<function>(): Compilation failed: <message> at offset
+   <n>` and the call returns false or null; the runtime asks for that text right after the call,
+   so one static record of the last failure is enough. */
+static int elephc_pcre2_v1_compile_failed = 0;
+static int elephc_pcre2_v1_compile_errorcode = 0;
+static PCRE2_SIZE elephc_pcre2_v1_compile_erroffset = 0;
+static char elephc_pcre2_v1_warning[512];
+
+/* Pattern errors php reports before PCRE2 ever sees the pattern. The runtime's delimiter
+   stripper records one, and the compile that always follows it fails with that reason instead
+   of compiling whatever bytes the stripper handed on. */
+#define ELEPHC_PCRE2_PATTERN_EMPTY 1
+#define ELEPHC_PCRE2_PATTERN_DELIMITER 2
+#define ELEPHC_PCRE2_PATTERN_NO_END 3
+#define ELEPHC_PCRE2_PATTERN_MODIFIER 4
+static int32_t elephc_pcre2_v1_pending_kind = 0;
+static uint32_t elephc_pcre2_v1_pending_byte = 0;
+static int32_t elephc_pcre2_v1_failure_kind = 0;
+static uint32_t elephc_pcre2_v1_failure_byte = 0;
+
+/* Records a delimiter or modifier error for the next compile to report. */
+void elephc_pcre2_v1_record_pattern_error(int32_t kind, uint32_t byte) {
+    elephc_pcre2_v1_pending_kind = kind;
+    elephc_pcre2_v1_pending_byte = byte & 0xffU;
+}
+
+/* Builds php's whole compile-failure warning line (`Warning: ...\n`, the form the runtime and
+   interpreter warning writers take) for `function_name` when the last compile failed.
+   Returns 1 with the message, or 0 (and an empty message) when it succeeded. */
+int32_t elephc_pcre2_v1_compile_warning(
+    const char *function_name,
+    uint64_t function_length,
+    const char **message_out,
+    uint64_t *length_out
+) {
+    PCRE2_UCHAR reason[256];
+    int written;
+
+    if (message_out != NULL) {
+        *message_out = "";
+    }
+    if (length_out != NULL) {
+        *length_out = 0;
+    }
+    if (!elephc_pcre2_v1_compile_failed || message_out == NULL || length_out == NULL) {
+        return 0;
+    }
+    elephc_pcre2_v1_compile_failed = 0;
+    if (function_length > 128) {
+        function_length = 128;
+    }
+    if (function_name == NULL) {
+        function_name = "";
+        function_length = 0;
+    }
+    switch (elephc_pcre2_v1_failure_kind) {
+    case ELEPHC_PCRE2_PATTERN_EMPTY:
+        written = snprintf(elephc_pcre2_v1_warning, sizeof(elephc_pcre2_v1_warning),
+                           "Warning: %.*s(): Empty regular expression\n",
+                           (int)function_length, function_name);
+        break;
+    case ELEPHC_PCRE2_PATTERN_DELIMITER:
+        written = snprintf(elephc_pcre2_v1_warning, sizeof(elephc_pcre2_v1_warning),
+                           "Warning: %.*s(): Delimiter must not be alphanumeric, backslash, or NUL byte\n",
+                           (int)function_length, function_name);
+        break;
+    case ELEPHC_PCRE2_PATTERN_NO_END:
+        written = snprintf(elephc_pcre2_v1_warning, sizeof(elephc_pcre2_v1_warning),
+                           "Warning: %.*s(): No ending delimiter '%c' found\n",
+                           (int)function_length, function_name, (int)elephc_pcre2_v1_failure_byte);
+        break;
+    case ELEPHC_PCRE2_PATTERN_MODIFIER:
+        written = snprintf(elephc_pcre2_v1_warning, sizeof(elephc_pcre2_v1_warning),
+                           "Warning: %.*s(): Unknown modifier '%c'\n",
+                           (int)function_length, function_name, (int)elephc_pcre2_v1_failure_byte);
+        break;
+    default:
+        if (pcre2_get_error_message(elephc_pcre2_v1_compile_errorcode, reason, sizeof(reason)) < 0) {
+            reason[0] = '\0';
+        }
+        written = snprintf(elephc_pcre2_v1_warning, sizeof(elephc_pcre2_v1_warning),
+                           "Warning: %.*s(): Compilation failed: %s at offset %lu\n",
+                           (int)function_length, function_name,
+                           (const char *)reason, (unsigned long)elephc_pcre2_v1_compile_erroffset);
+        break;
+    }
+    if (written < 0) {
+        return 0;
+    }
+    if ((size_t)written >= sizeof(elephc_pcre2_v1_warning)) {
+        written = (int)sizeof(elephc_pcre2_v1_warning) - 1;
+    }
+    *message_out = elephc_pcre2_v1_warning;
+    *length_out = (uint64_t)written;
+    return 1;
+}
+
 int32_t elephc_pcre2_v1_compile(
     void **handle_out,
     const char *pattern_z,
@@ -141,6 +271,7 @@ int32_t elephc_pcre2_v1_compile(
     elephc_pcre2_v1_cached *cached;
 
     elephc_pcre2_v1_error = 0;
+    elephc_pcre2_v1_compile_failed = 0;
     if (handle_out != NULL) {
         *handle_out = NULL;
     }
@@ -148,6 +279,14 @@ int32_t elephc_pcre2_v1_compile(
         *match_slot_count_out = 0;
     }
     if (handle_out == NULL || match_slot_count_out == NULL || pattern_z == NULL) {
+        elephc_pcre2_v1_error = 1;
+        return (int32_t)REG_BADPAT;
+    }
+    if (elephc_pcre2_v1_pending_kind != 0) {
+        elephc_pcre2_v1_failure_kind = elephc_pcre2_v1_pending_kind;
+        elephc_pcre2_v1_failure_byte = elephc_pcre2_v1_pending_byte;
+        elephc_pcre2_v1_pending_kind = 0;
+        elephc_pcre2_v1_compile_failed = 1;
         elephc_pcre2_v1_error = 1;
         return (int32_t)REG_BADPAT;
     }
@@ -193,6 +332,10 @@ int32_t elephc_pcre2_v1_compile(
         if (code == NULL) {
             free(handle);
             elephc_pcre2_v1_error = 1;
+            elephc_pcre2_v1_compile_failed = 1;
+            elephc_pcre2_v1_failure_kind = 0;
+            elephc_pcre2_v1_compile_errorcode = errorcode;
+            elephc_pcre2_v1_compile_erroffset = erroffset;
             return (int32_t)REG_BADPAT;
         }
         capture_count = 0;

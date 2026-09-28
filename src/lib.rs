@@ -49,6 +49,7 @@ pub mod ast_usage;
 mod array_filter_prelude;
 mod array_walk_prelude;
 mod preg_match_all_prelude;
+mod preg_array_prelude;
 mod is_callable_prelude;
 pub mod opcache_preload_sources;
 /// Narrow PHP-level fallbacks for builtin shapes not handled natively yet.

@@ -252,6 +252,24 @@ pub(super) fn register_eval_regex_provider(ctx: &mut FunctionContext<'_>) {
         .target
         .extern_symbol("__elephc_eval_register_regex_last_error");
     abi::emit_call_label(ctx.emitter, &register);
+    // Pattern-failure reporting: eval warns about a rejected pattern in the words, and through
+    // the shim state, compiled code uses.
+    for (index, shim_symbol) in [
+        "elephc_pcre2_v1_record_pattern_error",
+        "elephc_pcre2_v1_compile_warning",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, index);
+        let symbol = ctx.emitter.target.extern_symbol(shim_symbol);
+        abi::emit_symbol_address(ctx.emitter, arg_reg, &symbol);
+    }
+    let register = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_register_regex_diagnostics");
+    abi::emit_call_label(ctx.emitter, &register);
 }
 
 /// Writes the physical eval call site's strict profile before every runtime dispatch.

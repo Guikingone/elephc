@@ -55,7 +55,7 @@ fn declared_builtin_registry_derives_regex_metadata() {
     );
     assert_eq!(
         eval_declared_builtin_param_names("preg_replace_callback"),
-        Some(["pattern", "callback", "subject", "limit", "count"].as_slice())
+        Some(["pattern", "callback", "subject", "limit", "count", "flags"].as_slice())
     );
     assert_eq!(
         eval_declared_builtin_default_value("preg_replace_callback", 3),

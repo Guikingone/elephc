@@ -2,7 +2,7 @@
 title: "curl_escape()"
 description: "URL-encodes a string with the given cURL handle."
 sidebar:
-  order: 688
+  order: 692
 ---
 
 ## curl_escape()

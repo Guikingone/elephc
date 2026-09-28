@@ -9,6 +9,41 @@
 
 use super::*;
 
+/// Returns the `crate::preg_array_prelude` helper a statically bound replacement builtin needs,
+/// when its operands may be arrays or it passes `$flags`.
+///
+/// The positional operands php reads as pattern, replacement and subject are 0, 1 and 2 for
+/// `preg_replace()`, and 0 and 2 for `preg_replace_callback()`, whose sixth operand is `$flags`.
+fn preg_array_helper_for_callable(
+    ctx: &LoweringContext<'_, '_>,
+    function_name: &str,
+    args: &[Expr],
+) -> Option<&'static str> {
+    let key = php_symbol_key(function_name.trim_start_matches('\\'));
+    let (helper, operands): (&'static str, &[usize]) = match key.as_str() {
+        "preg_replace" => (crate::preg_array_prelude::PREG_REPLACE_FULL_NAME, &[0, 1, 2]),
+        "preg_replace_callback" => {
+            (crate::preg_array_prelude::PREG_REPLACE_CALLBACK_FULL_NAME, &[0, 2])
+        }
+        _ => return None,
+    };
+    if args
+        .iter()
+        .any(|arg| is_spread_arg(arg) || matches!(arg.kind, ExprKind::NamedArg { .. }))
+    {
+        return None;
+    }
+    let flagged = key == "preg_replace_callback" && args.len() == 6;
+    let may_be_array = operands.iter().any(|index| {
+        args.get(*index).is_some_and(|arg| {
+            crate::types::checker::builtins::preg_operand_may_be_array(
+                &materialized_expr_type_for_merge(ctx, arg).codegen_repr(),
+            )
+        })
+    });
+    (flagged || may_be_array).then_some(helper)
+}
+
 /// Lowers one resolved static callable target to the corresponding EIR call opcode.
 pub(super) fn lower_static_callable_call(
     ctx: &mut LoweringContext<'_, '_>,
@@ -52,6 +87,19 @@ pub(super) fn lower_static_callable_call(
             ))
         }
         StaticCallableBinding::Builtin(function_name) => {
+            // The array and `$flags` forms of the replacement builtins live in
+            // `crate::preg_array_prelude`, exactly as for a direct call
+            // (`compat_preludes::lower_backend_gap_builtin_shape`). No checker entry names this
+            // call, so the operands' own types decide: `call_user_func_array('preg_replace',
+            // ['/e/', 'E', ['a' => 'hello']])` reached the native runtime with a hash subject.
+            if let Some(helper) = preg_array_helper_for_callable(ctx, &function_name, callback_args) {
+                return Some(lower_function_call(
+                    ctx,
+                    &crate::names::Name::unqualified(helper),
+                    callback_args,
+                    expr,
+                ));
+            }
             let sig = call_signature(
                 ctx,
                 &function_name,

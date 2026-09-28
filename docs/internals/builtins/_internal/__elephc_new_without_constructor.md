@@ -2,7 +2,7 @@
 title: "__elephc_new_without_constructor() — internals"
 description: "Compiler internals for __elephc_new_without_constructor(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1073
+  order: 1077
 ---
 
 ## `__elephc_new_without_constructor()` — internals

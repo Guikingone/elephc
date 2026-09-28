@@ -2,7 +2,7 @@
 title: "ctype_alpha() — internals"
 description: "Compiler internals for ctype_alpha(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 890
+  order: 894
 ---
 
 ## `ctype_alpha()` — internals

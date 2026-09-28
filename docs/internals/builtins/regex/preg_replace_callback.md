@@ -2,7 +2,7 @@
 title: "preg_replace_callback() — internals"
 description: "Compiler internals for preg_replace_callback(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 753
+  order: 757
 ---
 
 ## `preg_replace_callback()` — internals
@@ -25,7 +25,7 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `independent`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function preg_replace_callback(string $pattern, callable $callback, string $subject, int $limit = -1, mixed $count = null): string
+function preg_replace_callback(string $pattern, callable $callback, string $subject, int $limit = -1, mixed $count = null, int $flags = 0): string
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 3–5 arguments (2 optional).
+- **Arity**: takes 3–6 arguments (3 optional).
 - **By-reference parameters**: `$count`.
 
 ## Eval interpreter (magician)

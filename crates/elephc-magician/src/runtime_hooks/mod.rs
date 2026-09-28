@@ -255,6 +255,19 @@ pub(crate) fn request_invoker_boundary() {
 #[cfg(test)]
 pub(crate) fn request_invoker_boundary() {}
 
+/// Mirrors an interpreted `@` scope into the runtime's suppression depth.
+///
+/// The interpreter's own depth only silences diagnostics it renders itself; a warning raised by
+/// a builtin's runtime helper, a compiled callee or the regex shim goes through the runtime's
+/// counter, which php's `@` covers just the same.
+#[cfg(not(test))]
+pub(crate) fn diag_suppression(enter: bool) {
+    unsafe { externs::__elephc_eval_diag_suppression(u64::from(enter)) };
+}
+
+#[cfg(test)]
+pub(crate) fn diag_suppression(_enter: bool) {}
+
 /// Test builds link no generated table, so every compiled class counts as loaded.
 #[cfg(test)]
 pub(crate) fn compiled_class_is_loaded(_name: &str) -> bool {

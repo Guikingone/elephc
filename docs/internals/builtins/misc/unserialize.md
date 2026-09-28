@@ -2,7 +2,7 @@
 title: "unserialize() — internals"
 description: "Compiler internals for unserialize(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 680
+  order: 684
 ---
 
 ## `unserialize()` — internals

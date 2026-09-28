@@ -2,7 +2,7 @@
 title: "session_cache_expire()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 928
+  order: 932
 ---
 
 ## session_cache_expire()

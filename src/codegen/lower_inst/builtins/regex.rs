@@ -46,14 +46,101 @@ pub(crate) fn lower_preg_match(ctx: &mut FunctionContext<'_>, inst: &Instruction
     )?;
     if let Some(slot) = matches_slot {
         abi::emit_call_label(ctx.emitter, "__rt_preg_match_capture");
-        store_matches_array(ctx, slot)?;
+        emit_preg_compile_warning(ctx, "preg_match");
+        store_matches_unless_pattern_failed(ctx, slot)?;
     } else {
         abi::emit_call_label(ctx.emitter, "__rt_preg_match");
+        emit_preg_compile_warning(ctx, "preg_match");
     }
     if result_is_boxed(ctx, inst)? {
         emit_box_preg_match_result(ctx);
     }
     super::store_if_result(ctx, inst)
+}
+
+/// Reports php's `Compilation failed` warning for `function` when the regex helper just called
+/// could not compile its pattern (`__rt_preg_compile_warning`); every result register survives.
+fn emit_preg_compile_warning(ctx: &mut FunctionContext<'_>, function: &str) {
+    let (label, len) = ctx.data.add_string(function.as_bytes());
+    let (pointer, length) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x9", "x10"),
+        Arch::X86_64 => ("r10", "r11"),
+    };
+    abi::emit_symbol_address(ctx.emitter, pointer, &label);
+    abi::emit_load_int_immediate(ctx.emitter, length, len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_preg_compile_warning");
+}
+
+/// Lowers `preg_last_error()`: the shim's code for the last compile or match.
+pub(crate) fn lower_preg_last_error(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "preg_last_error", 0)?;
+    ctx.emitter.bl_c("elephc_pcre2_v1_last_error");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov w0, w0"),                  // the C int32 result: clear the upper word
+        Arch::X86_64 => ctx.emitter.instruction("mov eax, eax"),                 // the C int32 result: clear the upper word
+    }
+    super::store_if_result(ctx, inst)
+}
+
+/// Lowers `preg_last_error_msg()`: the shim's static message for the last error code.
+pub(crate) fn lower_preg_last_error_msg(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "preg_last_error_msg", 0)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #16");                         // receive the message pointer and length
+            ctx.emitter.instruction("mov x0, sp");
+            ctx.emitter.instruction("add x1, sp, #8");
+            ctx.emitter.bl_c("elephc_pcre2_v1_last_error_msg");
+            ctx.emitter.instruction("ldp x1, x2, [sp], #16");                   // static message: pointer and length
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 16");                             // receive the message pointer and length
+            ctx.emitter.instruction("mov rdi, rsp");
+            ctx.emitter.instruction("lea rsi, [rsp + 8]");
+            ctx.emitter.bl_c("elephc_pcre2_v1_last_error_msg");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // static message pointer
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");            // and its length
+            ctx.emitter.instruction("add rsp, 16");
+        }
+    }
+    super::store_if_result(ctx, inst)
+}
+
+/// Stores the `$matches` array a capture helper built, unless its pattern failed to compile.
+///
+/// php leaves `$matches` untouched when the pattern is rejected -- it never got to match -- so the
+/// empty array the helper returns is dropped instead of replacing the variable. Reads the flag
+/// `__rt_preg_compile_warning` leaves in x9/r10, so it must follow that call directly.
+fn store_matches_unless_pattern_failed(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Result<()> {
+    let store = ctx.next_label("preg_matches_store");
+    let done = ctx.next_label("preg_matches_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x9, {store}"));               // the pattern compiled: store the matches
+            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // keep the call's result
+            ctx.emitter.instruction("mov x0, x1");                              // the empty matches array the failed call built
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+            ctx.emitter.instruction("ldr x0, [sp], #16");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test r10, r10");
+            ctx.emitter.instruction(&format!("jz {store}"));                    // the pattern compiled: store the matches
+            ctx.emitter.instruction("push rax");                                // keep the call's result
+            ctx.emitter.instruction("push rax");                                // second slot keeps the call aligned
+            ctx.emitter.instruction("mov rax, rdx");                            // the empty matches array the failed call built
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+            ctx.emitter.instruction("pop rax");
+            ctx.emitter.instruction("pop rax");
+        }
+    }
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&store);
+    store_matches_array(ctx, slot)?;
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Returns whether the checker typed this preg call's result for its failure value.
@@ -152,6 +239,102 @@ fn emit_box_preg_replace_result(ctx: &mut FunctionContext<'_>) {
     }
 }
 
+/// Boxes an owned array a preg helper returned, or `false` when the call failed.
+///
+/// `__rt_mixed_from_value` retains what it boxes, so the helper's own reference is dropped
+/// either way: after boxing, or with the empty array a failed call still returns.
+fn emit_box_preg_array_result(ctx: &mut FunctionContext<'_>, tag: i64, release: &str) {
+    let failed = ctx.next_label("preg_array_failed");
+    let done = ctx.next_label("preg_array_boxed");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // keep the owned array across the error query
+            ctx.emitter.bl_c("elephc_pcre2_v1_last_error");
+            ctx.emitter.instruction(&format!("cbnz w0, {failed}"));             // any preg error makes php return false
+            ctx.emitter.instruction("ldr x1, [sp]");                            // the array becomes the payload
+            ctx.emitter.instruction("mov x2, #0");                              // arrays have no high payload word
+            abi::emit_load_int_immediate(ctx.emitter, "x0", tag);               // runtime tag of the array shape
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction("str x0, [sp, #8]");                        // keep the box while the helper's reference drops
+            ctx.emitter.instruction("ldr x0, [sp]");
+            abi::emit_call_label(ctx.emitter, release);
+            ctx.emitter.instruction("ldr x0, [sp, #8]");                        // the box is the result
+            ctx.emitter.instruction("add sp, sp, #16");
+            ctx.emitter.instruction(&format!("b {done}"));
+            ctx.emitter.label(&failed);
+            ctx.emitter.instruction("ldr x0, [sp], #16");                       // the empty array a failed call returned
+            abi::emit_call_label(ctx.emitter, release);
+            ctx.emitter.instruction("mov x1, #0");                              // false carries no payload
+            ctx.emitter.instruction("mov x2, #0");
+            ctx.emitter.instruction("mov x0, #3");                              // runtime tag 3 is bool
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 16");                             // two aligned slots: the array and its box
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // keep the owned array across the error query
+            ctx.emitter.bl_c("elephc_pcre2_v1_last_error");
+            ctx.emitter.instruction("test eax, eax");                           // any preg error makes php return false
+            ctx.emitter.instruction(&format!("jnz {failed}"));
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // the array becomes the payload
+            ctx.emitter.instruction("xor esi, esi");                            // arrays have no high payload word
+            abi::emit_load_int_immediate(ctx.emitter, "rax", tag);              // runtime tag of the array shape
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");            // keep the box while the helper's reference drops
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");
+            abi::emit_call_label(ctx.emitter, release);
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");            // the box is the result
+            ctx.emitter.instruction("add rsp, 16");
+            ctx.emitter.instruction(&format!("jmp {done}"));
+            ctx.emitter.label(&failed);
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // the empty array a failed call returned
+            ctx.emitter.instruction("add rsp, 16");
+            abi::emit_call_label(ctx.emitter, release);
+            ctx.emitter.instruction("xor edi, edi");                            // false carries no payload
+            ctx.emitter.instruction("xor esi, esi");
+            ctx.emitter.instruction("mov eax, 3");                              // runtime tag 3 is bool
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done);
+        }
+    }
+}
+
+/// Keeps the Mixed box a preg helper returned, or replaces it with `false` when the call failed.
+fn emit_preg_box_or_false(ctx: &mut FunctionContext<'_>) {
+    let done = ctx.next_label("preg_box_kept");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // keep the result box across the error query
+            ctx.emitter.bl_c("elephc_pcre2_v1_last_error");
+            ctx.emitter.instruction("mov x9, x0");                              // the error code decides the result
+            ctx.emitter.instruction("ldr x0, [sp], #16");
+            ctx.emitter.instruction(&format!("cbz w9, {done}"));                // no error: the box is the result
+            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");             // drop the result a failed call built
+            ctx.emitter.instruction("mov x1, #0");                              // false carries no payload
+            ctx.emitter.instruction("mov x2, #0");
+            ctx.emitter.instruction("mov x0, #3");                              // runtime tag 3 is bool
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("push rax");                                // keep the result box across the error query
+            ctx.emitter.instruction("push rax");                                // second slot keeps the C call 16-byte aligned
+            ctx.emitter.bl_c("elephc_pcre2_v1_last_error");
+            ctx.emitter.instruction("mov ecx, eax");                            // the error code decides the result
+            ctx.emitter.instruction("pop rax");
+            ctx.emitter.instruction("pop rax");
+            ctx.emitter.instruction("test ecx, ecx");
+            ctx.emitter.instruction(&format!("jz {done}"));                     // no error: the box is the result
+            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");             // drop the result a failed call built
+            ctx.emitter.instruction("xor edi, edi");                            // false carries no payload
+            ctx.emitter.instruction("xor esi, esi");
+            ctx.emitter.instruction("mov eax, 3");                              // runtime tag 3 is bool
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done);
+        }
+    }
+}
+
 /// Lowers `preg_grep(pattern, array, flags = 0)` through the key-preserving mixed filter runtime.
 ///
 /// The synthetic predicate casts each boxed array value to PHP string form, invokes the shared
@@ -180,6 +363,10 @@ pub(crate) fn lower_preg_grep(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         }
     };
 
+    let boxed = result_is_boxed(ctx, inst)?;
+    if boxed {
+        ctx.emitter.bl_c("elephc_pcre2_v1_clear_error");
+    }
     let predicate_label = emit_preg_grep_predicate_wrapper(ctx);
     abi::emit_reserve_temporary_stack(ctx.emitter, 32);
     let flags_reg = match ctx.emitter.target.arch {
@@ -217,7 +404,13 @@ pub(crate) fn lower_preg_grep(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         }
     }
     abi::emit_call_label(ctx.emitter, runtime_label);
-    if return_raw_hash {
+    // The predicate compiles the pattern once per element, so one check after the whole filter
+    // reports a rejected pattern once, as php does.
+    emit_preg_compile_warning(ctx, "preg_grep");
+    if boxed {
+        // Both filter helpers return an owned Mixed box: it is the `array|false` result as is.
+        emit_preg_box_or_false(ctx);
+    } else if return_raw_hash {
         emit_take_preg_grep_raw_hash_result(ctx);
     }
     abi::emit_release_temporary_stack(ctx.emitter, 32);
@@ -311,6 +504,8 @@ fn emit_preg_grep_predicate_wrapper(ctx: &mut FunctionContext<'_>) -> String {
             ctx.emitter.instruction("mov x4, x2");                              // pass subject length to regex runtime
             ctx.emitter.instruction("ldr x9, [sp]");                            // reload pattern environment
             ctx.emitter.instruction("ldp x1, x2, [x9]");                        // load pattern pointer and length
+            ctx.emitter.instruction("mov x5, #0");                              // no preg_match flags
+            ctx.emitter.instruction("mov x6, #0");                              // match from the subject start, not from a stale x6
             abi::emit_call_label(ctx.emitter, "__rt_preg_match");
             ctx.emitter.instruction("ldr x9, [sp]");                            // reload predicate environment after regex call
             ctx.emitter.instruction("ldr x9, [x9, #16]");                       // load normalized inversion flag
@@ -336,6 +531,8 @@ fn emit_preg_grep_predicate_wrapper(ctx: &mut FunctionContext<'_>) -> String {
             ctx.emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");            // pass pattern length to regex runtime
             ctx.emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");           // pass subject pointer to regex runtime
             ctx.emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");           // pass subject length to regex runtime
+            ctx.emitter.instruction("xor r8d, r8d");                            // no preg_match flags
+            ctx.emitter.instruction("xor r9d, r9d");                            // match from the subject start, not from a stale r9
             abi::emit_call_label(ctx.emitter, "__rt_preg_match");
             ctx.emitter.instruction("mov r10, QWORD PTR [rbp - 8]");            // reload predicate environment after regex call
             ctx.emitter.instruction("xor rax, QWORD PTR [r10 + 16]");           // invert match result when requested
@@ -396,8 +593,12 @@ pub(crate) fn lower_preg_match_all(
     } else {
         abi::emit_call_label(ctx.emitter, "__rt_preg_match_all");
     }
+    emit_preg_compile_warning(ctx, "preg_match_all");
     if let Some(slot) = matches_slot {
-        store_matches_array(ctx, slot)?;
+        store_matches_unless_pattern_failed(ctx, slot)?;
+    }
+    if result_is_boxed(ctx, inst)? {
+        emit_box_preg_match_result(ctx);
     }
     super::store_if_result(ctx, inst)
 }
@@ -455,6 +656,7 @@ pub(crate) fn lower_preg_replace(ctx: &mut FunctionContext<'_>, inst: &Instructi
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_preg_replace");
+    emit_preg_compile_warning(ctx, "preg_replace");
     if let Some(slot) = count_slot {
         store_preg_replace_count(ctx, slot)?;
     }
@@ -469,7 +671,9 @@ pub(crate) fn lower_preg_replace_callback(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count_between(inst, "preg_replace_callback", 3, 5)?;
+    // A sixth operand is `$flags` at its default: a call that passes flags is redirected to
+    // `crate::preg_array_prelude` before it is lowered here.
+    super::ensure_arg_count_between(inst, "preg_replace_callback", 3, 6)?;
     let pattern = super::expect_operand(inst, 0)?;
     let callback = super::expect_operand(inst, 1)?;
     let subject = super::expect_operand(inst, 2)?;
@@ -527,10 +731,15 @@ pub(crate) fn lower_preg_replace_callback(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_preg_replace_callback");
+    emit_preg_compile_warning(ctx, "preg_replace_callback");
     if let Some(slot) = count_slot {
         store_preg_replace_count(ctx, slot)?;
     }
-    callback_target.release_env(ctx, env_bytes);
+    let boxed = result_is_boxed(ctx, inst)?;
+    if boxed {
+        emit_box_preg_replace_result(ctx);
+    }
+    callback_target.release_env(ctx, env_bytes, boxed);
     super::store_if_result(ctx, inst)
 }
 
@@ -550,9 +759,10 @@ impl PregReplaceCallbackTarget {
         self.env.reserve(ctx, strict_php)
     }
 
-    /// Releases any reserved callback environment while preserving the regex result.
-    fn release_env(&self, ctx: &mut FunctionContext<'_>, env_bytes: usize) {
-        self.env.release(ctx, env_bytes);
+    /// Releases any reserved callback environment while preserving the regex result, which is a
+    /// boxed `string|null` in the integer result register when `boxed` and a string pair otherwise.
+    fn release_env(&self, ctx: &mut FunctionContext<'_>, env_bytes: usize, boxed: bool) {
+        self.env.release(ctx, env_bytes, boxed);
     }
 }
 
@@ -593,12 +803,12 @@ impl PregReplaceCallbackEnv {
     }
 
     /// Releases a descriptor environment only when this target owns the descriptor.
-    fn release(&self, ctx: &mut FunctionContext<'_>, env_bytes: usize) {
+    fn release(&self, ctx: &mut FunctionContext<'_>, env_bytes: usize, boxed: bool) {
         if env_bytes == 0 {
             return;
         }
         if self.releases_descriptor() {
-            release_descriptor_callback_env_preserving_result(ctx, env_bytes);
+            release_descriptor_callback_env_preserving_result(ctx, env_bytes, boxed);
         } else {
             abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
         }
@@ -846,12 +1056,26 @@ fn reserve_callable_array_descriptor_callback_env(
     Ok(16)
 }
 
-/// Releases an owned descriptor env while preserving the regex replacement string result.
+/// Releases an owned descriptor env while preserving the regex replacement result.
+///
+/// The descriptor is reloaded into the integer result register to be released, so a result
+/// already boxed there must be saved instead of the string pair: saving only the pair returned
+/// the descriptor's address as the result, which `var_dump` printed as an `int`.
 fn release_descriptor_callback_env_preserving_result(
     ctx: &mut FunctionContext<'_>,
     env_bytes: usize,
+    boxed: bool,
 ) {
-    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    let (ptr_reg, len_reg) = if boxed {
+        // A distinct second register: reloading one register twice from a pair is unpredictable
+        // on AArch64.
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ("x0", "x1"),
+            Arch::X86_64 => ("rax", "rdx"),
+        }
+    } else {
+        abi::string_result_regs(ctx.emitter)
+    };
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
     abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
     callable_descriptor::emit_release_current_descriptor(ctx.emitter);
@@ -929,6 +1153,10 @@ pub(crate) fn lower_preg_split(ctx: &mut FunctionContext<'_>, inst: &Instruction
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_preg_split");
+    emit_preg_compile_warning(ctx, "preg_split");
+    if result_is_boxed(ctx, inst)? {
+        emit_box_preg_array_result(ctx, 4, "__rt_decref_array");
+    }
     super::store_if_result(ctx, inst)
 }
 
@@ -1116,6 +1344,25 @@ fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Resu
             }
         }
         abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+        // Boxing RETAINS an array, so the call's own reference to the fresh matches array is
+        // still outstanding: drop it and let the box hold the only one. Without this, every
+        // `preg_match($p, $s, $m)` into a `mixed` local leaked the whole matches array.
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("str x0, [sp, #-16]!");                 // keep the box across the release
+                ctx.emitter.instruction("ldr x0, [sp, #24]");                   // the matches array the call returned
+                abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+                ctx.emitter.instruction("ldr x0, [sp], #16");                   // the box to store
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("push rax");                            // keep the box across the release
+                ctx.emitter.instruction("push rax");                            // second slot keeps the call aligned
+                ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 24]");       // the matches array the call returned
+                abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+                ctx.emitter.instruction("pop rax");
+                ctx.emitter.instruction("pop rax");                             // the box to store
+            }
+        }
     }
     ctx.store_current_result_to_local(slot)?;
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);

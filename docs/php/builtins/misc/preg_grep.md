@@ -2,13 +2,13 @@
 title: "preg_grep()"
 description: "Returns entries whose values match a regular expression while preserving keys."
 sidebar:
-  order: 673
+  order: 674
 ---
 
 ## preg_grep()
 
 ```php
-function preg_grep(string $pattern, mixed $array, int $flags = 0): array
+function preg_grep(string $pattern, mixed $array, int $flags = 0): mixed
 ```
 
 Returns entries whose values match a regular expression while preserving keys.
@@ -18,12 +18,12 @@ Returns entries whose values match a regular expression while preserving keys.
 - `$array` (`mixed`)
 - `$flags` (`int`), default `0`, optional
 
-**Returns**: `array`
+**Returns**: `mixed`
 
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/regex/preg_grep.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_grep.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

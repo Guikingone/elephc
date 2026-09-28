@@ -54,6 +54,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_number_format(emitter);
     strings::emit_strcopy(emitter);
     strings::emit_str_persist(emitter);
+    strings::emit_str_persist_owned(emitter);
     strings::emit_str_inc_dec(emitter);
     strings::emit_mixed_inc_dec(emitter);
     strings::emit_strtolower(emitter);
@@ -210,6 +211,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     if features.regex {
         system::emit_preg_strip(emitter);
         system::emit_pcre_to_posix(emitter);
+        system::emit_preg_compile_warning(emitter);
         system::emit_mb_ereg_match(emitter);
         system::emit_preg_match(emitter);
         system::emit_preg_match_all(emitter);

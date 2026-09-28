@@ -238,6 +238,14 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Range,
     /// Dispatches `mb_ereg_match(...)`.
     MbEregMatch,
+    /// Dispatches `preg_filter(...)`.
+    PregFilter,
+    /// Dispatches `preg_grep(...)`.
+    PregGrep,
+    /// Dispatches `preg_last_error(...)`.
+    PregLastError,
+    /// Dispatches `preg_last_error_msg(...)`.
+    PregLastErrorMsg,
     /// Dispatches `preg_match(...)`.
     PregMatch,
     /// Dispatches `preg_match_all(...)`.
@@ -246,6 +254,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     PregReplace,
     /// Dispatches `preg_replace_callback(...)`.
     PregReplaceCallback,
+    /// Dispatches `preg_replace_callback_array(...)`.
+    PregReplaceCallbackArray,
     /// Dispatches `preg_split(...)`.
     PregSplit,
     /// Dispatches `buffer_free(...)`.
@@ -594,9 +604,26 @@ impl EvalValuesHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::MbEregMatch => eval_mb_ereg_match_values_result(evaluated_args, values),
+            Self::PregLastError => {
+                if !evaluated_args.is_empty() {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                eval_preg_last_error_result(values)
+            }
+            Self::PregLastErrorMsg => {
+                if !evaluated_args.is_empty() {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                eval_preg_last_error_msg_result(values)
+            }
             Self::PregMatch => eval_preg_match_values_result(evaluated_args, values),
             Self::PregMatchAll => eval_preg_match_all_values_result(evaluated_args, values),
-            Self::PregReplace => eval_preg_replace_values_result(evaluated_args, values),
+            Self::PregReplace => eval_preg_replace_values_result(evaluated_args, context, values),
+            Self::PregFilter => eval_preg_filter_values_result(evaluated_args, context, values),
+            Self::PregGrep => eval_preg_grep_values_result(evaluated_args, context, values),
+            Self::PregReplaceCallbackArray => {
+                eval_preg_replace_callback_array_values_result(evaluated_args, context, values)
+            }
             Self::PregReplaceCallback => {
                 eval_preg_replace_callback_values_result(evaluated_args, context, values)
             }

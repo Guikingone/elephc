@@ -2,7 +2,7 @@
 title: "setlocale()"
 description: "Sets locale information for the process."
 sidebar:
-  order: 678
+  order: 682
 ---
 
 ## setlocale()

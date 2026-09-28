@@ -106,6 +106,29 @@ impl Regex {
         })
     }
 
+    /// Compiles a pattern for the PHP `function`, or reports why php rejects it.
+    ///
+    /// A pattern PCRE2 cannot compile -- or one the delimiter parser already rejected, which
+    /// makes this compile fail on purpose -- produces php's warning and `None`; the caller then
+    /// returns its false or null. Any other failure stays an interpreter error.
+    pub(in crate::interpreter) fn compile_or_warn(
+        body: &[u8],
+        modifiers: EvalPregModifiers,
+        function: &str,
+        values: &mut impl crate::interpreter::RuntimeValueOps,
+    ) -> Result<Option<Self>, EvalStatus> {
+        match Self::compile(body, modifiers) {
+            Ok(regex) => Ok(Some(regex)),
+            Err(status) => match crate::regex_provider::regex_compile_warning(function) {
+                Some(message) => {
+                    values.warning(&message)?;
+                    Ok(None)
+                }
+                None => Err(status),
+            },
+        }
+    }
+
     /// Returns the number of capture slots including the full match at index 0.
     pub(in crate::interpreter) fn captures_len(&self) -> usize {
         self.capture_slots

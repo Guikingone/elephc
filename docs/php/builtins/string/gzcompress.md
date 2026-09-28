@@ -2,7 +2,7 @@
 title: "gzcompress()"
 description: "Compress a string using the ZLIB data format."
 sidebar:
-  order: 785
+  order: 789
 ---
 
 ## gzcompress()

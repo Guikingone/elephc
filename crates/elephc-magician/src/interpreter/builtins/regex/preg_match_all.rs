@@ -38,7 +38,9 @@ pub(in crate::interpreter) fn eval_builtin_preg_match_all(
             let matches_target = eval_preg_matches_target(matches, context, scope, values)?;
             let (result, matches_array) =
                 eval_preg_match_all_capture_result(pattern, subject, None, None, values)?;
-            eval_write_preg_matches_target(&matches_target, matches_array, context, values)?;
+            if let Some(matches_array) = matches_array {
+                eval_write_preg_matches_target(&matches_target, matches_array, context, values)?;
+            }
             Ok(result)
         }
         [pattern, subject, matches, flags] => {
@@ -48,7 +50,9 @@ pub(in crate::interpreter) fn eval_builtin_preg_match_all(
             let flags = eval_expr(flags, context, scope, values)?;
             let (result, matches_array) =
                 eval_preg_match_all_capture_result(pattern, subject, Some(flags), None, values)?;
-            eval_write_preg_matches_target(&matches_target, matches_array, context, values)?;
+            if let Some(matches_array) = matches_array {
+                eval_write_preg_matches_target(&matches_target, matches_array, context, values)?;
+            }
             Ok(result)
         }
         [pattern, subject, matches, flags, offset] => {
@@ -64,7 +68,9 @@ pub(in crate::interpreter) fn eval_builtin_preg_match_all(
                 Some(offset),
                 values,
             )?;
-            eval_write_preg_matches_target(&matches_target, matches_array, context, values)?;
+            if let Some(matches_array) = matches_array {
+                eval_write_preg_matches_target(&matches_target, matches_array, context, values)?;
+            }
             Ok(result)
         }
         _ => Err(EvalStatus::RuntimeFatal),
@@ -95,9 +101,12 @@ pub(in crate::interpreter) fn eval_builtin_preg_match_all_call(
         .ref_target
         .clone()
         .ok_or(EvalStatus::RuntimeFatal)?;
+    eval_preg_define_matches_target(&target, matches.value, context, values)?;
     let (result, matches_array) =
         eval_preg_match_all_capture_result(pattern.value, subject.value, flags, offset, values)?;
-    eval_write_preg_matches_target(&target, matches_array, context, values)?;
+    if let Some(matches_array) = matches_array {
+        eval_write_preg_matches_target(&target, matches_array, context, values)?;
+    }
     Ok(result)
 }
 
@@ -117,7 +126,9 @@ pub(in crate::interpreter) fn eval_preg_match_all_result_at(
     offset: Option<RuntimeCellHandle>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let regex = eval_preg_regex(pattern, values)?;
+    let Some(regex) = eval_preg_regex(pattern, "preg_match_all", values)? else {
+        return values.bool_value(false);
+    };
     let subject = values.string_bytes(subject)?;
     let Some(offset) = eval_preg_start_offset(offset, subject.len(), values)? else {
         return values.bool_value(false);
@@ -133,13 +144,15 @@ pub(in crate::interpreter) fn eval_preg_match_all_capture_result(
     flags: Option<RuntimeCellHandle>,
     offset: Option<RuntimeCellHandle>,
     values: &mut impl RuntimeValueOps,
-) -> Result<(RuntimeCellHandle, RuntimeCellHandle), EvalStatus> {
-    let regex = eval_preg_regex(pattern, values)?;
+) -> Result<(RuntimeCellHandle, Option<RuntimeCellHandle>), EvalStatus> {
+    let Some(regex) = eval_preg_regex(pattern, "preg_match_all", values)? else {
+        return Ok((values.bool_value(false)?, None));
+    };
     let capture_count = regex.captures_len();
     let subject = values.string_bytes(subject)?;
     let flags = eval_preg_match_all_flags(flags, values)?;
     let Some(offset) = eval_preg_start_offset(offset, subject.len(), values)? else {
-        return Ok((values.bool_value(false)?, values.array_new(0)?));
+        return Ok((values.bool_value(false)?, Some(values.array_new(0)?)));
     };
     let captures: Vec<Captures<'_>> = regex.captures_iter_at(&subject, offset).collect();
     let count = values.int(i64::try_from(captures.len()).map_err(|_| EvalStatus::RuntimeFatal)?)?;
@@ -148,7 +161,7 @@ pub(in crate::interpreter) fn eval_preg_match_all_capture_result(
     } else {
         eval_preg_match_all_pattern_order_array(&subject, &captures, capture_count, flags, values)?
     };
-    Ok((count, matches))
+    Ok((count, Some(matches)))
 }
 
 /// Returns supported `preg_match_all()` flags.
@@ -248,7 +261,9 @@ pub(in crate::interpreter) fn eval_preg_match_all_values_result(
             )?;
             let (count, matches) =
                 eval_preg_match_all_capture_result(*pattern, *subject, None, None, values)?;
-            values.release(matches)?;
+            if let Some(matches) = matches {
+                values.release(matches)?;
+            }
             Ok(count)
         }
         [pattern, subject, _matches, flags] => {
@@ -257,7 +272,9 @@ pub(in crate::interpreter) fn eval_preg_match_all_values_result(
             )?;
             let (count, matches) =
                 eval_preg_match_all_capture_result(*pattern, *subject, Some(*flags), None, values)?;
-            values.release(matches)?;
+            if let Some(matches) = matches {
+                values.release(matches)?;
+            }
             Ok(count)
         }
         [pattern, subject, _matches, flags, offset] => {
@@ -271,7 +288,9 @@ pub(in crate::interpreter) fn eval_preg_match_all_values_result(
                 Some(*offset),
                 values,
             )?;
-            values.release(matches)?;
+            if let Some(matches) = matches {
+                values.release(matches)?;
+            }
             Ok(count)
         }
         _ => Err(EvalStatus::RuntimeFatal),

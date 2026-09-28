@@ -2,7 +2,7 @@
 title: "md5()"
 description: "Calculates the MD5 hash of a string."
 sidebar:
-  order: 823
+  order: 827
 ---
 
 ## md5()

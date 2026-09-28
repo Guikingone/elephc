@@ -37,6 +37,22 @@ pub(crate) fn check_preg_replace_callback_first_class_call(
         .ok_or_else(|| CompileError::new(span, "preg_replace_callback() is not available"))
 }
 
+/// Returns whether a `preg_*` replacement operand of this static type may be an ARRAY at run time.
+///
+/// The native runtime replaces one pattern in one string, so a call with such an operand goes to
+/// `crate::preg_array_prelude` instead, and the checker types it `mixed`: that is the signal
+/// `ir_lower::expr::compat_preludes` redirects on, so the two cannot disagree about a call.
+pub(crate) fn preg_operand_may_be_array(ty: &PhpType) -> bool {
+    matches!(
+        ty,
+        PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Mixed
+            | PhpType::Union(_)
+            | PhpType::Iterable
+    )
+}
+
 /// Specializes a user callback variadic parameter when runtime associative arrays can
 /// provide named arguments through `call_user_func_array()`.
 pub(super) fn specialize_dynamic_assoc_variadic_user_callback(
@@ -992,6 +1008,15 @@ fn check_callback_builtin_call_in_engine_frame(
     }
 
     if let Some(sig) = checker.resolve_expr_callable_sig(callback, env)? {
+        if matches!(callback.kind, ExprKind::Closure { .. }) {
+            return checker.check_engine_invoked_userland_callback_call(
+                &sig,
+                callback_args,
+                span,
+                env,
+                label,
+            );
+        }
         return checker.check_engine_invoked_callback_call(&sig, callback_args, span, env, label);
     }
 

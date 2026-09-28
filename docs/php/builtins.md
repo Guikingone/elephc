@@ -683,7 +683,11 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`phpversion()`](./builtins/misc/phpversion.md) | `(?string $extension = null): string|false` | `string|false` | ✓ | ✓ |
 | [`posix_setpgid()`](./builtins/misc/posix_setpgid.md) | `(int $process_id, int $process_group_id): bool` | `bool` | ✓ | ✓ |
 | [`posix_setsid()`](./builtins/misc/posix_setsid.md) | `(): int` | `int` | ✓ | ✓ |
-| [`preg_grep()`](./builtins/misc/preg_grep.md) | `(string $pattern, mixed $array, int $flags = 0): array` | `array` | ✓ | — |
+| [`preg_filter()`](./builtins/misc/preg_filter.md) | `(mixed $pattern, mixed $replacement, mixed $subject, int $limit = -1, mixed $count = null): mixed` | `mixed` | ✓ | ✓ |
+| [`preg_grep()`](./builtins/misc/preg_grep.md) | `(string $pattern, mixed $array, int $flags = 0): mixed` | `mixed` | ✓ | ✓ |
+| [`preg_last_error()`](./builtins/misc/preg_last_error.md) | `(): int` | `int` | ✓ | ✓ |
+| [`preg_last_error_msg()`](./builtins/misc/preg_last_error_msg.md) | `(): string` | `string` | ✓ | ✓ |
+| [`preg_replace_callback_array()`](./builtins/misc/preg_replace_callback_array.md) | `(mixed $pattern, mixed $subject, int $limit = -1, mixed $count = null, int $flags = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`print_r()`](./builtins/misc/print_r.md) | `(mixed $value, bool $return = false): mixed` | `mixed` | ✓ | ✓ |
 | [`register_tick_function()`](./builtins/misc/register_tick_function.md) | `(mixed $callback, ...$args): bool` | `bool` | — | ✓ |
 | [`serialize()`](./builtins/misc/serialize.md) | `(mixed $value): string` | `string` | ✓ | ✓ |
@@ -763,7 +767,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`preg_match()`](./builtins/regex/preg_match.md) | `(string $pattern, string $subject, array $matches = null, int $flags = 0, int $offset = 0): int` | `int` | ✓ | ✓ |
 | [`preg_match_all()`](./builtins/regex/preg_match_all.md) | `(string $pattern, string $subject, mixed $matches = null, int $flags = 0, int $offset = 0): int` | `int` | ✓ | ✓ |
 | [`preg_replace()`](./builtins/regex/preg_replace.md) | `(string $pattern, string $replacement, string $subject, int $limit = -1, mixed $count = null): string` | `string` | ✓ | ✓ |
-| [`preg_replace_callback()`](./builtins/regex/preg_replace_callback.md) | `(string $pattern, callable $callback, string $subject, int $limit = -1, mixed $count = null): string` | `string` | ✓ | ✓ |
+| [`preg_replace_callback()`](./builtins/regex/preg_replace_callback.md) | `(string $pattern, callable $callback, string $subject, int $limit = -1, mixed $count = null, int $flags = 0): string` | `string` | ✓ | ✓ |
 | [`preg_split()`](./builtins/regex/preg_split.md) | `(string $pattern, string $subject, int $limit = -1, int $flags = 0): array` | `array` | ✓ | ✓ |
 | [`iterator_apply()`](./builtins/spl/iterator_apply.md) | `(traversable $iterator, callable $callback, array $args = null): int` | `int` | ✓ | ✓ |
 | [`iterator_count()`](./builtins/spl/iterator_count.md) | `(traversable $iterator): int` | `int` | ✓ | ✓ |

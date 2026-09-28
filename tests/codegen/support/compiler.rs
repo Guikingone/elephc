@@ -762,6 +762,31 @@ pub(crate) fn compile_and_run_with_heap_debug(source: &str) -> ProgramOutput {
     output
 }
 
+/// Compiles and runs a fixture under heap debug with the explicit regex capability, so a
+/// `preg_*` fixture can report its leak summary.
+pub(crate) fn compile_and_run_with_heap_debug_and_regex(source: &str) -> ProgramOutput {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+    let _dir_guard = TestDirGuard::new(dir.clone());
+
+    let (user_asm, runtime_asm, required_libraries) =
+        compile_source_to_asm_with_options_and_regex(
+            source, &dir, 8_388_608, false, false, true, true,
+        );
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    assemble_and_run_capture(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    )
+}
+
 // Parses GC statistics from stderr output produced when gc_stats is enabled.
 // Expects a line matching `GC: allocs=N frees=N` and returns (allocs, frees).
 // Panics if the line is missing or the numbers cannot be parsed.

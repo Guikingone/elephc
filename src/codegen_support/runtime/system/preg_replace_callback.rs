@@ -205,7 +205,7 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.label("__rt_preg_replace_callback_direct");
     emitter.instruction(&format!("ldr x10, [sp, #{}]", callback_ptr_off));      // reload callback entry point
     emitter.instruction("blr x10");                                             // call callback and receive replacement string in x1/x2
-    emitter.instruction("bl __rt_str_persist");                                 // copy callback result away from volatile concat-buffer scratch space
+    emitter.instruction("bl __rt_str_persist_owned");                           // copy the callback's own result out of concat scratch, releasing it if duplicated
     emitter.instruction(&format!("str x1, [sp, #{}]", callback_result_ptr_off)); // save persisted callback result pointer across prefix copying
     emitter.instruction(&format!("str x2, [sp, #{}]", callback_result_len_off)); // save persisted callback result length across prefix copying
 
@@ -255,6 +255,17 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.label("__rt_preg_replace_callback_advance");
     emitter.instruction(&format!("str x11, [sp, #{}]", output_write_off));      // save output write pointer after callback copy
     publish_concat_offset(emitter, output_write_off);
+    // -- release what this match allocated: the persisted result is in the output, the backup is --
+    // -- restored, and the callback retained whatever it kept of `$matches` --
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", callback_result_ptr_off)); // persisted callback result, now copied into the output
+    emitter.instruction("bl __rt_heap_free");
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", output_backup_ptr_off));  // persisted output backup, now restored
+    emitter.instruction("bl __rt_heap_free");
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", matches_array_off));      // this match's `$matches` array: a callback that kept it retained it
+    emitter.instruction("bl __rt_decref_array");
+    // The loop head can reach `__rt_preg_replace_callback_done` without reloading the output write
+    // pointer: it expects x11 to still hold it from here, so it must survive the frees.
+    emitter.instruction(&format!("ldr x11, [sp, #{}]", output_write_off));      // x11 = output write pointer again
     emitter.instruction(&format!("ldr x9, [sp, #{}]", count_off));              // reload completed replacement count
     emitter.instruction("add x9, x9, #1");                                      // count this completed callback replacement
     emitter.instruction(&format!("str x9, [sp, #{}]", count_off));              // publish updated replacement count
@@ -309,15 +320,35 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
 
     // -- failure: return original subject --
     emitter.label("__rt_preg_replace_callback_fail");
-    emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_ptr_off));        // return original subject pointer on regex compilation failure
-    emitter.instruction(&format!("ldr x2, [sp, #{}]", subject_len_off));        // return original subject length on regex compilation failure
-    emitter.instruction("b __rt_preg_replace_callback_ret");                    // return through the common epilogue
+    emitter.instruction("b __rt_preg_replace_callback_copy_subject");           // a pattern that does not compile leaves the subject unchanged
 
     emitter.label("__rt_preg_replace_callback_malloc_fail");
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload opaque handle after capture-buffer allocation failed
     emitter.bl_c("elephc_pcre2_v1_free");                                       // free compiled regex resources before returning the subject
-    emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_ptr_off));        // return original subject pointer after allocation failure
-    emitter.instruction(&format!("ldr x2, [sp, #{}]", subject_len_off));        // return original subject length after allocation failure
+
+    // -- an unchanged result is still a COPY in concat scratch, like every other result: --
+    // -- returning the subject itself made the result alias an argument, so the caller could --
+    // -- never release the subject it persisted for this call --
+    emitter.label("__rt_preg_replace_callback_copy_subject");
+    abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("ldr x10, [x9]");                                       // current concat-buffer offset
+    abi::emit_symbol_address(emitter, "x11", "_concat_buf");
+    emitter.instruction("add x11, x11, x10");                                   // x11 = where the copy starts
+    emitter.instruction(&format!("ldr x13, [sp, #{}]", subject_ptr_off));       // subject bytes
+    emitter.instruction(&format!("ldr x14, [sp, #{}]", subject_len_off));       // subject length
+    emitter.instruction("mov x12, #0");                                         // copy index
+    emitter.label("__rt_preg_replace_callback_copy_subject_loop");
+    emitter.instruction("cmp x12, x14");                                        // every subject byte copied?
+    emitter.instruction("b.hs __rt_preg_replace_callback_copy_subject_done");
+    emitter.instruction("ldrb w15, [x13, x12]");                                // load one subject byte
+    emitter.instruction("strb w15, [x11, x12]");                                // append it to the scratch result
+    emitter.instruction("add x12, x12, #1");
+    emitter.instruction("b __rt_preg_replace_callback_copy_subject_loop");
+    emitter.label("__rt_preg_replace_callback_copy_subject_done");
+    emitter.instruction("add x10, x10, x14");                                   // the copy now belongs to the concat buffer
+    emitter.instruction("str x10, [x9]");                                       // publish the advanced concat offset
+    emitter.instruction("mov x1, x11");                                         // result pointer
+    emitter.instruction("mov x2, x14");                                         // result length
 
     emitter.label("__rt_preg_replace_callback_ret");
     emitter.instruction(&format!("ldr x3, [sp, #{}]", count_off));              // return completed replacement count beside string result
@@ -539,7 +570,7 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_preg_replace_callback_direct_linux_x86_64");
     emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", callback_ptr_off)); // reload callback entry point
     emitter.instruction("call r10");                                            // call callback and receive replacement string in rax/rdx
-    emitter.instruction("call __rt_str_persist");                               // copy callback result away from volatile concat-buffer scratch space
+    emitter.instruction("call __rt_str_persist_owned");                         // copy the callback's own result out of concat scratch, releasing it if duplicated
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", callback_result_ptr_off)); // save persisted callback result pointer across prefix copying
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", callback_result_len_off)); // save persisted callback result length across prefix copying
 
@@ -589,6 +620,17 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_preg_replace_callback_advance_linux_x86_64");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r11", output_write_off)); // save output write pointer after callback copy
     publish_concat_offset_x86_64(emitter, output_write_off);
+    // -- release what this match allocated: the persisted result is in the output, the backup is --
+    // -- restored, and the callback retained whatever it kept of `$matches` --
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", callback_result_ptr_off)); // persisted callback result, now copied into the output
+    emitter.instruction("call __rt_heap_free");
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", output_backup_ptr_off)); // persisted output backup, now restored
+    emitter.instruction("call __rt_heap_free");
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", matches_array_off)); // this match's `$matches` array: a callback that kept it retained it
+    emitter.instruction("call __rt_decref_array");
+    // The loop head can reach the done label without reloading the output write pointer: it
+    // expects r11 to still hold it from here, so it must survive the frees.
+    emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", output_write_off)); // r11 = output write pointer again
     emitter.instruction(&format!("add QWORD PTR [rsp + {}], 1", count_off));    // count this completed callback replacement
     emitter.instruction(&format!("cmp QWORD PTR [rsp + {}], 0", limit_off));    // negative replacement limits remain unlimited
     emitter.instruction("jle __rt_preg_replace_callback_limit_ready_linux_x86_64"); // keep unlimited limit unchanged
@@ -640,15 +682,34 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
 
     // -- failure: return original subject --
     emitter.label("__rt_preg_replace_callback_fail_linux_x86_64");
-    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); // return original subject pointer on regex compilation failure
-    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); // return original subject length on regex compilation failure
-    emitter.instruction("jmp __rt_preg_replace_callback_ret_linux_x86_64");     // return through the common epilogue
+    emitter.instruction("jmp __rt_preg_replace_callback_copy_subject_linux_x86_64"); // a pattern that does not compile leaves the subject unchanged
 
     emitter.label("__rt_preg_replace_callback_malloc_fail_linux_x86_64");
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload opaque handle after capture-buffer allocation failed
     emitter.bl_c("elephc_pcre2_v1_free");                                       // free compiled regex resources before returning the subject
-    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); // return original subject pointer after allocation failure
-    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); // return original subject length after allocation failure
+
+    // -- an unchanged result is still a COPY in concat scratch, like every other result: --
+    // -- returning the subject itself made the result alias an argument --
+    emitter.label("__rt_preg_replace_callback_copy_subject_linux_x86_64");
+    abi::emit_symbol_address(emitter, "r9", "_concat_off");
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // current concat-buffer offset
+    abi::emit_symbol_address(emitter, "r11", "_concat_buf");
+    emitter.instruction("add r11, r10");                                        // r11 = where the copy starts
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_ptr_off)); // subject bytes
+    emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", subject_len_off)); // subject length
+    emitter.instruction("xor r8d, r8d");                                        // copy index
+    emitter.label("__rt_preg_replace_callback_copy_subject_loop_linux_x86_64");
+    emitter.instruction("cmp r8, rcx");                                         // every subject byte copied?
+    emitter.instruction("jae __rt_preg_replace_callback_copy_subject_done_linux_x86_64");
+    emitter.instruction("movzx eax, BYTE PTR [rsi + r8]");                      // load one subject byte
+    emitter.instruction("mov BYTE PTR [r11 + r8], al");                         // append it to the scratch result
+    emitter.instruction("add r8, 1");
+    emitter.instruction("jmp __rt_preg_replace_callback_copy_subject_loop_linux_x86_64");
+    emitter.label("__rt_preg_replace_callback_copy_subject_done_linux_x86_64");
+    emitter.instruction("add r10, rcx");                                        // the copy now belongs to the concat buffer
+    emitter.instruction("mov QWORD PTR [r9], r10");                             // publish the advanced concat offset
+    emitter.instruction("mov rax, r11");                                        // result pointer
+    emitter.instruction("mov rdx, rcx");                                        // result length
 
     emitter.label("__rt_preg_replace_callback_ret_linux_x86_64");
     emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", count_off));  // return completed replacement count beside string result

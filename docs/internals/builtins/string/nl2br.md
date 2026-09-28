@@ -2,7 +2,7 @@
 title: "nl2br() — internals"
 description: "Compiler internals for nl2br(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 824
+  order: 828
 ---
 
 ## `nl2br()` — internals

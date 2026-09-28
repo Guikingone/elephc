@@ -699,7 +699,7 @@ fn test_error_preg_replace_count_requires_variable() {
 fn test_error_preg_replace_callback_wrong_args() {
     expect_error(
         r#"<?php preg_replace_callback("/a/", function($matches) { return $matches[0]; });"#,
-        "preg_replace_callback() takes 3 to 5 arguments",
+        "preg_replace_callback() takes 3 to 6 arguments",
     );
 }
 

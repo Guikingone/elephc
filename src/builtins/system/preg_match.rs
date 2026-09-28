@@ -55,10 +55,130 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     if cx.args.len() >= 5 {
         cx.checker.infer_type(&cx.args[4], cx.env)?;
     }
-    if literal_pattern_is_utf8(&cx.args[0]) {
+    if preg_pattern_can_fail(&cx.args[0]) {
         return Ok(PhpType::Union(vec![PhpType::Int, PhpType::False]));
     }
     Ok(PhpType::Int)
+}
+
+/// Returns whether a preg call with this pattern can report failure in its RESULT.
+///
+/// php returns false (or null for the replace family) when the pattern does not compile, and
+/// when a match fails outright -- a subject that is not valid UTF-8 under `u`. A pattern that is
+/// not a string literal (a variable, a constant, a concatenation) may not compile, so its call is
+/// typed for the failure value; so is a literal carrying `u`. Any other literal keeps its narrow
+/// result: the compiler has no PCRE of its own to reject an invalid literal with, so such a call
+/// warns and returns the empty result at run time.
+pub(crate) fn preg_pattern_can_fail(pattern: &crate::parser::ast::Expr) -> bool {
+    match &pattern.kind {
+        crate::parser::ast::ExprKind::StringLiteral(literal) => {
+            literal_pattern_is_utf8(pattern) || literal_pattern_is_malformed(literal.as_bytes())
+        }
+        _ => true,
+    }
+}
+
+/// Returns whether php rejects this literal pattern before compiling it: empty, an alphanumeric,
+/// backslash or NUL delimiter, no closing delimiter, or an unknown modifier.
+///
+/// Mirrors the checks `__rt_preg_strip` makes at run time, including php's forward scan for the
+/// closing delimiter. Such a call always fails, so it is typed for its failure value.
+pub(crate) fn literal_pattern_is_malformed(pattern: &[u8]) -> bool {
+    let start = pattern
+        .iter()
+        .position(|byte| !matches!(byte, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r'));
+    let Some(start) = start else {
+        return true;
+    };
+    let pattern = &pattern[start..];
+    let open = pattern[0];
+    if open == 0 || open == b'\\' || open.is_ascii_alphanumeric() {
+        return true;
+    }
+    let close = match open {
+        b'(' => b')',
+        b'{' => b'}',
+        b'[' => b']',
+        b'<' => b'>',
+        other => other,
+    };
+    let mut depth = 1usize;
+    let mut index = 1usize;
+    let end = loop {
+        let Some(&byte) = pattern.get(index) else {
+            return true;
+        };
+        if byte == b'\\' {
+            index += 2;
+            continue;
+        }
+        if open == close {
+            if byte == close {
+                break index;
+            }
+        } else if byte == open {
+            depth += 1;
+        } else if byte == close {
+            depth -= 1;
+            if depth == 0 {
+                break index;
+            }
+        }
+        index += 1;
+    };
+    !pattern[end + 1..]
+        .iter()
+        .all(|modifier| b"imsuUAxDJnSXr \n\r".contains(modifier))
+        || !literal_regex_body_is_balanced(&pattern[1..end])
+}
+
+/// Returns whether a regex body's unescaped groups and character classes all close.
+///
+/// PCRE2 rejects `/(/` when it COMPILES the pattern, past every delimiter check, so the call
+/// still fails and must be typed for its failure value: `@preg_grep('/(/', $a)` answered an
+/// empty array where php answers false. This is the cheap structural half of that compile, and
+/// it only has to err one way: a body it wrongly calls unbalanced (a parenthesis inside an
+/// `x`-mode comment, say) is merely typed `T|false`, which is always safe.
+fn literal_regex_body_is_balanced(body: &[u8]) -> bool {
+    let mut groups = 0usize;
+    let mut index = 0usize;
+    while index < body.len() {
+        match body[index] {
+            b'\\' => index += 2,
+            b'[' => {
+                // `]` right after `[` or `[^` is a literal member, not the class's end.
+                index += 1;
+                if body.get(index) == Some(&b'^') {
+                    index += 1;
+                }
+                if body.get(index) == Some(&b']') {
+                    index += 1;
+                }
+                loop {
+                    match body.get(index) {
+                        None => return false,
+                        Some(b'\\') => index += 2,
+                        Some(b']') => break,
+                        Some(_) => index += 1,
+                    }
+                }
+                index += 1;
+            }
+            b'(' => {
+                groups += 1;
+                index += 1;
+            }
+            b')' => {
+                let Some(open) = groups.checked_sub(1) else {
+                    return false;
+                };
+                groups = open;
+                index += 1;
+            }
+            _ => index += 1,
+        }
+    }
+    groups == 0
 }
 
 /// Returns whether a preg pattern is a string literal carrying the `u` modifier.

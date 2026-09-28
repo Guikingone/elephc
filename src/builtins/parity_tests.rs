@@ -94,6 +94,7 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         ("web_prelude(wrap)", vec![crate::web_prelude::web_wrap_stmt()]),
         ("addcslashes_prelude", crate::addcslashes_prelude::declarations()),
         ("parse_str_prelude", crate::parse_str_prelude::declarations()),
+        ("preg_array_prelude", crate::preg_array_prelude::declarations()),
         ("sodium_prelude", crate::sodium_prelude::declarations(true, true)),
     ];
     // The mysqli prelude is a second bridge surface built as Rust AST like the others; the

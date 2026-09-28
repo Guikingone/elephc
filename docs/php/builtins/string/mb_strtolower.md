@@ -2,7 +2,7 @@
 title: "mb_strtolower()"
 description: "Lowercases a string with full Unicode case mapping in the requested encoding."
 sidebar:
-  order: 821
+  order: 825
 ---
 
 ## mb_strtolower()

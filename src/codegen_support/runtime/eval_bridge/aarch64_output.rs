@@ -268,6 +268,12 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     emitter.instruction("str x0, [x9]");                                        // publish Magician handler execution to the Fiber guard
     emitter.instruction("ret");                                                 // return to the Rust interpreter
 
+    label_c_global(emitter, "__elephc_eval_diag_suppression");
+    emitter.instruction("cbz x0, __elephc_eval_diag_suppression_leave");        // zero leaves one interpreted @ scope
+    emitter.instruction("b __rt_diag_push_suppression");                        // non-zero enters one interpreted @ scope
+    emitter.label("__elephc_eval_diag_suppression_leave");
+    emitter.instruction("b __rt_diag_pop_suppression");                         // restore the enclosing suppression depth
+
     label_c_global(emitter, "__elephc_eval_request_invoker_boundary");
     abi::emit_symbol_address(emitter, "x9", "__rt_eval_invoker_bounded");
     emitter.instruction("mov x10, #1");                                         // the next descriptor invoker is called by the interpreter

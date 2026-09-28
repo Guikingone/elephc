@@ -43,5 +43,8 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     if cx.args.len() >= 5 {
         cx.checker.infer_type(&cx.args[4], cx.env)?;
     }
+    if crate::builtins::system::preg_match::preg_pattern_can_fail(&cx.args[0]) {
+        return Ok(PhpType::Union(vec![PhpType::Int, PhpType::False]));
+    }
     Ok(PhpType::Int)
 }

@@ -2,7 +2,7 @@
 title: "xml_parse() — internals"
 description: "Compiler internals for xml_parse(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 960
+  order: 964
 ---
 
 ## `xml_parse()` — internals

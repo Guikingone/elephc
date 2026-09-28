@@ -3,10 +3,14 @@
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::hooks`.
+//! - `crate::interpreter::builtins::regex::preg_replace_callback_array`, one pattern at a time.
 //!
 //! Key details:
 //! - This file owns registry metadata, direct dispatch, by-value dispatch, and
 //!   callback invocation for `preg_replace_callback()`.
+//! - Every entry point lands on [`eval_preg_replace_callback_full`], which applies php's array
+//!   forms through `regex::preg_array` and hands `$flags` (`PREG_OFFSET_CAPTURE`,
+//!   `PREG_UNMATCHED_AS_NULL`) to the same capture builder `preg_match()` uses.
 
 use super::super::super::*;
 use super::super::*;
@@ -19,6 +23,10 @@ eval_builtin! {
     values: PregReplaceCallback,
 }
 
+/// php's `PREG_OFFSET_CAPTURE` and `PREG_UNMATCHED_AS_NULL`.
+const EVAL_PREG_OFFSET_CAPTURE: i64 = 256;
+const EVAL_PREG_UNMATCHED_AS_NULL: i64 = 512;
+
 /// Evaluates PHP `preg_replace_callback()` over eval expressions.
 pub(in crate::interpreter) fn eval_builtin_preg_replace_callback(
     args: &[EvalExpr],
@@ -26,57 +34,40 @@ pub(in crate::interpreter) fn eval_builtin_preg_replace_callback(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    match args {
-        [pattern, callback, subject] => {
-            let pattern = eval_expr(pattern, context, scope, values)?;
-            let callback = eval_expr(callback, context, scope, values)?;
-            let subject = eval_expr(subject, context, scope, values)?;
-            eval_preg_replace_callback_result_from_scope(
-                pattern,
-                callback,
-                subject,
-                Some(scope),
-                context,
-                values,
-            )
-        }
-        [pattern, callback, subject, limit] => {
-            let pattern = eval_expr(pattern, context, scope, values)?;
-            let callback = eval_expr(callback, context, scope, values)?;
-            let subject = eval_expr(subject, context, scope, values)?;
-            let limit = eval_expr(limit, context, scope, values)?;
-            eval_preg_replace_callback_result_with_count_from_scope(
-                pattern,
-                callback,
-                subject,
-                Some(limit),
-                Some(scope),
-                context,
-                values,
-            )
-            .map(|(result, _)| result)
-        }
-        [pattern, callback, subject, limit, count] => {
-            let pattern = eval_expr(pattern, context, scope, values)?;
-            let callback = eval_expr(callback, context, scope, values)?;
-            let subject = eval_expr(subject, context, scope, values)?;
-            let limit = eval_expr(limit, context, scope, values)?;
-            let count_target = eval_preg_matches_target(count, context, scope, values)?;
-            let (result, count) = eval_preg_replace_callback_result_with_count_from_scope(
-                pattern,
-                callback,
-                subject,
-                Some(limit),
-                Some(scope),
-                context,
-                values,
-            )?;
-            let count = values.int(count)?;
-            eval_write_preg_matches_target(&count_target, count, context, values)?;
-            Ok(result)
-        }
-        _ => Err(EvalStatus::RuntimeFatal),
+    if !(3..=6).contains(&args.len()) {
+        return Err(EvalStatus::RuntimeFatal);
     }
+    let pattern = eval_expr(&args[0], context, scope, values)?;
+    let callback = eval_expr(&args[1], context, scope, values)?;
+    let subject = eval_expr(&args[2], context, scope, values)?;
+    let limit = args
+        .get(3)
+        .map(|limit| eval_expr(limit, context, scope, values))
+        .transpose()?;
+    let count_target = args
+        .get(4)
+        .map(|count| eval_preg_matches_target(count, context, scope, values))
+        .transpose()?;
+    let flags = args
+        .get(5)
+        .map(|flags| eval_expr(flags, context, scope, values))
+        .transpose()?;
+    let (result, count) = eval_preg_replace_callback_full(
+        pattern,
+        callback,
+        subject,
+        limit,
+        flags,
+        "preg_replace_callback",
+        Some(scope),
+        context,
+        values,
+    )?;
+    if let Some(target) = count_target {
+        let count = values.int(count)?;
+        eval_write_preg_matches_target(&target, count, context, values)?;
+    }
+    Ok(result)
 }
 
 /// Evaluates a metadata-rich callback replacement call with optional counter writeback.
@@ -88,7 +79,7 @@ pub(in crate::interpreter) fn eval_builtin_preg_replace_callback_call(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
     let (bound, _) = bind_evaluated_ref_builtin_args(
-        &["pattern", "callback", "subject", "limit", "count"],
+        &["pattern", "callback", "subject", "limit", "count", "flags"],
         &evaluated_args,
         false,
     )?;
@@ -96,16 +87,18 @@ pub(in crate::interpreter) fn eval_builtin_preg_replace_callback_call(
     let callback = required_evaluated_ref_arg(&bound, 1)?;
     let subject = required_evaluated_ref_arg(&bound, 2)?;
     let limit = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
-    let (result, replacement_count) =
-        eval_preg_replace_callback_result_with_count_from_scope(
-            pattern.value,
-            callback.value,
-            subject.value,
-            limit,
-            Some(scope),
-            context,
-            values,
-        )?;
+    let flags = optional_evaluated_ref_arg(&bound, 5).map(|arg| arg.value);
+    let (result, replacement_count) = eval_preg_replace_callback_full(
+        pattern.value,
+        callback.value,
+        subject.value,
+        limit,
+        flags,
+        "preg_replace_callback",
+        Some(scope),
+        context,
+        values,
+    )?;
     let Some(count) = optional_evaluated_ref_arg(&bound, 4) else {
         return Ok(result);
     };
@@ -118,38 +111,6 @@ pub(in crate::interpreter) fn eval_builtin_preg_replace_callback_call(
     Ok(result)
 }
 
-/// Replaces every regex match by invoking an eval-supported callback with `$matches`.
-pub(in crate::interpreter) fn eval_preg_replace_callback_result(
-    pattern: RuntimeCellHandle,
-    callback: RuntimeCellHandle,
-    subject: RuntimeCellHandle,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_preg_replace_callback_result_from_scope(pattern, callback, subject, None, context, values)
-}
-
-/// Replaces regex matches with optional lexical scope for callback names.
-fn eval_preg_replace_callback_result_from_scope(
-    pattern: RuntimeCellHandle,
-    callback: RuntimeCellHandle,
-    subject: RuntimeCellHandle,
-    lexical_scope: Option<&ElephcEvalScope>,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_preg_replace_callback_result_with_count_from_scope(
-        pattern,
-        callback,
-        subject,
-        None,
-        lexical_scope,
-        context,
-        values,
-    )
-    .map(|(result, _)| result)
-}
-
 /// Replaces callback matches up to the optional limit and returns the completed count.
 pub(in crate::interpreter) fn eval_preg_replace_callback_result_with_count_from_scope(
     pattern: RuntimeCellHandle,
@@ -160,17 +121,88 @@ pub(in crate::interpreter) fn eval_preg_replace_callback_result_with_count_from_
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, i64), EvalStatus> {
-    let regex = eval_preg_regex(pattern, values)?;
+    eval_preg_replace_callback_full(
+        pattern,
+        callback,
+        subject,
+        limit,
+        None,
+        "preg_replace_callback",
+        lexical_scope,
+        context,
+        values,
+    )
+}
+
+/// `preg_replace_callback()` over every pattern and subject shape php accepts; `function` names
+/// the builtin a malformed pattern warns under.
+#[allow(clippy::too_many_arguments)]
+pub(in crate::interpreter) fn eval_preg_replace_callback_full(
+    pattern: RuntimeCellHandle,
+    callback: RuntimeCellHandle,
+    subject: RuntimeCellHandle,
+    limit: Option<RuntimeCellHandle>,
+    flags: Option<RuntimeCellHandle>,
+    function: &str,
+    lexical_scope: Option<&ElephcEvalScope>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, i64), EvalStatus> {
     let callback = eval_callable_with_optional_scope(callback, context, lexical_scope, values)?;
-    let subject = values.string_bytes(subject)?;
     let limit = limit
         .map(|limit| eval_int_value(limit, values))
         .transpose()?
         .unwrap_or(-1);
+    let flags = flags
+        .map(|flags| eval_int_value(flags, values))
+        .transpose()?
+        .unwrap_or(0);
+    let patterns = eval_preg_patterns(pattern, values)?;
+    eval_preg_over_subject(subject, false, values, |subject, values| {
+        let mut result = subject;
+        let mut count = 0i64;
+        for regex in &patterns {
+            let (next, replaced) = eval_preg_replace_callback_bytes(
+                *regex,
+                &callback,
+                &result,
+                limit,
+                flags,
+                function,
+                context,
+                values,
+            )?;
+            count += replaced;
+            let Some(next) = next else {
+                return Ok((None, count));
+            };
+            result = next;
+        }
+        Ok((Some(result), count))
+    })
+}
+
+/// Replaces one pattern's matches in one subject by calling `callback` with each match.
+#[allow(clippy::too_many_arguments)]
+fn eval_preg_replace_callback_bytes(
+    pattern: RuntimeCellHandle,
+    callback: &EvaluatedCallable,
+    subject: &[u8],
+    limit: i64,
+    flags: i64,
+    function: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(Option<Vec<u8>>, i64), EvalStatus> {
+    let Some(regex) = eval_preg_regex(pattern, function, values)? else {
+        return Ok((None, 0));
+    };
+    let offset_capture = flags & EVAL_PREG_OFFSET_CAPTURE != 0;
+    let unmatched_as_null = flags & EVAL_PREG_UNMATCHED_AS_NULL != 0;
     let mut result = Vec::with_capacity(subject.len());
     let mut cursor = 0;
     let mut replacement_count = 0i64;
-    for captures in regex.captures_iter(&subject) {
+    for captures in regex.captures_iter(subject) {
         if limit >= 0 && replacement_count >= limit {
             break;
         }
@@ -178,10 +210,16 @@ pub(in crate::interpreter) fn eval_preg_replace_callback_result_with_count_from_
             continue;
         };
         result.extend_from_slice(&subject[cursor..matched.start()]);
-        let matches =
-            eval_preg_capture_array(&subject, &regex, Some(&captures), false, false, values)?;
+        let matches = eval_preg_capture_array(
+            subject,
+            &regex,
+            Some(&captures),
+            offset_capture,
+            unmatched_as_null,
+            values,
+        )?;
         let callback_result =
-            eval_evaluated_callable_with_values(&callback, vec![matches], context, values)?;
+            eval_evaluated_callable_with_values(callback, vec![matches], context, values)?;
         let callback_result = values.cast_string(callback_result)?;
         let callback_bytes = values.string_bytes(callback_result)?;
         result.extend_from_slice(&callback_bytes);
@@ -189,9 +227,8 @@ pub(in crate::interpreter) fn eval_preg_replace_callback_result_with_count_from_
         replacement_count += 1;
     }
     result.extend_from_slice(&subject[cursor..]);
-    Ok((values.string_bytes_value(&result)?, replacement_count))
+    Ok((Some(result), replacement_count))
 }
-
 
 /// Dispatches by-value `preg_replace_callback()` calls after argument binding.
 pub(in crate::interpreter) fn eval_preg_replace_callback_values_result(
@@ -199,37 +236,28 @@ pub(in crate::interpreter) fn eval_preg_replace_callback_values_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    match evaluated_args {
-        [pattern, callback, subject] => {
-            eval_preg_replace_callback_result(*pattern, *callback, *subject, context, values)
-        }
-        [pattern, callback, subject, limit] => {
-            eval_preg_replace_callback_result_with_count_from_scope(
-                *pattern,
-                *callback,
-                *subject,
-                Some(*limit),
-                None,
-                context,
-                values,
-            )
-            .map(|(result, _)| result)
-        }
-        [pattern, callback, subject, limit, _count] => {
-            values.warning(
-                "preg_replace_callback(): Argument #5 ($count) must be passed by reference, value given",
-            )?;
-            eval_preg_replace_callback_result_with_count_from_scope(
-                *pattern,
-                *callback,
-                *subject,
-                Some(*limit),
-                None,
-                context,
-                values,
-            )
-            .map(|(result, _)| result)
-        }
-        _ => Err(EvalStatus::RuntimeFatal),
+    let [pattern, callback, subject, rest @ ..] = evaluated_args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    if rest.len() > 3 {
+        return Err(EvalStatus::RuntimeFatal);
     }
+    if rest.len() >= 2 {
+        values.warning(
+            "Warning: preg_replace_callback(): Argument #5 ($count) must be passed by reference, \
+             value given\n",
+        )?;
+    }
+    eval_preg_replace_callback_full(
+        *pattern,
+        *callback,
+        *subject,
+        rest.first().copied(),
+        rest.get(2).copied(),
+        "preg_replace_callback",
+        None,
+        context,
+        values,
+    )
+    .map(|(result, _)| result)
 }

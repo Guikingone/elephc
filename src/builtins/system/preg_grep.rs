@@ -21,9 +21,19 @@ builtin! {
 }
 
 /// Returns the key-preserving hash layout materialized by the regex filter runtime.
-fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    Ok(PhpType::AssocArray {
+///
+/// A pattern that can fail makes the result `array|false`, as php's.
+fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    let hash = PhpType::AssocArray {
         key: Box::new(PhpType::Mixed),
         value: Box::new(PhpType::Mixed),
-    })
+    };
+    if cx
+        .args
+        .first()
+        .is_some_and(crate::builtins::system::preg_match::preg_pattern_can_fail)
+    {
+        return Ok(PhpType::Union(vec![hash, PhpType::False]));
+    }
+    Ok(hash)
 }

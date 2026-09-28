@@ -263,10 +263,29 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.instruction("str x10, [x9]");                                       // store updated offset
     emitter.instruction("b __rt_preg_replace_ret");                             // return
 
-    // -- failure: return original subject --
+    // -- failure: the subject, unchanged, but as a COPY in concat scratch like every other --
+    // -- result: returning the subject itself made the result alias an argument, so the --
+    // -- caller could never release a subject it owned for the call --
     emitter.label("__rt_preg_replace_fail");
-    emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_ptr_off));        // original subject ptr
-    emitter.instruction(&format!("ldr x2, [sp, #{}]", subject_len_off));        // original subject len
+    abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("ldr x10, [x9]");                                       // current concat-buffer offset
+    abi::emit_symbol_address(emitter, "x11", "_concat_buf");
+    emitter.instruction("add x11, x11, x10");                                   // x11 = where the copy starts
+    emitter.instruction(&format!("ldr x13, [sp, #{}]", subject_ptr_off));       // subject bytes
+    emitter.instruction(&format!("ldr x14, [sp, #{}]", subject_len_off));       // subject length
+    emitter.instruction("mov x12, #0");                                         // copy index
+    emitter.label("__rt_preg_replace_fail_copy");
+    emitter.instruction("cmp x12, x14");                                        // every subject byte copied?
+    emitter.instruction("b.hs __rt_preg_replace_fail_copied");
+    emitter.instruction("ldrb w15, [x13, x12]");                                // load one subject byte
+    emitter.instruction("strb w15, [x11, x12]");                                // append it to the scratch result
+    emitter.instruction("add x12, x12, #1");
+    emitter.instruction("b __rt_preg_replace_fail_copy");
+    emitter.label("__rt_preg_replace_fail_copied");
+    emitter.instruction("add x10, x10, x14");                                   // the copy now belongs to the concat buffer
+    emitter.instruction("str x10, [x9]");                                       // publish the advanced concat offset
+    emitter.instruction("mov x1, x11");                                         // result pointer
+    emitter.instruction("mov x2, x14");                                         // result length
 
     emitter.label("__rt_preg_replace_ret");
     emitter.instruction(&format!("ldr x3, [sp, #{}]", count_off));              // return completed replacement count beside string result
@@ -497,9 +516,27 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r9], r10");                             // publish the updated concat scratch-buffer offset for later string-producing helpers
     emitter.instruction("jmp __rt_preg_replace_ret_linux_x86_64");              // share the common epilogue after materializing the replacement string result
 
+    // A failed call returns the subject unchanged, as a COPY in concat scratch: returning the
+    // subject itself made the result alias an argument the caller then could not release.
     emitter.label("__rt_preg_replace_fail_linux_x86_64");
-    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); // return the original elephc subject pointer when regex compilation fails
-    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); // return the original elephc subject length when regex compilation fails
+    abi::emit_symbol_address(emitter, "r9", "_concat_off");
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // current concat-buffer offset
+    abi::emit_symbol_address(emitter, "r11", "_concat_buf");
+    emitter.instruction("add r11, r10");                                        // r11 = where the copy starts
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_ptr_off)); // subject bytes
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); // subject length, also the result length
+    emitter.instruction("xor r8d, r8d");                                        // copy index
+    emitter.label("__rt_preg_replace_fail_copy_linux_x86_64");
+    emitter.instruction("cmp r8, rdx");                                         // every subject byte copied?
+    emitter.instruction("jae __rt_preg_replace_fail_copied_linux_x86_64");
+    emitter.instruction("movzx eax, BYTE PTR [rsi + r8]");                      // load one subject byte
+    emitter.instruction("mov BYTE PTR [r11 + r8], al");                         // append it to the scratch result
+    emitter.instruction("add r8, 1");
+    emitter.instruction("jmp __rt_preg_replace_fail_copy_linux_x86_64");
+    emitter.label("__rt_preg_replace_fail_copied_linux_x86_64");
+    emitter.instruction("add r10, rdx");                                        // the copy now belongs to the concat buffer
+    emitter.instruction("mov QWORD PTR [r9], r10");                             // publish the advanced concat offset
+    emitter.instruction("mov rax, r11");                                        // result pointer
 
     emitter.label("__rt_preg_replace_ret_linux_x86_64");
     emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", count_off));  // return completed replacement count beside string result

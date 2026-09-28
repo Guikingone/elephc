@@ -120,6 +120,34 @@ pub(super) fn lower_backend_gap_builtin_shape(
             expr,
         ));
     }
+    // `preg_replace()` / `preg_replace_callback()` with an operand that may be an array, or with
+    // `$flags`, go to `crate::preg_array_prelude`: the native runtime replaces one pattern in one
+    // string. The checker typed exactly those calls `mixed`
+    // (`types::checker::builtins::preg_operand_may_be_array`), and redirecting on the type
+    // it FILED for this call keeps the two in agreement -- a call it typed `string` must return
+    // one. The prelude's own calls pass strings, so they are filed `?string` and stay native. Named arguments
+    // pass through as they are: the helpers' parameters carry php's names, which is why this
+    // runs before the named-argument bail-out below.
+    if (builtin == "preg_replace" || builtin == "preg_replace_callback")
+        && !args.iter().any(is_spread_arg)
+        && expr.span.line != 0
+        && ctx
+            .builtin_call_types
+            .get(&(ctx.loop_storage_scope.clone(), expr.span))
+            .is_some_and(|checked| *checked == PhpType::Mixed)
+    {
+        let helper = if builtin == "preg_replace" {
+            crate::preg_array_prelude::PREG_REPLACE_FULL_NAME
+        } else {
+            crate::preg_array_prelude::PREG_REPLACE_CALLBACK_FULL_NAME
+        };
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(helper),
+            args,
+            expr,
+        ));
+    }
     if crate::types::call_args::has_named_args(args)
         || (builtin != "array_unshift" && args.iter().any(is_spread_arg))
     {
@@ -340,22 +368,6 @@ pub(super) fn lower_backend_gap_builtin_shape(
             ctx,
             &crate::names::Name::unqualified(
                 crate::backend_gap_prelude::ARRAY_SEARCH_MIXED_NAME,
-            ),
-            args,
-            expr,
-        ));
-    }
-    if builtin == "preg_replace"
-        && args.len() == 3
-        && matches!(
-            materialized_expr_type_for_merge(ctx, &args[0]).codegen_repr(),
-            PhpType::Array(_) | PhpType::AssocArray { .. }
-        )
-    {
-        return Some(lower_function_call(
-            ctx,
-            &crate::names::Name::unqualified(
-                crate::backend_gap_prelude::PREG_REPLACE_ARRAY_NAME,
             ),
             args,
             expr,

@@ -2,7 +2,7 @@
 title: "trigger_error()"
 description: "Implemented by the compiler-injected error-handling prelude."
 sidebar:
-  order: 954
+  order: 958
 ---
 
 ## trigger_error()

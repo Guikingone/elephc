@@ -198,6 +198,8 @@ const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] = &[
     "hash_update",
     "levenshtein",
     "parse_str",
+    "preg_filter",
+    "preg_replace_callback_array",
     "sodium_crypto_box_keypair",
     "sodium_crypto_box_publickey",
     "sodium_crypto_box_seal",
@@ -384,7 +386,6 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "array_udiff",
     "array_uintersect",
     "header_remove",
-    "preg_grep",
     "zval_free",
     "zval_pack",
     "zval_type",
@@ -441,15 +442,17 @@ mod tests {
         // homes landed (the thirteen names taken out of `EVAL_IMPLEMENTATION_PENDING`, among
         // them) without the numbers moving. Only the sodium share is named per count below.
         // Sodium: the four `sodium_crypto_box_*` eval homes. mbstring case mapping: the
-        // `mb_strtoupper` / `mb_strtolower` homes.
-        assert_eq!(eval_registry, 635 + curl_surface);
+        // `mb_strtoupper` / `mb_strtolower` homes. Regex: the four new contracts' eval homes plus
+        // `preg_grep`, out of `EVAL_IMPLEMENTATION_PENDING`.
+        assert_eq!(eval_registry, 640 + curl_surface);
         // 82 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use. Sodium: `__elephc_sodium_box` and
         // `__elephc_sodium_status`.
         assert_eq!(eval_internal, 102);
         // Registry builtins awaiting eval homes, plus the PHP-visible prelude-provided and
-        // name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 349);
+        // name-resolver-rewritten functions eval does not reach (see `eval_support`). `preg_grep`
+        // left it when its eval home landed.
+        assert_eq!(eval_pending, 348);
         // Main's BCMath registry adds fourteen AOT contracts; this branch also
         // promotes get_object_vars from an external surface into the registry and
         // adds the ten iconv contracts, thirty-five PCNTL contracts, forty-three
@@ -457,8 +460,8 @@ mod tests {
         // builtins (`xml_parse_into_struct` plus the nine handler setters).
         // Twenty of this branch's 23 added contracts are registry-backed here.
         // Sodium: `__elephc_sodium_box` and `__elephc_sodium_status`. mbstring case mapping:
-        // `mb_strtoupper` and `mb_strtolower`.
-        assert_eq!(aot_registry, 659);
+        // `mb_strtoupper` and `mb_strtolower`. Regex: `preg_last_error` and `preg_last_error_msg`.
+        assert_eq!(aot_registry, 661);
         // Constructs, dedicated syntax and hash surfaces, the prelude-provided and
         // name-resolver-rewritten contracts (54 of them the xml prelude, seven the `--web`
         // handler stack this branch contracted), and the curl prelude when published.
@@ -468,8 +471,9 @@ mod tests {
         // out-parameter is an ordinary by-reference parameter rather than a by-reference the
         // compiled side has no counterpart for. It is the same contract on the other side of the
         // `aot_unsupported` count below, which drops by the same one.
-        // Sodium: the four `sodium_crypto_box_*` prelude declarations.
-        assert_eq!(aot_external, 422 + curl_surface);
+        // Sodium: the four `sodium_crypto_box_*` prelude declarations. Regex: `preg_filter` and
+        // `preg_replace_callback_array`, built by `crate::preg_array_prelude`.
+        assert_eq!(aot_external, 424 + curl_surface);
         // `get_called_class`, `get_class_methods` and `get_class_vars` from main, plus this
         // branch's `register_tick_function` and `unregister_tick_function`.
         assert_eq!(aot_unsupported, 5);
@@ -520,10 +524,10 @@ mod tests {
         assert_eq!(shared_runtime, 20);
         assert_eq!(hybrid_adapter, 2);
         // Moves in step with `eval_registry` above: every newly bound eval home is an adapter.
-        assert_eq!(interpreter_adapter, 613 + curl_surface);
+        assert_eq!(interpreter_adapter, 618 + curl_surface);
         // Drifted with the counts in `every_contract_has_a_backend_support_record`; sodium's
-        // share is its two internal builtins, which eval never exposes.
-        assert_eq!(unsupported, 451);
+        // share is its two internal builtins, which eval never exposes. `preg_grep` left it.
+        assert_eq!(unsupported, 450);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

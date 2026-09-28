@@ -2,7 +2,7 @@
 title: "ptr_offset() — internals"
 description: "Compiler internals for ptr_offset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 723
+  order: 727
 ---
 
 ## `ptr_offset()` — internals

@@ -2,7 +2,7 @@
 title: "mb_strtoupper()"
 description: "Uppercases a string with full Unicode case mapping in the requested encoding."
 sidebar:
-  order: 822
+  order: 826
 ---
 
 ## mb_strtoupper()

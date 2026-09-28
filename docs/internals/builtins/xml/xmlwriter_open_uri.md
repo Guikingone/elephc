@@ -2,7 +2,7 @@
 title: "xmlwriter_open_uri() — internals"
 description: "Compiler internals for xmlwriter_open_uri(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 990
+  order: 994
 ---
 
 ## `xmlwriter_open_uri()` — internals

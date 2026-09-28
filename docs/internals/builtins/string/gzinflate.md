@@ -2,7 +2,7 @@
 title: "gzinflate() — internals"
 description: "Compiler internals for gzinflate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 787
+  order: 791
 ---
 
 ## `gzinflate()` — internals

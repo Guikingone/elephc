@@ -37,11 +37,22 @@ builtin! {
 /// That function lives in the checker's callables module (re-exported as `pub(crate)` from
 /// `types::checker::builtins`) and is already used for the first-class-callable path; the
 /// home simply reuses it so both paths share the same implementation.
+///
+/// A pattern that can fail widens a string result to php's `?string`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    crate::types::checker::builtins::check_preg_replace_callback_first_class_call(
+    let result = crate::types::checker::builtins::check_preg_replace_callback_first_class_call(
         cx.checker,
         cx.args,
         cx.span,
         cx.env,
-    )
+    )?;
+    if result == PhpType::Str
+        && cx
+            .args
+            .first()
+            .is_some_and(crate::builtins::system::preg_match::preg_pattern_can_fail)
+    {
+        return Ok(PhpType::Union(vec![PhpType::Str, PhpType::Void]));
+    }
+    Ok(result)
 }

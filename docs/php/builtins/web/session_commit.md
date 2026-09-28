@@ -2,7 +2,7 @@
 title: "session_commit()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 930
+  order: 934
 ---
 
 ## session_commit()

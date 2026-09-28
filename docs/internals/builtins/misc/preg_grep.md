@@ -2,7 +2,7 @@
 title: "preg_grep() — internals"
 description: "Compiler internals for preg_grep(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 673
+  order: 674
 ---
 
 ## `preg_grep()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function preg_grep(string $pattern, mixed $array, int $flags = 0): array
+function preg_grep(string $pattern, mixed $array, int $flags = 0): mixed
 ```
 
 ## What the type checker enforces
@@ -48,7 +48,10 @@ function preg_grep(string $pattern, mixed $array, int $flags = 0): array
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/regex/preg_grep.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_grep.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

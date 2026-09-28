@@ -548,7 +548,7 @@ def validate_presentation_overrides(repo: Path, entries: list[dict]) -> None:
 # ``src/builtins/parity_tests.rs``'s ``injected_prelude_programs``, and its
 # ``prelude_contracts_match_their_injected_signatures`` proves each contract is declared
 # by exactly one of them.
-PRELUDE_SOURCES: dict[str, tuple[tuple[tuple[str, str], ...], str]] = {
+PRELUDE_SOURCES: dict[str, tuple[tuple[tuple[str, ...], ...], str]] = {
     "curl": (
         (("curl_prelude.rs", "curl"),),
         "crates/elephc-builtin-contract/src/catalog_curl.rs",
@@ -609,9 +609,22 @@ PRELUDE_SOURCES: dict[str, tuple[tuple[tuple[str, str], ...], str]] = {
         (("var_export_prelude.rs", "var_export"),),
         "crates/elephc-builtin-contract/src/catalog_data.rs",
     ),
+    # `preg_filter` is declared in `catalog_surfaces.rs`, not in the area's `catalog_data.rs`, so
+    # its home names its own signature file as an optional third element.
     "system": (
-        (("version_prelude.rs", "version"),),
+        (
+            ("version_prelude.rs", "version"),
+            (
+                "preg_array_prelude.rs",
+                "preg-array",
+                "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+            ),
+        ),
         "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
+    "callables": (
+        (("preg_array_prelude.rs", "preg-array"),),
+        "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
     ),
     "opcache": (
         (("opcache_prelude/build.rs", "OPcache"),),
@@ -683,14 +696,16 @@ def resolve_non_registry_lowering(
             ) from None
         lowering.sig_file = sig_file
         prelude, label, match = None, None, None
-        for candidate, candidate_label in homes:
+        for candidate, candidate_label, *candidate_sig_file in homes:
             prelude = repo / "src" / candidate
             match = find_prelude_declaration(read(prelude), canonical)
             if match is not None:
                 label = candidate_label
+                if candidate_sig_file:
+                    lowering.sig_file = candidate_sig_file[0]
                 break
         if match is None:
-            listed = "/".join(candidate for candidate, _ in homes)
+            listed = "/".join(home[0] for home in homes)
             raise ValueError(
                 f"prelude-provided builtin {canonical!r} is not declared by src/{listed}. "
                 f"Its contract area {area!r} maps there, so either the contract's area or "

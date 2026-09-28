@@ -2,7 +2,7 @@
 title: "passthru() — internals"
 description: "Compiler internals for passthru(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 741
+  order: 745
 ---
 
 ## `passthru()` — internals

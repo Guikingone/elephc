@@ -682,6 +682,8 @@ pub enum RuntimeFnId {
     PhpUname,
     Phpversion,
     PregGrep,
+    PregLastError,
+    PregLastErrorMsg,
     PregMatch,
     PregMatchAll,
     PregQuote,
@@ -874,6 +876,13 @@ impl RuntimeFnId {
                 let result_element = result_element.codegen_repr();
                 result_element == source_element || result_element == PhpType::Mixed
             }
+            // The split helper always fills boxed-Mixed element slots, so only an `array<mixed>`
+            // or a boxed `array|false` describes what it returns.
+            RuntimeFnId::PregSplit => match checked.codegen_repr() {
+                PhpType::Array(element) => element.codegen_repr() == PhpType::Mixed,
+                PhpType::Mixed => true,
+                _ => false,
+            },
             _ => true,
         }
     }
@@ -1205,6 +1214,8 @@ impl RuntimeFnId {
             | RuntimeFnId::Defined
             | RuntimeFnId::JsonLastError
             | RuntimeFnId::JsonLastErrorMsg
+            | RuntimeFnId::PregLastError
+            | RuntimeFnId::PregLastErrorMsg
             | RuntimeFnId::DateDefaultTimezoneGet
             | RuntimeFnId::ObGetLevel
             | RuntimeFnId::ElephcDiagSuppressed => crate::ir::Effects::READS_GLOBAL,
@@ -1753,6 +1764,8 @@ impl RuntimeFnId {
             self,
             RuntimeFnId::PregMatch
                 | RuntimeFnId::PregGrep
+                | RuntimeFnId::PregLastError
+                | RuntimeFnId::PregLastErrorMsg
                 | RuntimeFnId::PregMatchAll
                 | RuntimeFnId::PregReplace
                 | RuntimeFnId::PregReplaceCallback
@@ -1859,9 +1872,17 @@ impl RuntimeFnId {
         // in the default `MayAliasArguments` bucket would keep an owned subject temporary
         // alive for the integer's whole lifetime, which is the leak shape already documented
         // for `Strpos` and `Strtr` below.
+        // `preg_replace()` and `preg_replace_callback()` build their result in concat scratch on
+        // every path, an unchanged subject included, so their arguments -- the callback's subject
+        // is persisted for the call because callbacks reuse that scratch -- can be released once
+        // the call returns.
+        if matches!(self, RuntimeFnId::PregReplace | RuntimeFnId::PregReplaceCallback) {
+            return BuiltinResultOwnership::Independent;
+        }
         if matches!(
             self,
             RuntimeFnId::IntvalBase
+                | RuntimeFnId::PregLastError
                 | RuntimeFnId::BcComp
                 | RuntimeFnId::BcScale
                 // `iconv_set_encoding()` answers with a bare boolean.
@@ -2743,6 +2764,8 @@ impl RuntimeFnId {
             RuntimeFnId::PhpUname => "php_uname",
             RuntimeFnId::Phpversion => "phpversion",
             RuntimeFnId::PregGrep => "preg_grep",
+            RuntimeFnId::PregLastError => "preg_last_error",
+            RuntimeFnId::PregLastErrorMsg => "preg_last_error_msg",
             RuntimeFnId::PregMatch => "preg_match",
             RuntimeFnId::PregMatchAll => "preg_match_all",
             RuntimeFnId::PregReplace => "preg_replace",

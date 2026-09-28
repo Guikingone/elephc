@@ -2,7 +2,7 @@
 title: "ptr_write32() — internals"
 description: "Compiler internals for ptr_write32(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 731
+  order: 735
 ---
 
 ## `ptr_write32()` — internals

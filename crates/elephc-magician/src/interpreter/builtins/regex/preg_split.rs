@@ -56,7 +56,9 @@ pub(in crate::interpreter) fn eval_preg_split_result(
     flags: Option<RuntimeCellHandle>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let regex = eval_preg_regex(pattern, values)?;
+    let Some(regex) = eval_preg_regex(pattern, "preg_split", values)? else {
+        return values.bool_value(false);
+    };
     let subject = values.string_bytes(subject)?;
     let limit = eval_preg_split_limit(limit, values)?;
     let flags = eval_preg_split_flags(flags, values)?;

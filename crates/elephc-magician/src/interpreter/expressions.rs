@@ -630,7 +630,9 @@ fn eval_expr_dispatch(
             expr,
         } => {
             context.push_error_suppression();
+            crate::runtime_hooks::diag_suppression(true);
             let result = eval_expr(expr, context, scope, values);
+            crate::runtime_hooks::diag_suppression(false);
             context.pop_error_suppression();
             result
         }

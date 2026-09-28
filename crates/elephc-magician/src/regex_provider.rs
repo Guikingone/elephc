@@ -101,6 +101,93 @@ pub(crate) fn regex_last_error() -> i32 {
     }
 }
 
+/// Records a delimiter or modifier error for the next compile to report.
+pub(crate) type RegexRecordPatternErrorFn = unsafe extern "C" fn(i32, u32);
+/// Builds php's whole warning line for the last failed compile, under a PHP function name.
+pub(crate) type RegexCompileWarningFn =
+    unsafe extern "C" fn(*const c_char, u64, *mut *const c_char, *mut u64) -> i32;
+
+/// The shim's pattern-failure reporting, registered next to the provider table.
+#[derive(Clone, Copy)]
+struct RegexDiagnostics {
+    record_pattern_error: RegexRecordPatternErrorFn,
+    compile_warning: RegexCompileWarningFn,
+}
+
+static REGEX_DIAGNOSTICS: OnceLock<RegexDiagnostics> = OnceLock::new();
+
+/// Registers the managed PCRE2 shim's pattern-failure reporting.
+///
+/// php rejects a pattern with a warning and a false or null result; eval reports it the way
+/// compiled code does, from the same shim state, so the two agree word for word.
+#[no_mangle]
+pub extern "C" fn __elephc_eval_register_regex_diagnostics(
+    record_pattern_error: RegexRecordPatternErrorFn,
+    compile_warning: RegexCompileWarningFn,
+) -> i32 {
+    let _ = REGEX_DIAGNOSTICS.set(RegexDiagnostics {
+        record_pattern_error,
+        compile_warning,
+    });
+    1
+}
+
+/// Records why php rejects a pattern before compiling it (see `PregPatternRejection`), for the
+/// compile that follows to fail with.
+pub(crate) fn record_pattern_error(kind: i32, byte: u8) {
+    #[cfg(test)]
+    {
+        test_provider::record_pattern_error(kind, byte);
+    }
+    #[cfg(not(test))]
+    {
+        if let Some(diagnostics) = REGEX_DIAGNOSTICS.get() {
+            unsafe { (diagnostics.record_pattern_error)(kind, u32::from(byte)) };
+        }
+    }
+}
+
+/// Returns php's warning line for the pattern the last compile rejected, or `None` when the
+/// last compile did not fail on its pattern.
+pub(crate) fn regex_compile_warning(function: &str) -> Option<String> {
+    #[cfg(test)]
+    {
+        test_provider::compile_warning(function)
+    }
+    #[cfg(not(test))]
+    {
+        let diagnostics = REGEX_DIAGNOSTICS.get()?;
+        let mut message: *const c_char = std::ptr::null();
+        let mut length = 0u64;
+        let failed = unsafe {
+            (diagnostics.compile_warning)(
+                function.as_ptr().cast(),
+                function.len() as u64,
+                &mut message,
+                &mut length,
+            )
+        };
+        if failed == 0 || message.is_null() {
+            return None;
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(message.cast::<u8>(), length as usize) };
+        Some(String::from_utf8_lossy(bytes).into_owned())
+    }
+}
+
+/// php's `preg_last_error_msg()` text for a `preg_last_error()` code.
+pub(crate) fn regex_last_error_msg(code: i32) -> &'static str {
+    match code {
+        0 => "No error",
+        2 => "Backtrack limit exhausted",
+        3 => "Recursion limit exhausted",
+        4 => "Malformed UTF-8 characters, possibly incorrectly encoded",
+        5 => "The offset did not correspond to the beginning of a valid UTF-8 code point",
+        6 => "JIT stack limit exhausted",
+        _ => "Internal error",
+    }
+}
+
 /// Returns whether dynamic eval may expose its regex builtin family.
 pub(crate) fn regex_provider_available() -> bool {
     regex_provider().is_some()
@@ -142,6 +229,39 @@ mod test_provider {
     /// Returns the code recorded by the last test compile or match.
     pub(super) fn last_error() -> i32 {
         LAST_ERROR.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Mirrors the shim's pending pattern error and last-failure record.
+    static PATTERN_ERROR: std::sync::Mutex<(i32, u8)> = std::sync::Mutex::new((0, 0));
+    static FAILURE: std::sync::Mutex<Option<(i32, u8, c_int, size_t)>> = std::sync::Mutex::new(None);
+
+    /// Mirrors `elephc_pcre2_v1_record_pattern_error`.
+    pub(super) fn record_pattern_error(kind: i32, byte: u8) {
+        *PATTERN_ERROR.lock().unwrap() = (kind, byte);
+    }
+
+    /// Mirrors `elephc_pcre2_v1_compile_warning`.
+    pub(super) fn compile_warning(function: &str) -> Option<String> {
+        let (kind, byte, errorcode, erroffset) = FAILURE.lock().unwrap().take()?;
+        let byte = char::from(byte);
+        let reason = match kind {
+            1 => "Empty regular expression".to_string(),
+            2 => "Delimiter must not be alphanumeric, backslash, or NUL byte".to_string(),
+            3 => format!("No ending delimiter '{byte}' found"),
+            4 => format!("Unknown modifier '{byte}'"),
+            _ => {
+                let mut buffer = [0u8; 256];
+                let written = unsafe {
+                    pcre2_get_error_message(errorcode, buffer.as_mut_ptr(), buffer.len())
+                };
+                let length = usize::try_from(written).unwrap_or(0);
+                format!(
+                    "Compilation failed: {} at offset {erroffset}",
+                    String::from_utf8_lossy(&buffer[..length])
+                )
+            }
+        };
+        Some(format!("Warning: {function}(): {reason}\n"))
     }
 
     /// Maps a `pcre2_match` status to php's `preg_last_error()` code, as the shim does.
@@ -249,6 +369,9 @@ mod test_provider {
         ) -> c_int;
         /// Releases host PCRE2 resources.
         fn pcre2_regfree(regex: *mut Pcre2Regex);
+        /// Renders a PCRE2 compile error code as PCRE2's own message.
+        #[link_name = "pcre2_get_error_message_8"]
+        fn pcre2_get_error_message(errorcode: c_int, buffer: *mut u8, size: size_t) -> c_int;
         // PCRE2's core (non-POSIX) API is compiled for multiple code-unit
         // widths in the same library, so `pcre2.h`'s C preprocessor renames
         // every one of these to an `_8` suffix when `PCRE2_CODE_UNIT_WIDTH 8`
@@ -333,6 +456,13 @@ mod test_provider {
             *slot_count_out = 0;
         }
         LAST_ERROR.store(0, std::sync::atomic::Ordering::Relaxed);
+        *FAILURE.lock().unwrap() = None;
+        let pending = std::mem::take(&mut *PATTERN_ERROR.lock().unwrap());
+        if pending.0 != 0 {
+            LAST_ERROR.store(1, std::sync::atomic::Ordering::Relaxed);
+            *FAILURE.lock().unwrap() = Some((pending.0, pending.1, 0, 0));
+            return REG_BADPAT;
+        }
         let anchored = flags & ELEPHC_PCRE2_CFLAG_ANCHORED != 0;
 
         // Translate the POSIX-style cflags into native PCRE2 compile options
@@ -385,6 +515,8 @@ mod test_provider {
             )
         };
         if code.is_null() {
+            LAST_ERROR.store(1, std::sync::atomic::Ordering::Relaxed);
+            *FAILURE.lock().unwrap() = Some((0, 0, errorcode, erroffset));
             return REG_BADPAT;
         }
         let match_data = unsafe { pcre2_match_data_create_from_pattern(code, std::ptr::null()) };

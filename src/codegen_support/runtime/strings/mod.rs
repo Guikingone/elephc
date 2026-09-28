@@ -26,6 +26,7 @@ mod grapheme_strrev;
 mod strcopy;
 mod str_inc_dec;
 mod str_persist;
+mod str_persist_owned;
 mod strtolower;
 mod strtoupper;
 mod trim;
@@ -147,6 +148,7 @@ pub use concat_scratch::emit_concat_scratch;
 /// helpers that bound themselves by it can never spell two different numbers.
 pub(crate) use concat_scratch::{CONCAT_BUF_CAPACITY, CONCAT_BUF_GUARD};
 pub use str_persist::emit_str_persist;
+pub use str_persist_owned::emit_str_persist_owned;
 /// Emit string persistence helper.
 pub use str_inc_dec::{emit_mixed_inc_dec, emit_str_inc_dec};
 /// Emit PHP's `++`/`--` on a string value and its boxed dispatch entry point.

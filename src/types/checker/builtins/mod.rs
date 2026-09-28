@@ -37,7 +37,7 @@ pub(crate) use callables::{
     array_walk_callback_arg_types, callback_supports_complex_descriptor_env,
     check_array_callback_builtin_call, check_call_user_func, check_call_user_func_array,
     check_function_exists,
-    check_preg_replace_callback_first_class_call,
+    check_preg_replace_callback_first_class_call, preg_operand_may_be_array,
     contextual_callback_arg_positions,
     runtime_callable_array_type,
 };

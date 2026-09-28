@@ -170,6 +170,26 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         "function.preg-grep"
     ),
     contract!(
+        "preg_last_error",
+        System,
+        Pcre,
+        [],
+        None,
+        Int,
+        "Returns the error code of the last PCRE regex execution.",
+        "function.preg-last-error"
+    ),
+    contract!(
+        "preg_last_error_msg",
+        System,
+        Pcre,
+        [],
+        None,
+        Str,
+        "Returns the error message of the last PCRE regex execution.",
+        "function.preg-last-error-msg"
+    ),
+    contract!(
         "setlocale",
         System,
         Standard,

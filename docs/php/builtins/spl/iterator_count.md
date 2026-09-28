@@ -2,7 +2,7 @@
 title: "iterator_count()"
 description: "Count the elements in an iterator."
 sidebar:
-  order: 756
+  order: 760
 ---
 
 ## iterator_count()

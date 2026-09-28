@@ -56,6 +56,7 @@ mod match_unhandled;
 mod mktime;
 mod mb_ereg_match;
 mod pcre_to_posix;
+mod preg_compile_warning;
 mod pcntl;
 mod pcntl_data;
 mod preg_match;
@@ -132,6 +133,7 @@ pub(crate) use mktime::emit_mktime;
 pub(crate) use php_uname::emit_php_uname;
 pub(crate) use mb_ereg_match::emit_mb_ereg_match;
 pub(crate) use pcre_to_posix::emit_pcre_to_posix;
+pub(crate) use preg_compile_warning::emit_preg_compile_warning;
 pub(crate) use pcntl::{
     emit_pcntl_rusage_array, emit_pcntl_siginfo_array, emit_pcntl_signal_dispatch,
 };

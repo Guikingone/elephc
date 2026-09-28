@@ -436,7 +436,9 @@ fn emit_cast_descriptor_mixed_result_for_callback(emitter: &mut Emitter, return_
 fn emit_release_preserved_mixed_result_after_cast(emitter: &mut Emitter, cast_ty: &PhpType) {
     if matches!(cast_ty.codegen_repr(), PhpType::Str) {
         let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
-        abi::emit_call_label(emitter, "__rt_str_persist"); // detach the string result from the boxed Mixed owner before release
+        // `__rt_mixed_cast_string` hands back a fresh copy it allocated for a boxed string, and scratch
+        // or a literal otherwise: persisting it as an OWNED source keeps one copy in every case.
+        abi::emit_call_label(emitter, "__rt_str_persist_owned"); // detach the string result from the boxed Mixed owner before release
         abi::emit_push_reg_pair(emitter, ptr_reg, len_reg); // preserve the detached string while releasing the boxed Mixed result
         abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 16);
         abi::emit_decref_if_refcounted(emitter, &PhpType::Mixed);

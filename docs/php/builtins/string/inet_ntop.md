@@ -2,7 +2,7 @@
 title: "inet_ntop()"
 description: "Converts a packed internet address to a human-readable representation."
 sidebar:
-  order: 812
+  order: 816
 ---
 
 ## inet_ntop()

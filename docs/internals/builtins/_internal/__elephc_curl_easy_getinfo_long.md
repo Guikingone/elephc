@@ -2,7 +2,7 @@
 title: "__elephc_curl_easy_getinfo_long() — internals"
 description: "Compiler internals for __elephc_curl_easy_getinfo_long(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1027
+  order: 1031
 ---
 
 ## `__elephc_curl_easy_getinfo_long()` — internals

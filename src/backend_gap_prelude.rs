@@ -31,9 +31,6 @@ pub(crate) const ARRAY_SPLICE_MIXED_REPLACEMENT_NAME: &str =
 pub(crate) const ARRAY_UNSHIFT_TRAILING_SPREAD_NAME: &str =
     "__elephc_array_unshift_trailing_spread";
 
-/// Reserved helper used for three-argument `preg_replace()` calls with an array of patterns.
-pub(crate) const PREG_REPLACE_ARRAY_NAME: &str = "__elephc_preg_replace_array";
-
 /// Reserved helper used for supported integer-only `pack()` formats.
 pub(crate) const PACK_INTEGER_NAME: &str = "__elephc_pack_integer";
 
@@ -229,24 +226,6 @@ function __elephc_array_slice(mixed $input, int $offset, ?int $length = null, bo
             }
         }
         $position++;
-    }
-    return $result;
-}
-"#;
-
-/// Sequential regex replacement for the three-argument array-pattern form.
-const PREG_REPLACE_ARRAY_SRC: &str = r#"<?php
-function __elephc_preg_replace_array(array $patterns, array|string $replacement, string $subject): string {
-    $result = $subject;
-    $index = 0;
-    foreach ($patterns as $pattern) {
-        if (is_array($replacement)) {
-            $current = $replacement[$index] ?? '';
-        } else {
-            $current = $replacement;
-        }
-        $result = preg_replace((string) $pattern, (string) $current, $result);
-        $index++;
     }
     return $result;
 }
@@ -1037,9 +1016,6 @@ pub fn inject_if_used(
     if usage.references("array_unshift") {
         sources.push(ARRAY_UNSHIFT_TRAILING_SPREAD_SRC);
     }
-    if usage.references("preg_replace") {
-        sources.push(PREG_REPLACE_ARRAY_SRC);
-    }
     if usage.references("pack") {
         sources.push(PACK_INTEGER_SRC);
     }
@@ -1116,7 +1092,14 @@ pub fn inject_if_used(
     let needs_array_walk =
         usage.references("array_walk") || usage.references("array_walk_recursive");
     // And so is `preg_match_all()` with `$flags`, which the native helper ignores.
-    let needs_preg_match_all_flags = usage.references("preg_match_all");
+    // And so are the array and flag forms of the `preg_replace*()` family, `preg_filter()` and
+    // `preg_replace_callback_array()`. The callback `$flags` form finds its matches through the
+    // `preg_match_all()` flag helper, so that one comes along.
+    let needs_preg_array = usage.references("preg_replace")
+        || usage.references("preg_replace_callback")
+        || usage.references("preg_filter")
+        || usage.references("preg_replace_callback_array");
+    let needs_preg_match_all_flags = usage.references("preg_match_all") || needs_preg_array;
     // And so are `is_callable()`'s second and third parameters: the backend predicate takes the
     // value alone, and `$syntax_only` asks a different question than "can this be called".
     let needs_is_callable_ext = usage.references("is_callable");
@@ -1135,6 +1118,7 @@ pub fn inject_if_used(
         && !needs_array_filter_callback
         && !needs_array_walk
         && !needs_preg_match_all_flags
+        && !needs_preg_array
         && !needs_is_callable_ext
     {
         return program;
@@ -1157,6 +1141,11 @@ pub fn inject_if_used(
     }
     if needs_array_filter_callback {
         let declarations = crate::array_filter_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_preg_array {
+        let declarations = crate::preg_array_prelude::declarations();
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);
         combined.extend(declarations);
     }

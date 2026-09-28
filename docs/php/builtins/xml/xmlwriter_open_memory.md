@@ -2,7 +2,7 @@
 title: "xmlwriter_open_memory()"
 description: "Creates a writer that buffers its output in memory."
 sidebar:
-  order: 989
+  order: 993
 ---
 
 ## xmlwriter_open_memory()

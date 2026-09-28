@@ -73,6 +73,7 @@ mod pdo_ibm;
 #[cfg(feature = "pdo-sqlsrv")]
 mod pdo_sqlsrv;
 mod parse_str;
+mod preg_array_forms;
 #[cfg(feature = "pdo-oci")]
 mod pdo_oci;
 #[cfg(feature = "pdo-cubrid")]

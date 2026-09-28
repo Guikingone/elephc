@@ -2,7 +2,7 @@
 title: "preg_replace() — internals"
 description: "Compiler internals for preg_replace(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 752
+  order: 756
 ---
 
 ## `preg_replace()` — internals
@@ -25,7 +25,7 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `independent`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
