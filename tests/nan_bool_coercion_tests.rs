@@ -544,6 +544,36 @@ echo sprintf("%s", $a[1]), "\n";
     );
 }
 
+/// The NAN warning of a `%s` conversion can run a user error handler in the middle of a
+/// `sprintf()`. The handler's own `sprintf()` and concatenations must not overwrite the part of
+/// the outer result already written. `sprintf` publishes that part first, as it does before a
+/// nested `__toString()`. The handler consumes every warning, so stderr stays empty. Reference
+/// PHP 8.5 prints the stdout asserted here.
+#[test]
+fn a_user_error_handler_run_by_a_sprintf_nan_keeps_the_partial_result() {
+    assert_run(
+        "nan_string_reentrant_handler",
+        r##"<?php
+function noisy(int $no, string $msg): bool {
+    if ($no === 0) { return false; }
+    $a = str_repeat("#", 50);
+    $b = sprintf("%s%s%s", $a, $msg, $a);
+    $c = $b . $b . strrev($b);
+    echo strlen($c), "\n";
+    return true;
+}
+set_error_handler("noisy");
+$nan = $argc > 5 ? 1.0 : NAN;
+$p = str_repeat("A", 20) . ($argc > 5 ? "x" : "B");
+echo sprintf("%s:%s:%s", $p, $nan, $p), "\n";
+echo sprintf("%'*30s|%s", $p, $nan), "\n";
+echo implode(",", [1.5, $nan, 2.5]), "\n";
+"##,
+        "426\nAAAAAAAAAAAAAAAAAAAAB:NAN:AAAAAAAAAAAAAAAAAAAAB\n426\n*********AAAAAAAAAAAAAAAAAAAAB|NAN\n426\n1.5,NAN,2.5\n",
+        "",
+    );
+}
+
 /// `--php-version 8.4` converts a NAN to string silently, as php 8.4 does.
 #[test]
 fn php_84_coerces_nan_to_string_silently() {
