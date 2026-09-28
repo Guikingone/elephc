@@ -12,13 +12,59 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use crate::ir::Function;
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
-use crate::types::{AttrArgEntry, AttrArgValue, AttrKey, ClassInfo};
+use crate::types::{
+    collect_attribute_args, collect_attribute_names, AttrArgEntry, AttrArgValue, AttrKey,
+    ClassInfo, FunctionSig,
+};
 
 /// Borrowed attribute-name/argument metadata from a reflection-visible source.
 pub(crate) type AttributeMetadataSource<'a> =
     (&'a [String], &'a [Option<Vec<AttrArgEntry>>]);
+
+/// Owned attribute-name/argument metadata, for a source only reachable through AST groups.
+pub(crate) type OwnedAttributeMetadata = (Vec<String>, Vec<Option<Vec<AttrArgEntry>>>);
+
+/// Returns the attribute lists declared on the parameters of `signature`, one per parameter that
+/// carries any. `ReflectionParameter::getAttributes()` reads the same groups, so a factory built
+/// from these is the one its `newInstance()` dispatches to.
+pub(crate) fn parameter_attribute_metadata(signature: &FunctionSig) -> Vec<OwnedAttributeMetadata> {
+    signature
+        .param_attributes
+        .iter()
+        .filter(|groups| !groups.is_empty())
+        .map(|groups| (collect_attribute_names(groups), collect_attribute_args(groups)))
+        .collect()
+}
+
+/// Returns the reflection-visible attribute metadata of the lowered top-level functions: each
+/// function's own attributes and its parameters'. Both factory consumers (the synthetic
+/// `ReflectionAttribute` bodies and the attribute-array emitter) build from this one list, so
+/// they number the factories identically.
+pub(crate) fn function_attribute_metadata(functions: &[Function]) -> Vec<OwnedAttributeMetadata> {
+    let mut sources = Vec::new();
+    for function in functions {
+        if !function.attribute_names.is_empty() {
+            sources.push((function.attribute_names.clone(), function.attribute_args.clone()));
+        }
+        if let Some(signature) = &function.signature {
+            sources.extend(parameter_attribute_metadata(signature));
+        }
+    }
+    sources
+}
+
+/// Borrows owned attribute metadata in the shape the factory collectors take.
+pub(crate) fn borrow_attribute_metadata(
+    owned: &[OwnedAttributeMetadata],
+) -> Vec<AttributeMetadataSource<'_>> {
+    owned
+        .iter()
+        .map(|(names, args)| (names.as_slice(), args.as_slice()))
+        .collect()
+}
 
 #[derive(Clone)]
 /// Factory record for compile-time reflection attribute metadata.
@@ -50,9 +96,9 @@ pub(crate) fn resolve_class_name<'a>(
 }
 
 /// Scans every class in `classes` and collects all distinct class-level,
-/// method-level, property-level, and constant-level attribute name/argument
-/// pairs into a sorted vector of `ReflectionAttributeFactory` records with
-/// sequential ids.
+/// method-level, method-parameter-level, property-level, and constant-level
+/// attribute name/argument pairs into a sorted vector of
+/// `ReflectionAttributeFactory` records with sequential ids.
 pub(crate) fn collect_attribute_factories(
     classes: &HashMap<String, ClassInfo>,
 ) -> Vec<ReflectionAttributeFactory> {
@@ -86,6 +132,17 @@ pub(crate) fn collect_attribute_factories_with_extra(
         for (member, names) in &class_info.constant_attribute_names {
             if let Some(args) = class_info.constant_attribute_args.get(member) {
                 collect_from_attribute_lists(classes, names, args, &mut unique);
+            }
+        }
+        // Method parameters carry attributes too; without a factory their `newInstance()`
+        // falls through to `null`.
+        for signature in class_info
+            .methods
+            .values()
+            .chain(class_info.static_methods.values())
+        {
+            for (names, args) in parameter_attribute_metadata(signature) {
+                collect_from_attribute_lists(classes, &names, &args, &mut unique);
             }
         }
     }

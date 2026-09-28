@@ -354,6 +354,7 @@ pub(super) fn check_types_impl(
                 constants,
                 enum_used_traits,
                 enum_trait_aliases,
+                &stmt.attributes,
                 stmt.span,
                 &mut checker,
                 &mut next_class_id,
