@@ -213,9 +213,7 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
     ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
 
-    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
-        emit_branch_if_mixed_dynamic_property_candidate_matches(ctx, candidate, label);
-    }
+    emit_mixed_dynamic_property_candidate_dispatch(ctx, &candidates, &match_labels);
     emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
     abi::emit_jump(ctx.emitter, &miss_label);
 

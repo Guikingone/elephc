@@ -294,9 +294,7 @@ pub(super) fn lower_runtime_mixed_prop_set(
     ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
 
-    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
-        emit_branch_if_mixed_dynamic_property_candidate_matches(ctx, candidate, label);
-    }
+    emit_mixed_dynamic_property_candidate_dispatch(ctx, &candidates, &match_labels);
     emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
     abi::emit_jump(ctx.emitter, &miss_label);
 
@@ -407,31 +405,115 @@ pub(super) fn push_mixed_unboxed_object_payload(ctx: &mut FunctionContext<'_>) {
     }
 }
 
-/// Branches when both the stacked object class id and runtime property name match.
-pub(super) fn emit_branch_if_mixed_dynamic_property_candidate_matches(
+/// Branches to the label of the candidate whose class id and property name match the stacked
+/// receiver and runtime name, and falls through when none does.
+///
+/// The candidates span every declared property of the whole program: thousands for a framework.
+/// Checking them one after another made each write through `ReflectionProperty::setRawValue()`
+/// walk half of them on average, and Symfony's `Request` sets its properties that way on every
+/// request. The receiver's class is chosen first, by a binary search over the candidates' class
+/// ids, and names are compared only against that class's own candidates, in their given order.
+pub(super) fn emit_mixed_dynamic_property_candidate_dispatch(
     ctx: &mut FunctionContext<'_>,
-    candidate: &MixedPropertyCandidate,
-    matched_label: &str,
+    candidates: &[MixedPropertyCandidate],
+    matched_labels: &[String],
 ) {
-    let next_label = ctx.next_label("mixed_dyn_prop_set_next");
+    let mut classes: std::collections::BTreeMap<u64, Vec<usize>> = std::collections::BTreeMap::new();
+    for (index, candidate) in candidates.iter().enumerate() {
+        classes.entry(candidate.class_id).or_default().push(index);
+    }
+    if classes.is_empty() {
+        return;
+    }
+    let classes = classes.into_iter().collect::<Vec<_>>();
+    let no_match_label = ctx.next_label("mixed_dyn_prop_no_match");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 16);
-            ctx.emitter.instruction("ldr x10, [x9]");                           // load the candidate receiver class id
-            abi::emit_load_int_immediate(ctx.emitter, "x11", candidate.class_id as i64);
-            ctx.emitter.instruction("cmp x10, x11");                            // compare receiver class id before checking the property name
-            ctx.emitter.instruction(&format!("b.ne {}", next_label));           // skip name comparison for unrelated classes
+            ctx.emitter.instruction("ldr x10, [x9]");                           // x10 = receiver class id, live through the class search
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", 16);
-            ctx.emitter.instruction("mov r10, QWORD PTR [r11]");                // load the candidate receiver class id
-            abi::emit_load_int_immediate(ctx.emitter, "r12", candidate.class_id as i64);
-            ctx.emitter.instruction("cmp r10, r12");                            // compare receiver class id before checking the property name
-            ctx.emitter.instruction(&format!("jne {}", next_label));            // skip name comparison for unrelated classes
+            ctx.emitter.instruction("mov r10, QWORD PTR [r11]");                // r10 = receiver class id, live through the class search
         }
     }
-    emit_branch_if_dynamic_name_matches(ctx, &candidate.slot.property, matched_label);
-    ctx.emitter.label(&next_label);
+    emit_candidate_class_search(ctx, &classes, candidates, matched_labels, &no_match_label);
+    ctx.emitter.label(&no_match_label);
+}
+
+/// Emits the binary search over `classes` (sorted by class id) for the receiver class id held in
+/// x10/r10. Nothing in the search calls out, so the id stays in its register until a class is
+/// found. Small ranges are compared one class at a time.
+fn emit_candidate_class_search(
+    ctx: &mut FunctionContext<'_>,
+    classes: &[(u64, Vec<usize>)],
+    candidates: &[MixedPropertyCandidate],
+    matched_labels: &[String],
+    no_match_label: &str,
+) {
+    if classes.len() <= 3 {
+        for (class_id, members) in classes {
+            let next_label = ctx.next_label("mixed_dyn_prop_class_next");
+            emit_compare_receiver_class_id(ctx, *class_id);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => ctx.emitter.instruction(&format!("b.ne {}", next_label)), // try the next class
+                Arch::X86_64 => ctx.emitter.instruction(&format!("jne {}", next_label)),   // try the next class
+            }
+            emit_candidate_class_names(ctx, members, candidates, matched_labels, no_match_label);
+            ctx.emitter.label(&next_label);
+        }
+        abi::emit_jump(ctx.emitter, no_match_label);
+        return;
+    }
+    let middle = classes.len() / 2;
+    let (class_id, members) = &classes[middle];
+    let lower_label = ctx.next_label("mixed_dyn_prop_class_lower");
+    let upper_label = ctx.next_label("mixed_dyn_prop_class_upper");
+    emit_compare_receiver_class_id(ctx, *class_id);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("b.lo {}", lower_label));          // the receiver's class id sorts below this class
+            ctx.emitter.instruction(&format!("b.hi {}", upper_label));          // the receiver's class id sorts above this class
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("jb {}", lower_label));            // the receiver's class id sorts below this class
+            ctx.emitter.instruction(&format!("ja {}", upper_label));            // the receiver's class id sorts above this class
+        }
+    }
+    emit_candidate_class_names(ctx, members, candidates, matched_labels, no_match_label);
+    ctx.emitter.label(&lower_label);
+    emit_candidate_class_search(ctx, &classes[..middle], candidates, matched_labels, no_match_label);
+    ctx.emitter.label(&upper_label);
+    emit_candidate_class_search(ctx, &classes[middle + 1..], candidates, matched_labels, no_match_label);
+}
+
+/// Compares the receiver class id held in x10/r10 with `class_id`.
+fn emit_compare_receiver_class_id(ctx: &mut FunctionContext<'_>, class_id: u64) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x11", class_id as i64);
+            ctx.emitter.instruction("cmp x10, x11");                            // compare the receiver class id with this class
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "r12", class_id as i64);
+            ctx.emitter.instruction("cmp r10, r12");                            // compare the receiver class id with this class
+        }
+    }
+}
+
+/// Compares the runtime name with each candidate of the receiver's class, then gives up: no
+/// other class's candidate can match a receiver of this class.
+fn emit_candidate_class_names(
+    ctx: &mut FunctionContext<'_>,
+    members: &[usize],
+    candidates: &[MixedPropertyCandidate],
+    matched_labels: &[String],
+    no_match_label: &str,
+) {
+    for &index in members {
+        emit_branch_if_dynamic_name_matches(ctx, &candidates[index].slot.property, &matched_labels[index]);
+    }
+    abi::emit_jump(ctx.emitter, no_match_label);
 }
 
 /// Branches when a stacked object payload is a stdClass instance.
@@ -653,9 +735,7 @@ fn lower_runtime_generic_object_prop_unset(
     ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
 
-    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
-        emit_branch_if_mixed_dynamic_property_candidate_matches(ctx, candidate, label);
-    }
+    emit_mixed_dynamic_property_candidate_dispatch(ctx, &candidates, &match_labels);
     emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
     abi::emit_jump(ctx.emitter, &miss_label);
 
@@ -711,9 +791,7 @@ fn lower_runtime_mixed_prop_unset(
     ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
 
-    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
-        emit_branch_if_mixed_dynamic_property_candidate_matches(ctx, candidate, label);
-    }
+    emit_mixed_dynamic_property_candidate_dispatch(ctx, &candidates, &match_labels);
     emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
     abi::emit_jump(ctx.emitter, &miss_label);
 

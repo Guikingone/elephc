@@ -1789,3 +1789,80 @@ $six = new Bag(); $six->a['k'] = 6;      echo isset($six->a) ? 'set' : 'unset';
     );
     assert_eq!(out, "1;1;1;1;5;set");
 }
+
+/// Verifies a runtime property name on a receiver of unknown class reaches the right class's slot.
+///
+/// A read, write or unset through `$object->$name` on a `mixed` or `object` receiver dispatches
+/// over every declared property of the program: the receiver's class is found by a binary search
+/// over class ids, then the name is compared within that class. Ten classes, inherited and
+/// redeclared properties, a property name several classes share, a name no class declares, and a
+/// non-object element cover each side of that search; `Req` writes through a cached
+/// `ReflectionProperty::setRawValue()`, which is how Symfony's `Request` sets its properties.
+#[test]
+fn test_runtime_property_name_dispatch_finds_the_receiver_class() {
+    let out = compile_and_run(
+        r#"<?php
+class A0 { public $a = 'a0'; public $shared = 's0'; }
+class A1 { public $b = 'b1'; public $shared = 's1'; public $z = 'z1'; }
+class A2 extends A1 { public $c = 'c2'; }
+class A3 { public int $n = 3; public $shared = 's3'; }
+class A4 { public $d = 'd4'; }
+class A5 extends A4 { public $e = 'e5'; public $shared = 's5'; }
+class A6 { public $f = 'f6'; }
+class A7 { public $g = 'g7'; public $shared = 's7'; }
+class A8 { public $h = 'h8'; }
+class A9 extends A8 { public $i = 'i9'; public $shared = 's9'; }
+final class Req {
+    public $query = null;
+    public $request = null;
+    public $attributes = null;
+
+    public static function set(self $r, string $name, mixed $value): void
+    {
+        static $cache;
+        $p = $cache[$name] ??= new \ReflectionProperty(self::class, $name);
+        $p->setRawValue($r, $value);
+    }
+}
+function objects(): array {
+    return [new A0(), new A1(), new A2(), new A3(), new A4(), new A5(), new A6(), new A7(), new A8(), new A9(), 42];
+}
+function drop(object $o, string $n): void { unset($o->$n); }
+
+$names = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'n', 'z', 'shared', 'missing'];
+foreach (objects() as $index => $object) {
+    $row = [];
+    foreach ($names as $name) {
+        if (is_object($object) && property_exists($object, $name)) {
+            $row[] = $name . '=' . $object->$name;
+        }
+    }
+    echo $index, ':', implode(',', $row), "\n";
+}
+foreach (objects() as $index => $object) {
+    if (!is_object($object)) {
+        continue;
+    }
+    $row = [];
+    foreach ($names as $name) {
+        if (property_exists($object, $name)) {
+            $object->$name = $name === 'n' ? 30 + $index : $name . $index;
+            $row[] = $object->$name;
+        }
+    }
+    echo implode(',', $row), "\n";
+}
+$u = new A9();
+drop($u, $argc > 5 ? 'h' : 'i');
+echo isset($u->i) ? 'set' : 'unset', ' ', $u->h, "\n";
+$r = new Req();
+foreach (['query' => 'q', 'request' => 'r', 'attributes' => 'a'] as $k => $v) {
+    for ($i = 0; $i < 2; $i++) {
+        Req::set($r, $k, $v . $i);
+    }
+}
+echo $r->query, $r->request, $r->attributes, "\n";
+"#,
+    );
+    assert_eq!(out, "0:a=a0,shared=s0\n1:b=b1,z=z1,shared=s1\n2:b=b1,c=c2,z=z1,shared=s1\n3:n=3,shared=s3\n4:d=d4\n5:d=d4,e=e5,shared=s5\n6:f=f6\n7:g=g7,shared=s7\n8:h=h8\n9:h=h8,i=i9,shared=s9\n10:\na0,shared0\nb1,z1,shared1\nb2,c2,z2,shared2\n33,shared3\nd4\nd5,e5,shared5\nf6\ng7,shared7\nh8\nh9,i9,shared9\nunset h8\nq1r1a1\n");
+}
