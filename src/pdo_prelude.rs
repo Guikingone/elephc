@@ -61,7 +61,17 @@ fn parsed_bridge_externs() -> Program {
 /// Returns whether the program references the PDO surface. Exposed so the
 /// pipeline can record the "PDO" PHP surface for `extension_loaded()` reporting
 /// using the same detection that decides prelude injection.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): the scan walks the whole
+/// program, so an embedder calling it without the CLI driver's wrapper gets the same stack budget.
 pub fn program_uses_pdo(program: &[Stmt]) -> bool {
+    crate::compiler_stack::with_compiler_stack(|| {
+        program_uses_pdo_on_compiler_stack(program)
+    })
+}
+
+/// The body of [`program_uses_pdo`], run on the stack `with_compiler_stack` sized.
+fn program_uses_pdo_on_compiler_stack(program: &[Stmt]) -> bool {
     detect::program_uses_pdo(program)
 }
 
@@ -6870,7 +6880,23 @@ pub fn inject_if_used(
 /// PHP 8.5 renumbered every high fetch-mode flag into the low byte. Generating the
 /// constants and all decoding masks from the same version selection prevents a source
 /// program compiled for 8.4 from being interpreted with 8.5 flag semantics.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
+/// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
+/// budget.
 pub fn inject_if_used_for_version(
+    program: Program,
+    force: bool,
+    php_version: PhpVersion,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
+    crate::compiler_stack::with_compiler_stack(|| {
+        inject_if_used_for_version_on_compiler_stack(program, force, php_version, inventory)
+    })
+}
+
+/// The body of [`inject_if_used_for_version`], run on the stack `with_compiler_stack` sized.
+fn inject_if_used_for_version_on_compiler_stack(
     program: Program,
     force: bool,
     php_version: PhpVersion,
