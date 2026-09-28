@@ -575,27 +575,29 @@ fn validate_interface_method(
         .get(method_name)
         .map(String::as_str)
         .unwrap_or(&class.name);
-    let return_compatible = (is_pdo_exception_get_code_contract(
-        contract_owner,
-        method_name,
-        &actual_sig.return_type,
-    ) || is_pdo_exception_get_code_contract(
-        &class.name,
-        method_name,
-        &actual_sig.return_type,
-    )) || late_static_compatible.unwrap_or_else(|| {
-        interface_self_return_conforms(
-            checker,
-            class,
-            interface_name,
-            &required_sig.return_type,
-            &actual_sig.return_type,
-        ) || declared_return_type_compatible(
-            checker,
-            &required_sig.return_type,
-            &actual_sig.return_type,
-        )
-    });
+    // The prelude's SQLSTATE `getCode()` keeps `Exception` as its declaring class, so a
+    // subclass that inherits the body is recognized through the class implementing it.
+    let implementing_class = state
+        .method_impl_classes
+        .get(method_name)
+        .map(String::as_str)
+        .unwrap_or(&class.name);
+    let return_compatible = [contract_owner, implementing_class, class.name.as_str()]
+        .into_iter()
+        .any(|owner| is_pdo_exception_get_code_contract(owner, method_name, &actual_sig.return_type))
+        || late_static_compatible.unwrap_or_else(|| {
+            interface_self_return_conforms(
+                checker,
+                class,
+                interface_name,
+                &required_sig.return_type,
+                &actual_sig.return_type,
+            ) || declared_return_type_compatible(
+                checker,
+                &required_sig.return_type,
+                &actual_sig.return_type,
+            )
+        });
     if required_sig.declared_return && !return_compatible {
         return Err(CompileError::new(
             actual_method

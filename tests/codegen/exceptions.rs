@@ -1132,3 +1132,18 @@ foreach ([$runtime, $code, $previous] as $method) {
 "#);
     assert_eq!(out, "final:Exception|final:Exception|final:Exception|");
 }
+
+/// Eval reflection reports the same declaring class as AOT for PDOException's inherited final
+/// `getCode()`: the prelude's SQLSTATE body does not make `PDOException` its declarer (#1440).
+#[test]
+fn test_eval_reflection_keeps_pdo_exception_get_code_declaring_class() {
+    let out = compile_and_run(r#"<?php
+$aot = new ReflectionMethod(PDOException::class, 'getCode');
+echo "aot:", $aot->getDeclaringClass()->getName(), "|";
+eval('$code = new ReflectionMethod("PDOException", "getCode");
+echo "eval:", $code->getDeclaringClass()->getName(), ":", $code->isFinal() ? "final" : "open", "|";
+$previous = new ReflectionMethod("PDOException", "getPrevious");
+echo "previous:", $previous->getDeclaringClass()->getName(), "|";');
+"#);
+    assert_eq!(out, "aot:Exception|eval:Exception:final|previous:Exception|");
+}

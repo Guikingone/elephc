@@ -1799,29 +1799,35 @@ fn eval_reflection_constructor_owner<'a>(
     None
 }
 
+/// Returns the class name that declares one visible instance method.
+///
+/// Reads the declaring-class map AOT reflection reads, before the implementing class: the two
+/// differ where a compiler-injected body keeps an inherited final method's declarer, as
+/// `PDOException::getCode()` keeps `Exception`.
 fn eval_reflection_instance_method_declaring_class<'a>(
     reflected_class: &'a str,
     class_info: &'a ClassInfo,
     method_name: &str,
 ) -> &'a str {
     class_info
-        .method_impl_classes
+        .method_declaring_classes
         .get(method_name)
-        .or_else(|| class_info.method_declaring_classes.get(method_name))
+        .or_else(|| class_info.method_impl_classes.get(method_name))
         .map(String::as_str)
         .unwrap_or(reflected_class)
 }
 
-/// Returns the class name that declares one visible static method.
+/// Returns the class name that declares one visible static method, reading the same
+/// declaring-class map as AOT reflection before the implementing class.
 fn eval_reflection_static_method_declaring_class<'a>(
     reflected_class: &'a str,
     class_info: &'a ClassInfo,
     method_name: &str,
 ) -> &'a str {
     class_info
-        .static_method_impl_classes
+        .static_method_declaring_classes
         .get(method_name)
-        .or_else(|| class_info.static_method_declaring_classes.get(method_name))
+        .or_else(|| class_info.static_method_impl_classes.get(method_name))
         .map(String::as_str)
         .unwrap_or(reflected_class)
 }

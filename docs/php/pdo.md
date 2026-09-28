@@ -1073,9 +1073,16 @@ exposing a non-PHP constructor shape:
   error (so `$e->errorInfo[0]` works — which is what frameworks read) and `null` when
   there is no structured info, matching PHP.
 - **`getCode()`** returns PDO's SQLSTATE string when structured driver information exists;
-  the driver-specific integer remains available in `errorInfo[1]`.
+  the driver-specific integer remains available in `errorInfo[1]`. The SQLSTATE form needs a
+  receiver the compiler knows is a `PDOException` (a `catch (PDOException $e)` block or a
+  `PDOException`-typed value): called through a `Throwable`, `Exception`, or
+  `RuntimeException` receiver, `getCode()` currently returns the driver's integer code instead.
 - **`getPrevious()`** returns the stored previous Throwable. The same value is also exposed
   as `$e->previous` because elephc's base Throwable layout has no private previous slot.
+- **Subclasses** (`class DriverError extends PDOException {}`, as Doctrine DBAL and many
+  applications declare) inherit this `getCode()`. Like PHP, they cannot override it:
+  `Exception::getCode()` is final, and reflection reports `Exception` as its declaring class,
+  in compiled code and inside `eval()` alike.
 
 ## Under `--web`
 
