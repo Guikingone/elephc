@@ -10,9 +10,13 @@
 //!   subset (null/bool/int/float/string); array support is added in a later increment.
 //! - Round-trips go through both helpers so a regression in either is caught.
 //! - Object casts and `get_object_vars()` retain PHP visibility, key, and built-in property rules.
+//! - Classes PHP refuses to (un)serialize are covered by the `not_serializable` submodule.
 
 use crate::support::*;
 use elephc::codegen_support::platform::Target;
+
+#[path = "serialize/not_serializable.rs"]
+mod not_serializable;
 
 /// Verifies `serialize()` formats each scalar type exactly like PHP's wire format.
 #[test]

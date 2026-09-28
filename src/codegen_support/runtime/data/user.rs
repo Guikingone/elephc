@@ -21,6 +21,7 @@ use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, EnumInfo, FunctionSig, InterfaceInfo, PhpType};
 
 use super::instanceof::{escaped_ascii, escaped_bytes};
+use super::NOT_SERIALIZABLE_BUILTIN_CLASSES;
 
 const EVAL_REFLECTION_CLASS_FLAG_FINAL: u64 = 1;
 const EVAL_REFLECTION_CLASS_FLAG_ABSTRACT: u64 = 2;
@@ -596,25 +597,26 @@ pub(crate) fn emit_runtime_data_user(
     // dispatches to the ancestor's emitted symbol); `0` means the class and its
     // ancestors declare no such method. `__serialize`/`__sleep` customise how an
     // object is written; `__unserialize`/`__wakeup` customise how it is restored.
-    for (table, method) in [
-        ("_class_serialize_ptrs", "__serialize"),
-        ("_class_unserialize_ptrs", "__unserialize"),
-        ("_class_sleep_ptrs", "__sleep"),
-        ("_class_wakeup_ptrs", "__wakeup"),
+    for (table, method, refusal) in [
+        ("_class_serialize_ptrs", "__serialize", Some("__rt_throw_serialization_denied")),
+        ("_class_unserialize_ptrs", "__unserialize", Some("__rt_throw_unserialization_denied")),
+        ("_class_sleep_ptrs", "__sleep", None),
+        ("_class_wakeup_ptrs", "__wakeup", None),
     ] {
         out.push_str(&format!(".globl {table}\n{table}:\n"));
         if let Some(max_class_id) = max_class_id {
             let method_key = php_symbol_key(method);
             for class_id in 0..=max_class_id {
-                // A class PHP refuses to serialize routes `__serialize` to the throwing helper,
-                // so the denial holds wherever the object is found: nested in an array, behind
-                // `mixed`, or reached through a subclass that declares its own `__serialize`.
-                let denied = table == "_class_serialize_ptrs"
-                    && class_name_by_id
+                // A class PHP refuses to serialize routes both hooks to a throwing helper, so the
+                // denial holds wherever the object is found: nested in an array, behind `mixed`,
+                // or reached through a subclass that declares its own hook. The unserialize
+                // decoders recognize their helper and throw before decoding the object's body.
+                if let Some(refusal) = refusal.filter(|_| {
+                    class_name_by_id
                         .get(&class_id)
-                        .is_some_and(|name| class_serialization_denied(name, classes));
-                if denied {
-                    out.push_str("    .quad __rt_throw_serialization_denied\n");
+                        .is_some_and(|name| class_serialization_denied(name, classes))
+                }) {
+                    out.push_str(&format!("    .quad {refusal}\n"));
                     continue;
                 }
                 let entry = class_info_by_id
@@ -2960,10 +2962,16 @@ fn interface_method_table_symbol(
     }
 }
 
-/// Returns whether PHP forbids serializing instances of a class: the Reflection family and the
-/// other internal classes php-src marks `ZEND_ACC_NOT_SERIALIZABLE` (`Generator`, `Fiber`,
-/// `SplFileInfo`, `WeakReference`, `WeakMap`, each measured on 8.5.10), and any class that
-/// extends one of them, such as `SplFileObject`.
+/// Returns whether PHP forbids serializing and unserializing instances of a class: one of the
+/// builtin classes php-src marks `ZEND_ACC_NOT_SERIALIZABLE` that elephc registers
+/// ([`NOT_SERIALIZABLE_BUILTIN_CLASSES`]: the Reflection family, `Generator`, `Fiber`, the
+/// `SplFileInfo` family, `Phar`, `PharData`, the PDO, curl, gd and XML handles, ...), or any class
+/// that extends one of them.
+///
+/// Only registered builtins are named, so a user class that merely shares its name with a PHP
+/// internal elephc does not model (`WeakMap`, `ReflectionType`) serializes like any user class.
+/// The list names every refused class itself too, because elephc registers some of them without
+/// their PHP parents (`Phar` and `PharData` do not extend `SplFileInfo` here).
 ///
 /// The comparison is exact-case on purpose: class names and `parent` links here are the
 /// resolver's canonical spellings (declared case), so `extends reflectionclass` arrives as
@@ -2971,36 +2979,7 @@ fn interface_method_table_symbol(
 fn class_serialization_denied(class_name: &str, classes: &HashMap<String, ClassInfo>) -> bool {
     let mut current = class_name.trim_start_matches('\\');
     for _ in 0..=classes.len() {
-        if matches!(
-            current,
-            "ReflectionAttribute"
-                | "ReflectionClass"
-                | "ReflectionClassConstant"
-                | "ReflectionConstant"
-                | "ReflectionEnum"
-                | "ReflectionEnumBackedCase"
-                | "ReflectionEnumUnitCase"
-                | "ReflectionExtension"
-                | "ReflectionFiber"
-                | "ReflectionFunction"
-                | "ReflectionFunctionAbstract"
-                | "ReflectionGenerator"
-                | "ReflectionIntersectionType"
-                | "ReflectionMethod"
-                | "ReflectionNamedType"
-                | "ReflectionObject"
-                | "ReflectionParameter"
-                | "ReflectionProperty"
-                | "ReflectionReference"
-                | "ReflectionType"
-                | "ReflectionUnionType"
-                | "ReflectionZendExtension"
-                | "Generator"
-                | "Fiber"
-                | "SplFileInfo"
-                | "WeakReference"
-                | "WeakMap"
-        ) {
+        if NOT_SERIALIZABLE_BUILTIN_CLASSES.contains(&current) {
             return true;
         }
         let Some(parent) = classes.get(current).and_then(|info| info.parent.as_deref()) else {
@@ -3472,7 +3451,8 @@ fn var_dump_property_type_name(prop_ty: &PhpType) -> String {
 /// Maps a declared property's static type to the runtime value tag consumed by
 /// `__rt_serialize_value` when serializing that property's 16-byte object slot.
 /// Mirrors the gc-descriptor tag mapping; reference and untyped/nullable
-/// properties are stored as boxed `Mixed` cells (tag 7).
+/// properties are stored as boxed `Mixed` cells (tag 7), and a `Closure` property
+/// holds its callable descriptor directly (tag 10), never a Mixed box.
 fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) -> u64 {
     if class_info.reference_properties.contains(prop_name) {
         return 7;
@@ -3485,6 +3465,7 @@ fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) ->
         PhpType::Array(_) => 4,
         PhpType::AssocArray { .. } => 5,
         PhpType::Object(_) => 6,
+        PhpType::Callable => 10,
         _ => 7,
     }
 }

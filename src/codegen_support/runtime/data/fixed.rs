@@ -19,8 +19,8 @@ use super::{
     OB_NTC_G_GET_FLUSH, OB_NTC_NO_CLEAN, OB_NTC_NO_END_CLEAN, OB_NTC_NO_END_FLUSH,
     NAMED_PARAMETER_OVERWRITE_PREFIX, NAMED_PARAMETER_OVERWRITE_SUFFIX,
     OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OBJECT_NOT_ARRAY_PREFIX, OBJECT_NOT_ARRAY_SUFFIX,
-    SERIALIZATION_DENIED_PREFIX, SERIALIZATION_DENIED_SUFFIX,
-    POSITIONAL_AFTER_NAMED_MSG, UNKNOWN_NAMED_PARAMETER_PREFIX,
+    SERIALIZATION_DENIED_PREFIX, SERIALIZATION_DENIED_SUFFIX, UNSERIALIZATION_DENIED_PREFIX,
+    CLOSURE_CLASS_NAME, NOT_SERIALIZABLE_BUILTIN_CLASSES, POSITIONAL_AFTER_NAMED_MSG, UNKNOWN_NAMED_PARAMETER_PREFIX,
     OB_WARN_BAD_CALLBACK_GENERIC,
     OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
     PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, SPRINTF_ARGCOUNT_MSG,
@@ -118,6 +118,13 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&format!(
         ".globl _serialization_denied_suffix\n_serialization_denied_suffix:\n    .ascii {SERIALIZATION_DENIED_SUFFIX:?}\n"
     ));
+    out.push_str(&format!(
+        ".globl _unserialization_denied_prefix\n_unserialization_denied_prefix:\n    .ascii {UNSERIALIZATION_DENIED_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _closure_class_name\n_closure_class_name:\n    .ascii {CLOSURE_CLASS_NAME:?}\n"
+    ));
+    emit_not_serializable_class_names(&mut out);
     out.push_str(&format!(
         ".globl _named_parameter_overwrite_prefix\n_named_parameter_overwrite_prefix:\n    .ascii {NAMED_PARAMETER_OVERWRITE_PREFIX:?}\n"
     ));
@@ -1697,6 +1704,32 @@ fn emit_spl_autoload_extensions_data() -> String {
     out
 }
 
+/// Emits the builtin class names `unserialize()` refuses, as a dense `(pointer, length)` table.
+///
+/// `__rt_unser_refuse_unknown_class` scans it when the wire names a class the program does not
+/// declare, so the refusal holds for a builtin that declaration pruning dropped (a Reflection
+/// class the program never names, a Closure, which is no class-table entry at all). Each row
+/// points at PHP's spelling, which is also what the refusal message prints.
+fn emit_not_serializable_class_names(out: &mut String) {
+    for (index, name) in NOT_SERIALIZABLE_BUILTIN_CLASSES.iter().enumerate() {
+        out.push_str(&format!(
+            ".globl _unser_refused_class_name_{index}\n_unser_refused_class_name_{index}:\n    .ascii {name:?}\n"
+        ));
+    }
+    out.push_str(".p2align 3\n");
+    out.push_str(&format!(
+        ".globl _unser_refused_class_count\n_unser_refused_class_count:\n    .quad {}\n",
+        NOT_SERIALIZABLE_BUILTIN_CLASSES.len()
+    ));
+    out.push_str(".globl _unser_refused_classes\n_unser_refused_classes:\n");
+    for (index, name) in NOT_SERIALIZABLE_BUILTIN_CLASSES.iter().enumerate() {
+        out.push_str(&format!(
+            "    .quad _unser_refused_class_name_{index}\n    .quad {}\n",
+            name.len()
+        ));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1884,5 +1917,28 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Every class the serializers refuse is one elephc registers as a builtin, so a user class
+    /// that merely shares a PHP internal's name (`WeakMap`) is never refused, and each row of the
+    /// refused-class table points at that class's PHP spelling with its exact byte length.
+    #[test]
+    fn test_refused_classes_are_catalogued_builtins_in_the_fixed_table() {
+        for name in NOT_SERIALIZABLE_BUILTIN_CLASSES {
+            let contract = elephc_builtin_contract::lookup_class(name)
+                .unwrap_or_else(|| panic!("{name} is refused but not a catalogued builtin class"));
+            assert_eq!(contract.name, *name, "{name} must use the catalogue's PHP spelling");
+        }
+        let asm = emit_runtime_data_fixed(
+            8_388_608,
+            Target::new(Platform::Linux, Arch::X86_64),
+            PhpVersion::Php85,
+        );
+        assert!(asm.contains(&format!(
+            "_unser_refused_class_count:\n    .quad {}\n",
+            NOT_SERIALIZABLE_BUILTIN_CLASSES.len()
+        )));
+        assert!(asm.contains("    .ascii \"Pdo\\\\Sqlite\"\n"), "backslashes must be escaped");
+        assert!(asm.contains("    .quad _unser_refused_class_name_0\n    .quad 8\n"));
     }
 }

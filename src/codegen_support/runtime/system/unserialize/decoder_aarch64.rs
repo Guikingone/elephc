@@ -396,6 +396,9 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov x2, x11");                                         // class-name length (new_by_name arg)
     emitter.instruction("bl __rt_new_by_name");                                 // instantiate the class by name (0 on unknown class)
     emitter.instruction("cbnz x0, __rt_unser_obj_allocated");                   // known classes use their declared layout
+    emitter.instruction("ldr x1, [sp, #40]");                                   // wire class-name pointer for the refusal check
+    emitter.instruction("ldr x2, [sp, #72]");                                   // wire class-name length for the refusal check
+    emitter.instruction("bl __rt_unser_refuse_unknown_class");                  // throw for an undeclared builtin PHP never hydrates
     emitter.instruction("str xzr, [sp, #80]");                                  // unknown classes suppress hooks and use opaque properties
     emitter.instruction("b __rt_unser_obj_incomplete");                         // match PHP's __PHP_Incomplete_Class fallback
     emitter.label("__rt_unser_obj_incomplete");
@@ -463,6 +466,9 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_class_unserialize_ptrs");
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // __unserialize method symbol (0 if none)
     emitter.instruction("cbz x10, __rt_unser_obj_default");                     // no __unserialize → inject properties by name
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "__rt_throw_unserialization_denied");
+    emitter.instruction("cmp x10, x11");                                        // does PHP refuse to unserialize this class?
+    emitter.instruction("b.eq __rt_unser_obj_refused");                         // refuse before decoding any property, like php-src
     emitter.instruction("str x10, [sp, #72]");                                  // park the __unserialize target across the body parse
     emitter.instruction("ldr x0, [sp, #32]");                                   // entry count = hash capacity hint
     emitter.instruction("mov x1, #7");                                          // hash value_type = boxed Mixed
@@ -502,6 +508,10 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.label("__rt_unser_obj_data_done");
     super::magic_call::emit_unserialize_magic_call(emitter);
     emitter.instruction("b __rt_unser_at_obj_box");                             // box the object (position is at the closing '}')
+    // -- a refused class throws; the public entry boundary closes the unserialize context --
+    emitter.label("__rt_unser_obj_refused");
+    emitter.instruction("ldr x0, [sp, #24]");                                   // the refused object names its class in the message
+    emitter.instruction("bl __rt_throw_unserialization_denied");                // throw the catchable Exception; never returns
     emitter.label("__rt_unser_obj_default");
     emitter.instruction("ldr x9, [sp, #80]");                                   // blocked objects own an opaque Mixed property hash
     emitter.instruction("cbnz x9, __rt_unser_obj_default_props");               // hydrated objects use their declared property slots

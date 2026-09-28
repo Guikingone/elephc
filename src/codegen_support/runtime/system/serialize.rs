@@ -17,10 +17,14 @@
 //! - All helpers append at the current `_concat_off`, advance it past the bytes
 //!   written, and return the slice pointer/length in the string result registers
 //!   (`x1`/`x2` on AArch64, `rax`/`rdx` on x86_64).
+//! - A Closure (runtime tag 10) throws PHP's catchable `Serialization of 'Closure' is not
+//!   allowed` wherever it sits; objects of refused classes throw through their
+//!   `_class_serialize_ptrs` entry.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::runtime::data::CLOSURE_CLASS_NAME;
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
 mod magic_result;
@@ -140,8 +144,15 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_serialize_nested_mixed");                    // unbox and re-dispatch
     emitter.instruction("cmp x0, #8");                                          // is the value null?
     emitter.instruction("b.eq __rt_serialize_null");                            // serialize null as N;
-    // Tag 10 (callables) is not serializable here and degrades to null.
+    emitter.instruction("cmp x0, #10");                                         // is the value a Closure (callable descriptor)?
+    emitter.instruction("b.eq __rt_serialize_closure");                         // PHP refuses to serialize a Closure
     emitter.instruction("b __rt_serialize_null");                               // unsupported tags serialize as null
+
+    // -- Closure: throw PHP's catchable `Serialization of 'Closure' is not allowed` --
+    emitter.label("__rt_serialize_closure");
+    emit_symbol_address(emitter, "x1", "_closure_class_name");
+    emitter.instruction(&format!("mov x2, #{}", CLOSURE_CLASS_NAME.len()));     // byte length of the Closure class name
+    emitter.instruction("bl __rt_throw_serialization_denied_name");             // throw the catchable Exception; never returns
 
     // -- indexed array / hash / nested mixed: delegate, then resume finalize --
     emitter.label("__rt_serialize_arr_indexed");
@@ -995,8 +1006,15 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_serialize_nested_mixed");                      // unbox and re-dispatch
     emitter.instruction("cmp rdi, 8");                                          // is the value null?
     emitter.instruction("je __rt_serialize_null");                              // serialize null as N;
-    // Tag 10 (callables) is not serializable here and degrades to null.
+    emitter.instruction("cmp rdi, 10");                                         // is the value a Closure (callable descriptor)?
+    emitter.instruction("je __rt_serialize_closure");                           // PHP refuses to serialize a Closure
     emitter.instruction("jmp __rt_serialize_null");                             // unsupported tags serialize as null
+
+    // -- Closure: throw PHP's catchable `Serialization of 'Closure' is not allowed` --
+    emitter.label("__rt_serialize_closure");
+    emit_symbol_address(emitter, "rax", "_closure_class_name");
+    emitter.instruction(&format!("mov rdx, {}", CLOSURE_CLASS_NAME.len()));     // byte length of the Closure class name
+    emitter.instruction("call __rt_throw_serialization_denied_name");           // throw the catchable Exception; never returns
 
     // -- indexed array / hash / nested mixed: delegate, then resume finalize --
     emitter.label("__rt_serialize_arr_indexed");
