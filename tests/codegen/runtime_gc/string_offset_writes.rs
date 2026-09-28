@@ -185,3 +185,56 @@ echo $n, "\n";
     );
     assert_clean(out, "1400210\n");
 }
+
+/// Returns the `live_blocks` count from a `--heap-debug` leak summary.
+fn live_blocks(stderr: &str) -> usize {
+    stderr
+        .split("leak summary: live_blocks=")
+        .nth(1)
+        .and_then(|tail| tail.split_whitespace().next())
+        .and_then(|count| count.parse().ok())
+        .unwrap_or(0)
+}
+
+/// A warning handler that THROWS out of a string offset write, and an empty value written at
+/// `PHP_INT_MAX`, release everything the write held: the retained cell, the cast value and the
+/// helper's private subject copy. Before the fix each iteration stranded two to four blocks, so
+/// the live count at exit grew with the iteration count. The handler's own state stays live at
+/// exit either way, so the test compares 5 and 50 iterations rather than asking for a clean
+/// summary. Review follow-up for #851.
+#[test]
+fn test_string_offset_write_releases_holds_when_a_warning_handler_throws() {
+    let program = |count: usize| {
+        format!(
+            r#"<?php
+function raise(int $no, string $msg): bool {{
+    throw new RuntimeException($msg);
+}}
+set_error_handler("raise");
+function once(int $i, int $argc): int {{
+    $s = $argc > 99 ? [] : "abc" . $i;
+    $c = 0;
+    try {{ $s[PHP_INT_MAX] = ""; }} catch (Error $e) {{ $c++; }}
+    try {{ $s[-10] = "x"; }} catch (RuntimeException $e) {{ $c++; }}
+    try {{ $s[-10] = str_repeat("y", 3) . $i; }} catch (RuntimeException $e) {{ $c++; }}
+    try {{ $s[1] = "long" . $i; }} catch (RuntimeException $e) {{ $c++; }}
+    return $c * 100 + strlen($s);
+}}
+$t = 0;
+for ($i = 0; $i < {count}; $i++) {{ $t += once($i, $argc); }}
+echo $t, "\n";
+"#
+        )
+    };
+    let few = compile_and_run_with_heap_debug(&program(5));
+    let many = compile_and_run_with_heap_debug(&program(50));
+    assert_eq!(few.stdout, "2020\n", "stderr: {}", few.stderr);
+    assert_eq!(many.stdout, "20240\n", "stderr: {}", many.stderr);
+    assert_eq!(
+        live_blocks(&few.stderr),
+        live_blocks(&many.stderr),
+        "live blocks grew with the iteration count:\n{}\n{}",
+        few.stderr,
+        many.stderr
+    );
+}

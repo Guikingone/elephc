@@ -17,7 +17,9 @@
 //! - Both warnings can run a user error handler, which may reassign a global or
 //!   reference-bound subject and free the string this helper was handed. Before either
 //!   warning the helper therefore swaps the subject for a private owned copy, reads only that
-//!   copy afterwards, and frees it once the result is built.
+//!   copy afterwards, and frees it once the result is built. A handler that THROWS unwinds past
+//!   that free, so the copy is guarded across each warning and `__rt_str_offset_set_unwind`
+//!   frees it instead.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -47,6 +49,7 @@ const EMPTY_ASSIGN_MSG_LEN: usize = "Cannot assign an empty string to a string o
 /// The subject is only borrowed on the silent path; a warning path reads a private copy (see
 /// `emit_pin_subject_aarch64`).
 pub fn emit_str_offset_set(emitter: &mut Emitter) {
+    emit_str_offset_set_unwind(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_str_offset_set_x86_64(emitter);
         return;
@@ -82,9 +85,11 @@ pub fn emit_str_offset_set(emitter: &mut Emitter) {
     emitter.instruction("cmp x4, #1");                                          // is the value exactly one byte?
     emitter.instruction("b.eq __rt_str_offset_set_sized");                      // a single byte is written without a warning
     emit_pin_subject_aarch64(emitter, "first_byte");
+    emit_copy_guard_push_aarch64(emitter);
     abi::emit_symbol_address(emitter, "x1", "_diag_string_offset_first_byte_msg");
     emitter.instruction(&format!("mov x2, #{}", FIRST_BYTE_MSG_LEN));           // pass the first-byte warning length
     abi::emit_call_label(emitter, "__rt_diag_warning");                         // warn that only the first byte is assigned
+    emit_copy_guard_pop_aarch64(emitter);
 
     // -- the result is the subject, widened to reach the offset --
     emitter.label("__rt_str_offset_set_sized");
@@ -100,8 +105,10 @@ pub fn emit_str_offset_set(emitter: &mut Emitter) {
     // -- an index before the start: warn with the requested offset, keep the bytes --
     emitter.label("__rt_str_offset_set_illegal");
     emit_pin_subject_aarch64(emitter, "illegal");
-    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the requested offset, unresolved on this path
+    emit_copy_guard_push_aarch64(emitter);
+    emitter.instruction("ldr x0, [sp, #64]");                                   // reload the requested offset (above the guard), unresolved on this path
     abi::emit_call_label(emitter, "__rt_warn_illegal_string_offset");           // warn `Illegal string offset N`
+    emit_copy_guard_pop_aarch64(emitter);
     emitter.instruction("str xzr, [sp, #48]");                                  // no byte is written on this path
     emitter.instruction("ldr x9, [sp, #8]");                                    // the result keeps the subject length
 
@@ -199,9 +206,11 @@ fn emit_str_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r9, 1");                                           // is the value exactly one byte?
     emitter.instruction("je __rt_str_offset_set_sized");                        // a single byte is written without a warning
     emit_pin_subject_x86_64(emitter, "first_byte");
+    emit_copy_guard_push_x86_64(emitter);
     abi::emit_symbol_address(emitter, "rdi", "_diag_string_offset_first_byte_msg");
     emitter.instruction(&format!("mov esi, {}", FIRST_BYTE_MSG_LEN));           // pass the first-byte warning length
     abi::emit_call_label(emitter, "__rt_diag_warning");                         // warn that only the first byte is assigned
+    emit_copy_guard_pop_x86_64(emitter);
 
     // -- the result is the subject, widened to reach the offset --
     emitter.label("__rt_str_offset_set_sized");
@@ -216,8 +225,10 @@ fn emit_str_offset_set_x86_64(emitter: &mut Emitter) {
     // -- an index before the start: warn with the requested offset, keep the bytes --
     emitter.label("__rt_str_offset_set_illegal");
     emit_pin_subject_x86_64(emitter, "illegal");
+    emit_copy_guard_push_x86_64(emitter);
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // pass the requested offset, unresolved on this path
     abi::emit_call_label(emitter, "__rt_warn_illegal_string_offset");           // warn `Illegal string offset N`
+    emit_copy_guard_pop_x86_64(emitter);
     emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // no byte is written on this path
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // the result keeps the subject length
 
@@ -318,4 +329,59 @@ fn emit_pin_subject_x86_64(emitter: &mut Emitter, site: &str) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // read the copy from here on
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // and release it once the result is built
     emitter.label(&skip);
+}
+
+/// Pushes a 32-byte AArch64 unwind guard over the private subject copy (`[sp, #56]`, 0 when
+/// none was made) before a warning that can run a throwing user error handler. Every frame
+/// slot is `#32` further from `sp` until [`emit_copy_guard_pop_aarch64`].
+fn emit_copy_guard_push_aarch64(emitter: &mut Emitter) {
+    emitter.instruction("ldr x9, [sp, #56]");                                   // the private subject copy, or 0
+    emitter.instruction("sub sp, sp, #32");                                     // reserve the guard record below the frame
+    emitter.instruction("str x9, [sp, #24]");                                   // the record's owner
+    abi::emit_symbol_address(emitter, "x9", "__rt_str_offset_set_unwind");
+    emitter.instruction("str x9, [sp, #8]");                                    // the cleanup the unwinder calls
+    emitter.instruction("mov x0, sp");                                          // the record
+    emitter.instruction("mov x1, #0");                                          // link it at the chain head
+    abi::emit_call_label(emitter, "__rt_exception_guard_owned");
+}
+
+/// Unlinks and pops the AArch64 guard once the warning returned normally; the shared exit
+/// frees the copy.
+fn emit_copy_guard_pop_aarch64(emitter: &mut Emitter) {
+    emitter.instruction("mov x0, sp");                                          // the guard record
+    abi::emit_call_label(emitter, "__rt_exception_unguard_owned");
+    emitter.instruction("add sp, sp, #32");                                     // pop the guard record
+}
+
+/// Pushes the x86_64 guard over the private subject copy (`[rbp - 72]`); frame slots are
+/// `rbp`-relative, so they keep their offsets while the record sits at `[rsp]`.
+fn emit_copy_guard_push_x86_64(emitter: &mut Emitter) {
+    emitter.instruction("sub rsp, 32");                                         // reserve the guard record, keeping calls aligned
+    emitter.instruction("mov r10, QWORD PTR [rbp - 72]");                       // the private subject copy, or 0
+    emitter.instruction("mov QWORD PTR [rsp + 24], r10");                       // the record's owner
+    emitter.instruction("lea r10, [rip + __rt_str_offset_set_unwind]");         // the cleanup the unwinder calls
+    emitter.instruction("mov QWORD PTR [rsp + 8], r10");                        // store it in the record
+    emitter.instruction("mov rdi, rsp");                                        // the record
+    emitter.instruction("xor esi, esi");                                        // link it at the chain head
+    abi::emit_call_label(emitter, "__rt_exception_guard_owned");
+}
+
+/// Unlinks and pops the x86_64 guard once the warning returned normally.
+fn emit_copy_guard_pop_x86_64(emitter: &mut Emitter) {
+    emitter.instruction("mov rdi, rsp");                                        // the guard record
+    abi::emit_call_label(emitter, "__rt_exception_unguard_owned");
+    emitter.instruction("add rsp, 32");                                         // pop the guard record
+}
+
+/// Emits `__rt_str_offset_set_unwind`, the cleanup the unwinder calls with the guard record
+/// when a warning handler throws: it frees the private subject copy (a null owner is skipped).
+fn emit_str_offset_set_unwind(emitter: &mut Emitter) {
+    emitter.label_global("__rt_str_offset_set_unwind");
+    if emitter.target.arch == Arch::X86_64 {
+        emitter.instruction("mov rax, QWORD PTR [rdi + 24]");                   // the private subject copy, or 0
+        emitter.instruction("jmp __rt_heap_free_safe");                         // free it and return to the unwinder
+        return;
+    }
+    emitter.instruction("ldr x0, [x0, #24]");                                   // the private subject copy, or 0
+    emitter.instruction("b __rt_heap_free_safe");                               // free it and return to the unwinder
 }
