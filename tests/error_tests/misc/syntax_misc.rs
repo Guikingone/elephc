@@ -72,6 +72,21 @@ fn test_error_declare_strict_types_must_be_first() {
     );
 }
 
+/// Tests that a doc comment before `declare(strict_types=1)` is not a statement: php accepts
+/// `<?php /** License */ declare(strict_types=1);`, which is how `league/uri` opens every file,
+/// while a doc comment followed by a real statement still keeps the directive from being first.
+#[test]
+fn test_declare_strict_types_may_follow_a_doc_comment() {
+    assert!(
+        check_source("<?php\n/**\n * License\n */\n\ndeclare(strict_types=1);\n\necho 1;").is_ok(),
+        "a doc comment before strict_types must be accepted",
+    );
+    expect_error(
+        "<?php /** doc */ echo 1; declare(strict_types=1);",
+        "strict_types declaration must be the very first statement in the script",
+    );
+}
+
 /// Tests that strict_types cannot control a braced body.
 #[test]
 fn test_error_declare_strict_types_rejects_block_mode() {
