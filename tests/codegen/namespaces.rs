@@ -856,3 +856,128 @@ echo strlen("x") + \strlen("yz"), "\n";
         )
     );
 }
+
+/// A reserved word glued into a qualified name is a name in EVERY parser position, including the
+/// keyword checks that run before a statement or expression is dispatched: a statement led by
+/// `Default\...` or `Case\...` inside a `switch` case body (`Case\Kit\pick();` was silently
+/// read as another case label), a `match` arm pattern led by `Default\...`, the `endif`, `else`
+/// and `finally` checks after a body, `catch (Self\X ...)` and `Parent\X`, the `static` and
+/// `readonly` member modifiers (`public Static\Factory $f` is a typed property, not a static
+/// one), `insteadof`, `instanceof Name::$prop`, a builtin type word (`Int\Money`), string and
+/// heredoc interpolation, and a one-word namespace declaration (`namespace Else { }`). The lexer
+/// now emits such a word as an identifier, as PHP 8 lexes the whole name as one token.
+/// Regression for #826 (review round 2); expected output is PHP 8.5's.
+#[test]
+fn test_reserved_word_names_survive_every_keyword_check() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Default\Theme {
+    class Palette {
+        const X = 1;
+        public static $hits = 0;
+        public static $cls = "Default\\Theme\\Palette";
+        public static function accent() { return "teal"; }
+        public function tone($n) { return "tone" . $n; }
+    }
+}
+namespace Case\Kit { function pick() { echo "picked\n"; return 1; } }
+namespace EndIf { class Marker { public static function ping() { echo "ping\n"; } } }
+namespace Else { class Gate { public static function go() { echo "else-go\n"; } } }
+namespace Finally\Kit { function done() { echo "done\n"; } }
+namespace Self { class Boom extends \Exception {} }
+namespace Parent { class Boom extends \Exception {} }
+namespace Static { class Factory {} }
+namespace Readonly { class Config {} }
+namespace Int { class Money { public function __construct(public int $cents) {} } }
+namespace List {
+    trait A { public function m() { return "A"; } }
+    trait B { public function m() { return "B"; } }
+}
+namespace {
+switch ($argc) {
+    case 1:
+        Default\Theme\Palette::accent();
+        echo "switch default-led\n";
+        Case\Kit\pick();
+        break;
+}
+$v = $argc;
+echo match ($v) { Default\Theme\Palette::X => "match one", default => "match other" }, "\n";
+if ($argc > 0):
+    EndIf\Marker::ping();
+endif;
+if ($argc > 5) { echo "no\n"; } Else\Gate::go();
+try { echo "try\n"; } catch (Exception $e) { } Finally\Kit\done();
+try { throw new Self\Boom("s"); } catch (Self\Boom $e) { echo "caught ", get_class($e), "\n"; }
+try { throw new Parent\Boom("p"); } catch (Parent\Boom | Self\Boom $e) { echo "caught ", get_class($e), "\n"; }
+class Holder {
+    public Static\Factory $f;
+    public Readonly\Config $c;
+    public function __construct() { $this->f = new Static\Factory(); $this->c = new Readonly\Config(); }
+}
+$h = new Holder();
+$r = new ReflectionProperty("Holder", "f");
+var_dump($r->isStatic());
+$r = new ReflectionProperty("Holder", "c");
+var_dump($r->isReadOnly());
+$h->c = new Readonly\Config();
+echo get_class($h->f), " ", get_class($h->c), "\n";
+class Picker { use List\A, List\B { List\A::m insteadof List\B; } }
+echo (new Picker())->m(), "\n";
+function money(Int\Money $m): Int\Money { return $m; }
+echo money(new Int\Money(250))->cents, "\n";
+$p = new Default\Theme\Palette();
+var_dump($p instanceof Default\Theme\Palette::$cls);
+echo "{$p->tone(Default\Theme\Palette::X)}\n";
+echo <<<TXT
+heredoc {$p->tone(Default\Theme\Palette::X + 1)}
+TXT;
+echo "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "switch default-led\n",
+            "picked\n",
+            "match one\n",
+            "ping\n",
+            "else-go\n",
+            "try\n",
+            "done\n",
+            "caught Self\\Boom\n",
+            "caught Parent\\Boom\n",
+            "bool(false)\n",
+            "bool(false)\n",
+            "Static\\Factory Readonly\\Config\n",
+            "A\n",
+            "250\n",
+            "bool(true)\n",
+            "tone1\n",
+            "heredoc tone2\n",
+        )
+    );
+}
+
+/// `eval()` of a runtime string (the Magician interpreter, not the AOT parser) reads a reserved
+/// word glued into a qualified name as a name too: `Function\Lib\g();` was dispatched as a
+/// function declaration, `Static\Kit\Factory::make();` as a `static` variable, and
+/// `use Function\Lib\Foo;` imported the FUNCTION `Lib\Foo`, where PHP and the compiled path
+/// import the class `Function\Lib\Foo`. Regression for #826; expected output is PHP 8.5's.
+#[test]
+fn test_eval_reads_reserved_word_first_segments_as_names() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Function\Lib { class Foo {} function g() { return "Function\\Lib\\g"; } }
+namespace Static\Kit { class Factory { public static function make() { echo "made\n"; } } }
+namespace {
+    $code = $argc > 5 ? 'return 0;' : 'namespace Probe; use Function\Lib\Foo; echo \Function\Lib\g(), "|", get_class(new Foo()), "\n";';
+    eval($code);
+    $code = $argc > 5 ? 'return 0;' : 'Static\Kit\Factory::make(); Function\Lib\g(); echo Function\Lib\g(), "\n";';
+    eval($code);
+}
+"#,
+    );
+    assert_eq!(out, "Function\\Lib\\g|Function\\Lib\\Foo\nmade\nFunction\\Lib\\g\n");
+}

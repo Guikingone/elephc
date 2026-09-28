@@ -181,6 +181,27 @@ fn test_relative_namespace_prefix_is_never_a_literal_segment() {
     assert!(dump.contains("\"Namespace\""), "a trailing segment must stay a segment: {dump}");
 }
 
+/// Verifies `namespace\CONFIG;` at statement position is never read as the declaration
+/// `namespace \CONFIG;`, which silently moved every later declaration of the file into a
+/// namespace named `CONFIG` (#826 review). The parser may refuse it or read it as the relative
+/// constant fetch it is in PHP, but the only namespace declared must stay `App`.
+#[test]
+fn test_relative_prefix_statement_is_never_a_namespace_declaration() {
+    let tokens = tokenize("<?php namespace App; namespace\\CONFIG; class Widget {}").unwrap();
+    if let Ok(stmts) = parse(&tokens) {
+        let declared: Vec<String> = stmts
+            .iter()
+            .filter_map(|stmt| match &stmt.kind {
+                StmtKind::NamespaceDecl { name } => {
+                    Some(name.as_ref().map(|name| name.as_canonical()).unwrap_or_default())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(declared, vec!["App".to_string()]);
+    }
+}
+
 /// Verifies the reserved-word FIRST segment of a qualified name starts a name in statement,
 /// expression, type, `implements`, `catch`, attribute and `use` positions (#826), and that the
 /// word must touch the `\`: a keyword followed by a space and a fully qualified name is still

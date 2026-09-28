@@ -36,6 +36,18 @@ pub(super) fn parse_namespace_stmt(
 
     let name = if *pos < tokens.len() && tokens[*pos].0 == Token::LBrace {
         None
+    } else if *pos < tokens.len() && tokens[*pos].0 == Token::Backslash {
+        // `namespace\CONFIG;` is a relative name, not a declaration, and a declared name is
+        // never fully qualified. Read as one, `\CONFIG` silently renamed the rest of the file.
+        return Err(CompileError::new(
+            span,
+            "Expected namespace name after 'namespace'; a namespace declaration cannot start with '\\'",
+        ));
+    } else if let Some(word) = single_reserved_namespace_name(tokens, *pos) {
+        // PHP accepts any reserved word but `namespace` as a one-segment namespace name:
+        // `namespace Default;`, `namespace List { ... }` (#840).
+        *pos += 1;
+        Some(Name::unqualified(word))
     } else {
         Some(parse_name(
             tokens,
@@ -79,6 +91,22 @@ pub(super) fn parse_namespace_stmt(
     Ok(Stmt::new(StmtKind::NamespaceBlock { name, body }, span))
 }
 
+/// Returns the spelling of a reserved word used alone as a namespace declaration name, as in
+/// `namespace Default;` or `namespace List { ... }`, or `None` when the token at `pos` is not a
+/// keyword followed by `;` or `{`. `namespace` itself is refused, as PHP refuses it ("Cannot
+/// use 'Namespace' as namespace name"); a keyword glued into a longer name is already an
+/// identifier (see `crate::lexer::qualified_names`).
+fn single_reserved_namespace_name(tokens: &[SpannedToken], pos: usize) -> Option<String> {
+    let (token, metadata) = tokens.get(pos)?;
+    if matches!(token, Token::Identifier(_) | Token::Namespace) {
+        return None;
+    }
+    if !matches!(tokens.get(pos + 1), Some((Token::Semicolon | Token::LBrace, _))) {
+        return None;
+    }
+    crate::parser::keyword_name::bareword_name_from_token(token, metadata)
+}
+
 /// Parses a `use` import statement.
 ///
 /// Handles `use`, `use function`, and `use const` declarations, including:
@@ -95,7 +123,15 @@ pub(super) fn parse_use_stmt(
 ) -> Result<Stmt, CompileError> {
     *pos += 1; // consume use
 
-    let default_kind = consume_use_kind(tokens, pos).unwrap_or(UseKind::Class);
+    let default_kind = if *pos < tokens.len() && tokens[*pos].0 == Token::Function {
+        *pos += 1;
+        UseKind::Function
+    } else if *pos < tokens.len() && tokens[*pos].0 == Token::Const {
+        *pos += 1;
+        UseKind::Const
+    } else {
+        UseKind::Class
+    };
 
     let prefix = parse_use_name(
         tokens,
@@ -120,7 +156,15 @@ pub(super) fn parse_use_stmt(
     let mut all_imports = imports;
     while *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
         *pos += 1;
-        let item_kind = consume_use_kind(tokens, pos).unwrap_or_else(|| default_kind.clone());
+        let item_kind = if *pos < tokens.len() && tokens[*pos].0 == Token::Function {
+            *pos += 1;
+            UseKind::Function
+        } else if *pos < tokens.len() && tokens[*pos].0 == Token::Const {
+            *pos += 1;
+            UseKind::Const
+        } else {
+            default_kind.clone()
+        };
         let name = parse_use_name(
             tokens,
             pos,
@@ -140,24 +184,6 @@ pub(super) fn parse_use_stmt(
         },
         span,
     ))
-}
-
-/// Consumes a `function` or `const` import-kind prefix and returns its kind.
-///
-/// Returns `None`, consuming nothing, when no prefix is there. A `function` or `const` glued
-/// to a following `\` is not a prefix but the first segment of a class import, as in
-/// `use Function\Registry;`, which PHP 8 lexes as one qualified name (#826).
-fn consume_use_kind(tokens: &[SpannedToken], pos: &mut usize) -> Option<UseKind> {
-    let kind = match tokens.get(*pos).map(|(token, _)| token) {
-        Some(Token::Function) => UseKind::Function,
-        Some(Token::Const) => UseKind::Const,
-        _ => return None,
-    };
-    if super::names::keyword_starts_qualified_name(tokens, *pos) {
-        return None;
-    }
-    *pos += 1;
-    Some(kind)
 }
 
 /// Parses an optional `as Alias` clause after a use item name.
@@ -228,7 +254,15 @@ fn parse_group_use_items(
             )?;
         }
 
-        let kind = consume_use_kind(tokens, pos).unwrap_or_else(|| default_kind.clone());
+        let kind = if *pos < tokens.len() && tokens[*pos].0 == Token::Function {
+            *pos += 1;
+            UseKind::Function
+        } else if *pos < tokens.len() && tokens[*pos].0 == Token::Const {
+            *pos += 1;
+            UseKind::Const
+        } else {
+            default_kind.clone()
+        };
 
         let suffix = parse_use_name(
             tokens,
@@ -311,13 +345,14 @@ fn parse_use_name(
 
     let mut parts = Vec::new();
     loop {
-        let after_separator = kind == NameKind::FullyQualified || !parts.is_empty();
-        let part = tokens.get(*pos).and_then(|(token, metadata)| {
-            super::names::qualified_segment_at(tokens, *pos, after_separator)
-                .or_else(|| token_as_import_name(token, metadata))
-        });
-        match part {
-            Some(part) => {
+        match tokens.get(*pos) {
+            Some((token, metadata))
+                if name_part_from_token(token, metadata).is_some()
+                    || token_as_import_name(token, metadata).is_some() =>
+            {
+                let part = name_part_from_token(token, metadata)
+                    .or_else(|| token_as_import_name(token, metadata))
+                    .expect("import name part was checked immediately above");
                 parts.push(part);
                 *pos += 1;
             }

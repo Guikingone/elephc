@@ -15,7 +15,6 @@ use crate::parser::ast::{AttributeGroup, Expr, Stmt, StmtKind, TypeExpr};
 use crate::parser::expr::parse_expr;
 use crate::span::Span;
 
-use super::names::word_starts_qualified_name;
 use super::{expect_token, name_starts_at, parse_block, parse_name};
 
 /// Parses a `function` declaration: name, parameters, optional return type, and body.
@@ -170,7 +169,7 @@ fn type_starts_at(tokens: &[SpannedToken], index: usize) -> bool {
                 | Token::Static
                 | Token::Parent
         )
-    ) || word_starts_qualified_name(tokens, index)
+    )
 }
 
 /// Collapses a parsed union member list into its canonical `TypeExpr`.
@@ -214,14 +213,13 @@ fn parse_atomic_type_expr(
     span: Span,
 ) -> Result<TypeExpr, CompileError> {
     match tokens.get(*pos).map(|(t, _)| t) {
-        // A word glued to `\` starts a class name even when it alone would be a builtin type
-        // or a keyword: `Default\Palette $p`, `Static\Config $c`, `Int\Money $m` (#826).
-        Some(_) if word_starts_qualified_name(tokens, *pos) => Ok(TypeExpr::Named(parse_name(
-            tokens,
-            pos,
-            span,
-            "Expected type name",
-        )?)),
+        // A builtin type word followed by `\` is the first segment of a class name, as in
+        // `Int\Money $m` or `Array\Cursor $c` (#826): it is a class type, not `int`/`array`.
+        Some(Token::Identifier(_))
+            if matches!(tokens.get(*pos + 1).map(|(t, _)| t), Some(Token::Backslash)) =>
+        {
+            Ok(TypeExpr::Named(parse_name(tokens, pos, span, "Expected type name")?))
+        }
         Some(Token::Identifier(name)) if ident_matches(name, &["int", "integer"]) => {
             *pos += 1;
             Ok(TypeExpr::Int)

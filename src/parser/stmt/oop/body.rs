@@ -19,10 +19,7 @@ use crate::parser::expr::parse_expr;
 use crate::span::Span;
 
 use super::super::params::{looks_like_typed_param, parse_name_list, parse_type_expr};
-use super::super::{
-    expect_semicolon, expect_token, keyword_starts_qualified_name, parse_block,
-    parse_unqualified_name,
-};
+use super::super::{expect_semicolon, expect_token, parse_block, parse_unqualified_name};
 use super::method_params::parse_method_params;
 use super::traits::parse_trait_use;
 
@@ -459,8 +456,7 @@ fn parse_optional_property_type(
     if !matches!(
         tokens.get(*pos).map(|(t, _)| t),
         Some(Token::Identifier(_)) | Some(Token::Question) | Some(Token::Backslash)
-    ) && !keyword_starts_qualified_name(tokens, *pos)
-    {
+    ) {
         return Ok(None);
     }
     Ok(Some(parse_type_expr(tokens, pos, span)?))

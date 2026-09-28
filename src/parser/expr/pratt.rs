@@ -720,14 +720,6 @@ fn parse_instanceof_target(
         return Ok(InstanceOfTarget::Expr(Box::new(target)));
     }
     match tokens.get(*pos).map(|(token, _)| token) {
-        // `$x instanceof Static\Marker` names a class whose first segment is a reserved word.
-        _ if crate::parser::stmt::keyword_starts_qualified_name(tokens, *pos) => parse_name(
-            tokens,
-            pos,
-            span,
-            "Expected class or interface name after 'instanceof'",
-        )
-        .map(InstanceOfTarget::Name),
         Some(Token::Self_) => {
             *pos += 1;
             Ok(InstanceOfTarget::Name(Name::unqualified("self")))
