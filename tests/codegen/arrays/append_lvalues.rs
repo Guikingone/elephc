@@ -2,7 +2,8 @@
 //! End-to-end coverage for append l-values beyond a trailing `$var[] = $v` (issue #845): an
 //! append in the middle of a nested write, an append used as an assignment expression, `$this[]`
 //! and call-result appends on an `ArrayAccess` object, appends that reach `offsetSet` even when
-//! the class declares or inherits `append()`, and an append onto an array call result.
+//! the class declares or inherits `append()` or the receiver is a union of `ArrayAccess` classes,
+//! and an append onto an array call result.
 //!
 //! Called from:
 //! - `cargo test --test codegen_tests arrays::append_lvalues`.
@@ -200,6 +201,60 @@ echo count($object), " ", $object[1], " ", count($stack), " ", $stack->top(), "\
     assert_eq!(
         out,
         "null=7,append:xy\nLogged::offsetSet(null, 5)\nLogged::offsetSet(null, 6)\n2 6\n2 2 2 4\n"
+    );
+}
+
+/// Verifies an append on a non-nullable union of `ArrayAccess` classes calls `offsetSet(null, $v)`
+/// on whichever object the union holds, through a union parameter and a union function result,
+/// including a class with its own `append()` and an `ArrayObject` subclass overriding `offsetSet`,
+/// and that the string values it stores leave the heap clean.
+#[test]
+fn test_append_on_array_access_union_calls_offset_set_with_null() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Bag implements ArrayAccess {
+    public $log = [];
+    public function offsetExists($offset): bool { return false; }
+    public function offsetGet($offset): mixed { return null; }
+    public function offsetSet($offset, $value): void {
+        $this->log[] = "B:" . ($offset === null ? "null" : $offset) . "=" . $value;
+    }
+    public function offsetUnset($offset): void {}
+    public function append(string $a, string $b): void { $this->log[] = "append"; }
+}
+class Logged extends ArrayObject {
+    public $log = [];
+    public function offsetSet(mixed $key, mixed $value): void {
+        $this->log[] = "L:" . ($key === null ? "null" : $key) . "=" . $value;
+        parent::offsetSet($key, $value);
+    }
+}
+function add(Bag|Logged $target, string $value): void {
+    $target[] = $value;
+    $target[] = $value . "!";
+}
+function pick(bool $bag): Bag|Logged { return $bag ? new Bag() : new Logged(); }
+$bag = new Bag();
+$bag->append("x", "y");
+add($bag, "s1");
+$logged = new Logged();
+add($logged, "s2");
+$picked = pick(true);
+$picked[] = "s3";
+$other = pick(false);
+$other[] = "s" . 4;
+echo implode(",", $bag->log), " | ", implode(",", $picked->log), " | ";
+echo implode(",", $logged->log), " ", count($logged), " | ", implode(",", $other->log), "\n";
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        "append,B:null=s1,B:null=s1! | B:null=s3 | L:null=s2,L:null=s2! 2 | L:null=s4\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
     );
 }
 
