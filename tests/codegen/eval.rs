@@ -33514,3 +33514,34 @@ echo function_exists("sodium_crypto_box_seal") ? "y" : "n";');
         )
     );
 }
+
+/// Verifies eval code calling a compiled static method with a `string ...$paths` variadic.
+///
+/// The compiled body stores that tail as a packed string array and is specialized on it, but the
+/// interpreter handed it boxed Mixed slots: Symfony's `Path::join()`, called from an interpreted
+/// class, ran `array_filter()` over them and asked the allocator for 8 GB ("heap memory
+/// exhausted"). Expected output is php 8.5.10's.
+#[test]
+fn test_eval_call_to_compiled_string_variadic_static_method() {
+    let out = compile_and_run(
+        r#"<?php
+final class Path {
+    public static function join(string ...$paths): string {
+        return implode('/', array_filter($paths, fn ($p) => $p !== ''));
+    }
+    public static function first(string $a, string ...$rest): string {
+        return $a . '+' . count($rest) . ':' . implode(',', $rest);
+    }
+}
+echo Path::join('a', '', 'c'), "\n";
+eval('
+echo Path::join("/var", "", "assets.json"), "\n";
+echo Path::join("x"), "|", Path::join(), "\n";
+echo Path::first("q", "w", "e"), "\n";
+$parts = ["m", "n"];
+echo Path::join(...$parts), "\n";
+');
+"#,
+    );
+    assert_eq!(out, "a/c\n/var/assets.json\nx|\nq+2:w,e\nm/n\n");
+}
