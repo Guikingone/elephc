@@ -472,9 +472,13 @@ name. `ReflectionMethod::getShortName()` reports the reflected method name,
 while `ReflectionMethod::getNamespaceName()` reports an empty string and
 `inNamespace()` reports `false`, matching PHP's method reflection behavior.
 `ReflectionFunction` and `ReflectionMethod` report eval user-symbol defaults
-through `isInternal()`, `isUserDefined()`, `isClosure()`, `returnsReference()`,
+through `isInternal()`, `isUserDefined()`, `isClosure()`,
 `isGenerator()`, `isVariadic()`, `isStatic()`,
-`hasTentativeReturnType()`, and `getTentativeReturnType()`. `hasReturnType()`
+`hasTentativeReturnType()`, and `getTentativeReturnType()`.
+`returnsReference()` reports the reflected declaration: `true` for a compiled
+`function &f()` or `function &m()` and for an eval-declared `&get` property
+hook. Eval code itself cannot declare a by-reference function, method, or
+closure (the fragment is rejected), so those report `false`. `hasReturnType()`
 and `getReturnType()` expose retained eval return type metadata for supported
 named, nullable, union, and intersection declarations, including `void` and
 `never` as builtin non-nullable named types.

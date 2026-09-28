@@ -187,7 +187,8 @@ fn parse_fragment_accepts_readonly_class_modifier() {
     );
 }
 
-/// Verifies concrete property hooks lower to property metadata plus accessor methods.
+/// Verifies concrete property hooks lower to property metadata plus accessor methods, the `&get`
+/// accessor keeping its by-reference declaration for `ReflectionMethod::returnsReference()`.
 #[test]
 fn parse_fragment_accepts_concrete_class_property_hooks() {
     let program = parse_fragment(
@@ -222,7 +223,8 @@ fn parse_fragment_accepts_concrete_class_property_hooks() {
                     Vec::new(),
                     vec![EvalStmt::Return(Some(EvalExpr::Const(EvalConst::Int(7))))]
                 )
-                .with_source_location(EvalSourceLocation::new(3, 3)),
+                .with_source_location(EvalSourceLocation::new(3, 3))
+                .with_returns_by_ref(true),
                 EvalClassMethod::new(
                     "__propset_value",
                     vec!["value".to_string()],

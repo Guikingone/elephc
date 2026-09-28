@@ -316,7 +316,8 @@ impl Parser {
             params,
             body,
         )
-        .with_source_location(EvalSourceLocation::new(source_start_line, source_end_line));
+        .with_source_location(EvalSourceLocation::new(source_start_line, source_end_line))
+        .with_returns_by_ref(returns_by_ref);
         if is_set {
             method = method.with_parameter_types(vec![
                 set_hook_type.clone().or_else(|| property_type.cloned()),
