@@ -858,6 +858,13 @@ the DESCENDANT's visibility.
 
 `src/types/checker/schema/class_constants.rs` validates typed constant declarations on classes, interfaces, enums, and traits. Validation is deferred until all class-like schemas exist, so object and interface relationships named in constant types resolve. Declared types are recorded in `constant_types`; initializer values are checked strictly against the declared type apart from PHP's allowed int-to-float widening, with a conservative `Mixed` inference accepted when an initializer cannot be narrowed statically. Inherited redeclarations must satisfy covariant type contracts, and constants declared `final` (PHP 8.1+) cannot be redeclared.
 
+`constants` on `ClassInfo` and `InterfaceInfo` is a map and carries no order, so each schema also records `constant_order`, the names in PHP's declaration order:
+- a class lists its own constants as declared, then those its traits bring in (`src/types/traits/merge.rs` sorts a compatible redeclaration back to its own position);
+- an enum interleaves cases and constants by their source spans, since the parser keeps them in two lists;
+- an interface lists its own constants, then each parent interface's.
+
+`ReflectionClass::getConstants()` / `getReflectionConstants()` build PHP's full order from these per-class lists. That order is the class's own names, then the parent chain, then the implemented interfaces, deepest ancestor first. The compiled path does this in `src/codegen/lower_inst/objects/reflection/class_members.rs`, and the eval bridge in `src/codegen/eval_class_constant_helpers.rs`, so compiled and `eval()` Reflection agree. A name missing from a recorded order still appears, after the ordered ones, sorted.
+
 For abstract methods, the checker keeps the inherited signature but intentionally leaves the implementation-class entry unset until a concrete subclass provides a body. Concrete classes are rejected if any abstract or interface requirement remains unresolved after inheritance + trait flattening + interface conformance checks.
 
 When checking property access (`$obj->prop`), the type checker validates that:
