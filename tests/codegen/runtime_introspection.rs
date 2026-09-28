@@ -138,3 +138,38 @@ echo function_exists("getmypid") ? "known" : "unknown";
     );
     assert_eq!(out, "int|positive|stable|same|known");
 }
+
+/// Verifies both builtins are reachable through runtime-selected string callables, not only
+/// through direct calls: a variable call, `call_user_func()`, `call_user_func_array()`,
+/// `is_callable()` and `array_map()` with a name only known at run time (it comes from `$argv`,
+/// so no compile-time binding can resolve it), spelled in mixed case, plus the same calls inside
+/// `eval()`.
+///
+/// `getmypid()` used to be refused by runtime string dispatch ("Call to undefined function")
+/// because its typed target had no runtime-callable wrapper contract. Expected output is
+/// PHP 8.5.10's.
+#[test]
+fn test_runtime_named_calls_reach_getmypid_and_is_countable() {
+    let out = compile_and_run(
+        r#"<?php
+$pidName = $argv[1] ?? "GetMyPid";
+$countableName = $argv[2] ?? "IS_COUNTABLE";
+$pid = getmypid();
+echo $pidName() === $pid ? "call" : "bad", "|";
+echo call_user_func($pidName) === $pid ? "cuf" : "bad", "|";
+echo call_user_func_array($pidName, []) === $pid ? "cufa" : "bad", "|";
+echo is_callable($pidName) ? "callable" : "bad", "|";
+$first = getmypid(...);
+echo $first() === $pid ? "fcc" : "bad", "\n";
+var_dump($countableName([1, 2]), $countableName("text"));
+var_dump(call_user_func($countableName, new ArrayObject([])));
+echo json_encode(array_map($countableName, [[], 1, new ArrayObject([]), null])), "\n";
+echo eval('$n = "getmypid"; return $n();') === $pid ? "eval-call" : "bad", "|";
+echo eval('$c = "is_countable"; return $c(7) ? "bad" : "eval-var";'), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "call|cuf|cufa|callable|fcc\nbool(true)\nbool(false)\nbool(true)\n[true,false,true,false]\neval-call|eval-var\n"
+    );
+}
