@@ -33545,3 +33545,31 @@ echo Path::join(...$parts), "\n";
     );
     assert_eq!(out, "a/c\n/var/assets.json\nx|\nq+2:w,e\nm/n\n");
 }
+
+/// Verifies eval code can open `php://stdout` and `php://stderr` in any write mode.
+///
+/// The interpreter's `fopen()` knew no `php://std*` stream, so Monolog's `StreamHandler`
+/// (`fopen('php://stderr', 'a')`, the Symfony demo's production log target) threw "could not be
+/// opened in append mode" on every request. Closing one must not close the process descriptor.
+/// Expected output is php 8.5.10's.
+#[test]
+fn test_eval_opens_php_std_streams() {
+    let out = compile_and_run(
+        r#"<?php
+eval('
+foreach (["a", "ab", "w", "wb"] as $m) {
+    $h = fopen("php://stderr", $m);
+    echo $m, "=", is_resource($h) ? "ok" : "no", "\n";
+    fclose($h);
+}
+$o = fopen("php://stdout", "a");
+fwrite($o, "through-stdout\n");
+fclose($o);
+$o = fopen("PHP://STDOUT", "w");
+fwrite($o, "again\n");
+');
+echo "end\n";
+"#,
+    );
+    assert_eq!(out, "a=ok\nab=ok\nw=ok\nwb=ok\nthrough-stdout\nagain\nend\n");
+}
