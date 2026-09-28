@@ -888,7 +888,7 @@ echo sqlSortKeyword(SortDirection::Descending); // DESC
 - `__set($name, $value)` — writing an undeclared property
 - `__isset($name)` — `isset()`/`empty()` on an undeclared or inaccessible property
 - `__unset($name)` — `unset()` of an undeclared or inaccessible property
-- `__invoke(...$args)` — calling an object directly, including `$this(...)` from inside its own class
+- `__invoke(...$args)` — calling an object directly, including `$this(...)` from inside its own class. The class that contains `$this(...)` must declare or inherit `__invoke`: an abstract parent that relies on a subclass's `__invoke` is refused at compile time, where PHP resolves it at run time
 - `__call($name, $args)` — intercepting missing instance methods
 - `__callStatic($name, $args)` — intercepting missing static methods
 

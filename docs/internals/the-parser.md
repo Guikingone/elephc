@@ -412,6 +412,7 @@ Before looking for infix operators, the parser handles **prefix** constructs —
 | `new` + `self` / `static` / `parent` | Parse scoped object instantiation → `NewScopedObject`; the argument list is optional |
 | `<receiver>::class` | Parse `MyClass::class`, `\App\C::class`, `self::class`, `parent::class`, `static::class` → `ClassConstant` |
 | `<object-expression>::class` | Parse `$object::class`, `make_object()::class` → `ObjectClassName` |
+| `$this` + `(` | Parse an invocation of the current object → `ExprCall` whose callee is `This` (the same node as `($this)(...)`), which reaches `__invoke` only, never `__call` |
 | `$this` | Return `This` node |
 | `...` + expr | Parse spread/unpack → `Spread` |
 | `ptr_cast` + `<Type>` + `(` | Parse pointer cast syntax → `PtrCast` |

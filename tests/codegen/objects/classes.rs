@@ -1412,6 +1412,37 @@ $l = new L(); echo $l->c1 + $l->c2 + $l->hooked, "\n";
     );
 }
 
+/// `$this(...)` reaches an `__invoke` the class inherits, takes from a trait, or overrides, and
+/// dispatches to the receiver's own implementation. Regression for #846.
+#[test]
+fn test_invoking_this_reaches_inherited_and_trait_invoke() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public function __invoke(int $n): string { return "base:" . $n; }
+}
+class Child extends Base {
+    public function twice(): string { return $this(1) . "|" . $this(2); }
+}
+trait Greets {
+    public function __invoke(string $who): string { return "hi " . $who; }
+}
+class UsesTrait {
+    use Greets;
+    public function run(): string { return $this("trait"); }
+}
+class Over extends Base {
+    public function __invoke(int $n): string { return "over:" . $n; }
+    public function viaParent(): string { return $this(3); }
+}
+echo (new Child())->twice(), "\n";
+echo (new UsesTrait())->run(), "\n";
+echo (new Over())->viaParent(), "\n";
+"#,
+    );
+    assert_eq!(out, "base:1|base:2\nhi trait\nover:3\n");
+}
+
 /// `$this(...)` invokes the current object through its `__invoke`, with positional or named
 /// arguments, as a statement or inside an expression. It failed to parse with
 /// `Expected ';'`. Regression for #846.

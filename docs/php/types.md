@@ -418,6 +418,7 @@ Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are
 - Inside a namespace that declares its own constant named after a predefined one (`const NAN = …;`, `const PHP_EOL = …;`), an unqualified `NAN` / `PHP_EOL` still reads the global constant, where PHP reads the namespaced one first. Read the namespaced constant through `constant(__NAMESPACE__ . '\NAN')`, or give it a name no predefined constant uses (#1349).
 - A `mixed` or union bound passed to `random_int()`, `mt_rand()` or `rand()` is coerced like `(int)`: an int passes through, a float truncates, a numeric string parses. A non-numeric string becomes `0`, where PHP throws a `TypeError` for the `int` parameter.
 - A property default of `self::class` or `parent::class` is refused in the backend; PHP resolves it to the declaring class (or its parent). A named `Foo::class` default works. Spell the class out, or assign the value in the constructor (#1351).
+- Invoking an object (`$this(...)`, `($this)(...)`, `$obj(...)`) is checked against the static class: the class must declare or inherit `__invoke`. An abstract parent calling `$this()` when only a subclass defines `__invoke` is refused at compile time, where PHP resolves the method at run time.
 - Variable variables (`$$name`, `${$expr}`) are not supported yet. Native AOT
   locals use fixed compile-time stack slots; supporting a runtime-computed name
   will require routing the access through Magician's materialized named scope
