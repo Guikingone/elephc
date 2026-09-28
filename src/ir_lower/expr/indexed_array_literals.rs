@@ -342,7 +342,7 @@ pub(super) fn assoc_array_literal_type_from_entries(
     for entry in entries {
         let next = match entry {
             ArrayEntry::Spread(inner) => {
-                match infer_expr_type_syntactic(inner).codegen_repr() {
+                match array_literal_spread_source_type_for_ir(ctx, inner).codegen_repr() {
                     PhpType::Array(elem) => elem.codegen_repr(),
                     PhpType::AssocArray { value, .. } => value.codegen_repr(),
                     _ => PhpType::Mixed,
@@ -614,6 +614,9 @@ pub(super) fn array_literal_element_type_for_ir(
             .constant_value(name.as_str())
             .map(|(_, ty)| ir_array_storage_type(ty))
             .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            scoped_constant_value_type_for_ir(ctx, receiver, name, item)
+        }
         ExprKind::Variable(name) => ir_array_storage_type(
             ctx.local_types
                 .get(name)
