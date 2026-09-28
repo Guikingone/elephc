@@ -170,6 +170,11 @@ pub(super) fn reflection_default_value_contains_object(value: &ReflectionParamet
 pub(super) fn reflection_literal_parameter_default_value(
     default: &Expr,
 ) -> Option<ReflectionParameterDefaultValue> {
+    if let Some(ExprKind::StringLiteral(value)) =
+        crate::codegen::literal_defaults::fold_named_class_constant(&default.kind)
+    {
+        return Some(ReflectionParameterDefaultValue::Str(value));
+    }
     match &default.kind {
         ExprKind::IntLiteral(value) => Some(ReflectionParameterDefaultValue::Int(*value)),
         ExprKind::BoolLiteral(value) => Some(ReflectionParameterDefaultValue::Bool(*value)),
@@ -210,6 +215,11 @@ pub(super) fn reflection_assoc_array_default_value(
 
 /// Converts one supported associative-array key expression into PHP-normalized metadata.
 pub(super) fn reflection_default_array_key(key: &Expr) -> Option<ReflectionDefaultArrayKey> {
+    if let Some(ExprKind::StringLiteral(value)) =
+        crate::codegen::literal_defaults::fold_named_class_constant(&key.kind)
+    {
+        return reflection_default_string_array_key(&value);
+    }
     match &key.kind {
         ExprKind::IntLiteral(value) => Some(ReflectionDefaultArrayKey::Int(*value)),
         ExprKind::BoolLiteral(value) => Some(ReflectionDefaultArrayKey::Int(i64::from(*value))),
