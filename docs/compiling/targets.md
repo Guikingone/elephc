@@ -70,6 +70,9 @@ or `--emit cdylib`; standalone `--emit executable` output is rejected for both
 iOS device and Simulator targets. A linked iOS library requires macOS with the
 matching Xcode SDK. `--emit-asm` can stop before assembling, but it must still be
 paired with a library emit kind so the assembly contains the public library ABI.
+The full implementation specification (library ABI, host-safety boundary,
+native dependencies, and sandbox diagnostics) lives in
+[iOS Target Support](../specs/ios-target.md).
 
 For the target-aware ABI and runtime details behind each platform, see
 [Architecture](../internals/architecture.md) and
