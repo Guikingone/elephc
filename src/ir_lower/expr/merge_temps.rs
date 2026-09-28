@@ -160,8 +160,50 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
             property_access_expr_type_for_ir(ctx, object, property)
                 .unwrap_or_else(|| fallback_expr_type(expr))
         }
+        // A static property is typed by the same helper that types its `load_static_property`,
+        // and each call by the declared metadata its lowering returns. The syntactic fallback
+        // answers `Int` for all of them, which sized the merge temp as an integer and cast an
+        // array arm to its element count, a string arm to `0` and an object arm to `0` (#1501).
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            static_property_result_type(ctx, receiver, property, expr)
+        }
+        ExprKind::FunctionCall { .. }
+        | ExprKind::MethodCall { .. }
+        | ExprKind::StaticMethodCall { .. } => {
+            call_expr_type_for_merge(ctx, expr).unwrap_or_else(|| fallback_expr_type(expr))
+        }
         _ => fallback_expr_type(expr),
     }
+}
+
+/// Returns the result type a function, method, or static-method call materializes, read from
+/// the same declared metadata its lowering uses, or `None` when that metadata is unavailable.
+///
+/// A builtin answers through `builtin_call_result_type_for_ir`, which keeps a scalar result
+/// precise and stamps anything else `Mixed`: the checker's container type for a builtin can
+/// disagree with the value its runtime contract really produces, and `Mixed` is the one merge
+/// type that boxes either shape correctly.
+fn call_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<PhpType> {
+    let php_type = match &expr.kind {
+        ExprKind::FunctionCall { name, .. } => {
+            let canonical = name.as_str();
+            if let Some(sig) = ctx.functions.get(canonical) {
+                eir_user_function_return_type(sig)
+            } else if let Some(sig) = ctx.extern_functions.get(canonical) {
+                sig.return_type.clone()
+            } else {
+                builtin_call_result_type_for_ir(ctx, expr.span)?
+            }
+        }
+        ExprKind::MethodCall { object, method, .. } => {
+            method_call_expr_type_for_ir(ctx, object, method)?
+        }
+        ExprKind::StaticMethodCall { receiver, method, .. } => {
+            static_method_call_expr_type_for_ir(ctx, receiver, method)?
+        }
+        _ => return None,
+    };
+    Some(normalize_value_php_type(php_type.codegen_repr()))
 }
 
 /// Coerces branch values to the hidden temp storage type before storing them.

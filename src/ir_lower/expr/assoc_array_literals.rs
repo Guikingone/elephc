@@ -179,6 +179,11 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
             property,
         )
         .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value))),
+        // Typed like the `load_static_property` that lowers it; the syntactic fallback answers
+        // `Int` and stamped an array, string or object element as an integer (#1501).
+        ExprKind::StaticPropertyAccess { receiver, property } => ir_array_storage_type(
+            static_property_result_type(ctx, receiver, property, value),
+        ),
         _ => ir_array_storage_type(infer_expr_type_syntactic(value)),
     }
 }
