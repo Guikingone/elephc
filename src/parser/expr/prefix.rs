@@ -11,7 +11,7 @@
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
 use crate::names::Name;
-use crate::parser::ast::{CallableTarget, Expr, ExprKind, MagicConstant, StaticReceiver};
+use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind, MagicConstant, StaticReceiver};
 use crate::span::Span;
 
 use super::assignment_targets::{
@@ -55,6 +55,7 @@ pub(super) fn parse_prefix(
 
     match &tokens[*pos].0 {
         Token::Minus => parse_unary(tokens, pos, span, ExprKind::Negate, 35),
+        Token::Plus => parse_unary(tokens, pos, span, unary_plus, 35),
         Token::Bang => parse_unary(tokens, pos, span, ExprKind::Not, 35),
         Token::Tilde => parse_unary(tokens, pos, span, ExprKind::BitNot, 35),
         Token::At => parse_unary(tokens, pos, span, ExprKind::ErrorSuppress, 35),
@@ -390,6 +391,18 @@ fn parse_unary(
     *pos += 1;
     let inner = parse_expr_bp(tokens, pos, bp)?;
     Ok(Expr::new(ctor(Box::new(inner)), span))
+}
+
+/// Builds unary plus `+expr` as `expr * 1`, which is exactly what PHP compiles it to
+/// (`zend_compile_unary_pm` emits `ZEND_MUL expr, 1`): numeric strings convert to int or
+/// float, `null`/`bool` to int, and an operand `*` rejects is rejected the same way.
+fn unary_plus(inner: Box<Expr>) -> ExprKind {
+    let span = inner.span;
+    ExprKind::BinaryOp {
+        left: inner,
+        op: BinOp::Mul,
+        right: Box::new(Expr::new(ExprKind::IntLiteral(1), span)),
+    }
 }
 
 /// Parses a prefix `++` or `--` increment/decrement operator. Consumes the operator,
