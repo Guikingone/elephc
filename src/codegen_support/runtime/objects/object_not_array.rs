@@ -129,15 +129,6 @@ fn emit_class_named_throw_aarch64(emitter: &mut Emitter, spec: &ClassNamedThrow)
     let ready = format!("{}_name_ready", spec.local);
     emitter.blank();
     emitter.comment(&format!("--- runtime: throw {} ---", spec.what));
-    if let Some(name_label) = spec.name_label {
-        emitter.label_global(name_label);
-        emitter.instruction("sub sp, sp, #48");                                 // reserve the same frame as the object entry
-        emitter.instruction("stp x29, x30, [sp, #32]");                         // preserve the caller frame and return address
-        emitter.instruction("add x29, sp, #32");                                // establish a stable Throwable-construction frame
-        emitter.instruction("mov x11, x1");                                     // the caller already knows the class-name pointer
-        emitter.instruction("mov x12, x2");                                     // and its byte length
-        emitter.instruction(&format!("b {ready}"));                             // share the message and Throwable construction
-    }
     emitter.label_global(spec.label);
 
     // Stack (48 bytes): [sp, #0] holds the message pair across the object allocation.
@@ -157,6 +148,19 @@ fn emit_class_named_throw_aarch64(emitter: &mut Emitter, spec: &ClassNamedThrow)
     abi::emit_symbol_address(emitter, "x11", "_unser_type_object");
     emitter.instruction("mov x12, #6");                                         // fallback length for the bare word "object"
     emitter.label(&ready);
+    if let Some(name_label) = spec.name_label {
+        let message = format!("{}_message", spec.label);
+        emitter.instruction(&format!("b {message}"));                           // join the message construction the name entry shares
+        emitter.label_global(name_label);
+        emitter.instruction("sub sp, sp, #48");                                 // reserve the same frame as the object entry
+        emitter.instruction("stp x29, x30, [sp, #32]");                         // preserve the caller frame and return address
+        emitter.instruction("add x29, sp, #32");                                // establish a stable Throwable-construction frame
+        emitter.instruction("mov x11, x1");                                     // the caller already knows the class-name pointer
+        emitter.instruction("mov x12, x2");                                     // and its byte length
+        // Reached from the object entry's atom by an unconditional branch only, so a shared
+        // label keeps it alive under macOS dead stripping without splitting this atom.
+        emitter.label_shared(&message);
+    }
 
     abi::emit_symbol_address(emitter, "x1", spec.prefix_symbol);                // concat left operand pointer
     emitter.instruction(&format!("mov x2, #{}", spec.prefix_len));              // concat left operand length
@@ -196,15 +200,6 @@ fn emit_class_named_throw_x86_64(emitter: &mut Emitter, spec: &ClassNamedThrow) 
     let ready = format!("{}_name_ready", spec.local);
     emitter.blank();
     emitter.comment(&format!("--- runtime: throw {} ---", spec.what));
-    if let Some(name_label) = spec.name_label {
-        emitter.label_global(name_label);
-        emitter.instruction("push rbp");                                        // preserve the caller frame pointer
-        emitter.instruction("mov rbp, rsp");                                    // establish the same frame as the object entry
-        emitter.instruction("sub rsp, 32");                                     // reserve the message pair, keeping rsp aligned
-        emitter.instruction("mov r11, rax");                                    // the caller already knows the class-name pointer
-        emitter.instruction("mov r12, rdx");                                    // and its byte length
-        emitter.instruction(&format!("jmp {ready}"));                           // share the message and Throwable construction
-    }
     emitter.label_global(spec.label);
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
@@ -224,6 +219,19 @@ fn emit_class_named_throw_x86_64(emitter: &mut Emitter, spec: &ClassNamedThrow) 
     emitter.instruction("lea r11, [rip + _unser_type_object]");                 // fall back to the bare word "object"
     emitter.instruction("mov r12, 6");                                          // fallback name length
     emitter.label(&ready);
+    if let Some(name_label) = spec.name_label {
+        let message = format!("{}_message", spec.label);
+        emitter.instruction(&format!("jmp {message}"));                         // join the message construction the name entry shares
+        emitter.label_global(name_label);
+        emitter.instruction("push rbp");                                        // preserve the caller frame pointer
+        emitter.instruction("mov rbp, rsp");                                    // establish the same frame as the object entry
+        emitter.instruction("sub rsp, 32");                                     // reserve the message pair, keeping rsp aligned
+        emitter.instruction("mov r11, rax");                                    // the caller already knows the class-name pointer
+        emitter.instruction("mov r12, rdx");                                    // and its byte length
+        // Reached from the object entry's atom by an unconditional jump only, so a shared
+        // label keeps it alive under macOS dead stripping without splitting this atom.
+        emitter.label_shared(&message);
+    }
 
     emitter.instruction(&format!("lea rax, [rip + {}]", spec.prefix_symbol));   // concat left operand pointer
     emitter.instruction(&format!("mov rdx, {}", spec.prefix_len));              // concat left operand length
