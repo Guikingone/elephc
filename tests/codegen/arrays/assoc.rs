@@ -1112,3 +1112,40 @@ var_dump(f());
     assert_eq!(out.stdout, "array(1) {\n  [\"x\"]=>\n  string(1) \"s\"\n}\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A mismatched write through a by-reference parameter or a `use (&$c)` capture, while another
+/// variable still shares the hash, splits it once: the sharer keeps the original entries, the
+/// written name sees the new ones, and nothing is released twice. Regression for #1508.
+#[test]
+fn test_mismatched_value_write_through_by_ref_param_and_capture_keeps_sharer() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function p(&$m) {
+    $m = ["a" => "s"];
+    $f = $m;
+    $m[] = 5;
+    $m["k"] = 1.5;
+    return $f;
+}
+$m = ["z" => 1];
+var_dump(p($m));
+var_dump($m);
+$c = ["x" => "s"];
+$g = $c;
+$fn = function () use (&$c) { $c[] = 5; };
+$fn();
+var_dump($g, $c);
+"#,
+    );
+    assert!(out.success, "program exited non-zero: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "array(1) {\n  [\"a\"]=>\n  string(1) \"s\"\n}\n",
+            "array(3) {\n  [\"a\"]=>\n  string(1) \"s\"\n  [0]=>\n  int(5)\n  [\"k\"]=>\n  float(1.5)\n}\n",
+            "array(1) {\n  [\"x\"]=>\n  string(1) \"s\"\n}\n",
+            "array(2) {\n  [\"x\"]=>\n  string(1) \"s\"\n  [0]=>\n  int(5)\n}\n",
+        )
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
