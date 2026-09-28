@@ -86,6 +86,11 @@ var_dump(getenv("LATE"));        // string(1) "1"
 var_dump(isset($_ENV["LATE"]));  // bool(false)
 ```
 
+Code run by `eval()` sees the same superglobals from every scope. A fragment
+that names one the compiled program never spelled gets it created with these
+same contents when the fragment starts; see
+[Scope behavior](eval.md#scope-behavior) for how such a value is shared.
+
 #### Known limitation
 
 Reading an **element** of the nested `$_SERVER['argv']` does not work: the index

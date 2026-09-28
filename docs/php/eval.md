@@ -143,6 +143,23 @@ alias compiler-known program-global storage, and `global $argc` / `global
 $argv` inside function eval fragments alias the CLI argument globals. Unsetting
 such a local alias removes the alias without unsetting the global value.
 
+Superglobals (`$_SERVER`, `$_ENV`, `$_GET`, `$_POST`, `$_COOKIE`, `$_FILES`,
+`$_REQUEST`, `$_SESSION`) resolve through the global scope from every fragment,
+with no `global` statement, so a fragment running inside a function reads and
+writes the values the compiled program holds. When a fragment names a CLI
+superglobal that the compiled program never created, eval creates it as the
+fragment starts, the way PHP's `auto_globals_jit` does, with the contents a
+compiled CLI program gives it (see
+[System & I/O](system-and-io.md)): the environment in `$_ENV`, the environment
+plus the CLI keys in `$_SERVER`, and empty request arrays; `$_SESSION` is never
+created. Two differences remain for such an eval-created superglobal. It is
+created when first named rather than at startup, so it includes variables that
+`putenv()` set before that point. And it belongs to the eval global scope of
+the call that created it: top-level fragments share one, but a fragment inside
+a later function call starts from a fresh copy and does not see writes made
+through another call. Naming the superglobal anywhere in the compiled program
+makes it one shared value everywhere.
+
 ## Supported statements
 
 | Construct | Support |

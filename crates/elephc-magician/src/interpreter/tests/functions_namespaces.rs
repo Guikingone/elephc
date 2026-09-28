@@ -338,6 +338,73 @@ fn execute_program_reference_alias_to_global_updates_source_global() {
     assert_eq!(values.get(global), FakeValue::Int(4));
     assert!(global_scope.visible_cell("alias").is_none());
 }
+
+/// Verifies superglobals resolve through the context global scope from a function-like scope
+/// while an eval call is executing, with no `global` statement, as they do in PHP (#935).
+///
+/// The compiled program synchronizes the superglobals it names into that global scope, so a
+/// read sees its value, a write lands there for the reload, and a CLI superglobal the fragment
+/// names but nobody created (`$_ENV`) is seeded there rather than in the local scope.
+#[test]
+fn execute_program_superglobals_resolve_through_the_global_scope() {
+    let program = parse_fragment(
+        br#"echo $_SERVER["k"]; $_SERVER["w"] = "x"; return is_array($_ENV);"#,
+    )
+    .expect("parse eval fragment");
+    let reread = parse_fragment(br#"return $_SERVER["w"];"#).expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut global_scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let server = values.assoc_new(1).expect("allocate server array");
+    let key = values.string("k").expect("allocate key");
+    let value = values.string("v").expect("allocate value");
+    let server = values.array_set(server, key, value).expect("seed server array");
+    global_scope.set("_SERVER", server, ScopeCellOwnership::Owned);
+    context.set_global_scope(&mut global_scope);
+    context.push_eval_backtrace_boundary();
+
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("execute eval ir");
+    let mut other_scope = ElephcEvalScope::new();
+    let written = execute_program_with_context(&mut context, &reread, &mut other_scope, &mut values)
+        .expect("execute second eval ir");
+    context.pop_eval_backtrace_boundary();
+
+    assert_eq!(values.output, "v");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+    assert_eq!(values.get(written), FakeValue::String("x".to_string()));
+    assert!(global_scope.visible_cell("_ENV").is_some());
+    assert!(scope.visible_cell("_ENV").is_none());
+    assert!(scope.visible_cell("_SERVER").is_none());
+}
+
+/// Verifies a context outside an executing eval call keeps superglobals local.
+///
+/// A callback can run in a context retained past the native frame that installed its global
+/// scope, so the redirect is limited to executing eval calls: here the global scope's
+/// `$_SERVER` is left alone and the fragment gets its own CLI `$_SERVER`.
+#[test]
+fn execute_program_superglobals_stay_local_outside_an_eval_call() {
+    let program = parse_fragment(br#"return $_SERVER["k"] ?? "absent";"#)
+        .expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut global_scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let server = values.assoc_new(1).expect("allocate server array");
+    let key = values.string("k").expect("allocate key");
+    let value = values.string("v").expect("allocate value");
+    let server = values.array_set(server, key, value).expect("seed server array");
+    global_scope.set("_SERVER", server, ScopeCellOwnership::Owned);
+    context.set_global_scope(&mut global_scope);
+
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::String("absent".to_string()));
+    assert!(scope.visible_cell("_SERVER").is_some());
+}
 /// Verifies named calls reject positional arguments that follow named arguments.
 #[test]
 fn execute_program_rejects_positional_after_named_arg() {

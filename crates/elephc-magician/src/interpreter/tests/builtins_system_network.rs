@@ -596,6 +596,55 @@ return putenv(assignment: \"ELEPHC_EVAL_PUTENV_NUL=\");",
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval creates the CLI superglobals a fragment names, with the contents PHP's CLI SAPI
+/// gives them, when nothing synchronized them in (#935).
+///
+/// `$_ENV` is the environment, `$_SERVER` the environment plus the CLI keys (the path-shaped
+/// ones name `argv[0]`), the request arrays are empty, and `$_SESSION` stays undefined. Like
+/// PHP's `auto_globals_jit`, the values are created when the fragment starts, so a variable the
+/// fragment itself `putenv()`s afterwards is not in `$_ENV`. Fragments that name no superglobal
+/// get none, and a value already in scope is never replaced.
+#[test]
+fn execute_program_seeds_named_cli_superglobals() {
+    let program = parse_fragment(
+        br#"putenv("ELEPHC_EVAL_SUPERGLOBAL_JIT=late");
+echo isset($_ENV["PATH"]) ? "env" : "no-env";
+echo ":", $_ENV["ELEPHC_EVAL_SUPERGLOBAL_JIT"] ?? "absent";
+echo ":", isset($_SERVER["PATH"]) ? "server-env" : "no-server-env";
+echo ":", $_SERVER["argc"] === count($_SERVER["argv"]) ? "argc" : "bad";
+echo ":", $_SERVER["PHP_SELF"] === $_SERVER["argv"][0] && $_SERVER["SCRIPT_NAME"] === $_SERVER["argv"][0]
+    && $_SERVER["SCRIPT_FILENAME"] === $_SERVER["argv"][0] && $_SERVER["PATH_TRANSLATED"] === $_SERVER["argv"][0] ? "self" : "bad";
+echo ":", $_SERVER["DOCUMENT_ROOT"] === "" ? "root" : "bad";
+echo ":", is_int($_SERVER["REQUEST_TIME"]) && is_float($_SERVER["REQUEST_TIME_FLOAT"]) ? "time" : "bad";
+echo ":", count($_GET) + count($_POST) + count($_COOKIE) + count($_FILES) + count($_REQUEST);
+echo ":", isset($_SESSION) ? "bad" : "no-session";
+return "done";"#,
+    )
+    .expect("parse eval fragment");
+    let unnamed = parse_fragment(br#"return array_key_exists("_ENV", get_defined_vars());"#)
+        .expect("parse eval fragment");
+    let kept = parse_fragment(br#"return $_ENV;"#).expect("parse eval fragment");
+    let mut values = FakeOps::default();
+
+    let mut scope = ElephcEvalScope::new();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+    let mut unnamed_scope = ElephcEvalScope::new();
+    let unnamed_result =
+        execute_program(&unnamed, &mut unnamed_scope, &mut values).expect("execute eval ir");
+    let mut kept_scope = ElephcEvalScope::new();
+    let mine = values.string("mine").expect("allocate existing value");
+    kept_scope.set("_ENV", mine, ScopeCellOwnership::Owned);
+    let kept_result = execute_program(&kept, &mut kept_scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "env:absent:server-env:argc:self:root:time:0:no-session"
+    );
+    assert_eq!(values.get(result), FakeValue::String("done".to_string()));
+    assert_eq!(values.get(unnamed_result), FakeValue::Bool(false));
+    assert_eq!(values.get(kept_result), FakeValue::String("mine".to_string()));
+}
+
 /// Verifies eval `getenv()` with no name, a null name, and `local_only` answers the environment.
 #[test]
 fn execute_program_dispatches_getenv_whole_environment() {
