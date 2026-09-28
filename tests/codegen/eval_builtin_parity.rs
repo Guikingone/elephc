@@ -793,8 +793,11 @@ echo htmlspecialchars($s), ";", htmlentities($s, ENT_NOQUOTES, "UTF-8");"#;
 /// `inet_pton()`/`inet_ntop()` helpers, and refuses the same invalid shapes.
 ///
 /// Eval was IPv4-only, so every IPv6 address packed to `false` (#1157). `01.2.3.4` pins that
-/// the platform parser, not eval's old `ip2long()` scanner, now decides validity. Both halves
-/// print PHP 8.5's output.
+/// the platform parser, not eval's old `ip2long()` scanner, now decides validity, so eval
+/// answers whatever the compiled helper answers on that platform. That answer follows the
+/// platform's `inet_pton(3)`, as PHP's does: glibc refuses the leading-zero octet, while
+/// Apple's BSD parser accepts it as `1.2.3.4`. The two halves must match each other on every
+/// platform, and each prints PHP 8.5's output for the host platform.
 #[test]
 fn test_eval_inet_ipv6_parity() {
     let body = r#"foreach (["::1", "2001:db8:85a3:0:0:8a2e:370:7334", "::ffff:192.0.2.128", "10.0.0.1", "gggg::1", "01.2.3.4"] as $a) {
@@ -804,13 +807,23 @@ fn test_eval_inet_ipv6_parity() {
 echo inet_ntop("123456789012345") === false ? "F" : "bad";"#;
     let out = compile_and_run(&native_then_dynamic_eval(body));
 
-    let expected = concat!(
-        "00000000000000000000000000000001=::1;",
-        "20010db885a3000000008a2e03707334=2001:db8:85a3::8a2e:370:7334;",
-        "00000000000000000000ffffc0000280=::ffff:192.0.2.128;",
-        "0a000001=10.0.0.1;false;false;F",
+    let (native, evaluated) = out.split_once('|').expect("both halves print their results");
+    assert_eq!(evaluated, native, "eval must answer exactly what the compiled helpers answer");
+    let leading_zero_octet = if cfg!(any(target_os = "macos", target_os = "ios")) {
+        "01020304=1.2.3.4;"
+    } else {
+        "false;"
+    };
+    let expected = format!(
+        concat!(
+            "00000000000000000000000000000001=::1;",
+            "20010db885a3000000008a2e03707334=2001:db8:85a3::8a2e:370:7334;",
+            "00000000000000000000ffffc0000280=::ffff:192.0.2.128;",
+            "0a000001=10.0.0.1;false;{}F",
+        ),
+        leading_zero_octet
     );
-    assert_eq!(out, format!("{expected}|{expected}"));
+    assert_eq!(native, expected);
 }
 
 /// Verifies eval `putenv()` reports libc's status the way the compiled `putenv()` does.
