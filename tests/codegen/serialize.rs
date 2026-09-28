@@ -1331,3 +1331,44 @@ echo get_class($value), "|", serialize($value);
         "__PHP_Incomplete_Class|O:7:\"Missing\":1:{s:4:\"self\";r:1;}",
     );
 }
+
+/// `unserialize()` of a null into a boxed-Mixed property (untyped, `?string`, `?float`) stores the
+/// parsed null cell like any other value.
+///
+/// It stored the in-band `NULL_SENTINEL` word instead, which is not a Mixed cell pointer, so the
+/// first reader of the property — `=== null`, `var_dump`, `json_encode` — dereferenced it and the
+/// program segfaulted.
+#[test]
+fn test_unserialize_null_into_mixed_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class P { public $n = 5; public ?string $m = "a"; public ?float $f = 1.5; }
+$p = new P();
+$p->n = $argc > 5 ? 1 : null;
+$p->m = $argc > 5 ? "z" : null;
+$p->f = $argc > 5 ? 2.5 : null;
+$u = unserialize(serialize($p));
+var_dump($u->n === null, $u->m === null, isset($u->f), $u->n ?? "dflt");
+echo json_encode($u), "\n";
+var_dump($u);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(false)\n",
+            "string(4) \"dflt\"\n",
+            "{\"n\":null,\"m\":null,\"f\":null}\n",
+            "object(P)#2 (3) {\n",
+            "  [\"n\"]=>\n",
+            "  NULL\n",
+            "  [\"m\"]=>\n",
+            "  NULL\n",
+            "  [\"f\"]=>\n",
+            "  NULL\n",
+            "}\n",
+        )
+    );
+}

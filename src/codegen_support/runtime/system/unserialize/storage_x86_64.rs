@@ -8,6 +8,9 @@
 //! - Manually boxed values preserve heap markers while parsed ownership moves into final storage.
 
 use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::sentinels::{
+    TAGGED_SCALAR_PROPERTY_TAG, TAGGED_SCALAR_TAG_INT, TAGGED_SCALAR_TAG_NULL,
+};
 
 /// Emits x86_64 object-property storage and parsed-hash conversion helpers.
 pub(super) fn emit_object_storage(emitter: &mut Emitter) {
@@ -66,8 +69,22 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("je __rt_obj_store_prop_str");                          // store pointer and length
     emitter.instruction("cmp r9, 4");                                           // is this an indexed-array slot?
     emitter.instruction("je __rt_obj_store_prop_arr");                          // convert the parsed hash to an indexed array
+    emitter.instruction(&format!("cmp r9, {}", TAGGED_SCALAR_PROPERTY_TAG));    // is this an inline tagged-scalar (`?int`) slot?
+    emitter.instruction("je __rt_obj_store_prop_tagged");                       // store the payload and its runtime tag inline
     emitter.instruction("mov rax, QWORD PTR [rcx + 8]");                        // typed scalar/object/hash: unbox the low word
     emitter.instruction("mov QWORD PTR [r10], rax");                            // store it inline in the slot
+    emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
+    emitter.label("__rt_obj_store_prop_tagged");
+    emitter.instruction(&format!("cmp QWORD PTR [rcx], {}", TAGGED_SCALAR_TAG_NULL)); // is the boxed value null?
+    emitter.instruction("je __rt_obj_store_prop_tagged_null");                  // store the canonical tagged null pair
+    emitter.instruction("mov rax, QWORD PTR [rcx + 8]");                        // unbox the integer payload
+    emitter.instruction("mov QWORD PTR [r10], rax");                            // payload word of the tagged slot
+    emitter.instruction(&format!("mov QWORD PTR [r10 + 8], {}", TAGGED_SCALAR_TAG_INT)); // tag word: a non-null tagged int
+    emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
+    emitter.label("__rt_obj_store_prop_tagged_null");
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "rax", crate::codegen_support::NULL_SENTINEL);
+    emitter.instruction("mov QWORD PTR [r10], rax");                            // canonical tagged-null payload word
+    emitter.instruction(&format!("mov QWORD PTR [r10 + 8], {}", TAGGED_SCALAR_TAG_NULL)); // tag word: PHP null
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
     emitter.label("__rt_obj_store_prop_arr");
     emitter.instruction("mov QWORD PTR [rbp - 64], r8");                        // save the property byte offset across the call
@@ -83,16 +100,11 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rcx + 16]");                       // string length from the box
     emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // store the string length
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
+    // A parsed null keeps its boxed tag-8 cell like every other value: the in-band
+    // NULL_SENTINEL is not a Mixed cell pointer, and every reader of the slot
+    // (`=== null`, var_dump, json_encode) dereferenced it.
     emitter.label("__rt_obj_store_prop_mixed");
-    emitter.instruction("mov rax, QWORD PTR [rcx]");                            // boxed value tag
-    emitter.instruction("cmp rax, 8");                                          // is the boxed value null?
-    emitter.instruction("je __rt_obj_store_prop_mixed_null");                   // store the null sentinel
     emitter.instruction("mov QWORD PTR [r10], rcx");                            // store the boxed Mixed cell pointer
-    emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
-    emitter.label("__rt_obj_store_prop_mixed_null");
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r11", crate::codegen_support::NULL_SENTINEL);
-    emitter.instruction("mov QWORD PTR [r10], r11");                            // store the in-band null sentinel
-    emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // clear the high word
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
     emitter.label("__rt_obj_store_prop_next");
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the row index

@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::codegen_support::data_section::comm_directive;
 use crate::codegen_support::platform::Target;
+use crate::codegen_support::sentinels::TAGGED_SCALAR_PROPERTY_TAG;
 use crate::codegen_support::source_method_adapters::{self, MethodAbiPlan, MethodKind};
 use crate::names::{
     enum_case_symbol, function_variant_active_symbol, interface_method_wrapper_symbol, mangle_fqn,
@@ -1076,6 +1077,8 @@ pub(crate) fn emit_runtime_data_user(
         for (prop_index, (prop_name, prop_ty)) in &public_props {
             let tag = if class_info.property_slot_is_reference(*prop_index, prop_name) {
                 0
+            } else if prop_ty.codegen_repr() == PhpType::TaggedScalar {
+                TAGGED_SCALAR_PROPERTY_TAG
             } else {
                 match prop_ty {
                     PhpType::Int => 0,
@@ -1120,6 +1123,10 @@ pub(crate) fn emit_runtime_data_user(
                 let prop_name = &class_info.properties[i].0;
                 let tag = if class_info.property_slot_is_reference(i, prop_name) {
                     if class_info.owned_reference_properties.contains(prop_name) { 11 } else { 0 }
+                } else if prop_ty.codegen_repr() == PhpType::TaggedScalar {
+                    // An inline `{payload, tag}` slot owns no heap reference: reading it as
+                    // Mixed (7) handed the integer payload to decref/mark as a cell pointer.
+                    0
                 } else {
                     match prop_ty {
                         PhpType::Int => 0,
@@ -3453,10 +3460,15 @@ fn var_dump_property_type_name(prop_ty: &PhpType) -> String {
 /// Maps a declared property's static type to the runtime value tag consumed by
 /// `__rt_serialize_value` when serializing that property's 16-byte object slot.
 /// Mirrors the gc-descriptor tag mapping; reference and untyped/nullable
-/// properties are stored as boxed `Mixed` cells (tag 7).
+/// properties are stored as boxed `Mixed` cells (tag 7), except `int|null`, whose
+/// tagged representation keeps an inline `{payload, tag}` pair in the slot and so
+/// gets `TAGGED_SCALAR_PROPERTY_TAG` for the walker to resolve at runtime.
 fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) -> u64 {
     if class_info.reference_properties.contains(prop_name) {
         return 7;
+    }
+    if prop_ty.codegen_repr() == PhpType::TaggedScalar {
+        return TAGGED_SCALAR_PROPERTY_TAG;
     }
     match prop_ty {
         PhpType::Int => 0,
