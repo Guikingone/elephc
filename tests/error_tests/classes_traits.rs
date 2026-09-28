@@ -929,6 +929,31 @@ fn test_malformed_declarator_lists_are_rejected() {
     );
 }
 
+/// Verifies a redeclared constant names the kind of type that declares it (issue #1141).
+///
+/// The class-like body parser passed a hardcoded `"class"` for every owner, so a trait or an enum
+/// reported `Cannot redeclare class constant`; only the interface parser named its own kind. The
+/// duplicate is reported whether it repeats a whole `const` or sits inside one declarator list.
+#[test]
+fn test_constant_redeclaration_names_the_declaring_kind() {
+    expect_error(
+        "<?php class K { const A = 1; const A = 2; }",
+        "Cannot redeclare class constant A",
+    );
+    expect_error(
+        "<?php trait T { const A = 1, A = 2; }",
+        "Cannot redeclare trait constant A",
+    );
+    expect_error(
+        "<?php enum E { case X; const A = 1; const A = 2; }",
+        "Cannot redeclare enum constant A",
+    );
+    expect_error(
+        "<?php interface I { const A = 1; const A = 2; }",
+        "Cannot redeclare interface constant A",
+    );
+}
+
 /// Verifies PHP-final Exception accessors cannot be overridden by user subclasses.
 #[test]
 fn test_error_cannot_override_final_exception_method() {

@@ -136,7 +136,7 @@ Each `Stmt` also carries a source `span` and an `attributes` list. The list is p
 | `Throw(Expr)` | `throw new Exception("boom");` |
 | `Synthetic(Vec<Stmt>)` | Internal lowering only; a source construct that has already been expanded into one or more ordinary statements before final codegen |
 | `Try { try_body, catches, finally_body }` | `try { ... } catch (Exception $e) { ... } finally { ... }` |
-| `ConstDecl { name, value }` | `const MAX = 100;` |
+| `ConstDecl { name, value }` | `const MAX = 100;`, `const MIN = 1, MAX = MIN + 9;` (a declarator list yields one `ConstDecl` per name, spliced into the enclosing file or namespace statement list) |
 | `IfDef { symbol, then_body, else_body }` | `ifdef DEBUG { ... } else { ... }` |
 | `NamespaceDecl { name: Option<Name> }` | `namespace App\Core;`, `namespace;` |
 | `NamespaceBlock { name: Option<Name>, body }` | `namespace App\Core { ... }`, `namespace { ... }` |
@@ -251,8 +251,8 @@ invalid forms such as `?T|U` and normalize accepted declarations.
 | `Attribute` | `name`, `args`, `span` | A PHP 8 attribute entry from a `#[...]` group. The parser validates names and optional argument expressions. Class, method, property, and method-parameter names plus supported literal args feed `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and the supported Reflection `getAttributes()` APIs. Method parameter names, positions, optional/variadic/by-reference flags, declared-type presence, and method-parameter attributes feed the supported `ReflectionMethod::getParameters()` / `ReflectionParameter` slice. |
 | `AttributeGroup` | `attributes`, `span` | One bracketed attribute group. Declaration sites can carry one or more groups. |
 | `EnumCaseDecl` | `name`, `value`, `span`, `attributes` | A backed or unit enum case declaration, with declaration-level attributes preserved in the AST. |
-| `ClassConst` | `name`, `visibility`, `is_final`, `value`, `span`, `attributes` | A class, interface, or trait constant declaration. |
-| `ClassProperty` | `name`, `visibility`, `type_expr`, `hooks`, `readonly`, `is_final`, `is_static`, `is_abstract`, `by_ref`, `default`, `span`, `attributes` | A property declaration inside a class, trait, or interface, optionally carrying a parsed property type declaration, hook contract, static-property marker, by-reference promotion marker, or declaration-level attributes |
+| `ClassConst` | `name`, `visibility`, `is_final`, `value`, `span`, `attributes` | A class, interface, or trait constant declaration. A declarator list (`const A = 1, B = 2;`) yields one entry per name, and `span` covers that entry's own declarator (`B = 2`). |
+| `ClassProperty` | `name`, `visibility`, `type_expr`, `hooks`, `readonly`, `is_final`, `is_static`, `is_abstract`, `by_ref`, `default`, `span`, `attributes` | A property declaration inside a class, trait, or interface, optionally carrying a parsed property type declaration, hook contract, static-property marker, by-reference promotion marker, or declaration-level attributes. A declarator list (`public int $a = 1, $b;`) yields one entry per name, and a class-body entry's `span` covers its own declarator (`$a = 1`) |
 | `ClassMethod` | `name`, `visibility`, `is_static`, `is_abstract`, `is_final`, `has_body`, `params`, `param_attributes`, `variadic`, `return_type`, `body`, `span`, `attributes` | A method declaration inside a class, trait, or interface, including source-order parameter attribute groups |
 | `CatchClause` | `exception_types`, `variable`, `body` | A catch arm. `exception_types` supports both single-type and PHP-style multi-catch (`TypeA | TypeB`), and `variable` is optional for PHP 8-style `catch (Exception)` |
 | `StaticReceiver` | `Named(Name)`, `Self_`, `Static`, `Parent` | Left-hand side of `ClassName::method()`, `self::method()`, `static::method()`, and `parent::method()` |
@@ -311,7 +311,7 @@ unary (- ! ~ @ clone)  35                prefix
 
 For `??`, the Pratt table still uses `BinOp::NullCoalesce` to assign binding power, but the parser builds a dedicated `ExprKind::NullCoalesce { value, default }` node rather than a generic `BinaryOp`.
 
-For `instanceof`, the Pratt loop handles the keyword at expression level and then parses either a class/interface target name or a dynamic target expression. Its binding power matches PHP's behavior where `!$obj instanceof User` parses as `!($obj instanceof User)`.
+For `instanceof`, the Pratt loop handles the keyword at expression level and then parses either a class/interface target name or a dynamic target expression. Its binding power matches PHP's behavior where `!$obj instanceof User` parses as `!($obj instanceof User)`. A dynamic target follows PHP's class-reference grammar: a parenthesized `(expr)` group is the whole target, and a variable chain may use property fetches, array dimensions and static properties but never a call, so `$obj instanceof Foo::$method()` is rejected rather than parsed as a call.
 
 For `|>`, the Pratt loop handles `Token::PipeArrow` before the generic `BinOp` table and builds `ExprKind::Pipe { value, callable }`. The binding power `(24, 25)` places it below concatenation, shifts, and arithmetic, but above comparisons, `??`, ternary, logical operators, and assignment. This matches PHP 8.5 and keeps pipe-specific validation, such as requiring parenthesized arrow-function targets, out of generic binary-operator lowering.
 
