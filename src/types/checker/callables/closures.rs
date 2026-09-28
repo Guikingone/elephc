@@ -273,8 +273,12 @@ impl Checker {
     /// (`int` for an untyped closure parameter), so `strlen($f("hello")[0])` was refused although
     /// lowering reads the element back as the string it is (issue #1270). Only a container is
     /// widened, and only for that shape, because only that shape is stamped this way.
+    ///
+    /// A container inside a union is widened too, keeping the union: a callee returning `[$v]`
+    /// or `null` gives `?array<mixed>`, whose elements a `string` parameter accepts, while the
+    /// boxed `Mixed` lowering stamps for that union is its codegen representation.
     fn caller_visible_direct_call_return(&self, body: &[Stmt], inferred: PhpType) -> PhpType {
-        if !matches!(inferred, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        if !crate::types::dynamic_params::type_contains_container(&inferred) {
             return inferred;
         }
         let [stmt] = body else {
@@ -297,7 +301,11 @@ impl Checker {
         {
             return inferred;
         }
-        crate::types::dynamic_params::dynamic_param_container_return_type(&inferred)
+        match crate::types::dynamic_params::dynamic_param_container_php_type(&inferred) {
+            // Two container members can widen to the same type; fold them back into one.
+            PhpType::Union(members) => self.normalize_union_type(members),
+            widened => widened,
+        }
     }
 
     /// Extracts the callable signature from an expression that may be a closure literal,

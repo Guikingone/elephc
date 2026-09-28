@@ -8,7 +8,8 @@
 //! - `crate::ir_lower::program::metadata` when it normalizes method ABIs for EIR.
 //! - `crate::ir_lower::expr::eir_user_function_return_type`, through `caller_visible_return_type`,
 //!   and `Checker::caller_visible_direct_call_return` in
-//!   `crate::types::checker::callables::closures`, through the two predicates it is built from.
+//!   `crate::types::checker::callables::closures`, through the predicates it is built from and
+//!   the union-preserving `dynamic_param_container_php_type`.
 //!
 //! Key details:
 //! - An untyped parameter starts as the checker's `Int` PLACEHOLDER, which direct call sites
@@ -234,5 +235,32 @@ pub fn dynamic_param_container_return_type(return_type: &PhpType) -> PhpType {
                 .collect(),
         ),
         other => other,
+    }
+}
+
+/// Checker-facing form of [`dynamic_param_container_return_type`]: widens the element of every
+/// container member to Mixed but keeps a union's members, so `?array<int>` becomes
+/// `?array<mixed>` instead of collapsing to the boxed `Mixed` that its codegen representation (and
+/// therefore EIR lowering) uses for the same value. Non-container members are left as they are.
+pub fn dynamic_param_container_php_type(return_type: &PhpType) -> PhpType {
+    match return_type {
+        PhpType::Array(_) => PhpType::Array(Box::new(PhpType::Mixed)),
+        PhpType::AssocArray { key, .. } => PhpType::AssocArray {
+            key: key.clone(),
+            value: Box::new(PhpType::Mixed),
+        },
+        PhpType::Union(members) => {
+            PhpType::Union(members.iter().map(dynamic_param_container_php_type).collect())
+        }
+        other => other.clone(),
+    }
+}
+
+/// Returns whether a type is an indexed or associative array, or a union with such a member.
+pub fn type_contains_container(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => true,
+        PhpType::Union(members) => members.iter().any(type_contains_container),
+        _ => false,
     }
 }

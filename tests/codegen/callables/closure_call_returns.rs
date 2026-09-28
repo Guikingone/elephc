@@ -300,3 +300,30 @@ echo strlen($f("hello")[0]), "|", strtoupper($g("abc")[0]), "|", strlen($h("a", 
     );
     assert_eq!(out, "5|ABC|3");
 }
+
+/// The checker widens a container INSIDE a union the same way: a callee returning `[$v]` or
+/// `null` makes the closure `?array<mixed>`, so its element reaches a `string` parameter.
+///
+/// Only a bare array return was widened at first, so this union kept the parameter
+/// placeholder's element type and `take($m("hello")[0])` was refused with `Function 'take'
+/// parameter $s expects Str, got Union([Int, Void])`, while lowering already boxed the whole
+/// result (raised in review). `strlen()` accepts any union, which is why the `string` parameter
+/// is the consumer that pins it. Reference PHP 8.5 prints `[hello]|[xyz]|5` and the dump.
+#[test]
+fn test_checker_widens_a_nullable_container_returned_through_a_closure() {
+    let out = compile_and_run(
+        r#"<?php
+function maybe_values($v) { if ($v === null) { return null; } return [$v]; }
+function maybe_pairs($k, $v) { if ($v === null) { return null; } return [$k => $v]; }
+function take(string $s): string { return "[" . $s . "]"; }
+$m = function ($v) { return maybe_values($v); };
+$p = fn($k, $v) => maybe_pairs($k, $v);
+echo take($m("hello")[0]), "|", take($p("a", "xyz")["a"]), "|", strlen($m("hello")[0]), "\n";
+var_dump($m("q"));
+"#,
+    );
+    assert_eq!(
+        out,
+        "[hello]|[xyz]|5\narray(1) {\n  [0]=>\n  string(1) \"q\"\n}\n"
+    );
+}
