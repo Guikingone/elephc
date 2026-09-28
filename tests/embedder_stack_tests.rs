@@ -45,6 +45,34 @@ fn summarize(program: elephc::parser::ast::Program) -> String {
     format!("{} statements", program.len())
 }
 
+/// Creates a fresh, unpredictably named directory that only this process can write to.
+///
+/// `DirBuilder::create` fails on a path that already exists instead of reusing it the way
+/// `create_dir_all` does, so a directory or symlink planted at the name ahead of time is refused
+/// rather than written through; the name mixes the process id with the clock and an attempt
+/// counter, and on Unix the directory is created with mode `0700`.
+fn exclusive_fixture_dir(prefix: &str) -> std::path::PathBuf {
+    for attempt in 0u32..64 {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or_default();
+        let dir = std::env::temp_dir().join(format!(
+            "{prefix}_{}_{nanos}_{attempt}",
+            std::process::id()
+        ));
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        match builder.create(&dir) {
+            Ok(()) => return dir,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => panic!("creating the fixture directory {}: {error}", dir.display()),
+        }
+    }
+    panic!("no free fixture directory name for {prefix}");
+}
+
 /// `$a = [[[…1…]]]` at the compiler's nesting limit.
 fn deeply_nested_source() -> String {
     format!(
@@ -224,11 +252,7 @@ fn eir_lowering_survives_the_nesting_limit_on_a_small_embedder_stack() {
 #[test]
 fn include_discovery_and_resolution_survive_the_nesting_limit_on_a_small_embedder_stack() {
     let report = on_a_small_embedder_stack(|| {
-        let dir = std::env::temp_dir().join(format!(
-            "elephc_embedder_include_{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&dir).expect("creating the include fixture directory");
+        let dir = exclusive_fixture_dir("elephc_embedder_include");
         // The included file's deep value is a top-level statement, so it sits AT the limit
         // rather than one level past it inside a function body; the declaration beside it gives
         // discovery something to hoist.
@@ -237,7 +261,14 @@ fn include_discovery_and_resolution_survive_the_nesting_limit_on_a_small_embedde
             "[".repeat(NESTING_DEPTH),
             "]".repeat(NESTING_DEPTH)
         );
-        std::fs::write(dir.join("deep_lib.php"), library).expect("writing the included file");
+        // `create_new` refuses a path that already exists, a symlink included, so the write can
+        // only ever create the fixture's own file.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dir.join("deep_lib.php"))
+            .and_then(|mut file| std::io::Write::write_all(&mut file, library.as_bytes()))
+            .expect("writing the included file");
         let source = format!(
             "<?php\nrequire 'deep_lib.php';\n$a = {}1{};\necho count($a);\n",
             "[".repeat(NESTING_DEPTH),
@@ -333,6 +364,54 @@ fn prelude_injection_survives_the_nesting_limit_on_a_small_embedder_stack() {
         }
     });
     assert_eq!(report, "2 statements");
+}
+
+/// Verifies the OPcache prelude's injection survives the same depth called on its own
+/// (issue #1149): it probes the program for every OPcache function it could declare.
+///
+/// The fixture calls none of them, so the program comes back unchanged; what is being walked is
+/// the deep tree each probe descends.
+#[test]
+fn opcache_injection_survives_the_nesting_limit_on_a_small_embedder_stack() {
+    let report = on_a_small_embedder_stack(|| {
+        let mut inventory = elephc::optimize::reachability::PreludeInventory::new();
+        let (ast, _bake_sites) = elephc::opcache_prelude::inject_if_used(
+            parse_deeply_nested(),
+            elephc::php_version::PhpVersion::default(),
+            false,
+            None,
+            &[],
+            &[],
+            None,
+            false,
+            &mut inventory,
+        );
+        summarize(ast)
+    });
+    assert_eq!(report, "2 statements");
+}
+
+/// Verifies the `--web` prelude's injection survives the same depth called on its own
+/// (issue #1149): its usage scan walks the whole user program before the handler wrapper moves
+/// the program's statements into the catch-all `try`.
+#[test]
+fn web_injection_survives_the_nesting_limit_on_a_small_embedder_stack() {
+    let report = on_a_small_embedder_stack(|| {
+        let mut inventory = elephc::optimize::reachability::PreludeInventory::new();
+        let ast = elephc::web_prelude::inject_if_web(
+            parse_deeply_nested(),
+            true,
+            elephc::php_version::PhpVersion::default(),
+            &[],
+            &mut inventory,
+        );
+        let wrapped = matches!(
+            ast.last().map(|stmt| &stmt.kind),
+            Some(elephc::parser::ast::StmtKind::Try { .. })
+        );
+        format!("handler wrapper last: {wrapped}")
+    });
+    assert_eq!(report, "handler wrapper last: true");
 }
 
 /// Verifies the PHP-profile scans survive the same depth called on their own (issue #1149).
