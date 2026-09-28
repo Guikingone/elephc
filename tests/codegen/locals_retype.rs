@@ -1650,10 +1650,10 @@ fn test_marked_top_level_local_written_through_a_method_global_alias() {
 /// put there — the string on the first call and the int on the second. Reading through a
 /// concrete view on either side would print the other type's payload.
 ///
-/// Heap: this shape leaks 48 bytes, and that has nothing to do with the marking — the boxed
-/// occupant of `_eir_global_a` is not released at program exit. An unmarked program leaks the same
-/// block (`test_marked_and_unmarked_global_alias_reads_leak_alike`), and so does this one built
-/// from the parent commit. Output correctness is what this fixture pins.
+/// Heap: when this fixture was written the boxed occupant of `_eir_global_a` was not released at
+/// program exit (48 bytes), in an unmarked program just the same, so the heap side is pinned by
+/// `test_marked_and_unmarked_global_alias_reads_leak_alike`, which compares the two programs arm
+/// by arm. Output correctness is what this fixture pins.
 #[test]
 fn test_marked_top_level_local_read_back_through_a_global_alias() {
     let out = compile_and_run_per_argv(fixtures::READ_BACK_THROUGH_A_GLOBAL_ALIAS, &[&[], &["x"]]);
@@ -1663,28 +1663,45 @@ fn test_marked_top_level_local_read_back_through_a_global_alias() {
 /// Control for the leak note above: a `global`-aliased read with NO marking anywhere leaks the
 /// same way, so the leak belongs to program-global storage rather than to boxed locals.
 ///
-/// Asserted as an EQUIVALENCE rather than a byte count. Both programs put one boxed string in
-/// `_eir_global_a` and neither releases it at exit (measured: `live_blocks=1 live_bytes=48` for
-/// each, on this commit and on the parent alike). Whoever fixes that fixes both, and this test
-/// keeps passing; what it refuses is one of them leaking while the other does not.
+/// Asserted as an EQUIVALENCE rather than a byte count. When it was written both programs put one
+/// boxed string in `_eir_global_a` and neither released it at exit (measured:
+/// `live_blocks=1 live_bytes=48` for each). Whoever changes that changes both, and this test keeps
+/// passing; what it refuses is one of them leaking while the other does not. Both arms of the
+/// marked program run (the int arm with one argument), each compared with the unmarked program
+/// run the same way.
 #[test]
 fn test_marked_and_unmarked_global_alias_reads_leak_alike() {
-    let marked = compile_and_run_with_heap_debug(
+    let marked_runs = compile_and_run_with_heap_debug_per_argv(
         r#"<?php
 function q() { global $a; var_dump($a); }
 if ($argc > 1) { $a = 0; } else { $a = "hello"; }
 q();"#,
+        &[&[], &["x"]],
     );
-    let unmarked = compile_and_run_with_heap_debug(
+    let unmarked_runs = compile_and_run_with_heap_debug_per_argv(
         r#"<?php
 function q() { global $a; var_dump($a); }
 $a = "hello" . $argc;
 q();"#,
+        &[&[], &["x"]],
     );
-    assert!(marked.success, "marked program failed: {}", marked.stderr);
-    assert!(unmarked.success, "unmarked program failed: {}", unmarked.stderr);
-    assert_eq!(marked.stdout, "string(5) \"hello\"\n");
-    assert_eq!(unmarked.stdout, "string(6) \"hello1\"\n");
+    let expected = [
+        ("string(5) \"hello\"\n", "string(6) \"hello1\"\n"),
+        ("int(0)\n", "string(6) \"hello2\"\n"),
+    ];
+    for ((marked, unmarked), (marked_out, unmarked_out)) in
+        marked_runs.iter().zip(&unmarked_runs).zip(expected)
+    {
+        assert!(marked.success, "marked program failed: {}", marked.stderr);
+        assert!(unmarked.success, "unmarked program failed: {}", unmarked.stderr);
+        assert_eq!(marked.stdout, marked_out);
+        assert_eq!(unmarked.stdout, unmarked_out);
+        assert_eq!(
+            leak_summary(&marked.stderr),
+            leak_summary(&unmarked.stderr),
+            "marking must not change what a global-aliased local leaks"
+        );
+    }
 
     /// Extracts the `leak summary: …` line so the two runs can be compared directly.
     fn leak_summary(stderr: &str) -> &str {
@@ -1693,11 +1710,6 @@ q();"#,
             .find(|line| line.contains("HEAP DEBUG: leak summary:"))
             .unwrap_or("<no leak summary>")
     }
-    assert_eq!(
-        leak_summary(&marked.stderr),
-        leak_summary(&unmarked.stderr),
-        "marking must not change what a global-aliased local leaks"
-    );
 }
 
 /// A `global $a` written inside a CLOSURE literal does NOT reach main's binding, and marking
@@ -1871,23 +1883,32 @@ fn test_concat_marked_local_reassigned_to_a_literal_reaches_a_checked_builtin() 
 
 /// Only the CLOSURE's `$m` is marked here; the enclosing one is `mixed` by ordinary inference.
 /// Measured on the parent commit: one leaked block, 48 bytes.
+///
+/// One argument takes the int arm on both sides: the capture holds `1` and the closure stores `0`.
 #[test]
 fn test_marked_local_in_a_closure_over_an_unmarked_mixed_capture() {
-    let out = compile_and_run_with_heap_debug(
+    let runs = compile_and_run_with_heap_debug_per_argv(
         r#"<?php
 $m = $argc > 1 ? 1 : "z";
 $f = function (int $n) use ($m) { if ($n > 1) { $m = 0; } else { $m = "s"; } return $m; };
 var_dump($f($argc));
 $g = function () use ($m) { return $m; };
 var_dump($g());"#,
+        &[&[], &["x"]],
     );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "string(1) \"s\"\nstring(1) \"z\"\n");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a clean heap, got: {}",
-        out.stderr
-    );
+    let expected = [
+        "string(1) \"s\"\nstring(1) \"z\"\n",
+        "int(0)\nint(1)\n",
+    ];
+    for (out, expected) in runs.iter().zip(expected) {
+        assert!(out.success, "program failed: {}", out.stderr);
+        assert_eq!(out.stdout, expected);
+        assert!(
+            out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+            "expected a clean heap, got: {}",
+            out.stderr
+        );
+    }
 }
 
 /// eval'd code retypes locals dynamically; permissive AOT now matches it.
@@ -1933,13 +1954,15 @@ fn test_unset_in_an_eval_body_still_nulls_the_local() {
 }
 
 /// Control: the branch-divergent shape is NOT gated by the eval rule and keeps working, because
-/// boxed `Mixed` storage is what the eval scope wants in the first place.
+/// boxed `Mixed` storage is what the eval scope wants in the first place. Both arms run: the
+/// fragment reads the boxed string, and with one argument the boxed int.
 #[test]
 fn test_branch_divergent_local_survives_an_eval_body() {
-    let out = compile_and_run(
+    let out = compile_and_run_per_argv(
         "<?php if ($argc > 1) { $b = 1; } else { $b = \"z\"; } eval('echo $b; $b = \"w\";'); echo \"|\", $b;",
+        &[&[], &["x"]],
     );
-    assert_eq!(out, "z|w");
+    assert_eq!(out, ["z|w", "1|w"]);
 }
 
 // ---------------------------------------------------------------------------
@@ -2530,10 +2553,10 @@ echo $a;"#;
 /// identical operation — was boxed and ran. The arm now asks
 /// `callee_may_bind_arguments_by_ref` about a resolvable target exactly as the ordinary call arm
 /// does, so both spellings warn identically, are rejected identically under `--strict-locals`, and
-/// print PHP's answer (`ciao`, verified with `strval($a)` on php 8.4 — the pipe itself is 8.5
-/// syntax the reference interpreter here cannot parse). The heap-debug arm is the part the
-/// checker could not promise: the boxed value crosses a synthesized single-argument call, and a
-/// missing release there would be a leak rather than a diagnostic.
+/// print PHP's answer for both arms (`ciao` bare and `0` with one argument, verified on PHP
+/// 8.5.10 for both spellings). The heap-debug run is the part the checker could not promise: the
+/// boxed value crosses a synthesized single-argument call, and a missing release there would be a
+/// leak rather than a diagnostic, so it runs for the string arm and for the int arm alike.
 #[test]
 fn test_marked_local_piped_into_a_known_by_value_target() {
     const PIPED: &str =
@@ -2553,14 +2576,16 @@ fn test_marked_local_piped_into_a_known_by_value_target() {
             "expected the strict rejection for {source}, got: {error}"
         );
 
-        let out = compile_and_run_with_heap_debug(source);
-        assert!(out.success, "program failed for {source}: {}", out.stderr);
-        assert_eq!(out.stdout, "ciao", "source: {source}");
-        assert!(
-            out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-            "expected a clean heap for {source}, got: {}",
-            out.stderr
-        );
+        let runs = compile_and_run_with_heap_debug_per_argv(source, &[&[], &["x"]]);
+        for (out, expected) in runs.iter().zip(["ciao", "0"]) {
+            assert!(out.success, "program failed for {source}: {}", out.stderr);
+            assert_eq!(out.stdout, expected, "source: {source}");
+            assert!(
+                out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+                "expected a clean heap for {source}, got: {}",
+                out.stderr
+            );
+        }
     }
 }
 
