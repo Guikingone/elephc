@@ -434,7 +434,7 @@ mod tests {
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         assert_eq!(shared_runtime, 85);
         assert_eq!(hybrid_adapter, 2);
-        assert_eq!(interpreter_adapter, 595 + curl_surface);
+        assert_eq!(interpreter_adapter, 593 + curl_surface);
         assert_eq!(unsupported, 455);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
