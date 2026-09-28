@@ -641,7 +641,14 @@ pub(in crate::interpreter) fn eval_property_set_result(
                 values,
             );
         }
-        if validate_eval_readonly_property_write(&declaring_class, &property, context).is_err() {
+        if validate_eval_readonly_property_write(&declaring_class, &property, context).is_err()
+            && !eval_readonly_property_first_initialization(
+                identity,
+                &declaring_class,
+                &property,
+                context,
+            )
+        {
             return eval_throw_readonly_property_modification_error(
                 &declaring_class,
                 property.name(),

@@ -66,6 +66,56 @@ return $box->id();"#,
     assert_eq!(values.get(result), FakeValue::Int(7));
 }
 
+/// Verifies a readonly property is initialized ONCE from any method of its class, including by
+/// `??=`, and a subclass method may initialize a non-private one; the second write still throws.
+///
+/// Symfony's `SymfonyRuntime::getArgument()` does `$this->request ??= Request::createFromGlobals()`
+/// outside the constructor, and every interpreted request died on "Cannot modify readonly
+/// property". Expected output is php 8.5.10's.
+#[test]
+fn execute_program_initializes_readonly_property_once_outside_the_constructor() {
+    let program = parse_fragment(
+        br#"class EvalLazyReadonly {
+    private readonly string $name;
+    protected readonly int $size;
+    public function name() { return $this->name ??= "late"; }
+    public function rename() { $this->name = "again"; }
+}
+class EvalLazyReadonlyChild extends EvalLazyReadonly {
+    public function size() { $this->size = 3; return $this->size; }
+}
+$o = new EvalLazyReadonly();
+echo $o->name(); echo ":"; echo $o->name(); echo ":";
+try {
+    $o->rename();
+    echo "bad";
+} catch (Error $e) {
+    echo $e->getMessage();
+}
+$c = new EvalLazyReadonlyChild();
+echo ":"; echo $c->size();
+try {
+    $c->size();
+    echo "bad";
+} catch (Error $e) {
+    echo ":"; echo $e->getMessage();
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "late:late:Cannot modify readonly property EvalLazyReadonly::$name:3:\
+         Cannot modify readonly property EvalLazyReadonly::$size"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies direct reads of uninitialized typed eval properties throw catchable PHP errors.
 #[test]
 fn execute_program_rejects_uninitialized_typed_property_reads() {

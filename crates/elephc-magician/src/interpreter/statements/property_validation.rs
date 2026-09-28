@@ -33,6 +33,36 @@ pub(super) fn validate_eval_readonly_property_write(
         .ok_or(EvalStatus::RuntimeFatal)
 }
 
+/// Returns true when a readonly instance property write is its FIRST initialization from a scope
+/// php lets initialize it.
+///
+/// php does not tie readonly initialization to the constructor: any method of the declaring
+/// class (or, for a non-private property, of a subclass — readonly implies `protected(set)`) may
+/// assign it once while it is uninitialized. Symfony's `SymfonyRuntime::getArgument()` does
+/// `$this->request ??= Request::createFromGlobals()`, and the constructor-only rule made every
+/// interpreted request die on "Cannot modify readonly property". Measured with php 8.5.10.
+pub(super) fn eval_readonly_property_first_initialization(
+    identity: u64,
+    declaring_class: &str,
+    property: &EvalClassProperty,
+    context: &ElephcEvalContext,
+) -> bool {
+    let Some(current_class) = context.current_class_scope() else {
+        return false;
+    };
+    let in_scope = if property.visibility() == EvalVisibility::Private {
+        same_eval_class_name(current_class, declaring_class)
+    } else {
+        same_eval_class_name(current_class, declaring_class)
+            || context.class_is_a(current_class, declaring_class, false)
+    };
+    if !in_scope {
+        return false;
+    }
+    let storage_property_name = eval_instance_property_storage_name(declaring_class, property);
+    !context.dynamic_property_is_initialized(identity, &storage_property_name)
+}
+
 /// Returns true while executing `__construct` for the property declaring class.
 pub(super) fn current_eval_method_is_declaring_constructor(
     declaring_class: &str,
