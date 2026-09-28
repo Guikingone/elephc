@@ -6,8 +6,9 @@
 //!
 //! Key details:
 //! - The check hook always errors: `class_alias()` is only supported as a top-level
-//!   statement with literal class names (handled by the AST-level resolver before
-//!   reaching the type checker). Any direct call that reaches this hook is rejected.
+//!   statement whose class names are compile-time constants (string literals, `Name::class`,
+//!   and their concatenations), which `crate::autoload::alias` turns into declarations before
+//!   the type checker runs. Any call that reaches this hook is rejected.
 //! - Arguments are pre-inferred by the registry common path before the hook runs.
 
 use crate::builtins::spec::BuiltinCheckCtx;

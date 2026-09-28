@@ -291,6 +291,21 @@ fn test_error_class_alias_rejects_runtime_call_shape() {
     );
 }
 
+/// Verifies `class_alias()` still refuses a class name only known at run time even though
+/// `Name::class` constants are accepted (issue #849): `$object::class` names the runtime class
+/// of an object, and a call inside a function body is not a top-level declaration.
+#[test]
+fn test_error_class_alias_rejects_runtime_class_name_shapes() {
+    expect_error(
+        r#"<?php class Original {} $o = new Original(); class_alias($o::class, "Alias");"#,
+        "class_alias() is only supported as a top-level statement with literal class names",
+    );
+    expect_error(
+        r#"<?php class Original {} function make() { class_alias(Original::class, "Alias"); } make();"#,
+        "class_alias() is only supported as a top-level statement with literal class names",
+    );
+}
+
 // --- Closure / arrow function errors ---
 
 /// Verifies that error call non callable variable.
