@@ -245,19 +245,39 @@ fn lower_hash_slice(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `array_slice()` for an indexed array stored inside a boxed Mixed cell.
+/// Lowers `array_slice()` for an indexed or hash array stored inside a boxed Mixed cell.
+///
+/// A boxed result (the PHP array type the checker, the fallback, and the callable wrapper give a
+/// boxed source) receives whichever storage the slice built, boxed by its runtime heap kind. An
+/// `array<mixed>` result only comes from a checked list type whose operand EIR still boxes, such
+/// as a call-site-specialized untyped parameter; a hash payload there stays a hash-backed array,
+/// which boxing recognizes by its heap kind.
 pub(super) fn lower_mixed_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let array = expect_operand(inst, 0)?;
     let offset = expect_operand(inst, 1)?;
     let length = slice_like_length_operand(inst)?;
-    let result_elem_ty =
-        result_array_element_type("array_slice", &inst.result_php_type.codegen_repr())?;
+    let result_ty = inst.result_php_type.codegen_repr();
+    let boxed_result = matches!(result_ty, PhpType::Mixed | PhpType::Union(_));
+    let result_elem_ty = if boxed_result {
+        PhpType::Mixed
+    } else {
+        result_array_element_type("array_slice", &result_ty)?
+    };
     require_array_slice_result_type(&PhpType::Mixed, &result_elem_ty)?;
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_mixed_array_slice_aarch64(ctx, array, offset, length)?,
-        Arch::X86_64 => lower_mixed_array_slice_x86_64(ctx, array, offset, length)?,
+        Arch::AArch64 => {
+            lower_mixed_array_slice_aarch64(ctx, array, offset, length, &result_elem_ty)?
+        }
+        Arch::X86_64 => {
+            lower_mixed_array_slice_x86_64(ctx, array, offset, length, &result_elem_ty)?
+        }
     }
-    normalize_indexed_array_result(ctx, "array_slice", &PhpType::Mixed, &result_elem_ty)?;
+    if boxed_result {
+        emit_box_current_owned_value_as_mixed(
+            ctx.emitter,
+            &PhpType::Array(Box::new(PhpType::Mixed)),
+        );
+    }
     store_if_result(ctx, inst)
 }
 

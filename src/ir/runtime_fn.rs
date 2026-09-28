@@ -830,9 +830,18 @@ impl RuntimeFnId {
     ) -> crate::types::PhpType {
         use crate::types::PhpType;
         match self {
-            RuntimeFnId::ArrayKeys | RuntimeFnId::ArraySlice => {
-                PhpType::Array(Box::new(PhpType::Mixed))
-            }
+            // Narrowing a hash keeps its key and value layout in both `preserve_keys` modes,
+            // which is the layout `__rt_hash_slice` builds. A callee resolved only by lowering,
+            // such as `$fn = "array_slice"; $fn($assoc, 1, 2)`, has no checked type to supply it,
+            // and the indexed fallback refused the associative source outright.
+            RuntimeFnId::ArraySlice => match arg_types.first().map(PhpType::codegen_repr) {
+                Some(hash @ PhpType::AssocArray { .. }) => hash,
+                // A boxed source may hold a list or a hash, so the result is the boxed PHP array
+                // type, exactly as the checker types a boxed source.
+                Some(PhpType::Mixed | PhpType::Union(_)) => PhpType::php_array(),
+                _ => PhpType::Array(Box::new(PhpType::Mixed)),
+            },
+            RuntimeFnId::ArrayKeys => PhpType::Array(Box::new(PhpType::Mixed)),
             // The removed-elements array copies the receiver's payload slots, so its element
             // layout is the receiver's. A type-changing `$replacement` promotes that receiver to
             // `array<mixed>` during lowering, and the checker's pre-promotion `array<int>` no
@@ -946,6 +955,22 @@ impl RuntimeFnId {
                 checked.codegen_repr(),
                 PhpType::Array(_) | PhpType::AssocArray { .. }
             )),
+            // An indexed source slices to a list, or to an integer-keyed hash under a literal
+            // `preserve_keys`, and a boxed source answers with the boxed PHP array. A checked hash
+            // outside those shapes describes some other operand: a call-site-specialized untyped
+            // parameter, or the two slices the `func_get_args()` rewrite nests under one span,
+            // which then read each other's checked type.
+            RuntimeFnId::ArraySlice
+                if matches!(
+                    (arg_types.first().map(PhpType::codegen_repr), checked.codegen_repr()),
+                    (Some(PhpType::Array(_)), PhpType::AssocArray { key, .. }) if *key != PhpType::Int
+                ) || matches!(
+                    (arg_types.first().map(PhpType::codegen_repr), checked.codegen_repr()),
+                    (Some(PhpType::Mixed | PhpType::Union(_)), PhpType::AssocArray { .. })
+                ) =>
+            {
+                false
+            }
             RuntimeFnId::ArraySlice | RuntimeFnId::ArraySplice => {
                 let PhpType::Array(result_element) = checked.codegen_repr() else {
                     return true;
@@ -1044,14 +1069,14 @@ impl RuntimeFnId {
             // between an indexed array and an integer-keyed hash, so the backend needs them as
             // compile-time literals. A dynamic callable wrapper receives runtime parameters, so
             // the flag is dropped from the wrapper ABI exactly like `count()`'s `$mode`; the
-            // wrapper then always produces the renumbered indexed result. `array_slice()`'s
-            // return type is pinned to the concrete indexed layout its helpers materialize,
-            // because the wrapper has no per-call-site checked type to read.
+            // wrapper then always renumbers integer keys. `array_slice()`'s return type is pinned
+            // to the boxed PHP array its boxed-source helper materializes, because the wrapper has
+            // no per-call-site checked type to read and its source may be a list or a hash.
             RuntimeFnId::ArrayReverse => truncate_callable_params(sig, 1),
             RuntimeFnId::ArrayChunk => truncate_callable_params(sig, 2),
             RuntimeFnId::ArraySlice => {
                 truncate_callable_params(sig, 3);
-                sig.return_type = PhpType::Array(Box::new(PhpType::Mixed));
+                sig.return_type = PhpType::php_array();
             }
             RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct => {
                 set_callable_param_type(sig, 0, PhpType::php_array());

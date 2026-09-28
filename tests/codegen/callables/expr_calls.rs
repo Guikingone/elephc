@@ -1864,6 +1864,76 @@ echo implode(",", array_keys(call_user_func($fn, $h, 1, 2, true))), "\n";
     assert_eq!(out, "b,c:b,c:b,c\n");
 }
 
+/// A string-literal callable local naming `array_slice()` keeps an associative slice (#1347).
+///
+/// The checker does not resolve `$fn = "array_slice"`, so no checked type reaches this call, and
+/// lowering fell back to the indexed `array<mixed>` layout: the hash source was refused with
+/// `array_slice of an associative array into result PHP type Array(Mixed)`. The fallback now keeps
+/// a hash source's own layout. Expected output is verbatim PHP 8.5.10.
+#[test]
+fn test_string_callable_array_slice_keeps_an_associative_layout() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ["a" => 1, "b" => 2, "c" => 3];
+$fn = "array_slice";
+var_dump($fn($h, 1, 2));
+var_dump($fn($h, 1, 1, true));
+$m = [5 => "x", 7 => "y", 9 => "z"];
+var_dump($fn($m, 1));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "array(2) {\n  [\"b\"]=>\n  int(2)\n  [\"c\"]=>\n  int(3)\n}\n",
+            "array(1) {\n  [\"b\"]=>\n  int(2)\n}\n",
+            "array(2) {\n  [0]=>\n  string(1) \"y\"\n  [1]=>\n  string(1) \"z\"\n}\n",
+        )
+    );
+}
+
+/// Callable dispatch of `array_slice()` over a boxed hash keeps its string keys (#1348).
+///
+/// A string callable given a `mixed` source, and a first-class callable invoked inside a loop
+/// (which goes through the descriptor wrapper with boxed arguments), both reach the boxed-source
+/// slice, which answered an empty array for a hash payload. Expected output is verbatim
+/// PHP 8.5.10.
+#[test]
+fn test_callable_array_slice_of_a_boxed_hash_keeps_string_keys() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(mixed $v): mixed { return $v; }
+$fn = "array_slice";
+echo json_encode($fn(pick(["a" => 1, "b" => 2, "c" => 3]), 1)), "|";
+$g = array_slice(...);
+for ($i = 0; $i < 2; $i++) {
+    echo json_encode($g(pick(["x" => $i, "y" => 2, 4 => 5]), 1)), "|";
+}
+"#,
+    );
+    assert_eq!(out, r#"{"b":2,"c":3}|{"y":2,"0":5}|{"y":2,"0":5}|"#);
+}
+
+/// A first-class callable keeps accepting arguments its direct call's contract refuses by TYPE.
+///
+/// Only a compile-time literal requirement is reported at a first-class call site (#1346).
+/// `array_reverse($mixed)` is refused as a direct call, but the callable ABI takes the boxed
+/// argument and reverses it at run time, so this spelling must keep compiling.
+#[test]
+fn test_first_class_array_reverse_still_accepts_a_boxed_argument() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(): mixed { return [3, 1, 2]; }
+$f = array_reverse(...);
+var_dump($f(pick()));
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(3) {\n  [0]=>\n  int(2)\n  [1]=>\n  int(1)\n  [2]=>\n  int(3)\n}\n"
+    );
+}
+
 /// A callable-builtin result map must keep same-coordinate included calls independent.
 #[test]
 fn test_first_class_builtin_result_types_do_not_collide_across_included_files() {

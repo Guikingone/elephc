@@ -58,7 +58,7 @@ fn literal_preserve_keys(flag: Option<&Expr>) -> Option<bool> {
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     let preserve = literal_preserve_keys(cx.args.get(2)).ok_or_else(|| {
-        CompileError::new(
+        CompileError::aot_literal_required(
             cx.span,
             "array_chunk() preserve_keys argument must be a literal bool in AOT mode",
         )

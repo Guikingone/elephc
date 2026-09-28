@@ -136,16 +136,25 @@ pub(super) fn materialize_mixed_slice_args(
 }
 
 /// Slices a private normalized payload without rewriting the borrowed ARM64 source box.
+///
+/// An indexed payload is copied into Mixed slots and sliced into a renumbered indexed array. A
+/// hash payload goes through `__rt_hash_slice` instead, which keeps string keys and renumbers
+/// integer ones as PHP does without `preserve_keys`. Any other payload yields an empty array.
+/// The caller boxes whichever storage comes back when the result type is boxed.
 pub(super) fn lower_mixed_array_slice_aarch64(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
     offset: ValueId,
     length: Option<ValueId>,
+    result_elem_ty: &PhpType,
 ) -> Result<()> {
+    let hash_label = ctx.next_label("mixed_array_slice_hash");
     let empty_label = ctx.next_label("mixed_array_slice_empty");
     let done_label = ctx.next_label("mixed_array_slice_done");
     ctx.load_value_to_reg(array, "x0")?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    ctx.emitter.instruction("cmp x0, #5");                                      // detect a hash payload, whose string keys survive the slice
+    ctx.emitter.instruction(&format!("b.eq {}", hash_label));                   // slice hash payloads by insertion position
     ctx.emitter.instruction("cmp x0, #4");                                      // require an indexed-array payload before slicing the Mixed cell
     ctx.emitter.instruction(&format!("b.ne {}", empty_label));                  // return an empty slice for non-array Mixed payloads
     ctx.emitter.instruction(&format!("cbz x1, {}", empty_label));               // return an empty slice for null array payloads
@@ -156,7 +165,13 @@ pub(super) fn lower_mixed_array_slice_aarch64(
     ctx.emitter.instruction("and x1, x1, #0x7f");                               // isolate the indexed-array value_type tag
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
     slice_owned_mixed_payload(ctx, offset, length)?;
-    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the empty-array fallback after slicing the boxed payload
+    normalize_indexed_array_result(ctx, "array_slice", &PhpType::Mixed, result_elem_ty)?;
+    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the other payload shapes after slicing the indexed payload
+    ctx.emitter.label(&hash_label);
+    ctx.emitter.instruction(&format!("cbz x1, {}", empty_label));               // return an empty slice for null hash payloads
+    abi::emit_push_reg(ctx.emitter, "x1");
+    slice_borrowed_mixed_hash_payload(ctx, offset, length)?;
+    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the empty-array fallback after slicing the hash payload
     ctx.emitter.label(&empty_label);
     allocate_empty_mixed_array_result(ctx);
     ctx.emitter.label(&done_label);
@@ -164,16 +179,23 @@ pub(super) fn lower_mixed_array_slice_aarch64(
 }
 
 /// Slices a private normalized payload without rewriting the borrowed x86_64 source box.
+///
+/// Mirrors `lower_mixed_array_slice_aarch64`: indexed payloads are renumbered, hash payloads go
+/// through `__rt_hash_slice` and keep their string keys, anything else yields an empty array.
 pub(super) fn lower_mixed_array_slice_x86_64(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
     offset: ValueId,
     length: Option<ValueId>,
+    result_elem_ty: &PhpType,
 ) -> Result<()> {
+    let hash_label = ctx.next_label("mixed_array_slice_hash");
     let empty_label = ctx.next_label("mixed_array_slice_empty");
     let done_label = ctx.next_label("mixed_array_slice_done");
     ctx.load_value_to_reg(array, "rax")?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    ctx.emitter.instruction("cmp rax, 5");                                      // detect a hash payload, whose string keys survive the slice
+    ctx.emitter.instruction(&format!("je {}", hash_label));                     // slice hash payloads by insertion position
     ctx.emitter.instruction("cmp rax, 4");                                      // require an indexed-array payload before slicing the Mixed cell
     ctx.emitter.instruction(&format!("jne {}", empty_label));                   // return an empty slice for non-array Mixed payloads
     ctx.emitter.instruction("test rdi, rdi");                                   // verify the unboxed indexed-array payload is present
@@ -186,10 +208,39 @@ pub(super) fn lower_mixed_array_slice_x86_64(
     ctx.emitter.instruction("and rsi, 0x7f");                                   // isolate the indexed-array value_type tag
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
     slice_owned_mixed_payload(ctx, offset, length)?;
-    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the empty-array fallback after slicing the boxed payload
+    normalize_indexed_array_result(ctx, "array_slice", &PhpType::Mixed, result_elem_ty)?;
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the other payload shapes after slicing the indexed payload
+    ctx.emitter.label(&hash_label);
+    ctx.emitter.instruction("test rdi, rdi");                                   // verify the unboxed hash payload is present
+    ctx.emitter.instruction(&format!("je {}", empty_label));                    // return an empty slice for null hash payloads
+    abi::emit_push_reg(ctx.emitter, "rdi");
+    slice_borrowed_mixed_hash_payload(ctx, offset, length)?;
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the empty-array fallback after slicing the hash payload
     ctx.emitter.label(&empty_label);
     allocate_empty_mixed_array_result(ctx);
     ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Slices the borrowed hash payload of a Mixed cell with `__rt_hash_slice`.
+///
+/// The hash pointer must be the topmost value on the temporary stack; the shared materializer
+/// pops it into the first argument register after resolving the window operands. The hash stays
+/// owned by its Mixed cell, because the helper only reads the source and retains what it copies.
+/// `preserve_keys` is always false: the checker refuses a key-preserving slice of a boxed source,
+/// and the callable wrapper drops the flag.
+fn slice_borrowed_mixed_hash_payload(
+    ctx: &mut FunctionContext<'_>,
+    offset: ValueId,
+    length: Option<ValueId>,
+) -> Result<()> {
+    materialize_mixed_slice_args(ctx, offset, length, "array_slice")?;
+    let preserve_keys_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x4",
+        Arch::X86_64 => "r8",
+    };
+    abi::emit_load_int_immediate(ctx.emitter, preserve_keys_reg, 0);
+    abi::emit_call_label(ctx.emitter, "__rt_hash_slice");
     Ok(())
 }
 

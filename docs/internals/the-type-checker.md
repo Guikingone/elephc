@@ -965,6 +965,19 @@ not *spelled a particular way*:
 | a name that is also an EXTERN function | **no** | lowering resolves the extern first and never reads this map for it |
 | `$fn = "array_slice"; $fn($assoc, …)` | **no** | lowering resolves that string statically; the checker does not track string-literal callable locals at all |
 
+A call with no entry takes `RuntimeFnId::fallback_result_type` in lowering. For `array_slice()`
+that answer is built from the operand types alone: an associative source keeps its layout and a
+boxed `mixed`/`array` source gets the boxed PHP array type, so the string-literal spelling above
+slices a hash instead of refusing it (issue #1347).
+
+When the contract REJECTS the arguments at a recorded site, the checker reports the rejection only
+if it is a compile-time literal requirement (`CompileErrorKind::AotLiteralRequired`: a
+`preserve_keys` flag, a constant or class name, a `str_word_count()` format). Every lowering of the
+callee needs that argument at compile time, so the direct call's diagnostic is the right one
+(issue #1346). Any other rejection is the direct call's view of its argument types, which can be
+narrower than the callable ABI: `$f = array_reverse(...); $f($mixed)` compiles and runs although
+`array_reverse($mixed)` is refused, so such a rejection falls back to the generic signature path.
+
 This is passed to the [code generator](the-codegen.md), which uses it to:
 - Allocate the right amount of stack space per variable
 - Choose the correct registers and instructions
