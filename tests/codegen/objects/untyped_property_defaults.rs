@@ -380,3 +380,43 @@ echo $h->describe(), "\n";
         )
     );
 }
+
+/// Reflection reports a `Foo::class` default as the string it stores: `hasDefaultValue()` and
+/// `getDefaultValue()` on a property (a scalar, an array value and an array key) and on a
+/// parameter. The default compiled, but Reflection still saw an unknown expression and said there
+/// was none. Regression for #1350.
+#[test]
+fn test_named_class_constant_default_is_reflected() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+class Repo {}
+class C {
+    public string $x = Repo::class;
+    public static string $s = \stdClass::class;
+    public array $list = [Repo::class, C::class => 'self'];
+}
+function f(string $name = Repo::class): string { return $name; }
+$r = new \ReflectionProperty(C::class, 'x');
+var_dump($r->hasDefaultValue(), $r->getDefaultValue());
+var_dump((new \ReflectionProperty(C::class, 's'))->getDefaultValue());
+var_dump((new \ReflectionProperty(C::class, 'list'))->getDefaultValue());
+var_dump((new \ReflectionFunction('App\f'))->getParameters()[0]->getDefaultValue());
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bool(true)\n",
+            "string(8) \"App\\Repo\"\n",
+            "string(8) \"stdClass\"\n",
+            "array(2) {\n",
+            "  [0]=>\n",
+            "  string(8) \"App\\Repo\"\n",
+            "  [\"App\\C\"]=>\n",
+            "  string(4) \"self\"\n",
+            "}\n",
+            "string(8) \"App\\Repo\"\n",
+        )
+    );
+}

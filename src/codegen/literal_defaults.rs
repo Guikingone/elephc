@@ -1107,9 +1107,10 @@ fn array_element_size(elem_type: &PhpType) -> Result<i64> {
 
 /// Folds `Foo::class` with a named receiver into the string literal it always is: the name
 /// as written, already resolved against the file's namespace and imports, with no leading
-/// `\`. `self::class` and `static::class` depend on the class they appear in and stay as they
-/// are.
-fn fold_named_class_constant(expr: &ExprKind) -> Option<ExprKind> {
+/// `\`. `self::class`, `parent::class` and `static::class` depend on the class they appear in
+/// and stay as they are. Shared with the Reflection default metadata, so a folded default
+/// reflects as the same string it stores.
+pub(crate) fn fold_named_class_constant(expr: &ExprKind) -> Option<ExprKind> {
     match expr {
         ExprKind::ClassConstant {
             receiver: crate::parser::ast::StaticReceiver::Named(name),
