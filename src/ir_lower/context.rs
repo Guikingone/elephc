@@ -33,6 +33,22 @@ pub(crate) struct LoweredValue {
     pub ir_type: IrType,
 }
 
+/// One reachable edge into a control-flow join, deferred so the join can convert it later.
+///
+/// `if` chains, lazily evaluated expressions and `switch` statements record one per edge and
+/// reconcile them in `stmt::conditionals::finish_if_type_join`.
+#[derive(Clone)]
+pub(crate) struct IfArmExit {
+    /// Empty block filled after every sibling edge has been lowered.
+    pub tail: BlockId,
+    /// Flow-sensitive local types at the end of this edge.
+    pub types: TypeEnv,
+    /// Definitely-initialized slots at the end of this edge.
+    pub initialized: HashSet<LocalSlotId>,
+    /// Compile-time callable targets that remain valid at the end of this edge.
+    pub static_callables: HashMap<String, StaticCallableBinding>,
+}
+
 /// Loop-control target pair for `break` and `continue`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LoopFrame {
@@ -161,6 +177,7 @@ pub(crate) struct LoweringSnapshot {
     initialized_slots: HashSet<LocalSlotId>,
     constants: HashMap<String, (ExprKind, PhpType)>,
     loop_stack: Vec<LoopFrame>,
+    switch_exit_arms: Vec<(BlockId, Vec<IfArmExit>)>,
     finally_stack: Vec<FinallyFrame>,
     try_loop_depths: Vec<usize>,
     static_callable_locals: HashMap<String, StaticCallableBinding>,
@@ -316,6 +333,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub top_level_env: TypeEnv,
     pub current_class: Option<String>,
     pub loop_stack: Vec<LoopFrame>,
+    /// The `break`/`continue` edges into each enclosing `switch` exit, innermost last, keyed by
+    /// that exit block, so the exit joins every edge's facts instead of the last case's.
+    pub(crate) switch_exit_arms: Vec<(BlockId, Vec<IfArmExit>)>,
     pub finally_stack: Vec<FinallyFrame>,
     /// Loop-stack depth at each active `try` handler push; see
     /// `LoweringContext::loops_a_throw_would_leave`.
@@ -488,6 +508,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             top_level_env,
             current_class,
             loop_stack: Vec::new(),
+            switch_exit_arms: Vec::new(),
             finally_stack: Vec::new(),
             try_loop_depths: Vec::new(),
             static_callable_locals: HashMap::new(),
@@ -545,6 +566,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             initialized_slots: self.initialized_slots.clone(),
             constants: self.constants.clone(),
             loop_stack: self.loop_stack.clone(),
+            switch_exit_arms: self.switch_exit_arms.clone(),
             finally_stack: self.finally_stack.clone(),
             try_loop_depths: self.try_loop_depths.clone(),
             static_callable_locals: self.static_callable_locals.clone(),
@@ -617,6 +639,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.initialized_slots = snapshot.initialized_slots;
         self.constants = snapshot.constants;
         self.loop_stack = snapshot.loop_stack;
+        self.switch_exit_arms = snapshot.switch_exit_arms;
         self.finally_stack = snapshot.finally_stack;
         self.try_loop_depths = snapshot.try_loop_depths;
         self.static_callable_locals = snapshot.static_callable_locals;

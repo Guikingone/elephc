@@ -12,20 +12,8 @@
 use super::*;
 use std::collections::HashMap;
 
-use crate::ir_lower::context::StaticCallableBinding;
+use crate::ir_lower::context::{IfArmExit, StaticCallableBinding};
 use crate::types::TypeEnv;
-
-/// One reachable arm of an `if` chain together with its deferred merge edge.
-struct IfArmExit {
-    /// Empty block filled after every sibling arm has been lowered.
-    tail: BlockId,
-    /// Flow-sensitive local types at the end of this arm.
-    types: TypeEnv,
-    /// Definitely-initialized slots at the end of this arm.
-    initialized: HashSet<LocalSlotId>,
-    /// Compile-time callable targets that remain valid at the end of this arm.
-    static_callables: HashMap<String, StaticCallableBinding>,
-}
 
 /// Lowers an `if` / `elseif` / `else` chain and joins all reachable arm types once.
 pub(super) fn lower_if(
@@ -156,7 +144,7 @@ fn lower_if_chain(
 }
 
 /// Defers one reachable arm's merge edge so representation conversions can be inserted later.
-fn record_if_arm_exit(ctx: &mut LoweringContext<'_, '_>, arms: &mut Vec<IfArmExit>) {
+pub(super) fn record_if_arm_exit(ctx: &mut LoweringContext<'_, '_>, arms: &mut Vec<IfArmExit>) {
     let tail = ctx.builder.create_named_block("if.arm", Vec::new());
     ctx.builder.terminate(Terminator::Br {
         target: tail,
@@ -170,8 +158,27 @@ fn record_if_arm_exit(ctx: &mut LoweringContext<'_, '_>, arms: &mut Vec<IfArmExi
     });
 }
 
+/// Defers a `break`/`continue` edge whose target is the exit of a `switch` being lowered.
+///
+/// A `switch` exit is a join like an `if` merge: each `break` reaches it with the facts its own
+/// case left, so it records its edge for `lower_switch_bodies` to reconcile instead of branching
+/// straight to the exit. Returns `false` when `target` is no such exit; the caller then branches.
+pub(super) fn record_switch_exit_edge(ctx: &mut LoweringContext<'_, '_>, target: BlockId) -> bool {
+    let Some(index) = ctx
+        .switch_exit_arms
+        .iter()
+        .rposition(|(exit, _)| *exit == target)
+    else {
+        return false;
+    };
+    let mut arms = std::mem::take(&mut ctx.switch_exit_arms[index].1);
+    record_if_arm_exit(ctx, &mut arms);
+    ctx.switch_exit_arms[index].1 = arms;
+    true
+}
+
 /// Reconciles flow-sensitive types and indexed-array layouts on all incoming merge edges.
-fn finish_if_type_join(
+pub(super) fn finish_if_type_join(
     ctx: &mut LoweringContext<'_, '_>,
     arms: Vec<IfArmExit>,
     merge: BlockId,
@@ -626,12 +633,19 @@ pub(super) fn lower_ifdef(
 /// A pointer slot refused that load at compile time; once an `if` join in the body had boxed the
 /// slot, the read became a constant `null` on every iteration. The same `Mixed` box, applied
 /// from lowering's own fact, gives the header one representation for both paths.
+///
+/// The box is a storage retype, not a load and re-store: the `null` fact that selects the local
+/// can be stale. A loop exit keeps its body's facts, so after `while ($k-- > 0) { $o = null; }`
+/// `$o` is typed `null` on the path that never entered the loop too. Reading the slot through
+/// that view materialized `null` for the object it still held, and storing the box made the
+/// slot `Mixed`, which hid the read from the backend's pointer-slot `null` proof. Widening the
+/// frame slot to `Mixed` instead makes the backend box every store into it, `null` and object
+/// alike, so the head reads whatever each path really left there.
 pub(super) fn apply_null_entry_boxing(
     ctx: &mut LoweringContext<'_, '_>,
     condition: Option<&Expr>,
     body: &[Stmt],
     update: Option<&Stmt>,
-    span: Option<Span>,
 ) {
     let mut names = crate::types::checker::loop_assigned_local_names(condition, body, update)
         .into_iter()
@@ -639,9 +653,7 @@ pub(super) fn apply_null_entry_boxing(
         .collect::<Vec<_>>();
     names.sort();
     for name in names {
-        let source = ctx.load_local(&name, span);
-        let boxed = ctx.box_value_as_mixed(source, PhpType::Mixed, span);
-        ctx.store_local_representation(&name, boxed, PhpType::Mixed, span);
+        ctx.set_local_type(&name, PhpType::Mixed);
     }
 }
 

@@ -8,6 +8,9 @@
 //! - Preserves statement ordering, CFG shape, EIR effects, and ownership contracts.
 
 use super::*;
+use std::collections::HashMap;
+
+use crate::ir_lower::context::IfArmExit;
 
 /// Lowers a `switch` with source-ordered pattern evaluation and PHP fallthrough.
 pub(super) fn lower_switch(
@@ -16,6 +19,7 @@ pub(super) fn lower_switch(
     cases: &[(Vec<Expr>, Vec<Stmt>)],
     default: Option<&[Stmt]>,
 ) {
+    let subject_span = subject.span;
     let subject = lower_expr(ctx, subject);
     let exit = ctx.builder.create_named_block("switch.exit", Vec::new());
     let default_block = ctx.builder.create_named_block("switch.default", Vec::new());
@@ -35,7 +39,7 @@ pub(super) fn lower_switch(
         lower_dynamic_switch_dispatch(ctx, subject, cases, &blocks, default_block);
     }
 
-    lower_switch_bodies(ctx, cases, default, &blocks, default_block, exit);
+    lower_switch_bodies(ctx, cases, default, &blocks, default_block, exit, subject_span);
 }
 
 /// Returns true when every switch case pattern can use the static integer switch terminator.
@@ -168,6 +172,15 @@ pub(super) fn float_loose_eq_pair(subject_ty: IrType, case_ty: IrType) -> bool {
 }
 
 /// Lowers switch case/default bodies and preserves PHP fallthrough between adjacent bodies.
+///
+/// Each body is entered from the dispatch and, unless the body before it ended in `break`,
+/// by falling through; the exit is reached by every `break` and by the last body falling out.
+/// Those are joins exactly like an `if` merge, and lowering the bodies one after another used
+/// to leave each join with the facts of whichever body was lowered last: after
+/// `case 1: $o = null; break; case 2: …; default: …` the exit read `$o` as `null` on the path
+/// that kept the object. Every body therefore starts from the dispatch facts joined with its
+/// fall-through edge, and the exit joins every edge that reaches it (`finish_if_type_join`),
+/// boxing a local whose edges disagree on its representation.
 pub(super) fn lower_switch_bodies(
     ctx: &mut LoweringContext<'_, '_>,
     cases: &[(Vec<Expr>, Vec<Stmt>)],
@@ -175,11 +188,20 @@ pub(super) fn lower_switch_bodies(
     blocks: &[BlockId],
     default_block: BlockId,
     exit: BlockId,
+    span: Span,
 ) {
     let default_index = default
         .and_then(|default| switch_default_source_index(cases, default))
         .unwrap_or(cases.len());
     ctx.clear_static_callable_locals();
+    let dispatch_types = ctx.local_types_snapshot();
+    let dispatch_initialized = ctx.initialized_slots_snapshot();
+    let dispatch_edge = |tail: BlockId| IfArmExit {
+        tail,
+        types: dispatch_types.clone(),
+        initialized: dispatch_initialized.clone(),
+        static_callables: HashMap::new(),
+    };
     ctx.loop_stack.push(LoopFrame {
         break_block: exit,
         continue_block: exit,
@@ -190,36 +212,68 @@ pub(super) fn lower_switch_bodies(
         iterator_cleanup: None,
         receiver_pin: None,
     });
+    ctx.switch_exit_arms.push((exit, Vec::new()));
+    let mut fallthrough = None;
     for index in 0..=cases.len() {
         if default.is_some() && default_index == index {
-            ctx.builder.position_at_end(default_block);
+            enter_switch_body(ctx, dispatch_edge(default_block), fallthrough.take(), span);
             if let Some(default) = default {
                 lower_block(ctx, default);
             }
-            if !ctx.builder.insertion_block_is_terminated() {
-                branch_to(ctx, blocks.get(index).copied().unwrap_or(exit));
-            }
-            ctx.clear_static_callable_locals();
+            fallthrough = leave_switch_body(ctx);
         }
         if let Some((_, body)) = cases.get(index) {
-            ctx.builder.position_at_end(blocks[index]);
+            enter_switch_body(ctx, dispatch_edge(blocks[index]), fallthrough.take(), span);
             lower_block(ctx, body);
-            if !ctx.builder.insertion_block_is_terminated() {
-                branch_to(
-                    ctx,
-                    switch_next_body_block(index + 1, blocks, default_index, default_block, exit),
-                );
-            }
-            ctx.clear_static_callable_locals();
+            fallthrough = leave_switch_body(ctx);
         }
     }
+    let (_, mut exit_edges) = ctx
+        .switch_exit_arms
+        .pop()
+        .expect("switch exit join pushed above");
+    exit_edges.extend(fallthrough);
     if default.is_none() {
-        ctx.builder.position_at_end(default_block);
-        branch_to(ctx, exit);
+        exit_edges.push(dispatch_edge(default_block));
     }
     ctx.loop_stack.pop();
+    finish_if_type_join(ctx, exit_edges, exit, span);
     ctx.builder.position_at_end(exit);
     ctx.clear_static_callable_locals();
+}
+
+/// Positions the builder at the start of one switch body, joining its fall-through edge in.
+///
+/// `dispatch` is the edge from the dispatch, whose tail is the body's dispatch target block. A
+/// body without a fall-through edge starts in that block with the dispatch facts; otherwise both
+/// edges are joined into a fresh block like the arms of an `if`.
+fn enter_switch_body(
+    ctx: &mut LoweringContext<'_, '_>,
+    dispatch: IfArmExit,
+    fallthrough: Option<IfArmExit>,
+    span: Span,
+) {
+    let Some(fallthrough) = fallthrough else {
+        ctx.restore_local_types(dispatch.types);
+        ctx.builder.position_at_end(dispatch.tail);
+        return;
+    };
+    let body = ctx.builder.create_named_block("switch.body", Vec::new());
+    finish_if_type_join(ctx, vec![dispatch, fallthrough], body, span);
+    ctx.builder.position_at_end(body);
+}
+
+/// Ends one switch body, deferring its fall-through edge when control can still leave it.
+fn leave_switch_body(ctx: &mut LoweringContext<'_, '_>) -> Option<IfArmExit> {
+    let fallthrough = if ctx.builder.insertion_block_is_terminated() {
+        None
+    } else {
+        let mut edges = Vec::with_capacity(1);
+        record_if_arm_exit(ctx, &mut edges);
+        edges.pop()
+    };
+    ctx.clear_static_callable_locals();
+    fallthrough
 }
 
 /// Returns the source-order insertion point for a non-empty switch default body.
@@ -245,21 +299,6 @@ pub(super) fn switch_default_source_index(
         }
     }
     Some(default_index)
-}
-
-/// Returns the block that follows one source-ordered switch body.
-pub(super) fn switch_next_body_block(
-    next_index: usize,
-    blocks: &[BlockId],
-    default_index: usize,
-    default_block: BlockId,
-    exit: BlockId,
-) -> BlockId {
-    if default_index == next_index {
-        default_block
-    } else {
-        blocks.get(next_index).copied().unwrap_or(exit)
-    }
 }
 
 /// Returns true when `span` appears before `pivot` in the same source file.

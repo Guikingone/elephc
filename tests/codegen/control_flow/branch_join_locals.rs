@@ -401,3 +401,163 @@ fb(1); fb(0); fp(1); fp(0);
     );
     assert_eq!(out, "null\nbuf\nnull\np\n");
 }
+
+/// A `match` arm with several conditions is reached once per condition, and each edge carries
+/// the facts its own condition left: `($v = null), ($v = 1) => …` enters the result with `$v`
+/// null on the first edge and int on the second. The result block used to take the LAST
+/// condition's fact on every edge, so the first condition's `null` read back as an int.
+#[test]
+fn test_match_condition_list_joins_each_condition_edge() {
+    let out = compile_and_run(
+        r#"<?php
+function m($n) {
+    $r = match ($n) { ($v = null), ($v = 1) => 10, default => 0 };
+    var_dump($r, $v);
+}
+m(null);
+m(1);
+m(2);
+function k($n) {
+    $r = match ($n) { ($v = 1.5), ($v = 2) => "hit", default => "miss" };
+    var_dump($r, $v);
+}
+k(1.5);
+k(2);
+k(3);
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(10)\nNULL\nint(10)\nint(1)\nint(0)\nint(1)\nstring(3) \"hit\"\nfloat(1.5)\nstring(3) \"hit\"\nint(2)\nstring(4) \"miss\"\nint(2)\n"
+    );
+}
+
+/// A `switch` exit is a join: each `break` reaches it with the facts its own case left, and
+/// each body is entered from the dispatch as well as by falling through. Lowering the bodies in
+/// sequence left `$o` typed `null` after `case 1: $o = null; break;` on every path, so a read
+/// after the switch refused to compile, and a loop that read `$o` before assigning it boxed the
+/// stale `null` at its head and printed `N` for the object the other cases kept.
+#[test]
+fn test_switch_exit_and_bodies_join_every_edge() {
+    let out = compile_and_run(
+        r#"<?php
+class P { public int $v = 7; }
+function after(int $n): string {
+    $o = new P();
+    switch ($n) {
+        case 1: $o = null; break;
+        case 2: $n = 5; break;
+        default: break;
+    }
+    return $o === null ? "N" : "O" . $o->v;
+}
+echo after(1), " ", after(2), " ", after(3), "\n";
+function loop(int $n): string {
+    $o = new P();
+    switch ($n) {
+        case 1: $o = null; break;
+        case 2: $n = 5; break;
+        default: break;
+    }
+    $out = "";
+    for ($i = 0; $i < 2; $i++) {
+        $out .= $o === null ? "N" : "O";
+        $o = new P();
+    }
+    return $out;
+}
+echo loop(1), " ", loop(2), " ", loop(3), "\n";
+function entry(int $n): string {
+    $o = new P();
+    switch ($n) {
+        case 1: $o = null; break;
+        case 2: return "O" . $o->v;
+        default: break;
+    }
+    return $o === null ? "N" : "D";
+}
+echo entry(1), " ", entry(2), " ", entry(3), "\n";
+function fall(int $n): string {
+    $o = new P();
+    switch ($n) {
+        case 1: $o = null;
+        case 2: $s = $o === null ? "N" : "O"; break;
+        default: $s = "D";
+    }
+    return $s;
+}
+echo fall(1), " ", fall(2), " ", fall(3), "\n";
+"#,
+    );
+    assert_eq!(out, "N O7 O7\nNO OO OO\nN O7 D\nN O D\n");
+}
+
+/// A `switch` whose cases leave a local in different representations reads it back after the
+/// exit as the value of whichever case ran. The exit used to take the representation of the
+/// case body lowered last, so the paths that skipped `$m = "s"` printed `string(0) ""`.
+#[test]
+fn test_switch_exit_joins_divergent_scalar_representations() {
+    let out = compile_and_run(
+        r#"<?php
+function sw(int $n) {
+    $m = null;
+    switch ($n) {
+        case 1: $m = "s" . $n; break;
+        case 2: $n++; break;
+    }
+    var_dump($m);
+    return 0;
+}
+sw(1); sw(2); sw(3);
+$c = null;
+switch ($argc) {
+    case 5: $c = 1.5; break;
+    case 6: break;
+    default: $c = $argc;
+}
+var_dump($c);
+"#,
+    );
+    assert_eq!(out, "string(2) \"s1\"\nNULL\nNULL\nint(1)\n");
+}
+
+/// A loop exit keeps its body's facts, so after `while (…) { $o = null; }` lowering types `$o`
+/// `null` on the path that never entered the loop as well. The next loop's head must not read
+/// the slot through that fact: it gives the local boxed storage instead of re-storing a box of
+/// the `null` view, which printed `N` for the object the skipped loop left in place.
+#[test]
+fn test_loop_entry_box_ignores_stale_null_from_previous_loop_exit() {
+    let out = compile_and_run(
+        r#"<?php
+class P { public int $v = 7; }
+function wl(int $k): string {
+    $o = new P();
+    while ($k-- > 0) {
+        $o = null;
+    }
+    $out = "";
+    for ($i = 0; $i < 2; $i++) {
+        $out .= $o === null ? "N" : "O";
+        $o = new P();
+    }
+    return $out;
+}
+echo wl(0), " ", wl(1), "\n";
+function fe(array $xs): string {
+    $o = new P();
+    foreach ($xs as $x) {
+        if ($x > 1) { break; }
+        $o = null;
+    }
+    $out = "";
+    foreach ([1, 2] as $y) {
+        $out .= $o === null ? "N" : "O";
+        $o = new P();
+    }
+    return $out;
+}
+echo fe([]), " ", fe([1]), " ", fe([2]), "\n";
+"#,
+    );
+    assert_eq!(out, "OO NO\nOO NO OO\n");
+}

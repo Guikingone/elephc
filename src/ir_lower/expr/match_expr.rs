@@ -28,6 +28,12 @@ pub(super) fn lower_match(
     for (conditions, result) in arms {
         let result_block = ctx.builder.create_named_block("match.result", Vec::new());
         let mut fallthrough = ctx.builder.insertion_block();
+        // A condition list reaches the result block once per condition, each edge carrying the
+        // facts that condition left: `($v = null), ($v = 1) => …` enters with `$v` null on the
+        // first edge and int on the second. Those edges are joined like `if` arms, so the result
+        // (and everything below the merge) reads `$v` through a type every edge can represent.
+        let mut hits =
+            (conditions.len() > 1).then(|| crate::ir_lower::stmt::ExprBranchJoin::at_split(ctx));
         for condition in conditions {
             let next_test = ctx.builder.create_named_block("match.next", Vec::new());
             let condition = lower_expr(ctx, condition);
@@ -39,18 +45,29 @@ pub(super) fn lower_match(
                 Op::StrictEq.default_effects(),
                 Some(expr.span),
             );
+            let hit_block = match hits {
+                Some(_) => ctx.builder.create_named_block("match.hit", Vec::new()),
+                None => result_block,
+            };
             ctx.builder.terminate(Terminator::CondBr {
                 cond: matched.value,
-                then_target: result_block,
+                then_target: hit_block,
                 then_args: Vec::new(),
                 else_target: next_test,
                 else_args: Vec::new(),
             });
+            if let Some(hits) = hits.as_mut() {
+                ctx.builder.position_at_end(hit_block);
+                hits.leave_arm(ctx);
+            }
             ctx.builder.position_at_end(next_test);
             fallthrough = Some(next_test);
         }
         let dispatch = crate::ir_lower::stmt::ExprBranchJoin::at_split(ctx);
-        ctx.builder.position_at_end(result_block);
+        match hits {
+            Some(hits) => hits.finish(ctx, result_block, expr.span),
+            None => ctx.builder.position_at_end(result_block),
+        }
         store_expr_into_temp(ctx, &temp_name, result_type.clone(), result, expr.span);
         join.leave_arm(ctx);
         dispatch.enter_arm(ctx);
