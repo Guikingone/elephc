@@ -9,9 +9,13 @@
 //! Key details:
 //! - The checker admits a `mixed` argument to an `array` parameter, so the check is PHP's
 //!   run-time one. Without it the edge helpers answered `null` for a string or an int.
-//! - The type name follows php-src: `int`, `string`, `float`, `null`, and the literal `true` /
-//!   `false` for a bool. An object is named `object`, where php-src names its class: the class
-//!   name is not available at this lowering site (the same divergence `array_keys()` has).
+//! - The type name follows php-src: `int`, `string`, `float`, `null`, `resource`, `Closure` for a
+//!   callable, and the literal `true` / `false` for a bool. An object is named `object`, where
+//!   php-src names its class: the class name is not available at this lowering site (the same
+//!   divergence `array_keys()` has).
+//! - On the array path the guard leaves the UNBOXED container in `holder`, peeled through every
+//!   nested Mixed box by `__rt_mixed_unbox`, so the edge helpers never see a box wrapping another
+//!   box that their own normalizer would not unwrap. The caller's box keeps owning it.
 
 use crate::codegen::abi;
 use crate::codegen::context::FunctionContext;
@@ -20,12 +24,18 @@ use crate::codegen::platform::Arch;
 use crate::codegen::Result;
 
 /// Runtime Mixed tags that are not array storage, with the type name php-src reports for them.
-const NON_ARRAY_TAG_TYPE_NAMES: [(u64, &str); 4] =
-    [(0, "int"), (1, "string"), (2, "float"), (8, "null")];
+const NON_ARRAY_TAG_TYPE_NAMES: [(u64, &str); 6] = [
+    (0, "int"),
+    (1, "string"),
+    (2, "float"),
+    (8, "null"),
+    (9, "resource"),
+    (10, "Closure"),
+];
 
 /// Checks the boxed `mixed` value in `holder` and raises PHP's TypeError when it holds no array.
-/// On the array path `holder` still holds the boxed pointer; every other caller-saved register
-/// may have been clobbered by the unbox call.
+/// On the array path `holder` then holds the unboxed container (borrowed from the box); every
+/// other caller-saved register may have been clobbered by the unbox call.
 pub(super) fn emit_mixed_array_argument_guard(
     ctx: &mut FunctionContext<'_>,
     function: &str,
@@ -99,5 +109,6 @@ pub(super) fn emit_mixed_array_argument_guard(
     ctx.emitter.label(&object_label);
     emit_type_error(ctx, &message("object"));
     ctx.emitter.label(&ok_label);
+    ctx.emitter.instruction(&format!("mov {holder}, {payload}"));               // hand the helper the unboxed container, not the box
     Ok(())
 }

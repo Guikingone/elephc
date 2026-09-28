@@ -1367,9 +1367,13 @@ impl RuntimeFnId {
             // `array_first()` / `array_last()` read one edge element and box it into a fresh
             // Mixed cell (retaining a container payload inside the box). No user code runs and
             // nothing is written, but the result depends on the array's current contents, so
-            // the call must never be treated as pure and merged with an earlier read.
+            // the call must never be treated as pure and merged with an earlier read. A `mixed`
+            // argument holding no array raises PHP's TypeError, so the call may throw: operands
+            // are pinned for unwind and stores before it stay observable by a catch.
             RuntimeFnId::ArrayFirst | RuntimeFnId::ArrayLast => crate::ir::Effects::from_bits_retain(
-                crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::ALLOC_HEAP.bits(),
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::MAY_THROW.bits(),
             ),
             // Re-boxing a property slot allocates the Mixed cell it hands back.
             RuntimeFnId::ElephcObjectPropValue => crate::ir::Effects::from_bits_retain(

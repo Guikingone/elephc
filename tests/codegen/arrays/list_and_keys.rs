@@ -234,3 +234,38 @@ var_dump(array_first([]), array_last([5, 6]));
         )
     );
 }
+
+/// A `mixed` holding a box of a box of an array (a hash entry widened by a by-reference
+/// `foreach`) reaches the edge helpers unboxed; a resource and a closure are named `resource` and
+/// `Closure` in the TypeError; and a caught TypeError releases the rejected operand (the builtins
+/// are MAY_THROW, so it is pinned for unwind). Review follow-up for #833.
+#[test]
+fn test_array_edge_builtins_nested_boxes_and_rejected_operands() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$h = ['k' => [1, 2, 3]];
+foreach ($h as &$v) {}
+unset($v);
+$m = $h['k'];
+var_dump(array_first($m), array_last($m), array_key_last($m));
+function res(): mixed { return fopen('php://memory', 'r'); }
+function clo(): mixed { return fn() => 1; }
+try { array_first(res()); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { array_last(clo()); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+class T {}
+function make(): mixed { return new T; }
+for ($i = 0; $i < 3; $i++) { try { array_first(make()); } catch (TypeError $e) { echo "caught\n"; } }
+"#,
+    );
+    assert!(out.success, "program exited non-zero: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "int(1)\nint(3)\nint(2)\n",
+            "array_first(): Argument #1 ($array) must be of type array, resource given\n",
+            "array_last(): Argument #1 ($array) must be of type array, Closure given\n",
+            "caught\ncaught\ncaught\n",
+        )
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
