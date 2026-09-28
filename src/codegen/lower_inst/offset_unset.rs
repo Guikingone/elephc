@@ -20,10 +20,11 @@ use super::{expect_operand, hashes};
 /// Promotes a rooted array cell to sparse storage, then removes the key from its installed hash.
 ///
 /// A cell that holds no array gets PHP's answer instead: null and false are left alone, a string
-/// raises `Error("Cannot unset string offsets")`, and any other payload raises
-/// `Error("Cannot unset offset in a non-array variable")`. An object is in the last group, which
-/// is PHP's answer for a non-`ArrayAccess` object only; an `ArrayAccess` object held in a boxed
-/// cell is not dispatched to its `offsetUnset()` here.
+/// raises `Error("Cannot unset string offsets")`, an object raises `Error("Cannot use object of
+/// type C as array")` through `__rt_throw_object_not_array`, and any other payload raises
+/// `Error("Cannot unset offset in a non-array variable")`. The object message is PHP's answer for
+/// a non-`ArrayAccess` object only; an `ArrayAccess` object held in a boxed cell is not
+/// dispatched to its `offsetUnset()` here.
 pub(super) fn lower_offset_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let cell = expect_operand(inst, 0)?;
     let key = expect_operand(inst, 1)?;
@@ -36,6 +37,7 @@ pub(super) fn lower_offset_unset(ctx: &mut FunctionContext<'_>, inst: &Instructi
     let done = ctx.next_label("offset_unset_done");
     let string_offset = ctx.next_label("offset_unset_string");
     let non_array = ctx.next_label("offset_unset_non_array");
+    let object = ctx.next_label("offset_unset_object");
     // PHP answers a receiver that is not an array by what it holds: null (a removed untyped
     // property is recreated as null by the write fetch) and false leave everything alone, a
     // string refuses its offsets, and every other scalar is not a container at all.
@@ -49,6 +51,8 @@ pub(super) fn lower_offset_unset(ctx: &mut FunctionContext<'_>, inst: &Instructi
             ctx.emitter.instruction(&format!("b.eq {done}"));                   // unset of an offset of null is a silent no-op
             ctx.emitter.instruction("cmp x10, #1");                             // runtime tag 1 = string
             ctx.emitter.instruction(&format!("b.eq {string_offset}"));          // strings refuse offset removal with their own Error
+            ctx.emitter.instruction("cmp x10, #6");                             // runtime tag 6 = object
+            ctx.emitter.instruction(&format!("b.eq {object}"));                 // an object refuses indexing with a message naming its class
             ctx.emitter.instruction("cmp x10, #3");                             // runtime tag 3 = bool
             ctx.emitter.instruction(&format!("b.ne {non_array}"));              // every other payload is not a container
             ctx.emitter.instruction("ldr x10, [x9, #8]");                       // load the bool payload
@@ -66,6 +70,8 @@ pub(super) fn lower_offset_unset(ctx: &mut FunctionContext<'_>, inst: &Instructi
             ctx.emitter.instruction(&format!("je {done}"));                     // unset of an offset of null is a silent no-op
             ctx.emitter.instruction("cmp r11, 1");                              // runtime tag 1 = string
             ctx.emitter.instruction(&format!("je {string_offset}"));            // strings refuse offset removal with their own Error
+            ctx.emitter.instruction("cmp r11, 6");                              // runtime tag 6 = object
+            ctx.emitter.instruction(&format!("je {object}"));                   // an object refuses indexing with a message naming its class
             ctx.emitter.instruction("cmp r11, 3");                              // runtime tag 3 = bool
             ctx.emitter.instruction(&format!("jne {non_array}"));               // every other payload is not a container
             ctx.emitter.instruction("cmp QWORD PTR [r10 + 8], 0");              // is the bool payload false?
@@ -73,6 +79,16 @@ pub(super) fn lower_offset_unset(ctx: &mut FunctionContext<'_>, inst: &Instructi
             ctx.emitter.instruction(&format!("jmp {non_array}"));               // true is not a container
         }
     }
+    ctx.emitter.label(&object);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x0, [x9, #8]");                        // pass the object so the Error can name its class
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");            // pass the object so the Error can name its class
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_throw_object_not_array");
     ctx.emitter.label(&string_offset);
     super::exceptions::emit_error(ctx, "Cannot unset string offsets");
     ctx.emitter.label(&non_array);

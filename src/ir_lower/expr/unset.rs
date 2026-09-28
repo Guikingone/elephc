@@ -376,11 +376,13 @@ pub(super) fn lower_unset_array_access(
 
 /// Lowers `unset($object->prop[$key])` for a declared-array or associative property.
 ///
-/// PHP's order is receiver, key, then the property fetch, so both operands are lowered here and
-/// the property is read by `lower_property_array_unset` last. The removed value's release can run
-/// a destructor that throws, so an owning receiver temporary and the key are rooted in an
-/// unwind-visible slot across the removal, the same protection the declared-array local path
-/// gives its key.
+/// PHP's order is receiver, key, then the property fetch, so both operands are lowered by
+/// [`lower_unset_receiver_and_key`] and the property is read by `lower_property_array_unset`
+/// last. The removed value's release can run a destructor that throws, so an owning receiver
+/// temporary and the key are rooted in an unwind-visible slot across the removal, the same
+/// protection the declared-array local path gives its key. A typed property that was never
+/// initialized (or was unset) is left alone, as PHP's quiet unset fetch does, instead of reaching
+/// the write fetch's uninitialized-property guard.
 fn lower_unset_property_array_element(
     ctx: &mut LoweringContext<'_, '_>,
     object: &Expr,
@@ -389,16 +391,37 @@ fn lower_unset_property_array_element(
     index: &Expr,
     expr: &Expr,
 ) {
-    let object_value = lower_expr(ctx, object);
-    // Only a receiver the expression itself produced (`make()->items[$k]`) needs a root; a
-    // variable or `$this` is kept alive by its own slot across the removal.
-    let (object_value, object_owner) = if ctx.value_is_owning_temporary(object_value) {
-        root_owned_call_operand(ctx, object_value, object.span)
-    } else {
-        (object_value, None)
-    };
-    let index_value = lower_expr(ctx, index);
+    let typed = unset_receiver_property_is_typed(ctx, object, property);
+    let (object_value, object_owner, index_value) = lower_unset_receiver_and_key(ctx, object, index);
     let (index_value, key_owner) = root_owned_call_operand(ctx, index_value, index.span);
+    let join_block = if typed {
+        let data = ctx.intern_string(property);
+        let initialized = ctx.emit_value(
+            Op::PropInitialized,
+            vec![object_value.value],
+            Some(Immediate::Data(data)),
+            PhpType::Bool,
+            Op::PropInitialized.default_effects(),
+            Some(expr.span),
+        );
+        let remove_block = ctx
+            .builder
+            .create_named_block("unset.property_element.remove", Vec::new());
+        let join_block = ctx
+            .builder
+            .create_named_block("unset.property_element.done", Vec::new());
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: initialized.value,
+            then_target: remove_block,
+            then_args: Vec::new(),
+            else_target: join_block,
+            else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(remove_block);
+        Some(join_block)
+    } else {
+        None
+    };
     crate::ir_lower::stmt::lower_property_array_unset(
         ctx,
         object_value,
@@ -407,12 +430,61 @@ fn lower_unset_property_array_element(
         index_value,
         expr.span,
     );
+    if let Some(join_block) = join_block {
+        if !ctx.builder.insertion_block_is_terminated() {
+            ctx.builder.terminate(Terminator::Br {
+                target: join_block,
+                args: Vec::new(),
+            });
+        }
+        ctx.builder.position_at_end(join_block);
+    }
     if let Some(slot) = key_owner {
         retire_owned_call_operand(ctx, slot, expr.span);
     }
     if let Some(slot) = object_owner {
         retire_owned_call_operand(ctx, slot, expr.span);
     }
+}
+
+/// Returns true when `$object->prop` names a property with a declared type, which PHP leaves
+/// uninitialized (rather than null) until it is assigned.
+fn unset_receiver_property_is_typed(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+) -> bool {
+    instance_callable_object_class_and_nullability(ctx, object)
+        .and_then(|(class_name, _)| ctx.classes.get(class_name.as_str()))
+        .is_some_and(|class_info| class_info.declared_properties.contains(property))
+}
+
+/// Lowers the receiver and the key of `unset($object->prop[$key])` in PHP's order.
+///
+/// PHP delays the property fetch of an unset target until after its dimension, and that delayed
+/// fetch reads a compiled variable (or `$this`) where it stands. So a variable receiver is read
+/// AFTER the key: a key that reassigns the variable reaches the new object, and nothing is left
+/// pointing at an object the key may have released. Any other receiver is an expression PHP
+/// evaluates before the key; its value is lowered first and, when it is an owning temporary,
+/// rooted in the returned owner slot, which the caller retires.
+fn lower_unset_receiver_and_key(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    index: &Expr,
+) -> (LoweredValue, Option<crate::ir::LocalSlotId>, LoweredValue) {
+    if matches!(object.kind, ExprKind::Variable(_) | ExprKind::This) {
+        let index_value = lower_expr(ctx, index);
+        let object_value = lower_expr(ctx, object);
+        return (object_value, None, index_value);
+    }
+    let object_value = lower_expr(ctx, object);
+    let (object_value, object_owner) = if ctx.value_is_owning_temporary(object_value) {
+        root_owned_call_operand(ctx, object_value, object.span)
+    } else {
+        (object_value, None)
+    };
+    let index_value = lower_expr(ctx, index);
+    (object_value, object_owner, index_value)
 }
 
 /// Lowers `unset(Class::$prop[$key])` for a declared PHP `array` static property, rooting an
@@ -576,13 +648,7 @@ fn lower_unset_readonly_property_element(
     index: &Expr,
     expr: &Expr,
 ) {
-    let object_value = lower_expr(ctx, object);
-    let (object_value, object_owner) = if ctx.value_is_owning_temporary(object_value) {
-        root_owned_call_operand(ctx, object_value, object.span)
-    } else {
-        (object_value, None)
-    };
-    let index_value = lower_expr(ctx, index);
+    let (object_value, object_owner, index_value) = lower_unset_receiver_and_key(ctx, object, index);
     let (_, key_owner) = root_owned_call_operand(ctx, index_value, index.span);
     let data = ctx.intern_string(property);
     let initialized = ctx.emit_value(

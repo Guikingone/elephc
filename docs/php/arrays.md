@@ -166,8 +166,14 @@ This covers a property declared `array` (instance or static), an untyped instanc
 whose keys are strings, and a property stored as a boxed `mixed` value: a `mixed` or `?array`
 property, and an untyped property that an earlier `unset($o->items)` removed. Such a property
 follows PHP's answer for what it holds at run time: a removed property is recreated as `null`,
-`null` is left alone, a string throws `Error("Cannot unset string offsets")`, and any other scalar
+`null` is left alone, a string throws `Error("Cannot unset string offsets")`, an object that
+is not `ArrayAccess` throws `Error("Cannot use object of type C as array")`, and any other scalar
 throws `Error("Cannot unset offset in a non-array variable")`.
+
+The property is always fetched after the key. For a variable or `$this` receiver, that means a
+key expression that reassigns the variable reaches the new object, as in PHP. Removing an element
+of a typed property that is not initialized is a silent no-op, and the property stays
+uninitialized.
 
 A property that holds an `ArrayAccess` object calls its `offsetUnset($key)`, and the property is
 read after the key, as PHP does: a key expression that stores another object into the property

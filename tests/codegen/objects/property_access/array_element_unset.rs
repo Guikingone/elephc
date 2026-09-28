@@ -435,3 +435,89 @@ echo count($h->bag->data), count($h->ro), "\n";
         out.stderr
     );
 }
+
+/// A variable receiver is read after the key, as PHP's delayed unset fetch does: a key that
+/// reassigns the variable removes the element from the NEW object, and the old one keeps it.
+/// Before, the receiver was read first, which also left a dangling receiver when the key dropped
+/// the last reference. Review follow-up for #750.
+#[test]
+fn test_unset_property_element_reads_variable_receiver_after_key() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C { public array $items = ["x" => 1, "y" => 2]; }
+function run(): void {
+    $c = new C();
+    $other = new C();
+    $keep = $c;
+    unset($c->items[(($c = $other) === null ? "y" : "x")]);
+    echo "1:", implode(",", array_keys($keep->items)), "|", implode(",", array_keys($other->items)), "\n";
+}
+run();
+"#,
+    );
+    assert!(out.success, "program exited non-zero: {}", out.stderr);
+    assert_eq!(out.stdout, "1:x,y|y\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Removing an element of a typed property that was never initialized is a silent no-op, as in
+/// PHP, instead of the write fetch's "must not be accessed before initialization" Error.
+/// Review follow-up for #750.
+#[test]
+fn test_unset_element_of_uninitialized_typed_property_is_a_no_op() {
+    let out = compile_and_run(
+        r#"<?php
+class U { public array $items; public mixed $m; }
+$u = new U();
+try { unset($u->items["k"]); echo "2:silent\n"; } catch (Error $e) { echo "2:", $e->getMessage(), "\n"; }
+try { unset($u->m["k"]); echo "3:silent\n"; } catch (Error $e) { echo "3:", $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(out, "2:silent\n3:silent\n");
+}
+
+/// A readonly property holding an `ArrayAccess` object still has its `offsetUnset()` called:
+/// readonly forbids reassigning the property, not mutating the object it holds. A plain object in
+/// a boxed `mixed` property refuses the removal with PHP's class-naming message.
+/// Review follow-up for #750.
+#[test]
+fn test_unset_element_through_readonly_array_access_and_mixed_object() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag implements ArrayAccess {
+    public array $data = ["a" => 1];
+    public function offsetExists(mixed $o): bool { return isset($this->data[$o]); }
+    public function offsetGet(mixed $o): mixed { return $this->data[$o] ?? null; }
+    public function offsetSet(mixed $o, mixed $v): void { $this->data[$o] = $v; }
+    public function offsetUnset(mixed $o): void { echo "offsetUnset\n"; unset($this->data[$o]); }
+}
+class C { public readonly Bag $bag; public function __construct() { $this->bag = new Bag(); } }
+$c = new C();
+try { unset($c->bag["a"]); echo "ok\n"; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+class W { public mixed $any = null; }
+$w = new W();
+$w->any = new stdClass;
+try { unset($w->any["p"]); echo "ok\n"; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "offsetUnset\nok\nError: Cannot use object of type stdClass as array\n"
+    );
+}
+
+/// Removing an offset of a `false` held in a boxed `mixed` property leaves it `false`. PHP also
+/// prints an `Automatic conversion of false to array` deprecation, which elephc does not (see
+/// `docs/php/types.md`). Review follow-up for #750.
+#[test]
+fn test_unset_offset_of_false_mixed_property_keeps_false() {
+    let out = compile_and_run(
+        r#"<?php
+class F { public mixed $m = false; }
+$f = new F();
+unset($f->m["k"]);
+var_dump($f->m);
+"#,
+    );
+    assert_eq!(out, "bool(false)\n");
+}
