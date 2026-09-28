@@ -56,6 +56,8 @@ It provides three essential operations:
 
 The cursor automatically tracks line and column — when it sees a `\n`, it increments `line` and resets `col` to 1. This information is stored in a `Span` and attached to every token, so error messages can say "error at line 5, column 12". A `Span` (`src/span.rs`) carries both the start position (`line`, `col`) and an *exclusive* end position (`end_line`, `end_col`); the scanner fills in the end position from the cursor position after the token is consumed.
 
+`Span` stays 16 bytes, so it has no separate field for the source file. For a token of an included file, `end_col` also carries that file's source identity (`Span::new_in_source`): bit 31 marks the packed form, bits 16 to 29 hold the identity, and bits 0 to 15 hold the end column. A pair that does not fit (an end column past 65535, as on a long minified line, or an identity past 16383) goes to a process-wide table instead: bit 30 is set and the low bits index the exact `(source identity, end column)` pair. A pair always gets the same index and entries are never removed, so equal positions still compare equal and spans stay usable as map keys. A root-file end column is stored bare unless it reaches bit 31, where it is interned with identity 0. Read positions through `Span::end_column()` and `Span::source_id()`, never the raw `end_col` field.
+
 ## The Scanner
 
 **File:** `src/lexer/scan.rs`

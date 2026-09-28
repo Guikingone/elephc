@@ -377,6 +377,45 @@ mod tests {
         assert!(extended.has_extent());
     }
 
+    /// An included-file end past the inline 16-bit field keeps its exact column and identity.
+    ///
+    /// It used to abort the compile (#1292); a saturating fallback would put a token that
+    /// STARTS past that column before its own end, so `has_extent()` would be false and source
+    /// maps would drop the end (#1306).
+    #[test]
+    fn an_included_end_past_the_packed_field_stays_exact() {
+        let point = Span::new_in_source(2, 70_000, 5);
+        assert_eq!(point.source_id(), 5);
+        assert_eq!(point.end_column(), 70_000);
+        assert!(!point.has_extent());
+
+        let token = Span::with_end_from(point, Span::new_in_source(2, 70_010, 5));
+        assert_eq!(token.source_id(), 5);
+        assert_eq!(token.end_column(), 70_010);
+        assert!(token.has_extent(), "an end past the start is an extent");
+
+        let wide = Span::with_end_from(Span::new_in_source(2, 6, 5), Span::new_in_source(2, 70_008, 5));
+        assert_eq!(wide.end_column(), 70_008, "a span straddling column 65535 keeps its end");
+
+        let merged = Span::new_in_source(2, 6, 5).merge(token);
+        assert_eq!(merged.end_column(), 70_010);
+        assert_eq!(merged.source_id(), 5);
+    }
+
+    /// Interned wide ends stay distinct map keys exactly as inline ones do.
+    #[test]
+    fn overflowing_ends_keep_spans_distinct_and_equal_where_they_should() {
+        let a = Span::with_end_from(Span::new_in_source(3, 70_000, 9), Span::new_in_source(3, 70_004, 9));
+        let same = Span::with_end_from(Span::new_in_source(3, 70_000, 9), Span::new_in_source(3, 70_004, 9));
+        let longer = Span::with_end_from(Span::new_in_source(3, 70_000, 9), Span::new_in_source(3, 70_009, 9));
+        let other_file = Span::with_end_from(Span::new_in_source(3, 70_000, 10), Span::new_in_source(3, 70_004, 10));
+        assert_eq!(a, same, "equal ends are one table entry, so the spans compare equal");
+        assert_ne!(a, longer);
+        assert_ne!(a, other_file, "the same coordinates in another included file stay distinct");
+        assert_eq!(other_file.source_id(), 10);
+        assert_ne!(a, Span::with_end(3, 70_000, 3, 70_004), "an included span is never a root one");
+    }
+
     /// Verifies merge takes the earlier start and later end across lines.
     #[test]
     fn merge_unions_start_and_end() {
