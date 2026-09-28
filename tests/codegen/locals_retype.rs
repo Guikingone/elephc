@@ -1667,31 +1667,37 @@ fn test_marked_top_level_local_read_back_through_a_global_alias() {
 /// boxed string in `_eir_global_a` and neither released it at exit (measured:
 /// `live_blocks=1 live_bytes=48` for each). Whoever changes that changes both, and this test keeps
 /// passing; what it refuses is one of them leaking while the other does not. Both arms of the
-/// marked program run (the int arm with one argument), each compared with the unmarked program
-/// run the same way.
+/// marked program run, and each is compared with an unmarked program holding the SAME kind of
+/// value in the global: a string on the bare run, and on the one-argument run an int, since a
+/// boxed string also owns its payload and could leak more than a boxed int for reasons unrelated
+/// to the marking.
 #[test]
 fn test_marked_and_unmarked_global_alias_reads_leak_alike() {
-    let marked_runs = compile_and_run_with_heap_debug_per_argv(
+    let marked = compile_and_run_with_heap_debug_per_argv(
         r#"<?php
 function q() { global $a; var_dump($a); }
 if ($argc > 1) { $a = 0; } else { $a = "hello"; }
 q();"#,
         &[&[], &["x"]],
     );
-    let unmarked_runs = compile_and_run_with_heap_debug_per_argv(
+    let unmarked_string = compile_and_run_with_heap_debug(
         r#"<?php
 function q() { global $a; var_dump($a); }
 $a = "hello" . $argc;
 q();"#,
-        &[&[], &["x"]],
     );
-    let expected = [
-        ("string(5) \"hello\"\n", "string(6) \"hello1\"\n"),
-        ("int(0)\n", "string(6) \"hello2\"\n"),
+    let unmarked_int = compile_and_run_with_heap_debug_per_argv(
+        r#"<?php
+function q() { global $a; var_dump($a); }
+$a = $argc - 2;
+q();"#,
+        &[&["x"]],
+    );
+    let arms = [
+        (&marked[0], &unmarked_string, "string(5) \"hello\"\n", "string(6) \"hello1\"\n"),
+        (&marked[1], &unmarked_int[0], "int(0)\n", "int(0)\n"),
     ];
-    for ((marked, unmarked), (marked_out, unmarked_out)) in
-        marked_runs.iter().zip(&unmarked_runs).zip(expected)
-    {
+    for (marked, unmarked, marked_out, unmarked_out) in arms {
         assert!(marked.success, "marked program failed: {}", marked.stderr);
         assert!(unmarked.success, "unmarked program failed: {}", unmarked.stderr);
         assert_eq!(marked.stdout, marked_out);
