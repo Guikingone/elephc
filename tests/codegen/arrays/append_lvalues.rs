@@ -1,7 +1,8 @@
 //! Purpose:
 //! End-to-end coverage for append l-values beyond a trailing `$var[] = $v` (issue #845): an
 //! append in the middle of a nested write, an append used as an assignment expression, `$this[]`
-//! and call-result appends on an `ArrayAccess` object, and an append onto an array call result.
+//! and call-result appends on an `ArrayAccess` object, appends that reach `offsetSet` even when
+//! the class declares or inherits `append()`, and an append onto an array call result.
 //!
 //! Called from:
 //! - `cargo test --test codegen_tests arrays::append_lvalues`.
@@ -154,6 +155,52 @@ echo implode(",", $bag->log), "\n";
 "#,
     );
     assert_eq!(out, "null=3,null=4,null=40,null=5,null=6,null=7\n");
+}
+
+/// Verifies `$obj[] = $v` calls `offsetSet(null, $v)` and never `append()`: on a user
+/// `ArrayAccess` class whose own `append()` takes a different signature and is called elsewhere,
+/// on an `ArrayObject` subclass that overrides `offsetSet`, and on plain SPL containers that keep
+/// appending through their own `offsetSet`.
+#[test]
+fn test_append_on_array_access_object_ignores_append_method() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag implements ArrayAccess {
+    public $log = [];
+    public function offsetExists($offset): bool { return false; }
+    public function offsetGet($offset): mixed { return null; }
+    public function offsetSet($offset, $value): void {
+        $this->log[] = ($offset === null ? "null" : $offset) . "=" . $value;
+    }
+    public function offsetUnset($offset): void {}
+    public function append(string $a, string $b): void { $this->log[] = "append:" . $a . $b; }
+}
+class Logged extends ArrayObject {
+    public function offsetSet(mixed $key, mixed $value): void {
+        echo "Logged::offsetSet(", $key === null ? "null" : $key, ", ", $value, ")\n";
+        parent::offsetSet($key, $value);
+    }
+}
+$bag = new Bag();
+$bag[] = 7;
+$bag->append("x", "y");
+echo implode(",", $bag->log), "\n";
+$logged = new Logged();
+$logged[] = 5;
+$logged[] = 6;
+echo count($logged), " ", $logged[1], "\n";
+$object = new ArrayObject([1]);
+$object[] = 2;
+$stack = new SplStack();
+$stack[] = 3;
+$stack[] = 4;
+echo count($object), " ", $object[1], " ", count($stack), " ", $stack->top(), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "null=7,append:xy\nLogged::offsetSet(null, 5)\nLogged::offsetSet(null, 6)\n2 6\n2 2 2 4\n"
+    );
 }
 
 /// Verifies an append onto an array call result evaluates the call and discards the write.

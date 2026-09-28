@@ -83,31 +83,19 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
 
 /// Returns the runtime-call operands for `$receiver[] = $value` on a non-array receiver.
 ///
-/// PHP turns an append on an `ArrayAccess` object into `offsetSet(null, $value)`. The runtime
-/// call dispatches on its operand count, and a two-operand write means the SPL `append` family
-/// (`ArrayObject::append`, `SplDoublyLinkedList::push`) that only the runtime-backed containers
-/// declare. Every other receiver (a user class, the `ArrayAccess` interface, or a union of
-/// `ArrayAccess` objects) gets an explicit null key, so the write reaches `offsetSet`.
+/// PHP turns an append on an `ArrayAccess` object into `offsetSet(null, $value)` and never calls
+/// an `append()` method, even when the class declares or inherits one. The runtime call
+/// dispatches on its operand count, and a two-operand write means `append`, so every object
+/// receiver (a concrete class, the `ArrayAccess` interface, or a union of `ArrayAccess` objects)
+/// gets an explicit null key. The SPL containers already treat `offsetSet(null, $value)` as an
+/// append, and a subclass that overrides `offsetSet` sees the call the way PHP makes it.
 pub(in crate::ir_lower) fn object_append_operands(
     ctx: &mut LoweringContext<'_, '_>,
     receiver: LoweredValue,
     value: LoweredValue,
 ) -> Vec<crate::ir::ValueId> {
     let receiver_ty = ctx.builder.value_php_type(receiver.value).codegen_repr();
-    let keeps_append_method = match &receiver_ty {
-        PhpType::Object(class_name) => {
-            let normalized = class_name.trim_start_matches('\\');
-            matches!(normalized, "SplDoublyLinkedList" | "SplStack" | "SplQueue")
-                || ctx.classes.get(normalized).is_some_and(|class_info| {
-                    class_info
-                        .methods
-                        .contains_key(&crate::names::php_symbol_key("append"))
-                })
-        }
-        PhpType::Union(_) => false,
-        _ => true,
-    };
-    if keeps_append_method {
+    if !matches!(receiver_ty, PhpType::Object(_) | PhpType::Union(_)) {
         return vec![receiver.value, value.value];
     }
     let null_key = ctx.builder.emit_const_null();
