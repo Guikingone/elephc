@@ -239,6 +239,11 @@ pub(super) fn parse_prefix(
         Token::Identifier(_) | Token::Enum | Token::Backslash => {
             parse_named_expr(tokens, pos, span)
         }
+        // `namespace\helper()`, `namespace\LIMIT`, `namespace\Box::make()`: a relative name
+        // (#825), resolved against the current namespace by the name parser.
+        Token::Namespace if crate::parser::relative_name_starts_at(tokens, *pos) => {
+            parse_named_expr(tokens, pos, span)
+        }
         Token::Self_ => {
             *pos += 1;
             parse_scoped_static_call(tokens, pos, span, StaticReceiver::Self_, "self")

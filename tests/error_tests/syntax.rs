@@ -822,3 +822,33 @@ fn test_error_for_condition_comma_list_is_named() {
         "not supported in a for CONDITION",
     );
 }
+
+/// Verifies a relative name is refused in every `use` import form (#825), as PHP's grammar
+/// refuses it ("unexpected namespace-relative name"), instead of being skipped or read as a
+/// name whose first segment is `namespace`.
+#[test]
+fn test_error_relative_name_in_use_import() {
+    for source in [
+        "<?php namespace App; use namespace\\Box;",
+        "<?php namespace App; use function namespace\\helper;",
+        "<?php namespace App; use const namespace\\LIMIT;",
+        "<?php namespace App; use Lib\\Tool, namespace\\Box;",
+    ] {
+        expect_error(source, "cannot be imported with 'use'");
+    }
+}
+
+/// Verifies a relative name is fully resolved, so it never falls back to a global function
+/// (`namespace\strlen()` in `App` is `App\strlen`, undefined, as in PHP), and that a bare
+/// `namespace\` with no name after it is a syntax error (#825).
+#[test]
+fn test_error_relative_name_has_no_global_fallback_and_needs_a_name() {
+    expect_error(
+        "<?php namespace App; echo namespace\\strlen(\"abc\");",
+        "Undefined function: App\\strlen",
+    );
+    expect_error(
+        "<?php namespace App; echo namespace\\;",
+        "Expected identifier after '\\' in qualified name",
+    );
+}

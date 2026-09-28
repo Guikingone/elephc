@@ -799,3 +799,114 @@ namespace {
         )
     );
 }
+
+/// A relative name keeps resolving in the enclosing namespace after the word `namespace` is
+/// used as an enum case, a method name and a member access: a token scan read `case namespace;`
+/// as the declaration `namespace;` and bound every later `namespace\...` in the global
+/// namespace. Also covers `extends`, `implements`, trait `use`, return, property and `catch`
+/// types, an attribute (read back through Reflection), a first-class callable, and a relative
+/// name in the global block that follows. Regression for #825; expected output is PHP 8.5's.
+#[test]
+fn test_relative_namespace_names_survive_namespace_as_a_member_name() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App {
+    enum Mode { case namespace; case other; }
+    #[\Attribute]
+    class Tag { public function __construct(public string $v = "tag") {} }
+    class Foo {
+        const C = "C";
+        public static function who() { return __CLASS__; }
+        public function namespace() { return "method named namespace"; }
+    }
+    interface Shape {}
+    trait Greets { public function hi() { return "hi from " . static::class; } }
+    class E extends \Exception {}
+    function f() { return __FUNCTION__; }
+    const K = 7;
+    echo namespace\f(), "\n";
+    echo namespace\K, "\n";
+    echo namespace\Foo::who(), "\n";
+    echo namespace\Foo::C, "\n";
+    echo namespace\Foo::class, "\n";
+    $o = new namespace\Foo();
+    echo $o->namespace(), "\n";
+    var_dump($o instanceof namespace\Foo);
+    var_dump(Mode::namespace === namespace\Mode::namespace);
+    class Bar extends namespace\Foo implements namespace\Shape { use namespace\Greets; }
+    echo (new Bar)->hi(), "\n";
+    function typed(namespace\Foo $x): namespace\Foo { return $x; }
+    echo get_class(typed(new Foo)), "\n";
+    try { throw new namespace\E("boom"); } catch (namespace\E $e) { echo "caught ", get_class($e), "\n"; }
+    #[namespace\Tag("x")]
+    function attributed() { return "attributed"; }
+    echo attributed(), "\n";
+    $r = new \ReflectionFunction('App\attributed');
+    echo $r->getAttributes()[0]->getName(), "\n";
+    $cb = namespace\f(...);
+    echo $cb(), "\n";
+    class Holder { public namespace\Foo $p; public function __construct() { $this->p = new Foo; } }
+    echo get_class((new Holder)->p), "\n";
+}
+namespace {
+    function f() { return "global f"; }
+    echo namespace\f(), "\n";
+    echo namespace\App\f(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "App\\f\n",
+            "7\n",
+            "App\\Foo\n",
+            "C\n",
+            "App\\Foo\n",
+            "method named namespace\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "hi from App\\Bar\n",
+            "App\\Foo\n",
+            "caught App\\E\n",
+            "attributed\n",
+            "App\\Tag\n",
+            "App\\f\n",
+            "App\\Foo\n",
+            "global f\n",
+            "App\\f\n",
+        )
+    );
+}
+
+/// `eval()` resolves a relative name in the eval fragment's own namespace, once: the eval
+/// parser read `namespace` as a first segment and prefixed the namespace again, so
+/// `namespace\helper()` in `App` called `App\namespace\helper`. The global fragment's relative
+/// name is the global function. Regression for #825; expected output is PHP 8.5's.
+#[test]
+fn test_eval_relative_namespace_names_resolve_in_the_fragment_namespace() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App {
+    function helper() { return "App\\helper"; }
+    const LIMIT = 3;
+    class Box { public static function make() { return "App\\Box::make"; } }
+}
+namespace {
+    function helper() { return "global helper"; }
+    $code = $argc > 5 ? 'return 0;' : 'namespace App; echo namespace\helper(), "|", namespace\LIMIT, "|", namespace\Box::make(), "|", namespace\Box::class, "\n"; namespace\helper();';
+    eval($code);
+    eval('echo namespace\helper(), "\n";');
+    eval('namespace App { echo get_class(new namespace\Box()), "\n"; }');
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "App\\helper|3|App\\Box::make|App\\Box\n",
+            "global helper\n",
+            "App\\Box\n",
+        )
+    );
+}

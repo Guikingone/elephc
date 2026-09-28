@@ -14,7 +14,7 @@
 //! ```text
 //! attribute-group     = "#[" attribute ("," attribute)* "]"
 //! attribute           = qualified-name [ "(" arg-list? ")" ]
-//! qualified-name      = ["\"] identifier ("\" identifier)*
+//! qualified-name      = ["\" | "namespace\"] identifier ("\" identifier)*
 //! arg-list            = expr ("," expr)*
 //! ```
 
@@ -113,7 +113,13 @@ fn parse_one_attribute(
     let span = tokens[*pos].1.span;
     let mut parts: Vec<String> = Vec::new();
     let mut fully_qualified = false;
-    if matches!(tokens[*pos].0, Token::Backslash) {
+    if crate::parser::relative_name_starts_at(tokens, *pos) {
+        // `#[namespace\Attr]` is a relative name (#825): the attribute class in the current
+        // namespace, so it resolves to the fully qualified `\Current\Ns\Attr`.
+        *pos += 2;
+        fully_qualified = true;
+        parts = crate::parser::current_namespace_parts();
+    } else if matches!(tokens[*pos].0, Token::Backslash) {
         *pos += 1;
         fully_qualified = true;
     }

@@ -18,11 +18,14 @@ mod control;
 pub mod expr;
 /// Maps tokens that may legally appear as bareword names (identifiers and semi-reserved keywords).
 mod keyword_name;
-/// Expands relative `namespace\name` references to fully qualified names before parsing.
+/// Resolves relative `namespace\name` references against the namespace being parsed.
 mod relative_names;
 mod stmt;
 
 pub(crate) use attributes::{consume_attribute_lists, parse_attribute_lists};
+pub(crate) use relative_names::{
+    current_namespace_parts, enter_namespace, relative_name_starts_at, restore_namespace,
+};
 
 /// Re-exports the root AST node for a parsed PHP file, containing all top-level statements.
 pub use ast::Program;
@@ -119,10 +122,10 @@ pub fn parse_with_recovery_in_mode(
 
 /// Implements recovery parsing after the source-mode scope has been installed.
 fn parse_with_recovery_inner(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileError>> {
-    let expanded = relative_names::expand_relative_names(tokens);
-    let tokens = expanded.as_deref().unwrap_or(tokens);
     reject_excessive_nesting(tokens)?;
-    crate::compiler_stack::with_compiler_stack(|| parse_checked_tokens(tokens))
+    relative_names::with_global_namespace_scope(|| {
+        crate::compiler_stack::with_compiler_stack(|| parse_checked_tokens(tokens))
+    })
 }
 
 /// Parses tokens whose nesting depth is already known to be within the compiler's limit.

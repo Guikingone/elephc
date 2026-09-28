@@ -49,8 +49,10 @@ Supported forms: `use Foo\Bar;`, `use Foo\Bar as Baz;`, `use function`, `use con
 - A relative name `namespace\helper()` names `helper` in the current namespace: inside
   `namespace Demo;` it is exactly `\Demo\helper()`, and in the global namespace it is `\helper()`.
   It works wherever a name does (calls, constants, `new`, static calls, `::class`, `instanceof`,
-  `implements`, type declarations), and inside braced `namespace X { ... }` blocks each block's
-  own name applies
+  `extends`, `implements`, trait `use`, type declarations, `catch`, attributes) and in `eval()`
+  code. Inside braced `namespace X { ... }` blocks each block's own name applies. It is fully
+  resolved, so it never falls back to a global function or constant, and, as in PHP, a `use`
+  import cannot name it (`use namespace\Foo;` is a syntax error)
 - Included files keep their own namespace and imports; an include cannot inherit the caller's namespace scope
 
 ## Case sensitivity
