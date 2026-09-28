@@ -283,11 +283,11 @@ fn test_error_get_declared_traits_wrong_args() {
 #[test]
 fn test_error_class_alias_rejects_runtime_call_shape() {
     // Verifies `class_alias()` with a runtime variable as the second argument
-    // produces a diagnostic because only top-level statements with literal
-    // class names are supported in AOT mode.
+    // produces a diagnostic because only top-level statements with
+    // compile-time-constant class names are supported in AOT mode.
     expect_error(
         r#"<?php class Original {} $alias = "Alias"; class_alias("Original", $alias);"#,
-        "class_alias() is only supported as a top-level statement with literal class names",
+        "class_alias() is only supported as a top-level statement with compile-time-constant class names (string literals, Name::class, or a concatenation of them)",
     );
 }
 
@@ -298,11 +298,11 @@ fn test_error_class_alias_rejects_runtime_call_shape() {
 fn test_error_class_alias_rejects_runtime_class_name_shapes() {
     expect_error(
         r#"<?php class Original {} $o = new Original(); class_alias($o::class, "Alias");"#,
-        "class_alias() is only supported as a top-level statement with literal class names",
+        "class_alias() is only supported as a top-level statement with compile-time-constant class names (string literals, Name::class, or a concatenation of them)",
     );
     expect_error(
         r#"<?php class Original {} function make() { class_alias(Original::class, "Alias"); } make();"#,
-        "class_alias() is only supported as a top-level statement with literal class names",
+        "class_alias() is only supported as a top-level statement with compile-time-constant class names (string literals, Name::class, or a concatenation of them)",
     );
 }
 

@@ -25,11 +25,15 @@ builtin! {
 
 /// Rejects any direct `class_alias()` call that reaches the type checker.
 ///
-/// AOT compilation resolves `class_alias()` at the top-level statement stage only.
-/// Direct calls in other contexts are not supported and must be rejected here.
+/// AOT compilation resolves `class_alias()` at the top-level statement stage only, and only when
+/// both class names are compile-time constants. A call in another context, or one whose names
+/// are only known at run time (a variable, `$object::class`), is not supported and is rejected
+/// here with a message naming the forms that are accepted.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    Err(CompileError::new(
-        cx.span,
-        "class_alias() is only supported as a top-level statement with literal class names",
-    ))
+    Err(CompileError::new(cx.span, UNSUPPORTED_CALL_SHAPE))
 }
+
+/// The diagnostic for a `class_alias()` call the top-level alias collector could not turn into a
+/// declaration. It lists the accepted class-name forms so a rejected call points at a fix.
+const UNSUPPORTED_CALL_SHAPE: &str = "class_alias() is only supported as a top-level statement \
+    with compile-time-constant class names (string literals, Name::class, or a concatenation of them)";
