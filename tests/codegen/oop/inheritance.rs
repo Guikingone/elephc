@@ -952,3 +952,46 @@ echo $c->f(), $c->g(), "\n";
     );
     assert_eq!(out, "21\n");
 }
+
+/// Verifies that converting an object to string calls the RUNTIME class's `__toString`: the
+/// declared parameter type named a parent whose own `__toString` was called directly, so a
+/// subclass override was silently skipped (`[plain]` for a `Fancy`).
+#[test]
+fn test_string_conversion_calls_the_subclass_tostring_override() {
+    let out = compile_and_run(
+        r#"<?php
+class Plain {
+    public function __toString(): string { return "plain"; }
+}
+class Fancy extends Plain {
+    public function __toString(): string { return "fancy"; }
+}
+function show(Plain $p): string { return "[" . $p . "]"; }
+function cast(Plain $p): string { return (string) $p; }
+echo show(new Plain()), show(new Fancy()), cast(new Fancy());
+"#,
+    );
+    assert_eq!(out, "[plain][fancy]fancy");
+}
+
+/// Verifies that an abstract class whose `__toString` comes only from `\Stringable` converts
+/// through its subclass: the direct call named a method body the abstract class never has, and
+/// the program failed to link.
+#[test]
+fn test_string_conversion_through_an_abstract_stringable_class() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class Shape implements \Stringable {
+    abstract public function area(): int;
+}
+class Square extends Shape {
+    public function __construct(private int $side) {}
+    public function area(): int { return $this->side * $this->side; }
+    public function __toString(): string { return "square " . $this->side; }
+}
+function describe(Shape $s): string { return (string) $s . "/" . $s->area(); }
+echo describe(new Square(3));
+"#,
+    );
+    assert_eq!(out, "square 3/9");
+}
