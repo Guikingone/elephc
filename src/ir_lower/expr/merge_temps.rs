@@ -160,8 +160,69 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
             property_access_expr_type_for_ir(ctx, object, property)
                 .unwrap_or_else(|| fallback_expr_type(expr))
         }
+        // Calls are typed from the return metadata their own lowering uses. The syntactic
+        // fallback answers `int` for every call outside its builtin allowlist, and a merge temp
+        // typed from that guess coerced a string, array or object branch into an integer slot or,
+        // beside a `null` branch, into a tagged `?int` scalar the backend cannot store an array
+        // in (issue #1364). A call whose result cannot be named here merges as boxed `mixed`,
+        // which holds whatever the call returns.
+        ExprKind::FunctionCall { name, .. } => function_call_type_for_merge(ctx, name.as_str(), expr),
+        ExprKind::MethodCall { object, method, .. } => {
+            method_call_expr_type_for_ir(ctx, object, method).unwrap_or(PhpType::Mixed)
+        }
+        ExprKind::NullsafeMethodCall { object, method, .. } => {
+            nullsafe_method_call_expr_type_for_ir(ctx, object, method).unwrap_or(PhpType::Mixed)
+        }
+        ExprKind::StaticMethodCall { receiver, method, .. } => {
+            static_method_call_expr_type_for_ir(ctx, receiver, method).unwrap_or(PhpType::Mixed)
+        }
+        ExprKind::ClosureCall { var, .. } => closure_call_type_for_merge(ctx, var),
+        ExprKind::ExprCall { .. } => PhpType::Mixed,
         _ => fallback_expr_type(expr),
     }
+}
+
+/// Returns the merge type of a named function call before it is lowered.
+///
+/// A user or extern function answers the return type `lower_function_call` stamps on the call.
+/// A builtin keeps the syntactic answer when that names a type, and otherwise consults the
+/// checker's result type for this very call (`int`, `bool`, `float` and `string` stay scalar,
+/// anything else is boxed), because the syntactic `int` is only a default for names outside
+/// its allowlist.
+fn function_call_type_for_merge(ctx: &LoweringContext<'_, '_>, canonical: &str, expr: &Expr) -> PhpType {
+    if !source_prefers_extension_builtin(canonical) {
+        if let Some(signature) = ctx.functions.get(canonical) {
+            return normalize_value_php_type(eir_user_function_return_type(signature));
+        }
+    }
+    if let Some(signature) = ctx.extern_functions.get(canonical) {
+        return normalize_value_php_type(signature.return_type.clone());
+    }
+    let syntactic = fallback_expr_type(expr);
+    if syntactic != PhpType::Int {
+        return syntactic;
+    }
+    builtin_call_result_type_for_ir(ctx, expr.span).unwrap_or(syntactic)
+}
+
+/// Returns the merge type of a `$callable(...)` call through a local variable.
+///
+/// Mirrors `lower_closure_call`: a statically known closure or user function answers its
+/// signature's return type and a typed callable parameter its descriptor signature's.
+/// Everything else (builtin names, methods, invokable objects, unknown callables) merges as
+/// boxed `mixed`.
+fn closure_call_type_for_merge(ctx: &LoweringContext<'_, '_>, var: &str) -> PhpType {
+    match ctx.static_callable_local(var) {
+        Some(target @ StaticCallableBinding::Closure { .. })
+        | Some(target @ StaticCallableBinding::UserFunction(_)) => {
+            return static_callable_return_type(ctx, &target);
+        }
+        Some(_) => return PhpType::Mixed,
+        None => {}
+    }
+    ctx.callable_param_signature(var)
+        .map(|signature| descriptor_invoker_result_type(Some(signature)))
+        .unwrap_or(PhpType::Mixed)
 }
 
 /// Coerces branch values to the hidden temp storage type before storing them.
