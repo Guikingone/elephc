@@ -14568,7 +14568,8 @@
         "kind": "static",
         "names": [
           "reads_heap",
-          "alloc_heap"
+          "alloc_heap",
+          "may_throw"
         ]
       },
       "lowering": {
@@ -15758,7 +15759,8 @@
         "kind": "static",
         "names": [
           "reads_heap",
-          "alloc_heap"
+          "alloc_heap",
+          "may_throw"
         ]
       },
       "lowering": {
