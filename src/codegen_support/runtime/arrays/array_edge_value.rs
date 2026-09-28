@@ -15,12 +15,14 @@
 //!   storage tail calls `__rt_array_get_mixed_key` (which understands every indexed
 //!   `value_type`), hash storage tail calls `__rt_mixed_from_value` (which retains
 //!   containers and persists strings). The returned cell is therefore independently owned.
-//! - Hashes read the header's insertion-order head (`[+24]`) or tail (`[+32]`) slot
-//!   directly, so both selectors are `O(1)`; a PHP reference entry (tag 11) is
+//! - Hashes read the header's insertion-order head (`[+24]`) or tail (`[+32]`) slot and
+//!   address the entry through `hash_layout::emit_entry_address` (entries live in separate
+//!   storage), so both selectors are `O(1)`; a PHP reference entry (tag 11) is
 //!   dereferenced so the caller receives the value, not the reference cell.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::runtime::arrays::hash_layout;
 
 use super::array_internal_pointer::{emit_normalize_aarch64, emit_normalize_x86_64};
 
@@ -56,10 +58,7 @@ pub fn emit_array_edge_value(emitter: &mut Emitter) {
     emitter.label("__rt_aedge_val_slot");
     emitter.instruction("cmn x9, #1");                                          // is the selected slot empty (index == -1)?
     emitter.instruction("b.eq __rt_aedge_val_null");                            // an inconsistent empty chain has no edge value
-    emitter.instruction("mov x10, #64");                                        // x10 = hash entry stride in bytes
-    emitter.instruction("mul x10, x9, x10");                                    // byte offset of the selected slot
-    emitter.instruction("add x10, x0, x10");                                    // advance from the hash base to the slot
-    emitter.instruction("add x10, x10, #40");                                   // skip the 40-byte hash header
+    hash_layout::emit_entry_address(emitter, "x10", "x0", "x9");
     emitter.instruction("ldr x9, [x10, #24]");                                  // x9 = value_lo from the hash entry
     emitter.instruction("ldr x13, [x10, #32]");                                 // x13 = value_hi from the hash entry
     emitter.instruction("ldr x14, [x10, #40]");                                 // x14 = value_tag from the hash entry
@@ -105,10 +104,7 @@ fn emit_array_edge_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_aedge_val_slot");
     emitter.instruction("cmp rax, -1");                                         // is the selected slot empty (index == -1)?
     emitter.instruction("je __rt_aedge_val_null");                              // an inconsistent empty chain has no edge value
-    emitter.instruction("mov r10, rax");                                        // copy the slot index before scaling it
-    emitter.instruction("shl r10, 6");                                          // convert the slot index into a 64-byte entry offset
-    emitter.instruction("add r10, rdi");                                        // advance from the hash base to the slot
-    emitter.instruction("add r10, 40");                                         // skip the 40-byte hash header
+    hash_layout::emit_entry_address(emitter, "r10", "rdi", "rax");
     emitter.instruction("mov r8, QWORD PTR [r10 + 24]");                        // r8 = value_lo from the hash entry
     emitter.instruction("mov r9, QWORD PTR [r10 + 32]");                        // r9 = value_hi from the hash entry
     emitter.instruction("mov rax, QWORD PTR [r10 + 40]");                       // rax = value_tag from the hash entry

@@ -202,3 +202,35 @@ echo $acc, "\n";
         out.stderr
     );
 }
+
+/// A `mixed` argument that holds no array is PHP's run-time TypeError for `array_first()`,
+/// `array_last()` and `array_key_first()` (they answered `null` before), naming `false`/`true`
+/// for a bool the way php-src does. Hash receivers read the entry through the hash layout helper,
+/// so their first and last values are right on main's separate entry storage too.
+#[test]
+fn test_array_edge_builtins_type_error_and_hash_receivers() {
+    let out = compile_and_run(
+        r#"<?php
+function m(int $n): mixed { return $n > 5 ? [1] : "str"; }
+function b(int $n): mixed { return $n > 5; }
+try { var_dump(array_first(m($argc))); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { var_dump(array_last(b($argc))); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { var_dump(array_key_first(m($argc))); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+var_dump(array_last(["a" => 1, "b" => 2]));
+var_dump(array_first([3 => "x", 1 => "y"]));
+var_dump(array_first([]), array_last([5, 6]));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "array_first(): Argument #1 ($array) must be of type array, string given\n",
+            "array_last(): Argument #1 ($array) must be of type array, false given\n",
+            "array_key_first(): Argument #1 ($array) must be of type array, string given\n",
+            "int(2)\n",
+            "string(1) \"x\"\n",
+            "NULL\n",
+            "int(6)\n",
+        )
+    );
+}

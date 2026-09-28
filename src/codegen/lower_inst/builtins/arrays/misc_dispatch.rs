@@ -301,10 +301,15 @@ pub(super) fn lower_array_edge_key(
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, name, 1)?;
     let array = expect_operand(inst, 0)?;
-    require_array_like_operand(ctx.value_php_type(array)?, name)?;
+    let array_ty = ctx.value_php_type(array)?;
+    require_array_like_operand(array_ty.clone(), name)?;
     let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
     let arg1 = abi::int_arg_reg_name(ctx.emitter.target, 1);
     ctx.load_value_to_reg(array, arg0)?;
+    if array_ty.codegen_repr() == PhpType::Mixed {
+        // PHP checks the `array` parameter at run time: a `mixed` holding no array is a TypeError.
+        super::mixed_array_argument_guard::emit_mixed_array_argument_guard(ctx, name, arg0)?;
+    }
     abi::emit_load_int_immediate(ctx.emitter, arg1, which);
     abi::emit_call_label(ctx.emitter, "__rt_array_edge_key");
     store_if_result(ctx, inst)
@@ -333,10 +338,15 @@ fn lower_array_edge_value(
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, name, 1)?;
     let array = expect_operand(inst, 0)?;
-    require_array_like_operand(ctx.value_php_type(array)?, name)?;
+    let array_ty = ctx.value_php_type(array)?;
+    require_array_like_operand(array_ty.clone(), name)?;
     let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
     let arg1 = abi::int_arg_reg_name(ctx.emitter.target, 1);
     ctx.load_value_to_reg(array, arg0)?;
+    if array_ty.codegen_repr() == PhpType::Mixed {
+        // PHP checks the `array` parameter at run time: a `mixed` holding no array is a TypeError.
+        super::mixed_array_argument_guard::emit_mixed_array_argument_guard(ctx, name, arg0)?;
+    }
     abi::emit_load_int_immediate(ctx.emitter, arg1, which);
     abi::emit_call_label(ctx.emitter, "__rt_array_edge_value");
     store_if_result(ctx, inst)

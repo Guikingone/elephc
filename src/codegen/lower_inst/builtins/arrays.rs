@@ -52,6 +52,7 @@ mod map_dispatch;
 mod map_results;
 mod reduce_sets;
 mod misc_dispatch;
+mod mixed_array_argument_guard;
 mod callback_builtins;
 mod multisort;
 mod sort_dispatch;
