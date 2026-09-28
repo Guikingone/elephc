@@ -1,6 +1,6 @@
 <?php
 
-// See docs/specs/ios-target.md. PHP describes a UI, a native host renders it.
+// Lot 2 of .plans/ios-target.md: PHP describes a UI, a native host renders it.
 //
 // Nothing here draws anything. `render_view()` returns a serialized view tree
 // and `dispatch()` returns the next one after an event, so the host stays a dumb

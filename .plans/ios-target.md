@@ -1,17 +1,12 @@
----
-title: "iOS Target Support"
-description: "Implementation specification for the ios-arm64 and ios-sim-arm64 library targets."
-sidebar:
-  order: 13
----
+# iOS target implementation specification
 
-This document describes the implemented iOS target support, built on the
-owned-string library ABI from #734. It is a description of the current tree,
-not the original implementation plan.
+This document describes the implementation on `feat/ios-target` after the
+owned-string library ABI from #734 was merged. It is a description of the
+current tree, not the original implementation plan.
 
 ## Scope
 
-iOS support adds two native compilation targets:
+The change adds two native compilation targets:
 
 - `ios-arm64` / `aarch64-apple-ios`
 - `ios-sim-arm64` / `aarch64-apple-ios-simulator`
@@ -22,7 +17,7 @@ rejected by `Target::parse()` with an arm64-only diagnostic.
 Both can produce a `staticlib`, which is the normal delivery form for an Xcode
 application. They can also use the shared library code path where the platform
 toolchain permits it. The PHP program still uses Elephc's existing native
-backend and runtime; iOS support does not add an interpreter or an iOS UI
+backend and runtime; this change does not add an interpreter or an iOS UI
 runtime.
 
 `--emit executable` is rejected for iOS code generation. Elephc's executable
@@ -216,7 +211,7 @@ x86_64 matrix. iOS SDK assembly/linking and SwiftUI execution require Xcode.
 
 ## Deliberate non-goals
 
-iOS support does not add another `Platform`, redesign staticlib versus cdylib, or
+This PR does not add another `Platform`, redesign staticlib versus cdylib, or
 change PHP header newline behavior.
 
 #804 (implicit-magic traversal for `__set`, `__isset`, `__unset`, and
