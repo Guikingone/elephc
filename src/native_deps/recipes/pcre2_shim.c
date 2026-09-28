@@ -17,7 +17,72 @@ typedef struct elephc_pcre2_v1_handle {
     regex_t regex;
     size_t slot_count;
     int anchored;
+    /* 0 when the compiled pattern belongs to the cache below: freeing the handle then releases
+       only its match data. */
+    int owns_code;
 } elephc_pcre2_v1_handle;
+
+/* Compiled patterns kept for the life of the process, as php's own PCRE cache keeps them.
+ *
+ * Every preg_* call compiles its pattern, and a request of a real application calls preg_* on
+ * the same few hundred patterns again and again: Symfony's router and Twig's lexer compiled the
+ * same patterns on every request, which cost more than matching them did. A compiled pattern is
+ * read-only while it matches, so one can serve every handle; each handle still gets its own
+ * match data, so a pattern used again while a match on it is in progress (a preg_replace_callback
+ * callback running the same pattern) never shares state with the outer call.
+ *
+ * Open addressing over the pattern bytes and the compile flags, at most half full. Once
+ * ELEPHC_PCRE2_CACHE_LIMIT patterns are cached, further patterns compile for their handle alone,
+ * which bounds the memory a program building patterns from its data can pin. A pattern that
+ * fails to compile is never cached, so its warning is raised on every call, as php raises it. */
+#define ELEPHC_PCRE2_CACHE_SLOTS 8192U
+#define ELEPHC_PCRE2_CACHE_LIMIT 4096U
+
+typedef struct elephc_pcre2_v1_cached {
+    char *pattern;
+    size_t length;
+    uint32_t cflags;
+    pcre2_code *code;
+    uint32_t capture_count;
+} elephc_pcre2_v1_cached;
+
+static elephc_pcre2_v1_cached *elephc_pcre2_v1_cache = NULL;
+static size_t elephc_pcre2_v1_cache_count = 0;
+
+/* FNV-1a over the pattern bytes, then the flags, so one pattern under two modifier sets is two
+   entries. */
+static size_t elephc_pcre2_v1_cache_home(const char *pattern, size_t length, uint32_t cflags) {
+    uint64_t hash = 0xcbf29ce484222325ULL;
+    size_t index;
+
+    for (index = 0; index < length; ++index) {
+        hash = (hash ^ (unsigned char)pattern[index]) * 0x100000001b3ULL;
+    }
+    hash = (hash ^ cflags) * 0x100000001b3ULL;
+    return (size_t)(hash & (ELEPHC_PCRE2_CACHE_SLOTS - 1U));
+}
+
+/* Returns the slot holding the pattern, or the empty slot that ends its probe, or NULL when the
+   cache could not be allocated. */
+static elephc_pcre2_v1_cached *elephc_pcre2_v1_cache_slot(const char *pattern, size_t length, uint32_t cflags) {
+    size_t slot;
+
+    if (elephc_pcre2_v1_cache == NULL) {
+        elephc_pcre2_v1_cache = (elephc_pcre2_v1_cached *)calloc(ELEPHC_PCRE2_CACHE_SLOTS, sizeof(*elephc_pcre2_v1_cache));
+        if (elephc_pcre2_v1_cache == NULL) {
+            return NULL;
+        }
+    }
+    slot = elephc_pcre2_v1_cache_home(pattern, length, cflags);
+    while (elephc_pcre2_v1_cache[slot].code != NULL) {
+        const elephc_pcre2_v1_cached *entry = &elephc_pcre2_v1_cache[slot];
+        if (entry->cflags == cflags && entry->length == length && memcmp(entry->pattern, pattern, length) == 0) {
+            break;
+        }
+        slot = (slot + 1U) & (ELEPHC_PCRE2_CACHE_SLOTS - 1U);
+    }
+    return &elephc_pcre2_v1_cache[slot];
+}
 
 /* php's preg_last_error() code for the most recent compile or match: 0 none, 1 internal,
    2 backtrack limit, 3 recursion limit, 4 bad UTF-8, 5 bad UTF-8 offset. A match on a subject
@@ -45,6 +110,16 @@ static int32_t elephc_pcre2_v1_error_from_match(int rc) {
     return 1;
 }
 
+/* Frees a handle and its match data, and its compiled pattern unless the cache holds it. */
+static void elephc_pcre2_v1_release(elephc_pcre2_v1_handle *handle) {
+    if (handle->owns_code) {
+        pcre2_regfree(&handle->regex);
+    } else {
+        pcre2_match_data_free((pcre2_match_data *)handle->regex.re_match_data);
+    }
+    free(handle);
+}
+
 int32_t elephc_pcre2_v1_last_error(void) {
     return elephc_pcre2_v1_error;
 }
@@ -62,6 +137,8 @@ int32_t elephc_pcre2_v1_compile(
     uint32_t capture_count;
     int errorcode;
     PCRE2_SIZE erroffset;
+    size_t pattern_length;
+    elephc_pcre2_v1_cached *cached;
 
     elephc_pcre2_v1_error = 0;
     if (handle_out != NULL) {
@@ -106,22 +183,44 @@ int32_t elephc_pcre2_v1_compile(
     if ((cflags & ELEPHC_PCRE2_CFLAG_DUPNAMES) != 0) native_options |= PCRE2_DUPNAMES;
     if ((cflags & ELEPHC_PCRE2_CFLAG_NO_AUTO_CAPTURE) != 0) native_options |= PCRE2_NO_AUTO_CAPTURE;
 
-    code = pcre2_compile((PCRE2_SPTR)pattern_z, PCRE2_ZERO_TERMINATED, native_options, &errorcode, &erroffset, NULL);
-    if (code == NULL) {
-        free(handle);
-        elephc_pcre2_v1_error = 1;
-        return (int32_t)REG_BADPAT;
+    pattern_length = strlen(pattern_z);
+    cached = elephc_pcre2_v1_cache_slot(pattern_z, pattern_length, cflags);
+    if (cached != NULL && cached->code != NULL) {
+        code = cached->code;
+        capture_count = cached->capture_count;
+    } else {
+        code = pcre2_compile((PCRE2_SPTR)pattern_z, PCRE2_ZERO_TERMINATED, native_options, &errorcode, &erroffset, NULL);
+        if (code == NULL) {
+            free(handle);
+            elephc_pcre2_v1_error = 1;
+            return (int32_t)REG_BADPAT;
+        }
+        capture_count = 0;
+        if (pcre2_pattern_info(code, PCRE2_INFO_CAPTURECOUNT, &capture_count) != 0) {
+            pcre2_code_free(code);
+            free(handle);
+            return (int32_t)REG_ESPACE;
+        }
+        handle->owns_code = 1;
+        if (cached != NULL && elephc_pcre2_v1_cache_count < ELEPHC_PCRE2_CACHE_LIMIT) {
+            char *key = (char *)malloc(pattern_length + 1U);
+            if (key != NULL) {
+                memcpy(key, pattern_z, pattern_length + 1U);
+                cached->pattern = key;
+                cached->length = pattern_length;
+                cached->cflags = cflags;
+                cached->code = code;
+                cached->capture_count = capture_count;
+                elephc_pcre2_v1_cache_count += 1U;
+                handle->owns_code = 0;
+            }
+        }
     }
     match_data = pcre2_match_data_create_from_pattern(code, NULL);
     if (match_data == NULL) {
-        pcre2_code_free(code);
-        free(handle);
-        return (int32_t)REG_ESPACE;
-    }
-    capture_count = 0;
-    if (pcre2_pattern_info(code, PCRE2_INFO_CAPTURECOUNT, &capture_count) != 0) {
-        pcre2_match_data_free(match_data);
-        pcre2_code_free(code);
+        if (handle->owns_code) {
+            pcre2_code_free(code);
+        }
         free(handle);
         return (int32_t)REG_ESPACE;
     }
@@ -134,15 +233,13 @@ int32_t elephc_pcre2_v1_compile(
     handle->regex.re_cflags = 0;
 
     if (handle->regex.re_nsub == SIZE_MAX) {
-        pcre2_regfree(&handle->regex);
-        free(handle);
+        elephc_pcre2_v1_release(handle);
         return (int32_t)REG_ESPACE;
     }
     handle->slot_count = handle->regex.re_nsub + 1;
 #if SIZE_MAX > UINT64_MAX
     if (handle->slot_count > UINT64_MAX) {
-        pcre2_regfree(&handle->regex);
-        free(handle);
+        elephc_pcre2_v1_release(handle);
         return (int32_t)REG_ESPACE;
     }
 #endif
@@ -254,8 +351,7 @@ void elephc_pcre2_v1_free(void *opaque_handle) {
     if (handle == NULL) {
         return;
     }
-    pcre2_regfree(&handle->regex);
-    free(handle);
+    elephc_pcre2_v1_release(handle);
 }
 
 /* Reads the compiled pattern out of the POSIX wrapper without exposing PCRE2 layouts to callers. */

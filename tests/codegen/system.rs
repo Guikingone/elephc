@@ -1792,6 +1792,50 @@ foreach ($m as $key => $value) {
     );
 }
 
+/// Verifies a compiled pattern is reused across calls without sharing any match state.
+///
+/// Compiled patterns are cached for the life of the process, as php's PCRE cache keeps them, so
+/// this pins what the cache must never change: one pattern under two modifier sets is two
+/// patterns; a pattern run again from inside a `preg_replace_callback()` callback on the SAME
+/// pattern leaves the outer match's captures alone; named groups and a MARK read from a cached
+/// pattern are the ones of the current match; and patterns past the cache's capacity still match,
+/// on their first run and on their second.
+#[test]
+fn test_preg_compiled_pattern_is_shared_but_match_state_is_not() {
+    let out = compile_and_run(
+        r##"<?php
+for ($i = 0; $i < 3; $i++) {
+    echo preg_match('/abc/', 'xABCx'), preg_match('/abc/i', 'xABCx'), preg_match('/^b$/m', "a\nb"), preg_match('/^b$/', "a\nb"), "\n";
+}
+echo preg_replace_callback('/(\d+)-(\w+)/', function ($m) {
+    preg_match('/(\d+)-(\w+)/', 'inner 7-zz', $inner);
+    return '[' . $m[2] . ':' . $m[1] . '|' . $inner[1] . $inner[2] . ']';
+}, 'a 12-foo b 34-bar c'), "\n";
+for ($i = 0; $i < 2; $i++) {
+    preg_match('/(?<year>\d{4})-(?<mon>\d\d)/', $i === 0 ? 'on 2024-05 ok' : 'on 1999-12 ok', $m);
+    echo $m['year'], '/', $m['mon'], ' ', count($m), ' ';
+    preg_match('#^/(?|a(*:1)|b(*:2))$#', $i === 0 ? '/b' : '/a', $mm);
+    echo $mm['MARK'], "\n";
+}
+$hits = 0;
+for ($round = 0; $round < 2; $round++) {
+    for ($i = 0; $i < 5000; $i++) {
+        $hits += preg_match('/k' . $i . 'x/', 'zk' . $i . 'xz');
+    }
+}
+echo $hits, "\n";
+$p = '/\s*,\s*/';
+for ($i = 0; $i < 2; $i++) {
+    echo implode('|', preg_split($p, 'a , b,c ,  d')), ' ', preg_replace($p, ';', 'x ,y'), ' ', preg_match_all($p, 'a,b,c'), "\n";
+}
+"##,
+    );
+    assert_eq!(
+        out,
+        "0110\n0110\n0110\na [foo:12|7zz] b [bar:34|7zz] c\n2024/05 5 2\n1999/12 5 1\n10000\na|b|c|d x;y 2\na|b|c|d x;y 2\n"
+    );
+}
+
 /// Verifies `PREG_OFFSET_CAPTURE` turns every `$matches` entry into `[text, byte offset]`.
 ///
 /// PHP's `PREG_OFFSET_CAPTURE` (bit 256) does not add a parallel array: it REPLACES each entry of

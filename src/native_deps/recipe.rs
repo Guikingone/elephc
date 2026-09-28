@@ -54,7 +54,7 @@ enum BuiltInRecipe {
 /// Resolves a package and immutable recipe revision to its built-in executor.
 fn built_in_recipe(package: &str, revision: u32) -> Option<BuiltInRecipe> {
     match (package, revision) {
-        ("pcre2", 8) => Some(BuiltInRecipe::Pcre2),
+        ("pcre2", 9) => Some(BuiltInRecipe::Pcre2),
         ("zlib", 1) => Some(BuiltInRecipe::Zlib),
         ("openssl", 1) => Some(BuiltInRecipe::Openssl),
         ("nghttp2", 2) => Some(BuiltInRecipe::Nghttp2),
@@ -122,6 +122,8 @@ mod tests {
     /// `$matches['MARK']` is built from and what Symfony's dumped dynamic-route matcher reads.
     /// Revision 8 added `elephc_pcre2_v1_last_error`, php's `preg_last_error()` code, which a
     /// `/u` call reads to return false or null for a subject that is not valid UTF-8.
+    /// Revision 9 caches compiled patterns for the life of the process, as php's PCRE cache does,
+    /// so `elephc_pcre2_v1_free` no longer frees a pattern the cache holds.
     #[test]
     fn previous_pcre2_recipe_revisions_are_not_dispatched() {
         assert!(built_in_recipe("pcre2", 2).is_none());
@@ -130,6 +132,7 @@ mod tests {
         assert!(built_in_recipe("pcre2", 5).is_none());
         assert!(built_in_recipe("pcre2", 6).is_none());
         assert!(built_in_recipe("pcre2", 7).is_none());
+        assert!(built_in_recipe("pcre2", 8).is_none());
     }
 
     /// Verifies the dispatcher recognizes curl and every library it links by exact catalog
