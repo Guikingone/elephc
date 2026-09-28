@@ -17,6 +17,7 @@ mod basic;
 mod class_refs;
 mod effects;
 mod calls_objects;
+mod null_coalesce;
 mod static_closure;
 use super::super::Checker;
 use super::syntactic::null_coalesce_merge_type;
@@ -286,9 +287,15 @@ fn merge_array_branch_types(acc: &PhpType, next: &PhpType) -> Option<PhpType> {
 /// Object operands merge the way the two branches of a ternary do: `?Contract ?? new
 /// Implementation()` is a `Contract`, since one side already accepts the other, and two
 /// unrelated implementations stay a union of both rather than widening to `mixed` (#822).
+/// An arm that already mixes an object with a scalar keeps that union too, so
+/// `?(Contract|int) ?? new Implementation()` is `Contract|int` (#1463).
 fn merge_null_coalesce_result_type(checker: &Checker, value: PhpType, default: PhpType) -> PhpType {
     if object_union_match_arm_type(&value) && object_union_match_arm_type(&default) {
         return merge_object_union_match_arm_types(checker, value, default);
+    }
+    if let Some(merged) = null_coalesce::merge_object_scalar_union_types(checker, &value, &default)
+    {
+        return merged;
     }
     merge_null_coalesce_value_types(value, default)
 }

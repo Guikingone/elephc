@@ -267,7 +267,7 @@ The type checker computes the type of every expression:
 | `Int & Int` | bitwise | `Int` |
 | `Int <=> Int` | spaceship | `Int` (-1, 0, or 1) |
 | `expr instanceof ClassName` | class/interface metadata check | `Bool` |
-| `expr ?? expr` | null coalescing | Type of the non-null operand |
+| `expr ?? expr` | null coalescing | Left type without `null`, joined with the default's type; the left type alone when the left operand is never null (see [Null-coalesce results](#null-coalesce-results)) |
 | `print expr` | output expression | `Int` (`1`) |
 
 ### Function calls
@@ -380,6 +380,27 @@ seeds it as `null` so codegen answers from the slot type instead of reading stor
 initializes. A name that is *also* assigned at top level (`if (!isset($cfg)) { $cfg = 3; }`) would
 get that assigned type on a slot the probe reads before the store, so the original diagnostic is
 restored for it.
+
+### Null-coalesce results
+
+**Files:** `src/types/checker/inference/expr/null_coalesce.rs`, `src/types/checker/inference/expr/mod.rs`
+
+`value ?? default` removes `null` from the left type and joins what is left with the default's
+type. Arrays widen elementwise, two object arms meet at the supertype one side already accepts (or
+stay a union of both), and an arm that already mixes an object with a scalar keeps a union:
+`?(Contract|int) ?? new Implementation()` is `Contract|int`, which an `is_int()` guard narrows back
+to `Contract`. Every other heterogeneous pair joins to `mixed`, as a ternary's branches do, so a
+pure object arm against a pure scalar arm (`?Contract ?? 'none'`) is `mixed`.
+
+The default is left out entirely when the left operand can never be null, because it is dead code
+there: a fresh value (a literal, `new`, `clone`, a closure, `$this`) or a call whose target
+declares a return type that excludes null (a function, a method called on `$this` or on a
+variable, or a static method). `find() ?? new Other()` over `function find(): Implementation|false`
+is therefore still `Implementation|false`. Storage operands never qualify, whatever their type:
+`??` reads an unassigned or `unset()` variable, a missing array key and an uninitialized property
+as null, and the checker has no definite-assignment analysis to rule those out. Inferred returns do
+not qualify either, since a body that falls off its end returns an implicit `null` its inferred
+type omits, and neither do builtin and extern results.
 
 ## User-defined function checking
 

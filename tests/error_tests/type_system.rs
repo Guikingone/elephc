@@ -1124,6 +1124,106 @@ fn test_heterogeneous_null_coalesce_array_merge_widens_element_type() {
     );
 }
 
+/// Classes shared by the `??` result-type tests below. `Repo` declares `Implementation|false`
+/// returns on an instance and a static method, and `Legacy` leaves its return undeclared.
+const NULL_COALESCE_CLASSES: &str = "interface Contract {} \
+    class Implementation implements Contract {} \
+    class Other implements Contract {} \
+    class Repo { \
+        public function find(): Implementation|false { return false; } \
+        public static function first(): Implementation|false { return false; } \
+    } \
+    class Legacy { \
+        public function find() { if (rand(0, 1) === 1) { return new Implementation(); } } \
+    } ";
+
+/// Returns the checker type of the top-level variable `$r` in a program built on
+/// [`NULL_COALESCE_CLASSES`].
+fn null_coalesce_result(body: &str) -> Option<PhpType> {
+    let result = check_source_full(&format!("<?php {NULL_COALESCE_CLASSES}{body}"))
+        .expect("expected source to type-check");
+    result.global_env.get("r").cloned()
+}
+
+/// `??` over an operand that can never be null keeps that operand's type: a call whose target
+/// declares `Implementation|false` never answers null, so the default is dead code and must not
+/// widen the result (issue #1462). Functions, instance methods, static methods and a fresh
+/// object all qualify.
+#[test]
+fn test_null_coalesce_drops_an_unreachable_default() {
+    let implementation_or_false = PhpType::Union(vec![
+        PhpType::Object("Implementation".to_string()),
+        PhpType::False,
+    ]);
+    for body in [
+        "function find(): Implementation|false { return false; } $r = find() ?? new Other();",
+        "$repo = new Repo(); $r = $repo->find() ?? new Other();",
+        "$r = Repo::first() ?? new Other();",
+    ] {
+        assert_eq!(
+            null_coalesce_result(body),
+            Some(implementation_or_false.clone()),
+            "{body}"
+        );
+    }
+    assert_eq!(
+        null_coalesce_result("$r = new Implementation() ?? new Other();"),
+        Some(PhpType::Object("Implementation".to_string()))
+    );
+}
+
+/// Operands whose value may be absent keep the default in the join (issue #1462): a variable may
+/// be unassigned or unset on some path, which the checker does not model, a function or method
+/// without a declared return may fall off its end and answer null, and a builtin result type can
+/// omit the null it returns.
+#[test]
+fn test_null_coalesce_keeps_the_default_of_storage_and_undeclared_calls() {
+    let other = PhpType::Object("Other".to_string());
+    for body in [
+        "function find(): Implementation|false { return false; } \
+         if ($argc > 1) { $x = find(); } $r = $x ?? new Other();",
+        "function find() { if (rand(0, 1) === 1) { return new Implementation(); } } \
+         $r = find() ?? new Other();",
+        "$legacy = new Legacy(); $r = $legacy->find() ?? new Other();",
+        "$list = [new Implementation()]; $r = array_pop($list) ?? new Other();",
+    ] {
+        let result = null_coalesce_result(body);
+        assert!(
+            matches!(&result, Some(PhpType::Union(members)) if members.contains(&other)),
+            "{body}: {result:?}"
+        );
+    }
+}
+
+/// An arm that already mixes an object with a non-false scalar joins as a union instead of
+/// `mixed`: `?(Contract|int) ?? new Implementation()` is `Contract|int`, because `Contract`
+/// absorbs the `Implementation` it accepts, and `?(Contract|int) ?? 'none'` is
+/// `Contract|int|string` (issue #1463).
+#[test]
+fn test_null_coalesce_joins_object_and_scalar_arms_as_a_union() {
+    let program = format!(
+        "<?php {NULL_COALESCE_CLASSES}\
+         function pick(Contract|int|null $v) {{ return $v ?? new Implementation(); }} \
+         function label(Contract|int|null $v) {{ return $v ?? 'none'; }}"
+    );
+    let result = check_source_full(&program).expect("expected source to type-check");
+    assert_eq!(
+        result.functions.get("pick").map(|sig| sig.return_type.clone()),
+        Some(PhpType::Union(vec![
+            PhpType::Object("Contract".to_string()),
+            PhpType::Int,
+        ]))
+    );
+    assert_eq!(
+        result.functions.get("label").map(|sig| sig.return_type.clone()),
+        Some(PhpType::Union(vec![
+            PhpType::Object("Contract".to_string()),
+            PhpType::Int,
+            PhpType::Str,
+        ]))
+    );
+}
+
 /// An empty branch contributes no element values, so `[]` merged with
 /// `array<int>` retains `array<int>` instead of widening unnecessarily.
 #[test]
