@@ -75,15 +75,108 @@ echo $out, "\n";
     assert_clean(out, "sMr299   7|err|type|str299\n");
 }
 
+/// A warning handler that replaces the global being written leaves it with the handler's
+/// value, like php, which abandons the write; the retained cell is released without a leak.
+#[test]
+fn test_string_offset_write_on_global_replaced_by_warning_handler() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function h(int $no, string $msg): bool { global $g; $g = str_repeat('Z', 12); return true; }
+function run(): string {
+    global $g;
+    $seen = '';
+    for ($i = 0; $i < 300; $i++) {
+        $g = str_repeat('abcdefgh', 4) . $i;
+        $g[1] = 'xy';
+        $seen = $g;
+    }
+    return $seen;
+}
+$g = '';
+set_error_handler('h');
+$last = run();
+restore_error_handler();
+echo $last, ' ', $g, "\n";
+$g = null;
+"#,
+    );
+    assert_clean(out, "ZZZZZZZZZZZZ ZZZZZZZZZZZZ\n");
+}
+
+/// A warning handler that frees the string being written (here a static local, replaced by a
+/// recursive call) cannot make the write read freed bytes. php abandons the write in that
+/// case and elephc keeps the written copy, so the fixture only checks the result is made of
+/// bytes the program wrote; heap debug poisons freed blocks, which a stale read would copy.
+#[test]
+fn test_string_offset_write_survives_warning_handler_freeing_subject() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function subject(bool $replace): string {
+    static $s = '';
+    if ($replace) {
+        $s = str_repeat('Z', 40);
+        return '';
+    }
+    $s = str_repeat('abcdefgh', 5);
+    $s[1] = 'xy';
+    return $s;
+}
+function replace_subject(int $no, string $msg): bool { subject(true); $junk = str_repeat('Q', 40); return true; }
+set_error_handler('replace_subject');
+$last = '';
+for ($i = 0; $i < 50; $i++) {
+    $last = subject(false);
+}
+restore_error_handler();
+echo strlen($last), ' ', trim($last, 'abcdefghxZ') === '' ? 'intact' : 'corrupt', "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "40 intact\n", "stderr: {}", out.stderr);
+}
+
+/// The expression form balances on a string local and on boxed storage, including the
+/// illegal-offset (`null`) arm and the array arm of a `mixed` value. `pick()` returns the
+/// expression over a value parameter: the result is a fresh byte, not that parameter, which
+/// the return-alias summary has to know for the caller to release it.
+#[test]
+fn test_string_offset_write_expression_balances_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function first(mixed $s): mixed { return ($s[0] = 'hello'); }
+function neg(mixed $s): mixed { return ($s[-99] = 'x'); }
+function keyed(mixed $a): mixed { return ($a['k'] = [1, 2]); }
+function pick(string $s, string $v) { return ($s[1] = $v); }
+$out = '';
+for ($i = 0; $i < 300; $i++) {
+    $s = str_repeat('abc', 2) . $i;
+    $r = ($s[$i % 4] = 'multi');
+    $n = ($s[-99] = 'q');
+    $v = 'v' . $i;
+    $out = $r . '|' . var_export($n, true) . '|' . $s . '|' . first($s) . '|'
+        . var_export(neg($s), true) . '|' . json_encode(keyed(null)) . '|' . json_encode(first([$i]))
+        . '|' . pick($s, $v) . $v;
+}
+echo $out, "\n";
+"#,
+    );
+    assert_clean(out, "m|NULL|abcmbc299|h|NULL|[1,2]|\"hello\"|vv299\n");
+}
+
 /// A write whose result outgrows the 64 KiB concat scratch buffer releases its heap-backed
-/// temporary.
+/// temporary. The subject is built by `.=` rather than one `str_repeat()` call: a
+/// `str_repeat()` result past the scratch buffer is not released once stored, independently
+/// of string offset writes, and would hide this fixture's own balance.
 #[test]
 fn test_string_offset_write_large_string_balance_heap() {
     let out = compile_and_run_with_heap_debug(
         r#"<?php
+$chunk = str_repeat('z', 1000);
 $n = 0;
 for ($i = 0; $i < 20; $i++) {
-    $big = str_repeat('z', 70000);
+    $big = '';
+    for ($k = 0; $k < 70; $k++) {
+        $big .= $chunk;
+    }
     $big[70000 + $i] = 'E';
     $n += strlen($big);
 }

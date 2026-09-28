@@ -49,6 +49,14 @@ pub(super) fn lower_assignment_expr(
         }
     }
     if assigned_name.is_none() {
+        // PHP's `($s[$i] = $v)` on a string evaluates to the byte it stored (or `null`), not to
+        // `$v`, so the string write produces its own result. The checker refuses the compound
+        // and increment forms, so only a plain `=` reaches here.
+        if let Some(result) = lower_string_offset_assignment_expr(
+            ctx, target, value, result_target, expr.span, key_already_diagnosed,
+        ) {
+            return result;
+        }
         if let Some(result_target) = result_target {
             // The non-local write evaluates the value itself. Lowering it beforehand leaves
             // an unused read (or repeats a side effect) before the target is written.
@@ -120,13 +128,6 @@ pub(super) fn lower_assignment_expr(
         if let Some(sig) = fiber_start_sig {
             ctx.bind_fiber_start_sig(name, sig);
         }
-    } else if let Some((name, index)) = string_offset_assignment_target(ctx, target) {
-        // PHP's `($s[$i] = $v)` evaluates to the byte it stored, not to `$v`, so the string
-        // write produces its own result instead of replaying the right-hand side. The checker
-        // refuses the compound and increment forms, so only a plain `=` reaches here.
-        return crate::ir_lower::stmt::lower_string_offset_assign_expr(
-            ctx, name, index, value, expr.span,
-        );
     } else {
         lower_non_local_assignment_write_with_diagnosed_key(ctx, target, value, expr.span, key_already_diagnosed);
     }
@@ -134,22 +135,6 @@ pub(super) fn lower_assignment_expr(
         return lower_expr(ctx, result_target);
     }
     result
-}
-
-/// Returns the local name and index when an assignment target is `$name[$index]` on a string
-/// local, i.e. a PHP string offset write.
-fn string_offset_assignment_target<'e>(
-    ctx: &LoweringContext<'_, '_>,
-    target: &'e Expr,
-) -> Option<(&'e str, &'e Expr)> {
-    let ExprKind::ArrayAccess { array, index } = &target.kind else {
-        return None;
-    };
-    let ExprKind::Variable(name) = &array.kind else {
-        return None;
-    };
-    crate::ir_lower::stmt::local_is_string_offset_target(ctx, name)
-        .then_some((name.as_str(), index.as_ref()))
 }
 
 /// Lowers a non-local `??=` assignment expression with lazy RHS evaluation.
@@ -229,7 +214,7 @@ pub(super) fn lower_non_local_assignment_write(
 }
 
 /// Writes an assignment target whose key may already have been diagnosed by its read half.
-fn lower_non_local_assignment_write_with_diagnosed_key(
+pub(super) fn lower_non_local_assignment_write_with_diagnosed_key(
     ctx: &mut LoweringContext<'_, '_>,
     target: &Expr,
     value: &Expr,

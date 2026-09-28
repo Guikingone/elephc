@@ -54,7 +54,10 @@ impl Checker {
         }
         if let Some((array, index)) = string_offset_write {
             // PHP's `($s[$i] = $v)` evaluates to the one-byte string it stored, never to `$v`
-            // itself, so the expression is a `string` whatever the value's type.
+            // itself, and to `null` when the offset lies before the start and nothing was
+            // written. Lowering materializes that `?string` as a boxed value; the checker calls
+            // it `mixed`, because a `?string` would refuse `return ($w[0] = 'x');` from a
+            // function declared `: string`, which php accepts whenever the offset is legal.
             let stmt = Stmt::new(
                 StmtKind::ArrayAssign {
                     array: array.to_string(),
@@ -64,8 +67,11 @@ impl Checker {
                 span,
             );
             self.check_assignment_like_stmt(&stmt, env)?;
-            return Ok(PhpType::Str);
+            return Ok(PhpType::Mixed);
         }
+        // A boxed local that may hold a string makes the result depend on its runtime type:
+        // the stored byte (or `null`) for a string, the assigned value otherwise.
+        let may_be_string_offset_write = boxed_string_offset_write_candidate(target, env);
 
         if let ExprKind::Variable(name) = &target.kind {
             return self.check_local_assignment_expression(name, value, span, env);
@@ -134,7 +140,11 @@ impl Checker {
             Some(result_target) if result_target != target => result_target,
             _ => value,
         };
-        self.infer_type(result_expr, env)
+        let result_ty = self.infer_type(result_expr, env)?;
+        if may_be_string_offset_write {
+            return Ok(PhpType::Mixed);
+        }
+        Ok(result_ty)
     }
 
     /// Type-checks `$object->{$property} = $value` assignment expressions.
@@ -197,6 +207,25 @@ fn string_offset_write_target<'e>(target: &'e Expr, env: &TypeEnv) -> Option<(&'
         return None;
     };
     matches!(env.get(name), Some(PhpType::Str)).then_some((name.as_str(), index.as_ref()))
+}
+
+/// Returns whether `target` is `$name[...]` on a local typed `mixed` or a union with a `string`
+/// member, i.e. a write that is a string offset write whenever the local holds a string.
+///
+/// EIR lowering branches on the runtime tag for exactly these locals
+/// (`crate::ir_lower::stmt::local_may_hold_boxed_string`), so the expression is `mixed`.
+fn boxed_string_offset_write_candidate(target: &Expr, env: &TypeEnv) -> bool {
+    let ExprKind::ArrayAccess { array, .. } = &target.kind else {
+        return false;
+    };
+    let ExprKind::Variable(name) = &array.kind else {
+        return false;
+    };
+    match env.get(name) {
+        Some(PhpType::Mixed) => true,
+        Some(PhpType::Union(members)) => members.iter().any(|member| *member == PhpType::Str),
+        _ => false,
+    }
 }
 
 /// Refuses the read-modify-write forms PHP rejects on a string offset.

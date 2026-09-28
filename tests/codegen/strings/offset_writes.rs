@@ -146,6 +146,71 @@ echo third('xyz'), "\n";
     assert_eq!(out.stdout, "h|ahc\nE\n");
 }
 
+/// The expression form evaluates a side-effecting value once, on a string local and on boxed
+/// `mixed` storage alike, and writes the byte of that single evaluation.
+#[test]
+fn test_string_offset_write_expression_evaluates_value_once() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function next_value(): string { static $n = 0; $n++; echo "call$n\n"; return $n === 1 ? 'xy' : 'Q'; }
+function boxed(mixed $s): string { $r = ($s[0] = next_value()); return $r . '|' . $s; }
+$s = str_repeat('abc', $argc);
+$r = ($s[1] = next_value());
+echo $r, '|', $s, "\n";
+echo boxed('mno'), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "call1\nx|axc\ncall2\nQ|Qno\n");
+}
+
+/// On boxed storage the expression is the stored byte when the value is a string at run time
+/// (a `mixed` or `string|array` parameter, a string local that `++` boxes) and the assigned
+/// value when it is an array.
+#[test]
+fn test_string_offset_write_expression_on_mixed_storage() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function first(mixed $s): mixed { return ($s[0] = 'hello'); }
+function either(string|array $s): string { $r = ($s[1] = 'Q!'); return json_encode([$r, $s]); }
+function keyed(mixed $a): string { $r = ($a['k'] = [1, 2]); return json_encode([$r, $a]); }
+var_dump(first('abc'));
+var_dump(first([7]));
+echo either('xyz'), ' ', either([1, 2]), ' ', keyed(null), "\n";
+$inc = 'az';
+$r = ($inc[0] = 'bzz');
+$inc++;
+echo $r, ' ', $inc, "\n";
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        "string(1) \"h\"\nstring(5) \"hello\"\n[\"Q\",\"xQz\"] [\"Q!\",[1,\"Q!\"]] \
+         [[1,2],{\"k\":[1,2]}]\nb ca\n"
+    );
+}
+
+/// An offset still before the start writes nothing, and the expression is `null`, not an
+/// empty string; an offset that just reaches the first byte still writes it.
+#[test]
+fn test_string_offset_write_expression_illegal_offset_is_null() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function boxed(mixed $s): mixed { return ($s[-9] = 'x'); }
+$t = 'abc';
+$r = ($t[-9] = 'x');
+var_dump($r, $r === null, $t);
+var_dump(boxed('abc'));
+$u = 'abc';
+var_dump(($u[-3] = 'Z'), $u);
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        "NULL\nbool(true)\nstring(3) \"abc\"\nNULL\nstring(1) \"Z\"\nstring(3) \"Zbc\"\n"
+    );
+    assert!(out.stderr.contains("Warning: Illegal string offset -9"), "{}", out.stderr);
+}
+
 /// A reference-bound string, a static local, and a closure parameter all take the write.
 #[test]
 fn test_string_offset_write_through_other_local_kinds() {

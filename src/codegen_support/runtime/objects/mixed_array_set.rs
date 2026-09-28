@@ -18,6 +18,9 @@
 //!   shared cell helper before any container header is dereferenced.
 //! - A string payload (tag 1) takes PHP's string offset write through `__rt_str_offset_set`
 //!   and gets the updated string as a new payload; a string key throws `TypeError`.
+//! - That write can warn, and a user error handler can then reassign the variable that owns
+//!   the cell. The arm retains the cell across the helper and, like php's
+//!   `zend_assign_to_string_offset`, abandons the write when its own reference is the last one.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -633,11 +636,18 @@ const STRING_OFFSET_TYPE_ERROR_MSG_LEN: usize =
 /// whose `++` gave it boxed storage).
 ///
 /// Runs inside the setter's 80-byte frame: `[sp, #0]` cell, `[sp, #8]`/`[sp, #16]` key words,
-/// `[sp, #24]` boxed value; `[sp, #32..#56]` are free on this path. The value is cast to a
-/// string, `__rt_str_offset_set` builds the updated string, and the persisted result replaces
-/// the cell's string payload, which the cell owns exclusively (as `__rt_mixed_free_deep`
-/// assumes). The value box is consumed like every other arm. A string key has no integer
-/// offset and throws PHP's `TypeError`.
+/// `[sp, #24]` boxed value; `[sp, #32..#56]` are free on this path, and `[sp, #16]` becomes the
+/// retained-cell flag once the key is checked. The value is cast to a string,
+/// `__rt_str_offset_set` builds the updated string, and the persisted result replaces the
+/// cell's string payload, which the cell owns exclusively (as `__rt_mixed_free_deep` assumes).
+/// The value box is consumed like every other arm. A string key has no integer offset and
+/// throws PHP's `TypeError`.
+///
+/// Whenever the helper can warn, the cell is retained across it: a warning handler that
+/// reassigns the variable releases the variable's reference, and the retained one then keeps
+/// the cell alive. If it is the last one afterwards, the write is abandoned and the cell
+/// released, which is what php does. An empty value at a reachable offset throws before any
+/// warning, so that path takes no reference it could never give back.
 fn emit_string_payload_set_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_array_set_string");
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload normalized key high word
@@ -653,6 +663,24 @@ fn emit_string_payload_set_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_array_set_string_write");
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the boxed value
     emitter.instruction("bl __rt_decref_mixed");                                // consume it now, before the helper may throw
+    emitter.instruction("str xzr, [sp, #16]");                                  // no retained cell yet; the key high word is spent
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload the cast value length
+    emitter.instruction("cbnz x9, __rt_mixed_array_set_string_retain");         // a non-empty value returns from the helper, maybe after a warning
+    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the target Mixed cell
+    emitter.instruction("ldr x11, [x10, #16]");                                 // subject string length
+    emitter.instruction("ldr x12, [sp, #8]");                                   // the integer offset
+    emitter.instruction("add x12, x12, x11");                                   // the offset counted from the start
+    emitter.instruction("cmp x12, #0");                                         // does it reach the string?
+    emitter.instruction("b.ge __rt_mixed_array_set_string_call");               // an empty value there throws before any warning
+    emitter.label("__rt_mixed_array_set_string_retain");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the target Mixed cell
+    emitter.instruction("bl __rt_heap_kind");                                   // is the cell heap-owned (refcounted)?
+    emitter.instruction("cbz x0, __rt_mixed_array_set_string_call");            // a static cell cannot be freed by a handler
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the target Mixed cell
+    emitter.instruction("bl __rt_incref");                                      // keep it alive across a warning handler
+    emitter.instruction("mov x9, #1");                                          // remember the retained reference
+    emitter.instruction("str x9, [sp, #16]");                                   // in the retained-cell flag
+    emitter.label("__rt_mixed_array_set_string_call");
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload the target Mixed cell
     emitter.instruction("ldr x1, [x10, #8]");                                   // subject string pointer
     emitter.instruction("ldr x2, [x10, #16]");                                  // subject string length
@@ -668,6 +696,20 @@ fn emit_string_payload_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x3");                                          // release a heap-backed helper result that persist copied
     emitter.instruction("bl __rt_heap_free_safe");                              // no-op for concat scratch
     emitter.label("__rt_mixed_array_set_string_owned");
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the retained-cell flag
+    emitter.instruction("cbz x9, __rt_mixed_array_set_string_publish");         // no warning could have run a handler
+    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the target Mixed cell
+    emitter.instruction("ldr w11, [x10, #-12]");                                // its refcount, from the uniform heap header
+    emitter.instruction("cmp w11, #1");                                         // is the retained reference the last one?
+    emitter.instruction("b.ne __rt_mixed_array_set_string_publish");            // the variable still holds the cell: write it
+    emitter.instruction("ldr x0, [sp, #48]");                                   // a handler replaced the variable: drop the updated string
+    emitter.instruction("bl __rt_heap_free_safe");                              // php abandons the write in that case
+    emitter.instruction("ldr x0, [sp, #32]");                                   // the cast value string
+    emitter.instruction("bl __rt_heap_free_safe");                              // release it (no-op for scratch)
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the abandoned cell
+    emitter.instruction("bl __rt_decref_mixed");                                // release the last reference, freeing it
+    emitter.instruction("b __rt_mixed_array_set_done");                         // the value was already consumed
+    emitter.label("__rt_mixed_array_set_string_publish");
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload the target Mixed cell
     emitter.instruction("ldr x0, [x10, #8]");                                   // the string payload being replaced
     emitter.instruction("bl __rt_heap_free_safe");                              // the cell owns its string payload exclusively
@@ -677,6 +719,10 @@ fn emit_string_payload_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x2, [x10, #16]");                                  // publish the new string length
     emitter.instruction("ldr x0, [sp, #32]");                                   // the cast value string
     emitter.instruction("bl __rt_heap_free_safe");                              // release it (no-op for scratch)
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the retained-cell flag
+    emitter.instruction("cbz x9, __rt_mixed_array_set_done");                   // nothing was retained
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the written cell
+    emitter.instruction("bl __rt_decref_mixed");                                // give the retained reference back; the variable keeps the cell
     emitter.instruction("b __rt_mixed_array_set_done");                         // the value was already consumed
 
     emitter.label("__rt_mixed_array_set_string_key_error");
@@ -700,7 +746,10 @@ fn emit_string_payload_set_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_array_set_string");
     emitter.instruction("cmp QWORD PTR [rbp - 24], -1");                        // does key_hi carry the integer-key sentinel?
     emitter.instruction("jne __rt_mixed_array_set_string_key_error");           // a string offset must be an integer
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // pass the boxed value to the string cast
+    // `__rt_mixed_cast_string` unboxes whatever `rax` holds (its `__rt_mixed_unbox` input), so
+    // the box goes in both registers; `rax` still holds the receiver cell from the deref above.
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // pass the boxed value to the string cast
+    emitter.instruction("mov rdi, rax");                                        // and in the documented argument register
     emitter.instruction("call __rt_mixed_cast_string");                         // rax/rdx = the value as a string
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // keep the cast value pointer
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // keep the cast value length
@@ -711,6 +760,22 @@ fn emit_string_payload_set_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_array_set_string_write");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the boxed value
     emitter.instruction("call __rt_decref_mixed");                              // consume it now, before the helper may throw
+    emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // no retained cell yet; the key high word is spent
+    emitter.instruction("cmp QWORD PTR [rbp - 48], 0");                         // is the cast value empty?
+    emitter.instruction("jne __rt_mixed_array_set_string_retain");              // a non-empty value returns from the helper, maybe after a warning
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the target Mixed cell
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // the integer offset
+    emitter.instruction("add r11, QWORD PTR [r10 + 16]");                       // the offset counted from the start
+    emitter.instruction("jge __rt_mixed_array_set_string_call");                // an empty value there throws before any warning
+    emitter.label("__rt_mixed_array_set_string_retain");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the target Mixed cell
+    emitter.instruction("call __rt_heap_kind");                                 // is the cell heap-owned (refcounted)?
+    emitter.instruction("test eax, eax");                                       // kind 0 means static storage
+    emitter.instruction("jz __rt_mixed_array_set_string_call");                 // a static cell cannot be freed by a handler
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the target Mixed cell
+    emitter.instruction("call __rt_incref");                                    // keep it alive across a warning handler
+    emitter.instruction("mov QWORD PTR [rbp - 24], 1");                         // remember the retained reference
+    emitter.label("__rt_mixed_array_set_string_call");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the target Mixed cell
     emitter.instruction("mov rax, QWORD PTR [r10 + 8]");                        // subject string pointer
     emitter.instruction("mov rdx, QWORD PTR [r10 + 16]");                       // subject string length
@@ -728,6 +793,19 @@ fn emit_string_payload_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, r10");                                        // release a heap-backed helper result that persist copied
     emitter.instruction("call __rt_heap_free_safe");                            // no-op for concat scratch
     emitter.label("__rt_mixed_array_set_string_owned");
+    emitter.instruction("cmp QWORD PTR [rbp - 24], 0");                         // was the cell retained?
+    emitter.instruction("je __rt_mixed_array_set_string_publish");              // no warning could have run a handler
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the target Mixed cell
+    emitter.instruction("cmp DWORD PTR [r10 - 12], 1");                         // is the retained reference the last one?
+    emitter.instruction("jne __rt_mixed_array_set_string_publish");             // the variable still holds the cell: write it
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // a handler replaced the variable: drop the updated string
+    emitter.instruction("call __rt_heap_free_safe");                            // php abandons the write in that case
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // the cast value string
+    emitter.instruction("call __rt_heap_free_safe");                            // release it (no-op for scratch)
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // the abandoned cell
+    emitter.instruction("call __rt_decref_mixed");                              // release the last reference, freeing it
+    emitter.instruction("jmp __rt_mixed_array_set_done");                       // the value was already consumed
+    emitter.label("__rt_mixed_array_set_string_publish");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the target Mixed cell
     emitter.instruction("mov rax, QWORD PTR [r10 + 8]");                        // the string payload being replaced
     emitter.instruction("call __rt_heap_free_safe");                            // the cell owns its string payload exclusively
@@ -738,6 +816,10 @@ fn emit_string_payload_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r10 + 16], rax");                       // publish the new string length
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // the cast value string
     emitter.instruction("call __rt_heap_free_safe");                            // release it (no-op for scratch)
+    emitter.instruction("cmp QWORD PTR [rbp - 24], 0");                         // was the cell retained?
+    emitter.instruction("je __rt_mixed_array_set_done");                        // nothing was retained
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // the written cell
+    emitter.instruction("call __rt_decref_mixed");                              // give the retained reference back; the variable keeps the cell
     emitter.instruction("jmp __rt_mixed_array_set_done");                       // the value was already consumed
 
     emitter.label("__rt_mixed_array_set_string_key_error");

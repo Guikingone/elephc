@@ -140,9 +140,15 @@ it, so any other holder of the old string keeps its bytes. The helper owns
 PHP's order of checks — an offset still before the start warns through
 `__rt_warn_illegal_string_offset` and copies the subject unchanged, an empty
 value throws `Error`, a longer value warns that only its first byte is used —
-and pads a write past the end with spaces. A string held in a boxed `Mixed`
-cell reaches the same helper from `__rt_mixed_array_set`, which casts the value
-to a string and swaps the persisted result in as the cell's new payload.
+and pads a write past the end with spaces. Either warning can run a user error
+handler that reassigns the variable and frees the subject, so before warning the
+helper swaps the borrowed subject for a private copy, reads only the copy, and
+frees it once the result is built. A string held in a boxed `Mixed` cell
+reaches the same helper from `__rt_mixed_array_set`, which casts the value to a
+string and swaps the persisted result in as the cell's new payload. That arm
+retains the cell across the helper whenever it can warn; if the retained
+reference is the last one afterwards, a handler replaced the variable, and the
+write is abandoned and the cell released, as PHP does.
 
 ## String routines
 

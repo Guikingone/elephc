@@ -14,11 +14,16 @@
 //!   `Illegal string offset N` and writes nothing (even for an empty value); only then does an
 //!   empty value throw `Error`, and a longer value warn that only its first byte is used.
 //! - Writing past the end pads the gap with spaces.
+//! - Both warnings can run a user error handler, which may reassign a global or
+//!   reference-bound subject and free the string this helper was handed. Before either
+//!   warning the helper therefore swaps the subject for a private owned copy, reads only that
+//!   copy afterwards, and frees it once the result is built.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::runtime::arrays::value_error;
+use crate::codegen_support::sentinels::CONCAT_TEMP_HEAP_KIND;
 
 const FIRST_BYTE_MSG_LEN: usize =
     "Warning: Only the first byte will be assigned to the string offset\n".len();
@@ -39,6 +44,8 @@ const EMPTY_ASSIGN_MSG_LEN: usize = "Cannot assign an empty string to a string o
 /// returns an unchanged copy of the subject. An empty value throws PHP's `Error`; otherwise the
 /// value's first byte is written at the offset, padding any gap past the end with spaces.
 /// Clobbers every caller-saved register, because the reservation can reach `__rt_heap_alloc`.
+/// The subject is only borrowed on the silent path; a warning path reads a private copy (see
+/// `emit_pin_subject_aarch64`).
 pub fn emit_str_offset_set(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_str_offset_set_x86_64(emitter);
@@ -50,13 +57,15 @@ pub fn emit_str_offset_set(emitter: &mut Emitter) {
     emitter.label_global("__rt_str_offset_set");
 
     // Stack (80 bytes): [0] subject ptr, [8] subject len, [16] value ptr, [24] value len,
-    // [32] resolved offset, [40] result length, [48] write flag, [64] frame linkage.
+    // [32] resolved offset, [40] result length, [48] write flag, [56] private subject copy
+    // (0 when the subject is still borrowed), [64] frame linkage.
     emitter.instruction("sub sp, sp, #80");                                     // reserve the operand spill slots and frame linkage
     emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #64");                                    // establish the helper frame
     emitter.instruction("stp x1, x2, [sp, #0]");                                // save the subject pointer and length
     emitter.instruction("stp x3, x4, [sp, #16]");                               // save the value pointer and length
     emitter.instruction("str x0, [sp, #32]");                                   // save the requested offset as the resolved one for now
+    emitter.instruction("str xzr, [sp, #56]");                                  // no private subject copy exists yet
 
     // -- resolve a negative offset against the subject length --
     emitter.instruction("cmp x0, #0");                                          // is the requested offset negative?
@@ -72,6 +81,7 @@ pub fn emit_str_offset_set(emitter: &mut Emitter) {
     emitter.instruction("cbz x4, __rt_str_offset_set_empty");                   // an empty value cannot be written to an offset
     emitter.instruction("cmp x4, #1");                                          // is the value exactly one byte?
     emitter.instruction("b.eq __rt_str_offset_set_sized");                      // a single byte is written without a warning
+    emit_pin_subject_aarch64(emitter, "first_byte");
     abi::emit_symbol_address(emitter, "x1", "_diag_string_offset_first_byte_msg");
     emitter.instruction(&format!("mov x2, #{}", FIRST_BYTE_MSG_LEN));           // pass the first-byte warning length
     abi::emit_call_label(emitter, "__rt_diag_warning");                         // warn that only the first byte is assigned
@@ -89,7 +99,9 @@ pub fn emit_str_offset_set(emitter: &mut Emitter) {
 
     // -- an index before the start: warn with the requested offset, keep the bytes --
     emitter.label("__rt_str_offset_set_illegal");
-    abi::emit_call_label(emitter, "__rt_warn_illegal_string_offset");           // x0 still holds the requested offset
+    emit_pin_subject_aarch64(emitter, "illegal");
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the requested offset, unresolved on this path
+    abi::emit_call_label(emitter, "__rt_warn_illegal_string_offset");           // warn `Illegal string offset N`
     emitter.instruction("str xzr, [sp, #48]");                                  // no byte is written on this path
     emitter.instruction("ldr x9, [sp, #8]");                                    // the result keeps the subject length
 
@@ -129,6 +141,10 @@ pub fn emit_str_offset_set(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x0");                                          // result pointer
     emitter.instruction("ldr x2, [sp, #40]");                                   // result length
     abi::emit_call_label(emitter, "__rt_concat_publish");                       // advance the concat cursor for a scratch-backed result
+    emitter.instruction("stp x1, x2, [sp, #0]");                                // keep the result; the subject slot is no longer read
+    emitter.instruction("ldr x0, [sp, #56]");                                   // reload the private subject copy, if a warning made one
+    abi::emit_call_label(emitter, "__rt_heap_free_safe");                       // release it (a null pointer is skipped)
+    emitter.instruction("ldp x1, x2, [sp, #0]");                                // reload the result pointer and length
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the updated string in x1/x2
@@ -155,15 +171,17 @@ fn emit_str_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_str_offset_set");
 
     // Frame: [rbp-8] subject ptr, [rbp-16] subject len, [rbp-24] value ptr, [rbp-32] value len,
-    // [rbp-40] resolved offset, [rbp-48] result length, [rbp-56] write flag, [rbp-64] result ptr.
+    // [rbp-40] resolved offset, [rbp-48] result length, [rbp-56] write flag, [rbp-64] result ptr,
+    // [rbp-72] private subject copy (0 while the subject is still borrowed).
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame
-    emitter.instruction("sub rsp, 64");                                         // reserve the operand spill slots, keeping calls aligned
+    emitter.instruction("sub rsp, 80");                                         // reserve the operand spill slots, keeping calls aligned
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the subject pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the subject length
     emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // save the value pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save the value length
     emitter.instruction("mov QWORD PTR [rbp - 40], rcx");                       // save the requested offset as the resolved one for now
+    emitter.instruction("mov QWORD PTR [rbp - 72], 0");                         // no private subject copy exists yet
 
     // -- resolve a negative offset against the subject length --
     emitter.instruction("test rcx, rcx");                                       // is the requested offset negative?
@@ -180,6 +198,7 @@ fn emit_str_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_str_offset_set_empty");                        // an empty value cannot be written to an offset
     emitter.instruction("cmp r9, 1");                                           // is the value exactly one byte?
     emitter.instruction("je __rt_str_offset_set_sized");                        // a single byte is written without a warning
+    emit_pin_subject_x86_64(emitter, "first_byte");
     abi::emit_symbol_address(emitter, "rdi", "_diag_string_offset_first_byte_msg");
     emitter.instruction(&format!("mov esi, {}", FIRST_BYTE_MSG_LEN));           // pass the first-byte warning length
     abi::emit_call_label(emitter, "__rt_diag_warning");                         // warn that only the first byte is assigned
@@ -196,7 +215,8 @@ fn emit_str_offset_set_x86_64(emitter: &mut Emitter) {
 
     // -- an index before the start: warn with the requested offset, keep the bytes --
     emitter.label("__rt_str_offset_set_illegal");
-    emitter.instruction("mov rax, rcx");                                        // pass the requested offset to the warning helper
+    emit_pin_subject_x86_64(emitter, "illegal");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // pass the requested offset, unresolved on this path
     abi::emit_call_label(emitter, "__rt_warn_illegal_string_offset");           // warn `Illegal string offset N`
     emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // no byte is written on this path
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // the result keeps the subject length
@@ -237,6 +257,12 @@ fn emit_str_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // result pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // result length
     abi::emit_call_label(emitter, "__rt_concat_publish");                       // advance the concat cursor for a scratch-backed result
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // keep the result pointer; the subject slot is no longer read
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // keep the result length
+    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // reload the private subject copy, if a warning made one
+    abi::emit_call_label(emitter, "__rt_heap_free_safe");                       // release it (a null pointer is skipped)
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the result pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the result length
     emitter.instruction("mov rsp, rbp");                                        // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the updated string in rax/rdx
@@ -251,4 +277,45 @@ fn emit_str_offset_set_x86_64(emitter: &mut Emitter) {
         "_string_offset_empty_assign_msg",
         EMPTY_ASSIGN_MSG_LEN,
     );
+}
+
+/// Replaces the borrowed subject in the AArch64 frame with a private owned copy.
+///
+/// Emitted right before a warning: the warning can run a user error handler that reassigns
+/// the variable holding the subject and frees its string. The copy lands in both the subject
+/// slot `[sp, #0]`, which every later read uses, and the release slot `[sp, #56]`, which the
+/// shared exit frees. A transient `.` temporary (`CONCAT_TEMP_HEAP_KIND`) is left alone: no
+/// variable owns it, so no handler can free it, and `__rt_str_persist` would adopt it in place
+/// instead of copying it. `site` keeps the skip label unique per call site. Clobbers every
+/// caller-saved register.
+fn emit_pin_subject_aarch64(emitter: &mut Emitter, site: &str) {
+    let skip = format!("__rt_str_offset_set_pinned_{}", site);
+    emitter.instruction("ldr x0, [sp, #0]");                                    // load the borrowed subject pointer
+    abi::emit_call_label(emitter, "__rt_heap_kind");                            // classify its storage
+    emitter.instruction(&format!("cmp x0, #{}", CONCAT_TEMP_HEAP_KIND));        // is it a transient concat temporary?
+    emitter.instruction(&format!("b.eq {}", skip));                             // nothing can free it: keep borrowing it
+    emitter.instruction("ldp x1, x2, [sp, #0]");                                // load the borrowed subject pointer and length
+    abi::emit_call_label(emitter, "__rt_str_persist");                          // x1 = an owned copy the handler cannot free
+    emitter.instruction("str x1, [sp, #0]");                                    // read the copy from here on
+    emitter.instruction("str x1, [sp, #56]");                                   // and release it once the result is built
+    emitter.label(&skip);
+}
+
+/// Replaces the borrowed subject in the x86_64 frame with a private owned copy.
+///
+/// Same contract as `emit_pin_subject_aarch64`: the copy lands in the subject slot
+/// `[rbp - 8]` and the release slot `[rbp - 72]`, and a transient concat temporary is left
+/// alone. Clobbers every caller-saved register.
+fn emit_pin_subject_x86_64(emitter: &mut Emitter, site: &str) {
+    let skip = format!("__rt_str_offset_set_pinned_{}", site);
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // load the borrowed subject pointer
+    abi::emit_call_label(emitter, "__rt_heap_kind");                            // classify its storage
+    emitter.instruction(&format!("cmp eax, {}", CONCAT_TEMP_HEAP_KIND));        // is it a transient concat temporary?
+    emitter.instruction(&format!("je {}", skip));                               // nothing can free it: keep borrowing it
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // load the borrowed subject pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // load the borrowed subject length
+    abi::emit_call_label(emitter, "__rt_str_persist");                          // rax = an owned copy the handler cannot free
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // read the copy from here on
+    emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // and release it once the result is built
+    emitter.label(&skip);
 }

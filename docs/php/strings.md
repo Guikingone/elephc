@@ -156,7 +156,9 @@ $copy[0] = "!";   // $s is unchanged: strings are copied on write
 - The offset follows the string read's rules: an integer, a float (truncated, with
   `String offset cast occurred`), or a numeric string literal such as `"1"`. Other offset
   expressions are compile errors.
-- The expression `($s[$i] = $v)` evaluates to the one-byte string that was written.
+- The expression `($s[$i] = $v)` evaluates to the one-byte string that was written, or to
+  `null` when an offset before the start wrote nothing. On a `mixed` variable it evaluates to
+  that byte while the variable holds a string, and to `$v` while it holds an array.
 - Compound assignment (`$s[0] .= "x"`), `++`/`--` (`$s[0]++`), `$s[] = $v` and
   `$s[0][0] = $v` are compile errors carrying PHP's own `Error` text, because PHP always throws
   there.
