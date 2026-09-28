@@ -220,7 +220,10 @@ pub(super) fn lower_hash_spread_into_hash_from_value(
     span: crate::span::Span,
 ) {
     let source_ty = ctx.builder.value_php_type(source.value).codegen_repr();
-    if matches!(source_ty, PhpType::Iterable | PhpType::Object(_)) {
+    // A `mixed` source (an untyped method's result: `[...$parser->getWarnings(), ...$this->w]`)
+    // has no static array layout for `ArrayToHash` to convert, so it goes through the runtime
+    // iterator like any other value whose shape is only known when it arrives.
+    if matches!(source_ty, PhpType::Iterable | PhpType::Object(_) | PhpType::Mixed) {
         lower_iterable_spread_into_hash(ctx, hash, source, span);
         return;
     }

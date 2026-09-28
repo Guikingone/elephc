@@ -733,3 +733,24 @@ echo implode(',', $merged);
     );
     assert_eq!(out, "a,b");
 }
+
+/// Spreading an untyped method's result into a literal that is associative because of another
+/// spread: `[...$parser->getWarnings(), ...$this->warnings]` is how `egulias/email-validator`
+/// collects warnings. The `mixed` source was handed to `ArrayToHash`, which needs a static array
+/// layout, and the build stopped with an EIR validation error. It now goes through the runtime
+/// iterator; integer keys are renumbered and string keys kept. Expected output is php 8.5's.
+#[test]
+fn test_mixed_method_result_spreads_into_an_associative_literal() {
+    let out = compile_and_run(
+        r#"<?php
+class P { private $w = []; public function __construct($x) { $this->w = $x; } public function getWarnings() { return $this->w; } }
+class Q {
+    private array $warnings = ["k" => "v"];
+    public function run($p) { $this->warnings = [...$p->getWarnings(), ...$this->warnings]; return $this->warnings; }
+}
+$p = new P($argc > 0 ? [7 => "a", "s" => "b"] : []);
+foreach ((new Q)->run($p) as $key => $value) { echo $key, "=", $value, ";"; }
+"#,
+    );
+    assert_eq!(out, "0=a;s=b;k=v;");
+}
