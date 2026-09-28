@@ -162,11 +162,26 @@ print_r($r->names());          // [0 => "b"]
 echo count(Registry::$cache);  // 0
 ```
 
-This covers a property declared `array` (instance or static) and an untyped instance property
-whose keys are strings. An **untyped** property whose default is a list (`public $list = [1, 2];`)
+This covers a property declared `array` (instance or static), an untyped instance property
+whose keys are strings, and a property stored as a boxed `mixed` value: a `mixed` or `?array`
+property, and an untyped property that an earlier `unset($o->items)` removed. Such a property
+follows PHP's answer for what it holds at run time: a removed property is recreated as `null`,
+`null` is left alone, a string throws `Error("Cannot unset string offsets")`, and any other scalar
+throws `Error("Cannot unset offset in a non-array variable")`.
+
+A property that holds an `ArrayAccess` object calls its `offsetUnset($key)`, and the property is
+read after the key, as PHP does: a key expression that stores another object into the property
+reaches the new one. A **readonly** array property refuses the removal with PHP's
+`Error("Cannot indirectly modify readonly property C::$p")` once it is initialized, and a
+nullsafe link anywhere in the target (`unset($o?->items[$k])`) is PHP's compile error
+"Can't use nullsafe operator in write context".
+
+An **untyped** property whose default is a list (`public $list = [1, 2];`)
 keeps packed list storage that every method of the class reads, and a removal would have to turn
 it into a hash, so `unset($this->list[$i])` reports a compile error at its line; the same goes for
 an element of an untyped static array. Declaring the property `array` is the fix in both cases.
+A nested element (`unset($o->items[$i][$j])`, not supported for locals either yet) and an element
+of a property named at run time (`unset($o->{$name}[$k])`) are not supported yet.
 
 ## Array union
 

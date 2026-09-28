@@ -234,6 +234,10 @@ pub(super) fn lower_property_array_assign(
 ///   local path does, so surviving keys keep their numbering.
 /// - An associative property holds a raw hash; `HashUnset` removes the key from the separated
 ///   table, which is already unique, so the backend's own split is a no-op.
+/// - A boxed `Mixed` property (`property_ty == Mixed`, an untyped slot widened by an earlier
+///   `unset($o->prop)` or a `mixed`/`?array` declaration) goes through `OffsetUnset` like the
+///   declared-array cell; the backend leaves a null cell alone and refuses a scalar with PHP's
+///   `Error`. A removed untyped slot is recreated as null by the fetch, as PHP does.
 ///
 /// Nothing owned is in flight across the removal. That matters because `__rt_hash_unset`
 /// releases the removed value last, and that release can run a destructor which throws or
@@ -256,6 +260,8 @@ pub(crate) fn lower_property_array_unset(
     let data = ctx.intern_string(property);
     let (container_ty, remove) = if property_ty.is_php_array() {
         (PhpType::php_array(), Op::OffsetUnset)
+    } else if *property_ty == PhpType::Mixed {
+        (PhpType::Mixed, Op::OffsetUnset)
     } else {
         (property_ty.clone(), Op::HashUnset)
     };

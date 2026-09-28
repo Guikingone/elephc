@@ -136,9 +136,51 @@ pub(super) fn unset_array_access_property_array_type(
     if property_ty.is_php_array() {
         return Some(property_ty);
     }
+    if boxed_property_may_hold_array(&property_ty) {
+        return Some(PhpType::Mixed);
+    }
     match property_ty.codegen_repr() {
         assoc @ PhpType::AssocArray { .. } => Some(assoc),
         _ => None,
+    }
+}
+
+/// Returns true when a property is stored as a boxed `Mixed` cell that may hold a PHP array and
+/// is never declared to hold an object.
+///
+/// That covers an untyped property type checking widened to `Mixed` (after `unset($o->items)`,
+/// for example), a `mixed` property, and a union such as `?array`. Its element is removed through
+/// the same `PropGetForWrite` + `OffsetUnset` pair as a declared `array` property; the backend
+/// answers PHP's no-op for a null cell and PHP's `Error` for a scalar. A union that can hold an
+/// object (a class, `iterable`, `callable`) keeps the `ArrayAccess` or unsupported paths, because
+/// `OffsetUnset` cannot dispatch to an object's `offsetUnset()`. A bare `Mixed` can hold one too;
+/// that shape is shared with a by-reference `Mixed` local and documented as a gap.
+fn boxed_property_may_hold_array(property_ty: &PhpType) -> bool {
+    match property_ty {
+        PhpType::Mixed => true,
+        PhpType::Union(members) => {
+            property_ty.codegen_repr() == PhpType::Mixed
+                && members.iter().any(|member| {
+                    matches!(
+                        member.codegen_repr(),
+                        PhpType::Array(_) | PhpType::AssocArray { .. }
+                    )
+                })
+                && members.iter().all(|member| {
+                    matches!(
+                        member,
+                        PhpType::Array(_)
+                            | PhpType::AssocArray { .. }
+                            | PhpType::Int
+                            | PhpType::Float
+                            | PhpType::Str
+                            | PhpType::Bool
+                            | PhpType::False
+                            | PhpType::Void
+                    )
+                })
+        }
+        _ => false,
     }
 }
 
@@ -268,9 +310,10 @@ pub(super) fn unset_array_access_has_object_receiver(
 /// `ArrayAccess` object dispatches to its `offsetUnset($key)` method like before, and a raw
 /// by-reference INDEXED local falls through to that path.
 ///
-/// An element of a declared-array or associative object property, and of a declared-array static
-/// property, is removed through the same storage the element writes mutate (issue #750); a
-/// property holding an ArrayAccess object reaches the `offsetUnset` dispatch below.
+/// An element of a declared-array, associative or boxed `Mixed` object property, and of a
+/// declared-array static property, is removed through the same storage the element writes mutate
+/// (issue #750). A property holding an ArrayAccess object dispatches to its `offsetUnset` after
+/// the key, and a readonly array property raises PHP's indirect-modification `Error`.
 pub(super) fn lower_unset_array_access(
     ctx: &mut LoweringContext<'_, '_>,
     array: &Expr,
@@ -279,7 +322,15 @@ pub(super) fn lower_unset_array_access(
 ) {
     if let ExprKind::PropertyAccess { object, property } = &array.kind {
         if let Some(property_ty) = unset_array_access_property_array_type(ctx, array) {
+            if let Some(message) = readonly_property_element_unset_message(ctx, object, property) {
+                lower_unset_readonly_property_element(ctx, object, property, &message, index, expr);
+                return;
+            }
             lower_unset_property_array_element(ctx, object, property, &property_ty, index, expr);
+            return;
+        }
+        if unset_array_access_has_array_access_property_receiver(ctx, array) {
+            lower_unset_array_access_property_offset(ctx, array, object, property, index, expr);
             return;
         }
     }
@@ -383,6 +434,185 @@ fn lower_unset_static_property_array_element(
         expr.span,
     );
     if let Some(slot) = key_owner {
+        retire_owned_call_operand(ctx, slot, expr.span);
+    }
+}
+
+/// Lowers `unset($object->prop[$key])` when the property holds an `ArrayAccess` object.
+///
+/// PHP delays the property fetch of an unset target until its dimension has been evaluated: the
+/// receiver runs first, then the key, then `$object->prop` is read and its `offsetUnset($key)`
+/// called. A key expression that stores another object into the property therefore reaches the
+/// NEW object. A plain `$object->prop->offsetUnset($key)` call would read the property before
+/// the argument, so the receiver and the key are evaluated here and parked in hidden owner slots,
+/// and the call is built over those slots. A variable, `$this` or a literal is read where it
+/// stands, which is what PHP does with a compiled variable too.
+fn lower_unset_array_access_property_offset(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+    object: &Expr,
+    property: &str,
+    index: &Expr,
+    expr: &Expr,
+) {
+    let mut owners = Vec::new();
+    let receiver = park_unset_operand(ctx, object, &mut owners);
+    let key = park_unset_operand(ctx, index, &mut owners);
+    let fetch = Expr::new(
+        ExprKind::PropertyAccess {
+            object: Box::new(receiver),
+            property: property.to_string(),
+        },
+        array.span,
+    );
+    // The fetched object is parked too. An `offsetUnset()` that throws would otherwise strand
+    // the reference the property read took, because the unwinder only sees owner slots.
+    let fetched = lower_expr(ctx, &fetch);
+    let container = park_lowered_unset_operand(ctx, fetched, array.span, &mut owners);
+    let call = Expr::new(
+        ExprKind::MethodCall {
+            object: Box::new(container),
+            method: "offsetUnset".to_string(),
+            args: vec![key],
+        },
+        expr.span,
+    );
+    lower_expr(ctx, &call);
+    for slot in owners.into_iter().rev() {
+        retire_owned_call_operand(ctx, slot, expr.span);
+    }
+}
+
+/// Evaluates one unset operand now and returns an expression that reads the same value later.
+///
+/// A variable, `$this` and a scalar literal are returned unchanged: reading them later has no
+/// side effect and sees what PHP's delayed fetch sees. Anything else is lowered once and parked
+/// by [`park_lowered_unset_operand`]. The caller retires every slot pushed onto `owners` after
+/// the operation.
+fn park_unset_operand(
+    ctx: &mut LoweringContext<'_, '_>,
+    operand: &Expr,
+    owners: &mut Vec<crate::ir::LocalSlotId>,
+) -> Expr {
+    if matches!(
+        operand.kind,
+        ExprKind::Variable(_)
+            | ExprKind::This
+            | ExprKind::StringLiteral(_)
+            | ExprKind::IntLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::BoolLiteral(_)
+            | ExprKind::Null
+    ) {
+        return operand.clone();
+    }
+    let value = lower_expr(ctx, operand);
+    park_lowered_unset_operand(ctx, value, operand.span, owners)
+}
+
+/// Parks an already lowered unset operand in a hidden owner slot and returns a read of it.
+///
+/// The value is retained into a hidden temporary registered as a call-operand owner, so a
+/// throwing `offsetUnset()` releases it on unwind, and an owning source temporary is released
+/// right away. The slot is pushed onto `owners` for the caller to retire.
+fn park_lowered_unset_operand(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+    owners: &mut Vec<crate::ir::LocalSlotId>,
+) -> Expr {
+    let ty = ctx.builder.value_php_type(value.value);
+    let name = ctx.declare_hidden_temp(ty.clone());
+    let retained = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
+    ctx.store_local(&name, retained, ty, Some(span));
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+    let slot = ctx.local_slots[&name];
+    register_owned_call_operand(ctx, slot, span);
+    owners.push(slot);
+    Expr::new(ExprKind::Variable(name), span)
+}
+
+/// Returns PHP's `Error` message when `unset($object->prop[$key])` targets a readonly property.
+///
+/// PHP refuses every indirect modification of an initialized readonly property, from any scope
+/// and for a missing key too, naming the DECLARING class. The receiver must resolve to a known
+/// class; an unknown receiver keeps the ordinary lowering.
+fn readonly_property_element_unset_message(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+) -> Option<String> {
+    let (class_name, _) = instance_callable_object_class_and_nullability(ctx, object)?;
+    let class_info = ctx.classes.get(class_name.as_str())?;
+    if !class_info.readonly_properties.contains(property) {
+        return None;
+    }
+    let declaring = class_info
+        .property_declaring_classes
+        .get(property)
+        .cloned()
+        .unwrap_or(class_name);
+    Some(format!(
+        "Cannot indirectly modify readonly property {}::${}",
+        declaring.trim_start_matches('\\'),
+        property
+    ))
+}
+
+/// Lowers `unset($object->prop[$key])` for a readonly array property.
+///
+/// PHP evaluates the receiver and the key, then refuses the write fetch: an initialized readonly
+/// property raises `Error("Cannot indirectly modify readonly property C::$p")`, and an
+/// uninitialized one is left alone, so `PropInitialized` picks the branch. Both operands are
+/// rooted across the throw, which releases them through the owner records, and retired on the
+/// quiet path.
+fn lower_unset_readonly_property_element(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    message: &str,
+    index: &Expr,
+    expr: &Expr,
+) {
+    let object_value = lower_expr(ctx, object);
+    let (object_value, object_owner) = if ctx.value_is_owning_temporary(object_value) {
+        root_owned_call_operand(ctx, object_value, object.span)
+    } else {
+        (object_value, None)
+    };
+    let index_value = lower_expr(ctx, index);
+    let (_, key_owner) = root_owned_call_operand(ctx, index_value, index.span);
+    let data = ctx.intern_string(property);
+    let initialized = ctx.emit_value(
+        Op::PropInitialized,
+        vec![object_value.value],
+        Some(Immediate::Data(data)),
+        PhpType::Bool,
+        Op::PropInitialized.default_effects(),
+        Some(expr.span),
+    );
+    let refuse_block = ctx
+        .builder
+        .create_named_block("unset.readonly.refuse", Vec::new());
+    let quiet_block = ctx
+        .builder
+        .create_named_block("unset.readonly.uninitialized", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: initialized.value,
+        then_target: refuse_block,
+        then_args: Vec::new(),
+        else_target: quiet_block,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(refuse_block);
+    crate::ir_lower::stmt::lower_throw_access_error(ctx, message, expr.span);
+    ctx.builder.position_at_end(quiet_block);
+    if let Some(slot) = key_owner {
+        retire_owned_call_operand(ctx, slot, expr.span);
+    }
+    if let Some(slot) = object_owner {
         retire_owned_call_operand(ctx, slot, expr.span);
     }
 }

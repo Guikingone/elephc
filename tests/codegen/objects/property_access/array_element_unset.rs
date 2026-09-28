@@ -8,8 +8,10 @@
 //!
 //! Key details:
 //! - Expected output was produced by php 8.5 on the same source.
-//! - A declared `array` property and an associative property lower directly. The refusals of a
-//!   packed-list property and an untyped static array are EIR lowering diagnostics, pinned in
+//! - A declared `array` property, an associative property and a boxed `Mixed` property lower
+//!   directly; an `ArrayAccess` property dispatches to `offsetUnset()` after the key, and a
+//!   readonly array property throws. The refusals of a packed-list property and an untyped
+//!   static array are EIR lowering diagnostics, pinned in
 //!   `src/ir_lower/tests/property_element_unset.rs`.
 
 use super::*;
@@ -248,6 +250,185 @@ echo count($s->items), count($s->typed), count(Store::$cache), "\n";
     );
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "110\n", "{}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// PHP fetches an `ArrayAccess` property only after the key of `unset($o->bag[$key])`: a key
+/// expression that stores a NEW object into the property reaches that object's `offsetUnset()`,
+/// for a variable receiver, a call receiver (evaluated first) and `$this`. A plain variable key
+/// and a literal key keep the same dispatch. Before the fix the synthetic `offsetUnset` call read
+/// the property first and removed the key from the replaced object.
+#[test]
+fn test_unset_array_access_property_element_fetches_property_after_key() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag implements ArrayAccess {
+    public function __construct(public string $name) {}
+    public function offsetExists(mixed $o): bool { return false; }
+    public function offsetGet(mixed $o): mixed { return null; }
+    public function offsetSet(mixed $o, mixed $v): void {}
+    public function offsetUnset(mixed $o): void { echo "offsetUnset($o) on {$this->name}\n"; }
+}
+class Holder {
+    public Bag $bag;
+    public function __construct() { $this->bag = new Bag("first"); }
+    public function drop(): void { unset($this->bag[$this->replace("inner")]); }
+    public function replace(string $name): string { echo "key\n"; $this->bag = new Bag($name); return "k"; }
+}
+function mk(Holder $h): Holder { echo "receiver\n"; return $h; }
+$h = new Holder();
+unset($h->bag[$h->replace("second")]);
+unset(mk($h)->bag[$h->replace("third")]);
+$h->drop();
+$k = "plain";
+unset($h->bag[$k], $h->bag["literal"]);
+echo $h->bag->name, "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "key\noffsetUnset(k) on second\nreceiver\nkey\noffsetUnset(k) on third\nkey\n\
+         offsetUnset(k) on inner\noffsetUnset(plain) on inner\noffsetUnset(literal) on inner\ninner\n"
+    );
+}
+
+/// An element unset on an initialized readonly array property raises PHP's
+/// "Cannot indirectly modify" `Error` naming the declaring class, from inside and outside the
+/// class, for a missing key too, and after the key was evaluated; an uninitialized readonly
+/// property is left alone.
+#[test]
+fn test_unset_readonly_array_property_element_throws() {
+    let out = compile_and_run(
+        r#"<?php
+class P {
+    public readonly array $ro;
+    public function __construct() {
+        try { unset($this->ro["a"]); echo "uninitialized: no-op\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+        $this->ro = ["a" => 1, "b" => 2];
+        try { unset($this->ro["a"]); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+    }
+    public function drop(string $k): void { unset($this->ro[$k]); }
+}
+class Q extends P {}
+function key_of(string $k): string { echo "key $k\n"; return $k; }
+$q = new Q();
+try { $q->drop("b"); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { unset($q->ro[key_of("missing")]); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+echo implode(",", array_keys($q->ro)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "uninitialized: no-op\nError: Cannot indirectly modify readonly property P::$ro\n\
+         Cannot indirectly modify readonly property P::$ro\nkey missing\n\
+         Cannot indirectly modify readonly property P::$ro\na,b\n"
+    );
+}
+
+/// A property stored as a boxed `Mixed` cell lowers too: an untyped property widened by
+/// `unset($w->items)`, a `?array` and a `mixed` property. An element unset of a removed property
+/// recreates it as null, as PHP does; null is a no-op, a string and the other scalars raise PHP's
+/// `Error`s, and an earlier copy keeps its elements.
+#[test]
+fn test_unset_boxed_mixed_property_element() {
+    let out = compile_and_run(
+        r#"<?php
+class W {
+    public $items = ["a" => 1, "b" => 2];
+    public ?array $maybe = null;
+    public mixed $any = null;
+}
+$w = new W();
+unset($w->items);
+unset($w->items["gone"]);
+var_dump($w->items);
+echo implode(",", array_keys(get_object_vars($w))), "\n";
+$w->items = ["x" => 1, "y" => 2];
+unset($w->items["x"]);
+echo implode(",", array_keys($w->items)), "\n";
+$w->items = [10, 20, 30];
+$copy = $w->items;
+unset($w->items[1]);
+echo json_encode($w->items), " ", json_encode($copy), "\n";
+unset($w->maybe["k"]);
+$w->maybe = ["k" => 1, "j" => 2];
+unset($w->maybe["k"]);
+echo json_encode($w->maybe), "\n";
+foreach ([null, "str", 7, 1.5, true, ["p" => 1, "q" => 2]] as $value) {
+    $w->any = $value;
+    try {
+        unset($w->any["p"]);
+        echo "ok ", json_encode($w->any), "\n";
+    } catch (Error $e) {
+        echo get_class($e), ": ", $e->getMessage(), "\n";
+    }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "NULL\nitems,maybe,any\ny\n{\"0\":10,\"2\":30} [10,20,30]\n{\"j\":2}\nok null\n\
+         Error: Cannot unset string offsets\nError: Cannot unset offset in a non-array variable\n\
+         Error: Cannot unset offset in a non-array variable\n\
+         Error: Cannot unset offset in a non-array variable\nok {\"q\":2}\n"
+    );
+}
+
+/// The `ArrayAccess`, readonly and boxed-`Mixed` element paths leave the heap clean, including an
+/// `offsetUnset()` that throws while the property holds a fresh object each iteration (the
+/// fetched object is parked in an owner slot the unwinder releases) and a readonly refusal on a
+/// call receiver.
+#[test]
+fn test_unset_property_element_review_paths_heap_is_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Bag implements ArrayAccess {
+    public array $data = [];
+    public function __construct(public string $name) {}
+    public function offsetExists(mixed $o): bool { return isset($this->data[$o]); }
+    public function offsetGet(mixed $o): mixed { return $this->data[$o]; }
+    public function offsetSet(mixed $o, mixed $v): void { $this->data[$o] = $v; }
+    public function offsetUnset(mixed $o): void {
+        if ($o === "boom") { throw new RuntimeException("boom " . $this->name); }
+        unset($this->data[$o]);
+    }
+}
+class Holder {
+    public Bag $bag;
+    public $items = ["a" => "x"];
+    public ?array $maybe = null;
+    public function __construct(public readonly array $ro = ["k" => "v"]) { $this->bag = new Bag("first"); }
+}
+function swap(Holder $h, int $i): string { $h->bag = new Bag("n" . $i); $h->bag["k$i"] = "v$i"; return "k$i"; }
+function mk(Holder $h): Holder { return $h; }
+$h = new Holder();
+unset($h->items);
+for ($i = 0; $i < 40; $i++) {
+    unset($h->bag[swap($h, $i)]);
+    unset(mk($h)->bag["x" . $i]);
+    try { unset($h->bag["bo" . ($i < 100 ? "om" : "")]); } catch (RuntimeException $e) { }
+    try { unset(mk($h)->ro["k" . $i]); } catch (Error $e) { }
+    $h->items = ["p$i" => "q$i", "r" => [$i]];
+    unset($h->items["p$i"], $h->items["zz"]);
+    unset($h->items);
+    unset($h->items["gone" . $i]);
+    $h->items = "str$i";
+    try { unset($h->items[0]); } catch (Error $e) { }
+    $h->maybe = ["m$i" => new Bag("m")];
+    unset($h->maybe["m$i"]);
+    $h->maybe = null;
+    unset($h->maybe["m$i"]);
+}
+unset($e);
+echo count($h->bag->data), count($h->ro), "\n";
+"#,
+    );
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "01\n", "{}", out.stderr);
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "{}",
