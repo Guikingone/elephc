@@ -110,6 +110,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Intval,
     /// Dispatches `is_bool(...)`.
     IsBool,
+    /// Dispatches `is_countable(...)`.
+    IsCountable,
     /// Dispatches `is_double(...)`.
     IsDouble,
     /// Dispatches `is_finite(...)`.
@@ -418,6 +420,9 @@ impl EvalValuesHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::IsBool => one_arg(evaluated_args, values, eval_is_bool_result),
+            Self::IsCountable => one_arg(evaluated_args, values, |value, values| {
+                eval_is_countable_result(value, context, values)
+            }),
             Self::IsDouble => one_arg(evaluated_args, values, eval_is_double_result),
             Self::IsFinite => one_arg(evaluated_args, values, eval_is_finite_result),
             Self::IsFloat => one_arg(evaluated_args, values, eval_is_float_result),

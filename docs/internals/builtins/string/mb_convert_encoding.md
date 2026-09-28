@@ -2,7 +2,7 @@
 title: "mb_convert_encoding() - internals"
 description: "Compiler internals for mb_convert_encoding(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 831
+  order: 832
 ---
 
 ## `mb_convert_encoding()` - internals

@@ -22,6 +22,7 @@ sidebar:
 | `defined()` | `defined($name): bool` | Check whether a string-literal global or `Class::CONST` name is defined |
 | `constant()` | `constant($name): mixed` | Value of a global constant named by a string literal. AOT has no runtime constant table, so a dynamic name, a `Foo::BAR` class constant, and an unknown name are compile errors |
 | `php_uname()` | `php_uname($mode = "a"): string` | Get system information from the target runtime |
+| `getmypid()` | `getmypid(): int` | The current process ID, read from `getpid()` on every call, so a `pcntl_fork()` child reports its own id |
 | `phpversion()` | `phpversion(?string $extension = null): string\|false` | Get the targeted PHP language version, or one extension's version (`false` if it is not loaded) |
 | `zend_version()` | `zend_version(): string` | Get the Zend Engine version for the compile target |
 | `php_sapi_name()` | `php_sapi_name(): string` | Get the SAPI name (`"cli"`, or `"cli-server"` under `--web`) |

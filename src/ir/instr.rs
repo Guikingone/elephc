@@ -403,6 +403,8 @@ impl PropertyFetchMode {
 pub enum PhpTypePredicate {
     Array,
     Bool,
+    /// `is_countable()`: an array, or an object whose class implements `Countable`.
+    Countable,
     Float,
     Int,
     Iterable,
@@ -418,6 +420,7 @@ impl PhpTypePredicate {
         match self {
             Self::Array => "array",
             Self::Bool => "bool",
+            Self::Countable => "countable",
             Self::Float => "float",
             Self::Int => "int",
             Self::Iterable => "iterable",

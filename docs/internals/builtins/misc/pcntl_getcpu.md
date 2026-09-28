@@ -2,7 +2,7 @@
 title: "pcntl_getcpu() - internals"
 description: "Compiler internals for pcntl_getcpu(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 651
+  order: 652
 ---
 
 ## `pcntl_getcpu()` - internals

@@ -642,6 +642,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`get_mangled_object_vars()`](./builtins/misc/get_mangled_object_vars.md) | `(mixed $object): array` | `array` | ✓ | ✓ |
 | [`get_required_files()`](./builtins/misc/get_required_files.md) | `(): array` | `array` | ✓ | ✓ |
 | [`get_resources()`](./builtins/misc/get_resources.md) | `(mixed $type = null): array` | `array` | ✓ | ✓ |
+| [`getmypid()`](./builtins/misc/getmypid.md) | `(): int` | `int` | ✓ | ✓ |
 | [`header()`](./builtins/misc/header.md) | `(string $header, bool $replace = true, int $response_code = 0): void` | `void` | ✓ | ✓ |
 | [`http_response_code()`](./builtins/misc/http_response_code.md) | `(int $response_code = 0): int` | `int` | ✓ | ✓ |
 | [`ini_restore()`](./builtins/misc/ini_restore.md) | `(string $option): void` | `void` | ✓ | - |
@@ -968,6 +969,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`is_array()`](./builtins/type/is_array.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_bool()`](./builtins/type/is_bool.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_callable()`](./builtins/type/is_callable.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
+| [`is_countable()`](./builtins/type/is_countable.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_double()`](./builtins/type/is_double.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_float()`](./builtins/type/is_float.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_int()`](./builtins/type/is_int.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |

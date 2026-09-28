@@ -691,6 +691,29 @@ pub(crate) fn lower_time(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `getmypid()` through the target's C library `getpid()`.
+///
+/// `getpid()` returns a 32-bit `pid_t`, and neither ABI defines the upper half of the 64-bit
+/// result register for an `int` return, so the id is sign-extended before it is stored as a
+/// PHP integer. The call is made on every evaluation rather than cached, so a `pcntl_fork()`
+/// child reports its own id.
+pub(crate) fn lower_getmypid(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "getmypid", 0)?;
+    ctx.emitter.bl_c("getpid");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sxtw x0, w0");                             // widen the 32-bit pid_t into a 64-bit PHP integer
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("movsxd rax, eax");                         // widen the 32-bit pid_t into a 64-bit PHP integer
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `usleep(microseconds)` through the target's C library symbol.
 pub(crate) fn lower_usleep(
     ctx: &mut FunctionContext<'_>,

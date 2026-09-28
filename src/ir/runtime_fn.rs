@@ -730,6 +730,7 @@ pub enum RuntimeFnId {
     ExtensionLoaded,
     Getdate,
     Getenv,
+    Getmypid,
     Gmdate,
     Gmmktime,
     Header,
@@ -1377,7 +1378,8 @@ impl RuntimeFnId {
             RuntimeFnId::BufferLen => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::MAY_FATAL.bits(),
             ),
-            RuntimeFnId::Time => crate::ir::Effects::READS_PROCESS,
+            // `getmypid()` is not a constant: a `pcntl_fork()` child reads its own id.
+            RuntimeFnId::Time | RuntimeFnId::Getmypid => crate::ir::Effects::READS_PROCESS,
             RuntimeFnId::Microtime | RuntimeFnId::Hrtime => {
                 crate::ir::Effects::from_bits_retain(
                     crate::ir::Effects::READS_PROCESS.bits()
@@ -3096,6 +3098,7 @@ impl RuntimeFnId {
             RuntimeFnId::ExtensionLoaded => "extension_loaded",
             RuntimeFnId::Getdate => "getdate",
             RuntimeFnId::Getenv => "getenv",
+            RuntimeFnId::Getmypid => "getmypid",
             RuntimeFnId::Gmdate => "gmdate",
             RuntimeFnId::Gmmktime => "gmmktime",
             RuntimeFnId::Header => "header",
