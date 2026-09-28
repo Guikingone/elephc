@@ -6292,6 +6292,68 @@ echo "|", filemtime("typew://file");
     assert_eq!(out, "D-F-|4321");
 }
 
+/// Verifies every integer stat getter reaches a registered wrapper's `url_stat()` (issue #724).
+///
+/// `fileatime()`, `filectime()`, `fileperms()`, `fileowner()`, `filegroup()` and `fileinode()`
+/// lowered straight to native `stat()` on the literal `scheme://...` path, so the wrapper was
+/// never asked and each call answered `false`, while `filesize()` and `filemtime()` already
+/// dispatched. PHP asks `url_stat()` once per call with the no-cache flag (4), answers `false`
+/// when the wrapper reports the path absent, and still stats real files natively. Every call
+/// uses its own path so the output does not depend on PHP's last-path stat cache.
+#[test]
+fn test_scalar_stat_getters_dispatch_to_wrapper_url_stat() {
+    let out = compile_and_run(
+        r#"<?php
+class GetterW {
+    public $context;
+    public function url_stat(string $path, int $flags) {
+        echo substr($path, 10), "=", $flags, " ";
+        if (strpos($path, "gone") !== false) { return false; }
+        return ['dev'=>1,'ino'=>4242,'mode'=>33188,'nlink'=>1,'uid'=>501,'gid'=>20,
+                'rdev'=>0,'size'=>7,'atime'=>1111,'mtime'=>2222,'ctime'=>3333,
+                'blksize'=>4096,'blocks'=>1];
+    }
+}
+stream_wrapper_register("getterw", "GetterW");
+echo fileatime("getterw://a"), "|";
+echo filectime("getterw://c"), "|";
+echo fileperms("getterw://p"), "|";
+echo fileowner("getterw://o"), "|";
+echo filegroup("getterw://g"), "|";
+echo fileinode("getterw://i"), "|";
+echo filemtime("getterw://m"), "|";
+echo filesize("getterw://s"), "\n";
+$gone = [
+    @fileatime("getterw://gone-a"),
+    @filectime("getterw://gone-c"),
+    @fileperms("getterw://gone-p"),
+    @fileowner("getterw://gone-o"),
+    @filegroup("getterw://gone-g"),
+    @fileinode("getterw://gone-i"),
+];
+echo "\n";
+foreach ($gone as $g) { echo $g === false ? "F" : "?"; }
+echo "\n";
+file_put_contents("getter_real.txt", "x");
+$st = stat("getter_real.txt");
+echo fileperms("getter_real.txt") === $st["mode"] ? "p" : "!";
+echo fileinode("getter_real.txt") === $st["ino"] ? "i" : "!";
+echo fileowner("getter_real.txt") === $st["uid"] ? "o" : "!";
+echo filegroup("getter_real.txt") === $st["gid"] ? "g" : "!";
+echo fileatime("getter_real.txt") === $st["atime"] ? "a" : "!";
+echo filectime("getter_real.txt") === $st["ctime"] ? "c" : "!";
+unlink("getter_real.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "a=4 1111|c=4 3333|p=4 33188|o=4 501|g=4 20|i=4 4242|m=4 2222|s=4 7\n\
+         gone-a=4 gone-c=4 gone-p=4 gone-o=4 gone-g=4 gone-i=4 \n\
+         FFFFFF\n\
+         piogac"
+    );
+}
+
 /// Verifies compiled PHP output for filesize and is file dispatch to wrapper url stat.
 #[test]
 fn test_filesize_and_is_file_dispatch_to_wrapper_url_stat() {
