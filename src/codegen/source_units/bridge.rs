@@ -145,15 +145,94 @@ int main(void) {
         let run = std::process::Command::new(&executable).output().unwrap();
         assert!(run.status.success(), "callback ABI failed: {:?}, {}", run.status.code(), String::from_utf8_lossy(&run.stderr));
     }
+
+    /// Records sharing a key lie on one probe path in table order, so a lookup's first match is
+    /// the record the linear scan used to find, and a raise-all walk meets every one of them.
+    #[test]
+    fn key_index_keeps_table_order_on_each_probe_path() {
+        let keys = ["a", "b", "a", "c", "a", "", "b"].map(|key| key.as_bytes().to_vec());
+        let slots = key_index_slots(&keys);
+        assert!(slots.len().is_power_of_two() && slots.len() >= keys.len() * 2);
+        let mask = slots.len() - 1;
+        for key in &keys {
+            let mut slot = key_hash(key) as usize & mask;
+            let mut seen = Vec::new();
+            while slots[slot] != 0 {
+                let record = slots[slot] as usize - 1;
+                if keys[record] == *key { seen.push(record); }
+                slot = (slot + 1) & mask;
+            }
+            let expected = keys.iter().enumerate().filter(|(_, other)| *other == key).map(|(index, _)| index).collect::<Vec<_>>();
+            assert_eq!(seen, expected, "key {key:?}");
+        }
+        assert_eq!(key_index_slots(&[]), vec![0], "an empty table still ends every probe");
+    }
+
+    /// Runs the lookup over enough sources that home slots collide, on the host.
+    #[cfg(unix)]
+    #[test]
+    fn native_include_lookup_finds_every_source_of_a_large_table() {
+        const COUNT: usize = 500;
+        let dir = std::env::temp_dir().join(format!("elephc-include-index-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir(&dir).unwrap();
+        let c = dir.join("check.c");
+        std::fs::write(&c, format!(r#"
+#include <stdio.h>
+#include <string.h>
+typedef unsigned long long u64;
+extern u64 *lookup(const char *, u64) __asm__("__rt_source_include_lookup");
+int main(void) {{
+    static u64 *cells[{COUNT}];
+    char path[64];
+    for (int i = 0; i < {COUNT}; i++) {{
+        snprintf(path, sizeof(path), "/sources/%d.php", i);
+        cells[i] = lookup(path, strlen(path));
+        if (!cells[i]) return 1;
+        *cells[i] = (u64)i + 10;
+    }}
+    for (int i = 0; i < {COUNT}; i++) {{
+        snprintf(path, sizeof(path), "/sources/%d.php", i);
+        if (lookup(path, strlen(path)) != cells[i] || *cells[i] != (u64)i + 10) return 2;
+    }}
+    if (lookup("/sources/{COUNT}.php", strlen("/sources/{COUNT}.php"))) return 3;
+    if (lookup("/sources/1.ph", strlen("/sources/1.ph")) || lookup("/sources/1.phpx", strlen("/sources/1.phpx"))) return 4;
+    return 0;
+}}
+"#)).unwrap();
+        let host = Target::detect_host();
+        let mut emitter = Emitter::new(host);
+        let mut data = DataSection::new();
+        let catalog = crate::ir::SourceCatalog::from_units((0..COUNT).map(|index| crate::resolver::SourceUnit {
+            canonical_path: format!("/sources/{index}.php").into(),
+            mode: crate::source::SourceMode::Php, source: "<?php".into(),
+        })).unwrap();
+        let mut module = Module::with_source_catalog(host, catalog);
+        module.required_runtime_features.eval_bridge = true;
+        emit_state_helpers(&module, &mut emitter, &mut data);
+        let syntax = if host.arch == Arch::X86_64 { ".intel_syntax noprefix\n" } else { "" };
+        let source = dir.join("helpers.s");
+        std::fs::write(&source, format!(".text\n{syntax}{}{}", emitter.output(), data.emit(host))).unwrap();
+        let executable = dir.join("check");
+        let compile = std::process::Command::new("cc").arg(&c).arg(&source).arg("-o").arg(&executable).output().unwrap();
+        let run = compile.status.success().then(|| std::process::Command::new(&executable).output().unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+        let run = run.unwrap();
+        assert!(run.status.success(), "lookup over {COUNT} sources failed: {:?}", run.status.code());
+    }
 }
 
 /// Emits one compact table and two callbacks, independent of the number of include sites.
 pub(in crate::codegen) fn emit_state_helpers(module: &Module, emitter: &mut Emitter, data: &mut DataSection) {
     if !module.required_runtime_features.eval_bridge { return; }
     let mut words = Vec::new();
+    let mut keys = Vec::new();
     if let Some(catalog) = module.source_catalog() {
         for (_, source) in catalog.iter() {
-            let (path, length) = data.add_string(source.canonical_path.as_os_str().as_encoded_bytes());
+            let key = source.canonical_path.as_os_str().as_encoded_bytes().to_vec();
+            let (path, length) = data.add_string(&key);
+            keys.push(key);
             let cell = data.add_comm(include_guard_symbol(&source.canonical_path), 8);
             let preincluded = if module.preincluded_sources.contains(&source.canonical_path) {
                 COMPILER_INCLUDED
@@ -171,7 +250,7 @@ pub(in crate::codegen) fn emit_state_helpers(module: &Module, emitter: &mut Emit
     let count = words.len() / 4;
     let table = data.add_words(words);
     data.add_comm(PRIMED.to_string(), 8);
-    emit_lookup(emitter, LOOKUP, "source_lookup", &table, count, OnMatch::Return);
+    emit_lookup(emitter, data, LOOKUP, "source_lookup", &table, &keys, OnMatch::Return);
     emit_reset(emitter, RESET, "source_reset", &table, count, Some(PRIMED));
     emit_prime(emitter, &table, count);
     emit_deferred_class_helpers(module, emitter, data);
@@ -199,8 +278,11 @@ enum OnMatch {
 /// The spliced event later finds its cell raised and, for a pre-included source, accepts that.
 fn emit_source_activate(module: &Module, emitter: &mut Emitter, data: &mut DataSection) {
     let mut words = Vec::new();
+    let mut keys = Vec::new();
     let mut add = |data: &mut DataSection, path: &std::path::Path, cell: String| {
-        let (label, length) = data.add_string(path.as_os_str().as_encoded_bytes());
+        let key = path.as_os_str().as_encoded_bytes().to_vec();
+        let (label, length) = data.add_string(&key);
+        keys.push(key);
         let cell = data.add_comm(cell, 8);
         words.extend([
             DataWord::Symbol(label),
@@ -230,7 +312,7 @@ fn emit_source_activate(module: &Module, emitter: &mut Emitter, data: &mut DataS
     let count = words.len() / 4;
     let table = data.add_words(words);
     let symbol = emitter.target.extern_symbol(SOURCE_ACTIVATE);
-    emit_lookup(emitter, &symbol, "source_activate", &table, count, OnMatch::RaiseAll);
+    emit_lookup(emitter, data, &symbol, "source_activate", &table, &keys, OnMatch::RaiseAll);
 }
 
 /// Every interface activation event belonging to a source the autoload pass pre-included, as
@@ -277,8 +359,10 @@ fn preincluded_interface_activation_cells(module: &Module) -> Vec<(std::path::Pa
 /// php class names are case-insensitive and the caller lowercases before asking.
 fn emit_deferred_class_helpers(module: &Module, emitter: &mut Emitter, data: &mut DataSection) {
     let mut words = Vec::new();
+    let mut keys = Vec::new();
     for name in &module.deferred_class_loads {
         let (label, length) = data.add_string(name.as_bytes());
+        keys.push(name.as_bytes().to_vec());
         let cell = data.add_comm(deferred_class_symbol(name), 8);
         words.extend([
             DataWord::Symbol(label),
@@ -290,7 +374,7 @@ fn emit_deferred_class_helpers(module: &Module, emitter: &mut Emitter, data: &mu
     let count = words.len() / 4;
     let table = data.add_words(words);
     let lookup_symbol = emitter.target.extern_symbol(CLASS_LOOKUP);
-    emit_lookup(emitter, &lookup_symbol, "class_lookup", &table, count, OnMatch::Return);
+    emit_lookup(emitter, data, &lookup_symbol, "class_lookup", &table, &keys, OnMatch::Return);
     emit_reset(emitter, CLASS_RESET, "class_reset", &table, count, None);
 }
 
@@ -325,54 +409,152 @@ pub(in crate::codegen) fn emit_state_install(ctx: &mut FunctionContext<'_>) {
     abi::emit_call_label(ctx.emitter, PRIME);
 }
 
-fn emit_lookup(emitter: &mut Emitter, symbol: &str, tag: &str, table: &str, count: usize, on_match: OnMatch) {
+/// FNV-1a offset basis of the key hash; the emitted lookup computes the same hash at run time.
+const KEY_HASH_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+
+/// FNV-1a prime of the key hash.
+const KEY_HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+/// Hashes one record key (a canonical path or a lowercase class name) byte by byte.
+fn key_hash(key: &[u8]) -> u64 {
+    key.iter()
+        .fold(KEY_HASH_BASIS, |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(KEY_HASH_PRIME))
+}
+
+/// Builds the open-addressing index over a table's record keys: a power-of-two number of slots,
+/// each holding a record index plus one, or 0 when empty.
+///
+/// The index is at most half full, so a probe always reaches an empty slot. Records are inserted
+/// in table order with linear probing, so records sharing a key lie on one probe path in table
+/// order: the first match is the one the linear scan used to find, and a raise-all walk meets
+/// every one of them before the empty slot that ends it.
+fn key_index_slots(keys: &[Vec<u8>]) -> Vec<u64> {
+    let size = (keys.len() * 2).max(1).next_power_of_two();
+    let mask = size - 1;
+    let mut slots = vec![0u64; size];
+    for (index, key) in keys.iter().enumerate() {
+        let mut slot = (key_hash(key) as usize) & mask;
+        while slots[slot] != 0 {
+            slot = (slot + 1) & mask;
+        }
+        slots[slot] = index as u64 + 1;
+    }
+    slots
+}
+
+/// Emits a lookup callback over `table`, whose record `i` has the key `keys[i]`.
+///
+/// The key is hashed once and the index probed from its home slot; each candidate record is
+/// compared by length and then `memcmp`. The table used to be scanned from its first record,
+/// which for the source table meant every source of the closed world (thousands for Symfony) on
+/// every interpreted include.
+fn emit_lookup(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    symbol: &str,
+    tag: &str,
+    table: &str,
+    keys: &[Vec<u8>],
+    on_match: OnMatch,
+) {
+    let slots = key_index_slots(keys);
+    let mask = (slots.len() - 1) as i64;
+    let index = data.add_words(slots.into_iter().map(DataWord::U64).collect());
     let prefix = emitter.target.platform.local_label_prefix();
-    let again = format!("{prefix}{tag}_again");
+    let hash_loop = format!("{prefix}{tag}_hash");
+    let hashed = format!("{prefix}{tag}_hashed");
+    let probe = format!("{prefix}{tag}_probe");
     let next = format!("{prefix}{tag}_next");
     let missing = format!("{prefix}{tag}_missing");
     let done = format!("{prefix}{tag}_done");
-    let result = abi::int_result_reg(emitter);
-    let a0 = abi::int_arg_reg_name(emitter.target, 0);
-    let a1 = abi::int_arg_reg_name(emitter.target, 1);
-    let a2 = abi::int_arg_reg_name(emitter.target, 2);
-    let scratch = abi::temp_int_reg(emitter.target);
     if emitter.target.arch == Arch::AArch64 { emitter.raw(".align 2"); }
     emitter.label_global(symbol);
     abi::emit_frame_prologue(emitter, FRAME);
-    abi::store_at_offset(emitter, a0, PATH);
-    abi::store_at_offset(emitter, a1, LENGTH);
-    abi::emit_symbol_address(emitter, result, table);
-    abi::store_at_offset(emitter, result, CURSOR);
-    abi::emit_load_int_immediate(emitter, result, count as i64);
-    abi::store_at_offset(emitter, result, REMAINING);
-    emitter.label(&again);
-    abi::load_at_offset(emitter, result, REMAINING);
-    abi::emit_branch_if_int_result_zero(emitter, &missing);
-    abi::load_at_offset(emitter, result, CURSOR);
-    abi::emit_load_from_address(emitter, a2, result, 8);
-    abi::load_at_offset(emitter, scratch, LENGTH);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cmp {a2}, {scratch}"));               // compare exact path byte lengths before reading bytes
-            emitter.instruction(&format!("b.ne {next}"));                       // skip entries with a different length
+            abi::store_at_offset(emitter, "x0", PATH);
+            abi::store_at_offset(emitter, "x1", LENGTH);
+            abi::emit_load_int_immediate(emitter, "x11", KEY_HASH_BASIS as i64);
+            abi::emit_load_int_immediate(emitter, "x12", KEY_HASH_PRIME as i64);
+            emitter.instruction("mov x13, #0");                                 // x13 = byte index within the requested key
+            emitter.label(&hash_loop);
+            emitter.instruction("cmp x13, x1");                                 // has every byte of the key been hashed?
+            emitter.instruction(&format!("b.hs {hashed}"));                     // yes — probe the index
+            emitter.instruction("ldrb w10, [x0, x13]");                         // load the next key byte
+            emitter.instruction("eor x11, x11, x10");                           // mix the byte into the hash
+            emitter.instruction("mul x11, x11, x12");                           // multiply by the FNV prime
+            emitter.instruction("add x13, x13, #1");                            // advance to the next byte
+            emitter.instruction(&format!("b {hash_loop}"));                     // keep hashing
+            emitter.label(&hashed);
+            abi::emit_load_int_immediate(emitter, "x12", mask);
+            emitter.instruction("and x11, x11, x12");                           // x11 = the key's home slot
+            abi::store_at_offset(emitter, "x11", CURSOR);
+            emitter.label(&probe);
+            abi::load_at_offset(emitter, "x11", CURSOR);
+            abi::emit_symbol_address(emitter, "x12", &index);
+            emitter.instruction("ldr x13, [x12, x11, lsl #3]");                 // x13 = record index + 1 in this slot, or 0 when empty
+            emitter.instruction(&format!("cbz x13, {missing}"));                // an empty slot ends the probe
+            emitter.instruction("sub x13, x13, #1");                            // x13 = record index
+            abi::emit_symbol_address(emitter, "x12", table);
+            emitter.instruction(&format!("add x12, x12, x13, lsl #{}", RECORD.trailing_zeros())); // x12 = the candidate record
+            abi::store_at_offset(emitter, "x12", REMAINING);
+            emitter.instruction("ldr x2, [x12, #8]");                           // x2 = candidate key length
+            abi::load_at_offset(emitter, "x10", LENGTH);
+            emitter.instruction("cmp x2, x10");                                 // compare the requested and candidate lengths
+            emitter.instruction(&format!("b.ne {next}"));                       // different lengths cannot match
+            emitter.instruction("ldr x1, [x12]");                               // x1 = candidate key bytes
+            abi::load_at_offset(emitter, "x0", PATH);
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("cmp {a2}, {scratch}"));               // compare exact path byte lengths before reading bytes
-            emitter.instruction(&format!("jne {next}"));                        // skip entries with a different length
+            abi::store_at_offset(emitter, "rdi", PATH);
+            abi::store_at_offset(emitter, "rsi", LENGTH);
+            emitter.instruction(&format!("mov r11, {KEY_HASH_BASIS:#x}"));      // r11 = FNV-1a offset basis
+            emitter.instruction(&format!("mov rcx, {KEY_HASH_PRIME:#x}"));      // rcx = FNV-1a prime
+            emitter.instruction("xor edx, edx");                                // rdx = byte index within the requested key
+            emitter.label(&hash_loop);
+            emitter.instruction("cmp rdx, rsi");                                // has every byte of the key been hashed?
+            emitter.instruction(&format!("jae {hashed}"));                      // yes — probe the index
+            emitter.instruction("movzx eax, BYTE PTR [rdi + rdx]");             // load the next key byte
+            emitter.instruction("xor r11, rax");                                // mix the byte into the hash
+            emitter.instruction("imul r11, rcx");                               // multiply by the FNV prime
+            emitter.instruction("add rdx, 1");                                  // advance to the next byte
+            emitter.instruction(&format!("jmp {hash_loop}"));                   // keep hashing
+            emitter.label(&hashed);
+            emitter.instruction(&format!("mov rcx, {mask}"));                   // rcx = index size - 1
+            emitter.instruction("and r11, rcx");                                // r11 = the key's home slot
+            abi::store_at_offset(emitter, "r11", CURSOR);
+            emitter.label(&probe);
+            abi::load_at_offset(emitter, "r11", CURSOR);
+            abi::emit_symbol_address(emitter, "r10", &index);
+            emitter.instruction("mov rax, QWORD PTR [r10 + r11 * 8]");          // rax = record index + 1 in this slot, or 0 when empty
+            emitter.instruction("test rax, rax");                               // is the slot empty?
+            emitter.instruction(&format!("jz {missing}"));                      // an empty slot ends the probe
+            emitter.instruction("sub rax, 1");                                  // rax = record index
+            emitter.instruction(&format!("shl rax, {}", RECORD.trailing_zeros())); // rax = byte offset of the record
+            abi::emit_symbol_address(emitter, "r10", table);
+            emitter.instruction("add r10, rax");                                // r10 = the candidate record
+            abi::store_at_offset(emitter, "r10", REMAINING);
+            emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                // rdx = candidate key length
+            abi::load_at_offset(emitter, "rax", LENGTH);
+            emitter.instruction("cmp rdx, rax");                                // compare the requested and candidate lengths
+            emitter.instruction(&format!("jne {next}"));                        // different lengths cannot match
+            emitter.instruction("mov rsi, QWORD PTR [r10]");                    // rsi = candidate key bytes
+            abi::load_at_offset(emitter, "rdi", PATH);
         }
     }
-    abi::emit_load_from_address(emitter, a1, result, 0);
-    abi::load_at_offset(emitter, a0, PATH);
     let compare = emitter.target.extern_symbol("memcmp");
     abi::emit_call_label(emitter, &compare);
+    let result = abi::int_result_reg(emitter);
+    let a2 = abi::int_arg_reg_name(emitter.target, 2);
+    let scratch = abi::temp_int_reg(emitter.target);
     match emitter.target.arch {
         Arch::AArch64 => emitter.instruction(&format!("cbnz w0, {next}")),      // test the C int result without depending on upper bits
         Arch::X86_64 => {
             emitter.instruction("test eax, eax");                               // test the C int result without depending on upper bits
-            emitter.instruction(&format!("jnz {next}"));                        // continue when the path bytes differ
+            emitter.instruction(&format!("jnz {next}"));                        // continue when the key bytes differ
         }
     }
-    abi::load_at_offset(emitter, result, CURSOR);
+    abi::load_at_offset(emitter, result, REMAINING);
     if on_match == OnMatch::Return {
         abi::emit_load_from_address(emitter, result, result, 16);
         abi::emit_jump(emitter, &done);
@@ -382,19 +564,23 @@ fn emit_lookup(emitter: &mut Emitter, symbol: &str, tag: &str, table: &str, coun
         abi::emit_store_to_address(emitter, scratch, a2, 0);
     }
     emitter.label(&next);
-    abi::load_at_offset(emitter, result, CURSOR);
     match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction(&format!("add {result}, {result}, #{RECORD}")), // advance one source record
-        Arch::X86_64 => emitter.instruction(&format!("add {result}, {RECORD}")), // advance one source record
+        Arch::AArch64 => {
+            abi::load_at_offset(emitter, "x11", CURSOR);
+            emitter.instruction("add x11, x11, #1");                            // step to the next slot on the probe path
+            abi::emit_load_int_immediate(emitter, "x12", mask);
+            emitter.instruction("and x11, x11, x12");                           // wrap around the end of the index
+            abi::store_at_offset(emitter, "x11", CURSOR);
+        }
+        Arch::X86_64 => {
+            abi::load_at_offset(emitter, "r11", CURSOR);
+            emitter.instruction("add r11, 1");                                  // step to the next slot on the probe path
+            emitter.instruction(&format!("mov rcx, {mask}"));                   // rcx = index size - 1
+            emitter.instruction("and r11, rcx");                                // wrap around the end of the index
+            abi::store_at_offset(emitter, "r11", CURSOR);
+        }
     }
-    abi::store_at_offset(emitter, result, CURSOR);
-    abi::load_at_offset(emitter, result, REMAINING);
-    match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction(&format!("sub {result}, {result}, #1")), // consume one candidate record
-        Arch::X86_64 => emitter.instruction(&format!("sub {result}, 1")),       // consume one candidate record
-    }
-    abi::store_at_offset(emitter, result, REMAINING);
-    abi::emit_jump(emitter, &again);
+    abi::emit_jump(emitter, &probe);
     emitter.label(&missing);
     abi::emit_load_int_immediate(emitter, result, 0);
     emitter.label(&done);
