@@ -88,3 +88,38 @@ echo $total, "\n";
     );
     assert_clean(out, "1690\n");
 }
+
+/// A callable arm boxed on its merge edge BEFORE the slot is `Mixed` still releases the unbox's
+/// reference: the first arm boxed here is the closure one, which leaked a descriptor per call.
+#[test]
+fn test_branch_join_heap_clean_callable_arm_boxed_first() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$g = function (int $n) {
+    $c = function () { return 1; };
+    if ($n > 0) { $c = function () { return 2; }; } else { $c = null; }
+    if ($n > 1) { echo ""; }
+    return $c === null ? 0 : $c();
+};
+$t = 0;
+for ($i = 0; $i < 100; $i++) { $t += $g($i % 3); }
+echo $t, "\n";
+"#,
+    );
+    assert_clean(out, "132\n");
+}
+
+/// Expression arms joined like `if` arms, and a loop head boxing a `null`-entry local, release
+/// every object they box or replace.
+#[test]
+fn test_lazy_expression_and_loop_entry_boxing_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$f = function (int $n) { $o = new ArrayObject([$n]); $x = $n % 2 ? ($o = null) : 0; $n % 3 && ($o = null); return $o === null ? -1 : count($o); };
+$t = 0; for ($i = 0; $i < 100; $i++) { $t += $f($i); } echo $t, "\n";
+function lh(int $n) { $o = new ArrayObject([$n]); $o = null; for ($i = 0; $i < 3; $i++) { if ($o !== null) { $n += count($o); } if ($i >= 0) { $o = new ArrayObject([$i, $n]); } } return $n; }
+$t = 0; for ($i = 0; $i < 100; $i++) { $t += lh($i); } echo $t, "\n";
+"#,
+    );
+    assert_clean(out, "-66\n5350\n");
+}

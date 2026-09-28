@@ -1,8 +1,10 @@
 //! Purpose:
-//! If-chain lowering and loop-entry storage contracts.
+//! If-chain lowering, the shared arm join for lazily evaluated expressions, and loop-entry
+//! storage contracts.
 //!
 //! Called from:
 //! - `crate::ir_lower::stmt`.
+//! - `crate::ir_lower::expr` (ternary, `?:`, `??`, `&&`/`||`, `match`) through `ExprBranchJoin`.
 //!
 //! Key details:
 //! - Preserves statement ordering, CFG shape, EIR effects, and ownership contracts.
@@ -220,6 +222,53 @@ fn finish_if_type_join(
     ctx.restore_static_callable_locals(joined_callables);
 }
 
+/// The arms of a lazily evaluated expression (`?:`, `??`, `&&`, `||`, `match`), joined like `if`.
+///
+/// Such an expression runs at most one of its arms, so an assignment inside one arm must not
+/// reach the facts below the merge as if every path had run it. `$c ? ($o = null) : 0` left `$o`
+/// typed `null` after the ternary, and the next read materialized PHP's null for the object the
+/// other path still held. Each arm now starts from the split point's facts, records its merge
+/// edge instead of branching straight to the merge, and `finish` reconciles the arms exactly as
+/// an `if` merge does, boxing a local whose arms disagree.
+pub(crate) struct ExprBranchJoin {
+    /// Flow-sensitive local types at the split point, where every arm starts.
+    split_types: TypeEnv,
+    /// Compile-time callable targets valid at the split point.
+    split_static_callables: HashMap<String, StaticCallableBinding>,
+    /// The arms that still reach the merge, in lowering order.
+    arms: Vec<IfArmExit>,
+}
+
+impl ExprBranchJoin {
+    /// Captures the flow facts at the split point, before the first arm is lowered.
+    pub(crate) fn at_split(ctx: &LoweringContext<'_, '_>) -> Self {
+        Self {
+            split_types: ctx.local_types_snapshot(),
+            split_static_callables: ctx.static_callable_locals_snapshot(),
+            arms: Vec::new(),
+        }
+    }
+
+    /// Starts lowering one arm from the split point's flow facts.
+    pub(crate) fn enter_arm(&self, ctx: &mut LoweringContext<'_, '_>) {
+        ctx.restore_local_types(self.split_types.clone());
+        ctx.restore_static_callable_locals(self.split_static_callables.clone());
+    }
+
+    /// Ends the arm being lowered, deferring its merge edge when it still reaches the merge.
+    pub(crate) fn leave_arm(&mut self, ctx: &mut LoweringContext<'_, '_>) {
+        if !ctx.builder.insertion_block_is_terminated() {
+            record_if_arm_exit(ctx, &mut self.arms);
+        }
+    }
+
+    /// Joins every recorded arm into `merge` and leaves the builder positioned there.
+    pub(crate) fn finish(self, ctx: &mut LoweringContext<'_, '_>, merge: BlockId, span: Span) {
+        finish_if_type_join(ctx, self.arms, merge, span);
+        ctx.builder.position_at_end(merge);
+    }
+}
+
 /// Intersects static callable facts across every reachable arm of an `if` join.
 fn join_arm_static_callables(
     arms: &[IfArmExit],
@@ -413,10 +462,22 @@ fn arm_mixed_conversions(arm: &IfArmExit, edge_boxed: &HashSet<String>) -> Vec<S
 /// occupant — the same materialization `apply_loop_storage_contracts` uses for a `Mixed`
 /// loop contract. The box holds the SAME array or hash the arm left in the slot, so the store
 /// keeps the hidden internal-pointer cursor: `next`/`end` before the `if` still hold after it.
+///
+/// Every edge-boxed local ends in a `Mixed` slot, so each arm's load becomes an owned unbox
+/// whose reference the box does not take over. Array, hash and object loads are provisional
+/// owners and `box_value_as_mixed` already releases them; a callable load is only one once the
+/// slot is `Mixed`, which is not yet true for the first arm boxed, so that arm's descriptor
+/// leaked once per pass through its edge. The release is added here instead, and builder
+/// finalization prunes it should the slot ever stay `callable`.
 fn box_arm_locals_as_mixed(ctx: &mut LoweringContext<'_, '_>, names: &[String], span: Span) {
     for name in names {
         let source = ctx.load_local(name, Some(span));
+        let release_callable_view = !ctx.value_is_owning_temporary(source)
+            && ctx.builder.value_php_type(source.value).codegen_repr() == PhpType::Callable;
         let boxed = ctx.box_value_as_mixed(source, PhpType::Mixed, Some(span));
+        if release_callable_view {
+            crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+        }
         ctx.store_local_representation(name, boxed, PhpType::Mixed, Some(span));
     }
 }
@@ -555,11 +616,62 @@ pub(super) fn lower_ifdef(
     ctx.clear_static_callable_locals();
 }
 
+/// Boxes, before a loop, each local that enters it holding `null` and that the loop assigns.
+///
+/// The loop body is lowered once, against the entry facts, so a local the back edge carries a
+/// new value into needs a head representation that holds both. The checker records that
+/// contract (boxed `Mixed`, issue #562) when ITS environment says the local is `null`, but it
+/// keeps a declared or earlier type across `$o = null`: after `$o = new C; $o = null;` it still
+/// says `C`, no contract is recorded, and the body read the slot through lowering's `null` fact.
+/// A pointer slot refused that load at compile time; once an `if` join in the body had boxed the
+/// slot, the read became a constant `null` on every iteration. The same `Mixed` box, applied
+/// from lowering's own fact, gives the header one representation for both paths.
+pub(super) fn apply_null_entry_boxing(
+    ctx: &mut LoweringContext<'_, '_>,
+    condition: Option<&Expr>,
+    body: &[Stmt],
+    update: Option<&Stmt>,
+    span: Option<Span>,
+) {
+    let mut names = crate::types::checker::loop_assigned_local_names(condition, body, update)
+        .into_iter()
+        .filter(|name| null_entry_local_needs_box(ctx, name))
+        .collect::<Vec<_>>();
+    names.sort();
+    for name in names {
+        let source = ctx.load_local(&name, span);
+        let boxed = ctx.box_value_as_mixed(source, PhpType::Mixed, span);
+        ctx.store_local_representation(&name, boxed, PhpType::Mixed, span);
+    }
+}
+
+/// Returns whether an initialized plain frame local enters the loop with a `null` fact.
+fn null_entry_local_needs_box(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
+    if !ctx
+        .local_type_fact(name)
+        .is_some_and(|ty| ty.codegen_repr() == PhpType::Void)
+    {
+        return false;
+    }
+    let is_plain_frame_local = matches!(
+        ctx.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal),
+        LocalKind::PhpLocal
+    ) && !ctx.is_ref_bound_local(name)
+        && !ctx.local_uses_global_storage(name)
+        && !crate::names::is_generated_local_name(name);
+    is_plain_frame_local
+        && ctx
+            .local_slots
+            .get(name)
+            .is_some_and(|slot| ctx.slot_is_initialized(*slot))
+}
+
 /// Materializes the checker-recorded storage contract before entering a loop.
 ///
 /// Indexed and associative arrays are promoted in place so existing elements use boxed payload
-/// cells. A whole-value `Mixed` contract uses the ordinary retaining store, allowing loop-carried
-/// container-kind changes to share the same fixed frame representation.
+/// cells. A whole-value `Mixed` contract uses the retaining representation store, allowing
+/// loop-carried container-kind changes to share the same fixed frame representation while the
+/// boxed array or hash keeps its internal-pointer cursor.
 pub(super) fn apply_loop_storage_contracts(
     ctx: &mut LoweringContext<'_, '_>,
     loop_span: Span,
@@ -626,9 +738,11 @@ pub(super) fn apply_loop_storage_contracts(
                 ctx.store_mutated_local(&name, converted, target_ty, span);
             }
             (_, PhpType::Mixed) => {
+                // Boxing keeps the variable bound to the same array or hash, so the internal
+                // pointer `next`/`end` moved before the loop must survive the loop-entry box.
                 let source = ctx.load_local(&name, span);
                 let converted = ctx.box_value_as_mixed(source, target_ty.clone(), span);
-                ctx.store_local(&name, converted, target_ty, span);
+                ctx.store_local_representation(&name, converted, target_ty, span);
             }
             // The contract cannot be materialized for the representation this local actually
             // holds — the only remaining shapes disagree on container kind (an `AssocArray`

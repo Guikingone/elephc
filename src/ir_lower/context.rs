@@ -709,6 +709,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.data.intern_class_name(value)
     }
 
+    /// Returns the flow-sensitive type fact recorded for a local, if lowering has one.
+    pub(crate) fn local_type_fact(&self, name: &str) -> Option<&PhpType> {
+        self.local_types.get(name)
+    }
+
     /// Returns the current known PHP type for a local or `Mixed` when unknown.
     pub(crate) fn local_type(&self, name: &str) -> PhpType {
         self.local_types

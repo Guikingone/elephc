@@ -295,3 +295,109 @@ $c = function () { return 1; }; if ($argc == 1) { $c = null; } var_dump($c);
     );
     assert_eq!(out, "NULL\nobject(stdClass)#1 (0) {\n}\nNULL\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\nNULL\narray(2) {\n  [\"k\"]=>\n  int(1)\n  [\"j\"]=>\n  int(2)\n}\nbool(true)\nbool(false)\nNULL\nNULL\n");
 }
+
+/// An assignment inside one arm of a ternary, `match`, `&&`, `||`, `?:` or `??` holds only on the
+/// path that ran it. The arms used to share one flow environment, so `$c ? ($o = null) : 0` left
+/// `$o` typed `null` below the merge and read the live object on the other path back as `NULL`
+/// (or, over an object slot, refused to compile).
+#[test]
+fn test_lazy_expression_arm_assignment_stays_in_its_arm() {
+    let out = compile_and_run(
+        r#"<?php
+function t(int $n) { $o = new stdClass(); $x = $n > 0 ? ($o = null) : 0; var_dump($o); return 0; }
+function m(int $n) { $o = new stdClass(); $r = match(true) { $n > 0 => ($o = null), default => 0 }; var_dump($o); return 0; }
+function l(int $n) { $o = new stdClass(); $n > 0 && ($o = null); var_dump($o); return 0; }
+function o(int $n) { $x = null; $ok = $n > 0 || ($x = "fallback"); var_dump($x); return 0; }
+function st(int $n) { $o = new stdClass(); $d = $n ?: ($o = null); var_dump($o); return 0; }
+function co(?int $n) { $o = new stdClass(); $d = $n ?? ($o = null); var_dump($o); return 0; }
+t(0); t(1); m(0); m(1); l(0); l(1); o(1); o(0); st(1); st(0); co(5); co($argc > 5 ? 1 : null);
+$c = function (int $n) { $v = 1.5; $x = $n > 0 ? ($v = null) : 0; var_dump($v); return 0; };
+$c(0); $c(1);
+$s = function (int $n) { $o = new stdClass(); if ($n > 5) { $o = null; } $n > 0 && ($o = null); var_dump($o); return 0; };
+$s(0); $s(1);
+"#,
+    );
+    let object = "object(stdClass)#1 (0) {\n}\n";
+    assert_eq!(
+        out,
+        format!(
+            "{object}NULL\n{object}NULL\n{object}NULL\nNULL\nstring(8) \"fallback\"\n{object}NULL\n{object}NULL\nfloat(1.5)\nNULL\nobject(stdClass)#3 (0) {{\n}}\nNULL\n"
+        )
+    );
+}
+
+/// A local that enters a loop typed `null` while the checker still knows its earlier type
+/// (`$o = new C; $o = null;`) is boxed at the loop head, so a read before the body's own
+/// assignment sees the value the back edge carries in instead of `null` on every iteration.
+#[test]
+fn test_loop_entry_null_fact_reads_the_back_edge_value() {
+    let out = compile_and_run(
+        r#"<?php
+function lo(int $n) { $o = new stdClass(); $o = null; for ($i = 0; $i < $n; $i++) { var_dump($o === null); if ($i >= 0) { $o = new stdClass(); } } return 0; }
+function dw(int $n) { $o = new stdClass(); if ($n > 0) { $o = null; $i = 0; do { var_dump($o === null); if ($i > 0) { $o = new stdClass(); } $i++; } while ($i < 3); return 1; } return 0; }
+function fe(array $xs) { $o = new stdClass(); $o = null; foreach ($xs as $x) { var_dump($o === null); if ($x > 0) { $o = new stdClass(); } } return 0; }
+function lv(int $n) { $v = 5; $v = null; for ($i = 0; $i < $n; $i++) { var_dump($v); $v = $i; } return 0; }
+lo(3); dw(1); fe([1, 2, 3]); lv(3);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(false)\nbool(false)\nbool(true)\nbool(true)\nbool(false)\nbool(true)\nbool(false)\nbool(false)\nNULL\nint(0)\nint(1)\n"
+    );
+}
+
+/// A whole-value `Mixed` loop contract over an array boxes the SAME array at the loop head, so
+/// the internal pointer `next`/`end` moved before the loop survives it, like the `if` join.
+#[test]
+fn test_loop_mixed_contract_keeps_array_cursor() {
+    let out = compile_and_run(
+        r#"<?php
+function pick_mixed(int $i): mixed { return $i > 2 ? ["x" => 1] : null; }
+function pick_union(int $i) { return $i > 5 ? [1, 2] : "s"; }
+function walk(int $n, mixed $m) { $a = [10, 20, 30]; next($a); $i = 0; while ($i < 2) { echo current($a), " "; if ($n > 5) { $a = $m; } next($a); $i++; } echo "\n"; return 0; }
+walk(1, "x");
+$h = ["a" => 1, "b" => 2, "c" => 3];
+end($h);
+for ($i = 0; $i < 2; $i++) { echo key($h), " "; if ($argc > 5) { $h = pick_mixed($i); } prev($h); }
+echo "\n";
+$a = [10, 20, 30];
+next($a);
+for ($i = 0; $i < 2; $i++) { if ($argc > 5) { $a = pick_union($i); } }
+var_dump(current($a));
+"#,
+    );
+    assert_eq!(out, "20 30 \nc b \nint(20)\n");
+}
+
+/// The `null` view of a pointer slot is materialized wherever the `null` store provably reaches
+/// the read: across an inner `if`, a loop, a call, or a `try`, not only in the same block.
+#[test]
+fn test_branch_join_null_arm_read_proven_across_blocks() {
+    let out = compile_and_run(
+        r#"<?php
+function nested(int $n) { $o = new stdClass(); if ($n > 0) { $o = null; if ($n > 1) { echo "deep "; } var_dump($o); return 1; } var_dump($o); return 0; }
+function loopn(int $n) { $o = new stdClass(); if ($n > 0) { $o = null; for ($i = 0; $i < $n; $i++) { echo $i; } echo "\n"; var_dump($o); return 1; } var_dump($o); return 0; }
+function callb(int $n) { $o = new stdClass(); if ($n > 0) { $o = null; strlen("x" . $n); var_dump($o); return 1; } var_dump($o); return 0; }
+function tr(int $n) { $o = new stdClass(); try { if ($n > 0) { $o = null; var_dump($o); return 1; } } catch (Exception $e) {} var_dump($o); return 0; }
+nested(2); nested(0); loopn(2); callb(1); tr(1); tr(0);
+"#,
+    );
+    let object = "object(stdClass)#1 (0) {\n}\n";
+    assert_eq!(out, format!("deep NULL\n{object}01\nNULL\nNULL\nNULL\n{object}"));
+}
+
+/// `buffer<T>` and packed-class slots also keep their pointer storage across a `null` store,
+/// so the `null` arm of a named function reads them through the same proven null view.
+/// (elephc extensions: the expected output follows PHP's `null` semantics for the local.)
+#[test]
+fn test_branch_join_null_arm_over_buffer_and_packed_slots() {
+    let out = compile_and_run(
+        r#"<?php
+packed class P { public int $x; }
+function fb(int $n) { $b = buffer_new<int>(2); if ($n > 0) { $b = null; } echo $b === null ? "null" : "buf", "\n"; return 0; }
+function fp(int $n) { $b = buffer_new<P>(1); $p = $b[0]; if ($n > 0) { $p = null; } echo $p === null ? "null" : "p", "\n"; return 0; }
+fb(1); fb(0); fp(1); fp(0);
+"#,
+    );
+    assert_eq!(out, "null\nbuf\nnull\np\n");
+}
