@@ -680,6 +680,12 @@ pub trait RuntimeValueOps {
     /// Creates a runtime null cell.
     fn null(&mut self) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Returns `Fiber::getCurrent()`: the running compiled `Fiber` object, or null on the main
+    /// thread. A host with no fibers is always on the main thread.
+    fn fiber_current(&mut self) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.null()
+    }
+
     /// Creates a runtime bool cell.
     fn bool_value(&mut self, value: bool) -> Result<RuntimeCellHandle, EvalStatus>;
 

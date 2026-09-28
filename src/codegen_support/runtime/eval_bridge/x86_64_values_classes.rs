@@ -26,6 +26,11 @@ pub(super) fn emit_x86_64_values_classes(emitter: &mut Emitter) {
     emitter.instruction("xor esi, esi");                                        // bool payloads do not use a high word
     emitter.instruction("jmp __rt_mixed_from_value");                           // box the bool payload and return to Rust
 
+    // `Fiber::getCurrent()` for interpreted code: the compiled call is an intrinsic with no
+    // method body the interpreter could dispatch to.
+    label_c_global(emitter, "__elephc_eval_value_fiber_current");
+    emitter.instruction("jmp __rt_fiber_get_current");                          // box the running fiber (or null) and return to Rust
+
     label_c_global(emitter, "__elephc_eval_value_new_object");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across runtime calls
     emitter.instruction("mov rbp, rsp");                                        // establish a stable dynamic-object wrapper frame
