@@ -154,49 +154,75 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         ExprKind::ShortTernary { value, default } => {
             short_ternary_merge_result_type(ctx, value, default)
         }
-        ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
-            .unwrap_or_else(|| fallback_expr_type(expr)),
-        ExprKind::PropertyAccess { object, property } => {
-            property_access_expr_type_for_ir(ctx, object, property)
-                .unwrap_or_else(|| fallback_expr_type(expr))
+        // Every arm below reads a type the syntax cannot know. The syntactic fallback answers
+        // `Int` for all of them, which sized the merge temp as an integer and cast an array arm
+        // to its element count, a string arm to `0` and an object arm to `0` (#1501). So each
+        // one reads the metadata its own lowering reads, and when there is none it answers
+        // `Mixed`: a `Mixed` temp boxes whatever the arm materializes, where any narrower guess
+        // stores a value of one shape into a slot declared as another.
+        ExprKind::ArrayAccess { array, .. } => {
+            array_access_expr_value_type_for_ir(ctx, array).unwrap_or(PhpType::Mixed)
         }
-        // A static property is typed by the same helper that types its `load_static_property`,
-        // and each call by the declared metadata its lowering returns. The syntactic fallback
-        // answers `Int` for all of them, which sized the merge temp as an integer and cast an
-        // array arm to its element count, a string arm to `0` and an object arm to `0` (#1501).
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property).unwrap_or(PhpType::Mixed)
+        }
+        ExprKind::NullsafePropertyAccess { object, property } => {
+            nullsafe_property_access_expr_type_for_ir(ctx, object, property)
+                .unwrap_or(PhpType::Mixed)
+        }
         ExprKind::StaticPropertyAccess { receiver, property } => {
             static_property_result_type(ctx, receiver, property, expr)
         }
         ExprKind::FunctionCall { .. }
         | ExprKind::MethodCall { .. }
+        | ExprKind::NullsafeMethodCall { .. }
         | ExprKind::StaticMethodCall { .. } => {
-            call_expr_type_for_merge(ctx, expr).unwrap_or_else(|| fallback_expr_type(expr))
+            call_expr_type_for_merge(ctx, expr).unwrap_or(PhpType::Mixed)
         }
+        // Callable invocations, dynamic member accesses, a dynamic `new`, `clone`, a pipe, an
+        // assignment used as a value, and an `include` result have no declaration the merge
+        // can read ahead of lowering them.
+        ExprKind::ClosureCall { .. }
+        | ExprKind::ExprCall { .. }
+        | ExprKind::Pipe { .. }
+        | ExprKind::DynamicPropertyAccess { .. }
+        | ExprKind::NullsafeDynamicPropertyAccess { .. }
+        | ExprKind::NullsafeDynamicMethodCall { .. }
+        | ExprKind::NewDynamic { .. }
+        | ExprKind::Clone(_)
+        | ExprKind::Assignment { .. }
+        | ExprKind::IncludeValue { .. } => PhpType::Mixed,
         _ => fallback_expr_type(expr),
     }
 }
 
-/// Returns the result type a function, method, or static-method call materializes, read from
-/// the same declared metadata its lowering uses, or `None` when that metadata is unavailable.
+/// Returns the result type a function, method, nullsafe-method, or static-method call
+/// materializes, read from the same declared metadata its lowering uses, or `None` when that
+/// metadata is unavailable (an unknown receiver, a `__call`/`__callStatic` redispatch, or a
+/// call the eval barrier routes dynamically), which the caller then types `Mixed`.
 ///
-/// A builtin answers through `builtin_call_result_type_for_ir`, which keeps a scalar result
-/// precise and stamps anything else `Mixed`: the checker's container type for a builtin can
-/// disagree with the value its runtime contract really produces, and `Mixed` is the one merge
-/// type that boxes either shape correctly.
+/// A user or extern function is typed by `call_return_type`, the helper that types the emitted
+/// call; an extension builtin shadowing a prelude function is lowered as the builtin, so it is
+/// typed as one. A builtin answers through `builtin_call_result_type_for_ir`, which keeps a
+/// scalar result precise and stamps anything else `Mixed`: the checker's container type for a
+/// builtin can disagree with the value its runtime contract really produces.
 fn call_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<PhpType> {
     let php_type = match &expr.kind {
         ExprKind::FunctionCall { name, .. } => {
             let canonical = name.as_str();
-            if let Some(sig) = ctx.functions.get(canonical) {
-                eir_user_function_return_type(sig)
-            } else if let Some(sig) = ctx.extern_functions.get(canonical) {
-                sig.return_type.clone()
+            let user_function = ctx.functions.contains_key(canonical)
+                && !source_prefers_extension_builtin(canonical);
+            if user_function || ctx.extern_functions.contains_key(canonical) {
+                call_return_type(ctx, canonical, &[])
             } else {
                 builtin_call_result_type_for_ir(ctx, expr.span)?
             }
         }
         ExprKind::MethodCall { object, method, .. } => {
             method_call_expr_type_for_ir(ctx, object, method)?
+        }
+        ExprKind::NullsafeMethodCall { object, method, .. } => {
+            nullsafe_method_call_expr_type_for_ir(ctx, object, method)?
         }
         ExprKind::StaticMethodCall { receiver, method, .. } => {
             static_method_call_expr_type_for_ir(ctx, receiver, method)?

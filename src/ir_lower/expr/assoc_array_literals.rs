@@ -302,8 +302,15 @@ pub(in crate::ir_lower) fn method_call_expr_type_for_ir(
 ) -> Option<PhpType> {
     let class_name = instance_callable_object_class(ctx, object)?;
     let method_key = php_symbol_key(method);
-    class_method_signature(ctx, &class_name, &method_key)
-        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+    let nominal = class_method_signature(ctx, &class_name, &method_key)
+        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))?;
+    // A `static` return is bound to the RECEIVER class, exactly as `method_call_result_type`
+    // binds it for the emitted call; the signature alone names the declaring class.
+    Some(
+        instance_method_late_static_return_for_ir(ctx, &class_name, &method_key)
+            .map(|return_type| late_static_return_type_for_ir(ctx, &return_type, &class_name))
+            .unwrap_or(nominal),
+    )
 }
 
 /// Returns the declared method result type plus `null` when a nullsafe receiver may be null.
