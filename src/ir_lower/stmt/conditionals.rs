@@ -411,12 +411,13 @@ fn arm_mixed_conversions(arm: &IfArmExit, edge_boxed: &HashSet<String>) -> Vec<S
 /// The load reads the arm's own view of the slot, the box takes its own reference or copy of
 /// the payload, and the retaining store widens the slot to `Mixed` and retires the previous
 /// occupant — the same materialization `apply_loop_storage_contracts` uses for a `Mixed`
-/// loop contract.
+/// loop contract. The box holds the SAME array or hash the arm left in the slot, so the store
+/// keeps the hidden internal-pointer cursor: `next`/`end` before the `if` still hold after it.
 fn box_arm_locals_as_mixed(ctx: &mut LoweringContext<'_, '_>, names: &[String], span: Span) {
     for name in names {
         let source = ctx.load_local(name, Some(span));
         let boxed = ctx.box_value_as_mixed(source, PhpType::Mixed, Some(span));
-        ctx.store_local(name, boxed, PhpType::Mixed, Some(span));
+        ctx.store_local_representation(name, boxed, PhpType::Mixed, Some(span));
     }
 }
 

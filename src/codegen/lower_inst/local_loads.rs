@@ -207,6 +207,25 @@ pub(in crate::codegen) fn coerce_loaded_local_to_result_type(
             );
             Ok(())
         }
+        // A pointer slot keeps its storage when `null` is stored into it, so a path whose last
+        // store was `null` reads it back typed `null`: `$o = new C; if ($c) { $o = null; }`
+        // followed by a tail DCE copied into both arms. The flow fact says the slot holds null,
+        // so the load materializes PHP's null sentinel instead of the zero pointer.
+        (
+            PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Object(_)
+            | PhpType::Callable
+            | PhpType::Iterable,
+            PhpType::Void,
+        ) => {
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                crate::codegen::NULL_SENTINEL,
+            );
+            Ok(())
+        }
         (_, PhpType::TaggedScalar) => {
             coerce_loaded_value_to_tagged_scalar(ctx, &source_ty)?;
             Ok(())

@@ -2011,6 +2011,22 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.store_local_impl(name, value, php_type, span, false)
     }
 
+    /// Re-stores a local's CURRENT value in a new representation without rebinding it.
+    ///
+    /// Boxing a value into a `Mixed` cell (an `if` arm's value on its merge edge, say) keeps the
+    /// variable bound to the same array or hash, so PHP's internal pointer must survive it:
+    /// `$a = [1, 2]; next($a); if ($c) { $a = null; } current($a);` still reads `2` on the arm
+    /// that kept the array. The store otherwise follows `store_local`'s retaining contract.
+    pub(crate) fn store_local_representation(
+        &mut self,
+        name: &str,
+        value: LoweredValue,
+        php_type: PhpType,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        self.store_local_impl(name, value, php_type, span, false)
+    }
+
     /// Stores a new local owner, optionally resetting the cursor for a PHP-visible assignment.
     fn store_local_impl(
         &mut self,

@@ -70,3 +70,21 @@ echo $total, "\n";
     );
     assert_clean(out, "796\n");
 }
+
+/// A pointer builtin that read the array before the `if` loaded it as a concrete array; the
+/// merge-edge box then widened the slot to Mixed, turning that load into an owned unbox that
+/// must be released. A named function's `null` arm reading its object slot stays clean too.
+#[test]
+fn test_branch_join_heap_clean_pointer_call_before_join() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$f = function (int $n) { $h = ["a" => "x" . $n, "b" => "y" . $n]; end($h); if ($n > 500) { $h = null; } return key($h) . current($h); };
+$g = function (int $n) { $a = [1, 2, 3]; next($a); if ($n > 500) { $a = null; } return current($a); };
+function jo(int $n) { $o = new ArrayObject([$n]); if ($n % 2) { $o = null; } $r = $o instanceof ArrayObject ? 3 : 1; return $r; }
+$total = 0;
+for ($i = 0; $i < 200; $i++) { $total += strlen($f($i)) + $g($i) + jo($i); }
+echo $total, "\n";
+"#,
+    );
+    assert_clean(out, "1690\n");
+}

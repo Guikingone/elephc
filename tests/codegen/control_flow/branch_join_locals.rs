@@ -224,3 +224,74 @@ nf(1);
     );
     assert_eq!(out, "string:s2\nNULL:null\n");
 }
+
+/// Boxing the arm that KEPT an array or hash on its merge edge is a representation change, not a
+/// rebinding, so the internal pointer `next`/`end` moved before the `if` survives the merge.
+#[test]
+fn test_branch_join_keeps_array_cursor_on_kept_container_arm() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [10, 20, 30];
+next($a);
+if ($argc > 5) { $a = null; }
+var_dump(current($a));
+$h = ["x" => 1, "y" => 2, "z" => 3];
+end($h);
+if ($argc > 5) { $h = null; }
+var_dump(key($h));
+$f = function (int $n) { $h = ["a" => 1, "b" => 2, "c" => 3]; end($h); if ($n > 5) { $h = null; } prev($h); return key($h); };
+var_dump($f(1));
+$g = function (int $n) { $a = [10, 20, 30]; next($a); if ($n > 5) { $a = null; } else { echo "kept "; } return current($a); };
+var_dump($g(1));
+function arr_cursor(int $n) { $a = [10, 20, 30]; next($a); if ($n > 5) { $a = null; } echo current($a), " "; next($a); echo current($a), "\n"; return 0; }
+arr_cursor(1);
+"#,
+    );
+    assert_eq!(out, "int(20)\nstring(1) \"z\"\nstring(1) \"b\"\nkept int(20)\n20 30\n");
+}
+
+/// A cursor carried around a loop whose body joins the array against `null` keeps advancing:
+/// before the fix every merge rewound it, so `while (current($l) !== false)` never ended.
+#[test]
+fn test_branch_join_keeps_loop_carried_array_cursor() {
+    let out = compile_and_run(
+        r#"<?php
+$l = [1, 2, 3, 4];
+$guard = 0;
+while (($v = current($l)) !== false && $guard++ < 10) {
+    echo $v, " ";
+    if ($argc > 5) { $l = null; }
+    next($l);
+}
+echo "\n";
+$h = ["a" => 1, "b" => 2, "c" => 3];
+end($h);
+for ($i = 0; $i < 2; $i++) {
+    echo key($h), " ";
+    if ($argc > 5) { $h = null; }
+    prev($h);
+}
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "1 2 3 4 \nc b \n");
+}
+
+/// An object, array, hash or callable local with a `null` arm compiles and reads back each arm's
+/// value, including in named functions where DCE copies the tail into both arms and the `null`
+/// arm reads the pointer slot through a `null` view.
+#[test]
+fn test_branch_join_null_arm_over_pointer_slot() {
+    let out = compile_and_run(
+        r#"<?php
+function jo(int $n) { $o = new stdClass(); if ($n > 0) { $o = null; } var_dump($o); return 0; }
+function ja(int $n) { $a = [1, 2]; if ($n > 0) { $a = null; } var_dump($a); return 0; }
+function jh(int $n) { $a = ["k" => 1]; if ($n > 0) { $a = null; } else { $a["j"] = 2; } var_dump($a); return 0; }
+function jc(int $n) { $f = fn() => 1; if ($n > 0) { $f = null; } var_dump($f === null); return 0; }
+jo(1); jo(0); ja(1); ja(0); jh(1); jh(0); jc(1); jc(0);
+$o = new stdClass(); if ($argc == 1) { $o = null; } var_dump($o);
+$c = function () { return 1; }; if ($argc == 1) { $c = null; } var_dump($c);
+"#,
+    );
+    assert_eq!(out, "NULL\nobject(stdClass)#1 (0) {\n}\nNULL\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\nNULL\narray(2) {\n  [\"k\"]=>\n  int(1)\n  [\"j\"]=>\n  int(2)\n}\nbool(true)\nbool(false)\nNULL\nNULL\n");
+}
