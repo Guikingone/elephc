@@ -100,13 +100,15 @@ impl ClassBuildState {
     /// Resolves all class constant expressions via
     /// `resolve_lexical_class_constant_value`, collects attributes, and
     /// merges the accumulated property/method metadata with the flattened
-    /// class AST.  Returns `CompileError` if any constant expression is
-    /// ill-formed.
+    /// class AST.  `is_internal` records whether elephc declared the class
+    /// (`ClassInfo::is_internal`).  Returns `CompileError` if any constant
+    /// expression is ill-formed.
     pub(super) fn into_class_info(
         self,
         class_id: u64,
         class: &FlattenedClass,
         constructor_param_to_prop: Vec<Option<String>>,
+        is_internal: bool,
     ) -> Result<ClassInfo, CompileError> {
         let attribute_args = collect_attribute_args(&class.attributes);
         let constant_attribute_names = class
@@ -132,6 +134,7 @@ impl ClassBuildState {
         Ok(ClassInfo {
             class_id,
             declaration_span: class.span,
+            is_internal,
             parent: class.extends.clone(),
             is_abstract: class.is_abstract,
             is_final: class.is_final,

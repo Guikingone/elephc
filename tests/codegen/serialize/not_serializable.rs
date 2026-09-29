@@ -11,6 +11,10 @@
 //!   user classes named after internals elephc does not model, which PHP rejects at declaration.
 //! - A refused class must throw even when the program never names it, since the wire string alone
 //!   decides which class `unserialize()` meets.
+//! - Only elephc's own declaration of a builtin is refused: a program that does not load the curl
+//!   or PDO prelude may declare a class with one of their names, and that class round-trips.
+//! - `unserialize()` refuses from its allocation-free preflight, so a caught refusal leaves nothing
+//!   behind and runs no hook of the payload, which `--heap-debug` pins.
 
 use crate::support::*;
 
@@ -228,4 +232,77 @@ echo $add(1), "\n";
          plain: a:2:{i:0;i:1;i:1;s:3:\"two\";}\n\
          2\n"
     );
+}
+
+/// A program that does not use ext/curl or PDO may declare its own `CurlHandle`, `CURLFile` or
+/// `Pdo\Sqlite`: no prelude declares them, so they are ordinary user classes that serialize and
+/// round-trip (in any wire spelling) instead of being refused like the builtins they are named
+/// after. PHP without those extensions behaves the same; the expected wire was measured on PHP
+/// 8.5.10 with the classes renamed, since that build loads both extensions.
+#[test]
+fn test_serialize_keeps_user_classes_named_like_prelude_classes() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Pdo {
+    class Sqlite { public $db = 'memory'; }
+    function make(): Sqlite { return new Sqlite(); }
+}
+namespace {
+    class CurlHandle { public $url = 'x'; }
+    class CURLFile { public $name = 'f.txt'; }
+    foreach ([new CurlHandle(), new CURLFile(), Pdo\make()] as $object) {
+        $wire = serialize($object);
+        echo $wire, "\n";
+        echo get_class(unserialize($wire)), "\n";
+    }
+    var_dump(unserialize('O:10:"curlhandle":0:{}') instanceof CurlHandle);
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "O:10:\"CurlHandle\":1:{s:3:\"url\";s:1:\"x\";}\nCurlHandle\n\
+         O:8:\"CURLFile\":1:{s:4:\"name\";s:5:\"f.txt\";}\nCURLFile\n\
+         O:10:\"Pdo\\Sqlite\":1:{s:2:\"db\";s:6:\"memory\";}\nPdo\\Sqlite\n\
+         bool(true)\n"
+    );
+}
+
+/// Catching `unserialize()` refusals in a loop leaves a clean heap: the refused class, whether the
+/// program declares it (a user subclass, a builtin) or not (`Generator` here), is refused by the
+/// allocation-free preflight before the decoder allocates its object, its box, or an enclosing
+/// array, and before a sibling's `__wakeup()` could run (PHP defers those hooks until the payload
+/// decoded, so it never runs them either).
+#[test]
+fn test_caught_unserialize_refusals_leave_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Mine extends ReflectionClass {}
+class Woken {
+    public function __wakeup(): void { echo "woken\n"; }
+}
+$refused = 0;
+for ($i = 0; $i < 40; $i++) {
+    foreach ([
+        'O:4:"Mine":0:{}',
+        'O:15:"ReflectionClass":0:{}',
+        'O:9:"Generator":0:{}',
+        'a:2:{i:0;O:8:"stdClass":0:{}i:1;O:4:"Mine":0:{}}',
+        'a:2:{i:0;O:5:"Woken":0:{}i:1;O:15:"ReflectionClass":0:{}}',
+        'O:5:"Woken":1:{s:1:"x";O:4:"Mine":0:{}}',
+    ] as $wire) {
+        try {
+            unserialize($wire);
+        } catch (Exception $e) {
+            $refused++;
+            $last = $e->getMessage();
+        }
+    }
+}
+echo $refused, " ", $last, "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "240 Unserialization of 'Mine' is not allowed\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

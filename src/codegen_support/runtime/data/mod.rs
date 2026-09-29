@@ -190,9 +190,11 @@ pub(crate) const CLOSURE_CLASS_NAME: &str = "Closure";
 /// intersected with the builtin class catalog; measured on PHP 8.5.10 by unserializing every
 /// declared class, plus the `PDO` driver subclasses of extensions that build did not load. A PHP
 /// internal elephc does not register (`WeakMap`, `ReflectionType`, ...) is absent on purpose: a
-/// user class may carry that name and must serialize like any other user class. Every entry is
-/// listed, subclasses included, because the `unserialize()` refusal must also recognize a
-/// class the program never declares, and so cannot walk its ancestry.
+/// user class may carry that name and must serialize like any other user class. A listed name
+/// refuses a declared class only when elephc itself declares it (`ClassInfo::is_internal`), since
+/// a program that does not load the curl or PDO prelude may declare a `CurlHandle` of its own.
+/// Every entry is listed, subclasses included, because the `unserialize()` refusal must also
+/// recognize a class the program never declares, and so cannot walk its ancestry.
 pub(crate) const NOT_SERIALIZABLE_BUILTIN_CLASSES: &[&str] = &[
     "CURLFile",
     "Closure",

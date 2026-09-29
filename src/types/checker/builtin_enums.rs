@@ -54,6 +54,7 @@ pub(crate) fn inject_builtin_enums(
         &[],
         &[],
         crate::span::Span::dummy(),
+        true,
         checker,
         next_class_id,
     )?;
@@ -82,6 +83,7 @@ pub(crate) fn inject_builtin_enums(
         &[],
         &[],
         crate::span::Span::dummy(),
+        true,
         checker,
         next_class_id,
     )?;
@@ -114,6 +116,7 @@ pub(crate) fn inject_builtin_enums(
             &[],
             &[],
             crate::span::Span::dummy(),
+            true,
             checker,
             next_class_id,
         )?;

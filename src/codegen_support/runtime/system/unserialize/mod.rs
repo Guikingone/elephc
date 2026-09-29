@@ -12,7 +12,8 @@
 //!   `INF`/`-INF`/`NAN`), `s:<bytelen>:"<raw>";`, arrays, objects, and references.
 //!   Objects resolve declared classes and invoke supported hydration hooks; references
 //!   reuse entries from the per-call registry. A class PHP refuses to unserialize throws
-//!   before its body is decoded, whether or not the program declares it.
+//!   from the preflight, before anything is allocated or any hook runs, whether or not the
+//!   program declares it.
 //! - Arrays build a hash (`__rt_hash_new` value_type 7) whose values are boxed Mixed
 //!   cells stored with per-entry tag 7, the canonical heterogeneous representation.
 //!   Scalar/value boxes come from `__rt_mixed_from_value` and transfer into the hash;
@@ -64,7 +65,7 @@ pub(crate) fn emit_unserialize(emitter: &mut Emitter) {
     diagnostics::emit_unserialize_type_error_helper(emitter);
     diagnostics::emit_unserialize_object_string_error_helper(emitter);
     diagnostics::emit_unserialize_object_to_string_helper(emitter);
-    refused_classes::emit_refuse_unknown_class(emitter);
+    refused_classes::emit_refuse_class(emitter);
 
     match emitter.target.arch {
         Arch::AArch64 => {

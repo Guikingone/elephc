@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Every cursor, delimiter, length, and recursive child is bounded before allocation or hooks.
+//! - Each object's class name goes to `__rt_unser_refuse_class` once it is bounded, so a class
+//!   PHP refuses to unserialize throws before the decoder allocates anything or runs a hook.
 
 use crate::codegen_support::emit::Emitter;
 
@@ -317,6 +319,15 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("ldrb w13, [x12, x9]");                                 // bounded delimiter byte
     emitter.instruction("cmp w13, #58");                                        // colon before the property count
     emitter.instruction("b.ne __rt_unser_validate_at_fail");                    // property count needs its colon
+    // -- PHP refuses a not-serializable class as soon as it reads the name: throw before the
+    //    decoder allocates anything or runs a hook anywhere in this payload --
+    emitter.instruction("str x9, [sp, #40]");                                   // keep the colon position across the refusal check
+    emitter.instruction("add x1, x12, x9");                                     // address of the colon after the class name
+    emitter.instruction("sub x1, x1, #1");                                      // address of the closing quote
+    emitter.instruction("sub x1, x1, x11");                                     // first class-name byte
+    emitter.instruction("mov x2, x11");                                         // class-name byte length
+    emitter.instruction("bl __rt_unser_refuse_class");                          // throws for a class PHP never unserializes
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload the colon position
     emitter.instruction("add x1, x9, #1");                                      // first property-count digit
     emitter.instruction("ldr x0, [sp]");                                        // saved source base
     emitter.instruction("ldr x2, [sp, #16]");                                   // saved source end

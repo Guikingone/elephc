@@ -597,26 +597,27 @@ pub(crate) fn emit_runtime_data_user(
     // dispatches to the ancestor's emitted symbol); `0` means the class and its
     // ancestors declare no such method. `__serialize`/`__sleep` customise how an
     // object is written; `__unserialize`/`__wakeup` customise how it is restored.
-    for (table, method, refusal) in [
-        ("_class_serialize_ptrs", "__serialize", Some("__rt_throw_serialization_denied")),
-        ("_class_unserialize_ptrs", "__unserialize", Some("__rt_throw_unserialization_denied")),
-        ("_class_sleep_ptrs", "__sleep", None),
-        ("_class_wakeup_ptrs", "__wakeup", None),
+    for (table, method) in [
+        ("_class_serialize_ptrs", "__serialize"),
+        ("_class_unserialize_ptrs", "__unserialize"),
+        ("_class_sleep_ptrs", "__sleep"),
+        ("_class_wakeup_ptrs", "__wakeup"),
     ] {
         out.push_str(&format!(".globl {table}\n{table}:\n"));
         if let Some(max_class_id) = max_class_id {
             let method_key = php_symbol_key(method);
             for class_id in 0..=max_class_id {
-                // A class PHP refuses to serialize routes both hooks to a throwing helper, so the
-                // denial holds wherever the object is found: nested in an array, behind `mixed`,
-                // or reached through a subclass that declares its own hook. The unserialize
-                // decoders recognize their helper and throw before decoding the object's body.
-                if let Some(refusal) = refusal.filter(|_| {
-                    class_name_by_id
+                // A class PHP refuses to serialize routes `__serialize` to the throwing helper,
+                // so the denial holds wherever the object is found: nested in an array, behind
+                // `mixed`, or reached through a subclass that declares its own `__serialize`.
+                // The unserialize side refuses by wire name instead (see below), before any
+                // object exists.
+                let denied = table == "_class_serialize_ptrs"
+                    && class_name_by_id
                         .get(&class_id)
-                        .is_some_and(|name| class_serialization_denied(name, classes))
-                }) {
-                    out.push_str(&format!("    .quad {refusal}\n"));
+                        .is_some_and(|name| class_serialization_denied(name, classes));
+                if denied {
+                    out.push_str("    .quad __rt_throw_serialization_denied\n");
                     continue;
                 }
                 let entry = class_info_by_id
@@ -628,6 +629,8 @@ pub(crate) fn emit_runtime_data_user(
             }
         }
     }
+
+    emit_unserialize_refusal_table(&mut out, &sorted_classes, classes);
 
     // Hydration hooks receive a parsed hash, while PHP array/Mixed parameters use boxed cells.
     out.push_str(".globl _class_unserialize_data_boxed\n_class_unserialize_data_boxed:\n");
@@ -2968,9 +2971,12 @@ fn interface_method_table_symbol(
 /// `SplFileInfo` family, `Phar`, `PharData`, the PDO, curl, gd and XML handles, ...), or any class
 /// that extends one of them.
 ///
-/// Only registered builtins are named, so a user class that merely shares its name with a PHP
-/// internal elephc does not model (`WeakMap`, `ReflectionType`) serializes like any user class.
-/// The list names every refused class itself too, because elephc registers some of them without
+/// A listed name counts only when elephc itself declares that class (`ClassInfo::is_internal`).
+/// The curl and PDO driver classes come from a prelude injected only for programs that use them,
+/// so a program that does not may declare its own `CurlHandle` or `Pdo\Sqlite`, and that class
+/// serializes like any user class. The same holds for a user class named after a PHP internal
+/// elephc does not model at all (`WeakMap`, `ReflectionType`), which the list never names. The
+/// list names every refused class itself too, because elephc registers some of them without
 /// their PHP parents (`Phar` and `PharData` do not extend `SplFileInfo` here).
 ///
 /// The comparison is exact-case on purpose: class names and `parent` links here are the
@@ -2979,15 +2985,65 @@ fn interface_method_table_symbol(
 fn class_serialization_denied(class_name: &str, classes: &HashMap<String, ClassInfo>) -> bool {
     let mut current = class_name.trim_start_matches('\\');
     for _ in 0..=classes.len() {
-        if NOT_SERIALIZABLE_BUILTIN_CLASSES.contains(&current) {
+        let Some(info) = classes.get(current) else {
+            return false;
+        };
+        if info.is_internal && NOT_SERIALIZABLE_BUILTIN_CLASSES.contains(&current) {
             return true;
         }
-        let Some(parent) = classes.get(current).and_then(|info| info.parent.as_deref()) else {
+        let Some(parent) = info.parent.as_deref() else {
             return false;
         };
         current = parent.trim_start_matches('\\');
     }
     false
+}
+
+/// Emits `_unser_refused_class_count` and `_unser_refused_classes`: the class names
+/// `unserialize()` refuses in this program, as `(name_ptr, name_len)` rows that the unserialize
+/// preflight scans before the decoder allocates anything.
+///
+/// A name is refused when the class the program would hydrate under it is denied
+/// ([`class_serialization_denied`]: a builtin PHP marks not serializable, or a subclass of one),
+/// or when no class the program declares answers to it and it names such a builtin. The wire
+/// alone decides which class `unserialize()` meets, so PHP refuses `O:15:"ReflectionClass":0:{}`
+/// whether or not the script mentions the class. A class the program declares itself under a
+/// builtin's name (a `CurlHandle` in a program without ext/curl) hydrates normally, so its name is
+/// left out. Each row carries the declared spelling, which is what the message prints.
+fn emit_unserialize_refusal_table(
+    out: &mut String,
+    sorted_classes: &[(&String, &ClassInfo)],
+    classes: &HashMap<String, ClassInfo>,
+) {
+    let declared: HashSet<String> = sorted_classes
+        .iter()
+        .map(|(name, _)| php_symbol_key(name.trim_start_matches('\\')))
+        .collect();
+    let names: Vec<&str> = sorted_classes
+        .iter()
+        .filter(|(name, _)| class_serialization_denied(name, classes))
+        .map(|(name, _)| name.trim_start_matches('\\'))
+        .chain(
+            NOT_SERIALIZABLE_BUILTIN_CLASSES
+                .iter()
+                .copied()
+                .filter(|name| !declared.contains(&php_symbol_key(name))),
+        )
+        .collect();
+    for (index, name) in names.iter().enumerate() {
+        out.push_str(&format!(
+            "_unser_refused_class_name_{index}:\n    .ascii \"{}\"\n",
+            escaped_ascii(name)
+        ));
+    }
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _unser_refused_class_count\n_unser_refused_class_count:\n");
+    out.push_str(&format!("    .quad {}\n", names.len()));
+    out.push_str(".globl _unser_refused_classes\n_unser_refused_classes:\n");
+    for (index, name) in names.iter().enumerate() {
+        out.push_str(&format!("    .quad _unser_refused_class_name_{index}\n"));
+        out.push_str(&format!("    .quad {}\n", name.len()));
+    }
 }
 
 /// Resolves one source-ABI instance entry through its physical implementing class.
@@ -3628,7 +3684,7 @@ mod tests {
 
     use super::{
         emit_runtime_data_user, source_instance_method_entry, source_instance_vtable_entry,
-        source_static_vtable_entry,
+        source_static_vtable_entry, NOT_SERIALIZABLE_BUILTIN_CLASSES,
     };
 
     /// Builds a direct physical method signature for source-entry lookup tests.
@@ -3770,6 +3826,7 @@ mod tests {
         ClassInfo {
             class_id,
             declaration_span: crate::span::Span::dummy(),
+            is_internal: false,
             parent: None,
             is_abstract: false,
             is_final: false,
@@ -3961,5 +4018,73 @@ mod tests {
         .unwrap();
 
         assert!(asm.contains("_class_gc_desc_1:\n    .byte 10\n"));
+    }
+
+    /// Every name the serializers refuse is a catalogued builtin class spelled as PHP declares it,
+    /// so a user class that merely shares the name of a PHP internal elephc does not model
+    /// (`WeakMap`) is never refused.
+    #[test]
+    fn test_refused_classes_are_catalogued_builtins() {
+        for name in NOT_SERIALIZABLE_BUILTIN_CLASSES {
+            let contract = elephc_builtin_contract::lookup_class(name)
+                .unwrap_or_else(|| panic!("{name} is refused but not a catalogued builtin class"));
+            assert_eq!(contract.name, *name, "{name} must use the catalogue's PHP spelling");
+        }
+    }
+
+    /// Only elephc's own declaration of a listed builtin is refused. A builtin and a user subclass
+    /// of it refuse both directions; a program's own `CurlHandle` (no curl prelude) keeps its
+    /// hooks and stays out of the unserialize refusal table, while every listed builtin the
+    /// program does not declare stays in it, once, with its backslashes escaped.
+    #[test]
+    fn test_refusals_skip_user_classes_named_like_builtins() {
+        let mut builtin = empty_class_info(1, "run");
+        builtin.is_internal = true;
+        let mut subclass = empty_class_info(2, "run");
+        subclass.parent = Some("ReflectionClass".to_string());
+        let classes = HashMap::from([
+            ("ReflectionClass".to_string(), builtin),
+            ("Mine".to_string(), subclass),
+            ("CurlHandle".to_string(), empty_class_info(3, "run")),
+        ]);
+
+        let asm = emit_runtime_data_user(
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &[],
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+            &classes,
+            &HashMap::new(),
+            &HashSet::new(),
+            None,
+            false,
+            None,
+            Target::new(Platform::Linux, Arch::X86_64),
+        )
+        .unwrap();
+
+        assert!(asm.contains(
+            "_class_serialize_ptrs:\n    .quad 0\n    .quad __rt_throw_serialization_denied\n    \
+             .quad __rt_throw_serialization_denied\n    .quad 0\n"
+        ));
+        assert!(!asm.contains("__rt_throw_unserialization_denied"));
+        let lines: Vec<&str> = asm.lines().collect();
+        let refused: Vec<&str> = lines
+            .windows(2)
+            .filter(|pair| pair[0].starts_with("_unser_refused_class_name_"))
+            .map(|pair| pair[1].trim().trim_start_matches(".ascii \"").trim_end_matches('"'))
+            .collect();
+        for name in ["ReflectionClass", "Mine", "GdImage", "Closure", "Pdo\\\\Sqlite"] {
+            assert_eq!(refused.iter().filter(|row| **row == name).count(), 1, "{name}: {refused:?}");
+        }
+        assert!(!refused.contains(&"CurlHandle"), "{refused:?}");
+        assert_eq!(refused.len(), NOT_SERIALIZABLE_BUILTIN_CLASSES.len());
+        assert!(asm.contains(&format!("_unser_refused_class_count:\n    .quad {}\n", refused.len())));
+        assert!(asm.contains("_unser_refused_classes:\n    .quad _unser_refused_class_name_0\n    .quad 15\n"));
     }
 }

@@ -382,6 +382,12 @@ Objects serialize as `O:<len>:"<Class>":<count>:{...}` with PHP's exact property
 mangling: public properties use the bare name, protected use `\0*\0name`, and private
 use `\0Class\0name`. Properties are emitted in declaration order (inherited first).
 
+Instances of the builtin classes PHP marks not serializable (the Reflection family, `Closure`,
+`Generator`, `Fiber`, the `SplFileInfo` family, `Phar`/`PharData`, and the PDO, curl, gd and
+XML handles, plus their subclasses) throw `Exception("Serialization of '<Class>' is not
+allowed")`. `unserialize()` refuses the same classes with `Unserialization of '<Class>' is not
+allowed` as soon as it reads the class name, before it builds anything else in the payload.
+
 Serialization magic methods are honoured:
 
 - **`__serialize(): array`** — when defined, the object body is the returned array's

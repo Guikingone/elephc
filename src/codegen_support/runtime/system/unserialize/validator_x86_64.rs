@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Every cursor, delimiter, length, and recursive child is bounded before allocation or hooks.
+//! - Each object's class name goes to `__rt_unser_refuse_class` once it is bounded, so a class
+//!   PHP refuses to unserialize throws before the decoder allocates anything or runs a hook.
 
 use crate::codegen_support::emit::Emitter;
 
@@ -312,6 +314,15 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("add r8, 1");                                           // colon before count
     emitter.instruction("cmp BYTE PTR [rdi + r8], 58");                         // exact colon before the count
     emitter.instruction("jne __rt_unser_validate_at_fail_x");                   // count must follow the class name
+    // -- PHP refuses a not-serializable class as soon as it reads the name: throw before the
+    //    decoder allocates anything or runs a hook anywhere in this payload --
+    emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // keep the colon position across the refusal check
+    emitter.instruction("lea rax, [rdi + r8 - 1]");                             // address of the closing quote
+    emitter.instruction("sub rax, r11");                                        // first class-name byte
+    emitter.instruction("mov rdx, r11");                                        // class-name byte length
+    emitter.instruction("call __rt_unser_refuse_class");                        // throws for a class PHP never unserializes
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the source base for the count parse
+    emitter.instruction("mov r8, QWORD PTR [rbp - 40]");                        // reload the colon position
     emitter.instruction("lea rsi, [r8 + 1]");                                   // first property-count digit
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // restore end for the count parse
     emitter.instruction("mov ecx, 58");                                         // property-count delimiter

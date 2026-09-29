@@ -257,6 +257,13 @@ pub struct ClassInfo {
     pub class_id: u64,
     /// Source span of the class-like declaration, or `Span::dummy()` for compiler-injected classes.
     pub declaration_span: crate::span::Span,
+    /// `true` when elephc itself declares the class: a runtime-registered builtin, or a class
+    /// from compiler-generated source such as an injected prelude (whose declarations can carry
+    /// real spans, so the dummy span above does not identify them). `false` for a class written
+    /// in the program's own source. Behaviour PHP ties to an internal class must check this, not
+    /// the name alone: a program that does not pull in a prelude may declare its own class with
+    /// that prelude's class name.
+    pub is_internal: bool,
     pub parent: Option<String>,
     pub is_abstract: bool,
     pub is_final: bool,
