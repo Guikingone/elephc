@@ -397,3 +397,32 @@ echo count($s), "\n";
     );
     assert_eq!(out, "2|word|label|3|arrow|2|word|word|2\n");
 }
+
+/// A pop or shift from an empty typed array is null even when another branch has the
+/// array element's scalar type. Branch temps must store the builtin's boxed result.
+#[test]
+fn test_pop_shift_branch_merges_preserve_empty_array_null() {
+    let out = compile_and_run(
+        r#"<?php
+$words = ['word'];
+$floats = [1.5];
+array_pop($words);
+array_shift($floats);
+$flag = $argc === 1;
+var_dump($flag ? array_pop($words) : 'fallback');
+var_dump($flag ? array_shift($floats) : 2.5);
+var_dump(match ($argc) { 1 => array_shift($words), default => 'fallback' });
+var_dump(match ($argc) { 1 => array_pop($floats), default => 2.5 });
+var_dump(array_pop($words) ?: 'fallback');
+var_dump(array_shift($floats) ?: 2.5);
+$words = ['word'];
+$floats = [1.5];
+var_dump($flag ? array_pop($words) : 'fallback');
+var_dump(match ($argc) { 1 => array_shift($floats), default => 2.5 });
+"#,
+    );
+    assert_eq!(
+        out,
+        "NULL\nNULL\nNULL\nNULL\nstring(8) \"fallback\"\nfloat(2.5)\nstring(4) \"word\"\nfloat(1.5)\n"
+    );
+}

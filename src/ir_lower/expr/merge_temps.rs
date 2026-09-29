@@ -185,10 +185,12 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
 /// Returns the merge type of a named function call before it is lowered.
 ///
 /// A user or extern function answers the return type `lower_function_call` stamps on the call.
-/// A builtin keeps the syntactic answer when that names a type, and otherwise consults the
-/// checker's result type for this very call (`int`, `bool`, `float` and `string` stay scalar,
-/// anything else is boxed), because the syntactic `int` is only a default for names outside
-/// its allowlist.
+/// A pop or shift uses its shared EIR result contract, which is boxed `Mixed` even when
+/// the checker sees a scalar array element: removing from an empty array returns null.
+/// Other builtins keep the syntactic answer when that names a type, and otherwise consult
+/// the checker's result type for this very call (`int`, `bool`, `float` and `string` stay
+/// scalar, anything else is boxed), because syntactic `int` is only a default outside its
+/// allowlist.
 fn function_call_type_for_merge(ctx: &LoweringContext<'_, '_>, canonical: &str, expr: &Expr) -> PhpType {
     if !source_prefers_extension_builtin(canonical) {
         if let Some(signature) = ctx.functions.get(canonical) {
@@ -197,6 +199,26 @@ fn function_call_type_for_merge(ctx: &LoweringContext<'_, '_>, canonical: &str, 
     }
     if let Some(signature) = ctx.extern_functions.get(canonical) {
         return normalize_value_php_type(signature.return_type.clone());
+    }
+    if let Some(def) = crate::builtins::registry::lookup(canonical.trim_start_matches('\\')) {
+        if matches!(
+            def.spec.semantics.lowering,
+            crate::builtins::semantics::BuiltinLowering::Runtime(
+                crate::ir::RuntimeCallTarget::Function(
+                    crate::ir::RuntimeFnId::ArrayPop | crate::ir::RuntimeFnId::ArrayShift
+                )
+            )
+        ) {
+            return resolve_registry_builtin_result_type(
+                ctx,
+                def.name,
+                &[],
+                &[],
+                expr.span,
+                None,
+            )
+            .expect("registered pop/shift builtin must resolve its result type");
+        }
     }
     let syntactic = fallback_expr_type(expr);
     if syntactic != PhpType::Int {
