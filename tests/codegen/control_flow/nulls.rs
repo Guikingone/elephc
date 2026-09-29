@@ -290,3 +290,37 @@ echo ($a[$hit_i][$miss_j] ?? 'dflt');
     );
     assert!(out.success, "program should exit successfully");
 }
+
+/// Coalescing a nullable object with `new` (`$o ??= new Box()`, `$o = $o ?? new Box()`) leaves
+/// the object itself in `$o`, not the boxed cell that held `?Box`: every member access after it
+/// read the cell as the object and crashed or answered garbage (#1628). Covers a `?Box`
+/// parameter both null and not, a nullable call result, a nullable property, a local merged
+/// from a ternary, and `?:`, over a loop under `--heap-debug`.
+#[test]
+fn test_null_coalesce_nullable_object_with_new_keeps_the_object() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Box {
+    public array $list = [1, 2, 3];
+    public int $n = 7;
+    public ?Box $next = null;
+    public function items(): array { return $this->list; }
+}
+function find(int $n): ?Box { return $n > 0 ? new Box() : null; }
+function a(?Box $o): int { $o ??= new Box(); return $o->n + count($o->items()); }
+function b(?Box $o): int { $o = $o ?? new Box(); return $o->list[2]; }
+function c(int $n): int { $o = find($n) ?? new Box(); return $o->n; }
+function d(Box $h): int { $x = $h->next ?? new Box(); return $x->n; }
+function e(?Box $o, int $n): int { $x = $n > 0 ? $o : new Box(); $x ??= new Box(); return $x->n; }
+function f(?Box $o): int { $x = $o ?: new Box(); return $x->n; }
+$total = 0;
+for ($i = 0; $i < 20 + ($argc > 5 ? 1 : 0); $i++) {
+    $total += a(null) + a(new Box()) + b(null) + b(new Box()) + c(0) + c(1) + d(new Box()) + e(null, 1) + e(new Box(), 0) + f(null) + f(new Box());
+}
+echo $total, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1500\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
