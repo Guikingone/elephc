@@ -7,12 +7,16 @@
 //! Key details:
 //! - Assignments mutate the host process environment for the current eval process.
 //! - PHP's syntax guard raises a catchable `ValueError` before host environment APIs run.
-//! - The platform calls and their status mirror the compiled `putenv()` lowering (#911): an
-//!   argument containing `=` goes to `putenv(3)` with a persistent NUL-terminated copy, anything
-//!   else to `unsetenv(3)`, and the result is `true` exactly when libc reports success. The
-//!   environment holds C strings, so libc sees the argument up to its first NUL byte.
+//! - The result mirrors the compiled `putenv()` lowering (#911), which hands libc the argument
+//!   (read up to its first NUL byte, since the environment holds C strings): an argument
+//!   containing `=` takes the set form, anything else the unset form, and `true` means libc
+//!   accepted the change. Eval applies the change through Rust's `std::env` setters, which
+//!   take the lock Rust's environment readers and process spawning take, and refuses exactly
+//!   the arguments libc would refuse before any setter runs.
 
 use super::*;
+use std::ffi::OsStr;
+use std::os::unix::ffi::OsStrExt;
 
 eval_builtin! {
     contract: "putenv",
@@ -52,28 +56,38 @@ pub(in crate::interpreter) fn eval_putenv_result(
     values.bool_value(eval_putenv_host(&assignment))
 }
 
-/// Applies one syntax-checked assignment through libc and reports whether libc accepted it.
+/// Applies one syntax-checked assignment and reports the status the compiled program's libc
+/// call would report for it.
 ///
-/// The `=` scan covers every byte, as the compiled lowering's does, while libc reads the copy
-/// only up to its first NUL. `putenv(3)` keeps the pointer it is given as part of the
-/// environment, so an accepted copy is deliberately never freed, like the compiled runtime's
-/// persistent buffer; a refused one is freed at once.
+/// libc reads the compiled runtime's copy only up to its first NUL byte, while the `=` that
+/// selects the set form is searched in every byte, as the compiled lowering searches it; both
+/// are reproduced here. The change itself goes through `std::env::set_var`/`remove_var`, so it
+/// is serialized with Rust's environment lock rather than racing a concurrent `std::env` read
+/// or process spawn on another thread. Those setters panic where libc answers `EINVAL`, so
+/// every such case is answered first:
+/// - an empty name (the argument starts with NUL): both `putenv(3)` and `unsetenv(3)` refuse;
+/// - a set form whose `=` sits after that NUL, which libc receives as a bare name: glibc and
+///   musl `putenv(3)` unset it, Apple's refuses it.
 fn eval_putenv_host(assignment: &[u8]) -> bool {
     let text = assignment.split(|byte| *byte == 0).next().unwrap_or_default();
-    let Ok(text) = CString::new(text) else {
+    if text.is_empty() {
         return false;
-    };
-    if !assignment.contains(&b'=') {
-        // SAFETY: `text` is NUL-terminated and outlives the call, which only reads it.
-        return unsafe { libc::unsetenv(text.as_ptr()) } == 0;
     }
-    let persistent = text.into_raw();
-    // SAFETY: `persistent` is a NUL-terminated heap string that stays valid for as long as the
-    // environment may reference it, because it is only freed when libc refused it.
-    let accepted = unsafe { libc::putenv(persistent) } == 0;
-    if !accepted {
-        // SAFETY: libc refused the pointer, so nothing else references this allocation.
-        drop(unsafe { CString::from_raw(persistent) });
+    let separator = text.iter().position(|byte| *byte == b'=');
+    match separator {
+        Some(separator) => {
+            // The syntax guard rejected a leading `=`, so the name is never empty, and the
+            // first `=` ends it: neither side holds a NUL or the name an `=`.
+            std::env::set_var(
+                OsStr::from_bytes(&text[..separator]),
+                OsStr::from_bytes(&text[separator + 1..]),
+            );
+            true
+        }
+        None if assignment.contains(&b'=') && cfg!(target_vendor = "apple") => false,
+        None => {
+            std::env::remove_var(OsStr::from_bytes(text));
+            true
+        }
     }
-    accepted
 }
