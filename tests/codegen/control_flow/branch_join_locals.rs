@@ -561,3 +561,53 @@ echo fe([]), " ", fe([1]), " ", fe([2]), "\n";
     );
     assert_eq!(out, "OO NO\nOO NO OO\n");
 }
+
+/// A `switch` case label may assign a local, so each body starts from the facts of the labels
+/// that select it, not from those the LAST label left. `case ($x = null) === null:` followed by
+/// `case ($x = 5) > 0:` read `$x` as an integer in the first body (printing the null sentinel).
+/// A body reached by two labels that disagree joins them, and a body entered both by its own
+/// label (`$o = null`) and by fall-through (`$o` still the object) joins those. The locals start
+/// from non-literal values so AST constant propagation cannot fold them. Runs under
+/// `--heap-debug` over a loop. Review follow-up for #771.
+#[test]
+fn test_switch_bodies_start_from_their_own_label_edges() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function s(int $n): string {
+    $x = 1;
+    $o = new stdClass();
+    $out = str_repeat("-", $n > 100 ? 1 : 0);
+    switch (true) {
+        case ($x = null) === null && $n == 1:
+        case ($x = 5) > 0 && $n == 2:
+            $out .= var_export($x, true) . ",";
+        case ($o = null) === null && $n == 3:
+            $out .= ($o === null ? "o-null" : "o-obj") . ",";
+            break;
+        default:
+            $out .= var_export($x, true) . "/" . ($o === null ? "o-null" : "o-obj");
+    }
+    return $out . "|" . var_export($x, true);
+}
+function u(int $n): string {
+    $s = str_repeat("a", $n > 100 ? 2 : 1);
+    switch ($n) {
+        case ($s = null) ?? 1: return var_export($s, true);
+        case ($s = "zz") ? 2 : 2: return $s;
+        default: return "d" . $s;
+    }
+}
+$r = "";
+for ($i = 0; $i < 30 + $argc; $i++) {
+    $r = s(1) . " " . s(2) . " " . s(3) . " " . s(4) . " " . u(1) . " " . u(2) . " " . u(3);
+}
+echo $r, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "NULL,o-obj,|NULL 5,o-obj,|5 o-null,|5 5/o-null|5 NULL zz dzz\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

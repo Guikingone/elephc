@@ -251,11 +251,12 @@ nested($argc);
         }
     }
 
-    /// `switch` bodies are lowered in sequence, so the case that stores `null` leaves the fact
-    /// `null` after the switch although the other paths still hold the object: the proof must
-    /// refuse that read instead of turning the live object into `NULL`.
+    /// Only one `switch` case stores `null`, so the read after the switch is reached by paths
+    /// that still hold the object, and the proof must refuse it whatever the env says. Switch
+    /// exits used to leave a stale `null` fact there; they now join every edge, so the read is
+    /// no longer typed `null`, and the analysis is asked about it directly.
     #[test]
-    fn a_stale_null_fact_is_not_proven() {
+    fn a_read_reached_by_a_non_null_path_is_not_proven() {
         let module = lower(
             r#"<?php
 function w(int $n) { $o = new stdClass(); switch ($n) { case 1: $o = null; break; case 2: echo "two"; break; } var_dump($o); return 0; }
@@ -263,11 +264,29 @@ w($argc);
 "#,
         );
         let w = function(&module, "w");
-        let loads = null_typed_loads(w, "o");
-        assert!(!loads.is_empty(), "the switch leaves a null fact for $o");
-        assert!(loads
+        let slot = w
+            .locals
             .iter()
-            .any(|(load, slot)| !null_store_reaches_load(w, *load, *slot, false)));
+            .find(|local| local.name.as_deref() == Some("o"))
+            .expect("w: missing local $o")
+            .id;
+        let after_switch = w
+            .blocks
+            .iter()
+            .flat_map(|block| block.instructions.iter().copied())
+            .filter(|inst_id| {
+                w.instruction(*inst_id).is_some_and(|inst| {
+                    inst.op == Op::LoadLocal
+                        && inst.immediate == Some(Immediate::LocalSlot(slot))
+                })
+            })
+            .last()
+            .expect("w reads $o after the switch");
+        assert!(!null_store_reaches_load(w, after_switch, slot, false));
+        assert!(
+            null_typed_loads(w, "o").iter().all(|(load, _)| *load != after_switch),
+            "the switch exit no longer leaves a stale null fact for $o"
+        );
     }
 
     /// A slot that may be a reference cell is never proven, whatever its stores say.
