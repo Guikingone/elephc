@@ -50,7 +50,10 @@ pub(super) fn op_is_volatile_safe(op: Op) -> bool {
         | ICmp | FCmp
         // Int-to-float promotion is still a single inline scvtf / cvtsi2sd.
         | IToF
-        | Nop
+        // A statement-boundary concat reset uses reserved x9/x10 or r10 scratch
+        // registers and stores its value to `_concat_off`. PIC x86_64 preserves
+        // its additional r11 symbol-address scratch around the store.
+        | ConcatReset | Nop
     )
 }
 

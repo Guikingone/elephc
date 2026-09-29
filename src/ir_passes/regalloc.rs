@@ -16,16 +16,16 @@
 //! - The spill heuristic is use-weighted: under pressure the rarely-used,
 //!   furthest-reaching interval is evicted first, keeping hot values in
 //!   registers.
-//! - First cut: only single-word `NonHeap` scalars (`I64`, `F64`) are
-//!   register-eligible, and never block parameters or branch arguments, which
-//!   stay in stack slots so the existing block-parameter moves are unchanged.
+//! - Only single-word `NonHeap` scalars (`I64`, `F64`) are register-eligible.
+//!   Edge copies materialize branch arguments into block-parameter homes, so
+//!   promoted loop values can remain in registers across back edges.
 //!   Generators fall back to all-spilled; handler functions still allocate
 //!   scalar ranges, with call clobber analysis protecting exception edges.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::codegen::platform::{Arch, Target};
-use crate::ir::{Function, IrType, Ownership, Terminator, ValueId};
+use crate::ir::{Function, IrType, Ownership, ValueId};
 use crate::ir_passes::allocation::Allocation;
 use crate::ir_passes::intervals::{build_intervals, LiveInterval};
 use crate::ir_passes::liveness::compute_liveness;
@@ -43,67 +43,17 @@ pub fn allocate_registers(func: &Function, target: Target) -> Allocation {
 
     let liveness = compute_liveness(func);
     let intervals = build_intervals(func, &liveness);
-    let ineligible = ineligible_values(func);
-
     let eligible: Vec<LiveInterval> = intervals
         .into_iter()
-        .filter(|iv| is_eligible(func, iv, &ineligible))
+        .filter(|iv| is_eligible(func, iv))
         .collect();
 
     scan(&eligible, target)
 }
 
-/// Collects values that must stay in stack slots regardless of their type:
-/// block parameters and values passed as branch arguments. These feed the
-/// slot-based block-parameter moves, which read them from their slots.
-fn ineligible_values(func: &Function) -> HashSet<ValueId> {
-    let mut ineligible = HashSet::new();
-    for block in &func.blocks {
-        for param in &block.params {
-            ineligible.insert(*param);
-        }
-        if let Some(term) = &block.terminator {
-            for arg in terminator_branch_args(term) {
-                ineligible.insert(arg);
-            }
-        }
-    }
-    ineligible
-}
-
-/// Returns the values a terminator passes as block-parameter arguments. These
-/// are distinct from condition/scrutinee/return uses, which are ordinary uses.
-fn terminator_branch_args(term: &Terminator) -> Vec<ValueId> {
-    match term {
-        Terminator::Br { args, .. } => args.clone(),
-        Terminator::CondBr {
-            then_args,
-            else_args,
-            ..
-        } => then_args.iter().chain(else_args).copied().collect(),
-        Terminator::Switch {
-            cases,
-            default_args,
-            ..
-        } => cases
-            .iter()
-            .flat_map(|case| case.args.iter().copied())
-            .chain(default_args.iter().copied())
-            .collect(),
-        Terminator::GeneratorSuspend { resume_args, .. } => resume_args.clone(),
-        Terminator::Return { .. }
-        | Terminator::Throw { .. }
-        | Terminator::Fatal { .. }
-        | Terminator::Unreachable => Vec::new(),
-    }
-}
-
 /// Returns true when an interval's value can live in a register: a single-word
-/// non-heap scalar that is not a block parameter or branch argument.
-fn is_eligible(func: &Function, iv: &LiveInterval, ineligible: &HashSet<ValueId>) -> bool {
-    if ineligible.contains(&iv.value) {
-        return false;
-    }
+/// non-heap scalar. Branch edge copies support register and stack homes.
+fn is_eligible(func: &Function, iv: &LiveInterval) -> bool {
     if !matches!(iv.ir_type, IrType::I64 | IrType::F64) {
         return false;
     }

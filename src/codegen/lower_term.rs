@@ -472,13 +472,24 @@ mod tests {
         assert!(asm.contains("ud2"), "{asm}");
     }
 
-    /// Verifies unconditional branch arguments are copied into target block parameter slots.
+    /// Verifies unconditional scalar branch arguments reach the allocated parameter register.
     #[test]
     fn br_arguments_are_copied_to_target_params() {
-        let asm = generate_branch_arg_main_asm(Target::new(Platform::Linux, Arch::AArch64));
-
-        assert!(asm.contains("ldur x0, [x29, #-16]"), "{asm}");
-        assert!(asm.contains("stur x0, [x29, #-8]"), "{asm}");
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).expect("supported target");
+            let asm = generate_branch_arg_main_asm(target);
+            let move_into_home = match target.arch {
+                Arch::AArch64 => "mov x12, x0",
+                Arch::X86_64 => "mov rsi, rax",
+            };
+            assert_eq!(asm.matches(move_into_home).count(), 2, "{name}: {asm}");
+        }
     }
 
     /// Verifies conditional branch arguments use per-edge copy stubs: both edges get their own
@@ -489,13 +500,21 @@ mod tests {
     /// shifts rather than when edge lowering regresses.
     #[test]
     fn cond_br_arguments_emit_edge_copy_stubs() {
-        let asm = generate_cond_branch_arg_main_asm(Target::new(Platform::Linux, Arch::X86_64));
-
-        let then_edge = find_numbered_label(&asm, "_eir_main_cond_then_args");
-        let else_edge = find_numbered_label(&asm, "_eir_main_cond_else_args");
-        assert_ne!(then_edge, else_edge, "{asm}");
-        assert!(branches_to(&asm, &then_edge), "{asm}");
-        assert!(branches_to(&asm, &else_edge), "{asm}");
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).expect("supported target");
+            let asm = generate_cond_branch_arg_main_asm(target);
+            let then_edge = find_numbered_label(&asm, "_eir_main_cond_then_args");
+            let else_edge = find_numbered_label(&asm, "_eir_main_cond_else_args");
+            assert_ne!(then_edge, else_edge, "{name}: {asm}");
+            assert!(branches_to(&asm, &then_edge), "{name}: {asm}");
+            assert!(branches_to(&asm, &else_edge), "{name}: {asm}");
+        }
     }
 
     /// Verifies switch case and default arguments use per-edge copy stubs, with the case compare
@@ -504,13 +523,21 @@ mod tests {
     /// Structural for the same reason as `cond_br_arguments_emit_edge_copy_stubs()`.
     #[test]
     fn switch_arguments_emit_edge_copy_stubs() {
-        let asm = generate_switch_arg_main_asm(Target::new(Platform::Linux, Arch::AArch64));
-
-        let case_edge = find_numbered_label(&asm, "_eir_main_switch_case_args");
-        let default_edge = find_numbered_label(&asm, "_eir_main_switch_default_args");
-        assert_ne!(case_edge, default_edge, "{asm}");
-        assert!(branches_to(&asm, &case_edge), "{asm}");
-        assert!(branches_to(&asm, &default_edge), "{asm}");
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).expect("supported target");
+            let asm = generate_switch_arg_main_asm(target);
+            let case_edge = find_numbered_label(&asm, "_eir_main_switch_case_args");
+            let default_edge = find_numbered_label(&asm, "_eir_main_switch_default_args");
+            assert_ne!(case_edge, default_edge, "{name}: {asm}");
+            assert!(branches_to(&asm, &case_edge), "{name}: {asm}");
+            assert!(branches_to(&asm, &default_edge), "{name}: {asm}");
+        }
     }
 
     /// Verifies an inliner-shaped Mixed phi promotes only its borrowed incoming edge.

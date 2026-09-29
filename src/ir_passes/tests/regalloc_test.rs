@@ -131,10 +131,10 @@ fn integers_and_floats_use_separate_pools() {
     );
 }
 
-/// Block parameters and branch arguments stay in stack slots so the existing
-/// slot-based block-parameter moves remain correct.
+/// Scalar block parameters and branch arguments receive register homes when
+/// available, letting promoted loop values cross edges without local traffic.
 #[test]
-fn block_parameters_and_branch_arguments_stay_spilled() {
+fn block_parameters_and_branch_arguments_can_use_registers() {
     let mut function = Function::new("params".to_string(), IrType::I64, PhpType::Int);
     let (arg, param) = {
         let mut builder = Builder::new(&mut function);
@@ -157,16 +157,8 @@ fn block_parameters_and_branch_arguments_stay_spilled() {
 
     let allocation = allocate_registers(&function, aarch64());
 
-    assert_eq!(
-        allocation.register_of(arg),
-        None,
-        "a branch argument must stay in its slot"
-    );
-    assert_eq!(
-        allocation.register_of(param),
-        None,
-        "a block parameter must stay in its slot"
-    );
+    assert!(allocation.register_of(arg).is_some(), "scalar branch argument can use a register");
+    assert!(allocation.register_of(param).is_some(), "scalar block parameter can use a register");
 }
 
 /// The x86_64 target used by these tests, exercising the caller-saved float
