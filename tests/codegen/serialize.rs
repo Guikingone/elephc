@@ -1331,3 +1331,70 @@ echo get_class($value), "|", serialize($value);
         "__PHP_Incomplete_Class|O:7:\"Missing\":1:{s:4:\"self\";r:1;}",
     );
 }
+
+/// `unserialize()` of a null into a boxed-Mixed property (untyped, `?string`, `?float`) stores the
+/// parsed null cell like any other value.
+///
+/// It stored the in-band `NULL_SENTINEL` word instead, which is not a Mixed cell pointer, so the
+/// first reader of the property — `=== null`, `var_dump`, `json_encode` — dereferenced it and the
+/// program segfaulted.
+#[test]
+fn test_unserialize_null_into_mixed_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class P { public $n = 5; public ?string $m = "a"; public ?float $f = 1.5; }
+$p = new P();
+$p->n = $argc > 5 ? 1 : null;
+$p->m = $argc > 5 ? "z" : null;
+$p->f = $argc > 5 ? 2.5 : null;
+$u = unserialize(serialize($p));
+var_dump($u->n === null, $u->m === null, isset($u->f), $u->n ?? "dflt");
+echo json_encode($u), "\n";
+var_dump($u);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(false)\n",
+            "string(4) \"dflt\"\n",
+            "{\"n\":null,\"m\":null,\"f\":null}\n",
+            "object(P)#2 (3) {\n",
+            "  [\"n\"]=>\n",
+            "  NULL\n",
+            "  [\"m\"]=>\n",
+            "  NULL\n",
+            "  [\"f\"]=>\n",
+            "  NULL\n",
+            "}\n",
+        )
+    );
+}
+
+/// `unserialize()` into a tagged `?int` property stores an int and a null as themselves, and
+/// never exposes another value's payload word as an integer. PHP rejects a string, float, bool
+/// or array there with a `TypeError`, which elephc does not raise yet (#1629, `docs/php/types.md`);
+/// the slot holds null instead, rather than a string's heap pointer read as an int. The heap is
+/// not asserted clean: `unserialize()` of an object leaks on main whatever the property type
+/// (#1562).
+#[test]
+fn test_unserialize_mismatched_value_into_nullable_int_property_stores_null() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C { public ?int $n = null; }
+$out = "";
+for ($i = 0; $i < 20 + $argc; $i++) {
+    $out = "";
+    foreach (['i:7;', 'N;', 's:3:"abc";', 'd:1.5;', 'b:1;', 'a:0:{}'] as $payload) {
+        $o = unserialize('O:1:"C":1:{s:1:"n";' . $payload . '}');
+        $out .= json_encode($o->n) . " ";
+    }
+}
+echo $out, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "7 null null null null null \n");
+}

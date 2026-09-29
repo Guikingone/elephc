@@ -21,7 +21,9 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::sentinels::emit_branch_if_null_container;
+use crate::codegen_support::sentinels::{
+    emit_branch_if_null_container, emit_resolve_tagged_scalar_property_tag,
+};
 
 mod magic_result;
 mod sleep_result;
@@ -683,6 +685,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [x7]");                                        // value low payload word
     emitter.instruction("ldr x2, [x7, #8]");                                    // value high payload word
     emitter.instruction("mov x0, x10");                                         // value tag
+    emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
     emitter.instruction("bl __rt_serialize_value");                             // append the serialized property value
     emitter.instruction("ldr x4, [sp, #32]");                                   // reload the property cursor
     emitter.instruction("add x4, x4, #1");                                      // advance to the next property
@@ -770,6 +773,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [x7]");                                        // value low payload word
     emitter.instruction("ldr x2, [x7, #8]");                                    // value high payload word
     emitter.instruction("mov x0, x10");                                         // value tag
+    emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
     emitter.instruction("bl __rt_serialize_value");                             // append the serialized property value
     emitter.instruction("b __rt_serialize_named_prop_done");                    // stop after the matching property
     emitter.label("__rt_serialize_named_prop_next");
@@ -1528,6 +1532,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rcx]");                            // value low payload word
     emitter.instruction("mov rdx, QWORD PTR [rcx + 8]");                        // value high payload word
     emitter.instruction("mov rdi, r9");                                         // value tag
+    emit_resolve_tagged_scalar_property_tag(emitter, "rdi", "rdx");
     emitter.instruction("call __rt_serialize_value");                           // append the serialized property value
     emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // reload the property cursor
     emitter.instruction("add rcx, 1");                                          // advance to the next property
@@ -1618,6 +1623,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rcx]");                            // value low payload word
     emitter.instruction("mov rdx, QWORD PTR [rcx + 8]");                        // value high payload word
     emitter.instruction("mov rdi, r9");                                         // value tag
+    emit_resolve_tagged_scalar_property_tag(emitter, "rdi", "rdx");
     emitter.instruction("call __rt_serialize_value");                           // append the serialized property value
     emitter.instruction("jmp __rt_serialize_named_prop_done");                  // stop after the matching property
     emitter.label("__rt_serialize_named_prop_next");
