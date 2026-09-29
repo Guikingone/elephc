@@ -891,6 +891,99 @@ echo $n, "\n";
     );
 }
 
+/// `empty()` on an `ArrayAccess` receiver holds the receiver and a computed offset only for
+/// the expression, so destructors run where PHP runs them.
+///
+/// The receiver (and a computed offset) are kept in hidden temps so `offsetExists` and
+/// `offsetGet` see the same values. Those temps used to live until the enclosing function
+/// returned: after `empty($box['k']); unset($box);` the object survived the `unset()`, and a
+/// call result or an object offset outlived the statement. They are now released as soon as
+/// `empty()` has decided, on the present, absent and null-receiver paths alike. The expected
+/// output is PHP 8.5.10's, and the heap must be clean.
+#[test]
+fn test_empty_on_array_access_releases_its_receiver_and_offset_when_it_decides() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Key {
+    public function __construct(public string $name) {}
+    public function __destruct() { echo "destruct key {$this->name}\n"; }
+}
+class Box implements ArrayAccess {
+    public ?Box $inner = null;
+    public function __construct(public string $name) {}
+    public function __destruct() { echo "destruct {$this->name}\n"; }
+    public function offsetExists(mixed $o): bool { return !($o instanceof Key) || $o->name !== "missing"; }
+    public function offsetGet(mixed $o): mixed { return $o === "zero" ? 0 : 1; }
+    public function offsetSet(mixed $o, mixed $v): void {}
+    public function offsetUnset(mixed $o): void {}
+}
+function make(string $name): Box { return new Box($name); }
+function probe(bool $make): void {
+    $box = new Box("local");
+    var_dump(empty($box["k"]));
+    unset($box);
+    echo "after local unset\n";
+    var_dump(empty(make("call")["zero"]));
+    echo "after call\n";
+    $holder = new Box("holder");
+    $holder->inner = new Box("inner");
+    var_dump(empty($holder->inner["k"]));
+    $holder->inner = null;
+    echo "after inner reset\n";
+    var_dump(empty($holder[new Key("present")]));
+    var_dump(empty($holder[new Key("missing")]));
+    echo "after keys\n";
+    unset($holder);
+    $maybe = $make ? new Box("nullable") : null;
+    var_dump(empty($maybe["k"]));
+    $maybe = null;
+    echo "after nullable reset\n";
+}
+probe(true);
+probe(false);
+$main = new Box("main");
+var_dump(empty($main["k"]));
+unset($main);
+echo "end\n";
+"#,
+    );
+    let probe = |nullable: &str| {
+        format!(
+            concat!(
+                "bool(false)\n",
+                "destruct local\n",
+                "after local unset\n",
+                "destruct call\n",
+                "bool(true)\n",
+                "after call\n",
+                "bool(false)\n",
+                "destruct inner\n",
+                "after inner reset\n",
+                "destruct key present\n",
+                "bool(false)\n",
+                "destruct key missing\n",
+                "bool(true)\n",
+                "after keys\n",
+                "destruct holder\n",
+                "{}",
+                "after nullable reset\n",
+            ),
+            nullable
+        )
+    };
+    let expected = format!(
+        "{}{}bool(false)\ndestruct main\nend\n",
+        probe("bool(false)\ndestruct nullable\n"),
+        probe("bool(true)\n"),
+    );
+    assert_eq!(out.stdout, expected, "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// Eval's `empty()` on an `ArrayAccess` object releases the value `offsetGet` returned once
 /// it is tested, as its `isset()` releases the `offsetExists` answer (#1450).
 ///
