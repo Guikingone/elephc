@@ -90,6 +90,15 @@ pub fn emit_mixed_from_value(emitter: &mut Emitter) {
         "x9",
         "__rt_mixed_from_value_null_container",
     );
+    // -- an indexed-typed array a string-keyed write promoted is boxed as the hash it is --
+    emitter.instruction("cmp x0, #4");                                          // only an indexed-array tag can disagree with its storage
+    emitter.instruction("b.ne __rt_mixed_from_value_dispatch");                 // every other tag already names its storage
+    emitter.instruction("ldr x9, [x1, #-8]");                                   // load the array's uniform heap kind word
+    emitter.instruction("and x9, x9, #0xff");                                   // keep the low-byte heap kind
+    emitter.instruction("cmp x9, #3");                                          // is the storage a hash?
+    emitter.instruction("b.ne __rt_mixed_from_value_dispatch");                 // indexed storage keeps the indexed tag
+    emitter.instruction("mov x0, #5");                                          // box promoted storage with the hash tag
+    emitter.instruction("str x0, [sp, #0]");                                    // keep the corrected tag for the allocation below
     emitter.label("__rt_mixed_from_value_dispatch");
     emitter.instruction("cmp x0, #1");                                          // does this mixed payload hold a string?
     emitter.instruction("b.eq __rt_mixed_from_value_string");                   // strings must be persisted for the boxed owner
@@ -191,6 +200,15 @@ fn emit_mixed_from_value_linux_x86_64(emitter: &mut Emitter) {
         "r10",
         "__rt_mixed_from_value_null_container",
     );
+    // -- an indexed-typed array a string-keyed write promoted is boxed as the hash it is --
+    emitter.instruction("cmp rax, 4");                                          // only an indexed-array tag can disagree with its storage
+    emitter.instruction("jne __rt_mixed_from_value_dispatch");                  // every other tag already names its storage
+    emitter.instruction("mov r10, QWORD PTR [rdi - 8]");                        // load the array's uniform heap kind word
+    emitter.instruction("and r10d, 0xff");                                      // keep the low-byte heap kind
+    emitter.instruction("cmp r10, 3");                                          // is the storage a hash?
+    emitter.instruction("jne __rt_mixed_from_value_dispatch");                  // indexed storage keeps the indexed tag
+    emitter.instruction("mov rax, 5");                                          // box promoted storage with the hash tag
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // keep the corrected tag for the allocation below
     emitter.label("__rt_mixed_from_value_dispatch");
     emitter.instruction("cmp rax, 1");                                          // detect string payloads that need their own owned copy inside the mixed box
     emitter.instruction("je __rt_mixed_from_value_string");                     // strings must be persisted so the mixed cell owns a stable payload

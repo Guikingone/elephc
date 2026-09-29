@@ -3854,3 +3854,68 @@ var_dump($arr);
         "sentinel comparison must precede the array header load, got:\n{body}"
     );
 }
+
+/// An `array<mixed>` promoted to hash storage at run time by a mixed-key write
+/// (`$map[$k] = ...` with `$k` from a function returning `mixed`) keeps its
+/// static indexed type. `var_dump`, `print_r` and `json_encode` chose their
+/// walker from that type alone and read the hash as a list, printing its
+/// header words as values (`[0 => 11, 1 => 3]`); their indexed walkers now
+/// defer to the hash walker when the storage says hash.
+#[test]
+fn test_mixed_key_promoted_array_prints_as_a_hash() {
+    let out = compile_and_run(
+        r#"<?php
+function key_of(int $i): mixed {
+    return $i === 0 ? "alpha" : 7;
+}
+function build(): array {
+    $map = [];
+    for ($i = 0; $i < 2; $i++) {
+        $map[key_of($i)] = $i === 0 ? "a" : "b";
+    }
+    return $map;
+}
+$m = build();
+echo json_encode($m), "\n";
+print_r($m);
+var_dump($m);
+echo json_encode([build(), [1, 2]]), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"alpha\":\"a\",\"7\":\"b\"}\n\
+         Array\n(\n    [alpha] => a\n    [7] => b\n)\n\
+         array(2) {\n  [\"alpha\"]=>\n  string(1) \"a\"\n  [7]=>\n  string(1) \"b\"\n}\n\
+         [{\"alpha\":\"a\",\"7\":\"b\"},[1,2]]\n"
+    );
+}
+
+/// The same promoted array, returned from a function typed `mixed`, is boxed.
+/// The box took its tag from the static type, 4 (indexed), so every consumer
+/// of the Mixed value walked a hash as a list: `array_keys` answered `0,1`.
+/// Boxing now tags promoted storage 5 (hash).
+#[test]
+fn test_boxed_mixed_key_promoted_array_keeps_its_keys() {
+    let out = compile_and_run(
+        r#"<?php
+function key_of(int $i): mixed {
+    return $i === 0 ? "alpha" : 7;
+}
+function build(): mixed {
+    $map = [];
+    for ($i = 0; $i < 2; $i++) {
+        $map[key_of($i)] = $i === 0 ? "a" : "b";
+    }
+    return $map;
+}
+$m = build();
+echo implode(",", array_keys($m)), "\n";
+foreach ($m as $k => $v) {
+    echo $k, "=", $v, " ";
+}
+echo "\n", json_encode(["wrapped" => $m]), "\n";
+"#,
+    );
+    assert_eq!(out, "alpha,7\nalpha=a 7=b \n{\"wrapped\":{\"alpha\":\"a\",\"7\":\"b\"}}\n");
+}
