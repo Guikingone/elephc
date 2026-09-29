@@ -480,6 +480,16 @@ pub(super) fn lower_nullable_prop_set(
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     emit_nullable_receiver_object_payload(ctx, object, &null_label, base_reg)?;
     emit_property_store(ctx, value, &slot, base_reg)?;
+    if matches!(
+        slot.php_type.codegen_repr(),
+        PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool
+    ) {
+        // A value written through a nullable receiver is boxed before the store (its slot is only
+        // known at run time in general), and scalar and string slots copy the accepted payload
+        // out of that cell, exactly as in `lower_mixed_named_prop_set`. An owned source box is
+        // retired here; leaving it was one leaked cell per `$link->n = 9` (#1643).
+        super::release_adopted_mixed_source(ctx, value, &slot.php_type)?;
+    }
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&null_label);

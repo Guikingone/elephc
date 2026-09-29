@@ -46,7 +46,7 @@ pub(super) fn lower_property_assign(
     // guard adds no evaluation and both branches see exactly the same two values.
     let magic_classes = magic_accessor_subclasses(ctx, object.value, property, "__set");
     if !magic_classes.is_empty() {
-        return lower_property_assign_guarding_magic_subclasses(
+        lower_property_assign_guarding_magic_subclasses(
             ctx,
             object,
             property,
@@ -55,8 +55,16 @@ pub(super) fn lower_property_assign(
             &magic_classes,
             span,
         );
+    } else {
+        lower_property_assign_value(ctx, object, property, value_expr, lowered_value, false, span);
     }
-    lower_property_assign_value(ctx, object, property, value_expr, lowered_value, false, span)
+    // Every write path above only BORROWS the receiver (the store, `__set`, a set hook). A
+    // receiver that is itself an owning temporary, such as `$h->next` read out of its slot for
+    // `$h->next->n = 9`, a call result or a `new` expression, is retired here once the write is
+    // done; leaving it was one leaked reference per statement (#1643).
+    if ctx.value_is_owning_temporary(object) && !ctx.builder.insertion_block_is_terminated() {
+        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
+    }
 }
 
 /// Emits the `instanceof` chain that hands a runtime subclass's `__set` its own call.

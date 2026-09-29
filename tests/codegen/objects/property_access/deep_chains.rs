@@ -294,3 +294,40 @@ echo Secret::reveal();
     );
     assert_eq!(out, "7");
 }
+
+/// Writing through a nullable object property link (`$h->next->n += 1` with `?Box $next`) leaves
+/// the heap clean. Two references leaked per statement (#1643):
+/// - the `$h->next` receiver read out of its slot was never released after the store, which
+///   also leaked for a call receiver such as `mk()->n = 5`;
+/// - the value boxed for the nullable receiver was copied into the scalar slot and never retired.
+///
+/// Covers `+=`, `=`, `++`, `.=`, a write through a local alias of the link, and a call receiver,
+/// in a loop under `--heap-debug`.
+#[test]
+fn test_write_through_nullable_property_link_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Box { public int $n = 7; public string $s = 'a'; public ?Box $next = null; }
+function mk(): Box { return new Box(); }
+function p(Box $h): int {
+    if ($h->next === null) { $h->next = new Box(); }
+    $h->next->n += 1;
+    $h->next->n = $h->next->n + 1;
+    ++$h->next->n;
+    $h->next->s .= 'b';
+    $b = $h->next;
+    $b->n += 1;
+    return $h->next->n + strlen($h->next->s);
+}
+$s = 0;
+for ($i = 0; $i < 40 + ($argc > 5 ? 1 : 0); $i++) {
+    $h = new Box();
+    $s += p($h) + p($h) + (mk()->n = 5);
+}
+echo $s, "\n";
+"#,
+    );
+    assert!(out.success, "program exited non-zero: {}", out.stderr);
+    assert_eq!(out.stdout, "1440\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
