@@ -561,6 +561,27 @@ fn first_archive_candidate(
         .find(|candidate| std::fs::symlink_metadata(candidate).is_ok())
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Directories `archive_search_dirs()` answers on the current test thread instead of the
+    /// executable- and environment-derived list, so discovery tests drive the production path
+    /// against directories they own without mutating process-wide state other tests read.
+    static TEST_ARCHIVE_SEARCH_DIRS: std::cell::RefCell<Option<Vec<PathBuf>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Returns the current test thread's replacement search directories, if a test installed one.
+#[cfg(test)]
+fn test_archive_search_dirs() -> Option<Vec<PathBuf>> {
+    TEST_ARCHIVE_SEARCH_DIRS.with(|directories| directories.borrow().clone())
+}
+
+/// Production builds always search the executable- and environment-derived directories.
+#[cfg(not(test))]
+fn test_archive_search_dirs() -> Option<Vec<PathBuf>> {
+    None
+}
+
 /// Returns bridge metadata for one linker library name.
 fn bridge_for_library(name: &str) -> Option<&'static BridgeStaticlib> {
     let bridge = BRIDGES.iter().find(|bridge| bridge.lib_name == name);
@@ -1020,6 +1041,9 @@ impl BridgeStaticlib {
     /// `archive_path` before any of these are consulted, and the message names it separately
     /// as the way out rather than as somewhere that was checked.
     fn archive_search_dirs(&self) -> Vec<PathBuf> {
+        if let Some(directories) = test_archive_search_dirs() {
+            return directories;
+        }
         let Some(executable_dir) = std::env::current_exe()
             .ok()
             .and_then(|executable| executable.parent().map(Path::to_path_buf))
@@ -2081,37 +2105,89 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// A dangling symbolic link where an archive belongs stops discovery and is reported as
-    /// an invalid file at that path (#1420).
+    /// Installs replacement search directories for the current test thread, clearing them on
+    /// drop so a panicking test cannot leak them into the next test run on the same thread.
+    struct TestArchiveSearchDirs;
+
+    impl TestArchiveSearchDirs {
+        /// Makes `archive_search_dirs()` answer `directories` until the guard is dropped.
+        fn install(directories: Vec<PathBuf>) -> Self {
+            TEST_ARCHIVE_SEARCH_DIRS.with(|slot| *slot.borrow_mut() = Some(directories));
+            Self
+        }
+    }
+
+    impl Drop for TestArchiveSearchDirs {
+        /// Restores the executable- and environment-derived search directories.
+        fn drop(&mut self) {
+            TEST_ARCHIVE_SEARCH_DIRS.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
+
+    /// A dangling symbolic link where an archive belongs stops production discovery and is
+    /// reported as an invalid file at that path, with the directories reached so far (#1420).
     ///
     /// `Path::exists()` follows the link and answers false for a dangling one, so discovery
-    /// skipped it and went on to a later directory, never reaching `validate_archive`.
+    /// skipped it and linked the valid archive a later directory holds, never reaching
+    /// `validate_archive`. This drives `archive_path()` itself, the entry point linking uses,
+    /// so the search, the validation and the `looked in:` context all come from the same
+    /// `archive_search_dirs()` list: the directories up to the match are listed, the one after
+    /// it is not.
     #[test]
-    fn dangling_archive_link_is_found_and_reported_invalid() {
+    fn dangling_archive_link_stops_production_discovery_with_its_search_context() {
         let bridge = bridge_for_library("elephc_tls").expect("tls bridge");
+        assert!(
+            std::env::var_os(bridge.env_var).is_none(),
+            "{} short-circuits the discovery this test drives",
+            bridge.env_var
+        );
         let filename = bridge.archive_filename();
         let base = std::env::temp_dir().join(format!(
             "elephc-dangling-archive-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&base);
-        let first = base.join("first");
-        let second = base.join("second");
-        std::fs::create_dir_all(&first).expect("create first search directory");
-        std::fs::create_dir_all(&second).expect("create second search directory");
-        let dangling = first.join(&filename);
+        let directories: Vec<PathBuf> =
+            ["first", "second", "third"].iter().map(|name| base.join(name)).collect();
+        for directory in &directories {
+            std::fs::create_dir_all(directory).expect("create search directory");
+        }
+        let dangling = directories[1].join(&filename);
         std::os::unix::fs::symlink(base.join("nowhere.a"), &dangling).expect("create dangling link");
-        std::fs::write(second.join(&filename), b"!<arch>\n").expect("create later archive");
+        std::fs::write(directories[2].join(&filename), b"!<arch>\n").expect("create later archive");
 
-        let found = first_archive_candidate(vec![first.clone(), second.clone()], &filename);
-        assert_eq!(found.as_deref(), Some(dangling.as_path()));
-        let invalid = bridge
-            .validate_archive(dangling.clone())
-            .expect_err("a dangling link is not an archive")
-            .to_string();
-        assert!(invalid.contains(&format!("needs: {}", dangling.display())), "{invalid}");
-        assert!(invalid.contains("Replace invalid archive"), "{invalid}");
+        let error = {
+            let _search = TestArchiveSearchDirs::install(directories.clone());
+            assert_eq!(bridge.find_archive().as_deref(), Some(dangling.as_path()));
+            bridge
+                .archive_path()
+                .expect_err("a dangling link must stop discovery, not fall through to a later archive")
+        };
         let _ = std::fs::remove_dir_all(&base);
+
+        let LinkError::MissingBridge { archive, searched, override_dir, .. } = &error;
+        assert_eq!(archive.as_deref(), Some(dangling.display().to_string().as_str()));
+        assert_eq!(
+            searched,
+            &directories[..=1]
+                .iter()
+                .map(|directory| directory.display().to_string())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(override_dir, &None);
+        let rendered = error.to_string();
+        assert!(rendered.contains(&format!("needs: {}", dangling.display())), "{rendered}");
+        for reached in &directories[..=1] {
+            let line = format!("    {}", reached.display());
+            assert!(rendered.lines().any(|rendered_line| rendered_line == line), "{rendered}");
+        }
+        let later = format!("    {}", directories[2].display());
+        assert!(
+            !rendered.lines().any(|rendered_line| rendered_line == later),
+            "a directory after the match must not be listed as searched:\n{rendered}"
+        );
+        assert!(rendered.contains("Replace invalid archive"), "{rendered}");
+        assert!(rendered.contains("ELEPHC_TLS_LIB_DIR"), "{rendered}");
     }
 
     /// The override error names the archive that was actually wanted.
