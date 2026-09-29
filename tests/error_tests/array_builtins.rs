@@ -175,6 +175,27 @@ fn test_error_array_slice_non_literal_preserve_keys() {
     );
 }
 
+/// Verifies every first-class spelling of `array_slice()` reports the direct call's diagnostic
+/// for a non-literal `preserve_keys` flag (issue #1346).
+///
+/// The checker used to discard the contract's rejection at these sites, so the program reached
+/// the backend and died there with an internal "not a compile-time literal" error.
+#[test]
+fn test_error_first_class_array_slice_non_literal_preserve_keys() {
+    for call in [
+        "$f = array_slice(...); $f([1, 2], 0, 1, $t);",
+        "call_user_func(array_slice(...), [1, 2], 0, 1, $t);",
+        "$f = array_slice(...); call_user_func($f, [1, 2], 0, 1, $t);",
+        "call_user_func_array(array_slice(...), [[1, 2], 0, 1, $t]);",
+        "$f = array_slice(...); for ($i = 0; $i < 2; $i++) { $f([1, 2], 0, 1, $t); }",
+    ] {
+        expect_error(
+            &format!("<?php $t = $argc > 0; {call}"),
+            "array_slice() preserve_keys argument must be a literal bool in AOT mode",
+        );
+    }
+}
+
 /// Verifies a key-preserving `array_slice()` of a boxed array is rejected, not miscompiled.
 ///
 /// The key-preserving helper copies the source header's `value_type` into the result hash, so

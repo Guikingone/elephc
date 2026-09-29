@@ -9,6 +9,27 @@
 
 use super::*;
 
+/// Verifies first-class builtin calls keep the compile-time literal rule of their contract.
+///
+/// Each argument below decides what the backend emits, so every spelling of the call needs it at
+/// compile time; the direct call's diagnostic is reported instead of a backend failure or a
+/// silently ignored flag (issue #1346).
+#[test]
+fn test_error_first_class_builtin_non_literal_arguments() {
+    expect_error(
+        "<?php $t = $argc > 0; $f = array_reverse(...); $f([1, 2], $t);",
+        "array_reverse() preserve_keys argument must be a literal bool in AOT mode",
+    );
+    expect_error(
+        "<?php $n = $argc > 5 ? 'A' : 'B'; $f = constant(...); $f($n);",
+        "constant() first argument must be a string literal in AOT mode",
+    );
+    expect_error(
+        "<?php $m = $argc > 5 ? 1 : 0; $f = str_word_count(...); $f('a b', $m);",
+        "str_word_count() format argument must be an integer literal in AOT mode",
+    );
+}
+
 /// An unsupported fourth replacement argument stays rejected through callable syntax.
 #[test]
 fn test_error_capped_string_replace_callable_rejects_fourth_argument() {
