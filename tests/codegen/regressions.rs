@@ -5,7 +5,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for scalars and regex, arrays, syntax edges, closures and refs, string memory, symbol collisions, and related suites.
+//! - Submodules group focused fixtures for scalars and regex, arrays, syntax edges, closures and refs, string memory, symbol collisions, pinned fixes for issues main already resolves, and related suites.
 
 use crate::support::*;
 
@@ -19,6 +19,8 @@ mod syntax_edges;
 mod closures_and_refs;
 #[path = "regressions/string_memory.rs"]
 mod string_memory;
+#[path = "regressions/pinned_fixed_issues.rs"]
+mod pinned_fixed_issues;
 #[path = "regressions/builtins_misc.rs"]
 mod builtins_misc;
 #[path = "regressions/concat_buffer_args.rs"]
