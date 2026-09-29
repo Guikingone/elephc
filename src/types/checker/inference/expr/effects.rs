@@ -15,7 +15,8 @@ use crate::types::{PhpType, TypeEnv};
 
 use super::super::super::null_probe;
 use super::super::super::Checker;
-use super::{merge_match_arm_result_type, merge_null_coalesce_result_type};
+use super::merge_match_arm_result_type;
+use super::null_coalesce::{null_coalesce_result_type, operand_is_never_null};
 
 impl Checker {
     /// Infers the type of an expression while tracking assignment effects through the environment.
@@ -118,6 +119,7 @@ impl Checker {
                 let value_ty = self.infer_null_probe_operand_with_effects(value, env);
                 null_probe::end_null_probe_root(probe, env);
                 let value_ty = value_ty?;
+                let value_is_never_null = operand_is_never_null(self, value, &value_ty, env);
                 let default_ty = if value_ty == PhpType::Void {
                     self.infer_type_with_assignment_effects(default, env)?
                 } else {
@@ -127,14 +129,10 @@ impl Checker {
                     merge_array_storage_effects(env, &default_env);
                     default_ty
                 };
-                let non_null_value = if Self::union_contains_void(&value_ty) {
-                    self.strip_void_from_union(&value_ty)
-                } else {
-                    value_ty
-                };
-                Ok(merge_null_coalesce_result_type(
+                Ok(null_coalesce_result_type(
                     self,
-                    non_null_value,
+                    value_is_never_null,
+                    value_ty,
                     default_ty,
                 ))
             }
