@@ -145,6 +145,13 @@ pub(crate) fn lower_array_chunk(ctx: &mut FunctionContext<'_>, inst: &Instructio
         return store_if_result(ctx, inst);
     }
     let source_elem_ty = array_chunk_source_element_type(ctx.value_php_type(array)?)?;
+    if preserve_keys && source_elem_ty == PhpType::Str {
+        // `__rt_array_chunk_to_hash` copies 8-byte slots; only the renumbering form has a
+        // string twin (`__rt_array_chunk_str`).
+        return Err(CodegenIrError::unsupported(
+            "array_chunk preserve_keys for indexed-array element PHP type Str".to_string(),
+        ));
+    }
     let result_inner_elem_ty = if preserve_keys {
         array_chunk_result_inner_hash_value_type(&result_elem_ty)?
     } else {
@@ -386,7 +393,7 @@ pub(crate) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruct
         return lower_array_reverse_preserve_keys(ctx, inst, array);
     }
     let elem_ty =
-        eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_reverse")?;
+        str_or_eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_reverse")?;
     ctx.load_value_to_result(array)?;
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the source indexed-array pointer as the reverse helper argument

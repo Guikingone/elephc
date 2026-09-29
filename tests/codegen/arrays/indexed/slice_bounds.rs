@@ -920,3 +920,118 @@ echo "ok\n";
         .unwrap_or_else(|| panic!("unexpected GC stats shape: {stats}"));
     assert_eq!(allocs, frees, "array_slice on a string array leaked: {stats}");
 }
+
+/// Regression for #675: `array_chunk`, `array_pad`, `array_reverse`, `array_merge`, `array_diff`
+/// and `shuffle` accept an indexed `array<string>`.
+///
+/// Each refused a string receiver at compile time (`unsupported EIR backend feature: ...
+/// indexed-array element PHP type Str`), because an indexed string array stores 16-byte
+/// `{pointer, length}` slots and their helpers copy 8 bytes per element. The `_str` twins copy the
+/// pair through `__rt_array_push_str`, the same ownership rule as `__rt_array_slice_str`: the
+/// result owns its bytes, so mutating it leaves the source intact. The rows cover chunk sizes of
+/// 1, 2 and more than the array; padding on both sides and a size that needs no padding; merging
+/// with an empty array on either side; and diffs that remove some, all or none of the strings.
+/// The long-string row forces real heap buffers.
+///
+/// `array_diff` renumbers the kept strings here, like the integer helper; PHP keeps the
+/// surviving keys, which `implode` does not show. Every expectation is php 8.4's output.
+#[test]
+fn test_array_builtins_on_indexed_string_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+$s = ["alpha", "bravo", "charlie", "delta", "echo"];
+
+function row(string $label, array $a): void {
+    echo $label, "=[", implode(",", $a), "] n=", count($a), "\n";
+}
+
+$c = array_chunk($s, 2);
+$parts = [];
+foreach ($c as $chunk) { $parts[] = implode(",", $chunk); }
+echo "chunk2=", count($c), ":", implode("|", $parts), "\n";
+$c1 = array_chunk($s, 1);
+echo "chunk1=", count($c1), ":", $c1[4][0], "\n";
+$cbig = array_chunk($s, 99);
+echo "chunk99=", count($cbig), ":", count($cbig[0]), "\n";
+row("pad-right", array_pad($s, 7, "p"));
+row("pad-left", array_pad($s, -7, "q"));
+row("pad-short", array_pad($s, 3, "z"));
+row("pad-neg-short", array_pad($s, -2, "z"));
+row("reverse", array_reverse($s));
+row("reverse-one", array_reverse(["only"]));
+row("merge", array_merge($s, ["x", "y"]));
+row("merge-empty-right", array_merge($s, []));
+row("merge-empty-left", array_merge([], $s));
+row("merge-nested", array_merge(array_merge(["a"], ["b"]), ["c"]));
+row("diff", array_diff($s, ["bravo", "echo"]));
+row("diff-all", array_diff($s, $s));
+row("diff-none", array_diff($s, ["zulu"]));
+$t = $s;
+shuffle($t);
+sort($t);
+row("shuffle-sorted", $t);
+row("source-intact", $s);
+
+$r = array_reverse($s);
+$r[0] = "MUTATED";
+row("after-mutate", $r);
+row("source-still-intact", $s);
+$long = [str_repeat("q", 100), str_repeat("w", 200)];
+$m = array_pad($long, 3, str_repeat("e", 300));
+echo "long=", strlen($m[0]), ",", strlen($m[1]), ",", strlen($m[2]), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "chunk2=3:alpha,bravo|charlie,delta|echo\n",
+            "chunk1=5:echo\n",
+            "chunk99=1:5\n",
+            "pad-right=[alpha,bravo,charlie,delta,echo,p,p] n=7\n",
+            "pad-left=[q,q,alpha,bravo,charlie,delta,echo] n=7\n",
+            "pad-short=[alpha,bravo,charlie,delta,echo] n=5\n",
+            "pad-neg-short=[alpha,bravo,charlie,delta,echo] n=5\n",
+            "reverse=[echo,delta,charlie,bravo,alpha] n=5\n",
+            "reverse-one=[only] n=1\n",
+            "merge=[alpha,bravo,charlie,delta,echo,x,y] n=7\n",
+            "merge-empty-right=[alpha,bravo,charlie,delta,echo] n=5\n",
+            "merge-empty-left=[alpha,bravo,charlie,delta,echo] n=5\n",
+            "merge-nested=[a,b,c] n=3\n",
+            "diff=[alpha,charlie,delta] n=3\n",
+            "diff-all=[] n=0\n",
+            "diff-none=[alpha,bravo,charlie,delta,echo] n=5\n",
+            "shuffle-sorted=[alpha,bravo,charlie,delta,echo] n=5\n",
+            "source-intact=[alpha,bravo,charlie,delta,echo] n=5\n",
+            "after-mutate=[MUTATED,delta,charlie,bravo,alpha] n=5\n",
+            "source-still-intact=[alpha,bravo,charlie,delta,echo] n=5\n",
+            "long=100,200,300\n",
+        )
+    );
+}
+
+/// The six string-array builtins of #675 leave the heap clean over a loop: every duplicated
+/// string, every chunk and the outer chunk array are released with their owners, and the pad
+/// value, borrowed by `__rt_array_pad_str`, is freed by its own owner.
+#[test]
+fn test_array_builtins_on_indexed_string_arrays_heap_is_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$s = ["a" . $argc, "bb", "c", "dd", "e"];
+$n = 0;
+for ($i = 0; $i < 30 + ($argc > 5 ? 1 : 0); $i++) {
+    $n += count(array_chunk($s, 2));
+    $n += count(array_pad($s, -8, "q" . $i)) + count(array_pad($s, 7, "p"));
+    $n += count(array_reverse($s));
+    $n += count(array_merge($s, ["x" . $i, "y"]));
+    $n += count(array_diff($s, ["bb", "e"]));
+    $t = $s;
+    shuffle($t);
+    $n += count($t);
+}
+echo $n, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1140\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

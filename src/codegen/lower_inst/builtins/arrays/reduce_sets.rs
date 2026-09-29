@@ -125,8 +125,21 @@ pub(crate) fn lower_array_merge(ctx: &mut FunctionContext<'_>, inst: &Instructio
     store_if_result(ctx, inst)
 }
 
-/// Lowers `array_diff()` for two compatible indexed arrays with pointer-sized payload slots.
+/// Lowers `array_diff()` for two compatible indexed arrays with pointer-sized payload slots, or
+/// two indexed string arrays through `__rt_array_diff_str` (issue #675).
 pub(crate) fn lower_array_diff(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if let (Some(first), Some(second)) = (inst.operands.first(), inst.operands.get(1)) {
+        let first_ty = ctx.value_php_type(*first)?.codegen_repr();
+        let second_ty = ctx.value_php_type(*second)?.codegen_repr();
+        if let (PhpType::Array(first_elem), PhpType::Array(second_elem)) = (&first_ty, &second_ty) {
+            let second_elem = second_elem.codegen_repr();
+            if first_elem.codegen_repr() == PhpType::Str
+                && matches!(second_elem, PhpType::Str | PhpType::Never | PhpType::Void)
+            {
+                return lower_array_diff_str(ctx, inst, *first, *second);
+            }
+        }
+    }
     lower_indexed_array_set_op(
         ctx,
         inst,
@@ -134,6 +147,37 @@ pub(crate) fn lower_array_diff(ctx: &mut FunctionContext<'_>, inst: &Instruction
         "__rt_array_diff",
         "__rt_array_diff_refcounted",
     )
+}
+
+/// Calls `__rt_array_diff_str` for two indexed string arrays (the second may be empty).
+///
+/// The helper duplicates every kept string into a fresh 16-byte-slot array renumbered from zero,
+/// like the integer helper, and the result is stamped as a string array.
+fn lower_array_diff_str(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    first: ValueId,
+    second: ValueId,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, "array_diff", 2)?;
+    require_set_op_result_type("array_diff", &PhpType::Str, &inst.result_php_type.codegen_repr())?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(first, "x0")?;
+            ctx.load_value_to_reg(second, "x1")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(first, "rdi")?;
+            ctx.load_value_to_reg(second, "rsi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_diff_str");
+    crate::codegen::emit_array_value_type_stamp(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        &PhpType::Str,
+    );
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `array_intersect()` for two compatible indexed arrays with pointer-sized payload slots.
