@@ -446,9 +446,10 @@ Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are
   `class_parents()`, `class_implements()` and `class_exists()`, which reject a non-literal name at
   compile time instead of answering. One gap of its own: an enum does not carry its implicit
   `UnitEnum`/`BackedEnum` interfaces, so `is_subclass_of("Suit", "UnitEnum")` is `false` where PHP
-  says `true`. For an enum with an `implements` clause, `class_implements()` lists only the
-  directly declared interfaces; it omits their transitive parents and the implicit
-  `UnitEnum`/`BackedEnum` interfaces.
+  says `true`. For an enum declared in the compiled program with an `implements` clause,
+  `class_implements()` lists only the directly declared interfaces; it omits their transitive
+  parents and the implicit `UnitEnum`/`BackedEnum` interfaces. An enum declared inside `eval()`
+  already reports both, like PHP.
 
 ### Filesystem functions not implemented
 
