@@ -30,6 +30,13 @@ try {
 } catch (OutOfRangeException $e) {
     echo get_class($e), " ", $e->getCode(), " ", $e->getMessage(), "\n";
 }
+$left = 10;
+echo demo_consume(4, $left), " ", $left, "\n";
+try {
+    demo_consume(9, $left);
+} catch (UnderflowException $e) {
+    echo get_class($e), " ", $e->getCode(), " ", $e->getMessage(), " left=", $left, "\n";
+}
 try {
     demo_split("abc", "");
 } catch (ValueError $e) {

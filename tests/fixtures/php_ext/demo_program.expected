@@ -9,6 +9,8 @@ NULL
 DemoParseException 42 '12x' is not an integer
 -17
 OutOfRangeException 7 out of range
+6 6
+UnderflowException 3 overdrawn left=0
 ValueError: demo_split(): Argument #2 ($separator) cannot be empty
 {"a":[1,2.5,"x"],"b":null,"3":true}
 float(1.5)

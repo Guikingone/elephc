@@ -167,6 +167,42 @@ PHP_FUNCTION(demo_fatal)
     php_error_docref(NULL, E_ERROR, "the fixture gave up");
 }
 
+/* demo_consume(int $amount, &$left): int — writes through the reference,
+ * then throws when the amount overdraws it. PHP keeps the write. */
+PHP_FUNCTION(demo_consume)
+{
+    zend_long amount;
+    zval *left;
+    ZEND_PARSE_PARAMETERS_START(2, 2)
+        Z_PARAM_LONG(amount)
+        Z_PARAM_ZVAL(left)
+    ZEND_PARSE_PARAMETERS_END();
+    zval *current = Z_REFVAL_P(left);
+    zend_long remaining = (Z_TYPE_P(current) == IS_LONG ? Z_LVAL_P(current) : 0) - amount;
+    ZEND_TRY_ASSIGN_REF_LONG(left, remaining < 0 ? 0 : remaining);
+    if (remaining < 0) {
+        zend_throw_exception(spl_ce_UnderflowException, "overdrawn", 3);
+        RETURN_THROWS();
+    }
+    RETURN_LONG(remaining);
+}
+
+/* demo_error_object(): object — an object of a class other than stdClass,
+ * which the host refuses to rebuild. */
+PHP_FUNCTION(demo_error_object)
+{
+    ZEND_PARSE_PARAMETERS_NONE();
+    object_init_ex(return_value, demo_parse_exception_ce);
+}
+
+/* demo_cycle(): stdClass — an object whose property is itself. */
+PHP_FUNCTION(demo_cycle)
+{
+    ZEND_PARSE_PARAMETERS_NONE();
+    object_init(return_value);
+    add_property_zval(return_value, "self", return_value);
+}
+
 /* demo_calls(): int — module globals survive between calls. */
 PHP_FUNCTION(demo_calls)
 {
@@ -213,6 +249,17 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_demo_fatal, 0, 0, IS_VOID, 0)
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_demo_calls, 0, 0, IS_LONG, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_demo_consume, 0, 2, IS_LONG, 0)
+    ZEND_ARG_TYPE_INFO(0, amount, IS_LONG, 0)
+    ZEND_ARG_INFO(1, left)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_demo_error_object, 0, 0, IS_OBJECT, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_demo_cycle, 0, 0, stdClass, 0)
 ZEND_END_ARG_INFO()
 
 /* Old-style arginfo, as simdjson writes it: no types, no defaults. */
@@ -264,6 +311,9 @@ static const zend_function_entry demo_functions[] = {
     PHP_FE(demo_warn, arginfo_demo_warn)
     PHP_FE(demo_fatal, arginfo_demo_fatal)
     PHP_FE(demo_calls, arginfo_demo_calls)
+    PHP_FE(demo_consume, arginfo_demo_consume)
+    PHP_FE(demo_error_object, arginfo_demo_error_object)
+    PHP_FE(demo_cycle, arginfo_demo_cycle)
     PHP_FE(demo_echo, arginfo_demo_echo)
     PHP_FE(demo_nested, arginfo_demo_nested)
     PHP_FE(demo_object, arginfo_demo_object)

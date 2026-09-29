@@ -33,7 +33,7 @@ use std::collections::BTreeSet;
 use crate::parser::ast::{BinOp, CType, CastType, Expr, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
     e_array, e_assign, e_binop, e_bool, e_call, e_cast, e_const, e_dyn_prop, e_float, e_index, e_int, e_new,
-    e_null, e_str, e_var, extern_fn_unbound, function, internal_declarations, s_array_assign,
+    e_not, e_null, e_str, e_var, extern_fn_unbound, function, internal_declarations, s_array_assign,
     s_array_push, s_assign, s_const, s_expr, s_for, s_foreach, s_if, s_namespace, s_return,
     s_return_void, s_static, s_throw, t_array, t_mixed, t_ptr,
 };
@@ -115,12 +115,18 @@ fn abi_externs() -> Vec<Stmt> {
         extern_fn_unbound("elephc_php_ext_call_error_message").param("call", ptr()).returns(CType::Str).build(),
         extern_fn_unbound("elephc_php_ext_call_error_code").param("call", ptr()).returns(CType::Int).build(),
         extern_fn_unbound("elephc_php_ext_call_free").param("call", ptr()).build(),
+        extern_fn_unbound("elephc_php_ext_value_check").param("call", ptr()).param("value", ptr()).returns(CType::Int).build(),
         extern_fn_unbound("elephc_php_ext_value_kind").param("value", ptr()).returns(CType::Int).build(),
-        extern_fn_unbound("elephc_php_ext_value_type_name").param("value", ptr()).returns(CType::Str).build(),
         extern_fn_unbound("elephc_php_ext_value_export").param("call", ptr()).param("value", ptr()).returns(ptr()).build(),
         extern_fn_unbound("elephc_php_ext_value_count").param("value", ptr()).returns(CType::Int).build(),
         extern_fn_unbound("elephc_php_ext_value_is_list").param("value", ptr()).returns(CType::Int).build(),
-        extern_fn_unbound("elephc_php_ext_value_key").param("value", ptr()).param("index", CType::Int).returns(CType::Str).build(),
+        extern_fn_unbound("elephc_php_ext_value_key")
+            .param("call", ptr())
+            .param("value", ptr())
+            .param("index", CType::Int)
+            .returns(ptr())
+            .build(),
+        extern_fn_unbound("elephc_php_ext_value_name").param("value", ptr()).param("index", CType::Int).returns(CType::Str).build(),
         extern_fn_unbound("elephc_php_ext_value_at").param("value", ptr()).param("index", CType::Int).returns(ptr()).build(),
     ]
 }
@@ -217,23 +223,13 @@ fn transfer_helpers(throwables: &[String]) -> Vec<Stmt> {
         .body(throw_body)
         .build();
 
-    // function __elephc_php_ext_invoke(ptr $call): void
-    let invoke = function("__elephc_php_ext_invoke")
+    // function __elephc_php_ext_raise(ptr $call): void
+    // Throws the call's error (the extension's exception, or the bridge's
+    // refusal) after freeing the call.
+    let raise = function("__elephc_php_ext_raise")
         .param("__elephc_call", t_ptr())
         .returns(TypeExpr::Void)
         .body(vec![
-            s_assign("__elephc_status", call("elephc_php_ext_call_invoke", vec![call_var()])),
-            s_if(strict_eq(e_var("__elephc_status"), e_int(0)), vec![s_return_void()], vec![], None),
-            // A fatal error was already reported by the engine, as PHP reports it.
-            s_if(
-                strict_eq(e_var("__elephc_status"), e_int(2)),
-                vec![
-                    s_expr(call("elephc_php_ext_call_free", vec![call_var()])),
-                    s_expr(call("exit", vec![e_int(255)])),
-                ],
-                vec![],
-                None,
-            ),
             s_assign("__elephc_class", call("elephc_php_ext_call_error_class", vec![call_var()])),
             s_assign("__elephc_message", call("elephc_php_ext_call_error_message", vec![call_var()])),
             s_assign("__elephc_code", call("elephc_php_ext_call_error_code", vec![call_var()])),
@@ -245,9 +241,37 @@ fn transfer_helpers(throwables: &[String]) -> Vec<Stmt> {
         ])
         .build();
 
+    // function __elephc_php_ext_invoke(ptr $call): int
+    // 0, or 1 when the extension threw: the wrapper still writes by-reference
+    // arguments back first, since PHP keeps what the extension wrote into them.
+    let invoke = function("__elephc_php_ext_invoke")
+        .param("__elephc_call", t_ptr())
+        .returns(TypeExpr::Int)
+        .body(vec![
+            s_assign("__elephc_status", call("elephc_php_ext_call_invoke", vec![call_var()])),
+            // A fatal error was already reported by the engine, as PHP reports it.
+            s_if(
+                strict_eq(e_var("__elephc_status"), e_int(2)),
+                vec![
+                    s_expr(call("elephc_php_ext_call_free", vec![call_var()])),
+                    s_expr(call("exit", vec![e_int(255)])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_var("__elephc_status")),
+        ])
+        .build();
+
     // function __elephc_php_ext_value(ptr $call, ptr $value): mixed
     let at = || call("elephc_php_ext_value_at", vec![value_var(), e_var("__elephc_i")]);
     let recurse = || call("__elephc_php_ext_value", vec![call_var(), at()]);
+    let key = || {
+        call(
+            "zval_unpack",
+            vec![call("elephc_php_ext_value_key", vec![call_var(), value_var(), e_var("__elephc_i")])],
+        )
+    };
     let counted_loop = |body: Vec<Stmt>| {
         s_for(
             Some(s_assign("__elephc_i", e_int(0))),
@@ -271,33 +295,15 @@ fn transfer_helpers(throwables: &[String]) -> Vec<Stmt> {
                 vec![],
                 None,
             ),
-            s_if(
-                strict_eq(e_var("__elephc_kind"), e_int(3)),
-                vec![
-                    s_assign("__elephc_type", call("elephc_php_ext_value_type_name", vec![value_var()])),
-                    s_throw(e_new(
-                        "\\Error",
-                        vec![e_binop(
-                            e_binop(
-                                e_str("a hosted PHP extension returned a value of type "),
-                                BinOp::Concat,
-                                e_var("__elephc_type"),
-                            ),
-                            BinOp::Concat,
-                            e_str(", which Elephc cannot represent yet"),
-                        )],
-                    )),
-                ],
-                vec![],
-                None,
-            ),
             s_assign("__elephc_count", call("elephc_php_ext_value_count", vec![value_var()])),
             s_if(
                 strict_eq(e_var("__elephc_kind"), e_int(1)),
                 vec![
                     s_assign("__elephc_object", e_new("\\stdClass", vec![])),
                     counted_loop(vec![
-                        s_assign("__elephc_name", call("elephc_php_ext_value_key", vec![value_var(), e_var("__elephc_i")])),
+                        // A C string, not the mixed key: a name cast from mixed
+                        // leaks once per property on the current backend.
+                        s_assign("__elephc_name", call("elephc_php_ext_value_name", vec![value_var(), e_var("__elephc_i")])),
                         s_expr(e_assign(
                             e_dyn_prop(e_var("__elephc_object"), e_var("__elephc_name")),
                             recurse(),
@@ -320,10 +326,39 @@ fn transfer_helpers(throwables: &[String]) -> Vec<Stmt> {
             ),
             s_assign("__elephc_map", e_array(vec![])),
             counted_loop(vec![
-                s_assign("__elephc_key", call("elephc_php_ext_value_key", vec![value_var(), e_var("__elephc_i")])),
-                s_array_assign("__elephc_map", e_var("__elephc_key"), recurse()),
+                s_assign("__elephc_key", key()),
+                // Written with a typed key: a mixed one appends instead.
+                s_if(
+                    call("is_int", vec![e_var("__elephc_key")]),
+                    vec![s_array_assign("__elephc_map", e_cast(CastType::Int, e_var("__elephc_key")), recurse())],
+                    vec![],
+                    Some(vec![s_array_assign(
+                        "__elephc_map",
+                        e_cast(CastType::String, e_var("__elephc_key")),
+                        recurse(),
+                    )]),
+                ),
             ]),
             s_return(e_var("__elephc_map")),
+        ])
+        .build();
+
+    // function __elephc_php_ext_rebuild(ptr $call, ptr $value): mixed
+    // The one entry into __elephc_php_ext_value: the whole value is checked
+    // first, so a refusal (a cycle, a class Elephc lacks) frees the call
+    // instead of leaving a walk half done.
+    let rebuild = function("__elephc_php_ext_rebuild")
+        .param("__elephc_call", t_ptr())
+        .param("__elephc_value", t_ptr())
+        .returns(t_mixed())
+        .body(vec![
+            s_if(
+                e_binop(call("elephc_php_ext_value_check", vec![call_var(), value_var()]), BinOp::StrictNotEq, e_int(0)),
+                vec![s_expr(call("__elephc_php_ext_raise", vec![call_var()]))],
+                vec![],
+                None,
+            ),
+            s_return(call("__elephc_php_ext_value", vec![call_var(), value_var()])),
         ])
         .build();
 
@@ -334,14 +369,14 @@ fn transfer_helpers(throwables: &[String]) -> Vec<Stmt> {
         .body(vec![
             s_assign(
                 "__elephc_result",
-                call("__elephc_php_ext_value", vec![call_var(), call("elephc_php_ext_call_result", vec![call_var()])]),
+                call("__elephc_php_ext_rebuild", vec![call_var(), call("elephc_php_ext_call_result", vec![call_var()])]),
             ),
             s_expr(call("elephc_php_ext_call_free", vec![call_var()])),
             s_return(e_var("__elephc_result")),
         ])
         .build();
 
-    vec![arg, throw, invoke, value, result]
+    vec![arg, throw, raise, invoke, value, rebuild, result]
 }
 
 /// Every throwable a wrapper may have to rebuild: the engine's own and each
@@ -523,11 +558,20 @@ enum Tail {
     /// The extension's own variadic parameter: any number, by value.
     Variadic(String),
     /// Optional parameters whose default only the C code knows, or that are
-    /// by reference: each is passed only if the caller passed it. `by_ref`
-    /// flags each position; any by-reference position makes the whole tail a
-    /// by-reference variadic, the one shape through which Elephc both counts
-    /// the arguments and writes back only into variables the caller gave.
-    Optional { by_ref: Vec<bool> },
+    /// by reference: each is passed only if the caller passed it, by position
+    /// or by name. Any by-reference one makes the whole tail a by-reference
+    /// variadic, the one shape through which Elephc both tells which arguments
+    /// were given and writes back only into variables the caller gave.
+    Optional { params: Vec<TailParam> },
+}
+
+/// One parameter of an optional tail.
+struct TailParam {
+    name: String,
+    by_ref: bool,
+    /// The arginfo default, passed when a later argument is given but this
+    /// one is not; `None` when only the C code knows it, which PHP refuses.
+    default: Option<Expr>,
 }
 
 /// The variadic name an optional tail is declared under.
@@ -590,8 +634,15 @@ fn plan(extension: &InstalledExtension, function: &SurfaceFunction) -> Result<Pl
                 for later in rest {
                     param_type(later.ty.as_deref()).ok_or_else(|| unpassable(later))?;
                 }
-                let by_ref = rest.iter().map(|later| later.by_ref).collect();
-                return Ok(Plan { fixed, tail: Some(Tail::Optional { by_ref }) });
+                let params = rest
+                    .iter()
+                    .map(|later| TailParam {
+                        name: local_name(later),
+                        by_ref: later.by_ref,
+                        default: later.default.as_deref().and_then(|text| default_expr(text, extension)),
+                    })
+                    .collect();
+                return Ok(Plan { fixed, tail: Some(Tail::Optional { params }) });
             }
         }
     }
@@ -615,37 +666,97 @@ fn wrapper(extension: &InstalledExtension, function: &SurfaceFunction, local: &s
             (false, None, None) => builder.param_untyped(&param.name),
         };
     }
-    let tail_name = match &plan.tail {
-        Some(Tail::Variadic(name)) => {
-            builder = builder.variadic(name, Some(t_mixed()));
-            Some(name.clone())
+    match &plan.tail {
+        Some(Tail::Variadic(name)) => builder = builder.variadic(name, Some(t_mixed())),
+        Some(Tail::Optional { params }) if params.iter().any(|param| param.by_ref) => {
+            builder = builder.variadic_by_ref(OPTIONAL_TAIL, Some(t_mixed()));
         }
-        Some(Tail::Optional { by_ref }) => {
-            builder = if by_ref.iter().any(|flag| *flag) {
-                builder.variadic_by_ref(OPTIONAL_TAIL, Some(t_mixed()))
-            } else {
-                builder.variadic(OPTIONAL_TAIL, Some(t_mixed()))
-            };
-            Some(OPTIONAL_TAIL.to_string())
-        }
-        None => None,
-    };
+        Some(Tail::Optional { .. }) => builder = builder.variadic(OPTIONAL_TAIL, Some(t_mixed())),
+        None => {}
+    }
     builder = builder.returns(declared_return.clone());
 
     let call_var = || e_var("__elephc_call");
     let fixed_count = plan.fixed.len() as i64;
-    let argc = match &tail_name {
-        Some(tail) => e_binop(e_int(fixed_count), BinOp::Add, call("count", vec![e_var(tail)])),
-        None => e_int(fixed_count),
-    };
-    // `count($tail) > $position`: whether the caller passed that position.
-    let passed = |position: usize| {
-        e_binop(call("count", vec![e_var(OPTIONAL_TAIL)]), BinOp::Gt, e_int(position as i64))
-    };
+    let tail = || e_var(OPTIONAL_TAIL);
+    let has = |key: Expr| call("array_key_exists", vec![key, tail()]);
+    // Whether the caller gave tail parameter `position`, by position or name.
+    let given = |position: usize, name: &str| e_binop(has(e_int(position as i64)), BinOp::Or, has(e_str(name)));
     let mut body = Vec::new();
     if has_ini {
         body.push(s_expr(call("__elephc_php_ext_setup", vec![])));
     }
+    let argc = match &plan.tail {
+        Some(Tail::Variadic(name)) => e_binop(e_int(fixed_count), BinOp::Add, call("count", vec![e_var(name)])),
+        // The extension sees arguments up to the last one given. The checks
+        // run before the call exists, so a refusal has nothing to free.
+        Some(Tail::Optional { params }) => {
+            // A name the tail does not declare is PHP's own call-time error.
+            let unknown = params.iter().fold(call("is_string", vec![e_var("__elephc_given")]), |test, param| {
+                e_binop(test, BinOp::And, e_binop(e_var("__elephc_given"), BinOp::StrictNotEq, e_str(&param.name)))
+            });
+            body.push(s_foreach(
+                tail(),
+                Some("__elephc_given"),
+                "__elephc_unused",
+                vec![s_if(
+                    unknown,
+                    vec![s_throw(e_new(
+                        "\\Error",
+                        vec![e_binop(e_str("Unknown named parameter $"), BinOp::Concat, e_var("__elephc_given"))],
+                    ))],
+                    vec![],
+                    None,
+                )],
+            ));
+            body.push(s_assign("__elephc_argc", e_int(fixed_count)));
+            for (position, param) in params.iter().enumerate() {
+                body.push(s_if(
+                    given(position, &param.name),
+                    vec![s_assign("__elephc_argc", e_int(fixed_count + position as i64 + 1))],
+                    vec![],
+                    None,
+                ));
+            }
+            for (position, param) in params.iter().enumerate() {
+                let number = fixed_count + position as i64 + 1;
+                if param.default.is_none() {
+                    body.push(s_if(
+                        e_binop(
+                            e_not(given(position, &param.name)),
+                            BinOp::And,
+                            e_binop(e_var("__elephc_argc"), BinOp::Gt, e_int(number)),
+                        ),
+                        vec![s_throw(e_new(
+                            "\\ArgumentCountError",
+                            vec![e_str(&format!(
+                                "{}(): Argument #{number} (${}) must be passed explicitly, because the default value is not known",
+                                function.name, param.name
+                            ))],
+                        ))],
+                        vec![],
+                        None,
+                    ));
+                }
+                if param.by_ref {
+                    body.push(s_if(
+                        has(e_str(&param.name)),
+                        vec![s_throw(e_new(
+                            "\\Error",
+                            vec![e_str(&format!(
+                                "{}(): Elephc cannot write argument ${} back when it is passed by name yet; pass it by position",
+                                function.name, param.name
+                            ))],
+                        ))],
+                        vec![],
+                        None,
+                    ));
+                }
+            }
+            e_var("__elephc_argc")
+        }
+        None => e_int(fixed_count),
+    };
     body.push(s_assign(
         "__elephc_call",
         call(
@@ -656,11 +767,11 @@ fn wrapper(extension: &InstalledExtension, function: &SurfaceFunction, local: &s
     // The engine already reported why (a module that failed to start, a
     // function it does not export), as PHP would for a fatal.
     body.push(s_if(call("ptr_is_null", vec![call_var()]), vec![s_expr(call("exit", vec![e_int(255)]))], vec![], None));
+    let pass = |index: i64, value: Expr, by_ref: bool| {
+        s_expr(call("__elephc_php_ext_arg", vec![call_var(), e_int(index), value, e_int(i64::from(by_ref))]))
+    };
     for (index, param) in plan.fixed.iter().enumerate() {
-        body.push(s_expr(call(
-            "__elephc_php_ext_arg",
-            vec![call_var(), e_int(index as i64), e_var(&param.name), e_int(i64::from(param.by_ref))],
-        )));
+        body.push(pass(index as i64, e_var(&param.name), param.by_ref));
     }
     match &plan.tail {
         Some(Tail::Variadic(name)) => {
@@ -680,30 +791,33 @@ fn wrapper(extension: &InstalledExtension, function: &SurfaceFunction, local: &s
         }
         // Unrolled per position: a loop writing into the tail would go through
         // the backend's loop-storage conversion, which the write-back must not.
-        Some(Tail::Optional { by_ref }) => {
-            for (position, flag) in by_ref.iter().enumerate() {
+        Some(Tail::Optional { params }) => {
+            for (position, param) in params.iter().enumerate() {
+                let index = fixed_count + position as i64;
+                let skipped = match &param.default {
+                    Some(default) => vec![s_if(
+                        e_binop(e_var("__elephc_argc"), BinOp::Gt, e_int(index)),
+                        vec![pass(index, default.clone(), param.by_ref)],
+                        vec![],
+                        None,
+                    )],
+                    None => vec![],
+                };
                 body.push(s_if(
-                    passed(position),
-                    vec![s_expr(call(
-                        "__elephc_php_ext_arg",
-                        vec![
-                            call_var(),
-                            e_int(fixed_count + position as i64),
-                            e_index(e_var(OPTIONAL_TAIL), e_int(position as i64)),
-                            e_int(i64::from(*flag)),
-                        ],
-                    ))],
-                    vec![],
-                    None,
+                    has(e_int(position as i64)),
+                    vec![pass(index, e_index(tail(), e_int(position as i64)), param.by_ref)],
+                    vec![(has(e_str(&param.name)), vec![pass(index, e_index(tail(), e_str(&param.name)), param.by_ref)])],
+                    Some(skipped),
                 ));
             }
         }
         None => {}
     }
-    body.push(s_expr(call("__elephc_php_ext_invoke", vec![call_var()])));
+    body.push(s_assign("__elephc_status", call("__elephc_php_ext_invoke", vec![call_var()])));
+    // Written back even when the extension threw: PHP keeps what it wrote.
     let written_back = |index: i64| {
         call(
-            "__elephc_php_ext_value",
+            "__elephc_php_ext_rebuild",
             vec![call_var(), call("elephc_php_ext_call_ref", vec![call_var(), e_int(index)])],
         )
     };
@@ -712,15 +826,23 @@ fn wrapper(extension: &InstalledExtension, function: &SurfaceFunction, local: &s
             body.push(s_assign(&param.name, written_back(index as i64)));
         }
     }
-    if let Some(Tail::Optional { by_ref }) = &plan.tail {
-        for (position, flag) in by_ref.iter().enumerate() {
-            if *flag {
-                let mut write = vec![s_assign("__elephc_back", written_back(fixed_count + position as i64))];
-                write.push(typed_tail_write(position));
-                body.push(s_if(passed(position), write, vec![], None));
+    if let Some(Tail::Optional { params }) = &plan.tail {
+        for (position, param) in params.iter().enumerate() {
+            if param.by_ref {
+                let write = vec![
+                    s_assign("__elephc_back", written_back(fixed_count + position as i64)),
+                    typed_tail_write(position),
+                ];
+                body.push(s_if(has(e_int(position as i64)), write, vec![], None));
             }
         }
     }
+    body.push(s_if(
+        e_binop(e_var("__elephc_status"), BinOp::StrictNotEq, e_int(0)),
+        vec![s_expr(call("__elephc_php_ext_raise", vec![call_var()]))],
+        vec![],
+        None,
+    ));
     let result = call("__elephc_php_ext_result", vec![call_var()]);
     if declared_return == TypeExpr::Void {
         body.push(s_expr(result));

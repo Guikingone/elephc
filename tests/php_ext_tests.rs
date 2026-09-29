@@ -87,7 +87,7 @@ fn add_and_list_report_the_surface() {
     let list = Command::new(elephc()).current_dir(&dir).args(["extension", "list"]).output().unwrap();
     assert_success(&list, "extension list");
     let text = String::from_utf8_lossy(&list.stdout);
-    assert!(text.contains("elephc_demo 1.2.3 — 16 functions, 2 classes, 3 constants"), "{text}");
+    assert!(text.contains("elephc_demo 1.2.3 — 19 functions, 2 classes, 3 constants"), "{text}");
     assert!(text.contains("not callable yet: demo_apply()"), "{text}");
     let manifest = fs::read_to_string(dir.join("elephc.toml")).unwrap();
     assert!(manifest.contains("php-src = \"8.5.6\""), "{manifest}");
@@ -174,5 +174,91 @@ echo $total, "\n";
     assert_success(&run, "compiled program");
     let stderr = String::from_utf8_lossy(&run.stderr);
     assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{stderr}");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// A result Elephc cannot represent (an object of a class other than
+/// stdClass, a value containing itself) is refused with a catchable `Error`
+/// before any of it is rebuilt.
+#[test]
+#[ignore = "downloads php-src and builds a C extension"]
+fn unrepresentable_results_are_refused() {
+    let dir = project("refused");
+    let run = compile_and_run(
+        &dir,
+        r#"<?php
+try {
+    demo_error_object();
+} catch (Error $e) {
+    echo $e->getMessage(), "\n";
+}
+try {
+    demo_cycle();
+} catch (Error $e) {
+    echo $e->getMessage(), "\n";
+}
+echo "done\n";
+"#,
+    );
+    assert_success(&run, "compiled program");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "a hosted PHP extension returned a value of type DemoParseException, which Elephc cannot represent yet\n\
+         a hosted PHP extension returned a recursive object, which Elephc cannot represent yet\n\
+         done\n"
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// Every error path frees the call it prepared: an extension exception after
+/// a by-reference write, a refused result, a refused argument, a named
+/// argument refused before the call. The host counts calls not yet freed.
+///
+/// Elephc's own heap is not asserted here: a function left by `throw` does
+/// not release its heap locals on the current backend (a pure-PHP
+/// `function f(string $s) { throw new Error("x"); }` leaks `$s`), so every
+/// exception costs a few blocks whatever the bridge does.
+#[test]
+#[ignore = "downloads php-src and builds a C extension"]
+fn error_paths_free_the_call() {
+    let dir = project("error-paths");
+    let run = compile_and_run(
+        &dir,
+        r#"<?php
+extern function elephc_php_ext_live_calls(): int;
+$caught = 0;
+for ($i = 0; $i < 50; $i++) {
+    $left = 1;
+    try {
+        demo_consume(5, $left);
+    } catch (UnderflowException $e) {
+        $caught += 1 + $left;
+    }
+    try {
+        demo_error_object();
+    } catch (Error $e) {
+        $caught++;
+    }
+    try {
+        demo_cycle();
+    } catch (Error $e) {
+        $caught++;
+    }
+    try {
+        demo_parse("x");
+    } catch (DemoException $e) {
+        $caught++;
+    }
+    try {
+        demo_echo(new stdClass());
+    } catch (TypeError $e) {
+        $caught++;
+    }
+}
+echo $caught, " ", elephc_php_ext_live_calls(), "\n";
+"#,
+    );
+    assert_success(&run, "compiled program");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "250 0\n");
     fs::remove_dir_all(dir).unwrap();
 }

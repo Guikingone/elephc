@@ -117,6 +117,7 @@ Directives in `[extension.ini]` are applied before any extension starts, the way
 | scalars, strings, arrays (any nesting) | the same Elephc values |
 | `stdClass` objects, including inside arrays | `stdClass` objects |
 | other objects, resources | an `Error` naming the type |
+| a value that contains itself | an `Error`; a value shared along two paths arrives as two copies |
 
 Exceptions thrown by the extension are rethrown as the same class when Elephc
 declares it — the extension's own exception classes are declared for you, with
@@ -127,6 +128,9 @@ program with exit status 255.
 Argument types come from the extension's arginfo. An optional parameter whose
 default is written in arginfo is declared with it; one whose default only the
 C code knows is passed only when your call passes it, exactly as PHP does.
+Named arguments work as in PHP, including PHP's errors for an unknown name
+and for skipping a parameter whose default is not known. By-reference
+arguments the extension wrote are written back even when it then throws.
 
 ## Current limits
 
@@ -146,7 +150,9 @@ C code knows is passed only when your call passes it, exactly as PHP does.
   holding a value of the type the extension writes (`$success = false;
   apcu_fetch("k", $success);`). Elephc types a variable by its storage: a
   variable that has only ever held `null` stays `null`, and an undefined
-  variable is refused at compile time.
+  variable is refused at compile time. An optional by-reference argument
+  must be passed by position: passed by name, the call raises an `Error`
+  before it starts, since Elephc cannot write it back yet.
 - **Extensions are built for the host target.** Their surface is read by
   running them, so cross-installing for another target is not supported yet.
 - Arrays that contain objects cost one small allocation per call that is not

@@ -52,14 +52,19 @@
 #define ELEPHC_VALUE_PLAIN 0       /* no object anywhere below: export it whole */
 #define ELEPHC_VALUE_STDCLASS 1    /* rebuild as stdClass, property by property */
 #define ELEPHC_VALUE_ARRAY 2       /* an array holding objects: rebuild entry by entry */
-#define ELEPHC_VALUE_UNSUPPORTED 3 /* an object or resource with no Elephc counterpart yet */
 
-/* The last entry elephc_walk_entry answered: see there. */
-static struct {
+/* Where elephc_walk_entry last stopped in each table being walked: see there.
+ * One per table, because rebuilding a nested value walks a child between two
+ * entries of its parent. The least recently used one is replaced, so the
+ * parent, touched between every child, keeps its place. */
+#define ELEPHC_WALK_CURSORS 32
+static struct elephc_walk_cursor {
     HashTable *table;
     uint32_t index;
     uint32_t slot;
-} elephc_walk_cursor;
+    uint64_t used;
+} elephc_walk_cursors[ELEPHC_WALK_CURSORS];
+static uint64_t elephc_walk_clock;
 
 extern void elephc_stdlib_startup(void);
 extern size_t elephc_zend_write_stdout(const char *str, size_t len);
@@ -407,7 +412,8 @@ static HashTable *elephc_object_properties(zval *zv) {
     return Z_OBJ_HT_P(zv)->get_properties(Z_OBJ_P(zv));
 }
 
-/* True when `zv` holds an object or resource anywhere below it. */
+/* True when `zv` holds an object or resource anywhere below it. Only called
+ * on values elephc_representable accepted, so it never meets a cycle. */
 static bool elephc_contains_objects(zval *zv) {
     zv = elephc_value(zv);
     if (Z_TYPE_P(zv) == IS_OBJECT || Z_TYPE_P(zv) == IS_RESOURCE) {
@@ -543,6 +549,14 @@ static void elephc_call_fail(elephc_call *call, const char *class_name, const ch
     call->error_code = 0;
 }
 
+/* Calls prepared and not yet freed: every wrapper path, the error ones
+ * included, must bring this back to zero. */
+static int64_t elephc_live_calls;
+
+int64_t elephc_php_ext_live_calls(void) {
+    return elephc_live_calls;
+}
+
 /* Starts `module` if needed and prepares a call to `name` with `argc` slots.
  * Returns NULL when the module cannot start or does not export `name`. */
 void *elephc_php_ext_call_new(void *module, const char *name, int64_t argc) {
@@ -562,6 +576,7 @@ void *elephc_php_ext_call_new(void *module, const char *name, int64_t argc) {
     size_t slots = ZEND_CALL_FRAME_SLOT + (argc > 0 ? (size_t)argc : 1);
     call->frame = ecalloc(slots, sizeof(zval));
     ZVAL_UNDEF(&call->result);
+    elephc_live_calls++;
     return call;
 }
 
@@ -676,7 +691,8 @@ int64_t elephc_php_ext_call_error_code(void *handle) {
 }
 
 /* Releases the frame's arguments and result (refcount-aware: a value the
- * extension kept survives) and every exported copy. */
+ * extension kept survives) and every exported copy. A cyclic result the
+ * wrapper refused is not reclaimed: the collector is not hosted. */
 void elephc_php_ext_call_free(void *handle) {
     elephc_call *call = handle;
     if (!call) {
@@ -686,9 +702,9 @@ void elephc_php_ext_call_free(void *handle) {
         zval_ptr_dtor(ZEND_CALL_ARG(call->frame, i + 1));
     }
     zval_ptr_dtor(&call->result);
-    /* The walk cursor names a table by address; one freed here may come back
+    /* The walk cursors name tables by address; one freed here may come back
      * at the same address in the next call's result. */
-    elephc_walk_cursor.table = NULL;
+    memset(elephc_walk_cursors, 0, sizeof elephc_walk_cursors);
     for (elephc_export_node *node = call->exports; node;) {
         elephc_export_node *next = node->next;
         elephc_free_export(&node->value);
@@ -699,29 +715,72 @@ void elephc_php_ext_call_free(void *handle) {
     free(call->error_class);
     free(call->error_message);
     free(call);
+    elephc_live_calls--;
 }
 
 /* ------------------------------------------------------------ value walking */
+
+/* Whether `zv` can cross into Elephc: objects are stdClass, there is no
+ * resource, and no array or object contains itself. On refusal the reason is
+ * left on `call` as its error. A value shared along two paths is accepted
+ * (and arrives as two copies); only one on its own path is a cycle. */
+static bool elephc_representable(elephc_call *call, zval *zv) {
+    char reason[256];
+    zv = elephc_value(zv);
+    if (Z_TYPE_P(zv) == IS_RESOURCE
+            || (Z_TYPE_P(zv) == IS_OBJECT && Z_OBJCE_P(zv) != zend_standard_class_def)) {
+        const char *type = Z_TYPE_P(zv) == IS_OBJECT ? ZSTR_VAL(Z_OBJCE_P(zv)->name) : "resource";
+        snprintf(reason, sizeof reason,
+            "a hosted PHP extension returned a value of type %s, which Elephc cannot represent yet", type);
+        elephc_call_fail(call, "Error", reason);
+        return false;
+    }
+    HashTable *table;
+    zend_refcounted *guard;
+    if (Z_TYPE_P(zv) == IS_OBJECT) {
+        table = elephc_object_properties(zv);
+        guard = (zend_refcounted *)Z_OBJ_P(zv);
+    } else if (Z_TYPE_P(zv) == IS_ARRAY && !(GC_FLAGS(Z_ARRVAL_P(zv)) & GC_IMMUTABLE)) {
+        /* An immutable array holds only immutable scalars and arrays. */
+        table = Z_ARRVAL_P(zv);
+        guard = (zend_refcounted *)table;
+    } else {
+        return true;
+    }
+    if (GC_IS_RECURSIVE(guard)) {
+        snprintf(reason, sizeof reason,
+            "a hosted PHP extension returned a recursive %s, which Elephc cannot represent yet",
+            Z_TYPE_P(zv) == IS_OBJECT ? "object" : "array");
+        elephc_call_fail(call, "Error", reason);
+        return false;
+    }
+    GC_PROTECT_RECURSION(guard);
+    bool accepted = true;
+    zval *entry;
+    ZEND_HASH_FOREACH_VAL_IND(table, entry) {
+        if (!elephc_representable(call, entry)) {
+            accepted = false;
+            break;
+        }
+    } ZEND_HASH_FOREACH_END();
+    GC_UNPROTECT_RECURSION(guard);
+    return accepted;
+}
+
+/* Called once on each value the wrapper rebuilds (the result, each by-ref
+ * argument) before any walk: 0 when it can cross, 1 with the reason left as
+ * the call's error. */
+int64_t elephc_php_ext_value_check(void *handle, void *value) {
+    return value && !elephc_representable(handle, value) ? 1 : 0;
+}
 
 /* How the wrapper must turn `value` (an engine zval) into an Elephc value. */
 int64_t elephc_php_ext_value_kind(void *value) {
     zval *zv = elephc_value(value);
     if (Z_TYPE_P(zv) == IS_OBJECT) {
-        return Z_OBJCE_P(zv) == zend_standard_class_def ? ELEPHC_VALUE_STDCLASS : ELEPHC_VALUE_UNSUPPORTED;
-    }
-    if (Z_TYPE_P(zv) == IS_RESOURCE) {
-        return ELEPHC_VALUE_UNSUPPORTED;
+        return ELEPHC_VALUE_STDCLASS;
     }
     return elephc_contains_objects(zv) ? ELEPHC_VALUE_ARRAY : ELEPHC_VALUE_PLAIN;
-}
-
-/* What an unsupported value is, for the error the wrapper raises. */
-const char *elephc_php_ext_value_type_name(void *value) {
-    zval *zv = elephc_value(value);
-    if (Z_TYPE_P(zv) == IS_OBJECT) {
-        return ZSTR_VAL(Z_OBJCE_P(zv)->name);
-    }
-    return zend_zval_type_name(zv);
 }
 
 /* Exports an object-free value in zval_unpack's layout. The copy belongs to
@@ -744,19 +803,41 @@ static HashTable *elephc_walked_table(zval *zv) {
     return Z_TYPE_P(zv) == IS_ARRAY ? Z_ARRVAL_P(zv) : NULL;
 }
 
-/* Position of the `index`-th visible entry. Wrappers walk entries in order,
- * so the previous answer is remembered and the next lookup is O(1). */
-static Bucket *elephc_walk_entry(void *value, int64_t index) {
+/* The cursor for `table`, or the least recently used one, reset to it. */
+static struct elephc_walk_cursor *elephc_walk_cursor_for(HashTable *table) {
+    struct elephc_walk_cursor *oldest = &elephc_walk_cursors[0];
+    for (int i = 0; i < ELEPHC_WALK_CURSORS; i++) {
+        struct elephc_walk_cursor *cursor = &elephc_walk_cursors[i];
+        if (cursor->table == table) {
+            cursor->used = ++elephc_walk_clock;
+            return cursor;
+        }
+        if (cursor->used < oldest->used) {
+            oldest = cursor;
+        }
+    }
+    oldest->table = table;
+    oldest->index = 0;
+    oldest->slot = 0;
+    oldest->used = ++elephc_walk_clock;
+    return oldest;
+}
+
+/* The `index`-th visible entry, and its slot in `*slot_out`. Wrappers walk
+ * each table in order (the key, then the value, of one entry after another),
+ * so each table's previous answer is remembered and the next lookup is O(1). */
+static Bucket *elephc_walk_entry(void *value, int64_t index, uint32_t *slot_out) {
     HashTable *table = elephc_walked_table(value);
     if (!table || index < 0) {
         return NULL;
     }
     bool is_object = Z_TYPE_P(elephc_value(value)) == IS_OBJECT;
+    struct elephc_walk_cursor *cursor = elephc_walk_cursor_for(table);
     uint32_t visible = 0;
     uint32_t slot = 0;
-    if (elephc_walk_cursor.table == table && elephc_walk_cursor.index <= (uint32_t)index) {
-        visible = elephc_walk_cursor.index;
-        slot = elephc_walk_cursor.slot;
+    if (cursor->index <= (uint32_t)index) {
+        visible = cursor->index;
+        slot = cursor->slot;
     }
     for (; slot < table->nNumUsed; slot++) {
         Bucket *bucket;
@@ -782,9 +863,11 @@ static Bucket *elephc_walk_entry(void *value, int64_t index) {
             }
         }
         if (visible == (uint32_t)index) {
-            elephc_walk_cursor.table = table;
-            elephc_walk_cursor.index = visible;
-            elephc_walk_cursor.slot = slot;
+            cursor->index = visible;
+            cursor->slot = slot;
+            if (slot_out) {
+                *slot_out = slot;
+            }
             return bucket;
         }
         visible++;
@@ -819,42 +902,39 @@ int64_t elephc_php_ext_value_is_list(void *value) {
     return Z_TYPE_P(zv) == IS_ARRAY && zend_array_is_list(Z_ARRVAL_P(zv)) ? 1 : 0;
 }
 
-/* The key of entry `index` as a string: a property name, a string key, or an
- * integer key in decimal (PHP folds a decimal string key back to an integer). */
-const char *elephc_php_ext_value_key(void *value, int64_t index) {
-    static char decimal[32];
-    Bucket *bucket = elephc_walk_entry(value, index);
+/* The key of entry `index`, exported like a value: a property name or string
+ * key with its full length (a key may hold NUL bytes), or an integer key. */
+void *elephc_php_ext_value_key(void *handle, void *value, int64_t index) {
+    Bucket *bucket = elephc_walk_entry(value, index, NULL);
+    zval key;
     if (!bucket) {
-        return "";
+        ZVAL_NULL(&key);
+    } else if (bucket->key) {
+        ZVAL_STR(&key, bucket->key); /* borrowed: the export copies it */
+    } else {
+        ZVAL_LONG(&key, (zend_long)bucket->h);
     }
-    if (bucket->key) {
-        return ZSTR_VAL(bucket->key);
-    }
-    /* By hand: PHP's headers redirect snprintf to their own formatter, whose
-     * length modifiers are not the C library's. */
-    zend_long key = (zend_long)bucket->h;
-    zend_ulong magnitude = key < 0 ? (zend_ulong)0 - (zend_ulong)key : (zend_ulong)key;
-    char *end = decimal + sizeof decimal - 1;
-    char *cursor = end;
-    *cursor = '\0';
-    do {
-        *--cursor = (char)('0' + magnitude % 10);
-        magnitude /= 10;
-    } while (magnitude);
-    if (key < 0) {
-        *--cursor = '-';
-    }
-    return cursor;
+    return elephc_php_ext_value_export(handle, &key);
+}
+
+/* The name of visible property `index` of a stdClass, as a C string. Elephc
+ * sets a property from a string it copies, and a property table's keys are
+ * always strings; array keys, which may hold NUL bytes, go through
+ * elephc_php_ext_value_key instead. */
+const char *elephc_php_ext_value_name(void *value, int64_t index) {
+    Bucket *bucket = elephc_walk_entry(value, index, NULL);
+    return bucket && bucket->key ? ZSTR_VAL(bucket->key) : "";
 }
 
 /* The value of entry `index`, as an engine zval the wrapper walks further. */
 void *elephc_php_ext_value_at(void *value, int64_t index) {
-    Bucket *bucket = elephc_walk_entry(value, index);
+    uint32_t slot;
+    Bucket *bucket = elephc_walk_entry(value, index, &slot);
     if (!bucket) {
         return NULL;
     }
     if (HT_IS_PACKED(elephc_walked_table(value))) {
-        return elephc_value(&elephc_walked_table(value)->arPacked[elephc_walk_cursor.slot]);
+        return elephc_value(&elephc_walked_table(value)->arPacked[slot]);
     }
     return elephc_value(&bucket->val);
 }

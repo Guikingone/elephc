@@ -28,6 +28,7 @@
 #include "ext/spl/spl_iterators.h"
 #include "ext/standard/basic_functions.h"
 #include "ext/standard/file.h"
+#include "ext/standard/php_incomplete_class.h"
 #include "ext/standard/php_string.h"
 #include "ext/standard/php_var.h"
 #include "ext/pcre/php_pcre.h"
@@ -87,6 +88,15 @@ void elephc_stdlib_startup(void) {
     zend_class_entry ce;
     INIT_CLASS_ENTRY(ce, "JsonSerializable", NULL);
     php_json_serializable_ce = zend_register_internal_interface(&ce);
+
+    /* ext/standard's stand-in for a serialized class nobody declared: var.c,
+     * igbinary and msgpack build one instead of failing, and dereference the
+     * entry unconditionally. Registered as basic_functions.c does, minus the
+     * #[AllowDynamicProperties] attribute nothing here reads. */
+    INIT_CLASS_ENTRY(ce, "__PHP_Incomplete_Class", NULL);
+    php_ce_incomplete_class = zend_register_internal_class_with_flags(
+        &ce, NULL, ZEND_ACC_FINAL | ZEND_ACC_ALLOW_DYNAMIC_PROPERTIES);
+    php_register_incomplete_class_handlers();
 }
 
 /* ------------------------------------------------------------ registrations */

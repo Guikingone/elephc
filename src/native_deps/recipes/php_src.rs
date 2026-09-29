@@ -95,7 +95,7 @@ pub const ENGINE_UNITS: &[&str] = &[
 /// any edit to them until both the catalog revision and this pair move.
 #[cfg(test)]
 pub const ENGINE_FINGERPRINT: (u32, &str) =
-    (1, "43625b8d2890a6e9eff565eb7531f7bdeb1ac537f7ea4c1f1b0f5c07abeb5303");
+    (1, "fcf31cb63a95c5365719e1c86094269aff8de8c7ef1c679cfe4ff032fb46ae20");
 
 /// Headers Elephc writes itself rather than copying from the tarball.
 const OWNED_HEADERS: &[&str] = &[
