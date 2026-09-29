@@ -79,6 +79,13 @@ impl Parser {
         if matches!(self.current(), TokenKind::AttributeStart) {
             return self.parse_attributed_stmt();
         }
+        // The empty statement. PHP accepts a lone `;` wherever a statement may stand
+        // (`echo 1;;`, `while (f());`), and a `?>` lexes as one: `echo 1; ?>X` is `echo 1; ;
+        // echo "X";`. It was refused here, so every eval'd close tag after a `;` failed.
+        if matches!(self.current(), TokenKind::Semicolon) {
+            self.advance();
+            return Ok(Vec::new());
+        }
         match self.current() {
             TokenKind::Ident(name) if ident_eq(name, "break") => {
                 self.advance();

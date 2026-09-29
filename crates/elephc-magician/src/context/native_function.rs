@@ -16,6 +16,7 @@ use super::*;
 /// Native AOT function callback metadata visible to runtime eval fragments.
 #[derive(Clone)]
 pub struct NativeFunction {
+    pub(super) name: String,
     pub(super) descriptor: *mut c_void,
     pub(super) invoker: NativeFunctionInvoker,
     pub(super) param_count: usize,
@@ -38,6 +39,7 @@ impl NativeFunction {
         param_count: usize,
     ) -> Self {
         Self {
+            name: String::new(),
             descriptor,
             invoker,
             param_count,
@@ -51,6 +53,11 @@ impl NativeFunction {
             bridge_supported: true,
             shape: None,
         }
+    }
+
+    /// Returns the lowercase name this callback was registered under, empty until registered.
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     /// Returns the visible positional parameter count accepted by this callback.

@@ -1251,7 +1251,13 @@ impl<'a> FunctionContext<'a> {
     /// and hash set/append lowerings already perform; without it a global array
     /// that grows past its initial capacity leaves the global symbol pointing at
     /// freed storage (corruption / crash). No-op unless `value` came from
-    /// `Op::LoadGlobal`.
+    /// `Op::LoadGlobal` or `Op::LoadStaticLocal`.
+    ///
+    /// A function static is the same hazard behind a different symbol:
+    /// `static $a = [0]; $a[] = 1;` grew the array through `__rt_array_grow`, which
+    /// frees the old block, and the static kept pointing at it — `count($a)` answered
+    /// 2 after twenty appends, and the next allocation to reuse that block was
+    /// corrupted.
     pub(super) fn writeback_global_array_source(&mut self, value: ValueId) -> Result<()> {
         let Some(value_ref) = self.function.value(value) else {
             return Err(CodegenIrError::missing_entry("value", value.as_raw()));
@@ -1262,6 +1268,12 @@ impl<'a> FunctionContext<'a> {
         let Some(inst_ref) = self.function.instruction(inst) else {
             return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
         };
+        if inst_ref.op == Op::LoadStaticLocal {
+            let Some(crate::ir::Immediate::LocalSlot(slot)) = inst_ref.immediate else {
+                return Ok(());
+            };
+            return self.writeback_static_local_array_source(value, slot);
+        }
         if inst_ref.op != Op::LoadGlobal {
             return Ok(());
         }
@@ -1274,6 +1286,35 @@ impl<'a> FunctionContext<'a> {
         self.data.add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
         self.load_value_to_result(value)?;
         abi::emit_store_result_to_symbol(self.emitter, &symbol, &ty, false);
+        Ok(())
+    }
+
+    /// Writes a mutated container back to the static-local symbol it was loaded from.
+    ///
+    /// Only when the slot stores the container itself. A `mixed` static holds a box, and
+    /// the load unwrapped it, so the pointer in hand is not what the slot stores.
+    fn writeback_static_local_array_source(&mut self, value: ValueId, slot: LocalSlotId) -> Result<()> {
+        let local = self
+            .function
+            .locals
+            .get(slot.as_raw() as usize)
+            .ok_or_else(|| CodegenIrError::missing_entry("local slot", slot.as_raw()))?;
+        let Some(name) = local.name.clone() else {
+            return Ok(());
+        };
+        let slot_ty = local.php_type.codegen_repr();
+        let ty = self.value_php_type(value)?.codegen_repr();
+        let same_storage = matches!(
+            (&slot_ty, &ty),
+            (PhpType::Array(_), PhpType::Array(_))
+                | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
+        );
+        if !same_storage {
+            return Ok(());
+        }
+        let symbol = crate::names::static_local_symbol(&self.function.name, &name);
+        self.load_value_to_result(value)?;
+        abi::emit_store_result_to_symbol(self.emitter, &symbol, &slot_ty, false);
         Ok(())
     }
 

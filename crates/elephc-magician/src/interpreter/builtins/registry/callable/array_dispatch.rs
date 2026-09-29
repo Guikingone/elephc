@@ -186,6 +186,11 @@ pub(in crate::interpreter) fn eval_callable_with_call_array_args(
     if let Some(forbidden) = eval_forbidden_dynamic_scope_builtin(name) {
         return eval_throw_forbidden_dynamic_scope_builtin(forbidden, context, values);
     }
+    // A positional count is known here, and the OPcache names can still resolve to a native
+    // prelude function below, whose userland binding accepts surplus arguments PHP refuses.
+    if evaluated_args.iter().all(|arg| arg.name.is_none()) {
+        eval_check_builtin_arity(name, evaluated_args.len(), context, values)?;
+    }
     if eval_builtin_uses_owned_arguments(name) {
         return eval_builtin_callback_with_arguments(name, evaluated_args, true, context, values);
     }
@@ -236,6 +241,22 @@ pub(in crate::interpreter) fn eval_callable_with_call_array_args(
             values,
         )?;
         return eval_native_function_with_values(function, evaluated_args, context, values);
+    }
+    // THE RUNTIME HANDLERS ARE A CALLABLE TARGET TOO. Names such as `opcache_get_status` are
+    // not PHP-visible builtins here: they are plain handlers in `eval_builtin_with_values`,
+    // which `call_user_func` consults and this path did not. So `$f = 'opcache_' .
+    // 'get_status'; $f();` and `call_user_func_array($f, [])` inside eval() died on an
+    // unsupported construct where reference returns the status array, and the same name
+    // through `call_user_func` worked. MEASURED on reference PHP 8.5.
+    //
+    // LAST, and positional only: every name that resolved before still resolves the same
+    // way, and only a call that used to be fatal gains a target.
+    if evaluated_args.iter().all(|arg| arg.name.is_none()) {
+        let positional: Vec<RuntimeCellHandle> =
+            evaluated_args.iter().map(|arg| arg.value).collect();
+        if let Some(result) = eval_builtin_with_values(name, &positional, context, values)? {
+            return Ok(result);
+        }
     }
     Err(EvalStatus::UnsupportedConstruct)
 }

@@ -21,6 +21,15 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Token>, EvalParseError> {
     Lexer::new(source).tokenize()
 }
 
+/// Tokenizes one code block of a larger file whose first line is `line`.
+///
+/// An included file is lexed block by block (`crate::script_cache::segments`), and every
+/// block has to count lines from where it sits in the file, or `__LINE__` restarts at 1 after
+/// each `?>`.
+pub(crate) fn tokenize_at_line(source: &str, line: i64) -> Result<Vec<Token>, EvalParseError> {
+    Lexer { line, ..Lexer::new(source) }.tokenize()
+}
+
 /// Converts a UTF-8 eval source fragment into parser tokens.
 pub(super) struct Lexer<'a> {
     source: &'a str,
@@ -67,6 +76,9 @@ impl<'a> Lexer<'a> {
         let line = self.line;
         if ch == '"' {
             return self.lex_double_quoted(line);
+        }
+        if ch == '?' && self.peek_next_char() == Some('>') {
+            return Ok(self.lex_close_tag(line));
         }
         let kind = match ch {
             '$' => self.lex_variable(),
@@ -525,8 +537,14 @@ impl<'a> Lexer<'a> {
     }
 
     /// Advances past a `//` or `#` comment, including its trailing newline when present.
+    ///
+    /// A `?>` ends the comment too, and is left for `next_tokens` to lex as a close tag:
+    /// `eval('// c ?>X')` prints `X` in reference PHP 8.5.10.
     fn skip_line_comment(&mut self) {
         while let Some(ch) = self.peek_char() {
+            if ch == '?' && self.peek_next_char() == Some('>') {
+                return;
+            }
             self.bump_char();
             if ch == '\n' {
                 break;

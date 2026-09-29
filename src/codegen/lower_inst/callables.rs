@@ -188,6 +188,12 @@ pub(super) fn lower_callable_descriptor_invoke(
 /// Unboxes the callback and dispatches every PHP callable runtime shape: string
 /// function names, closure descriptors, invokable objects, and two-element
 /// instance/static method arrays. Any other tag or malformed array is fatal.
+///
+/// Every tag test branches through `abi::emit_branch_if_equal_wide`. The arms are one per
+/// callable target in the program, so on a large one a plain `b.eq` (±1 MiB on AArch64) no
+/// longer reaches them and the ASSEMBLER refuses the whole program with `fixup value out of
+/// range`. MEASURED on a two-class fixture whose only unusual feature is an `eval()`: 1.5M
+/// lines of assembly and that error.
 fn lower_mixed_callable_descriptor_invoke(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -223,9 +229,9 @@ fn lower_mixed_callable_descriptor_invoke(
             ctx.load_value_to_reg(callable, "x0")?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");              // unbox → x0=tag, x1=payload lo, x2=payload hi
             ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_STRING)); // is the boxed Mixed payload a string function name?
-            ctx.emitter.instruction(&format!("b.eq {}", string_label));         // dispatch a boxed string-name callable
+            abi::emit_branch_if_equal_wide(ctx.emitter, &string_label);         // dispatch a boxed string-name callable
             ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_CALLABLE)); // is the boxed Mixed payload a callable descriptor?
-            ctx.emitter.instruction(&format!("b.eq {}", callable_label));       // dispatch a boxed closure/first-class callable descriptor
+            abi::emit_branch_if_equal_wide(ctx.emitter, &callable_label);       // dispatch a boxed closure/first-class callable descriptor
             if let Some(array_label) = &array_label {
                 ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_INDEXED_ARRAY)); // is the boxed Mixed payload a two-element callable array?
                 abi::emit_branch_if_equal_wide(ctx.emitter, array_label);       // dispatch a boxed callable array past the string-name case table
@@ -466,9 +472,9 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
             ctx.load_value_to_reg(callable, "x0")?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
             ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_CALLABLE)); // classify an existing callable descriptor
-            ctx.emitter.instruction(&format!("b.eq {}", descriptor_label));     // return the existing descriptor payload
+            abi::emit_branch_if_equal_wide(ctx.emitter, &descriptor_label);     // return the existing descriptor payload
             ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_STRING)); // classify a runtime callable name
-            ctx.emitter.instruction(&format!("b.eq {}", string_label));         // resolve the callable name through the descriptor table
+            abi::emit_branch_if_equal_wide(ctx.emitter, &string_label);         // resolve the callable name through the descriptor table
             if let Some(array_label) = &array_label {
                 ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_INDEXED_ARRAY)); // classify a two-element callable array
                 abi::emit_branch_if_equal_wide(ctx.emitter, array_label);       // resolve an instance/static method descriptor across large string dispatch tables
@@ -3252,7 +3258,21 @@ fn emit_runtime_callable_name_compare(
             abi::emit_load_int_immediate(ctx.emitter, "x4", candidate_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
             ctx.emitter.instruction("cmp x0, #0");                              // did the runtime string callable name match this user function?
-            ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // dispatch to this user function when names match case-insensitively
+            // THE ONE DISPATCH HERE THAT HOISTS EVERY COMPARE ABOVE EVERY ARM.
+            // `lower_runtime_string_call` emits all name compares first and all call arms
+            // after, so this branch jumps over the remaining compares AND every earlier arm —
+            // a distance that grows with the number of user functions the call could name.
+            // The per-case dispatches in this file interleave compare and arm, so their
+            // conditional branches only ever skip one bounded arm; this one does not.
+            //
+            // DEFENSIVE, AND SAID SO: no ordinary PHP reaches this today. `$f()` on a string
+            // lowers to `callable_descriptor_invoke` and takes the descriptor path, whose
+            // normalizer carries the same fix and is pinned by a test. No fixture could be
+            // built that emits this dispatch, so there is no test here — one was written and
+            // its premise guard refused to pass on a dispatch that was never emitted. The form
+            // costs one instruction on the taken path and removes an assembler failure the day
+            // a lowering change routes string callables back here.
+            abi::emit_branch_if_equal_wide(ctx.emitter, matched_label);         // dispatch to this user function when names match case-insensitively
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);

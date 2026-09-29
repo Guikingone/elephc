@@ -77,6 +77,17 @@ pub fn inject_if_used(
     })
 }
 
+/// Whether a binary's OPcache configuration is the CLI default: no `--web`, and no `--ini` for an
+/// `opcache.*` directive.
+///
+/// The eval interpreter's fallback OPcache functions answer from exactly that configuration,
+/// so they are only allowed to answer for a binary that has it.
+pub(crate) fn opcache_configuration_is_cli_default(web: bool, overrides: &[(String, String)]) -> bool {
+    !web && !overrides
+        .iter()
+        .any(|(name, _)| name.to_ascii_lowercase().starts_with("opcache."))
+}
+
 /// The body of [`inject_if_used`], run on the stack `with_compiler_stack` sized.
 fn inject_if_used_on_compiler_stack(
     program: Program,
@@ -113,11 +124,39 @@ fn inject_if_used_on_compiler_stack(
     let mut declarations = crate::synthetic_class::internal_declarations(|| {
         let mut declarations: Program = Vec::new();
 
-        if detect::program_references(&program, GET_CONFIGURATION_FN)
-            && !detect::program_declares(&program, GET_CONFIGURATION_FN)
-        {
+        // Whether THIS binary gets an `ini_set()` that can install an override. The
+        // configuration literal below consults the override store only then: without such a
+        // wrapper no override can exist, and the store's helper is injected with the INI
+        // surface, so referencing it anyway would be an undefined function.
+        //
+        // Under `--web` the web prelude owns the `ini_set` name and emits it
+        // UNCONDITIONALLY (pay-for-use there comes from
+        // `prune_unreachable_prelude_functions`, not from a reference check), and its body
+        // runs the same opcache arms — so the flag is simply true.
+        let ini_set_injected = web
+            || (detect::program_references(&program, "ini_set")
+                && !detect::program_declares(&program, "ini_set"));
+
+        // An OPcache function is wanted when the program names it, or when it can call it from
+        // an `eval()` source the compiler cannot read AND this binary's OPcache configuration
+        // is not the CLI default. In that case the interpreter would otherwise answer from its
+        // fallback, which knows only the CLI default: the PR #968 review compiled
+        // `eval(getenv(...))` with `--ini opcache.enable_cli=1` and got `false` from
+        // `opcache_get_status()` and `DISABLED` from `opcache_get_configuration()` right after
+        // `opcache_compile_file()` had cached a file, where reference reports a live cache.
+        // With the declarations present, eval calls them, and every spelling gets the answer
+        // the compiled code gets. A CLI-default binary keeps the fallback, whose answers are
+        // exactly the CLI default's, so ordinary `eval()` programs pay nothing.
+        let opaque_eval_reads_opcache =
+            !opcache_configuration_is_cli_default(web, overrides) && detect::program_has_opaque_eval(&program);
+        let wanted = |name: &str| {
+            (detect::program_references(&program, name) || opaque_eval_reads_opcache)
+                && !detect::program_declares(&program, name)
+        };
+
+        if wanted(GET_CONFIGURATION_FN) {
             needs_env_helpers = true;
-            let configuration = configuration_expr(php_version, overrides);
+            let configuration = configuration_expr(php_version, overrides, ini_set_injected);
             declarations.push(if restricted {
                 build::restricted_get_configuration_decl(configuration, warning())
             } else {
@@ -125,9 +164,7 @@ fn inject_if_used_on_compiler_stack(
             });
         }
 
-        if detect::program_references(&program, RESET_FN)
-            && !detect::program_declares(&program, RESET_FN)
-        {
+        if wanted(RESET_FN) {
             declarations.push(if restricted {
                 build::restricted_reset_decl(warning())
             } else {
@@ -135,9 +172,7 @@ fn inject_if_used_on_compiler_stack(
             });
         }
 
-        if detect::program_references(&program, GET_STATUS_FN)
-            && !detect::program_declares(&program, GET_STATUS_FN)
-        {
+        if wanted(GET_STATUS_FN) {
             // Manifest-dependent even when restricted: the restricted gate keeps the array exit
             // (as a dead branch) so the `array|false` signature survives, and that exit still
             // carries the `scripts` map and the cached-script counts.
@@ -152,9 +187,7 @@ fn inject_if_used_on_compiler_stack(
             ));
         }
 
-        if detect::program_references(&program, IS_SCRIPT_CACHED_FN)
-            && !detect::program_declares(&program, IS_SCRIPT_CACHED_FN)
-        {
+        if wanted(IS_SCRIPT_CACHED_FN) {
             // The restricted body is a bare warning + `false` with no manifest in it, so only the
             // normal body is a bake site.
             sites.is_script_cached = !restricted;
@@ -165,9 +198,7 @@ fn inject_if_used_on_compiler_stack(
             });
         }
 
-        if detect::program_references(&program, INVALIDATE_FN)
-            && !detect::program_declares(&program, INVALIDATE_FN)
-        {
+        if wanted(INVALIDATE_FN) {
             // The restricted body warns and returns `false` with no manifest in it, so only the
             // normal body is a bake site.
             sites.invalidate = !restricted;
@@ -179,17 +210,17 @@ fn inject_if_used_on_compiler_stack(
         }
 
         // NOT restricted in reference PHP (verified) — always the normal body.
-        if detect::program_references(&program, COMPILE_FILE_FN)
-            && !detect::program_declares(&program, COMPILE_FILE_FN)
-        {
+        if wanted(COMPILE_FILE_FN) {
             sites.compile_file = true;
             declarations.push(compile_file_declaration(php_version, web, manifest, overrides));
         }
 
-        if detect::program_references(&program, IS_SCRIPT_CACHED_IN_FILE_CACHE_FN)
-            && !detect::program_declares(&program, IS_SCRIPT_CACHED_IN_FILE_CACHE_FN)
-        {
-            // Carries no manifest either way (elephc has no file cache), so it is never a bake site.
+        if wanted(IS_SCRIPT_CACHED_IN_FILE_CACHE_FN) {
+            // Carries no manifest either way — it asks the ON-DISK cache through
+            // `__elephc_opcache_rt_in_file_cache`, not the baked script list — so it is
+            // never a bake site. It used to be a hardcoded `false` justified by "elephc has
+            // no file cache", which stopped being true the moment this branch shipped
+            // `file_store` and `opcache.file_cache`.
             declarations.push(if restricted {
                 build::restricted_is_script_cached_in_file_cache_decl(warning())
             } else {
@@ -199,9 +230,7 @@ fn inject_if_used_on_compiler_stack(
 
         // NOT restricted in reference PHP (verified) — always the normal body, and it needs no
         // baked compile-time data at all.
-        if detect::program_references(&program, JIT_BLACKLIST_FN)
-            && !detect::program_declares(&program, JIT_BLACKLIST_FN)
-        {
+        if wanted(JIT_BLACKLIST_FN) {
             declarations.push(build::jit_blacklist_decl());
         }
 
@@ -219,9 +248,7 @@ fn inject_if_used_on_compiler_stack(
             COMPILE_FILE_FN,
         ]
         .iter()
-        .any(|name| {
-            detect::program_references(&program, name) && !detect::program_declares(&program, name)
-        });
+        .any(|name| wanted(name));
         if needs_state_helpers {
             declarations.extend(build::state_helper_decls());
         }
@@ -235,8 +262,8 @@ fn inject_if_used_on_compiler_stack(
         if !web {
             let ini_get_used = detect::program_references(&program, "ini_get")
                 && !detect::program_declares(&program, "ini_get");
-            let ini_set_used = detect::program_references(&program, "ini_set")
-                && !detect::program_declares(&program, "ini_set");
+            // Inside `if !web`, so the flag reduces to the CLI reference check.
+            let ini_set_used = ini_set_injected;
             let ini_get_all_used = detect::program_references(&program, "ini_get_all")
                 && !detect::program_declares(&program, "ini_get_all");
             if ini_get_used || ini_set_used || ini_get_all_used {

@@ -58,9 +58,10 @@ fn execute_program_call_user_func_releases_literal_callback_after_dispatch() {
     );
 }
 
-/// Verifies `call_user_func` releases literal callback temporaries after dispatch fatal.
+/// Verifies `call_user_func` releases literal callback temporaries when the dispatched builtin
+/// refuses its argument count: `strlen()` with no argument throws PHP's `ArgumentCountError`.
 #[test]
-fn execute_program_call_user_func_releases_literal_callback_after_dispatch_fatal() {
+fn execute_program_call_user_func_releases_literal_callback_after_arity_error() {
     let program =
         parse_fragment(br#"return call_user_func("strlen");"#).expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
@@ -68,7 +69,7 @@ fn execute_program_call_user_func_releases_literal_callback_after_dispatch_fatal
 
     let result = execute_program(&program, &mut scope, &mut values);
 
-    assert_eq!(result, Err(EvalStatus::RuntimeFatal));
+    assert_eq!(result, Err(EvalStatus::UncaughtThrowable));
     assert!(
         values
             .releases
