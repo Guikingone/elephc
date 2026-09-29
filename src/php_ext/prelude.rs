@@ -5,7 +5,7 @@
 //!
 //! Called from:
 //! - `crate::pipeline`, before name resolution, when the program's project
-//!   declares `[php-ext]` extensions.
+//!   declares extensions in `[extension.dependencies]`.
 //!
 //! Key details:
 //! - Built as AST, never parsed from PHP source.
@@ -133,7 +133,7 @@ fn strict_eq(left: Expr, right: Expr) -> Expr {
     e_binop(left, BinOp::StrictEq, right)
 }
 
-/// `__elephc_php_ext_setup()`: applies `[php-ext.ini]` once, before any
+/// `__elephc_php_ext_setup()`: applies `[extension.ini]` once, before any
 /// extension starts.
 fn setup_helper(ini: &[(String, String)]) -> Stmt {
     let mut body = vec![
@@ -769,7 +769,7 @@ fn unsupported_wrapper(function: &SurfaceFunction, local: &str, reason: &str) ->
         .build()
 }
 
-/// Names the functions whose wrappers only raise, for `php-ext add` to report.
+/// Names the functions whose wrappers only raise, for `extension add` to report.
 pub fn unsupported_functions(extension: &InstalledExtension) -> Vec<(String, String)> {
     extension
         .surface

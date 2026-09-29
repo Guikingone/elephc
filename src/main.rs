@@ -164,7 +164,7 @@ fn run_native(command: native_deps::NativeCommand) {
     }
 }
 
-/// Executes a parsed `elephc php-ext` command, printing its output or error.
+/// Executes a parsed `elephc extension` command, printing its output or error.
 fn run_php_ext(command: php_ext::cli::PhpExtCommand) {
     let cwd = match std::env::current_dir() {
         Ok(cwd) => cwd,

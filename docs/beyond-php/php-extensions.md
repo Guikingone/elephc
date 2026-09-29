@@ -1,6 +1,6 @@
 ---
 title: "Hosting PHP extensions"
-description: "Build real PECL, PIE, or in-house C extensions from source and call them from compiled programs with elephc php-ext."
+description: "Build real PECL, PIE, or in-house C extensions from source and call them from compiled programs with elephc extension."
 sidebar:
   order: 10
 ---
@@ -15,7 +15,7 @@ The extension is built from its own C (or C++) sources, and every function it
 registers becomes an ordinary PHP function your code calls by name:
 
 ```bash
-elephc php-ext add simdjson@4.0.0
+elephc extension add simdjson@4.0.0
 ```
 
 ```php
@@ -40,7 +40,7 @@ builds that engine code from a pinned php-src release — the real `zend_hash.c`
 into `libelephc_zend.a`, and replaces only what an ahead-of-time binary does
 not have: the executor that runs opcodes.
 
-`elephc php-ext add` then:
+`elephc extension add` then:
 
 1. declares the managed [`php-src`](../compiling/native-dependencies.md)
    package, which provides the PHP headers and that engine archive;
@@ -66,19 +66,19 @@ its archive is linked.
 ## Sources
 
 ```bash
-elephc php-ext add apcu                  # newest stable PECL release
-elephc php-ext add apcu@5.1.28           # an exact PECL release
-elephc php-ext add vendor/package@1.2.3  # a PIE package (Packagist type php-ext)
-elephc php-ext add demo --path ext/demo  # a source tree in your project
+elephc extension add apcu                  # newest stable PECL release
+elephc extension add apcu@5.1.28           # an exact PECL release
+elephc extension add vendor/package@1.2.3  # a PIE package (Packagist type php-ext)
+elephc extension add demo --path ext/demo  # a source tree in your project
 ```
 
 The manifest records each source:
 
 ```toml
-[php-ext]
+[extension]
 schema = 1
 
-[php-ext.extensions]
+[extension.dependencies]
 simdjson = { version = "4.0.0", sha256 = "1fb48fe5…" }
 apcu = { pie = "apcu/apcu", version = "5.1.28", sha256 = "…" }
 demo = { path = "ext/demo" }
@@ -89,17 +89,17 @@ hosted on GitHub. Zend extensions (`php-ext-zend`, such as Xdebug) are refused:
 they hook the PHP engine's executor, which a compiled program does not have, so
 they would link cleanly and never run.
 
-`elephc php-ext install` builds every declared extension that is missing (for
-example on a fresh CI machine), `elephc php-ext list` shows what is declared and
-built, and `elephc php-ext remove <name>` drops a declaration.
+`elephc extension install` builds every declared extension that is missing (for
+example on a fresh CI machine), `elephc extension list` shows what is declared and
+built, and `elephc extension remove <name>` drops a declaration.
 
 ## INI directives
 
-Directives in `[php-ext.ini]` are applied before any extension starts, the way
+Directives in `[extension.ini]` are applied before any extension starts, the way
 `php.ini` is:
 
 ```toml
-[php-ext.ini]
+[extension.ini]
 "apc.enable_cli" = "1"
 "apc.shm_size" = "64M"
 ```
@@ -133,7 +133,7 @@ C code knows is passed only when your call passes it, exactly as PHP does.
 - **Objects and callables cannot be passed in yet.** A function taking a
   `callable` (APCu's `apcu_entry()`, `array_map`-style helpers) or an object is
   still declared, but calling it throws an `Error` explaining why, and
-  `elephc php-ext add` lists such functions. Class-based extensions (`ds`'s
+  `elephc extension add` lists such functions. Class-based extensions (`ds`'s
   `Ds\Vector`, `mongodb`) therefore expose only their functions.
 - **Integrations with other extensions are compiled out.** Elephc does not
   host `session`, `pcre`, streams or output buffering, so an optional

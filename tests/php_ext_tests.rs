@@ -1,5 +1,5 @@
 //! Purpose:
-//! End-to-end tests for hosted PHP extensions: `elephc php-ext add` builds the
+//! End-to-end tests for hosted PHP extensions: `elephc extension add` builds the
 //! `elephc_demo` fixture extension from source, and compiled programs call it.
 //!
 //! Called from:
@@ -33,15 +33,15 @@ fn fixture_dir() -> PathBuf {
 /// A fresh project directory with the fixture extension added as a path source.
 fn project(label: &str) -> PathBuf {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    let dir = std::env::temp_dir().join(format!("elephc-php-ext-{label}-{}-{nanos}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("elephc-extension-{label}-{}-{nanos}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     let output = Command::new(elephc())
         .current_dir(&dir)
-        .args(["php-ext", "add", "elephc_demo", "--path"])
+        .args(["extension", "add", "elephc_demo", "--path"])
         .arg(fixture_dir().join("demo"))
         .output()
-        .expect("run elephc php-ext add");
-    assert_success(&output, "php-ext add");
+        .expect("run elephc extension add");
+    assert_success(&output, "extension add");
     dir
 }
 
@@ -84,8 +84,8 @@ fn hosted_calls_match_real_php() {
 #[ignore = "downloads php-src and builds a C extension"]
 fn add_and_list_report_the_surface() {
     let dir = project("list");
-    let list = Command::new(elephc()).current_dir(&dir).args(["php-ext", "list"]).output().unwrap();
-    assert_success(&list, "php-ext list");
+    let list = Command::new(elephc()).current_dir(&dir).args(["extension", "list"]).output().unwrap();
+    assert_success(&list, "extension list");
     let text = String::from_utf8_lossy(&list.stdout);
     assert!(text.contains("elephc_demo 1.2.3 — 16 functions, 2 classes, 3 constants"), "{text}");
     assert!(text.contains("not callable yet: demo_apply()"), "{text}");
@@ -95,13 +95,13 @@ fn add_and_list_report_the_surface() {
     fs::remove_dir_all(dir).unwrap();
 }
 
-/// `[php-ext.ini]` is applied before the extension starts, as php.ini is.
+/// `[extension.ini]` is applied before the extension starts, as php.ini is.
 #[test]
 #[ignore = "downloads php-src and builds a C extension"]
 fn ini_directives_reach_the_extension() {
     let dir = project("ini");
     let mut manifest = fs::read_to_string(dir.join("elephc.toml")).unwrap();
-    manifest.push_str("\n[php-ext.ini]\n\"elephc_demo.greeting\" = \"Bonjour\"\n");
+    manifest.push_str("\n[extension.ini]\n\"elephc_demo.greeting\" = \"Bonjour\"\n");
     fs::write(dir.join("elephc.toml"), manifest).unwrap();
     let run = compile_and_run(&dir, "<?php echo demo_greet('Ada'), \"\\n\";");
     assert_success(&run, "compiled program");

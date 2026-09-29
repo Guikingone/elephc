@@ -1,5 +1,5 @@
 //! Purpose:
-//! Parses and runs the `elephc php-ext` command family.
+//! Parses and runs the `elephc extension` command family.
 //!
 //! Called from:
 //! - Top-level CLI dispatch (`crate::cli::parse_args`) and `main`.
@@ -16,7 +16,7 @@ use crate::native_deps::{NativeError, NativeErrorKind};
 
 use super::install::{self, AddSpec};
 
-/// A validated `elephc php-ext` subcommand.
+/// A validated `elephc extension` subcommand.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PhpExtCommand {
     Add { spec: AddSpec, options: PhpExtOptions },
@@ -44,12 +44,12 @@ pub enum PhpExtParseOutcome {
 pub fn php_ext_help() -> String {
     concat!(
         "Usage:\n",
-        "  elephc php-ext add <name>[@<version>] [--target TARGET] [--offline] [--manifest-path FILE]\n",
-        "  elephc php-ext add <vendor/package>[@<version>] [...]      (a PIE package from Packagist)\n",
-        "  elephc php-ext add <name> --path DIR [...]                  (a local extension source tree)\n",
-        "  elephc php-ext install [--target TARGET] [--offline] [--manifest-path FILE]\n",
-        "  elephc php-ext remove <name> [--manifest-path FILE]\n",
-        "  elephc php-ext list [--target TARGET] [--manifest-path FILE]\n",
+        "  elephc extension add <name>[@<version>] [--target TARGET] [--offline] [--manifest-path FILE]\n",
+        "  elephc extension add <vendor/package>[@<version>] [...]      (a PIE package from Packagist)\n",
+        "  elephc extension add <name> --path DIR [...]                  (a local extension source tree)\n",
+        "  elephc extension install [--target TARGET] [--offline] [--manifest-path FILE]\n",
+        "  elephc extension remove <name> [--manifest-path FILE]\n",
+        "  elephc extension list [--target TARGET] [--manifest-path FILE]\n",
         "\n",
         "Hosts real PHP extensions (PECL, PIE, or your own) in compiled programs: each is built\n",
         "from source against Elephc's Zend engine and its functions become callable PHP functions.\n",
@@ -61,10 +61,10 @@ fn usage(message: impl Into<String>) -> NativeError {
     NativeError::new(NativeErrorKind::Usage, message)
 }
 
-/// Parses the tokens after `php-ext`.
+/// Parses the tokens after `extension`.
 pub fn parse_php_ext_args(args: &[String]) -> Result<PhpExtParseOutcome, NativeError> {
     let Some(verb) = args.first().map(String::as_str) else {
-        return Err(usage("missing php-ext command"));
+        return Err(usage("missing extension command"));
     };
     if matches!(verb, "-h" | "--help" | "help") {
         return Ok(PhpExtParseOutcome::Help(php_ext_help()));
@@ -102,15 +102,15 @@ pub fn parse_php_ext_args(args: &[String]) -> Result<PhpExtParseOutcome, NativeE
     let one = |what: &str| -> Result<String, NativeError> {
         match positional.as_slice() {
             [single] => Ok(single.clone()),
-            [] => Err(usage(format!("php-ext {verb} needs {what}"))),
-            _ => Err(usage(format!("php-ext {verb} takes one {what}"))),
+            [] => Err(usage(format!("extension {verb} needs {what}"))),
+            _ => Err(usage(format!("extension {verb} takes one {what}"))),
         }
     };
     let none = || -> Result<(), NativeError> {
-        if positional.is_empty() { Ok(()) } else { Err(usage(format!("php-ext {verb} takes no arguments"))) }
+        if positional.is_empty() { Ok(()) } else { Err(usage(format!("extension {verb} takes no arguments"))) }
     };
     if path.is_some() && verb != "add" {
-        return Err(usage("--path belongs to php-ext add"));
+        return Err(usage("--path belongs to extension add"));
     }
     let command = match verb {
         "add" => PhpExtCommand::Add { spec: install::parse_add_spec(&one("an extension")?, path)?, options },
@@ -123,7 +123,7 @@ pub fn parse_php_ext_args(args: &[String]) -> Result<PhpExtParseOutcome, NativeE
             none()?;
             PhpExtCommand::List { options }
         }
-        other => return Err(usage(format!("unknown php-ext command '{other}'"))),
+        other => return Err(usage(format!("unknown extension command '{other}'"))),
     };
     Ok(PhpExtParseOutcome::Command(command))
 }

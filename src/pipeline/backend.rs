@@ -503,7 +503,7 @@ fn insert_hosted_extensions(
             system_libraries.push(cxx_runtime.to_string());
         }
         crate::native_deps::ResolvedNativePackage {
-            package: format!("php-ext:{}", extension.name),
+            package: format!("extension:{}", extension.name),
             artifact_root: extension.artifact_dir.clone(),
             archives: vec![extension.archive()],
             system_libraries,

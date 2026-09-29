@@ -3,7 +3,7 @@
 //! source tree — inside compiled Elephc programs.
 //!
 //! Called from:
-//! - `elephc php-ext …` (install side) and the compile pipeline (use side).
+//! - `elephc extension …` (install side) and the compile pipeline (use side).
 //!
 //! Key details:
 //! - An extension is built from source by evaluating its own `config.m4`
@@ -13,8 +13,8 @@
 //! - Its surface is read by running its MINIT and walking what it registered
 //!   (`surface`), then declared to the compiler as ordinary PHP functions,
 //!   classes and constants that call through the engine (`prelude`).
-//! - `manifest` owns the `[php-ext]` section of `elephc.toml`; `install` and
-//!   `cli` run `elephc php-ext add/install/remove/list`; `source` fetches PECL
+//! - `manifest` owns the `[extension]` section of `elephc.toml`; `install` and
+//!   `cli` run `elephc extension add/install/remove/list`; `source` fetches PECL
 //!   and PIE archives; `admission` refuses extensions that hook the VM.
 
 pub mod admission;

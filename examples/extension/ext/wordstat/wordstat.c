@@ -1,7 +1,7 @@
 /* wordstat.c — a small, ordinary PHP extension: word statistics over a text.
  *
  * Nothing here knows about Elephc. The same file builds with phpize for PHP
- * (`phpize && ./configure && make`), and `elephc php-ext add wordstat --path
+ * (`phpize && ./configure && make`), and `elephc extension add wordstat --path
  * ext/wordstat` hosts it in a compiled program.
  */
 

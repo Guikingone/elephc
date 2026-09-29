@@ -6,7 +6,7 @@
 //! - `crate::php_ext::install`.
 //!
 //! Key details:
-//! - PECL publishes no checksums. The archive `elephc php-ext add` downloads is
+//! - PECL publishes no checksums. The archive `elephc extension add` downloads is
 //!   hashed and the digest written to the manifest; every later download must
 //!   match it, so a build cannot silently change under a pinned version.
 //! - PIE packages are Packagist packages of type `php-ext`. Their metadata
@@ -48,7 +48,7 @@ fn agent() -> Agent {
         .timeout_connect(Some(Duration::from_secs(30)))
         .timeout_recv_body(Some(Duration::from_secs(60)))
         .timeout_global(Some(Duration::from_secs(5 * 60)))
-        .user_agent("elephc-php-ext")
+        .user_agent("elephc")
         .build()
         .into()
 }

@@ -40,7 +40,7 @@ so later XML extensions can compile against the same artifact.
 php-src is what [hosted PHP extensions](../beyond-php/php-extensions.md) build
 and link against: every header under `Zend/`, `main/`, `TSRM/` and `ext/`, plus
 `libelephc_zend.a`, the Zend engine's own data-structure units compiled with
-the small host layer that stands in for the executor. `elephc php-ext add`
+the small host layer that stands in for the executor. `elephc extension add`
 declares it for you.
 
 `elephc native add oniguruma` installs the pinned Oniguruma library and the

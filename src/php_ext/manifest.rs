@@ -1,9 +1,9 @@
 //! Purpose:
-//! Reads and edits the `[php-ext]` section of `elephc.toml`, which declares the
+//! Reads and edits the `[extension]` section of `elephc.toml`, which declares the
 //! real PHP extensions a program hosts and the INI directives they start with.
 //!
 //! Called from:
-//! - `elephc php-ext add/remove/install/list` and extension resolution during
+//! - `elephc extension add/remove/install/list` and extension resolution during
 //!   compilation.
 //!
 //! Key details:
@@ -13,10 +13,10 @@
 //!   Packagist (`{ pie = "vendor/name", version, sha256 }`), and a local source
 //!   tree (`{ path = "ext/demo" }`) for in-house extensions.
 //! - Remote sources are pinned by exact version AND by the SHA-256 of the
-//!   archive `elephc php-ext add` downloaded. PECL publishes no checksums, so the
+//!   archive `elephc extension add` downloaded. PECL publishes no checksums, so the
 //!   first download is trusted and every later one must match it; a range would
 //!   make a build's contents depend on when it ran.
-//! - `[php-ext.ini]` holds directives applied before any extension starts, the
+//! - `[extension.ini]` holds directives applied before any extension starts, the
 //!   way php.ini is — APCu, for one, does nothing in CLI without
 //!   `apc.enable_cli = "1"`.
 
@@ -59,7 +59,7 @@ impl ExtensionSource {
     }
 }
 
-/// Comment-preserving manifest document and its validated `[php-ext]` content.
+/// Comment-preserving manifest document and its validated `[extension]` content.
 #[derive(Clone, Debug)]
 pub struct PhpExtManifest {
     document: DocumentMut,
@@ -68,7 +68,7 @@ pub struct PhpExtManifest {
 }
 
 impl PhpExtManifest {
-    /// An empty manifest with no `[php-ext]` section yet.
+    /// An empty manifest with no `[extension]` section yet.
     pub fn new() -> Self {
         Self {
             document: DocumentMut::new(),
@@ -77,9 +77,9 @@ impl PhpExtManifest {
         }
     }
 
-    /// Parses and strictly validates the `[php-ext]` section.
+    /// Parses and strictly validates the `[extension]` section.
     ///
-    /// A manifest with no `[php-ext]` section is valid and declares nothing:
+    /// A manifest with no `[extension]` section is valid and declares nothing:
     /// hosting is opt-in.
     pub fn parse(text: &str) -> Result<Self, NativeError> {
         let document = DocumentMut::from_str(text)
@@ -89,23 +89,23 @@ impl PhpExtManifest {
             extensions: BTreeMap::new(),
             ini: BTreeMap::new(),
         };
-        let Some(section) = manifest.document.get("php-ext").and_then(Item::as_table) else {
+        let Some(section) = manifest.document.get("extension").and_then(Item::as_table) else {
             return Ok(manifest);
         };
         for (key, _) in section.iter() {
-            if !matches!(key, "schema" | "extensions" | "ini") {
-                return Err(manifest_error(format!("unknown key 'php-ext.{key}'")));
+            if !matches!(key, "schema" | "dependencies" | "ini") {
+                return Err(manifest_error(format!("unknown key 'extension.{key}'")));
             }
         }
         if section.get("schema").and_then(Item::as_integer) != Some(1) {
-            return Err(manifest_error("php-ext.schema is required and must equal 1"));
+            return Err(manifest_error("extension.schema is required and must equal 1"));
         }
 
         let mut folded = BTreeSet::new();
-        if let Some(item) = section.get("extensions") {
+        if let Some(item) = section.get("dependencies") {
             let table = item
                 .as_table_like()
-                .ok_or_else(|| manifest_error("php-ext.extensions must be a table"))?;
+                .ok_or_else(|| manifest_error("extension.dependencies must be a table"))?;
             for (name, entry) in table.iter() {
                 validate_extension_name(name)?;
                 if !folded.insert(name.to_ascii_lowercase()) {
@@ -118,11 +118,11 @@ impl PhpExtManifest {
         if let Some(item) = section.get("ini") {
             let table = item
                 .as_table_like()
-                .ok_or_else(|| manifest_error("php-ext.ini must be a table"))?;
+                .ok_or_else(|| manifest_error("extension.ini must be a table"))?;
             for (directive, entry) in table.iter() {
                 let setting = entry.as_str().ok_or_else(|| {
                     manifest_error(format!(
-                        "php-ext.ini '{directive}' must be a string, as it would be in php.ini"
+                        "extension.ini '{directive}' must be a string, as it would be in php.ini"
                     ))
                 })?;
                 manifest.ini.insert(directive.to_string(), setting.to_string());
@@ -134,7 +134,7 @@ impl PhpExtManifest {
     /// Reads and parses a manifest from disk.
     pub fn load(path: &Path) -> Result<Self, NativeError> {
         let text = fs::read_to_string(path)
-            .map_err(|error| NativeError::io("read php-ext manifest", path, error))?;
+            .map_err(|error| NativeError::io("read extension manifest", path, error))?;
         Self::parse(&text).map_err(|error| error.with_path(path))
     }
 
@@ -168,7 +168,7 @@ impl PhpExtManifest {
                 entry.insert("path", Value::from(path.to_string_lossy().as_ref()));
             }
         }
-        self.document["php-ext"]["extensions"][name] = value(entry);
+        self.document["extension"]["dependencies"][name] = value(entry);
         self.extensions.insert(name.to_string(), source);
         Ok(())
     }
@@ -179,9 +179,9 @@ impl PhpExtManifest {
         if removed {
             if let Some(table) = self
                 .document
-                .get_mut("php-ext")
+                .get_mut("extension")
                 .and_then(Item::as_table_mut)
-                .and_then(|section| section.get_mut("extensions"))
+                .and_then(|section| section.get_mut("dependencies"))
                 .and_then(Item::as_table_like_mut)
             {
                 table.remove(name);
@@ -196,12 +196,12 @@ impl PhpExtManifest {
     }
 
     fn ensure_section(&mut self) {
-        if self.document.get("php-ext").and_then(Item::as_table).is_none() {
-            self.document["php-ext"] = Item::Table(Table::new());
-            self.document["php-ext"]["schema"] = value(1);
+        if self.document.get("extension").and_then(Item::as_table).is_none() {
+            self.document["extension"] = Item::Table(Table::new());
+            self.document["extension"]["schema"] = value(1);
         }
-        if self.document["php-ext"].get("extensions").is_none() {
-            self.document["php-ext"]["extensions"] = Item::Table(Table::new());
+        if self.document["extension"].get("dependencies").is_none() {
+            self.document["extension"]["dependencies"] = Item::Table(Table::new());
         }
     }
 }
@@ -212,12 +212,12 @@ impl Default for PhpExtManifest {
     }
 }
 
-/// Reads one `[php-ext.extensions]` entry.
+/// Reads one `[extension.dependencies]` entry.
 fn parse_source(name: &str, item: &Item) -> Result<ExtensionSource, NativeError> {
     if item.is_str() {
         return Err(manifest_error(format!(
             "php extension '{name}' must be a table such as {{ version = \"1.0.0\", sha256 = \"…\" }}; \
-             run `elephc php-ext add {name}@<version>` to pin it"
+             run `elephc extension add {name}@<version>` to pin it"
         )));
     }
     let table = item
@@ -255,7 +255,7 @@ fn parse_source(name: &str, item: &Item) -> Result<ExtensionSource, NativeError>
                 .ok_or_else(|| manifest_error(format!("php extension '{name}' has no version")))?;
             let sha256 = text("sha256")?.ok_or_else(|| {
                 manifest_error(format!(
-                    "php extension '{name}' has no sha256; run `elephc php-ext add` to pin it"
+                    "php extension '{name}' has no sha256; run `elephc extension add` to pin it"
                 ))
             })?;
             match pie {
@@ -364,15 +364,15 @@ mod tests {
     fn parses_every_source_kind() {
         let text = format!(
             r#"
-[php-ext]
+[extension]
 schema = 1
 
-[php-ext.extensions]
+[extension.dependencies]
 simdjson = {{ version = "4.0.0", sha256 = "{SHA}" }}
 apcu = {{ pie = "apcu/apcu", version = "5.1.28", sha256 = "{SHA}" }}
 demo = {{ path = "ext/demo" }}
 
-[php-ext.ini]
+[extension.ini]
 "apc.enable_cli" = "1"
 "#
         );
@@ -413,7 +413,7 @@ demo = {{ path = "ext/demo" }}
         let rendered = manifest.render();
         assert!(rendered.contains("# project manifest"), "comment kept");
         assert!(rendered.contains("zlib = \"1.3.1\""), "native entry kept");
-        assert!(rendered.contains("[php-ext.extensions]"));
+        assert!(rendered.contains("[extension.dependencies]"));
         assert!(rendered.contains("apcu = { version = \"5.1.28\""), "new entry written: {rendered}");
         let reparsed = PhpExtManifest::parse(&rendered).expect("round-trips");
         assert_eq!(reparsed.extensions().len(), 1);
@@ -434,9 +434,9 @@ demo = {{ path = "ext/demo" }}
     /// command that fixes it is kinder than trusting whatever downloads next.
     #[test]
     fn a_bare_version_string_is_refused_with_the_fix() {
-        let text = "[php-ext]\nschema = 1\n\n[php-ext.extensions]\napcu = \"5.1.28\"\n";
+        let text = "[extension]\nschema = 1\n\n[extension.dependencies]\napcu = \"5.1.28\"\n";
         let error = PhpExtManifest::parse(text).expect_err("unpinned");
-        assert!(error.to_string().contains("elephc php-ext add apcu@<version>"), "{error}");
+        assert!(error.to_string().contains("elephc extension add apcu@<version>"), "{error}");
     }
 
     /// Ranges must be refused *as ranges*: asserting only that the call fails is
@@ -463,14 +463,14 @@ demo = {{ path = "ext/demo" }}
 
     #[test]
     fn rejects_a_path_that_also_pins_a_version() {
-        let text = "[php-ext]\nschema = 1\n\n[php-ext.extensions]\ndemo = { path = \"ext\", version = \"1.0\" }\n";
+        let text = "[extension]\nschema = 1\n\n[extension.dependencies]\ndemo = { path = \"ext\", version = \"1.0\" }\n";
         assert!(PhpExtManifest::parse(text).is_err());
     }
 
     #[test]
     fn rejects_unknown_keys_and_a_wrong_schema() {
-        assert!(PhpExtManifest::parse("[php-ext]\nschema = 1\nnope = true\n").is_err());
-        assert!(PhpExtManifest::parse("[php-ext]\nschema = 2\n").is_err());
+        assert!(PhpExtManifest::parse("[extension]\nschema = 1\nnope = true\n").is_err());
+        assert!(PhpExtManifest::parse("[extension]\nschema = 2\n").is_err());
     }
 
     #[test]
@@ -486,7 +486,7 @@ demo = {{ path = "ext/demo" }}
 
     #[test]
     fn ini_values_must_be_strings() {
-        let text = "[php-ext]\nschema = 1\n\n[php-ext.ini]\n\"apc.enable_cli\" = 1\n";
+        let text = "[extension]\nschema = 1\n\n[extension.ini]\n\"apc.enable_cli\" = 1\n";
         let error = PhpExtManifest::parse(text).expect_err("not a string");
         assert!(error.to_string().contains("as it would be in php.ini"));
     }

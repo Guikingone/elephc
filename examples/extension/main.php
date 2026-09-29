@@ -3,7 +3,7 @@
 // you would build with phpize. Elephc builds it from source and its functions,
 // constant and exception class become part of this program.
 //
-//   elephc php-ext install     # builds ext/wordstat (declared in elephc.toml)
+//   elephc extension install     # builds ext/wordstat (declared in elephc.toml)
 //   elephc main.php && ./main
 
 $text = <<<TEXT

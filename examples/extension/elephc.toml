@@ -4,8 +4,8 @@ schema = 1
 [native.dependencies]
 php-src = "8.5.6"
 
-[php-ext]
+[extension]
 schema = 1
 
-[php-ext.extensions]
+[extension.dependencies]
 wordstat = { path = "ext/wordstat" }

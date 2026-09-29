@@ -1,6 +1,6 @@
 //! Purpose:
-//! Runs `elephc php-ext add/install/remove/list`: acquires extension sources,
-//! builds them against the `php-src` package, and keeps the `[php-ext]`
+//! Runs `elephc extension add/install/remove/list`: acquires extension sources,
+//! builds them against the `php-src` package, and keeps the `[extension]`
 //! manifest section in step.
 //!
 //! Called from:
@@ -10,7 +10,7 @@
 //! - The `php-src` package (PHP headers + the Zend engine archive) is an
 //!   ordinary `[native]` dependency: `add` declares it through `elephc native
 //!   add` when the project lacks it, so it is locked and cached like any other.
-//! - Built extensions live in the native cache under `php-ext/<name>/<key>`,
+//! - Built extensions live in the native cache under `extension/<name>/<key>`,
 //!   where the key covers everything the build depends on: the build logic
 //!   revision, the extension's source identity (pinned archive digest, or the
 //!   content of a path source), the exact `php-src` artifact (which already
@@ -100,7 +100,7 @@ struct Context {
 impl Context {
     fn open(cwd: &Path, manifest_path: Option<&Path>, target: Option<Target>, offline: bool, create: bool) -> Result<Self, NativeError> {
         let project = discover_for_native(cwd, manifest_path, create)?.ok_or_else(|| {
-            NativeError::new(NativeErrorKind::Project, "no elephc.toml found; run `elephc php-ext add` in the project root")
+            NativeError::new(NativeErrorKind::Project, "no elephc.toml found; run `elephc extension add` in the project root")
         })?;
         Ok(Self {
             project,
@@ -155,7 +155,7 @@ impl Context {
     }
 
     fn cache_dir(&self) -> PathBuf {
-        self.cache.root.join("php-ext")
+        self.cache.root.join("extension")
     }
 }
 
@@ -163,7 +163,7 @@ impl Context {
 pub fn php_src_root(project_root: &Path, target: Target) -> Result<PathBuf, NativeError> {
     // Resolution discovers the project from a source path; any path inside the
     // project root names it.
-    let probe = project_root.join("elephc-php-ext.php");
+    let probe = project_root.join("elephc-extension.php");
     let resolved = resolve_for_compilation(&probe, target, &[NativeRequirement::package(PHP_SRC_PACKAGE)])?;
     resolved
         .into_iter()
@@ -198,7 +198,7 @@ pub fn artifact_dir(cache_root: &Path, name: &str, identity: &str, php_src: &Pat
         digest.update([0u8]);
     }
     let key = format!("{:x}", digest.finalize());
-    cache_root.join("php-ext").join(name).join(&key[..32])
+    cache_root.join("extension").join(name).join(&key[..32])
 }
 
 /// The identity of an extension's source for the cache key.
@@ -267,7 +267,7 @@ fn remote_tree(ctx: &Context, name: &str, source: &ExtensionSource, work: &Path)
                 NativeErrorKind::Integrity,
                 format!(
                     "php extension '{name}' changed upstream: the manifest pins sha256 {sha256}, the download \
-                     is {actual}. If the new archive is expected, run `elephc php-ext add` again to re-pin it"
+                     is {actual}. If the new archive is expected, run `elephc extension add` again to re-pin it"
                 ),
             ));
         }
@@ -357,7 +357,7 @@ fn pin(ctx: &Context, spec: &AddSpec) -> Result<(String, ExtensionSource), Nativ
 /// Downloads an archive for the first time and files it under its digest.
 fn fetch_for_pin(ctx: &Context, url: &str) -> Result<String, NativeError> {
     if ctx.offline {
-        return Err(NativeError::new(NativeErrorKind::Network, "offline mode: `php-ext add` must download the source to pin it"));
+        return Err(NativeError::new(NativeErrorKind::Network, "offline mode: `extension add` must download the source to pin it"));
     }
     let sources = ctx.cache_dir().join("sources");
     let temporary = sources.join(format!("pin.{}.tar.gz", std::process::id()));
@@ -384,7 +384,7 @@ fn describe(installed: &InstalledExtension) -> String {
     text
 }
 
-/// `elephc php-ext add`.
+/// `elephc extension add`.
 pub fn add(cwd: &Path, spec: &AddSpec, manifest_path: Option<&Path>, target: Option<Target>, offline: bool) -> Result<String, NativeError> {
     let mut ctx = Context::open(cwd, manifest_path, target, offline, true)?;
     let php_src = ctx.ensure_php_src()?;
@@ -397,7 +397,7 @@ pub fn add(cwd: &Path, spec: &AddSpec, manifest_path: Option<&Path>, target: Opt
     Ok(ctx.output)
 }
 
-/// `elephc php-ext install`: builds every declared extension that is missing.
+/// `elephc extension install`: builds every declared extension that is missing.
 pub fn install(cwd: &Path, manifest_path: Option<&Path>, target: Option<Target>, offline: bool) -> Result<String, NativeError> {
     let mut ctx = Context::open(cwd, manifest_path, target, offline, false)?;
     let manifest = ctx.manifest()?;
@@ -412,7 +412,7 @@ pub fn install(cwd: &Path, manifest_path: Option<&Path>, target: Option<Target>,
     Ok(ctx.output)
 }
 
-/// `elephc php-ext remove`.
+/// `elephc extension remove`.
 pub fn remove(cwd: &Path, name: &str, manifest_path: Option<&Path>) -> Result<String, NativeError> {
     let ctx = Context::open(cwd, manifest_path, None, false, false)?;
     let mut manifest = ctx.manifest()?;
@@ -423,7 +423,7 @@ pub fn remove(cwd: &Path, name: &str, manifest_path: Option<&Path>) -> Result<St
     Ok(format!("removed php extension {name}\n"))
 }
 
-/// `elephc php-ext list`: each declared extension and whether it is built.
+/// `elephc extension list`: each declared extension and whether it is built.
 pub fn list(cwd: &Path, manifest_path: Option<&Path>, target: Option<Target>) -> Result<String, NativeError> {
     let ctx = Context::open(cwd, manifest_path, target, false, false)?;
     let manifest = ctx.manifest()?;
@@ -435,10 +435,10 @@ pub fn list(cwd: &Path, manifest_path: Option<&Path>, target: Option<Target>) ->
                 let identity = source_identity(&ctx.project.root, source)?;
                 match load_installed(name, &artifact_dir(&ctx.cache.root, name, &identity, php_src, ctx.target)) {
                     Ok(installed) => describe(&installed),
-                    Err(_) => format!("{name} — not built; run `elephc php-ext install`"),
+                    Err(_) => format!("{name} — not built; run `elephc extension install`"),
                 }
             }
-            None => format!("{name} — php-src is not installed; run `elephc php-ext install`"),
+            None => format!("{name} — php-src is not installed; run `elephc extension install`"),
         };
         out.push_str(&format!("{state}  [{}]\n", source.describe()));
     }
@@ -471,7 +471,7 @@ pub fn resolve_hosted(source_file: &Path, target: Target) -> Result<Option<Hoste
         return Ok(None);
     }
     let php_src = php_src_root(&project.root, target).map_err(|error| {
-        error.with_recovery(format!("elephc php-ext install --target {}", target.as_str()))
+        error.with_recovery(format!("elephc extension install --target {}", target.as_str()))
     })?;
     let cwd = std::env::current_dir().map_err(|error| NativeError::io("read current directory", Path::new("."), error))?;
     let cache = CacheLayout::from_environment(&cwd)?;
@@ -485,7 +485,7 @@ pub fn resolve_hosted(source_file: &Path, target: Target) -> Result<Option<Hoste
                 format!("php extension '{name}' is not built for {}", target.as_str()),
             )
             .with_project(project.root.clone())
-            .with_recovery(format!("elephc php-ext install --target {}", target.as_str()))
+            .with_recovery(format!("elephc extension install --target {}", target.as_str()))
         })?;
         extensions.push(installed);
     }
@@ -532,6 +532,6 @@ mod tests {
         assert_ne!(base, artifact_dir(root, "apcu", "bbb", php_src, target), "source identity");
         assert_ne!(base, artifact_dir(root, "apcu", "aaa", Path::new("/other"), target), "engine artifact");
         assert_ne!(base, artifact_dir(root, "igbinary", "aaa", php_src, target), "extension name");
-        assert!(base.starts_with("/cache/php-ext/apcu"));
+        assert!(base.starts_with("/cache/extension/apcu"));
     }
 }

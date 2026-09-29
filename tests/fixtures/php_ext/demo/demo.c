@@ -1,7 +1,7 @@
 /* demo.c — the elephc_demo fixture extension: module lifecycle, INI,
  * constants, exception classes, and scalar/by-reference functions.
  *
- * Ordinary PHP 8 extension code, compiled unmodified by `elephc php-ext`.
+ * Ordinary PHP 8 extension code, compiled unmodified by `elephc extension`.
  * Every function exercises a different engine path a hosted extension relies
  * on; tests/php_ext_tests.rs asserts each against the output real PHP gives.
  */
