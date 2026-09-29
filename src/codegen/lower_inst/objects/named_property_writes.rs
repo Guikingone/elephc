@@ -120,7 +120,16 @@ fn emit_dynamic_plan_write(
             ensure_property_value_supported(ctx, slot, value, &value_ty, inst)?;
             let base_reg = abi::symbol_scratch_reg(ctx.emitter);
             ctx.load_value_to_reg(object, base_reg)?;
-            emit_property_store(ctx, value, slot, base_reg)
+            emit_property_store(ctx, value, slot, base_reg)?;
+            if matches!(
+                slot.php_type.codegen_repr(),
+                PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool
+            ) {
+                // A scalar or string slot copies the payload out of the runtime-shaped box, as
+                // `lower_mixed_named_prop_set` retires (#1643).
+                super::release_adopted_mixed_source(ctx, value, &slot.php_type)?;
+            }
+            Ok(())
         }
         PropertyRuntimeAction::DynamicHash { hash_offset, .. } => {
             // The NAME comes from the arm, not from the receiver's static type: php reports the

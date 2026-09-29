@@ -331,3 +331,58 @@ echo $s, "\n";
     assert_eq!(out.stdout, "1440\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// The sibling write shapes of #1643 through an owning receiver leave the heap clean, and the
+/// expression form of `??=` on a property yields the value PHP does:
+/// - `$h->next->m ??= 5` as a statement and as an expression. The expression form double-freed
+///   its probe temp, which read back empty and tripped `--heap-debug`'s bad-refcount check;
+/// - property-array element writes, pushes and compound updates through a typed link and a
+///   call result;
+/// - runtime-name writes `$h->next->{$k} = v` and `mk()->{$k} = v`;
+/// - writes that THROW: a weak-mode `TypeError` through the nullable link and through a call
+///   result, and a set hook that throws on a call-result receiver.
+#[test]
+fn test_write_sibling_shapes_through_owning_receivers_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Box {
+    public int $n = 7;
+    public ?int $m = null;
+    public array $arr = [1, 2];
+    public ?Box $next = null;
+}
+class G { public Box $b; public function __construct() { $this->b = new Box(); } }
+class Hooked { public int $v = 0 { set(int $x) { if ($x < 0) { throw new RuntimeException("neg"); } $this->v = $x; } } }
+function mk(): Box { return new Box(); }
+function mkhooked(): Hooked { return new Hooked(); }
+function linked(): Box { $h = new Box(); $h->next = new Box(); return $h; }
+$s = 0;
+for ($i = 0; $i < 30 + ($argc > 5 ? 1 : 0); $i++) {
+    $h = linked();
+    $h->next->m ??= 5;
+    $s += $h->next->m;
+    $g = linked();
+    $s += ($g->next->m ??= 6);
+    $c = new G();
+    $c->b->arr[0] = 9;
+    $c->b->arr[] = 3;
+    $c->b->arr[1] += 1;
+    $s += $c->b->arr[0] + $c->b->arr[1] + count($c->b->arr);
+    mk()->arr[0] = 9;
+    mk()->arr[] = 9;
+    $k = "n";
+    $h->next->{$k} = 2;
+    mk()->{$k} = 4;
+    $s += $h->next->n;
+    $v = $i > 1000 ? 1 : "x";
+    try { $h->next->n = $v; } catch (TypeError $e) { $s += 1; }
+    try { mk()->n = $v; } catch (TypeError $e) { $s += 1; }
+    try { mkhooked()->v = -1; } catch (RuntimeException $e) { $s += 1; }
+}
+echo $s, "\n";
+"#,
+    );
+    assert!(out.success, "program exited non-zero: {}", out.stderr);
+    assert_eq!(out.stdout, "930\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
