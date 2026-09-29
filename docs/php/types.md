@@ -466,6 +466,12 @@ Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are
   `class_implements()` lists only the directly declared interfaces; it omits their transitive
   parents and the implicit `UnitEnum`/`BackedEnum` interfaces. An enum declared inside `eval()`
   already reports both, like PHP.
+- `empty($box['k'])` on a **nullable static property** holding an `ArrayAccess` object
+  (`public static ?Box $box`) calls `offsetGet()` without asking `offsetExists()` first, where
+  PHP asks `offsetExists()` and skips `offsetGet()` for a missing offset. That property reads as
+  a plain `mixed` value, so its class is not known when `empty()` is lowered. Variables, `$this`,
+  instance properties (nullable or not), non-nullable static properties and call results all go
+  through `offsetExists()` first.
 
 ### Filesystem functions not implemented
 

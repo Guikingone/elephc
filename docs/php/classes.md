@@ -116,7 +116,13 @@ Classes implementing `ArrayAccess` can use PHP subscript syntax:
 `offsetSet()`, `isset($obj[$key])` dispatches to `offsetExists()`, and
 `unset($obj[$key])` dispatches to `offsetUnset()`. `empty($obj[$key])` asks
 `offsetExists()` first and calls `offsetGet()` to test the value only when the
-offset exists, evaluating the object and the key once.
+offset exists, evaluating the object and the key once, so `offsetGet()` runs on
+the object `offsetExists()` answered for even if that call replaced the variable
+or property holding it. This holds for variables, `$this`, instance and static
+properties declared with an `ArrayAccess` class type, and call results; a nullable
+receiver holding `null` is empty without either call. A nullable static
+property (`static ?Box $box`) is read as a plain value, so `empty()` on it goes
+straight to `offsetGet()`.
 
 `Serializable` is intentionally not provided: it is deprecated since
 PHP 8.1. Use the `__serialize` / `__unserialize` magic methods instead.
