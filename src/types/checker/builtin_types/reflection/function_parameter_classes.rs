@@ -156,7 +156,7 @@ pub(super) fn builtin_reflection_parameter() -> FlattenedClass {
             builtin_reflection_slot_getter("getType", "__type", mixed_type()),
             builtin_reflection_slot_getter("getClass", "__class", mixed_type()),
             builtin_reflection_slot_getter("__toString", "__name", TypeExpr::Str),
-            builtin_reflection_owner_get_attributes_method(),
+            builtin_reflection_owner_get_attributes_method("ReflectionParameter"),
             builtin_reflection_slot_getter(
                 "isDefaultValueAvailable",
                 "__has_default_value",
