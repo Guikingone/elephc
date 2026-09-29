@@ -373,6 +373,9 @@ pub(super) fn lower_nullable_array_access(
     });
 
     ctx.builder.position_at_end(null_block);
+    // The read arm releases an owning call result after indexing it. The null arm
+    // has no read to consume that result, so retire it before storing boxed null.
+    release_owning_receiver_temporary(ctx, array_value, expr.span);
     let null_value = lower_boxed_null(ctx, expr);
     store_value_into_temp(ctx, &temp_name, result_type.clone(), null_value, expr.span);
     branch_to(ctx, merge);

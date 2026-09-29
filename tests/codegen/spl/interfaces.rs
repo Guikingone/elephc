@@ -1047,3 +1047,35 @@ echo $n, "\n";
         out.stderr
     );
 }
+
+/// A computed receiver that is an array or string still needs its evaluated value
+/// kept through the silent read, including when a nullable call returns null.
+/// Repeating the null path exposes ownership leaks in nullable subscript lowering.
+#[test]
+fn test_empty_on_computed_nullable_native_receivers_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function maybe_row(bool $null): ?array {
+    return $null ? null : ['k' => str_repeat('x', 3)];
+}
+function maybe_word(bool $null): ?string {
+    return $null ? null : str_repeat('y', 3);
+}
+function word(): string { return str_repeat('y', 3); }
+$hits = 0;
+for ($i = 0; $i < 40; $i++) {
+    if (empty(maybe_row(true)['k'])) { $hits++; }
+    if (!empty(maybe_row(false)['k'])) { $hits++; }
+    if (empty(maybe_word(true)[0])) { $hits++; }
+    if (!empty(word()[0])) { $hits++; }
+}
+echo $hits, "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "160\n", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}

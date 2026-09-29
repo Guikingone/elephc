@@ -192,15 +192,25 @@ pub(super) fn lower_lazy_empty(
                 release_evaluated_once(ctx, Some(temp_name), args[0].span);
                 return Some(result);
             }
-            let value = lower_array_access_from_receiver(ctx, receiver, index, &args[0], false);
-            return Some(emit_builtin_call_value(
+            // Keep a computed native receiver in the same hidden-local form used by the
+            // ArrayAccess route, through both the silent read and the empty test.
+            // Retire the local immediately after the decision instead of at function exit.
+            let temp_name = ctx.declare_hidden_temp(receiver_type.clone());
+            store_value_into_temp(ctx, &temp_name, receiver_type, receiver, args[0].span);
+            let staged = Expr::new(ExprKind::Variable(temp_name.clone()), args[0].span);
+            let value = lower_array_access_with_missing_warning(
+                ctx, &staged, index, &args[0], false,
+            );
+            let result = emit_builtin_call_value(
                 ctx,
                 name,
                 vec![value.value],
                 PhpType::Bool,
                 expr.span,
                 None,
-            ));
+            );
+            release_evaluated_once(ctx, Some(temp_name), args[0].span);
+            return Some(result);
         }
         let value = lower_array_access_with_missing_warning(ctx, array, index, &args[0], false);
         return Some(emit_builtin_call_value(
@@ -566,4 +576,3 @@ pub(super) fn property_existence_magic_class(
     }
     class_method_signature(ctx, &class_name, &php_symbol_key(magic)).map(|_| class_name)
 }
-
