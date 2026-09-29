@@ -338,3 +338,91 @@ echo $r[0], "\n", $r[1], "\n", $a[0], "\n";
     );
     assert_eq!(out, "1\n2\n1\n");
 }
+
+/// Verifies `count()` of a `?array` ternary whose array branch is a closure call (issue #1364).
+///
+/// The merge temp was typed from the syntactic `int` guess for the call, so beside the `null`
+/// branch it became a tagged `?int` scalar and the backend refused `count()` on it.
+#[test]
+fn test_ternary_nullable_closure_call_result_is_countable() {
+    let out = compile_and_run(
+        r#"<?php
+$h = fn(int $i): array => [$i, $i];
+$i = 3;
+$c = $argc == 1 ? $h($i) : null;
+echo count($c), "\n";
+"#,
+    );
+    assert_eq!(out, "2\n");
+}
+
+/// Verifies ternary, `match` and `?:` merges keep the value of every call shape (issue #1364).
+///
+/// Each call was typed `int` by the syntactic fallback, which refused an array or string next to
+/// `null` and silently turned a string or array branch into an integer (`$flag ? word() : other()`
+/// printed `0`). Covers user functions, instance and static methods, an arrow-function call, and
+/// a builtin outside the syntactic allowlist. Expected output is PHP 8.5.10's.
+#[test]
+fn test_ternary_and_match_merges_keep_call_result_types() {
+    let out = compile_and_run(
+        r#"<?php
+function pair(int $i): array { return [$i, $i]; }
+function word(): string { return "word"; }
+function other(): string { return "other"; }
+class Box {
+    public function label(): string { return "label"; }
+    public static function make(): array { return [7, 8, 9]; }
+}
+$box = new Box();
+$f = fn(): string => "arrow";
+$flag = $argc == 1;
+$a = $flag ? pair(2) : null;
+echo count($a), "|";
+$b = $flag ? word() : other();
+echo $b, "|";
+$c = $flag ? $box->label() : null;
+echo $c, "|";
+$d = $flag ? Box::make() : Box::make();
+echo count($d), "|";
+$e = $flag ? $f() : $f();
+echo $e, "|";
+$g = $flag ? array_keys(["x" => 1, "y" => 2]) : null;
+echo count($g), "|";
+echo $flag ? word() : 5, "|";
+$m = match ($argc) { 1 => word(), default => null };
+echo $m, "|";
+$s = pair(1) ?: null;
+echo count($s), "\n";
+"#,
+    );
+    assert_eq!(out, "2|word|label|3|arrow|2|word|word|2\n");
+}
+
+/// A pop or shift from an empty typed array is null even when another branch has the
+/// array element's scalar type. Branch temps must store the builtin's boxed result.
+#[test]
+fn test_pop_shift_branch_merges_preserve_empty_array_null() {
+    let out = compile_and_run(
+        r#"<?php
+$words = ['word'];
+$floats = [1.5];
+array_pop($words);
+array_shift($floats);
+$flag = $argc === 1;
+var_dump($flag ? array_pop($words) : 'fallback');
+var_dump($flag ? array_shift($floats) : 2.5);
+var_dump(match ($argc) { 1 => array_shift($words), default => 'fallback' });
+var_dump(match ($argc) { 1 => array_pop($floats), default => 2.5 });
+var_dump(array_pop($words) ?: 'fallback');
+var_dump(array_shift($floats) ?: 2.5);
+$words = ['word'];
+$floats = [1.5];
+var_dump($flag ? array_pop($words) : 'fallback');
+var_dump(match ($argc) { 1 => array_shift($floats), default => 2.5 });
+"#,
+    );
+    assert_eq!(
+        out,
+        "NULL\nNULL\nNULL\nNULL\nstring(8) \"fallback\"\nfloat(2.5)\nstring(4) \"word\"\nfloat(1.5)\n"
+    );
+}
