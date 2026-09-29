@@ -32,7 +32,7 @@ use std::collections::BTreeSet;
 
 use crate::parser::ast::{BinOp, CType, CastType, Expr, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
-    e_array, e_assign, e_binop, e_bool, e_call, e_cast, e_const, e_dyn_prop, e_float, e_int, e_new,
+    e_array, e_assign, e_binop, e_bool, e_call, e_cast, e_const, e_dyn_prop, e_float, e_index, e_int, e_new,
     e_null, e_str, e_var, extern_fn_unbound, function, internal_declarations, s_array_assign,
     s_array_push, s_assign, s_const, s_expr, s_for, s_foreach, s_if, s_namespace, s_return,
     s_return_void, s_static, s_throw, t_array, t_mixed, t_ptr,
@@ -515,10 +515,23 @@ fn default_expr(text: &str, extension: &InstalledExtension) -> Option<Expr> {
 struct Plan {
     /// Declared parameters that are always passed, in order.
     fixed: Vec<PlannedParam>,
-    /// Name of the variadic tail, when optional arguments (or the extension's
-    /// own variadic parameter) are passed through it.
-    tail: Option<String>,
+    tail: Option<Tail>,
 }
+
+/// Arguments passed only when the caller writes them.
+enum Tail {
+    /// The extension's own variadic parameter: any number, by value.
+    Variadic(String),
+    /// Optional parameters whose default only the C code knows, or that are
+    /// by reference: each is passed only if the caller passed it. `by_ref`
+    /// flags each position; any by-reference position makes the whole tail a
+    /// by-reference variadic, the one shape through which Elephc both counts
+    /// the arguments and writes back only into variables the caller gave.
+    Optional { by_ref: Vec<bool> },
+}
+
+/// The variadic name an optional tail is declared under.
+const OPTIONAL_TAIL: &str = "__elephc_optional";
 
 struct PlannedParam {
     name: String,
@@ -533,40 +546,56 @@ fn local_name(param: &SurfaceParam) -> String {
     param.name.clone()
 }
 
+fn unpassable(param: &SurfaceParam) -> String {
+    format!(
+        "parameter ${} takes {}, which Elephc cannot pass to an extension yet",
+        param.name,
+        param.ty.as_deref().unwrap_or("?")
+    )
+}
+
 /// Plans a wrapper, or explains why the function cannot be called yet.
+///
+/// A by-reference parameter with a default is never declared with that
+/// default: omitted, it would bind the wrapper's write-back to a variable that
+/// only ever held null, which the backend does not carry back (and whose write
+/// corrupts memory). It starts the optional tail instead.
 fn plan(extension: &InstalledExtension, function: &SurfaceFunction) -> Result<Plan, String> {
     let mut fixed = Vec::new();
-    let mut tail = None;
     for (index, param) in function.params.iter().enumerate() {
-        let ty = param_type(param.ty.as_deref())
-            .ok_or_else(|| format!("parameter ${} takes {}, which Elephc cannot pass to an extension yet", param.name, param.ty.as_deref().unwrap_or("?")))?;
+        let ty = param_type(param.ty.as_deref()).ok_or_else(|| unpassable(param))?;
         if param.variadic {
             if param.by_ref {
                 return Err(format!("parameter ${} is a by-reference variadic", param.name));
             }
-            tail = Some(local_name(param));
-            break;
+            return Ok(Plan { fixed, tail: Some(Tail::Variadic(local_name(param))) });
         }
-        let required = (index as u32) < function.required;
-        if required {
+        if (index as u32) < function.required {
             fixed.push(PlannedParam { name: local_name(param), ty, default: None, by_ref: param.by_ref });
             continue;
         }
-        match param.default.as_deref().and_then(|text| default_expr(text, extension)) {
-            Some(default) => fixed.push(PlannedParam { name: local_name(param), ty, default: Some(default), by_ref: param.by_ref }),
-            None => {
-                if function.params[index..].iter().any(|rest| rest.by_ref) {
+        let default = param.default.as_deref().and_then(|text| default_expr(text, extension));
+        match default {
+            Some(default) if !param.by_ref => {
+                fixed.push(PlannedParam { name: local_name(param), ty, default: Some(default), by_ref: false });
+            }
+            _ => {
+                let rest = &function.params[index..];
+                if let Some(variadic) = rest.iter().find(|later| later.variadic) {
                     return Err(format!(
-                        "parameter ${} is by-reference with a default only the C code knows",
-                        param.name
+                        "parameter ${} follows optional parameters, which cannot be skipped positionally yet",
+                        variadic.name
                     ));
                 }
-                tail = Some("__elephc_optional".to_string());
-                break;
+                for later in rest {
+                    param_type(later.ty.as_deref()).ok_or_else(|| unpassable(later))?;
+                }
+                let by_ref = rest.iter().map(|later| later.by_ref).collect();
+                return Ok(Plan { fixed, tail: Some(Tail::Optional { by_ref }) });
             }
         }
     }
-    Ok(Plan { fixed, tail })
+    Ok(Plan { fixed, tail: None })
 }
 
 /// The wrapper for one hosted function.
@@ -578,29 +607,40 @@ fn wrapper(extension: &InstalledExtension, function: &SurfaceFunction, local: &s
     };
     let mut builder = crate::synthetic_class::function(local);
     for param in &plan.fixed {
-        builder = match (param.by_ref, &param.default) {
-            (true, Some(default)) => builder.param_by_ref_default(&param.name, param.ty.clone(), default.clone()),
-            (true, None) => builder.param_by_ref(&param.name, param.ty.clone()),
-            (false, Some(default)) => match &param.ty {
-                Some(ty) => builder.param_default(&param.name, ty.clone(), default.clone()),
-                None => builder.param_untyped_default(&param.name, default.clone()),
-            },
-            (false, None) => match &param.ty {
-                Some(ty) => builder.param(&param.name, ty.clone()),
-                None => builder.param_untyped(&param.name),
-            },
+        builder = match (param.by_ref, &param.default, &param.ty) {
+            (true, _, ty) => builder.param_by_ref(&param.name, ty.clone()),
+            (false, Some(default), Some(ty)) => builder.param_default(&param.name, ty.clone(), default.clone()),
+            (false, Some(default), None) => builder.param_untyped_default(&param.name, default.clone()),
+            (false, None, Some(ty)) => builder.param(&param.name, ty.clone()),
+            (false, None, None) => builder.param_untyped(&param.name),
         };
     }
-    if let Some(tail) = &plan.tail {
-        builder = builder.variadic(tail, Some(t_mixed()));
-    }
+    let tail_name = match &plan.tail {
+        Some(Tail::Variadic(name)) => {
+            builder = builder.variadic(name, Some(t_mixed()));
+            Some(name.clone())
+        }
+        Some(Tail::Optional { by_ref }) => {
+            builder = if by_ref.iter().any(|flag| *flag) {
+                builder.variadic_by_ref(OPTIONAL_TAIL, Some(t_mixed()))
+            } else {
+                builder.variadic(OPTIONAL_TAIL, Some(t_mixed()))
+            };
+            Some(OPTIONAL_TAIL.to_string())
+        }
+        None => None,
+    };
     builder = builder.returns(declared_return.clone());
 
     let call_var = || e_var("__elephc_call");
     let fixed_count = plan.fixed.len() as i64;
-    let argc = match &plan.tail {
+    let argc = match &tail_name {
         Some(tail) => e_binop(e_int(fixed_count), BinOp::Add, call("count", vec![e_var(tail)])),
         None => e_int(fixed_count),
+    };
+    // `count($tail) > $position`: whether the caller passed that position.
+    let passed = |position: usize| {
+        e_binop(call("count", vec![e_var(OPTIONAL_TAIL)]), BinOp::Gt, e_int(position as i64))
     };
     let mut body = Vec::new();
     if has_ini {
@@ -622,31 +662,63 @@ fn wrapper(extension: &InstalledExtension, function: &SurfaceFunction, local: &s
             vec![call_var(), e_int(index as i64), e_var(&param.name), e_int(i64::from(param.by_ref))],
         )));
     }
-    if let Some(tail) = &plan.tail {
-        body.push(s_assign("__elephc_index", e_int(fixed_count)));
-        body.push(s_foreach(
-            e_var(tail),
-            None,
-            "__elephc_extra",
-            vec![
-                s_expr(call(
-                    "__elephc_php_ext_arg",
-                    vec![call_var(), e_var("__elephc_index"), e_var("__elephc_extra"), e_int(0)],
-                )),
-                s_assign("__elephc_index", e_binop(e_var("__elephc_index"), BinOp::Add, e_int(1))),
-            ],
-        ));
+    match &plan.tail {
+        Some(Tail::Variadic(name)) => {
+            body.push(s_assign("__elephc_index", e_int(fixed_count)));
+            body.push(s_foreach(
+                e_var(name),
+                None,
+                "__elephc_extra",
+                vec![
+                    s_expr(call(
+                        "__elephc_php_ext_arg",
+                        vec![call_var(), e_var("__elephc_index"), e_var("__elephc_extra"), e_int(0)],
+                    )),
+                    s_assign("__elephc_index", e_binop(e_var("__elephc_index"), BinOp::Add, e_int(1))),
+                ],
+            ));
+        }
+        // Unrolled per position: a loop writing into the tail would go through
+        // the backend's loop-storage conversion, which the write-back must not.
+        Some(Tail::Optional { by_ref }) => {
+            for (position, flag) in by_ref.iter().enumerate() {
+                body.push(s_if(
+                    passed(position),
+                    vec![s_expr(call(
+                        "__elephc_php_ext_arg",
+                        vec![
+                            call_var(),
+                            e_int(fixed_count + position as i64),
+                            e_index(e_var(OPTIONAL_TAIL), e_int(position as i64)),
+                            e_int(i64::from(*flag)),
+                        ],
+                    ))],
+                    vec![],
+                    None,
+                ));
+            }
+        }
+        None => {}
     }
     body.push(s_expr(call("__elephc_php_ext_invoke", vec![call_var()])));
+    let written_back = |index: i64| {
+        call(
+            "__elephc_php_ext_value",
+            vec![call_var(), call("elephc_php_ext_call_ref", vec![call_var(), e_int(index)])],
+        )
+    };
     for (index, param) in plan.fixed.iter().enumerate() {
         if param.by_ref {
-            body.push(s_assign(
-                &param.name,
-                call(
-                    "__elephc_php_ext_value",
-                    vec![call_var(), call("elephc_php_ext_call_ref", vec![call_var(), e_int(index as i64)])],
-                ),
-            ));
+            body.push(s_assign(&param.name, written_back(index as i64)));
+        }
+    }
+    if let Some(Tail::Optional { by_ref }) = &plan.tail {
+        for (position, flag) in by_ref.iter().enumerate() {
+            if *flag {
+                let mut write = vec![s_assign("__elephc_back", written_back(fixed_count + position as i64))];
+                write.push(typed_tail_write(position));
+                body.push(s_if(passed(position), write, vec![], None));
+            }
         }
     }
     let result = call("__elephc_php_ext_result", vec![call_var()]);
@@ -659,6 +731,28 @@ fn wrapper(extension: &InstalledExtension, function: &SurfaceFunction, local: &s
         }));
     }
     builder.body(body).build()
+}
+
+/// `$__elephc_optional[position] = $__elephc_back`, written as the scalar type
+/// the value holds. A `mixed` value written into a by-reference variadic
+/// element is not carried back to the caller's variable on the current
+/// backend, while a typed one is; casting to the type it already has makes
+/// the write a typed one without changing the value.
+fn typed_tail_write(position: usize) -> Stmt {
+    let back = || e_var("__elephc_back");
+    let write = |value: Expr| vec![s_array_assign(OPTIONAL_TAIL, e_int(position as i64), value)];
+    let arms = [
+        ("is_bool", CastType::Bool),
+        ("is_int", CastType::Int),
+        ("is_float", CastType::Float),
+        ("is_string", CastType::String),
+    ];
+    let mut clauses: Vec<(Expr, Vec<Stmt>)> = arms
+        .into_iter()
+        .map(|(test, cast)| (call(test, vec![back()]), write(e_cast(cast, back()))))
+        .collect();
+    let (first_test, first_body) = clauses.remove(0);
+    s_if(first_test, first_body, clauses, Some(write(back())))
 }
 
 /// A declaration for a function whose parameters cannot be passed yet. It is
@@ -762,11 +856,19 @@ mod tests {
         assert_eq!(return_type.as_ref(), Some(&TypeExpr::Int));
     }
 
+    /// An optional by-reference parameter becomes a by-reference variadic tail:
+    /// declared with its `null` default, an omitted argument would bind the
+    /// write-back to a null-only variable, which the backend does not carry
+    /// back and whose write corrupts memory.
     #[test]
-    fn by_reference_parameters_are_declared_by_reference() {
+    fn optional_by_reference_parameters_become_a_by_reference_tail() {
         let program = declarations(&hosted());
-        let StmtKind::FunctionDecl { params, .. } = function(&program, "demo_inc") else { unreachable!() };
-        assert!(params[1].3, "&$success stays by reference");
+        let StmtKind::FunctionDecl { params, variadic, variadic_by_ref, .. } = function(&program, "demo_inc") else {
+            unreachable!()
+        };
+        assert_eq!(params.len(), 1, "only $key is declared");
+        assert_eq!(variadic.as_deref(), Some(OPTIONAL_TAIL));
+        assert!(*variadic_by_ref, "&$success is written back through the tail");
     }
 
     /// A callable cannot be handed to an extension yet; the function is still
