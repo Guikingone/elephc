@@ -25,7 +25,11 @@
 //! - `call` describes the ABI-level call sequence for a hosted function, kept
 //!   separate from emitting it.
 
+//! - `build` executes a plan with a real toolchain, archiving the shim once
+//!   rather than folding a copy into every extension.
+
 pub mod admission;
+pub mod build;
 pub mod call;
 pub mod manifest;
 pub mod recipe;
