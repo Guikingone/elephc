@@ -33,6 +33,7 @@ mod return_values;
 mod runtime_ops;
 mod scope_cells;
 mod persistent_references;
+mod superglobals;
 mod statements;
 #[cfg(not(test))]
 mod output_handlers;
@@ -84,6 +85,7 @@ use runtime_ops::*;
 pub(crate) use pcntl_escape::value_contains_foreign_pcntl_callable;
 use scope_cells::*;
 use persistent_references::*;
+use superglobals::*;
 #[cfg(not(test))]
 pub(crate) use statements::eval_dynamic_destructor_for_object_cell;
 #[cfg(not(test))]
@@ -136,6 +138,7 @@ pub fn execute_program_outcome_with_context(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
+    seed_named_cli_superglobals(program, context, scope, values)?;
     match execute_statements(program.statements(), context, scope, values) {
         Ok(EvalControl::None | EvalControl::ReturnVoid) => values.null().map(EvalOutcome::Value),
         Ok(EvalControl::Return(result)) => {

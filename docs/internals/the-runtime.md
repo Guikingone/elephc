@@ -240,15 +240,22 @@ Both answers are what php-src produces; they differ because the string path runs
 the *capping* helper, not the wrapping one — using the sibling turned `(int)"1e19"` into the
 negative wrapped value.
 
-Both helpers check for NaN and the infinities **before** converting, because the conversion
-instructions disagree there and that disagreement is the reason these are shared helpers at
-all: AArch64's `fcvtzs` saturates by definition, while x86_64's `cvttsd2si` answers with the
-"integer indefinite" pattern `0x8000000000000000`. A bare conversion at a call site therefore
-made `(int)NAN` differ between targets. With the non-finite arm taken first, both helpers
-answer `0` for NaN and both infinities on both architectures, and the capping helper's
-remaining work is well defined: every value reaching `fcvtzs`/`cvttsd2si` is finite, so
-AArch64 saturates to exactly PHP's cap and x86_64 only has to correct a positive overflow to
-`PHP_INT_MAX`.
+The hardware conversion instructions disagree on non-finite input, and that disagreement is
+the reason these are shared helpers at all: AArch64's `fcvtzs` saturates by definition, while
+x86_64's `cvttsd2si` answers with the "integer indefinite" pattern `0x8000000000000000`. A bare
+conversion at a call site therefore made `(int)NAN` differ between targets. The two helpers
+avoid it differently:
+
+- `__rt_php_float_to_int` never uses those instructions. It decodes the IEEE-754 sign,
+  exponent and significand with integer instructions and shifts the significand into place,
+  so the modulo-2^64 reduction is exact and bit-identical on both architectures. NaN and the
+  infinities carry the all-ones exponent, so they land in the same "every significand bit
+  leaves the 64-bit window" arm that answers `0`.
+- `__rt_php_float_to_int_cap` is the only helper that converts with `fcvtzs`/`cvttsd2si`, and
+  it checks for NaN and the infinities **before** converting, answering `0` for them on both
+  architectures. Its remaining work is well defined: every value reaching
+  `fcvtzs`/`cvttsd2si` is finite, so AArch64 saturates to exactly PHP's cap and x86_64 only
+  has to correct a positive overflow to `PHP_INT_MAX`.
 
 **Input:** `d0` / `xmm0` = source double
 **Output:** Both helpers return the PHP integer value in `x9` / `r11`.
@@ -305,6 +312,8 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_explode` | Split by delimiter | delimiter + string | `x0` (array ptr) |
 | `__rt_implode` | Join string array with glue | glue + array | `x1`/`x2` |
 | `__rt_implode_int` | Join integer array with glue | glue + array | `x1`/`x2` |
+| `__rt_implode_float` | Join float array with glue, formatting each element through `__rt_ftoa` | glue + array | `x1`/`x2` |
+| `__rt_implode_bool` | Join bool array with glue (`true` as `1`, `false` as the empty string) | glue + array | `x1`/`x2` |
 | `__rt_strcmp` | Binary comparison | two strings | `x0` (-1, 0, 1) |
 | `__rt_strcasecmp` | Case-insensitive compare | two strings | `x0` |
 | `__rt_str_starts_with` | Check prefix match | `x1`/`x2` + `x3`/`x4` | `x0` (0 or 1) |
@@ -325,7 +334,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_quoted_printable_encode` | MIME quoted-printable encode | `x1`/`x2` | `x1`/`x2` |
 | `__rt_urlencode` | URL encode | `x1`/`x2` | `x1`/`x2` |
 | `__rt_urldecode` | URL decode | `x1`/`x2` | `x1`/`x2` |
-| `__rt_htmlspecialchars` | HTML escape | `x1`/`x2` | `x1`/`x2` |
+| `__rt_htmlspecialchars` | HTML escape honouring the `ENT_*` quote and document-type flags | `x1`/`x2` + flags in `x3` | `x1`/`x2` |
 | `__rt_html_entity_decode` | Decode HTML entities | `x1`/`x2` | `x1`/`x2` |
 | `__rt_rawurlencode` | URL encode (RFC 3986) | `x1`/`x2` | `x1`/`x2` |
 | `__rt_parse_url` | Parse URL bytes and select an array/string/int/null/false result | `x1`/`x2` + component in `x3` | `x0` (Mixed ptr) |
@@ -822,7 +831,7 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_array_merge` | Concatenate two indexed arrays into a new array |
 | `__rt_array_merge_into` | Append all elements from source array into dest array (in-place) |
 | `__rt_array_slice` / `__rt_array_splice` | Extract slices and remove splice windows from indexed arrays |
-| `__rt_hash_slice` | `array_slice()` over an ASSOCIATIVE source. `$offset`/`$length` count POSITIONS in insertion order, which a hash cannot answer by key, so the helper walks the source through `__rt_hash_iter_next` and counts. One helper serves both `preserve_keys` modes because they differ by a single per-entry decision: php-src renumbers INTEGER keys when the flag is false and leaves string keys alone either way. Ownership follows `__rt_hash_clone_shallow` — string keys and refcounted values are retained, string values re-persisted — because the window holds the same values the source does |
+| `__rt_hash_slice` | `array_slice()` over an ASSOCIATIVE source, including the hash payload of a boxed `mixed` or `array` value. `$offset`/`$length` count POSITIONS in insertion order, which a hash cannot answer by key, so the helper walks the source through `__rt_hash_iter_next` and counts. One helper serves both `preserve_keys` modes because they differ by a single per-entry decision: php-src renumbers INTEGER keys when the flag is false and leaves string keys alone either way. Ownership follows `__rt_hash_clone_shallow` (string keys and refcounted values are retained, string values re-persisted) because the window holds the same values the source does |
 | `__rt_array_slice_str` | The `array_slice()` copy for indexed **string** arrays, whose payload slots are 16-byte `{pointer, length}` pairs rather than the 8-byte slots the other slice helpers copy. The window arithmetic is the shared `slice_bounds` prologue, so offsets and lengths behave identically to every other variant; the copy DUPLICATES each pair through `__rt_array_push_str` (which persists via `__rt_str_persist`) because `array_slice()` leaves its argument untouched and an indexed string array owns its bytes exclusively — aliasing them would double free |
 | `__rt_array_splice_str` | The `array_splice()` removal for indexed **string** arrays, whose payload slots are 16-byte `{pointer, length}` pairs rather than the 8-byte slots the other splice helpers move. The removed strings are MOVED into the result array: an indexed string array owns its persisted bytes exclusively, so retaining them would double free and copying them would leak |
 | `__rt_array_splice_insert` / `_refcounted` / `_boxed` / `_unboxed` / `_str` | Write `array_splice()`'s `$replacement` into the gap the removal opened, growing the destination first. The five variants differ in what one replacement slot becomes: copied verbatim, retained, wrapped in a fresh boxed `Mixed` cell, read back out of one as a plain integer, or duplicated with `__rt_str_persist` into a 16-byte string slot |
@@ -1206,6 +1215,8 @@ The first table covers the file/filesystem core; the subsections after it cover 
 
 Userspace `streamWrapper` classes registered with `stream_wrapper_register()` dispatch through a vtable of `__rt_user_wrapper_*` routines (`fopen`/`fread`/`fwrite`/`fclose`/`feof`/`fseek`/`ftell`/`fflush`/`fstat`/`ftruncate`/`flock`/`set_option`/`stream_cast`, the `dir_*` family, `path_op`, and `rename`), each bridging the synthetic descriptor back to PHP method calls on the wrapper instance. Stream filters use `__rt_stream_filter_register`, `__rt_apply_stream_filter` / `__rt_apply_user_stream_filter`, `__rt_stream_filter_attach_user`, `__rt_resolve_user_filter_id`, `__rt_user_filter_brigade_invoke`, and `__rt_user_filter_release_fd` to run built-in (`zlib.*`, `bzip2.*`, `convert.iconv.*`, `string.*`) and user-defined filter chains over stream reads and writes.
 
+A `convert.iconv.*` write filter keeps its libc `iconv_t` open across writes. Apple's iconv (Citrus-based since macOS 14) stores the `//TRANSLIT` and `//IGNORE` options on the converter it shares between every descriptor of one charset pair, and any `iconv_open()` for that pair, the iconv bridge's included, rewrites them. On Apple targets the attach therefore records the filter's own option bits in `_iconv_write_options[fd]`, and the write helper restores them with `iconvctl()` before each conversion, the same protocol the `elephc-iconv` bridge follows. The read transform needs no restore: it opens its descriptor immediately before its only conversion and closes it right after. glibc keeps the options per descriptor, so Linux code has neither step.
+
 ### Phar archive routines
 
 | Routine | What it does |
@@ -1470,7 +1481,7 @@ Notable runtime-only helpers emitted here include `__rt_diag_push_suppression`, 
 The tables above document the public runtime operations. The emitters also split complex operations into the following internal symbols so the linker can dead-strip each unit independently:
 
 - **Arrays, hashes, and Mixed values:** `__rt_abs_mixed`, `__rt_amr_box_value`, `__rt_array_edge_key`, `__rt_array_ensure_elem_for_write`, `__rt_array_fill_assoc`, `__rt_array_fill_str`, `__rt_array_find_any_all`, `__rt_array_get_mixed_key`, `__rt_array_is_list`, `__rt_array_merge_recursive`, `__rt_array_multisort`, `__rt_array_replace`, `__rt_array_replace_recursive`, `__rt_array_set_int`, `__rt_array_set_mixed`, `__rt_array_set_mixed_key`, `__rt_array_set_refcounted`, `__rt_array_set_str`, `__rt_array_sum_mixed`, `__rt_array_to_hash`, `__rt_array_udiff_uintersect`, `__rt_array_walk_recursive`, `__rt_assoc_diff_intersect`, `__rt_hash_flip`, `__rt_hash_map`, `__rt_hash_sum_mixed`, `__rt_hash_to_indexed_array`, `__rt_in_array_mixed_int`, `__rt_mixed_array_append`, `__rt_mixed_array_get_for_write`, `__rt_mixed_cell_autovivify_array`, `__rt_mixed_cell_promote_to_hash`, `__rt_mixed_new_empty_array_cell`, and `__rt_mixed_numeric_common`.
-- **Strings, dates, JSON, and serialization:** `__rt_concat_append`, `__rt_date_entry`, `__rt_implode_bool`, `__rt_json_validate_number`, `__rt_json_validate_string`, `__rt_microtime_build_into`, `__rt_microtime_mixed`, `__rt_microtime_str`, `__rt_mktime_shifted`, `__rt_serialize_begin`, `__rt_serialize_hash_body`, `__rt_serialize_indexed_body`, `__rt_serialize_pstr`, `__rt_serialize_uint`, `__rt_unser_at`, and `__rt_unser_key`.
+- **Strings, dates, JSON, and serialization:** `__rt_concat_append`, `__rt_date_entry`, `__rt_json_validate_number`, `__rt_json_validate_string`, `__rt_microtime_build_into`, `__rt_microtime_mixed`, `__rt_microtime_str`, `__rt_mktime_shifted`, `__rt_serialize_begin`, `__rt_serialize_hash_body`, `__rt_serialize_indexed_body`, `__rt_serialize_pstr`, `__rt_serialize_uint`, `__rt_unser_at`, and `__rt_unser_key`.
 - **Objects, callables, resources, and zvals:** `__rt_box_wrapper_stat_result`, `__rt_function_exists_lookup`, `__rt_obj_store_prop`, `__rt_object_handle_acquire`, `__rt_object_handle_of`, `__rt_object_handle_release`, `__rt_resource_id_mint`, `__rt_resource_id_of`, `__rt_resource_type_name`, `__rt_spl_object_hash`, `__rt_zval_pack_element`.
 - **Files, streams, sockets, and networking:** `__rt_addr_is_udp`, `__rt_build_sockaddr_in6`, `__rt_chgrp_group`, `__rt_chown_user`, `__rt_disk_space`, `__rt_fd_write`, `__rt_file_get_contents_maybe_url`, `__rt_format_sockaddr_in`, `__rt_format_sockaddr_in6`, `__rt_format_sockaddr_unix`, `__rt_fsockopen`, `__rt_fwrite`, `__rt_get_int_context_option`, `__rt_get_string_context_option`, `__rt_http_build_copy_aarch64`, `__rt_http_build_copy_x86`, `__rt_inet6_pton`, `__rt_inet_addr_parse`, `__rt_lchgrp_group`, `__rt_lchown_user`, `__rt_opendir`, `__rt_opendir_glob`, `__rt_path_is_wrapper`, `__rt_popen`, `__rt_readdir`, `__rt_readfile_wrapper`, `__rt_rewinddir`, `__rt_servent_load`, `__rt_stash_connect_host`, `__rt_stream_wrapper_register`, and `__rt_stream_wrapper_unregister`.
 - **User stream wrappers:** `__rt_user_wrapper_dir_closedir`, `__rt_user_wrapper_dir_readdir`, `__rt_user_wrapper_dir_rewinddir`, `__rt_user_wrapper_fclose`, `__rt_user_wrapper_feof`, `__rt_user_wrapper_fflush`, `__rt_user_wrapper_flock`, `__rt_user_wrapper_fread`, `__rt_user_wrapper_fseek`, `__rt_user_wrapper_fstat`, `__rt_user_wrapper_ftell`, `__rt_user_wrapper_ftruncate`, `__rt_user_wrapper_fwrite`, `__rt_user_wrapper_opendir`, `__rt_user_wrapper_path_op`, `__rt_user_wrapper_rename`, `__rt_user_wrapper_set_option`, `__rt_user_wrapper_stream_cast`, `__rt_user_wrapper_url_stat`, and `__rt_user_wrapper_url_stat_field`.

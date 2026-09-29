@@ -3779,6 +3779,7 @@ mod tests {
             clone_override_property_storage: false,
             scope_dynamic_property_storage: false,
             constants: HashMap::new(),
+            constant_order: Vec::new(),
     constant_deprecations: HashMap::new(),
     constant_types: HashMap::new(),
     constant_visibilities: HashMap::new(),

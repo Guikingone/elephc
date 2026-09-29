@@ -45,7 +45,18 @@ pub struct PreloadSymbols {
 /// this runs BEFORE `name_resolver` and the raw `FunctionDecl`/`ClassDecl` names are local.
 /// Duplicates are dropped case-insensitively (PHP symbol names are case-insensitive, and elephc's
 /// `FunctionVariantGroup` extension can surface one PHP-visible name through several declarations).
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): it walks every statement
+/// list that can host a declaration, so an embedder calling it without the CLI driver's wrapper
+/// gets the same stack budget.
 pub fn collect_preload_symbols(program: &[Stmt]) -> PreloadSymbols {
+    crate::compiler_stack::with_compiler_stack(|| {
+        collect_preload_symbols_on_compiler_stack(program)
+    })
+}
+
+/// The body of [`collect_preload_symbols`], run on the stack `with_compiler_stack` sized.
+fn collect_preload_symbols_on_compiler_stack(program: &[Stmt]) -> PreloadSymbols {
     let mut symbols = PreloadSymbols::default();
     let mut seen_functions: HashSet<String> = HashSet::new();
     let mut seen_classes: HashSet<String> = HashSet::new();

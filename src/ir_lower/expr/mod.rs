@@ -191,6 +191,7 @@ pub(crate) use array_access::{
     lower_array_access_from_lowered_receiver, lower_by_ref_foreach_element_source,
 };
 pub(crate) use array_access_types::type_satisfies_array_access_for_ir;
+pub(crate) use assignments::lower_null_coalesce_update_stmt;
 pub(crate) use instanceof_coercions::{
     coerce_array_key_to_int_at_span, coerce_to_int_at_span,
 };
@@ -211,6 +212,8 @@ pub(super) use assoc_array_literals::{
 };
 pub(super) use call_return_types::call_return_type;
 pub(super) use call_return_types::eir_user_function_return_type;
+pub(super) use method_metadata::closure_return_method_call_type;
+pub(super) use nullsafe_chain::result_storage_type as nullsafe_chain_result_storage_type;
 pub(super) use merge_temps::coerce_container_to_mixed_payload;
 pub(super) use nullable_method_calls::lower_dynamic_method_call_with_receiver;
 pub(super) use static_method_calls::static_method_call_expr_type_for_ir;

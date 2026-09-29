@@ -19,6 +19,7 @@ mod getenv;
 mod gethostbyaddr;
 mod gethostbyname;
 mod gethostname;
+mod getmypid;
 mod getprotobyname;
 mod getprotobynumber;
 mod getservbyname;
@@ -45,6 +46,7 @@ pub(in crate::interpreter) use getenv::*;
 pub(in crate::interpreter) use gethostbyaddr::*;
 pub(in crate::interpreter) use gethostbyname::*;
 pub(in crate::interpreter) use gethostname::*;
+pub(in crate::interpreter) use getmypid::*;
 pub(in crate::interpreter) use getprotobyname::*;
 pub(in crate::interpreter) use getprotobynumber::*;
 pub(in crate::interpreter) use getservbyname::*;
@@ -85,6 +87,7 @@ pub(in crate::interpreter) fn eval_builtin_network_env_call(
         "gethostbyaddr" => eval_builtin_gethostbyaddr(args, context, scope, values),
         "gethostbyname" => eval_builtin_gethostbyname(args, context, scope, values),
         "gethostname" => eval_builtin_gethostname(args, values),
+        "getmypid" => eval_builtin_getmypid(args, values),
         "getprotobyname" => eval_builtin_getprotobyname(args, context, scope, values),
         "getprotobynumber" => eval_builtin_getprotobynumber(args, context, scope, values),
         "getservbyname" => eval_builtin_getservbyname(args, context, scope, values),
@@ -130,6 +133,12 @@ pub(in crate::interpreter) fn eval_network_env_values_result(
                 return Err(EvalStatus::RuntimeFatal);
             }
             eval_gethostname_result(values)
+        }
+        "getmypid" => {
+            if !evaluated_args.is_empty() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            eval_getmypid_result(values)
         }
         "getprotobyname" => {
             let [protocol] = evaluated_args else {

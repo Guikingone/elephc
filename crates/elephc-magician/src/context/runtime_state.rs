@@ -344,6 +344,14 @@ impl ElephcEvalContext {
         self.eval_backtrace_boundaries.pop();
     }
 
+    /// Reports whether an `eval()` call (bridge or nested) is executing in this context.
+    ///
+    /// The native frame that installed the global scope handle is alive for the whole call,
+    /// whereas a context a callback retains can outlive that frame and its scopes.
+    pub(crate) fn in_eval_execution(&self) -> bool {
+        !self.eval_backtrace_boundaries.is_empty()
+    }
+
     /// Stores the non-owned global scope handle used by eval `global` aliases.
     pub fn set_global_scope(&mut self, scope: *mut ElephcEvalScope) -> bool {
         if scope.is_null() {

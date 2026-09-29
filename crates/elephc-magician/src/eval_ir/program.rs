@@ -6,14 +6,23 @@
 //!
 //! Key details:
 //! - Source offsets and file/line ranges remain syntax metadata, not runtime cells.
+//! - The CLI superglobals a fragment names are recorded at parse time, the moment PHP's
+//!   `auto_globals_jit` arms an auto-global for the code that mentions it.
 
 use super::*;
+
+/// The superglobals PHP's CLI SAPI has populated when a script starts, in the order the
+/// compiler's `superglobals::CLI_POPULATED_SUPERGLOBALS` lists them. `$_SESSION` is absent on
+/// purpose: it does not exist until `session_start()`.
+pub const EVAL_CLI_POPULATED_SUPERGLOBALS: [&str; 7] =
+    ["_SERVER", "_GET", "_POST", "_COOKIE", "_FILES", "_ENV", "_REQUEST"];
 
 /// Parsed eval fragment lowered into dynamic by-name statements.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalProgram {
     source_len: usize,
     statements: Vec<EvalStmt>,
+    cli_superglobals: Vec<&'static str>,
 }
 
 impl EvalProgram {
@@ -22,7 +31,19 @@ impl EvalProgram {
         Self {
             source_len,
             statements,
+            cli_superglobals: Vec::new(),
         }
+    }
+
+    /// Records the CLI-populated superglobals (without `$`) this fragment's code names.
+    pub fn with_cli_superglobals(mut self, names: Vec<&'static str>) -> Self {
+        self.cli_superglobals = names;
+        self
+    }
+
+    /// Returns the CLI-populated superglobals this fragment's code names, in canonical order.
+    pub fn cli_superglobals(&self) -> &[&'static str] {
+        &self.cli_superglobals
     }
 
     /// Returns the byte length of the parsed eval fragment.

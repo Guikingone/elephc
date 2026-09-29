@@ -730,6 +730,7 @@ pub enum RuntimeFnId {
     ExtensionLoaded,
     Getdate,
     Getenv,
+    Getmypid,
     Gmdate,
     Gmmktime,
     Header,
@@ -830,9 +831,18 @@ impl RuntimeFnId {
     ) -> crate::types::PhpType {
         use crate::types::PhpType;
         match self {
-            RuntimeFnId::ArrayKeys | RuntimeFnId::ArraySlice => {
-                PhpType::Array(Box::new(PhpType::Mixed))
-            }
+            // Narrowing a hash keeps its key and value layout in both `preserve_keys` modes,
+            // which is the layout `__rt_hash_slice` builds. A callee resolved only by lowering,
+            // such as `$fn = "array_slice"; $fn($assoc, 1, 2)`, has no checked type to supply it,
+            // and the indexed fallback refused the associative source outright.
+            RuntimeFnId::ArraySlice => match arg_types.first().map(PhpType::codegen_repr) {
+                Some(hash @ PhpType::AssocArray { .. }) => hash,
+                // A boxed source may hold a list or a hash, so the result is the boxed PHP array
+                // type, exactly as the checker types a boxed source.
+                Some(PhpType::Mixed | PhpType::Union(_)) => PhpType::php_array(),
+                _ => PhpType::Array(Box::new(PhpType::Mixed)),
+            },
+            RuntimeFnId::ArrayKeys => PhpType::Array(Box::new(PhpType::Mixed)),
             // The removed-elements array copies the receiver's payload slots, so its element
             // layout is the receiver's. A type-changing `$replacement` promotes that receiver to
             // `array<mixed>` during lowering, and the checker's pre-promotion `array<int>` no
@@ -946,6 +956,22 @@ impl RuntimeFnId {
                 checked.codegen_repr(),
                 PhpType::Array(_) | PhpType::AssocArray { .. }
             )),
+            // An indexed source slices to a list, or to an integer-keyed hash under a literal
+            // `preserve_keys`, and a boxed source answers with the boxed PHP array. A checked hash
+            // outside those shapes describes some other operand: a call-site-specialized untyped
+            // parameter, or the two slices the `func_get_args()` rewrite nests under one span,
+            // which then read each other's checked type.
+            RuntimeFnId::ArraySlice
+                if matches!(
+                    (arg_types.first().map(PhpType::codegen_repr), checked.codegen_repr()),
+                    (Some(PhpType::Array(_)), PhpType::AssocArray { key, .. }) if *key != PhpType::Int
+                ) || matches!(
+                    (arg_types.first().map(PhpType::codegen_repr), checked.codegen_repr()),
+                    (Some(PhpType::Mixed | PhpType::Union(_)), PhpType::AssocArray { .. })
+                ) =>
+            {
+                false
+            }
             RuntimeFnId::ArraySlice | RuntimeFnId::ArraySplice => {
                 let PhpType::Array(result_element) = checked.codegen_repr() else {
                     return true;
@@ -1040,19 +1066,17 @@ impl RuntimeFnId {
                 set_callable_param_type(sig, 1, PhpType::Mixed);
                 sig.return_type = PhpType::Mixed;
             }
-            // `array_reverse()`'s `$preserve_keys` and `array_slice()`'s `$preserve_keys` pick
-            // between an indexed array and an integer-keyed hash, so the backend needs them as
-            // compile-time literals. A dynamic callable wrapper receives runtime parameters, so
-            // the flag is dropped from the wrapper ABI exactly like `count()`'s `$mode`; the
-            // wrapper then always produces the renumbered indexed result. `array_slice()`'s
-            // return type is pinned to the concrete indexed layout its helpers materialize,
+            // `array_chunk()`'s `$preserve_keys` picks between nested lists and nested
+            // integer-keyed hashes, so the backend needs it as a compile-time literal. A dynamic
+            // callable wrapper receives runtime parameters, so the flag is dropped from the
+            // wrapper ABI exactly like `count()`'s `$mode`. `array_reverse()` and `array_slice()`
+            // keep every parameter: their wrappers take a boxed source, whose result is the boxed
+            // PHP array whatever the flag says, so the boxed lowering reads `$preserve_keys` at
+            // runtime (the invoker converts a dynamic argument with PHP truthiness for the `bool`
+            // parameter). `array_slice()`'s return type is pinned to that boxed PHP array,
             // because the wrapper has no per-call-site checked type to read.
-            RuntimeFnId::ArrayReverse => truncate_callable_params(sig, 1),
             RuntimeFnId::ArrayChunk => truncate_callable_params(sig, 2),
-            RuntimeFnId::ArraySlice => {
-                truncate_callable_params(sig, 3);
-                sig.return_type = PhpType::Array(Box::new(PhpType::Mixed));
-            }
+            RuntimeFnId::ArraySlice => sig.return_type = PhpType::php_array(),
             RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct => {
                 set_callable_param_type(sig, 0, PhpType::php_array());
                 sig.return_type = PhpType::Mixed;
@@ -1377,7 +1401,8 @@ impl RuntimeFnId {
             RuntimeFnId::BufferLen => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::MAY_FATAL.bits(),
             ),
-            RuntimeFnId::Time => crate::ir::Effects::READS_PROCESS,
+            // `getmypid()` is not a constant: a `pcntl_fork()` child reads its own id.
+            RuntimeFnId::Time | RuntimeFnId::Getmypid => crate::ir::Effects::READS_PROCESS,
             RuntimeFnId::Microtime | RuntimeFnId::Hrtime => {
                 crate::ir::Effects::from_bits_retain(
                     crate::ir::Effects::READS_PROCESS.bits()
@@ -1970,6 +1995,9 @@ impl RuntimeFnId {
     }
 
     /// Returns whether the operation has a proven generic runtime-callable wrapper.
+    ///
+    /// `Getmypid` qualifies because its wrapper has no parameters to adapt and returns a plain
+    /// integer: `$name = "getmypid"; $name()` and `call_user_func($name)` must reach it like PHP.
     pub const fn runtime_callable_supported(self) -> bool {
         if matches!(self, Self::MbEreg | Self::MbEregi | Self::MbParseStr) { return false; }
         if self.uses_mbstring_runtime() { return true; }
@@ -1980,6 +2008,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayProduct
                 | RuntimeFnId::CloneWith
                 | RuntimeFnId::Count
+                | RuntimeFnId::Getmypid
                 | RuntimeFnId::Gettype
                 | RuntimeFnId::InArray
                 | RuntimeFnId::Trim
@@ -2008,7 +2037,7 @@ impl RuntimeFnId {
                         | PhpType::Void
                 )
             }),
-            RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct
+            RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct | RuntimeFnId::Getmypid
             | RuntimeFnId::Gettype | RuntimeFnId::InArray => true,
             RuntimeFnId::Trim => source.is_none_or(|ty| matches!(ty, PhpType::Str)),
             _ => false,
@@ -3096,6 +3125,7 @@ impl RuntimeFnId {
             RuntimeFnId::ExtensionLoaded => "extension_loaded",
             RuntimeFnId::Getdate => "getdate",
             RuntimeFnId::Getenv => "getenv",
+            RuntimeFnId::Getmypid => "getmypid",
             RuntimeFnId::Gmdate => "gmdate",
             RuntimeFnId::Gmmktime => "gmmktime",
             RuntimeFnId::Header => "header",

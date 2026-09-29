@@ -371,6 +371,93 @@ pub fn join_symbol_fragments(prefix: &str, fragments: &[&str]) -> String {
     symbol
 }
 
+/// Returns the byte length of the `mangle_fqn()` escape at the start of `bytes`, if any.
+///
+/// The escapes are `_u_`, `_N_` and `_xNN_` with two lowercase hex digits; their second byte
+/// is never `_`, which is what separates them from a `join_symbol_fragments()` boundary.
+fn mangled_escape_len(bytes: &[u8]) -> Option<usize> {
+    match bytes {
+        [b'_', b'u' | b'N', b'_', ..] => Some(3),
+        [b'_', b'x', high, low, b'_', ..]
+            if is_lower_hex_digit(*high) && is_lower_hex_digit(*low) =>
+        {
+            Some(5)
+        }
+        _ => None,
+    }
+}
+
+/// Returns `true` for the digits `mangle_fqn()` spells a byte with (`{:02x}`).
+fn is_lower_hex_digit(byte: u8) -> bool {
+    byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+}
+
+/// Returns the PHP name a `mangle_fqn()` result spells, or `None` when `mangled` is not one.
+///
+/// The exact inverse of `mangle_fqn()`: `_u_` → `_`, `_N_` → `\`, and each `_xNN_` group
+/// back to the UTF-8 byte it escapes.
+pub fn demangle_fqn(mangled: &str) -> Option<String> {
+    let bytes = mangled.as_bytes();
+    let mut name = Vec::with_capacity(bytes.len());
+    let mut position = 0;
+    while position < bytes.len() {
+        let byte = bytes[position];
+        if byte.is_ascii_alphanumeric() {
+            name.push(byte);
+            position += 1;
+            continue;
+        }
+        let length = mangled_escape_len(&bytes[position..])?;
+        name.push(match bytes[position + 1] {
+            b'u' => b'_',
+            b'N' => b'\\',
+            _ => u8::from_str_radix(&mangled[position + 2..position + 4], 16).ok()?,
+        });
+        position += length;
+    }
+    String::from_utf8(name).ok()
+}
+
+/// Splits the text that follows a symbol prefix back into the fragments
+/// `join_symbol_fragments()` joined, or `None` when `tail` is not such a join.
+///
+/// A tail opening with `___` is the escaped regime: each fragment is read token by token
+/// (alphanumerics and `mangle_fqn()` escapes), and a `_` that cannot open an escape ends the
+/// fragment, where exactly `___` must follow. Otherwise the tail is the compact regime, one
+/// `_` before each alphanumeric fragment.
+pub fn split_symbol_fragments(tail: &str) -> Option<Vec<&str>> {
+    if !tail.starts_with(ESCAPED_FRAGMENT_SEPARATOR) {
+        let fragments: Vec<&str> = tail.strip_prefix(COMPACT_FRAGMENT_SEPARATOR)?.split('_').collect();
+        return fragments.iter().all(|fragment| is_compact_fragment(fragment)).then_some(fragments);
+    }
+    let bytes = tail.as_bytes();
+    let mut fragments = Vec::new();
+    let mut position = ESCAPED_FRAGMENT_SEPARATOR.len();
+    loop {
+        let start = position;
+        while position < bytes.len() {
+            if bytes[position].is_ascii_alphanumeric() {
+                position += 1;
+            } else if let Some(length) = mangled_escape_len(&bytes[position..]) {
+                position += length;
+            } else {
+                break;
+            }
+        }
+        if position == start {
+            return None;
+        }
+        fragments.push(&tail[start..position]);
+        if position == bytes.len() {
+            return Some(fragments);
+        }
+        if !tail[position..].starts_with(ESCAPED_FRAGMENT_SEPARATOR) {
+            return None;
+        }
+        position += ESCAPED_FRAGMENT_SEPARATOR.len();
+    }
+}
+
 /// Mangles each raw PHP name and joins them onto `prefix` with `join_symbol_fragments()`.
 ///
 /// This is the only supported way to build a symbol or label out of more than one PHP name.
@@ -416,6 +503,48 @@ mod mangle_tests {
             mangled.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
             "mangled name must be an assembler-safe label, got {mangled}"
         );
+    }
+
+    /// Verifies `demangle_fqn()` inverts `mangle_fqn()` for every escape kind, and refuses
+    /// text no `mangle_fqn()` call produces.
+    #[test]
+    fn demangle_fqn_inverts_mangle_fqn() {
+        for name in [
+            "", "foo", "foo_bar", "A\\B", "App\\My_Class", "__construct", "_", "___", "价格",
+            "App\\Éngine", "a_\\_b", "_x5f_", "_u_", "12",
+        ] {
+            assert_eq!(demangle_fqn(&mangle_fqn(name)).as_deref(), Some(name), "{name:?}");
+        }
+        for text in ["_", "a_b", "_u", "_x5F_", "_xg0_", "a-b", "__", "_N"] {
+            assert_eq!(demangle_fqn(text), None, "{text:?}");
+        }
+    }
+
+    /// Verifies `split_symbol_fragments()` recovers the joined fragments in both separator
+    /// regimes, over the same adversarial names the injectivity tests use.
+    #[test]
+    fn split_symbol_fragments_inverts_the_joiner() {
+        let names = [
+            "a", "b", "a_", "_a", "a_b", "a__b", "a_u", "u_b", "_", "__", "___", "_S_", "_u_",
+            "_N_", "A\\b", "a\\b", "aéb", "a_é", "é", "x_init", "init", "prop", "local", "1",
+            "12", "价格", "a价", "_x5f_", "\\_",
+        ];
+        for left in names {
+            for right in names {
+                let mangled = [mangle_fqn(left), mangle_fqn(right)];
+                let fragments = [mangled[0].as_str(), mangled[1].as_str()];
+                let symbol = join_symbol_fragments("_k", &fragments);
+                let tail = symbol.strip_prefix("_k").expect("the joiner keeps the prefix");
+                assert_eq!(
+                    split_symbol_fragments(tail),
+                    Some(fragments.to_vec()),
+                    "{symbol:?}"
+                );
+            }
+        }
+        for tail in ["", "_", "__a", "___", "___a__b", "___a____", "_a__b", "_a_", "___a___"] {
+            assert_eq!(split_symbol_fragments(tail), None, "{tail:?}");
+        }
     }
 
     /// Verifies distinct names mangle to distinct labels, so escaping does not collapse

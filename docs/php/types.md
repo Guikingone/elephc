@@ -222,6 +222,7 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 | `is_object()`   | `is_object($val): bool`      | Returns true if value is an object |
 | `is_scalar()`   | `is_scalar($val): bool`      | Returns true for int, float, string, or bool (not null, array, object, or resource) |
 | `is_iterable()` | `is_iterable($val): bool`    | Returns true if array or Traversable-compatible iterable |
+| `is_countable()` | `is_countable($val): bool`  | Returns true for an array or an object whose class implements `Countable`; a statically typed object that cannot decide it is checked against its runtime class |
 | `is_callable()` | `is_callable($val): bool`    | Returns true for closures, first-class callables, strings case-insensitively naming known builtins, user functions, or public static methods (`"Class::method"`), `[$obj, "method"]` arrays with public methods, `[ClassName::class, "method"]` static method arrays, and objects with public `__invoke()`. |
 | `is_resource()` | `is_resource($val): bool`    | Returns true if value is an open resource handle |
 | `is_nan()`      | `is_nan($val): bool`         | Returns true if NAN            |
@@ -239,6 +240,20 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 PHP's predicate aliases are supported and behave identically to their canonical
 forms: `is_integer()` and `is_long()` are aliases of `is_int()`, and
 `is_double()` and `is_real()` are aliases of `is_float()`.
+
+`is_countable()` is the guard to use before `count()` on a value that may not be
+countable. It is decided at compile time when the declared type settles it, and
+against the runtime class otherwise, so a `Countable` subclass behind a base-class
+parameter still answers `true`:
+
+```php
+function size(mixed $value): int {
+    return is_countable($value) ? count($value) : -1;
+}
+echo size([1, 2, 3]);                  // 3
+echo size(new ArrayObject(["a", "b"])); // 2
+echo size("text");                     // -1
+```
 
 ### Type narrowing
 
@@ -417,6 +432,7 @@ Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are
 - `match` (and ternary) arms whose scalar types share one runtime representation merge to it instead of each arm keeping its own type: an `int` arm together with a `bool` arm collapses to one representation (`match($n) { 1 => 42, default => true }` yields `bool(true)` where PHP keeps `int(42)`). Arms with otherwise distinct runtime representations — object, array, string, int, float, `null` — each keep their own runtime type, matching PHP.
 - Inside a namespace that declares its own constant named after a predefined one (`const NAN = …;`, `const PHP_EOL = …;`), an unqualified `NAN` / `PHP_EOL` still reads the global constant, where PHP reads the namespaced one first. Read the namespaced constant through `constant(__NAMESPACE__ . '\NAN')`, or give it a name no predefined constant uses (#1349).
 - A `mixed` or union bound passed to `random_int()`, `mt_rand()` or `rand()` is coerced like `(int)`: an int passes through, a float truncates, a numeric string parses. A non-numeric string becomes `0`, where PHP throws a `TypeError` for the `int` parameter.
+- A property default of `self::class` or `parent::class` is refused in the backend; PHP resolves it to the declaring class (or its parent). A named `Foo::class` default works. Spell the class out, or assign the value in the constructor (#1351).
 - Variable variables (`$$name`, `${$expr}`) are not supported yet. Native AOT
   locals use fixed compile-time stack slots; supporting a runtime-computed name
   will require routing the access through Magician's materialized named scope
@@ -445,9 +461,10 @@ Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are
   `class_parents()`, `class_implements()` and `class_exists()`, which reject a non-literal name at
   compile time instead of answering. One gap of its own: an enum does not carry its implicit
   `UnitEnum`/`BackedEnum` interfaces, so `is_subclass_of("Suit", "UnitEnum")` is `false` where PHP
-  says `true`. For an enum with an `implements` clause, `class_implements()` lists only the
-  directly declared interfaces; it omits their transitive parents and the implicit
-  `UnitEnum`/`BackedEnum` interfaces.
+  says `true`. For an enum declared in the compiled program with an `implements` clause,
+  `class_implements()` lists only the directly declared interfaces; it omits their transitive
+  parents and the implicit `UnitEnum`/`BackedEnum` interfaces. An enum declared inside `eval()`
+  already reports both, like PHP.
 - `empty($box['k'])` on a **nullable static property** holding an `ArrayAccess` object
   (`public static ?Box $box`) calls `offsetGet()` without asking `offsetExists()` first, where
   PHP asks `offsetExists()` and skips `offsetGet()` for a missing offset. That property reads as

@@ -343,6 +343,11 @@ impl PostTypecheckOptimizer {
     }
 
     /// Builds callable and exception analyses, optionally using authoritative checker metadata.
+    ///
+    /// Both public constructors funnel through here, and every analysis walks the whole program,
+    /// so it runs under `crate::compiler_stack::with_compiler_stack` like the four phases below:
+    /// an embedder driving the optimizer without the CLI's wrapper gets the same stack budget
+    /// (issue #1149).
     fn new_with_optional_type_metadata(
         program: &Program,
         type_metadata: Option<(
@@ -351,15 +356,17 @@ impl PostTypecheckOptimizer {
             &HashMap<String, crate::types::InterfaceInfo>,
         )>,
     ) -> Self {
-        let callable_effects = CallableEffectAnalysis::from_program(program);
-        let exception_flow = with_callable_effect_analysis(&callable_effects, || {
-            Rc::new(ExceptionFlowAnalysis::from_program(program, type_metadata))
-        });
-        Self {
-            callable_effects,
-            by_ref_signatures: collect_by_ref_signatures(program),
-            exception_flow,
-        }
+        crate::compiler_stack::with_compiler_stack(|| {
+            let callable_effects = CallableEffectAnalysis::from_program(program);
+            let exception_flow = with_callable_effect_analysis(&callable_effects, || {
+                Rc::new(ExceptionFlowAnalysis::from_program(program, type_metadata))
+            });
+            Self {
+                callable_effects,
+                by_ref_signatures: collect_by_ref_signatures(program),
+                exception_flow,
+            }
+        })
     }
 
     /// Propagates constants while using the shared callable-effect summary.
@@ -371,7 +378,23 @@ impl PostTypecheckOptimizer {
     /// compiler PANIC in a checked builtin's fast path rather than as anything a reader would
     /// connect back to this call.
     /// `buffer_read_sites` carries checker proofs that indexing cannot invoke a warning handler.
+    ///
+    /// Runs under `crate::compiler_stack::with_compiler_stack`, as do `prune`, `normalize` and
+    /// `eliminate_dead_code`: the CLI pipeline calls these methods directly, so an embedder doing
+    /// the same must get the budget from the method itself rather than from `main` (issue #1149).
     pub fn propagate(
+        &self,
+        program: Program,
+        mixed_storage_locals: HashSet<String>,
+        buffer_read_sites: HashSet<Span>,
+    ) -> Program {
+        crate::compiler_stack::with_compiler_stack(|| {
+            self.propagate_on_compiler_stack(program, mixed_storage_locals, buffer_read_sites)
+        })
+    }
+
+    /// The body of [`Self::propagate`], run on the stack `with_compiler_stack` sized.
+    fn propagate_on_compiler_stack(
         &self,
         program: Program,
         mixed_storage_locals: HashSet<String>,
@@ -406,9 +429,11 @@ impl PostTypecheckOptimizer {
     /// with its original spans. The spans let that rewrite veto itself; see
     /// `control::switch::single_case_rewrite_would_clone_a_decision`.
     pub fn normalize(&self, program: Program, binding_decision_spans: HashSet<Span>) -> Program {
-        with_local_binding_decision_spans(binding_decision_spans, || {
-            with_callable_effect_analysis(&self.callable_effects, || {
-                with_exception_flow_analysis(&self.exception_flow, || prune_block(program))
+        crate::compiler_stack::with_compiler_stack(|| {
+            with_local_binding_decision_spans(binding_decision_spans, || {
+                with_callable_effect_analysis(&self.callable_effects, || {
+                    with_exception_flow_analysis(&self.exception_flow, || prune_block(program))
+                })
             })
         })
     }
@@ -418,9 +443,11 @@ impl PostTypecheckOptimizer {
     /// Installs `binding_decision_spans` for the same reason `normalize` does — the two phases run
     /// the same `prune_block`, so the cloning switch rewrite is reachable from both.
     pub fn prune(&self, program: Program, binding_decision_spans: HashSet<Span>) -> Program {
-        with_local_binding_decision_spans(binding_decision_spans, || {
-            with_callable_effect_analysis(&self.callable_effects, || {
-                with_exception_flow_analysis(&self.exception_flow, || prune_block(program))
+        crate::compiler_stack::with_compiler_stack(|| {
+            with_local_binding_decision_spans(binding_decision_spans, || {
+                with_callable_effect_analysis(&self.callable_effects, || {
+                    with_exception_flow_analysis(&self.exception_flow, || prune_block(program))
+                })
             })
         })
     }
@@ -439,10 +466,14 @@ impl PostTypecheckOptimizer {
         program: Program,
         binding_decision_spans: HashSet<Span>,
     ) -> Program {
-        with_local_binding_decision_spans(binding_decision_spans, || {
-            with_callable_effect_analysis(&self.callable_effects, || {
-                with_exception_flow_analysis(&self.exception_flow, || {
-                    with_by_ref_signatures(self.by_ref_signatures.clone(), || dce_block(program))
+        crate::compiler_stack::with_compiler_stack(|| {
+            with_local_binding_decision_spans(binding_decision_spans, || {
+                with_callable_effect_analysis(&self.callable_effects, || {
+                    with_exception_flow_analysis(&self.exception_flow, || {
+                        with_by_ref_signatures(self.by_ref_signatures.clone(), || {
+                            dce_block(program)
+                        })
+                    })
                 })
             })
         })

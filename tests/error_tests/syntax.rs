@@ -822,3 +822,31 @@ fn test_error_for_condition_comma_list_is_named() {
         "not supported in a for CONDITION",
     );
 }
+
+/// Verifies a malformed file-scope `const` declarator list is rejected by its own cause
+/// (issue #1142): a trailing comma names the missing constant, and a declarator without a value
+/// names the missing `=`.
+#[test]
+fn test_error_malformed_file_scope_const_declarator_list() {
+    expect_error(
+        "<?php const A = 1, ;",
+        "Expected a constant name after ',' in the declaration list",
+    );
+    expect_error("<?php const A = 1, B;", "Expected '=' after constant name");
+}
+
+/// Verifies an unparenthesized call used as an `instanceof` target is a syntax error with one
+/// diagnostic, whether the parser consumed the call (`Foo::$method()`) or left its argument list
+/// behind (`self::$method()`) (issue #1454). PHP rejects both forms.
+#[test]
+fn test_error_unparenthesized_call_as_instanceof_target() {
+    for target in ["Foo::$method()", "self::$method()", "$this->cls()"] {
+        expect_error(
+            &format!(
+                "<?php class Foo {{ public static $method = 'Foo'; function t($x) {{ return $x instanceof {}; }} }}",
+                target
+            ),
+            "Cannot use an unparenthesized call as an instanceof target",
+        );
+    }
+}

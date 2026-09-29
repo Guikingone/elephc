@@ -112,7 +112,24 @@ pub(crate) fn web_wrap_stmt() -> Stmt {
 /// handler body in a catch-all `try`/`catch` so uncaught exceptions become a
 /// pre-commit 500 or abort an already-committed response.
 /// Returns the program unchanged otherwise.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
+/// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
+/// budget.
 pub fn inject_if_web(
+    program: Program,
+    web: bool,
+    php_version: PhpVersion,
+    ini_overrides: &[(String, String)],
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
+    crate::compiler_stack::with_compiler_stack(|| {
+        inject_if_web_on_compiler_stack(program, web, php_version, ini_overrides, inventory)
+    })
+}
+
+/// The body of [`inject_if_web`], run on the stack `with_compiler_stack` sized.
+fn inject_if_web_on_compiler_stack(
     program: Program,
     web: bool,
     php_version: PhpVersion,

@@ -11,7 +11,7 @@
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, TypeExpr};
+use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind, TypeExpr};
 use crate::span::Span;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
@@ -258,7 +258,53 @@ impl Checker {
             for return_info in &all_return_infos[1..] {
                 inferred_return = wider_type_syntactic(&inferred_return, &return_info.ty);
             }
-            Ok((inferred_return, false))
+            Ok((self.caller_visible_direct_call_return(body, inferred_return), false))
+        }
+    }
+
+    /// Applies the caller-visible container rule to a closure whose body is `return <user call>;`.
+    ///
+    /// EIR lowering stamps exactly that body shape with the callee's
+    /// `crate::types::dynamic_params::caller_visible_return_type` (see
+    /// `crate::ir_lower::function::direct_closure_return_expr_type`), built from the two
+    /// predicates applied here: a callee with an untyped by-value parameter receives it as a
+    /// boxed Mixed cell, so an array it builds from it holds Mixed elements. The checker
+    /// inferred the element from the parameter placeholder instead
+    /// (`int` for an untyped closure parameter), so `strlen($f("hello")[0])` was refused although
+    /// lowering reads the element back as the string it is (issue #1270). Only a container is
+    /// widened, and only for that shape, because only that shape is stamped this way.
+    ///
+    /// A container inside a union is widened too, keeping the union: a callee returning `[$v]`
+    /// or `null` gives `?array<mixed>`, whose elements a `string` parameter accepts, while the
+    /// boxed `Mixed` lowering stamps for that union is its codegen representation.
+    fn caller_visible_direct_call_return(&self, body: &[Stmt], inferred: PhpType) -> PhpType {
+        if !crate::types::dynamic_params::type_contains_container(&inferred) {
+            return inferred;
+        }
+        let [stmt] = body else {
+            return inferred;
+        };
+        let StmtKind::Return(Some(expr)) = &stmt.kind else {
+            return inferred;
+        };
+        let ExprKind::FunctionCall { name, .. } = &expr.kind else {
+            return inferred;
+        };
+        if self.builtin_call_types.contains_key(&expr.span) {
+            return inferred;
+        }
+        let Some(signature) = self.functions.get(name.as_str()) else {
+            return inferred;
+        };
+        if signature.declared_return
+            || !crate::types::dynamic_params::signature_has_dynamic_untyped_param(signature)
+        {
+            return inferred;
+        }
+        match crate::types::dynamic_params::dynamic_param_container_php_type(&inferred) {
+            // Two container members can widen to the same type; fold them back into one.
+            PhpType::Union(members) => self.normalize_union_type(members),
+            widened => widened,
         }
     }
 

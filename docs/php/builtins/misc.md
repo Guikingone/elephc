@@ -38,6 +38,7 @@ sidebar:
 | [`get_mangled_object_vars()`](./misc/get_mangled_object_vars.md) | `(mixed $object): array` | `array` | ✓ | ✓ |
 | [`get_required_files()`](./misc/get_required_files.md) | `(): array` | `array` | ✓ | ✓ |
 | [`get_resources()`](./misc/get_resources.md) | `(mixed $type = null): array` | `array` | ✓ | ✓ |
+| [`getmypid()`](./misc/getmypid.md) | `(): int` | `int` | ✓ | ✓ |
 | [`header()`](./misc/header.md) | `(string $header, bool $replace = true, int $response_code = 0): void` | `void` | ✓ | ✓ |
 | [`http_response_code()`](./misc/http_response_code.md) | `(int $response_code = 0): int` | `int` | ✓ | ✓ |
 | [`ini_restore()`](./misc/ini_restore.md) | `(string $option): void` | `void` | ✓ | - |

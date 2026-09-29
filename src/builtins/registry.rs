@@ -912,7 +912,6 @@ mod tests {
     fn runtime_callable_prefix_keeps_all_parameter_metadata_aligned() {
         for (name, target, count) in [
             ("count", crate::ir::RuntimeFnId::Count, 1),
-            ("array_reverse", crate::ir::RuntimeFnId::ArrayReverse, 1),
             ("array_chunk", crate::ir::RuntimeFnId::ArrayChunk, 2),
         ] {
             let mut sig = first_class_callable_sig(name).expect("callable signature");
@@ -1074,6 +1073,29 @@ mod tests {
         let mut sort = callable_wrapper_sig(&function_sig("sort").expect("sort signature"));
         crate::ir::RuntimeFnId::Sort.refine_runtime_callable_wrapper_sig(&mut sort);
         assert_eq!(sort.params[0].1, PhpType::Array(Box::new(PhpType::Int)));
+    }
+
+    /// The `array_reverse()` and `array_slice()` wrappers keep their `$preserve_keys` parameter:
+    /// the boxed lowering honors a runtime flag, so dropping it would silently renumber keys.
+    #[test]
+    fn preserve_keys_wrappers_keep_the_flag_parameter() {
+        for (name, target, count) in [
+            ("array_reverse", crate::ir::RuntimeFnId::ArrayReverse, 2),
+            ("array_slice", crate::ir::RuntimeFnId::ArraySlice, 4),
+        ] {
+            let mut sig = callable_wrapper_sig(&function_sig(name).expect("callable signature"));
+            target.refine_runtime_callable_wrapper_sig(&mut sig);
+            assert_eq!(sig.params.len(), count, "{name} keeps every parameter");
+            assert_eq!(
+                sig.params.last().map(|(param, ty)| (param.as_str(), ty.clone())),
+                Some(("preserve_keys", PhpType::Bool)),
+                "{name}"
+            );
+            assert_eq!(sig.defaults.len(), count, "{name} parameter metadata stays aligned");
+        }
+        let mut slice = callable_wrapper_sig(&function_sig("array_slice").expect("slice signature"));
+        crate::ir::RuntimeFnId::ArraySlice.refine_runtime_callable_wrapper_sig(&mut slice);
+        assert_eq!(slice.return_type, PhpType::php_array());
     }
 
     /// Verifies source-order argument strategies are registry metadata rather than name dispatch.

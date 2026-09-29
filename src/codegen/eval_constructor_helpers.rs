@@ -2068,6 +2068,43 @@ mod argument_ownership_tests {
         }
     }
 
+    /// Callable constructor arguments reach the array and invokable-object lookups through
+    /// unconditional AArch64 branches.
+    ///
+    /// The string-name descriptor lookup emitted between the tag ladder and those lookups grows
+    /// with the program's callable names, so a `b.eq` across it can leave the ±1 MiB
+    /// conditional-branch range (#1444). x86_64 keeps its rel32 `je`.
+    #[test]
+    fn callable_constructor_argument_ladder_widens_aarch64_branches() {
+        for name in SUPPORTED_TARGETS {
+            let target = Target::parse(name).unwrap();
+            let asm = constructor_argument_asm(target, PhpType::Callable, false);
+            let lines = asm.lines().map(str::trim).collect::<Vec<_>>();
+            for (suffix, sites) in [("_callable_array", 2), ("_callable_object", 1)] {
+                let reaches = |line: &str, mnemonic: &str| {
+                    line.strip_prefix(mnemonic).is_some_and(|label| label.ends_with(suffix))
+                };
+                match target.arch {
+                    Arch::AArch64 => {
+                        assert!(
+                            !lines.iter().any(|line| reaches(line, "b.eq ")),
+                            "{name}: near branch to {suffix}:\n{asm}"
+                        );
+                        let wide = lines
+                            .windows(2)
+                            .filter(|pair| pair[0] == "b.ne 1f" && reaches(pair[1], "b "))
+                            .count();
+                        assert_eq!(wide, sites, "{name}: wide branches to {suffix}:\n{asm}");
+                    }
+                    Arch::X86_64 => {
+                        let near = lines.iter().filter(|line| reaches(line, "je ")).count();
+                        assert_eq!(near, sites, "{name}: je branches to {suffix}:\n{asm}");
+                    }
+                }
+            }
+        }
+    }
+
     /// Constructor by-reference slots own their raw payload while method slots borrow it.
     #[test]
     fn constructor_reference_slots_stay_owned_unlike_method_slots() {
