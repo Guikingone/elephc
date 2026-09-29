@@ -30,6 +30,11 @@ fn main_ir(source: &str, optimized: bool) -> String {
 
 /// Compiles and executes one PHP program with the requested EIR optimization mode.
 fn run_variant(source: &str, optimized: bool) -> String {
+    run_variant_with_args(source, optimized, &[])
+}
+
+/// Compiles and executes one PHP program with the requested CLI arguments.
+fn run_variant_with_args(source: &str, optimized: bool, args: &[&str]) -> String {
     let dir = make_cli_test_dir("elephc_mem2reg_run");
     let php_path = dir.join("main.php");
     fs::write(&php_path, source).expect("write PHP fixture");
@@ -39,7 +44,7 @@ fn run_variant(source: &str, optimized: bool) -> String {
     }
     let compile = command.arg(&php_path).output().expect("compile PHP fixture");
     assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
-    let run = run_binary(&dir.join("main"), &dir);
+    let run = run_binary_with_args(&dir.join("main"), &dir, args);
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
     let stdout = String::from_utf8(run.stdout).expect("stdout is UTF-8");
     fs::remove_dir_all(dir).expect("remove fixture directory");
@@ -66,11 +71,13 @@ fn test_mem2reg_promotes_loop_counter_and_accumulator() {
 /// Distinct assignments on both sides of a branch merge through an EIR parameter.
 #[test]
 fn test_mem2reg_promotes_branch_join() {
-    let source = "<?php $x = 0; if ($argc > 1) { $x = 11; } else { $x = 22; } while ($x > 0) { $x = ($x - 1) & 255; } echo $x;";
+    let source = "<?php $x = 0; if ($argc > 1) { $x = 11; } else { $x = 22; } echo $x; while ($x > 0) { $x = ($x - 1) & 255; } echo $x;";
     let optimized = main_ir(source, true);
     assert!(optimized.contains("if.merge("), "join takes an SSA parameter: {optimized}");
-    assert_eq!(run_variant(source, false), "0");
-    assert_eq!(run_variant(source, true), "0");
+    for optimized in [false, true] {
+        assert_eq!(run_variant_with_args(source, optimized, &[]), "220");
+        assert_eq!(run_variant_with_args(source, optimized, &["extra"]), "110");
+    }
 }
 
 /// Floating-point loop state is promoted without changing PHP's printed result.

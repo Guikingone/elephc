@@ -8,6 +8,7 @@
 //! - Only fully defined, non-aliased integer, boolean, and float PHP locals qualify.
 //! - Values live into CFG joins and loop headers use EIR block parameters.
 //! - Exceptional control flow and implicit eval scope access retain memory slots.
+//! - Slot facts and SSA use replacements are batched to bound work on large functions.
 
 use std::collections::{HashMap, HashSet};
 
@@ -56,12 +57,14 @@ impl IrPass for Mem2Reg {
         let order = reverse_postorder(function);
         let reachable: HashSet<BlockId> = order.iter().copied().collect();
         let dominance = compute_dominance(function);
+        let facts = slot_facts(function, &slots);
         let mut changed = false;
+        let mut replacements = HashMap::new();
         for slot in slots {
-            let facts = slot_facts(function, slot);
-            let live_in = live_in(function, &facts, &order);
-            let defined_in = defined_in(&facts, &preds, &order);
-            if !loads_are_defined(function, slot, &defined_in, &reachable) {
+            let slot_facts = &facts[&slot];
+            let live_in = live_in(function, slot_facts, &order);
+            let defined_in = defined_in(slot_facts, &preds, &order);
+            if !loads_are_defined(slot_facts, &defined_in, &order) {
                 continue;
             }
             let mut phi_blocks = vec![false; function.blocks.len()];
@@ -80,7 +83,17 @@ impl IrPass for Mem2Reg {
             if phi_blocks.is_empty() {
                 continue;
             }
-            changed |= promote_slot(function, slot, &phi_blocks, &order, &dominance);
+            changed |= promote_slot(
+                function,
+                slot,
+                &phi_blocks,
+                &order,
+                &dominance,
+                &mut replacements,
+            );
+        }
+        if changed {
+            replace_all_uses(function, &resolve_chains(&replacements));
         }
         changed
     }
@@ -178,25 +191,41 @@ struct SlotFacts {
     stores: Vec<bool>,
 }
 
-/// Records whether each block reads the slot before writing it, and whether it writes it.
-fn slot_facts(function: &Function, slot: LocalSlotId) -> SlotFacts {
-    let mut reads_before_store = vec![false; function.blocks.len()];
-    let mut stores = vec![false; function.blocks.len()];
+/// Records the read and write facts for all eligible slots in one instruction scan.
+fn slot_facts(function: &Function, slots: &[LocalSlotId]) -> HashMap<LocalSlotId, SlotFacts> {
+    let mut facts: HashMap<_, _> = slots
+        .iter()
+        .copied()
+        .map(|slot| {
+            (
+                slot,
+                SlotFacts {
+                    reads_before_store: vec![false; function.blocks.len()],
+                    stores: vec![false; function.blocks.len()],
+                },
+            )
+        })
+        .collect();
     for block in &function.blocks {
         let raw = block.id.as_raw() as usize;
         for &inst_id in &block.instructions {
             let inst = &function.instructions[inst_id.as_raw() as usize];
-            if inst.immediate != Some(Immediate::LocalSlot(slot)) {
+            let Some(Immediate::LocalSlot(slot)) = inst.immediate.as_ref() else {
                 continue;
-            }
+            };
+            let Some(slot_facts) = facts.get_mut(slot) else {
+                continue;
+            };
             match inst.op {
-                Op::LoadLocal if !stores[raw] => reads_before_store[raw] = true,
-                Op::StoreLocal => stores[raw] = true,
+                Op::LoadLocal if !slot_facts.stores[raw] => {
+                    slot_facts.reads_before_store[raw] = true;
+                }
+                Op::StoreLocal => slot_facts.stores[raw] = true,
                 _ => {}
             }
         }
     }
-    SlotFacts { reads_before_store, stores }
+    facts
 }
 
 /// Computes where the slot's previous value may be needed across a block boundary.
@@ -248,31 +277,12 @@ fn defined_in(facts: &SlotFacts, preds: &[Vec<BlockId>], order: &[BlockId]) -> V
     incoming
 }
 
-/// Rejects a slot when a reachable load can still observe its memory initialization.
-fn loads_are_defined(
-    function: &Function,
-    slot: LocalSlotId,
-    defined_in: &[bool],
-    reachable: &HashSet<BlockId>,
-) -> bool {
-    for block in &function.blocks {
-        if !reachable.contains(&block.id) {
-            continue;
-        }
-        let mut defined = defined_in[block.id.as_raw() as usize];
-        for &inst_id in &block.instructions {
-            let inst = &function.instructions[inst_id.as_raw() as usize];
-            if inst.immediate != Some(Immediate::LocalSlot(slot)) {
-                continue;
-            }
-            match inst.op {
-                Op::LoadLocal if !defined => return false,
-                Op::StoreLocal => defined = true,
-                _ => {}
-            }
-        }
-    }
-    true
+/// Rejects a slot if a reachable block reads it before any definite store.
+fn loads_are_defined(facts: &SlotFacts, defined_in: &[bool], order: &[BlockId]) -> bool {
+    order.iter().all(|block| {
+        let raw = block.as_raw() as usize;
+        !facts.reads_before_store[raw] || defined_in[raw]
+    })
 }
 
 /// Adds join parameters, renames loads and stores, and supplies incoming edge values.
@@ -282,6 +292,7 @@ fn promote_slot(
     phi_blocks: &[bool],
     order: &[BlockId],
     dominance: &DominanceInfo,
+    replacements: &mut HashMap<ValueId, ValueId>,
 ) -> bool {
     let local = &function.locals[slot.as_raw() as usize];
     let (ir_type, php_type) = (local.ir_type, local.php_type.clone());
@@ -304,7 +315,6 @@ fn promote_slot(
     }
 
     let mut end_values = vec![None; function.blocks.len()];
-    let mut replacements = HashMap::new();
     let mut neutralized = Vec::new();
     rename_block(
         function,
@@ -314,7 +324,7 @@ fn promote_slot(
         &phi_values,
         dominance,
         &mut end_values,
-        &mut replacements,
+        replacements,
         &mut neutralized,
     );
     for &block in order {
@@ -323,7 +333,6 @@ fn promote_slot(
             append_edge_values(term, &phi_values, end_values[raw]);
         }
     }
-    replace_all_uses(function, &resolve_chains(&replacements));
     for inst_id in &neutralized {
         neutralize_to_nop(&mut function.instructions[inst_id.as_raw() as usize]);
     }
