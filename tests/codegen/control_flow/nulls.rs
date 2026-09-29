@@ -293,9 +293,11 @@ echo ($a[$hit_i][$miss_j] ?? 'dflt');
 
 /// Coalescing a nullable object with `new` (`$o ??= new Box()`, `$o = $o ?? new Box()`) leaves
 /// the object itself in `$o`, not the boxed cell that held `?Box`: every member access after it
-/// read the cell as the object and crashed or answered garbage (#1628). Covers a `?Box`
-/// parameter both null and not, a nullable call result, a nullable property, a local merged
-/// from a ternary, and `?:`, over a loop under `--heap-debug`.
+/// read the cell as the object and crashed or answered garbage (#1628). The unbox is taken by a
+/// `?Box` parameter both null and not, a nullable call result and a nullable property (`a`-`d`),
+/// and by a nullable callable coalesced with a closure (`h`). `$o ?? null` stays nullable (`g`).
+/// A local merged from a ternary (`e`) and `?:` (`f`) keep a `Mixed` temp and pin the unchanged
+/// neighbouring paths. Runs over a loop under `--heap-debug`.
 #[test]
 fn test_null_coalesce_nullable_object_with_new_keeps_the_object() {
     let out = compile_and_run_with_heap_debug(
@@ -313,14 +315,18 @@ function c(int $n): int { $o = find($n) ?? new Box(); return $o->n; }
 function d(Box $h): int { $x = $h->next ?? new Box(); return $x->n; }
 function e(?Box $o, int $n): int { $x = $n > 0 ? $o : new Box(); $x ??= new Box(); return $x->n; }
 function f(?Box $o): int { $x = $o ?: new Box(); return $x->n; }
+function g(?Box $o): string { $x = $o ?? null; return $x === null ? "null" : (string) $x->n; }
+function h(?callable $cb): string { $cb2 = $cb ?? fn() => "dflt"; return $cb2(); }
 $total = 0;
+$tail = "";
 for ($i = 0; $i < 20 + ($argc > 5 ? 1 : 0); $i++) {
     $total += a(null) + a(new Box()) + b(null) + b(new Box()) + c(0) + c(1) + d(new Box()) + e(null, 1) + e(new Box(), 0) + f(null) + f(new Box());
+    $tail = g(null) . g(new Box()) . h(null) . h(fn() => "cb");
 }
-echo $total, "\n";
+echo $total, " ", $tail, "\n";
 "#,
     );
     assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "1500\n");
+    assert_eq!(out.stdout, "1500 null7dfltcb\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

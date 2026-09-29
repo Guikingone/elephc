@@ -187,6 +187,10 @@ pub(super) fn coerce_value_for_temp(
         // types the merge from the non-null side, so the arm that keeps `$o` must hand over the
         // object inside the cell. Storing the cell pointer itself made the next member access
         // read the box as the object (#1628). The unbox owns its own lease of the payload.
+        // `MixedUnbox` does not check the tag, so this arm relies on never seeing null: the
+        // only producer of an object temp from a nullable value is `null_coalesce_result_type`,
+        // and its value arm runs behind `IsNull`. Ternary, `match` and `?:` merges keep a
+        // nullable arm in a `Mixed` temp and never reach here.
         PhpType::Object(_) | PhpType::Callable
             if source_ty == PhpType::Mixed && value.ir_type == IrType::Heap(IrHeapKind::Mixed) =>
         {
