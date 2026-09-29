@@ -223,3 +223,26 @@ echo json_encode((array) int_or_float(true)), json_encode((array) int_or_float(f
         "\"a\"=1\n\"\\u0000*\\u0000b\"=2\n\"\\u0000Base\\u0000c\"=3\n\"a\"=1\n\"\\u0000*\\u0000b\"=2\n\"\\u0000Base\\u0000c\"=3\n\"d\"=d\n30\n1\n[1,2]\n[1][2.5]\n"
     );
 }
+
+/// `(array)` on a resource wraps the resource itself, not its numeric handle: the element is still
+/// a stream that `is_resource()`, `get_resource_type()` and `fwrite()` accept, both from a
+/// statically typed resource and from one held in a `mixed` value (the runtime-dispatch path).
+/// Review follow-up for #707.
+#[test]
+fn test_array_cast_of_a_resource_keeps_the_resource() {
+    let out = compile_and_run(
+        r#"<?php
+$h = fopen("php://memory", "r+");
+$a = (array) $h;
+var_dump(count($a), is_resource($a[0]), get_resource_type($a[0]));
+fwrite($a[0], "hi");
+rewind($h);
+echo fread($h, 2), "\n";
+$m = $argc > 5 ? 1 : $h;
+$b = (array) $m;
+var_dump(count($b), is_resource($b[0]));
+fclose($h);
+"#,
+    );
+    assert_eq!(out, "int(1)\nbool(true)\nstring(6) \"stream\"\nhi\nint(1)\nbool(true)\n");
+}
