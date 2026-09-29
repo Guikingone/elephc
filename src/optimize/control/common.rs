@@ -505,31 +505,5 @@ fn stmt_has_early_exit(stmt: &Stmt, depth: usize) -> bool {
 /// this mirrors that rule exactly. A default with no statements, a dummy span on the default or
 /// on any case pattern, or an empty case list all lower with the default last.
 pub(crate) fn switch_default_runs_last(cases: &[(Vec<Expr>, Vec<Stmt>)], default: &[Stmt]) -> bool {
-    switch_default_position(cases, default) == cases.len()
-}
-
-/// Returns how many case bodies run before the `default` body in execution order, by the same
-/// rule as [`switch_default_runs_last`]: the cases whose first pattern precedes the default's
-/// first statement, or all of them when a span is missing.
-pub(crate) fn switch_default_position(cases: &[(Vec<Expr>, Vec<Stmt>)], default: &[Stmt]) -> usize {
-    let Some(default_start) = default.first().map(|stmt| stmt.span) else {
-        return cases.len();
-    };
-    if default_start == crate::span::Span::dummy() {
-        return cases.len();
-    }
-    for (index, (patterns, _)) in cases.iter().enumerate() {
-        let Some(case_start) = patterns.first().map(|pattern| pattern.span) else {
-            return cases.len();
-        };
-        if case_start == crate::span::Span::dummy() {
-            return cases.len();
-        }
-        let case_is_after = case_start.line > default_start.line
-            || (case_start.line == default_start.line && case_start.col >= default_start.col);
-        if case_is_after {
-            return index;
-        }
-    }
-    cases.len()
+    crate::termination::switch_default_position(cases, default) == cases.len()
 }

@@ -139,7 +139,11 @@ This pass is still intentionally local and conservative. Today it focuses on:
 - `switch` bodies and labels propagated from the facts they can actually see: each label after
   the writes of the labels before it, and each body with the writes of every label and of every
   body that can fall into it invalidated. The exit simulation runs `default` at its source
-  position among the cases, so falling off a case reaches the default only when it follows
+  position among the cases, so falling off a case reaches the default only when the default is
+  written after that case. A `continue` in a body leaves the switch like `break`, and a body that
+  may leave the switch from inside an `if` or `try` makes the exit assume every body's writes.
+  The terminal-effect analysis (`termination::switch_terminal_effect`) walks the bodies in the
+  same order, and the single-case `if` rewrite keeps a switch whose `break` is nested.
 - conservative `try` / `catch` merges when every reachable fallthrough handler path agrees on the same scalar value
 - non-throwing `try` bodies that keep unreachable `catch` writes out of the post-`try` constant environment
 - recognizing uniform scalar assignment outcomes from local merge expressions such as `?:` and `match`

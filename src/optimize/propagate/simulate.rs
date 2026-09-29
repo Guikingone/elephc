@@ -346,6 +346,9 @@ pub(crate) enum SwitchConstantPathOutcome {
     FallsThrough(ConstantEnv),
     Breaks(ConstantEnv),
     ExitsCurrentBlock,
+    /// A path may leave the switch from inside a nested statement (`if ($c) { break; }`), with
+    /// writes this walk does not follow; the caller must assume any body may have run.
+    Untracked,
 }
 
 /// Simulates the statements within a switch body, updating the constant environment
@@ -359,7 +362,16 @@ pub(crate) fn simulate_switch_body_constant_env(
     mut env: ConstantEnv,
 ) -> SwitchConstantPathOutcome {
     for stmt in body {
+        if crate::termination::stmt_may_leave_current_switch_from_nested(stmt) {
+            return SwitchConstantPathOutcome::Untracked;
+        }
         env = propagate_stmt(stmt.clone(), env).1;
+        // `continue` targets a switch like `break` does (PHP warns about it, and lowering gives
+        // the switch a loop frame whose continue block is the exit), so it reaches the code after
+        // the switch; `stmt_terminal_effect` reads it as leaving the enclosing block.
+        if matches!(stmt.kind, StmtKind::Continue(1)) {
+            return SwitchConstantPathOutcome::Breaks(env);
+        }
         match stmt_terminal_effect(stmt) {
             TerminalEffect::FallsThrough => {}
             TerminalEffect::Breaks => return SwitchConstantPathOutcome::Breaks(env),
@@ -391,7 +403,7 @@ pub(crate) fn simulate_switch_entry_constant_env(
     // so falling off a case runs the default only when the default follows it, and falling off
     // the default runs the cases written after it.
     let default_position = default
-        .map(|body| crate::optimize::control::switch_default_position(cases, body));
+        .map(|body| crate::termination::switch_default_position(cases, body));
     let mut bodies: Vec<&[Stmt]> = cases.iter().map(|(_, body)| body.as_slice()).collect();
     if let (Some(body), Some(position)) = (default, default_position) {
         bodies.insert(position, body);
@@ -408,6 +420,14 @@ pub(crate) fn simulate_switch_entry_constant_env(
             SwitchConstantPathOutcome::FallsThrough(updated) => env = updated,
             SwitchConstantPathOutcome::Breaks(updated) => return Some(updated),
             SwitchConstantPathOutcome::ExitsCurrentBlock => return None,
+            SwitchConstantPathOutcome::Untracked => {
+                let mut conservative = incoming_env.clone();
+                for body in &bodies {
+                    crate::optimize::propagate::invalidation::block_invalidation(body)
+                        .apply(&mut conservative);
+                }
+                return Some(conservative);
+            }
         }
     }
     Some(env)

@@ -177,8 +177,12 @@ pub(super) fn propagate_foreach_stmt(
 }
 
 /// Propagates constants through a `switch` statement.
-/// Propagates the subject, then propagates each case pattern and body in the base env (empty if subject has side effects).
-/// The exit environment is derived by merging all case paths and the default branch.
+///
+/// The subject is propagated first and its writes invalidated. Each label is then propagated
+/// after the writes of the labels before it, and each body from the environment with the writes
+/// of every label and of every body that can fall into it invalidated. The exit environment
+/// merges every simulated entry path, starting from the after-labels environment
+/// (`merge_switch_constant_env_paths`).
 pub(super) fn propagate_switch_stmt(
     subject: Expr,
     cases: Vec<(Vec<Expr>, Vec<Stmt>)>,

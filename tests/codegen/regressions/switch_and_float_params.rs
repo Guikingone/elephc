@@ -281,3 +281,74 @@ echo default_first(1), " ", default_first(9), "|", nested(1), " ", nested(5), "|
     );
     assert_eq!(out, "zz dzz|5 1 8 100|t1 d1|121 101|8 6 3|13\n");
 }
+
+/// The switch exit models follow execution order and every way out of a body: a `default` written
+/// before a case that falls off the end (nested, in a loop, and before code after the switch)
+/// does not make the switch "always exit"; `continue` in a body leaves the switch like `break`;
+/// and a `break` nested under an `if` keeps its target and the writes before it. Each of these
+/// read an uninitialized value, hung, crashed, or folded a stale constant. Review follow-up for
+/// #1631.
+#[test]
+fn test_switch_exit_models_follow_execution_order_and_nested_breaks() {
+    let out = compile_and_run(
+        r#"<?php
+function nested_mid_default(int $n): int {
+    $x = 0;
+    switch ($n) {
+        case 1:
+            switch ($n + 1) {
+                default: return 9;
+                case 2: $x = 5;
+            }
+            break;
+    }
+    return $x;
+}
+function loop_mid_default(int $n): int {
+    $x = 0;
+    while (true) {
+        if ($n === 0) { $x = 7; break; }
+        switch ($n) {
+            case 1: $x = 1;
+            default: return 9;
+            case 2: $x = 5;
+        }
+        break;
+    }
+    return $x;
+}
+function continue_in_switch(int $n): int {
+    $x = 1;
+    switch ($n) {
+        case 0: $x = 2; continue 1;
+        default: break;
+    }
+    return $x;
+}
+function nested_break(int $n, bool $c): int {
+    $x = 1;
+    switch ($n) {
+        case 0:
+            if ($c) { $x = 2; break; }
+            return 5;
+        default: break;
+    }
+    return $x;
+}
+function after_mid_default(int $n): int {
+    $x = 1;
+    switch ($n) {
+        case 0: return 10;
+        default: return 20;
+        case 9: $y = $x;
+    }
+    $x = 2;
+    return $x;
+}
+echo nested_mid_default(1), nested_mid_default(2), " ", loop_mid_default(0), loop_mid_default(2), " ";
+echo continue_in_switch(0), " ", nested_break(0, true), nested_break(0, false), " ";
+echo after_mid_default(9), after_mid_default(0), after_mid_default(5), "\n";
+"#,
+    );
+    assert_eq!(out, "50 75 2 25 21020\n");
+}
