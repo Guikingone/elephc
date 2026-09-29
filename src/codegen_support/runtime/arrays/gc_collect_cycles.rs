@@ -455,14 +455,14 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_collecting");
     emitter.instruction("str xzr, [x9]");                                       // mark the collector as inactive again
     CLEANUP.finish(emitter);
-    emitter.instruction("cbz x0, __rt_gc_collect_cycles_cleanup_done");        // preserve a cleanup throw until the collector frame is gone
+    emitter.instruction("cbz x0, __rt_gc_collect_cycles_cleanup_done");         // preserve a cleanup throw until the collector frame is gone
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x0", "_exc_value", 0);
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x1", "_gc_pending_throw", 0);
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x0", "_gc_pending_throw", 0);
     crate::codegen_support::abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     emitter.instruction("bl __rt_exception_chain");                             // keep an earlier destructor throw behind the cleanup throw
     emitter.label("__rt_gc_collect_cycles_cleanup_done");
-    emitter.instruction("ldr x0, [sp, #80]");                                  // return the collection count when no exception escaped
+    emitter.instruction("ldr x0, [sp, #80]");                                   // return the collection count when no exception escaped
     emitter.instruction("ldr x19, [sp, #48]");                                  // restore the callee-saved scratch register after collection
     emitter.instruction("ldr x20, [sp, #56]");                                  // restore the callee-saved payload-size register after collection
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address

@@ -1108,6 +1108,7 @@ real-world validation rather than by speculative pass work.
 
 ### Delivered in v0.27.1
 
+- [x] Added all 65 PHP 8.5.10 mbstring functions and 9 constants to native compilation and `eval()`, with shared request-scoped INI and web state, managed Oniguruma-backed mbregex, MIME and mail handling, and live by-reference `mb_convert_variables()` updates.
 - [x] Completed the supported Core builtin inventory across native compilation and `eval()`, with shared runtime state, ownership, diagnostics, and generated documentation.
 - [x] Expanded PHP language compatibility for object casts, class-aware `defined('Class::CONST')`, `for` clause grammar, postfix property and array increments, grouped declarations, and nested property defaults.
 - [x] Hardened array, callable, property, and call-boundary ownership, including copy-on-write mutation, named keyed spreads, by-reference arguments, and loop-carried nullable values.
@@ -1148,7 +1149,7 @@ real-world validation rather than by speculative pass work.
 ## v0.29.x — PHP extension bridge (experimental)
 
 - [ ] Link against PHP extension `.so` / `.dylib` shared libraries
-- [ ] Proof of concept with one extension (e.g., `mbstring` or `curl`)
+- [ ] Proof of concept with one native PHP extension not already covered by an elephc bridge
 - [ ] `--ext` flag to specify extension libraries at compile time
 - [ ] Documentation: how to bridge a PHP extension
 

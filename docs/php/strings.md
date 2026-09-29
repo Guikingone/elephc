@@ -161,11 +161,13 @@ array, including nested keys and repeated `[]` entries. AOT and `eval()` use the
 same encoding detection, substitution settings, and Core INI query limits.
 The example in `examples/mbstring/main.php` parses a product search and tags.
 
-The current AOT output adapter accepts local variables and managed aliases.
-By-reference function parameters, property-backed references, dynamic output
-unpacking, and generic callable wrappers still require additional adapters.
-PHP error-handler routing and shared indexed-array root promotion also remain
-incomplete; the complete mbstring extension is still in development.
+The current AOT output adapter accepts local variables and managed aliases, while
+opaque eval also supports a by-reference function parameter. Raw AOT by-reference
+function parameters, property-backed references, and generic callable wrappers
+still require additional output adapters. PHP error-handler routing and shared
+indexed-array root promotion also remain incomplete. These are documented
+call-shape limitations, not missing symbols: all 65 PHP 8.5.10 mbstring functions
+and all 9 constants are registered for native compilation and `eval()`.
 
 Programs using mbstring retain response MIME metadata when `header()` accepts a
 header, including in CLI builds. Output buffering and `print_r(..., true)` keep
@@ -175,14 +177,14 @@ headers mutable until nonempty bytes reach the final output destination. Startup
 internal/output encodings, MIME selection, and substitution settings. Direct,
 named, unpacked, and callable calls work in AOT and `eval()`. Use
 `ob_start("mb_output_handler")` to convert buffered output automatically, as in
-`examples/mbstring/main.php`. Programs using mbstring or opaque eval require the
-managed `pcre2` package for MIME selection, including with default INI settings.
+`examples/mbstring/main.php`. The contract-owned default MIME expression needs no
+native package. A custom `mbstring.http_output_conv_mimetypes` expression inside
+opaque eval requires the complete `--with-mbstring` capability and managed PCRE2.
 
 Runtime mutation of the Core response settings remains incomplete. Eval handler
-registrations currently retain their callback until the owning eval context is
-destroyed; releasing that registration when its individual buffer closes remains
-part of the output-buffer lifecycle work. PHP error-handler routing and web
-transport verification also remain open.
+registrations release their retained callback when the individual buffer closes,
+with context teardown handling registrations that remain active. PHP error-handler
+routing and web transport verification remain open.
 
 | Function | Signature | Description |
 |---|---|---|

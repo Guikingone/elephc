@@ -669,8 +669,10 @@ checking still evaluates every spread source and rejects non-array or undefined
 inputs. `exception.update_array_guard` refreshes exceptional ownership after an
 append relocates the array. Ordinary returns and both pre-entry/invocation failures
 release the container and copied values, including when a native child destructor
-throws during deep release. Dynamic named/associative spread handling remains
-separate unfinished work.
+throws during deep release. Dynamic associative spreads use the shared argument
+planner too: string keys map to named contract parameters, values remain in PHP
+source order, and the runtime applies the same duplicate, arity, and ownership
+rules as direct arguments.
 
 `__rt_mbstring_stringable` provides the protected host action for Stringable
 preparation results. It reuses the existing native/eval string-context dispatcher,
@@ -745,7 +747,7 @@ Extern callback trampolines use the same descriptor invoker from a C-facing entr
 
 ## Array routines
 
-**Source:** `src/codegen_support/runtime/arrays/` (194 top-level files plus 3 nested target/debug helpers)
+**Source:** `src/codegen_support/runtime/arrays/` (204 top-level files plus 7 nested target/debug helpers)
 
 ### Core allocation
 
@@ -930,7 +932,7 @@ path for from a leaf helper.
 
 ## System routines
 
-**Source:** `src/codegen_support/runtime/system/` (46 top-level files plus 43 files in nested date, JSON, serialization, and parsing modules; 89 files recursively)
+**Source:** `src/codegen_support/runtime/system/` (45 top-level files plus 43 files in nested date, JSON, serialization, and parsing modules; 88 files recursively)
 
 ### `__rt_build_argv` — Build $argv array
 
@@ -1006,7 +1008,7 @@ backend that registered its handler.
 
 ## Exception routines
 
-**Source:** `src/codegen_support/runtime/exceptions.rs` plus `src/codegen_support/runtime/exceptions/` (16 files in the directory)
+**Source:** `src/codegen_support/runtime/exceptions.rs` plus `src/codegen_support/runtime/exceptions/` (22 files in the directory)
 
 elephc lowers exceptions with a small runtime layer around `_setjmp` / `_longjmp`. Codegen publishes the current exception object into `_exc_value`, pushes a handler record into `_exc_handler_top`, and then uses these helpers to unwind, match catch clauses, and resume control flow through `catch` / `finally`.
 
@@ -1130,7 +1132,7 @@ a package.
 
 ## I/O routines
 
-**Source:** `src/codegen_support/runtime/io/` (122 files)
+**Source:** `src/codegen_support/runtime/io/` (126 top-level files plus 1 nested response-metadata helper)
 
 These routines handle file and filesystem operations through target-aware libc/syscall helpers. PHP strings (pointer + length) must be converted to null-terminated C strings before passing to C or OS APIs — `__rt_cstr` handles the primary buffer and also emits `__rt_cstr2` for routines that need a second simultaneous C string.
 
@@ -1349,7 +1351,7 @@ These helpers support the compiler-specific `buffer<T>` hot-path data type. Publ
 
 ## Object and stdClass routines
 
-**Source:** `src/codegen_support/runtime/objects/` (16 files)
+**Source:** `src/codegen_support/runtime/objects/` (17 files)
 
 These helpers support `stdClass`, `json_decode()` object results, boxed Mixed property/index access, object destructor dispatch, and dynamic `new $name()` instantiation. `stdClass` instances use a compact `[class_id][hash_ptr]` payload, with dynamic properties stored in a hash of boxed `Mixed` values.
 
@@ -1494,11 +1496,12 @@ The tables above document the public runtime operations. The emitters also split
 - **Additional array and scalar entry points:** `__rt_alloc_overflow`, `__rt_array_chunk_to_hash`, `__rt_array_count_values`, `__rt_array_iter_next`, `__rt_array_key_exists_mixed_key`, `__rt_array_ptr_key`, `__rt_array_ptr_seek`, `__rt_array_ptr_value`, `__rt_array_slice_to_hash`, `__rt_array_splice_insert_boxed`, `__rt_array_splice_insert_refcounted`, `__rt_array_splice_insert_str`, `__rt_array_splice_insert_unboxed`, `__rt_array_strict_eq`, `__rt_array_to_hash_reverse`, `__rt_count_values_bump`, `__rt_hash_count_values`, `__rt_int_pow_checked`, `__rt_min_max_hash`, `__rt_min_max_mixed`, `__rt_min_max_str`, `__rt_mixed_clone`, `__rt_mixed_inc_dec`, `__rt_mixed_intval_base`, `__rt_mixed_numeric_pow`, `__rt_php_float_to_int`, `__rt_php_truthy`, and `__rt_round_mode`.
 - **Additional string and crypto entry points:** `__rt_base_convert`, `__rt_base_to_number`, `__rt_chunk_split`, `__rt_concat_grow`, `__rt_concat_publish`, `__rt_concat_reserve`, `__rt_count_chars`, `__rt_dec_to_base`, `__rt_openssl_cipher_iv_length`, `__rt_openssl_decrypt`, `__rt_openssl_encrypt`, `__rt_openssl_get_cipher_methods`, `__rt_parse_url_key_address`, `__rt_parse_url_throw_component`, `__rt_quotemeta`, `__rt_str_inc_dec`, `__rt_str_to_int_base`, `__rt_str_word_count`, `__rt_strncasecmp`, `__rt_strncmp`, `__rt_strtr_array`, `__rt_strtr_hash`, `__rt_strtr_int_key_len`, `__rt_strtr_pairwise`, `__rt_strtr_probe`, and `__rt_substr_count`.
 - **Additional object, generator, I/O, bridge, and PDO entry points:** `__rt_bcmath_throw`, `__rt_file_get_contents_range`, `__rt_gen_suspend_delegated`, `__rt_obj_dump_dyn_props`, `__rt_obj_dyn_prop_at`, `__rt_obj_enum_case_name`, `__rt_obj_prop_count`, `__rt_obj_prop_name`, `__rt_pdo_call_agg_final`, `__rt_pdo_call_agg_step`, `__rt_pdo_call_collation`, `__rt_pdo_call_scalar`, `__rt_pr_obj_desc`, `__rt_print_r_hash_entries`, `__rt_print_r_object`, and `__rt_var_dump_emit_enum_line`.
-- **Boxed arrays, hashes, references, and properties:** `__rt_array_cell_ensure_unique`, `__rt_array_column_boxed`, `__rt_array_flip_boxed`, `__rt_array_flip_boxed_body`, `__rt_array_map_boxed`, `__rt_array_merge_boxed`, `__rt_array_multisort_boxed`, `__rt_array_reduce_boxed`, `__rt_array_reverse_boxed`, `__rt_array_take_boxed`, `__rt_array_walk_boxed`, `__rt_array_walk_boxed_visit`, `__rt_in_array_boxed`, `__rt_hash_entry_deref`, `__rt_hash_entry_make_reference`, `__rt_hash_iter_next_value`, `__rt_hash_iter_resync`, `__rt_hash_pop_boxed`, `__rt_hash_project_spread`, `__rt_hash_set_value`, `__rt_local_ref_cell_release`, `__rt_reference_cell_clone`, `__rt_reference_cell_free_deep`, `__rt_reference_cell_is_unmanaged_borrow`, `__rt_reference_cell_new`, `__rt_reference_cell_owner`, `__rt_reference_cell_release`, `__rt_reference_cell_value_release`, `__rt_property_hash_get`, `__rt_property_hash_set`, `__rt_object_clone_shallow_boxed`, and `__rt_mixed_str_operand_is_float`.
-- **GC, cleanup, exceptions, and diagnostics:** `__rt_backtrace_print_arg`, `__rt_cleanup_invoke`, `__rt_cleanup_preserve_exception`, `__rt_diag_reset`, `__rt_diag_write`, `__rt_dispatch_uncaught_exception`, `__rt_error_handler_invoke`, `__rt_error_handler_restore`, `__rt_exception_chain`, `__rt_gc_collect_cycles_explicit`, `__rt_gc_collector_begin`, `__rt_gc_collector_end`, `__rt_gc_destructor_begin`, `__rt_gc_destructor_end`, `__rt_gc_destructors`, `__rt_gc_disable`, `__rt_gc_drop_pins`, `__rt_gc_enable`, `__rt_gc_enabled`, `__rt_gc_eval_object_children`, `__rt_gc_free_begin`, `__rt_gc_mem_caches`, `__rt_gc_protected_destructor`, `__rt_gc_request_start`, `__rt_gc_rethrow_pending`, `__rt_gc_status_metric`, `__rt_gc_unpin_reachable`, `__rt_heap_debug_live_blocks`, `__rt_magic_set_guard_pop`, `__rt_magic_set_guard_push`, `__rt_throw_boxed_destructor_exception`, `__rt_throwable_box_owned`, `__rt_throwable_initialize`, `__rt_throwable_previous`, `__rt_throwable_previous_slot`, `__rt_throwable_take_boxed`, `__rt_warning_cleanup`, and `__rt_wrapper_unbox_int`.
+- **Boxed arrays, hashes, references, and properties:** `__rt_array_cell_ensure_unique`, `__rt_array_column_boxed`, `__rt_array_flip_boxed`, `__rt_array_flip_boxed_body`, `__rt_array_map_boxed`, `__rt_array_merge_boxed`, `__rt_array_multisort_boxed`, `__rt_array_reduce_boxed`, `__rt_array_reverse_boxed`, `__rt_array_set_mixed_key_already_diagnosed`, `__rt_array_take_boxed`, `__rt_array_walk_boxed`, `__rt_array_walk_boxed_visit`, `__rt_hash_append_error`, `__rt_hash_chunk`, `__rt_hash_entry_deref`, `__rt_hash_entry_make_reference`, `__rt_hash_iter_next_value`, `__rt_hash_iter_resync`, `__rt_hash_next_index`, `__rt_hash_pop_boxed`, `__rt_hash_project_spread`, `__rt_hash_set_value`, `__rt_hash_try_next_index`, `__rt_hash_write_guard_claim`, `__rt_hash_write_guard_pop`, `__rt_hash_write_guard_push`, `__rt_in_array_boxed`, `__rt_local_ref_cell_release`, `__rt_mixed_deref`, `__rt_reference_cell_clone`, `__rt_reference_cell_free_deep`, `__rt_reference_cell_is_unmanaged_borrow`, `__rt_reference_cell_new`, `__rt_reference_cell_owner`, `__rt_reference_cell_release`, `__rt_reference_cell_value_release`, `__rt_reference_is`, `__rt_reference_new`, `__rt_reference_replace`, `__rt_property_hash_get`, `__rt_property_hash_set`, `__rt_object_clone_shallow_boxed`, and `__rt_mixed_str_operand_is_float`.
+- **Argument binding and mbstring bridge adapters:** `__rt_call_argument_collect_named`, `__rt_call_argument_collect_positionals`, `__rt_call_argument_validate_unpack`, `__rt_mbregex_init`, `__rt_mbstring_array_next_impl`, `__rt_mbstring_build_array`, `__rt_mbstring_build_ini_array`, `__rt_mbstring_capture_reference_fill`, `__rt_mbstring_capture_reference_store`, `__rt_mbstring_catalog`, `__rt_mbstring_clone`, `__rt_mbstring_drop_array`, `__rt_mbstring_exception_chain`, `__rt_mbstring_float`, `__rt_mbstring_header_status`, `__rt_mbstring_ini_input`, `__rt_mbstring_output_header`, `__rt_mbstring_pin`, `__rt_mbstring_publish_throw`, `__rt_mbstring_query_hash_store_array`, `__rt_mbstring_query_next`, `__rt_mbstring_query_register`, `__rt_mbstring_query_release`, `__rt_mbstring_query_root`, `__rt_mbstring_release_catalog`, `__rt_mbstring_request_reset`, `__rt_mbstring_restore_array`, and `__rt_mbstring_restore_ini_array`.
+- **GC, cleanup, exceptions, and diagnostics:** `__rt_backtrace_print_arg`, `__rt_call_object_destructor_body`, `__rt_cleanup_call`, `__rt_cleanup_chain_previous`, `__rt_cleanup_invoke`, `__rt_cleanup_preserve_exception`, `__rt_destructor_throw_mixed`, `__rt_diag_reset`, `__rt_diag_write`, `__rt_dispatch_uncaught_exception`, `__rt_error_handler_invoke`, `__rt_error_handler_restore`, `__rt_exception_chain`, `__rt_gc_collect_cycles_explicit`, `__rt_gc_collector_begin`, `__rt_gc_collector_end`, `__rt_gc_destructor_begin`, `__rt_gc_destructor_end`, `__rt_gc_destructors`, `__rt_gc_disable`, `__rt_gc_drop_pins`, `__rt_gc_enable`, `__rt_gc_enabled`, `__rt_gc_eval_object_children`, `__rt_gc_free_begin`, `__rt_gc_mem_caches`, `__rt_gc_protected_destructor`, `__rt_gc_request_start`, `__rt_gc_rethrow_pending`, `__rt_gc_status_metric`, `__rt_gc_unpin_reachable`, `__rt_heap_debug_live_blocks`, `__rt_magic_set_guard_pop`, `__rt_magic_set_guard_push`, `__rt_throw_boxed_destructor_exception`, `__rt_throwable_append_previous`, `__rt_throwable_box_owned`, `__rt_throwable_initialize`, `__rt_throwable_previous`, `__rt_throwable_previous_slot`, `__rt_throwable_take_boxed`, `__rt_warning_cleanup`, and `__rt_wrapper_unbox_int`.
 - **Curl and iconv bridge adapters:** `__rt_curl_easy_body`, `__rt_curl_easy_str_op`, `__rt_curl_invoke_callback`, `__rt_curl_rethrow_pending`, `__rt_curl_version`, `__rt_iconv_build_array`, `__rt_iconv_call`, `__rt_iconv_call_bool`, `__rt_iconv_invoke`, `__rt_iconv_materialize`, `__rt_iconv_mime_option`, `__rt_iconv_option_table`, and `__rt_iconv_release_block`.
 - **Serialization and formatting internals:** `__rt_implode_cast_string`, `__rt_serialize_magic_body`, `__rt_serialize_sleep_body`, `__rt_sprintf_throw_string_error`, `__rt_sprintf_throw_string_error_x64`, `__rt_sprintf_warn_array_to_string`, `__rt_sprintf_warn_array_to_string_x64`, `__rt_sprintf_warn_object_numeric`, `__rt_sprintf_warn_object_numeric_x64`, `__rt_str_numeric_value`, `__rt_unser_allowed_object_to_string`, `__rt_unser_throw_object_string_error`, `__rt_unser_throw_type_error`, `__rt_unser_validate_at`, `__rt_unser_validate_key`, `__rt_unser_validate_uint`, `__rt_unserialize_class_allowed`, `__rt_unserialize_defer_data`, `__rt_unserialize_detach_data`, `__rt_unserialize_end`, `__rt_unserialize_finish_data`, `__rt_unserialize_register_array`, `__rt_unserialize_set_options`, `__rt_unserialize_set_options_indexed`, and `__rt_unserialize_set_options_mixed`.
-- **Resources, eval objects, files, and display:** `__rt_eval_object_release_children`, `__rt_file_put_contents_maybe_phar_flagged`, `__rt_get_resources`, `__rt_resource_inventory_close`, `__rt_resource_inventory_insert`, `__rt_resource_inventory_register`, `__rt_resource_inventory_reset`, `__rt_resource_inventory_retire`, `__rt_resource_type_selector`, and `__rt_var_dump_emit_callable`.
+- **Resources, eval objects, files, and display:** `__rt_eval_object_release_children`, `__rt_file_put_contents_maybe_phar_flagged`, `__rt_get_resources`, `__rt_ob_release_eval_handler`, `__rt_resource_inventory_close`, `__rt_resource_inventory_insert`, `__rt_resource_inventory_register`, `__rt_resource_inventory_reset`, `__rt_resource_inventory_retire`, `__rt_resource_type_selector`, and `__rt_var_dump_emit_callable`.
 
 Compiled **executables** dead-strip unreachable runtime helpers at link time. On Linux each `__rt_*` helper is emitted in its own `.text.<name>` section and collected with `--gc-sections`; on macOS the runtime object carries a `.subsections_via_symbols` footer so each helper is a separately collectable atom dropped by `-dead_strip` (internal cross-helper labels stay assembler-local `L`-locals, with the few helpers reached by a `b`/`bl` from another atom marked `.alt_entry` so they remain live symbols). Combined with the AST-side control-flow pruning and dead-code elimination elephc already does before codegen, only the helpers a program actually reaches are linked. Shared libraries (`--emit cdylib`) keep the full runtime so every exported entry stays callable.
 

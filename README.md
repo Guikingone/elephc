@@ -519,16 +519,16 @@ The full list of supported constructs, operators, and control structures is in t
 - **XML**: the complete function, class and constant inventory of `ext/xml` (the `XMLParser` SAX parser, every handler, incremental `xml_parse()`, `xml_parse_into_struct()`, libxml2's error codes) and `ext/xmlwriter` (`XMLWriter` with memory and URI output) on a statically pinned libxml2 2.15.3 from the native catalog (`elephc native add libxml2`, auto-linked or `--with-xml`), natively and inside `eval()`; see the [XML guide](docs/php/xml.md) for documented behavioral differences and [runtime limits](docs/php/xml.md#runtime-limits)
 - **Date/time**: `DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`, `DateInterval`, `DatePeriod`, the PHP 8.3 date exception hierarchy, DST-aware formatting via a bundled IANA timezone database, and `ext/calendar` Julian-Day functions
 - **Crypto**: `md5()`/`sha1()`/`hash()`/`hash_hmac()` hashing and OpenSSL-compatible symmetric ciphers (`openssl_encrypt()`/`openssl_decrypt()`, AES CBC/CTR/ECB/GCM) through a pure-Rust bridge with no system OpenSSL dependency
-- **Native extensions**: complete `iconv` conversion and MIME helpers, plus the supported `curl` easy, multi, share, callback, stream, and multipart API through pay-for-use bridges
+- **Native extensions**: complete PHP 8.5.10 `mbstring` function and constant inventory, complete `iconv` conversion and MIME helpers, plus the supported `curl` easy, multi, share, callback, stream, and multipart API through pay-for-use bridges
 - **Environment**: `getenv()` answers a single variable or the whole environment, `putenv()` sets and removes, and `$_ENV` / `$_SERVER` carry the process environment plus `$_SERVER['argv']` in ordinary CLI programs
 - **Web server (`--web`)**: standalone prefork HTTP server binaries with compile-time `worker` (default), persistent `pool`, or fork-per-`request` isolation; request superglobals and `php://input`; `header()`/`http_response_code()` response control; and PHP-compatible sessions — `$_SESSION`, the complete `session_*()` API, file persistence, custom save handlers, strict mode, cookies and cache limiters, and trans-SID rewriting
 - **Extensions**: `ifdef`, `packed class`, `buffer<T>`, `buffer_new<T>()`, `buffer_len()`, `buffer_free()`
 
 </details>
 
-### Built-in functions (1003)
+### Built-in functions (1068)
 
-The generated builtin documentation currently exposes 1003 PHP-visible entries across arrays, buffers, class introspection, databases, dates, filesystems, I/O, images, JSON, math/BCMath, networking, process control, regex, SPL, streams, strings, types, web and XML, and elephc's pointer extensions. The exhaustive list, signatures, availability, and implementation links are generated from the shared contract in [Built-in functions](docs/php/builtins.md); keeping one generated index avoids a second hand-maintained list drifting here.
+The generated builtin documentation currently exposes 1068 PHP-visible entries across arrays, buffers, class introspection, databases, dates, filesystems, I/O, images, JSON, math/BCMath, multibyte strings, networking, process control, regex, SPL, streams, strings, types, web and XML, and elephc's pointer extensions. The exhaustive list, signatures, availability, and implementation links are generated from the shared contract in [Built-in functions](docs/php/builtins.md); keeping one generated index avoids a second hand-maintained list drifting here.
 
 ### Constants
 
@@ -737,6 +737,7 @@ crates/
 ├── elephc-image/        # GD/Exif/Imagick/Gmagick/Cairo image bridge
 ├── elephc-instr/        # Exact profiling instrumentation runtime
 ├── elephc-magician/     # Optional EvalIR interpreter staticlib for dynamic eval
+├── elephc-mbstring/     # Shared PHP 8.5.10 mbstring engine and native bridge
 ├── elephc-monitoring-contract/ # Typed monitoring policy shared by the compiler and bridges
 ├── elephc-pcntl/        # Unix process control, wait, exec, and signal bridge
 ├── elephc-pdo/          # Multi-driver PDO bridge

@@ -407,8 +407,8 @@ src/
 │   ├── runtime_callable_invoker.rs Runtime callable-descriptor invocation lowering
 │   ├── function_variants.rs   Include-loaded function-variant dispatcher emission
 │   ├── literal_defaults.rs    Literal property defaults → backend-native values
-│   ├── eval_*_helpers.rs      Eval-to-native bridge helpers: callables, class constants, constructors, methods, properties, ref args, reflection (+ owners), static properties (12 files)
-│   ├── shared_*.rs            Shared once-per-program helper frames: the count() TypeError guard, the boxed-mixed __toString ladder, their common helper-frame plumbing, and the module-wide state that dedupes callable descriptors and owns the label counter (4 files)
+│   ├── eval_*_helpers.rs      Eval-to-native bridge helpers: arguments, callables, class constants, constructors, error handlers, methods, properties, ref args, reflection (+ owners), static properties, and values (13 files)
+│   ├── shared_*.rs            Shared once-per-program helper frames: the count() TypeError guard, mbstring callable dispatch, the boxed-mixed __toString ladder, their common helper-frame plumbing, and the module-wide state that dedupes callable descriptors and owns the label counter (5 files)
 │   ├── fibers.rs              Fiber-aware EIR codegen integration
 │   └── web.rs                 `--web` program-entry lowering
 │
@@ -474,22 +474,22 @@ src/
 │       ├── resource_ids.rs    Runtime resource-kind identifiers shared by cleanup paths
 │       ├── round_mode.rs      PHP rounding-mode constants used by runtime helpers
 │       ├── sysv_call_alignment.rs x86_64 SysV nested-call stack-alignment helpers
-│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, hashes, iconv, and conversion helpers (100 top-level files + 4 nested bridge helpers)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (194 top-level files + 3 nested target/debug helpers)
+│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, hashes, iconv, mbstring, parse_url, and conversion helpers (103 top-level files + 68 nested helpers)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (204 top-level files + 7 nested target/debug helpers)
 │       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (7 files)
 │       ├── compare/           Loose/strict comparison and truthiness helpers (5 files)
-│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (122 files)
+│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (126 top-level files + 1 nested response-metadata helper)
 │       ├── buffers/           Generation-safe handle resolution, allocation/free, length, bounds/size/use-after-free diagnostics (8 files incl. mod.rs)
 │       ├── bcmath/            Target-aware C-ABI marshalling for exact decimal bridge calls (3 files incl. target assembly)
 │       ├── curl/              Easy, multi, share, callback, multipart, error, and version bridge adapters (14 files)
-│       ├── eval_bridge/       Magician value, array, cast, reflection, clone, and builtin adapters (29 files)
+│       ├── eval_bridge/       Magician value, array, cast, reflection, clone, mbstring, output, and builtin adapters (36 top-level files + 1 nested output helper)
 │       ├── exceptions.rs      Exception runtime module root / re-exports
-│       ├── exceptions/        cleanup frames, handler dispatch, dynamic instanceof, matching, throwing, and Throwable helpers (16 files)
+│       ├── exceptions/        cleanup frames, handler dispatch, dynamic instanceof, matching, throwing, and Throwable helpers (22 files)
 │       ├── pdo/               Target-aware PDO callable callback adapters (5 files)
-│       ├── system/            build_argv, time, getenv, shell_exec, date/JSON/strtotime, serialize/unserialize, preg_*, ... (46 top-level files + 43 nested files)
+│       ├── system/            build_argv, time, getenv, shell_exec, date/JSON/strtotime, serialize/unserialize, preg_*, ... (45 top-level files + 43 nested files)
 │       ├── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ptr_read_string, ptr_write_string, ... (7 files)
 │       ├── fibers/            stack allocation/free, context switch, entry trampoline (4 top-level files) + `api/` (4 target-aware public API helper files)
-│       ├── objects/           stdClass, object handles, Mixed property/index autovivification, object-vars/export, destructor dispatch, and new-by-name helpers (16 files)
+│       ├── objects/           stdClass, object handles, Mixed property/index autovivification, object-vars/export, destructor dispatch, and new-by-name helpers (17 files)
 │       ├── spl/               SplDoublyLinkedList and SplFixedArray runtime container helpers (3 files)
 │       ├── generators/        Generator frame layout and fiber-backed coroutine __rt_gen_* helpers (3 files)
 │       └── zval/              Zval bridge packing, unpacking, type, and lifetime helpers (11 files)

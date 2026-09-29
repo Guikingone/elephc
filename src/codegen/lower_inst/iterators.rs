@@ -2273,32 +2273,32 @@ fn load_current_hash_call_value_as_mixed(
             Arch::AArch64 => {
                 abi::load_at_offset(ctx.emitter, "x10", offset - ITER_VALUE_ADDR_OFFSET_DELTA);
                 if promote_reference {
-                    ctx.emitter.instruction("mov x0, x10");                   // promote this writable entry in the caller's array
+                    ctx.emitter.instruction("mov x0, x10");                     // promote this writable entry in the caller's array
                     abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
-                    ctx.emitter.instruction("mov x10, x0");                   // carry the managed cell into the descriptor marker
+                    ctx.emitter.instruction("mov x10, x0");                     // carry the managed cell into the descriptor marker
                 } else {
-                    ctx.emitter.instruction("ldr x9, [x10, #16]");           // inspect the original entry before iterator dereferencing
-                    ctx.emitter.instruction("cmp x9, #11");                  // only a PHP reference shares caller storage
-                    ctx.emitter.instruction(&format!("b.ne {ordinary}"));    // ordinary entries keep their by-value result
-                    ctx.emitter.instruction("ldr x10, [x10]");                // borrow the cell from the pinned source
+                    ctx.emitter.instruction("ldr x9, [x10, #16]");              // inspect the original entry before iterator dereferencing
+                    ctx.emitter.instruction("cmp x9, #11");                     // only a PHP reference shares caller storage
+                    ctx.emitter.instruction(&format!("b.ne {ordinary}"));       // ordinary entries keep their by-value result
+                    ctx.emitter.instruction("ldr x10, [x10]");                  // borrow the cell from the pinned source
                 }
-                ctx.emitter.instruction("mov x9, #11");                       // encode a descriptor reference marker
-                ctx.emitter.instruction("mov x11, #7");                       // its referenced PHP value is boxed Mixed
+                ctx.emitter.instruction("mov x9, #11");                         // encode a descriptor reference marker
+                ctx.emitter.instruction("mov x11, #7");                         // its referenced PHP value is boxed Mixed
                 emit_box_runtime_payload_as_mixed(ctx.emitter, "x9", "x10", "x11");
             }
             Arch::X86_64 => {
                 abi::load_at_offset(ctx.emitter, "r10", offset - ITER_VALUE_ADDR_OFFSET_DELTA);
                 if promote_reference {
-                    ctx.emitter.instruction("mov rdi, r10");                 // promote this writable entry in the caller's array
+                    ctx.emitter.instruction("mov rdi, r10");                    // promote this writable entry in the caller's array
                     abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
-                    ctx.emitter.instruction("mov rcx, rax");                 // carry the managed cell into the descriptor marker
+                    ctx.emitter.instruction("mov rcx, rax");                    // carry the managed cell into the descriptor marker
                 } else {
-                    ctx.emitter.instruction("cmp QWORD PTR [r10 + 16], 11"); // inspect the original entry before iterator dereferencing
-                    ctx.emitter.instruction(&format!("jne {ordinary}"));     // ordinary entries keep their by-value result
-                    ctx.emitter.instruction("mov rcx, QWORD PTR [r10]");     // borrow the cell from the pinned source
+                    ctx.emitter.instruction("cmp QWORD PTR [r10 + 16], 11");    // inspect the original entry before iterator dereferencing
+                    ctx.emitter.instruction(&format!("jne {ordinary}"));        // ordinary entries keep their by-value result
+                    ctx.emitter.instruction("mov rcx, QWORD PTR [r10]");        // borrow the cell from the pinned source
                 }
-                ctx.emitter.instruction("mov r9, 11");                        // encode a descriptor reference marker
-                ctx.emitter.instruction("mov r8, 7");                         // its referenced PHP value is boxed Mixed
+                ctx.emitter.instruction("mov r9, 11");                          // encode a descriptor reference marker
+                ctx.emitter.instruction("mov r8, 7");                           // its referenced PHP value is boxed Mixed
                 emit_box_runtime_payload_as_mixed(ctx.emitter, "r9", "rcx", "r8");
             }
         }

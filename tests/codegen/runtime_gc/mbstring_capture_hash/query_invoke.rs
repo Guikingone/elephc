@@ -7,7 +7,7 @@
 //! Key details:
 //! - A small C embedding host supplies live configuration and optional SAPI filtering.
 //! - Only the fixture entry is replaced; PHP coercion, initialization, parsing, and cleanup stay real.
-//! - These tests do not claim public INI or mb_parse_str lvalue binding support.
+//! - The host fixture isolates shared query execution beneath the public INI and lvalue adapters.
 
 use super::*;
 use std::process::Command;

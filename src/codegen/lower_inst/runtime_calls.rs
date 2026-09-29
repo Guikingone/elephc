@@ -277,7 +277,7 @@ fn lower_unary_string(
         abi::emit_push_reg_pair(ctx.emitter, pointer, length);
         abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
         let result = abi::int_result_reg(ctx.emitter);
-        ctx.emitter.instruction(&format!("cmp {result}, 1"));                 // reserve returns a fresh owned string only after leaving scratch storage
+        ctx.emitter.instruction(&format!("cmp {result}, 1"));                   // reserve returns a fresh owned string only after leaving scratch storage
         ctx.emitter.instruction(&format!("{} {owned}", if ctx.emitter.target.arch == crate::codegen::platform::Arch::AArch64 { "b.eq" } else { "je" })); // preserve an already-owned heap result
         abi::emit_pop_reg_pair(ctx.emitter, pointer, length);
         abi::emit_call_label(ctx.emitter, "__rt_str_persist");                 // copy the scratch result before later string operations reuse it
