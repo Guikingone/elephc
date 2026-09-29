@@ -44,18 +44,20 @@
 #include "php_ini.h"
 #include "spprintf.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* Reports a path this host deliberately does not implement, then aborts. */
-#define ELEPHC_UNSUPPORTED(what)                                                  \
-    do {                                                                         \
-        fprintf(stderr, "Fatal error: hosted PHP extension reached '%s', which " \
-                        "an ahead-of-time Elephc binary does not provide\n",     \
-                what);                                                           \
-        abort();                                                                 \
-    } while (0)
+/* Reports a path this host deliberately does not implement, then aborts.
+ * Shared with stdlib.c. */
+ZEND_COLD ZEND_NORETURN void elephc_zend_unsupported(const char *what) {
+    fflush(stdout);
+    fprintf(stderr, "Fatal error: hosted PHP extension reached '%s', which an "
+                    "ahead-of-time Elephc binary does not provide\n", what);
+    abort();
+}
+#define ELEPHC_UNSUPPORTED(what) elephc_zend_unsupported(what)
 
 /* ------------------------------------------------------------ engine globals */
 
@@ -249,6 +251,24 @@ ZEND_API ZEND_COLD void zend_type_error(const char *format, ...) {
     va_end(args);
 }
 
+ZEND_API ZEND_COLD void zend_value_error(const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+    elephc_throw_formatted(zend_ce_value_error, format, args);
+    va_end(args);
+}
+
+/* zend_execute_API.c's check: letters, digits, `_`, `\` and bytes >= 0x80. */
+ZEND_API bool zend_is_valid_class_name(zend_string *name) {
+    for (size_t i = 0; i < ZSTR_LEN(name); i++) {
+        unsigned char c = ZSTR_VAL(name)[i];
+        if (!(isalnum(c) || c == '_' || c == '\\' || c >= 0x80)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 ZEND_API ZEND_COLD void zend_argument_count_error(const char *format, ...) {
     va_list args;
     va_start(args, format);
@@ -408,14 +428,27 @@ PHPAPI size_t php_write(void *buf, size_t size) {
     return zend_write((const char *)buf, size);
 }
 
-PHPAPI size_t php_printf(const char *format, ...) {
-    va_list args;
+static size_t elephc_vprintf(const char *format, va_list args) {
     char *buffer = NULL;
-    va_start(args, format);
     size_t len = zend_vspprintf(&buffer, 0, format, args);
-    va_end(args);
     size_t written = zend_write(buffer, len);
     efree(buffer);
+    return written;
+}
+
+PHPAPI size_t php_printf(const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+    size_t written = elephc_vprintf(format, args);
+    va_end(args);
+    return written;
+}
+
+PHPAPI size_t php_printf_unchecked(const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+    size_t written = elephc_vprintf(format, args);
+    va_end(args);
     return written;
 }
 
@@ -887,6 +920,11 @@ ZEND_API bool ZEND_FASTCALL zend_verify_ref_assignable_zval(zend_reference *ref,
     (void)ref; (void)zv; (void)strict;
     return true;
 }
+ZEND_API bool ZEND_FASTCALL zend_verify_prop_assignable_by_ref(const zend_property_info *prop_info,
+                                                              zval *orig_val, bool strict) {
+    (void)prop_info; (void)orig_val; (void)strict;
+    return true;
+}
 ZEND_API bool ZEND_FASTCALL zend_verify_prop_assignable_by_ref_ex(
         const zend_property_info *prop_info, zval *orig_val, bool strict,
         zend_verify_prop_assignable_by_ref_context context) {
@@ -986,6 +1024,7 @@ ZEND_API HashTable *zend_lazy_object_get_properties(zend_object *object) { (void
 zend_object *zend_lazy_object_clone(zend_object *old_obj) { (void)old_obj; ELEPHC_UNSUPPORTED("zend_lazy_object_clone"); }
 HashTable *zend_lazy_object_debug_info(zend_object *object, int *is_temp) { (void)object; (void)is_temp; ELEPHC_UNSUPPORTED("zend_lazy_object_debug_info"); }
 HashTable *zend_lazy_object_get_gc(zend_object *zobj, zval **table, int *n) { (void)zobj; (void)table; (void)n; ELEPHC_UNSUPPORTED("zend_lazy_object_get_gc"); }
+ZEND_API zend_property_info *zend_lazy_object_get_property_info_for_slot(zend_object *obj, zval *slot) { (void)obj; (void)slot; ELEPHC_UNSUPPORTED("zend_lazy_object_get_property_info_for_slot"); }
 
 ZEND_API void ZEND_FASTCALL _zend_observer_class_linked_notify(zend_class_entry *ce, zend_string *name) {
     (void)ce; (void)name;

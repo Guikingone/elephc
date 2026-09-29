@@ -61,6 +61,7 @@ static struct {
     uint32_t slot;
 } elephc_walk_cursor;
 
+extern void elephc_stdlib_startup(void);
 extern size_t elephc_zend_write_stdout(const char *str, size_t len);
 extern size_t elephc_zend_printf_stdout(const char *format, ...);
 extern void elephc_zend_error_cb(int type, zend_string *filename, const uint32_t lineno,
@@ -146,6 +147,13 @@ static zend_module_entry elephc_spl_module = {
     STANDARD_MODULE_HEADER, "SPL", NULL, NULL, NULL, NULL, NULL, NULL,
     PHP_VERSION, STANDARD_MODULE_PROPERTIES
 };
+/* ext/standard's C API as far as extensions link it (base64, digests, the
+ * incomplete class, the basic globals); anything beyond fails at link time
+ * with the missing symbol's name, so the claim cannot hide a gap. */
+static zend_module_entry elephc_standard_module = {
+    STANDARD_MODULE_HEADER, "standard", NULL, NULL, NULL, NULL, NULL, NULL,
+    PHP_VERSION, STANDARD_MODULE_PROPERTIES
+};
 
 static void elephc_register_provided_module(zend_module_entry *module) {
     zend_module_entry *registered = zend_register_internal_module(module);
@@ -227,10 +235,31 @@ void elephc_zend_startup(void) {
      * records EG(current_module) on every entry it creates. */
     elephc_register_provided_module(&elephc_core_module);
     elephc_register_provided_module(&elephc_spl_module);
+    elephc_register_provided_module(&elephc_standard_module);
     EG(current_module) = &elephc_core_module;
     elephc_register_core_classes();
+    elephc_stdlib_startup();
     EG(current_module) = NULL;
+
+    /* From here on the program is inside one long request, as php_module_startup
+     * leaves a PHP process: interned strings made now are request strings. The
+     * permanent handlers must not see request-time calls — the one for
+     * zend_string_init_existing_interned asserts `permanent`, and in a release
+     * build that assertion is an optimisation hint: asked for a request string
+     * it silently returns a persistent (malloc'd) one, which the caller then
+     * efree()s into the Zend heap. igbinary does exactly that. */
+    zend_interned_strings_activate();
+    zend_interned_strings_switch_storage(1);
     EG(active) = 1;
+}
+
+/* Runs `startup` (a module's MINIT) with permanent interned-string storage,
+ * where PHP runs every MINIT, then returns to request storage. */
+static zend_result elephc_run_module_startup(zend_module_entry *module) {
+    zend_interned_strings_switch_storage(0);
+    zend_result result = zend_startup_module_ex(module);
+    zend_interned_strings_switch_storage(1);
+    return result;
 }
 
 /* Sets an INI directive, as a php.ini line would. Called by the generated
@@ -260,8 +289,10 @@ static bool elephc_boot_module(zend_module_entry *module) {
     bool booted = false;
     EG(bailout) = &frame;
     if (SETJMP(frame) == 0) {
+        zend_interned_strings_switch_storage(0);
         zend_module_entry *registered = zend_register_internal_module(module);
-        if (registered && zend_startup_module_ex(registered) == SUCCESS) {
+        zend_interned_strings_switch_storage(1);
+        if (registered && elephc_run_module_startup(registered) == SUCCESS) {
             if (registered->request_startup_func) {
                 EG(current_module) = registered;
                 booted = registered->request_startup_func(registered->type,
@@ -273,6 +304,8 @@ static bool elephc_boot_module(zend_module_entry *module) {
         }
     }
     EG(bailout) = outer;
+    /* A MINIT that bailed out skipped the switch back. */
+    zend_interned_strings_switch_storage(1);
     if (!booted) {
         fflush(stdout);
         fprintf(stderr, "Fatal error: hosted PHP extension '%s' failed to start\n", module->name);

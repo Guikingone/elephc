@@ -41,6 +41,9 @@ pub const RUNTIME_C: &str = include_str!("php_src/runtime.c");
 /// The ABI generated wrappers call: startup, call frames, value transfer,
 /// introspection.
 pub const HOST_C: &str = include_str!("php_src/host.c");
+/// The standard-library state, MINIT registrations and refusals extensions
+/// link against (globals, stream wrappers, output handlers, serialize).
+pub const STDLIB_C: &str = include_str!("php_src/stdlib.c");
 
 /// The static archive every hosted extension resolves its Zend symbols from.
 pub const ENGINE_ARCHIVE: &str = "lib/libelephc_zend.a";
@@ -69,8 +72,22 @@ pub const ENGINE_UNITS: &[&str] = &[
     "Zend/zend_string.c",
     "Zend/zend_strtod.c",
     "Zend/zend_variables.c",
+    "main/explicit_bzero.c",
+    "main/php_scandir.c",
     "main/snprintf.c",
     "main/spprintf.c",
+    // Standard-library units extensions call directly, each self-contained on
+    // top of the engine: base64 (zstd), digests (zstd, apcu), the incomplete
+    // class used when unserializing an unknown class (msgpack, igbinary).
+    "ext/hash/hash_sha.c",
+    "ext/standard/base64.c",
+    "ext/standard/incomplete_class.c",
+    "ext/standard/md5.c",
+    "ext/standard/sha1.c",
+    // PHP's own serialize()/unserialize(): APCu's default serializer, and what
+    // msgpack, igbinary and ds fall back to for objects.
+    "ext/standard/var.c",
+    "ext/standard/var_unserializer.c",
 ];
 
 /// Recipe revision the embedded engine sources were last published under, and
@@ -78,7 +95,7 @@ pub const ENGINE_UNITS: &[&str] = &[
 /// any edit to them until both the catalog revision and this pair move.
 #[cfg(test)]
 pub const ENGINE_FINGERPRINT: (u32, &str) =
-    (1, "f7886c2444d65efc9d8cd4c9d7d0bb0879b6cbd78edbd5919a55248b06afb5ca");
+    (1, "43625b8d2890a6e9eff565eb7531f7bdeb1ac537f7ea4c1f1b0f5c07abeb5303");
 
 /// Headers Elephc writes itself rather than copying from the tarball.
 const OWNED_HEADERS: &[&str] = &[
@@ -144,7 +161,7 @@ fn build_engine(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
     let include = request.staging_prefix.join("include");
     let includes = include_dirs(&include);
 
-    let mut sources: Vec<PathBuf> = Vec::with_capacity(ENGINE_UNITS.len() + 2);
+    let mut sources: Vec<PathBuf> = Vec::with_capacity(ENGINE_UNITS.len() + 3);
     for unit in ENGINE_UNITS {
         let source = request.source.join(unit);
         if !source.is_file() {
@@ -155,7 +172,11 @@ fn build_engine(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
         }
         sources.push(source);
     }
-    for (name, contents) in [("elephc_zend_runtime.c", RUNTIME_C), ("elephc_zend_host.c", HOST_C)] {
+    for (name, contents) in [
+        ("elephc_zend_runtime.c", RUNTIME_C),
+        ("elephc_zend_host.c", HOST_C),
+        ("elephc_zend_stdlib.c", STDLIB_C),
+    ] {
         let source = build.join(name);
         write_file(&source, contents)?;
         sources.push(source);
@@ -223,7 +244,7 @@ mod tests {
     /// stable across builds.
     fn engine_sources_digest() -> String {
         let mut digest = Sha256::new();
-        for part in [PHP_CONFIG_H, ZEND_CONFIG_H, BUILD_DEFS_H, RUNTIME_C, HOST_C] {
+        for part in [PHP_CONFIG_H, ZEND_CONFIG_H, BUILD_DEFS_H, RUNTIME_C, HOST_C, STDLIB_C] {
             digest.update(part.as_bytes());
             digest.update([0u8]);
         }

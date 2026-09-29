@@ -64,4 +64,9 @@
 /* zend_virtual_cwd.h declares DIR* members unconditionally on this. */
 #define HAVE_DIRENT_H 1
 
+/* ext/pcre's header includes PCRE2 from php-src's bundled copy (retained with
+ * the headers) instead of a system pcre2.h. APCu reaches it for its iterator. */
+#define HAVE_BUNDLED_PCRE 1
+#define PCRE2_CODE_UNIT_WIDTH 8
+
 #endif /* PHP_CONFIG_H */
