@@ -27,8 +27,9 @@ use super::super::context::FunctionContext;
 use super::{
     class_implements_interface, exceptions, expect_data, expect_operand,
     instruction_strict_php_profile, load_value_to_first_int_arg,
-    lower_instance_runtime_intrinsic, lower_runtime_object_method_call, predicates,
-    runtime_backed_instance_intrinsic, store_if_result,
+    lower_instance_runtime_intrinsic, lower_runtime_object_method_call,
+    object_name_satisfies_interface, predicates, runtime_backed_instance_intrinsic,
+    store_if_result,
 };
 use crate::codegen::{CodegenIrError, Result};
 

@@ -730,6 +730,7 @@ pub enum RuntimeFnId {
     ExtensionLoaded,
     Getdate,
     Getenv,
+    Getmypid,
     Gmdate,
     Gmmktime,
     Header,
@@ -1377,7 +1378,8 @@ impl RuntimeFnId {
             RuntimeFnId::BufferLen => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::MAY_FATAL.bits(),
             ),
-            RuntimeFnId::Time => crate::ir::Effects::READS_PROCESS,
+            // `getmypid()` is not a constant: a `pcntl_fork()` child reads its own id.
+            RuntimeFnId::Time | RuntimeFnId::Getmypid => crate::ir::Effects::READS_PROCESS,
             RuntimeFnId::Microtime | RuntimeFnId::Hrtime => {
                 crate::ir::Effects::from_bits_retain(
                     crate::ir::Effects::READS_PROCESS.bits()
@@ -1970,6 +1972,9 @@ impl RuntimeFnId {
     }
 
     /// Returns whether the operation has a proven generic runtime-callable wrapper.
+    ///
+    /// `Getmypid` qualifies because its wrapper has no parameters to adapt and returns a plain
+    /// integer: `$name = "getmypid"; $name()` and `call_user_func($name)` must reach it like PHP.
     pub const fn runtime_callable_supported(self) -> bool {
         if matches!(self, Self::MbEreg | Self::MbEregi | Self::MbParseStr) { return false; }
         if self.uses_mbstring_runtime() { return true; }
@@ -1980,6 +1985,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayProduct
                 | RuntimeFnId::CloneWith
                 | RuntimeFnId::Count
+                | RuntimeFnId::Getmypid
                 | RuntimeFnId::Gettype
                 | RuntimeFnId::InArray
                 | RuntimeFnId::Trim
@@ -2008,7 +2014,7 @@ impl RuntimeFnId {
                         | PhpType::Void
                 )
             }),
-            RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct
+            RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct | RuntimeFnId::Getmypid
             | RuntimeFnId::Gettype | RuntimeFnId::InArray => true,
             RuntimeFnId::Trim => source.is_none_or(|ty| matches!(ty, PhpType::Str)),
             _ => false,
@@ -3096,6 +3102,7 @@ impl RuntimeFnId {
             RuntimeFnId::ExtensionLoaded => "extension_loaded",
             RuntimeFnId::Getdate => "getdate",
             RuntimeFnId::Getenv => "getenv",
+            RuntimeFnId::Getmypid => "getmypid",
             RuntimeFnId::Gmdate => "gmdate",
             RuntimeFnId::Gmmktime => "gmmktime",
             RuntimeFnId::Header => "header",

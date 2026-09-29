@@ -222,6 +222,7 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 | `is_object()`   | `is_object($val): bool`      | Returns true if value is an object |
 | `is_scalar()`   | `is_scalar($val): bool`      | Returns true for int, float, string, or bool (not null, array, object, or resource) |
 | `is_iterable()` | `is_iterable($val): bool`    | Returns true if array or Traversable-compatible iterable |
+| `is_countable()` | `is_countable($val): bool`  | Returns true for an array or an object whose class implements `Countable`; a statically typed object that cannot decide it is checked against its runtime class |
 | `is_callable()` | `is_callable($val): bool`    | Returns true for closures, first-class callables, strings case-insensitively naming known builtins, user functions, or public static methods (`"Class::method"`), `[$obj, "method"]` arrays with public methods, `[ClassName::class, "method"]` static method arrays, and objects with public `__invoke()`. |
 | `is_resource()` | `is_resource($val): bool`    | Returns true if value is an open resource handle |
 | `is_nan()`      | `is_nan($val): bool`         | Returns true if NAN            |
@@ -239,6 +240,20 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 PHP's predicate aliases are supported and behave identically to their canonical
 forms: `is_integer()` and `is_long()` are aliases of `is_int()`, and
 `is_double()` and `is_real()` are aliases of `is_float()`.
+
+`is_countable()` is the guard to use before `count()` on a value that may not be
+countable. It is decided at compile time when the declared type settles it, and
+against the runtime class otherwise, so a `Countable` subclass behind a base-class
+parameter still answers `true`:
+
+```php
+function size(mixed $value): int {
+    return is_countable($value) ? count($value) : -1;
+}
+echo size([1, 2, 3]);                  // 3
+echo size(new ArrayObject(["a", "b"])); // 2
+echo size("text");                     // -1
+```
 
 ### Type narrowing
 

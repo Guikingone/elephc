@@ -247,6 +247,27 @@ the ABI `(descriptor, argument array) -> Mixed`. The invoker saves and restores
 the caller's callee-saved registers it scratches — `x19`-`x26` on AArch64 and
 `r12`, `rbx`, `r13`-`r15` on x86_64 — in a dedicated frame save area.
 
+### Inline wrappers and branch reach
+
+Some lowerings emit a wrapper or invoker in the middle of the enclosing
+function and jump over it: the `array_map()` and `preg_replace_callback()`
+descriptor callback wrappers, the direct-callback argument adapter, and the
+runtime-callable invokers. Their `label_global()` opens the wrapper's own
+`.text.<symbol>` section on ELF, so the lowering captures
+`Emitter::current_text_section()` before the wrapper and calls
+`reopen_text_section()` after it. Without that, the rest of the enclosing
+function continues inside the wrapper's section, and a conditional branch from
+the function into that tail becomes a cross-section relocation whose distance
+depends on the linker's section layout.
+
+On AArch64, `b.cond` and `cbz`/`cbnz` encode only a ±1 MiB displacement
+(`tbz`/`tbnz` only ±32 KiB). An edge that jumps over code whose size grows with
+the program, such as the runtime-name case tables of callable dispatch, uses
+`abi::emit_branch_if_equal_wide()`: an inverted `b.ne 1f` over an unconditional
+`b`, which reaches ±128 MiB. x86_64 `jcc` relaxes to a rel32 displacement and
+needs no widening. `tests/codegen/callables/branch_reach.rs` pins both rules on
+the runtime-selected callable paths.
+
 ### Static and global storage
 
 Function `static` locals are `.comm` symbols (`_static_<fn>_<name>`, 16 bytes)

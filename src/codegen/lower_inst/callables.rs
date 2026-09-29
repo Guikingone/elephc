@@ -228,11 +228,11 @@ fn lower_mixed_callable_descriptor_invoke(
             ctx.emitter.instruction(&format!("b.eq {}", callable_label));       // dispatch a boxed closure/first-class callable descriptor
             if let Some(array_label) = &array_label {
                 ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_INDEXED_ARRAY)); // is the boxed Mixed payload a two-element callable array?
-                ctx.emitter.instruction(&format!("b.eq {}", array_label));      // dispatch a boxed instance/static-method callable array
+                abi::emit_branch_if_equal_wide(ctx.emitter, array_label);       // dispatch a boxed callable array past the string-name case table
             }
             if let Some(object_label) = &object_label {
                 ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_OBJECT)); // is the boxed Mixed payload an invokable object?
-                ctx.emitter.instruction(&format!("b.eq {}", object_label));     // dispatch the object's public __invoke method
+                abi::emit_branch_if_equal_wide(ctx.emitter, object_label);      // dispatch __invoke past the string-name and array dispatch blocks
             }
             abi::emit_jump(ctx.emitter, &fatal_label);
             ctx.emitter.label(&callable_label);

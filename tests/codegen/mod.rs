@@ -78,6 +78,7 @@ mod reference_property_payload;
 mod references;
 mod runtime_gc;
 mod runtime_reachability;
+mod runtime_introspection;
 mod math;
 mod misc;
 mod pointers;

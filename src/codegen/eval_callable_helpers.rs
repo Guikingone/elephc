@@ -1262,11 +1262,11 @@ pub(super) fn emit_aarch64_cast_eval_callable_arg(
     emitter.instruction("cmp x0, #1");                                          // runtime tag 1 means a string callable name
     emitter.instruction(&format!("b.eq {}", string_label));                     // resolve string callables through descriptor metadata
     emitter.instruction("cmp x0, #4");                                          // runtime tag 4 means an indexed callable array
-    emitter.instruction(&format!("b.eq {}", array_label));                      // resolve static callable arrays through descriptor metadata
+    abi::emit_branch_if_equal_wide(emitter, &array_label);                      // resolve indexed callable arrays past the string-name lookup table
     emitter.instruction("cmp x0, #5");                                          // runtime tag 5 means an associative callable array
-    emitter.instruction(&format!("b.eq {}", array_label));                      // resolve static callable arrays with numeric keys
+    abi::emit_branch_if_equal_wide(emitter, &array_label);                      // resolve callable arrays with numeric keys past that table
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means an invokable object candidate
-    emitter.instruction(&format!("b.eq {}", object_label));                     // resolve invokable objects through descriptor metadata
+    abi::emit_branch_if_equal_wide(emitter, &object_label);                     // resolve invokable objects past the string and array lookups
     abi::emit_jump(emitter, miss_label);
     emitter.label(&string_label);
     abi::emit_push_reg_pair(emitter, "x1", "x2");

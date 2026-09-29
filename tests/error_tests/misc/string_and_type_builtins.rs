@@ -325,6 +325,20 @@ expect_builtin_arity_error!(
     "is_iterable() takes exactly 1 argument"
 );
 
+// Tests is_countable() arity error when called with no arguments (issue #860).
+expect_builtin_arity_error!(
+    test_error_is_countable_wrong_args,
+    "<?php is_countable();",
+    "is_countable() takes exactly 1 argument"
+);
+
+// Tests is_countable() arity error when called with too many arguments.
+expect_builtin_arity_error!(
+    test_error_is_countable_too_many_args,
+    "<?php is_countable([], []);",
+    "is_countable() takes exactly 1 argument"
+);
+
 // Tests is_callable() arity error when called with no arguments.
 expect_builtin_arity_error!(
     test_error_is_callable_wrong_args,

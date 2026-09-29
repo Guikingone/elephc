@@ -70,6 +70,7 @@ pub mod get_required_files;
 pub mod get_resources;
 pub mod getdate;
 pub mod getenv;
+pub mod getmypid;
 pub mod gmdate;
 pub mod gmmktime;
 pub mod header;
