@@ -191,6 +191,9 @@ pub(super) fn register_eval_native_function(
             &type_spec,
         );
     }
+    if registration.signature.by_ref_return {
+        register_eval_native_function_returns_reference(ctx, context_offset, &name_label, name_len);
+    }
     Ok(())
 }
 

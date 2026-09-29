@@ -206,6 +206,32 @@ pub(super) fn register_eval_native_function_return_type(
     abi::emit_call_label(ctx.emitter, &symbol);
 }
 
+/// Emits the registration call marking a native function declared `function &name()`, which
+/// eval's `ReflectionFunction::returnsReference()` reports.
+pub(super) fn register_eval_native_function_returns_reference(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    function_name_label: &str,
+    function_name_len: usize,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        function_name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        function_name_len as i64,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_register_native_function_returns_reference");
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
 /// Emits one native function parameter-default registration call.
 pub(super) fn register_eval_native_function_param_default(
     ctx: &mut FunctionContext<'_>,

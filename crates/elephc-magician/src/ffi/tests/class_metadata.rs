@@ -120,6 +120,47 @@ fn register_native_interface_property_records_metadata() {
         .all(|(_, property)| property.name() != "bad"));
 }
 
+/// Verifies a native `&get` contract flag survives registration for both interface and abstract
+/// class property contracts, so eval reflection can report `returnsReference()`.
+#[test]
+fn register_native_property_contracts_keep_by_ref_get() {
+    let mut ctx = ElephcEvalContext::new();
+    let property_type = b"string";
+    for (key, flags) in [
+        (&b"RefContract::RefContract::name"[..], TEST_NATIVE_PROPERTY_REQUIRES_GET | TEST_NATIVE_PROPERTY_GET_BY_REF),
+        (&b"PlainContract::PlainContract::name"[..], TEST_NATIVE_PROPERTY_REQUIRES_GET),
+    ] {
+        let interface = unsafe {
+            __elephc_eval_register_native_interface_property(
+                &mut ctx,
+                key.as_ptr(),
+                key.len() as u64,
+                property_type.as_ptr(),
+                property_type.len() as u64,
+                flags,
+            )
+        };
+        let abstract_class = unsafe {
+            __elephc_eval_register_native_abstract_property(
+                &mut ctx,
+                key.as_ptr(),
+                key.len() as u64,
+                property_type.as_ptr(),
+                property_type.len() as u64,
+                flags,
+            )
+        };
+        assert_eq!((interface, abstract_class), (1, 1));
+    }
+
+    for (owner, by_ref) in [("RefContract", true), ("PlainContract", false)] {
+        let interface = ctx.native_interface_property_requirements(owner);
+        let abstract_class = ctx.native_abstract_property_requirements(owner);
+        assert_eq!(interface[0].1.get_returns_by_ref(), by_ref, "{owner}");
+        assert_eq!(abstract_class[0].1.get_returns_by_ref(), by_ref, "{owner}");
+    }
+}
+
 /// Verifies native AOT abstract class property contracts are available to eval validation.
 #[test]
 fn register_native_abstract_property_records_metadata() {

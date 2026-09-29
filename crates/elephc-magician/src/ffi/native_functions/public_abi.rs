@@ -192,6 +192,23 @@ pub unsafe extern "C" fn __elephc_eval_register_native_function_return_type(
     .unwrap_or(0)
 }
 
+/// Registers that one generated native PHP function is declared `function &name()`.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. The function name pointer must be
+/// readable for its declared byte length.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_function_returns_reference(
+    ctx: *mut ElephcEvalContext,
+    function_name_ptr: *const u8,
+    function_name_len: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_function_returns_reference_inner(ctx, function_name_ptr, function_name_len)
+    })
+    .unwrap_or(0)
+}
+
 /// Registers one generated native PHP function scalar parameter default in an eval context.
 ///
 /// # Safety

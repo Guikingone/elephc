@@ -70,6 +70,8 @@ const NATIVE_ARRAY_DEFAULT_KEY_INT: u8 = 1;
 const NATIVE_ARRAY_DEFAULT_KEY_STRING: u8 = 2;
 const NATIVE_PROPERTY_REQUIRES_GET: u64 = 1;
 const NATIVE_PROPERTY_REQUIRES_SET: u64 = 2;
+/// The property's `get` contract is declared `&get` (returns by reference).
+const NATIVE_PROPERTY_GET_BY_REF: u64 = 4;
 const MAX_NATIVE_OBJECT_DEFAULT_ARGS: usize = u8::MAX as usize;
 
 #[derive(Clone, Copy)]
