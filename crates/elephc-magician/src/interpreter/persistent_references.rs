@@ -48,6 +48,11 @@ fn promote_array_reference_variable(
         if global_scope != scope || global_name != name {
             return promote_array_reference_variable(global_scope, global_name, context, values);
         }
+    } else if let Some(global_scope) =
+        eval_superglobal_global_scope(context, name).filter(|global| *global != scope)
+    {
+        // A superglobal lives in the global scope whatever scope names it.
+        return promote_array_reference_variable(global_scope, name, context, values);
     }
     let (value, ownership) = source.entry(name).filter(|entry| entry.flags().is_visible())
         .map(|entry| (entry.cell(), entry.flags().ownership))

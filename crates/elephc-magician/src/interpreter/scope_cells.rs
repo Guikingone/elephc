@@ -6,9 +6,61 @@
 //!
 //! Key details:
 //! - Global aliases redirect through `ElephcEvalContext` while local aliases stay in the materialized eval scope.
+//! - PHP superglobals resolve through the same global scope from every scope, as if each scope
+//!   had declared them `global`, but only while an `eval()` call is executing, when the frame
+//!   that installed that scope is known to be alive; otherwise they stay local.
 //! - Replaced owned cells are released by callers through existing scope APIs.
 
 use super::*;
+
+/// PHP's superglobals: every scope sees them without a `global` statement.
+pub(in crate::interpreter) const EVAL_SUPERGLOBALS: [&str; 8] =
+    ["_SERVER", "_GET", "_POST", "_COOKIE", "_FILES", "_ENV", "_REQUEST", "_SESSION"];
+
+/// Returns the global scope a superglobal named `name` resolves through, when one is reachable.
+///
+/// `None` for any other name, outside an executing `eval()` call (a callback can run in a
+/// retained context whose global scope has already been freed), or when no global scope is
+/// installed; the superglobal then resolves in the current scope.
+pub(in crate::interpreter) fn eval_superglobal_global_scope(
+    context: &ElephcEvalContext,
+    name: &str,
+) -> Option<*mut ElephcEvalScope> {
+    if !EVAL_SUPERGLOBALS.contains(&name) || !context.in_eval_execution() {
+        return None;
+    }
+    context.global_scope_ptr()
+}
+
+/// Returns the global-scope name a variable resolves through, if any.
+///
+/// That is the target of an explicit `global` alias, or the variable itself when it is one of
+/// PHP's superglobals and a global scope is reachable.
+fn eval_global_target<'a>(
+    context: &ElephcEvalContext,
+    scope: &'a ElephcEvalScope,
+    name: &'a str,
+) -> Option<&'a str> {
+    scope.global_alias_target(name).or_else(|| {
+        eval_superglobal_global_scope(context, name).map(|_| name)
+    })
+}
+
+/// Returns the distinct global scope a superglobal write must use, or `None` to stay local.
+///
+/// Explicit `global` aliases keep their stricter contract (a missing global scope is fatal),
+/// so they are left to the callers' alias branches.
+fn eval_superglobal_scope(
+    context: &ElephcEvalContext,
+    scope: &ElephcEvalScope,
+    name: &str,
+) -> Option<*mut ElephcEvalScope> {
+    if scope.global_alias_target(name).is_some() {
+        return None;
+    }
+    eval_superglobal_global_scope(context, name)
+        .filter(|global| *global != scope as *const ElephcEvalScope as *mut ElephcEvalScope)
+}
 
 /// Returns the eval-visible entry for a variable, following `global` aliases.
 pub(in crate::interpreter) fn scope_entry(
@@ -16,7 +68,7 @@ pub(in crate::interpreter) fn scope_entry(
     scope: &ElephcEvalScope,
     name: &str,
 ) -> Option<ScopeEntry> {
-    let Some(global_name) = scope.global_alias_target(name) else {
+    let Some(global_name) = eval_global_target(context, scope, name) else {
         return scope.entry(name);
     };
     let Some(global_scope) = context.global_scope_ptr() else {
@@ -59,7 +111,9 @@ pub(in crate::interpreter) fn set_scope_cell(
         if values.is_reference(reference)? {
             if reference == cell { return Ok(Vec::new()); }
             let previous = values.reference_replace(reference, cell)?;
-            if let Some(global_name) = scope.global_alias_target(&name).map(str::to_string) {
+            if let Some(global) = eval_superglobal_scope(context, scope, &name) {
+                unsafe { global.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?.mark_reference_changed(&name);
+            } else if let Some(global_name) = scope.global_alias_target(&name).map(str::to_string) {
                 let global = context.global_scope_ptr().ok_or(EvalStatus::RuntimeFatal)?;
                 if global == scope as *mut ElephcEvalScope {
                     scope.mark_reference_changed(&global_name);
@@ -107,6 +161,10 @@ fn update_scope_cell(
     name: String,
     update: impl FnOnce(&mut ElephcEvalScope, String) -> Vec<RuntimeCellHandle>,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    if let Some(global) = eval_superglobal_scope(context, scope, &name) {
+        let global = unsafe { global.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?;
+        return Ok(update(global, name));
+    }
     if let Some(global_name) = scope.global_alias_target(&name).map(str::to_string) {
         let Some(global_scope) = context.global_scope_ptr() else {
             return Err(EvalStatus::RuntimeFatal);
@@ -135,6 +193,10 @@ pub(in crate::interpreter) fn set_reference_alias(
         scope.mark_global_alias_to(target.to_string(), global_name);
         return Ok(Vec::new());
     }
+    if eval_superglobal_scope(context, scope, source).is_some() {
+        scope.mark_global_alias_to(target.to_string(), source.to_string());
+        return Ok(Vec::new());
+    }
     let (cell, ownership) = scope_entry(context, scope, source)
         .filter(|entry| entry.flags().is_visible())
         .map_or_else(
@@ -144,14 +206,24 @@ pub(in crate::interpreter) fn set_reference_alias(
     Ok(scope.set_reference(target.to_string(), source.to_string(), cell, ownership))
 }
 
-/// Unsets a variable, removing only the local alias when the name is global.
+/// Unsets a variable, removing only the local alias when the name is a `global` alias.
+///
+/// A superglobal is different: PHP unsets the global itself from any scope, so it is unset in
+/// the same global scope its reads and writes resolve through, and recorded so that no later
+/// fragment re-creates it. The released cell, if this scope owned one, goes to the caller.
 pub(in crate::interpreter) fn unset_scope_cell(
+    context: &ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     name: impl Into<String>,
 ) -> Option<RuntimeCellHandle> {
     let name = name.into();
     if scope.is_global_alias(&name) {
         scope.clear_global_alias(&name);
+        return scope.unset_respecting_references(name);
+    }
+    note_superglobal_unset(&name);
+    if let Some(global) = eval_superglobal_scope(context, scope, &name) {
+        return unsafe { global.as_mut() }?.unset_respecting_references(name);
     }
     scope.unset_respecting_references(name)
 }

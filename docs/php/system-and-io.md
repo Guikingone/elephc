@@ -17,7 +17,7 @@ sidebar:
 | `sleep()` | `sleep($seconds): int` | Sleep for seconds |
 | `usleep()` | `usleep($microseconds): void` | Sleep for microseconds |
 | `getenv()` | `getenv($name = null, $local_only = false): string\|array\|false` | Get one environment variable, or — with no argument — the whole environment as a string-keyed array. Answers `false` for a name that is not set, and `""` for one set to the empty string. `$local_only` is accepted and has no effect: there is no environment here separate from the process's |
-| `putenv()` | `putenv($assignment): bool` | Set an environment variable (`KEY=VALUE`), or remove it when the argument has no `=` |
+| `putenv()` | `putenv($assignment): bool` | Set an environment variable (`KEY=VALUE`), or remove it when the argument has no `=`. Answers the platform's own status, so `false` when libc refuses the change |
 | `define()` | `define($name, $value): bool` | Define a compile-time global constant with a string-literal name |
 | `defined()` | `defined($name): bool` | Check whether a string-literal global or `Class::CONST` name is defined |
 | `constant()` | `constant($name): mixed` | Value of a global constant named by a string literal. AOT has no runtime constant table, so a dynamic name, a `Foo::BAR` class constant, and an unknown name are compile errors |
@@ -86,6 +86,11 @@ putenv("LATE=1");
 var_dump(getenv("LATE"));        // string(1) "1"
 var_dump(isset($_ENV["LATE"]));  // bool(false)
 ```
+
+Code run by `eval()` sees the same superglobals from every scope. A fragment
+that names one the compiled program never spelled gets it created with these
+same contents when the fragment starts; see
+[Scope behavior](eval.md#scope-behavior) for how such a value is shared.
 
 #### Known limitation
 
