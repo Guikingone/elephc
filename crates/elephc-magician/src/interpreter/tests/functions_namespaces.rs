@@ -427,6 +427,43 @@ fn execute_program_superglobal_unset_reaches_the_global_scope() {
     assert!(global_scope.visible_cell("_SERVER").is_none());
 }
 
+/// Verifies an unset superglobal stays undefined in a fresh eval context on the same thread.
+///
+/// elephc gives each function frame that calls `eval()` its own context, but all of them run
+/// in one PHP request, where an unset auto-global is never created again: after
+/// `function a() { eval('unset($_SERVER);'); }`, PHP 8.5.10 answers `false` to `isset($_SERVER)`
+/// in a later function's eval and in a top-level eval alike.
+#[test]
+fn execute_program_superglobal_unset_holds_in_a_fresh_context() {
+    /// Forgets the recorded superglobal unsets when the test ends, even on a failed assertion.
+    struct ResetUnsetSuperglobals;
+    impl Drop for ResetUnsetSuperglobals {
+        /// Clears this thread's record so later tests still see superglobals created.
+        fn drop(&mut self) {
+            reset_unset_superglobals();
+        }
+    }
+    let _reset = ResetUnsetSuperglobals;
+    let unset = parse_fragment(br#"unset($_SERVER); return isset($_SERVER);"#).expect("parse eval fragment");
+    let read = parse_fragment(br#"return isset($_SERVER);"#).expect("parse eval fragment");
+    let mut values = FakeOps::default();
+
+    let mut first_context = ElephcEvalContext::new();
+    let mut first_scope = ElephcEvalScope::new();
+    let unset_result =
+        execute_program_with_context(&mut first_context, &unset, &mut first_scope, &mut values)
+            .expect("execute eval ir");
+    let mut fresh_context = ElephcEvalContext::new();
+    let mut fresh_scope = ElephcEvalScope::new();
+    let read_result =
+        execute_program_with_context(&mut fresh_context, &read, &mut fresh_scope, &mut values)
+            .expect("execute eval ir");
+
+    assert_eq!(values.get(unset_result), FakeValue::Bool(false));
+    assert_eq!(values.get(read_result), FakeValue::Bool(false));
+    assert!(fresh_scope.visible_cell("_SERVER").is_none());
+}
+
 /// Verifies a context outside an executing eval call keeps superglobals local.
 ///
 /// A callback can run in a context retained past the native frame that installed its global

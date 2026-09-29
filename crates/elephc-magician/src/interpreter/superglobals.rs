@@ -26,6 +26,11 @@ use std::os::unix::ffi::OsStrExt;
 
 thread_local! {
     /// One bit per `EVAL_CLI_POPULATED_SUPERGLOBALS` entry that eval code has unset.
+    ///
+    /// Deliberately not per eval context: elephc creates one context for each function frame
+    /// that calls `eval()`, and all of them run inside the same PHP request, in which PHP never
+    /// re-creates an unset auto-global. A fragment in a later frame, with a fresh context, must
+    /// therefore still see an unset an earlier frame's fragment made.
     static UNSET_CLI_SUPERGLOBALS: Cell<u8> = const { Cell::new(0) };
 }
 
