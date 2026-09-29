@@ -666,3 +666,34 @@ echo $out, "\n";
     assert_eq!(out.stdout, "string integer double boolean NULL string string\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A float offset reaches a boxed `ArrayAccess` object's `offsetUnset()` without PHP's float-to-int
+/// deprecation, which PHP only raises for a real array key. The warning used to fire while the key
+/// was normalized for the SPL arm, and an error handler that replaced the property ran between the
+/// payload check and the receiver read, which then treated `null` as the object. Review follow-up
+/// for #750.
+#[test]
+fn test_unset_float_offset_of_boxed_array_access_raises_no_deprecation() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class B implements ArrayAccess {
+    public function offsetExists(mixed $o): bool { return false; }
+    public function offsetGet(mixed $o): mixed { return null; }
+    public function offsetSet(mixed $o, mixed $v): void {}
+    public function offsetUnset(mixed $o): void { echo "unset:", var_export($o, true), "\n"; }
+}
+class L { public $bag; }
+$l = new L();
+$l->bag = new B();
+unset($l->bag[1.5]);
+$m = $argc > 5 ? 1 : 2.5;
+unset($l->bag[$m]);
+set_error_handler(function () use ($l) { $l->bag = null; return true; });
+unset($l->bag[1.5]);
+echo "survived\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "unset:1.5\nunset:2.5\nunset:1.5\nsurvived\n");
+    assert!(!out.stderr.contains("Deprecated"), "{}", out.stderr);
+}

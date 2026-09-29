@@ -92,10 +92,13 @@ pub(super) fn lower_offset_unset(ctx: &mut FunctionContext<'_>, inst: &Instructi
     }
     let boxed_key = abi::int_result_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, boxed_key);
-    // The runtime's SPL containers still take the normalized key; see the helper.
+    // The runtime's SPL containers still take the normalized key; see the helper. It is built
+    // WITHOUT the float-to-int deprecation: PHP hands an `ArrayAccess` object the float as is and
+    // warns about nothing, and a warning here could run a user error handler between the payload
+    // tag check above and the receiver read below, with the owned key box on the stack.
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            hashes::materialize_hash_key_aarch64(ctx, key)?;
+            hashes::materialize_hash_key_aarch64_after_first(ctx, key)?;
             ctx.emitter.instruction("mov x3, x2");                              // pass the normalized key high word
             ctx.emitter.instruction("mov x2, x1");                              // pass the normalized key low word
             abi::emit_pop_reg(ctx.emitter, "x1");
@@ -105,7 +108,7 @@ pub(super) fn lower_offset_unset(ctx: &mut FunctionContext<'_>, inst: &Instructi
             ctx.emitter.instruction(&format!("b {done}"));                      // the object answered through offsetUnset or threw
         }
         Arch::X86_64 => {
-            hashes::materialize_hash_key_x86_64(ctx, key)?;
+            hashes::materialize_hash_key_x86_64_after_first(ctx, key)?;
             ctx.emitter.instruction("mov rcx, rdx");                            // pass the normalized key high word
             ctx.emitter.instruction("mov rdx, rsi");                            // pass the normalized key low word
             abi::emit_pop_reg(ctx.emitter, "rsi");
