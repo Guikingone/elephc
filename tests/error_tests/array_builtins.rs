@@ -175,6 +175,27 @@ fn test_error_array_slice_non_literal_preserve_keys() {
     );
 }
 
+/// Verifies every first-class spelling of `array_slice()` reports the direct call's diagnostic
+/// for a non-literal `preserve_keys` flag (issue #1346).
+///
+/// The checker used to discard the contract's rejection at these sites, so the program reached
+/// the backend and died there with an internal "not a compile-time literal" error.
+#[test]
+fn test_error_first_class_array_slice_non_literal_preserve_keys() {
+    for call in [
+        "$f = array_slice(...); $f([1, 2], 0, 1, $t);",
+        "call_user_func(array_slice(...), [1, 2], 0, 1, $t);",
+        "$f = array_slice(...); call_user_func($f, [1, 2], 0, 1, $t);",
+        "call_user_func_array(array_slice(...), [[1, 2], 0, 1, $t]);",
+        "$f = array_slice(...); for ($i = 0; $i < 2; $i++) { $f([1, 2], 0, 1, $t); }",
+    ] {
+        expect_error(
+            &format!("<?php $t = $argc > 0; {call}"),
+            "array_slice() preserve_keys argument must be a literal bool in AOT mode",
+        );
+    }
+}
+
 /// Verifies a key-preserving `array_slice()` of a boxed array is rejected, not miscompiled.
 ///
 /// The key-preserving helper copies the source header's `value_type` into the result hash, so
@@ -318,6 +339,29 @@ fn test_error_array_values_wrong_args() {
     expect_error(
         "<?php array_values();",
         "array_values() takes exactly 1 argument",
+    );
+}
+
+/// Accepting a `mixed` receiver (issue #630) must not open the door to a statically known
+/// non-array: a scalar, or a union with no array member, can never succeed and stays a compile
+/// error for `array_values()`, `array_flip()` and `in_array()`.
+#[test]
+fn test_error_mixed_receiver_array_builtins_still_reject_non_arrays() {
+    expect_error(
+        "<?php array_values(42);",
+        "array_values() argument must be array",
+    );
+    expect_error(
+        "<?php array_flip(\"s\");",
+        "array_flip() argument must be array",
+    );
+    expect_error(
+        "<?php in_array(1, 5);",
+        "in_array() second argument must be array",
+    );
+    expect_error(
+        "<?php function pick(int|string $v): void { array_values($v); } pick(1);",
+        "array_values() argument must be array",
     );
 }
 

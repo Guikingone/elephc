@@ -103,6 +103,7 @@ pub(crate) fn propagate_abstract_return_types(checker: &mut Checker) {
 /// - `cases`: parsed enum case declarations
 /// - `span`: source location for error reporting
 /// - `used_traits` / `trait_aliases`: flattened direct enum trait-use metadata
+/// - `attributes`: the declaration's own attribute groups, recorded for reflection
 /// - `checker`: type checker state (classes, interfaces, enums, resolve_type_expr)
 /// - `next_class_id`: incrementing class ID counter
 ///
@@ -122,6 +123,7 @@ pub(crate) fn build_enum_info(
     user_constants: &[crate::parser::ast::ClassConst],
     used_traits: &[String],
     trait_aliases: &[(String, String)],
+    attributes: &[crate::parser::ast::AttributeGroup],
     span: crate::span::Span,
     checker: &mut Checker,
     next_class_id: &mut u64,
@@ -245,7 +247,24 @@ pub(crate) fn build_enum_info(
         span,
         checker,
         next_class_id,
-    )
+    )?;
+    // PHP keeps cases and constants in one table, in declaration order: `case B; const X;
+    // case A;` reflects as B, X, A. The parser keeps them in two lists, so their source spans
+    // are what interleaves them back.
+    let mut declared: Vec<(crate::span::Span, String)> = cases
+        .iter()
+        .map(|case| (case.span, case.name.clone()))
+        .chain(user_constants.iter().map(|constant| (constant.span, constant.name.clone())))
+        .collect();
+    declared.sort_by_key(|(span, _)| (span.line, span.col));
+    if let Some(class_info) = checker.classes.get_mut(name) {
+        class_info.constant_order = declared.into_iter().map(|(_, name)| name).collect();
+        // The declaration's own attributes (`#[A] enum E {}`), which `ReflectionEnum` and
+        // `ReflectionClass` report like a class's.
+        class_info.attribute_names = collect_attribute_names(attributes);
+        class_info.attribute_args = collect_attribute_args(attributes);
+    }
+    Ok(())
 }
 
 /// Inserts validated enum metadata and its parallel final readonly class metadata.
@@ -318,6 +337,7 @@ pub(crate) fn insert_enum_metadata(
     let mut static_method_visibilities = HashMap::new();
     let mut static_method_declaring_classes = HashMap::new();
     let mut static_method_impl_classes = HashMap::new();
+    let mut abstract_static_methods = HashSet::new();
     static_methods.insert(
         "cases".to_string(),
         FunctionSig {
@@ -382,6 +402,9 @@ pub(crate) fn insert_enum_metadata(
     let mut method_visibilities = HashMap::new();
     let mut method_declaring_classes = HashMap::new();
     let mut method_impl_classes = HashMap::new();
+    let mut abstract_methods = HashSet::new();
+    let mut method_attribute_names = HashMap::new();
+    let mut method_attribute_args = HashMap::new();
     for method in user_methods {
         // Clone + rewrite self/static on this enum method (enums have no parent).
         // Must happen before build_method_sig because bare "self" is rejected later.
@@ -390,6 +413,9 @@ pub(crate) fn insert_enum_metadata(
 
         let sig = build_method_sig(checker, &method, name)?;
         let key = php_symbol_key(&method.name);
+        // Reflection reads a method's attributes by its key, as it does for a class method.
+        method_attribute_names.insert(key.clone(), collect_attribute_names(&method.attributes));
+        method_attribute_args.insert(key.clone(), collect_attribute_args(&method.attributes));
         let late_static_return = method
             .return_type
             .as_ref()
@@ -402,7 +428,13 @@ pub(crate) fn insert_enum_metadata(
             }
             static_method_visibilities.insert(key.clone(), method.visibility.clone());
             static_method_declaring_classes.insert(key.clone(), name.to_string());
-            static_method_impl_classes.insert(key, name.to_string());
+            if method.is_abstract {
+                static_method_impl_classes.remove(&key);
+                abstract_static_methods.insert(key);
+            } else {
+                static_method_impl_classes.insert(key.clone(), name.to_string());
+                abstract_static_methods.remove(&key);
+            }
         } else {
             methods.insert(key.clone(), sig);
             if let Some(return_type) = late_static_return {
@@ -410,7 +442,13 @@ pub(crate) fn insert_enum_metadata(
             }
             method_visibilities.insert(key.clone(), method.visibility.clone());
             method_declaring_classes.insert(key.clone(), name.to_string());
-            method_impl_classes.insert(key, name.to_string());
+            if method.is_abstract {
+                method_impl_classes.remove(&key);
+                abstract_methods.insert(key);
+            } else {
+                method_impl_classes.insert(key.clone(), name.to_string());
+                abstract_methods.remove(&key);
+            }
         }
         // Codegen emits both instance and static method bodies from `method_decls`.
         method_decls.push(method);
@@ -469,6 +507,7 @@ pub(crate) fn insert_enum_metadata(
             clone_override_property_storage: false,
             scope_dynamic_property_storage: false,
             constants,
+            constant_order: user_constants.iter().map(|constant| constant.name.clone()).collect(),
             constant_deprecations: user_constants
                 .iter()
                 .filter_map(|constant| {
@@ -483,8 +522,8 @@ pub(crate) fn insert_enum_metadata(
             final_constants,
             attribute_names: Vec::new(),
             attribute_args: Vec::new(),
-            method_attribute_names: HashMap::new(),
-            method_attribute_args: HashMap::new(),
+            method_attribute_names,
+            method_attribute_args,
             property_attribute_names: HashMap::new(),
             property_attribute_args: HashMap::new(),
             constant_attribute_names,
@@ -525,20 +564,14 @@ pub(crate) fn insert_enum_metadata(
             final_methods: HashSet::new(),
             method_declaring_classes,
             method_impl_classes,
-            // Empty on purpose, and empty by what this builder does rather than by a
-            // rule it enforces: it never inspects `method.is_abstract` and inserts every
-            // user method into `method_impl_classes` unconditionally below, so the old
-            // emission-derived inference also answered "not abstract" for all of them.
-            // If this builder ever starts injecting unimplemented interface methods into
-            // `methods`, they need an entry here or they will report as concrete.
-            abstract_methods: HashSet::new(),
+            abstract_methods,
             vtable_methods: Vec::new(),
             vtable_slots: HashMap::new(),
             static_method_visibilities,
             final_static_methods: HashSet::new(),
             static_method_declaring_classes,
             static_method_impl_classes,
-            abstract_static_methods: HashSet::new(),
+            abstract_static_methods,
             static_vtable_methods: Vec::new(),
             static_vtable_slots: HashMap::new(),
             interfaces,

@@ -107,6 +107,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Intval,
     /// Dispatches `is_bool(...)`.
     IsBool,
+    /// Dispatches `is_countable(...)`.
+    IsCountable,
     /// Dispatches `is_double(...)`.
     IsDouble,
     /// Dispatches `is_finite(...)`.
@@ -207,8 +209,6 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Round,
     /// Dispatches `range(...)`.
     Range,
-    /// Dispatches `mb_ereg_match(...)`.
-    MbEregMatch,
     /// Dispatches `preg_match(...)`.
     PregMatch,
     /// Dispatches `preg_match_all(...)`.
@@ -378,6 +378,7 @@ impl EvalDirectHook {
             Self::Hypot => eval_builtin_hypot(args, context, scope, values),
             Self::Intval => eval_builtin_intval(args, context, scope, values),
             Self::IsBool => eval_builtin_is_bool(args, context, scope, values),
+            Self::IsCountable => eval_builtin_is_countable(args, context, scope, values),
             Self::IsDouble => eval_builtin_is_double(args, context, scope, values),
             Self::IsFinite => eval_builtin_is_finite(args, context, scope, values),
             Self::IsFloat => eval_builtin_is_float(args, context, scope, values),
@@ -458,7 +459,6 @@ impl EvalDirectHook {
             Self::Rand => eval_builtin_rand(args, context, scope, values),
             Self::RandomInt => eval_builtin_random_int(args, context, scope, values),
             Self::Round => eval_builtin_round(args, context, scope, values),
-            Self::MbEregMatch => eval_builtin_mb_ereg_match(args, context, scope, values),
             Self::PregMatch => eval_builtin_preg_match(args, context, scope, values),
             Self::PregMatchAll => eval_builtin_preg_match_all(args, context, scope, values),
             Self::PregReplace => eval_builtin_preg_replace(args, context, scope, values),
@@ -550,7 +550,6 @@ impl EvalDirectHook {
             Self::StrWordCount => eval_builtin_str_word_count(args, context, scope, values),
             Self::Iconv => eval_builtin_iconv_call(name, args, context, scope, values),
             Self::Strlen => match name {
-                "mb_strlen" => eval_builtin_mb_strlen(args, context, scope, values),
                 "strlen" => eval_builtin_strlen(args, context, scope, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },

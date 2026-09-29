@@ -34,7 +34,7 @@ pub(crate) fn lower_array_filter(ctx: &mut FunctionContext<'_>, inst: &Instructi
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmp x0, #8");                              // null callbacks select PHP's empty-value filtering
-            ctx.emitter.instruction(&format!("b.eq {null_callback}"));          // omit callback normalization only for null
+            abi::emit_branch_if_equal_wide(ctx.emitter, &null_callback);        // omit callback normalization and its runtime-name case tables
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp rax, 8");                              // null callbacks select PHP's empty-value filtering

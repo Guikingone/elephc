@@ -2,7 +2,7 @@
 title: "opcache_get_status() - internals"
 description: "Compiler internals for opcache_get_status(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 638
+  order: 639
 ---
 
 ## `opcache_get_status()` - internals
@@ -38,7 +38,7 @@ function opcache_get_status(mixed $include_scripts = true): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

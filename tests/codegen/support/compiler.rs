@@ -432,6 +432,7 @@ fn set_fixture_linked_extensions(libraries: &[String]) {
             "elephc_pdo" => Some("PDO"),
             "elephc_crypto" => Some("hash"),
             "elephc_bcmath" => Some("bcmath"),
+            "elephc_mbstring" => Some("mbstring"),
             "elephc_phar" => Some("Phar"),
             "elephc_image" => Some("gd"),
             "elephc_web" => Some("session"),
@@ -747,6 +748,68 @@ pub(crate) fn compile_and_run_with_heap_debug(source: &str) -> ProgramOutput {
     compile_and_run_with_heap_debug_and_asm(source).0
 }
 
+/// Compiles `source` ONCE and runs the binary once per argument vector, returning each run's
+/// stdout and asserting every run exits successfully.
+///
+/// `compile_and_run` always starts the program with no arguments, so `$argc` is 1 and a fixture
+/// whose control flow branches on `$argc` only ever executes one arm. Passing `&[&[], &["x"]]`
+/// runs the same binary at `$argc == 1` and `$argc == 2`, so both arms run under CI.
+pub(crate) fn compile_and_run_per_argv(source: &str, argvs: &[&[&str]]) -> Vec<String> {
+    compile_and_capture_per_argv(source, false, argvs)
+        .into_iter()
+        .zip(argvs)
+        .map(|(output, args)| {
+            assert!(
+                output.success,
+                "binary exited with an error for arguments {:?}\nstdout: {}\nstderr: {}",
+                args,
+                output.stdout,
+                output.stderr
+            );
+            output.stdout
+        })
+        .collect()
+}
+
+/// Heap-debug counterpart of [`compile_and_run_per_argv`]: compiles `source` once with heap
+/// debugging and returns every run's captured output, one per argument vector, without asserting
+/// success, so a fixture can check each arm's output and leak summary.
+pub(crate) fn compile_and_run_with_heap_debug_per_argv(
+    source: &str,
+    argvs: &[&[&str]],
+) -> Vec<ProgramOutput> {
+    compile_and_capture_per_argv(source, true, argvs)
+}
+
+/// Compiles `source` once and captures one run per argument vector.
+fn compile_and_capture_per_argv(
+    source: &str,
+    heap_debug: bool,
+    argvs: &[&[&str]],
+) -> Vec<ProgramOutput> {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_argv_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (user_asm, runtime_asm, required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, heap_debug);
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    let outputs = assemble_and_run_capture_per_argv(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+        argvs,
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    outputs
+}
+
 /// Returns the exact user assembly with a heap-debug fixture's output for target-specific CI diagnostics.
 pub(crate) fn compile_and_run_with_heap_debug_and_asm(source: &str) -> (ProgramOutput, String) {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
@@ -769,6 +832,40 @@ pub(crate) fn compile_and_run_with_heap_debug_and_asm(source: &str) -> (ProgramO
 
     let _ = fs::remove_dir_all(&dir);
     (output, user_asm)
+}
+
+/// Runs a heap-debug fixture with the tagged null representation forced on, whatever
+/// `ELEPHC_NULL_REPR` selects. A fixture about tagged-scalar boxing would otherwise pass
+/// without exercising it when the suite runs under the sentinel representation, where a
+/// nullable int is already boxed.
+pub(crate) fn compile_and_run_with_heap_debug_tagged(source: &str) -> ProgramOutput {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_hd_tagged_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (user_asm, runtime_asm, required_libraries) = compile_source_to_asm_with_defines_repr(
+        source,
+        &dir,
+        &HashSet::new(),
+        8_388_608,
+        false,
+        true,
+        elephc::codegen::NullRepr::Tagged,
+    );
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    let output = assemble_and_run_capture(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    output
 }
 
 // Parses GC statistics from stderr output produced when gc_stats is enabled.

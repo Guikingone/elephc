@@ -191,6 +191,9 @@ pub(super) fn register_eval_native_function(
             &type_spec,
         );
     }
+    if registration.signature.by_ref_return {
+        register_eval_native_function_returns_reference(ctx, context_offset, &name_label, name_len);
+    }
     Ok(())
 }
 
@@ -248,11 +251,14 @@ pub(super) fn emit_eval_native_function_invoker_inline(
     let defaults =
         crate::codegen::runtime_callable_invoker::resolve_invoker_defaults(ctx.module, None, sig);
     let invoker = RuntimeCallableInvoker {
+        mbstring_operation: None,
+        mbstring_variable_ref_warnings: false,
         label: &label,
         sig,
         captures: &captures,
         owns_string_return: ctx.module.functions.iter().find(|function| function.name == name)
             .is_some_and(crate::codegen::runtime_callable_invoker::function_returns_owned_string),
+        php_return_status: true,
         defaults: &defaults,
     };
     let enclosing = ctx.emitter.current_text_section();

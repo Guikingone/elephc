@@ -111,6 +111,24 @@ pub(super) fn eval_reflection_property_set_raw_value_args(
     Ok((args[0], args[1]))
 }
 
+/// Returns whether `method_name` (`$property::get`) names the `get` hook of an abstract or
+/// interface property contract declared `&get`. Such a contract has no accessor method to carry
+/// the by-reference flag, so the declaration answers `ReflectionMethod::returnsReference()`.
+pub(super) fn eval_reflection_get_contract_returns_reference(
+    declaring_class: &str,
+    method_name: &str,
+    context: &ElephcEvalContext,
+) -> bool {
+    let Some((property_name, "get")) = method_name
+        .strip_prefix('$')
+        .and_then(|body| body.rsplit_once("::"))
+    else {
+        return false;
+    };
+    eval_reflection_property_for_hooks(declaring_class, property_name, context)
+        .is_some_and(|(_, property)| property.get_contract_returns_by_ref())
+}
+
 /// Returns the eval property metadata eligible for ReflectionProperty hook APIs.
 pub(super) fn eval_reflection_property_for_hooks(
     declaring_class: &str,
@@ -141,7 +159,8 @@ pub(super) fn eval_reflection_property_for_hooks(
                         .with_abstract_hook_contract(
                             property.requires_get(),
                             property.requires_set(),
-                        );
+                        )
+                        .with_get_contract_returns_by_ref(property.get_returns_by_ref());
                     (declaring_class.to_string(), property)
                 })
         })
@@ -155,7 +174,8 @@ pub(super) fn eval_reflection_property_for_hooks(
                 let property = EvalClassProperty::new(property.name(), None)
                     .with_type(property.property_type().cloned())
                     .with_attributes(property.attributes().to_vec())
-                    .with_abstract_hook_contract(property.requires_get(), property.requires_set());
+                    .with_abstract_hook_contract(property.requires_get(), property.requires_set())
+                    .with_get_contract_returns_by_ref(property.get_returns_by_ref());
                 (owner, property)
             })
         })

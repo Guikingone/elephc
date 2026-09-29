@@ -114,7 +114,15 @@ classes that extend `Exception` or `Error` can implement those user interfaces.
 Classes implementing `ArrayAccess` can use PHP subscript syntax:
 `$obj[$key]` dispatches to `offsetGet()`, `$obj[$key] = $value` dispatches to
 `offsetSet()`, `isset($obj[$key])` dispatches to `offsetExists()`, and
-`unset($obj[$key])` dispatches to `offsetUnset()`.
+`unset($obj[$key])` dispatches to `offsetUnset()`. `empty($obj[$key])` asks
+`offsetExists()` first and calls `offsetGet()` to test the value only when the
+offset exists, evaluating the object and the key once, so `offsetGet()` runs on
+the object `offsetExists()` answered for even if that call replaced the variable
+or property holding it. This holds for variables, `$this`, instance and static
+properties declared with an `ArrayAccess` class type, and call results; a nullable
+receiver holding `null` is empty without either call. A nullable static
+property (`static ?Box $box`) is read as a plain value, so `empty()` on it goes
+straight to `offsetGet()`.
 
 `Serializable` is intentionally not provided: it is deprecated since
 PHP 8.1. Use the `__serialize` / `__unserialize` magic methods instead.
@@ -183,7 +191,7 @@ $target = "Button";
 echo ($item instanceof $target) ? "yes" : "no";     // yes
 ```
 
-The runtime check uses emitted class metadata, so subclasses match parent classes and implemented interfaces. The left-hand side may be a direct object or a boxed `mixed` / nullable / union value; non-object payloads return `false` once any dynamic target has been validated. Supported targets are named classes/interfaces, `self`, `parent`, late-bound `static`, dynamic class/interface strings, and dynamic object expressions.
+The runtime check uses emitted class metadata, so subclasses match parent classes and implemented interfaces. The left-hand side may be a direct object or a boxed `mixed` / nullable / union value; non-object payloads return `false` once any dynamic target has been validated. Supported targets are named classes/interfaces, `self`, `parent`, late-bound `static`, dynamic class/interface strings, and dynamic object expressions. A dynamic target can be any variable expression holding the class name or object, not just a local: `$value instanceof $this->className`, `$value instanceof $map['type']`, `$value instanceof self::$fallback`.
 
 ## Abstract classes
 ```php
@@ -262,6 +270,8 @@ Property type declarations are checked at compile time for both instance and sta
 
 An untyped property with no explicit default (`public $x;`, instance or static) is initialized to `null`, exactly like `public $x = null;` — matching PHP, where untyped properties are implicitly nullable. When later assignments give such a property a concrete scalar or array type, the slot keeps nullable storage (the same layout as a typed `?T` property) so the null default stays observable before the first write; heterogeneous assignments widen the slot to `mixed`. Assignments made inside the class's own constructor initialize the slot before any observable read, so those keep the precise inferred type.
 
+A named `Foo::class` is a compile-time string, so it can be a property default anywhere a string literal can: `public static string $handler = JsonHandler::class;`, or as an array value or key, as in `public array $map = [Square::class => 4]`. `self::class` and `parent::class` defaults are not supported yet (#1351).
+
 Property default values are applied both for the normal `new ClassName()` form and for dynamic `new $variable()` instantiation (and therefore for runtime-instantiated stream wrappers and stream filters). When the class name resolves to a known class, dynamic instantiation follows the same allocation path as direct construction, so constructor arguments are evaluated and `__construct` runs normally.
 
 An `array`-typed (or untyped) property may take an associative literal default such as `['a' => 1]`. The property is then stored as an associative array, so string-key reads and writes (`$this->data['a']`, `$this->data[$key]`) type-check and run like any other associative array. A positional literal default (`[1, 2, 3]`) keeps integer-keyed list storage.
@@ -310,6 +320,7 @@ Rules:
 - The property must be typed, and the modifier is not allowed on static properties.
 - Indirect writes through an array element (`$obj->items[] = x`, `$obj->items['k'] = x`) are writes too, so they honor the `set` visibility — not the (wider) read visibility.
 - Abstract and interface property hook contracts may carry asymmetric write visibility on writable (`{ set; }`) contracts. `private(set)` contracts are final and cannot be implemented or redeclared by a concrete child property.
+- Promoted constructor properties accept the same modifiers (`public private(set) int $x`, `protected(set) readonly string $label`), with the same rules, write checks, and Reflection flags as the equivalent declared property. See [Constructor](#constructor).
 
 ### Property redeclaration
 
@@ -491,6 +502,22 @@ echo $user->name();  // Ada
 ```
 
 Promoted properties support `public`, `protected`, `private`, `readonly`, nullable and union type declarations, constructor parameter defaults, and by-reference parameters. Variadic promotion is rejected, matching PHP.
+
+Promoted properties also accept PHP 8.4 [asymmetric visibility](#asymmetric-visibility-privateset). A `(set)` modifier alone is enough to promote the parameter, and it leaves the read visibility at `public`:
+
+```php
+<?php
+class Money {
+    public function __construct(
+        private(set) int $amount,                  // read: public, write: private
+        public protected(set) string $currency = "EUR",
+    ) {}
+}
+
+$m = new Money(5);
+echo $m->amount;    // 5
+// $m->amount = 9;  // rejected: write is private
+```
 
 By-reference promoted properties are supported when the constructor argument is a variable:
 
@@ -867,7 +894,7 @@ echo sqlSortKeyword(SortDirection::Descending); // DESC
 - `__set($name, $value)` — writing an undeclared property
 - `__isset($name)` — `isset()`/`empty()` on an undeclared or inaccessible property
 - `__unset($name)` — `unset()` of an undeclared or inaccessible property
-- `__invoke(...$args)` — calling an object directly
+- `__invoke(...$args)` — calling an object directly, including `$this(...)` from inside its own class. The class that contains `$this(...)` must declare or inherit `__invoke`: an abstract parent that relies on a subclass's `__invoke` is refused at compile time, where PHP resolves it at run time
 - `__call($name, $args)` — intercepting missing instance methods
 - `__callStatic($name, $args)` — intercepting missing static methods
 
@@ -1117,7 +1144,7 @@ Rules and notes:
 
 ## Attributes
 
-PHP 8.0 attributes (`#[Name]`) decorate declarations. elephc parses attributes at every site PHP allows: classes, interfaces, traits, enums, enum cases, top-level functions, methods, properties, function/method/closure parameters (incl. promoted constructor params), closures, and arrow functions. Class, function, method, property, and method-parameter attributes have limited runtime reflection through the helpers below; attributes on other declaration sites are currently validated for syntax and kept only in the AST.
+PHP 8.0 attributes (`#[Name]`) decorate declarations. elephc parses attributes at every site PHP allows: classes, interfaces, traits, enums, enum cases, top-level functions, methods, properties, function/method/closure parameters (incl. promoted constructor params), closures, and arrow functions. Class, enum, function, method, property, class-constant, enum-case, and function/method-parameter attributes have limited runtime reflection through the helpers below; attributes on other declaration sites are currently validated for syntax and kept only in the AST.
 
 ```php
 <?php
@@ -1270,21 +1297,25 @@ echo $class->getAttributes(Route::class)[0]->newInstance()->path, "\n"; // /home
 
 The filter compares class names the way PHP does — folding ASCII case, without resolving a leading separator — so `getAttributes("markerone")` finds `#[MarkerOne]` and `getAttributes("\MarkerOne")` finds nothing.
 
-`$flags` is accepted so the signature matches PHP, but only the default `0` (filter by exact class name) is implemented. `ReflectionAttribute::IS_INSTANCEOF` widens the filter to subclasses and implemented interfaces, and deciding that needs a subclass test on a class name the compiled program only has as a runtime string. AOT `is_subclass_of()` accepts a literal class name, but returns `false` when the name is only known at runtime; `class_parents()`, `class_implements()` and `class_exists()` reject a non-literal name. Rather than quietly returning a subset of PHP's answer, elephc refuses the call:
+`$flags` follows PHP's rules. `0`, the default, filters by exact class name. Any value other than `0` and `ReflectionAttribute::IS_INSTANCEOF` raises PHP's `ValueError`, whatever `$name` holds, naming the class that declares the method (`ReflectionFunctionAbstract` for `ReflectionFunction` and `ReflectionMethod`, `ReflectionClassConstant` for enum cases):
 
 ```
-error: ReflectionClass::getAttributes(): the $flags argument is not supported yet — ReflectionAttribute::IS_INSTANCEOF needs a subclass test on a class name known only at runtime, and AOT mode has no name-keyed class hierarchy query
+ValueError: ReflectionClass::getAttributes(): Argument #2 ($flags) must be a valid attribute filter flag
 ```
 
-Refusing everything but `0` costs nothing in fidelity: PHP itself accepts only `0` and `ReflectionAttribute::IS_INSTANCEOF`, and raises `ValueError: Argument #2 ($flags) must be a valid attribute filter flag` for any other value. So the one valid call elephc turns away is the `IS_INSTANCEOF` one.
+`ReflectionAttribute::IS_INSTANCEOF` widens the filter to subclasses and implemented interfaces, and deciding that needs a subclass test on a class name the compiled program only has as a runtime string. No AOT builtin answers one: `is_subclass_of()` reports `false` for a string first argument, and `class_parents()`, `class_implements()` and `class_exists()` reject a non-literal name. Rather than quietly returning a subset of PHP's answer, elephc refuses it. A call that provably asks for it (the flag folds to `IS_INSTANCEOF` and `$name` is a string literal, a `::class` fetch, or a concatenation) is a compile error in every spelling where the argument list is visible: positional, named (`flags: 2`), a literal or static associative spread, and a call on a `mixed` receiver that can only dispatch to a Reflection owner:
 
-The compile-time refusal covers every spelling where the argument list is visible: positional, named (`flags: 2`), and through a spread. A STATIC associative spread — `getAttributes(...['name' => M::class, 'flags' => 0])` — is expanded into named arguments by the shared call planner first and then read like any other list, so it is accepted on the same terms. A spread whose contents are a runtime array is refused, because nothing there can tell `$flags` from absent — pass those arguments positionally, and a call on a `mixed` receiver that could dispatch to a Reflection owner at runtime. Three spellings are allowed through, because PHP answers them without any subclass test: a `null` name, no name at all (`getAttributes(flags: 2)` — an absent `$name` is null, so nothing is filtered), and a `$flags` that folds to `0`, including a literal `false`.
+```
+error: ReflectionClass::getAttributes(): the $flags argument is not supported yet: ReflectionAttribute::IS_INSTANCEOF needs a subclass test on a class name known only at runtime, and AOT mode has no name-keyed class hierarchy query
+```
 
-Some spellings hand the method its arguments with no visible list — a first-class callable (`$r->getAttributes(...)`), `call_user_func_array([$r, 'getAttributes'], $args)`, and a dynamic method name (`$r->$m(...)`), which PHP-level dispatch resolves only at runtime. There the method itself throws:
+Every other spelling compiles and the method checks the flag when it runs: a flag held in a variable, a spread of a runtime array, a first-class callable (`$r->getAttributes(...)`), `call_user_func_array([$r, 'getAttributes'], $args)`, and a dynamic method name (`$r->$m(...)`). A runtime `0` filters by name, a null `$name` filters nothing and ignores the flag as PHP does, an invalid flag raises the `ValueError` above, and `IS_INSTANCEOF` next to a name throws:
 
 ```
 PHP Fatal error: Uncaught ReflectionException: ReflectionAttribute::IS_INSTANCEOF is not supported yet: it needs a subclass test on a class name known only at runtime, and AOT mode has no name-keyed class hierarchy query
 ```
+
+A literal `null` flag is refused at compile time: PHP coerces it to `0` behind a deprecation notice, which the call does not model, so pass `0` (or `false`) or omit the argument.
 
 `ReflectionAttribute` is a final synthetic built-in class with `getName(): string`, `getArguments(): array`, and `newInstance(): mixed` methods. It is populated internally by `class_get_attributes()` and the supported Reflection lookups and cannot be constructed or populated directly from user code; its metadata slots are private. `getArguments()` returns the same `array<int|string, mixed>` shape as `class_attribute_args()`. `newInstance()` constructs the attribute class on demand when the attribute class exists in the program and the captured positional or named arguments are supported literals:
 
@@ -1358,12 +1389,13 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionClass::newInstanceWithoutConstructor()` | `new ReflectionClass($class_name)` | Allocate an instance of the reflected class without running `__construct()` |
 | `ReflectionClass::getAttributes()` | `new ReflectionClass($class_name)` | Return `ReflectionAttribute` objects for class attributes, optionally filtered to one attribute class by `$name` |
 | `ReflectionObject::*` inherited class metadata methods | `new ReflectionObject($object)` | Return the same reflected class metadata as `ReflectionClass`, with the reflected class taken from the object's runtime class id |
+| `ReflectionEnum::getAttributes()` | `new ReflectionEnum($enum_name)` | Return `ReflectionAttribute` objects for the enum's own attributes, optionally filtered to one attribute class by `$name` |
 | `ReflectionEnum::isBacked()` / `getBackingType()` | `new ReflectionEnum($enum_name)` | Return whether the reflected enum is backed and expose `int`/`string` backing metadata as `ReflectionNamedType` |
 | `ReflectionEnum::hasCase()` / `getCase()` / `getCases()` | Eval-backed `new ReflectionEnum($enum_name)` | Return enum-case presence and `ReflectionEnumUnitCase` / `ReflectionEnumBackedCase` objects for eval-declared enum cases |
 | `ReflectionFunction::getName()` | `new ReflectionFunction($function_name)` | Return the canonical user or supported callable-builtin function name |
 | `ReflectionFunction::getShortName()` / `getNamespaceName()` / `inNamespace()` | `new ReflectionFunction($function_name)` | Return namespace-aware name metadata for the reflected user or supported callable-builtin function |
 | `ReflectionFunction::isInternal()` / `isUserDefined()` | `new ReflectionFunction($function_name)` | Return origin predicates for supported reflected functions |
-| `ReflectionFunction::isClosure()` / `isDeprecated()` / `returnsReference()` / `isGenerator()` | `new ReflectionFunction($function_name)` | Return retained function predicates; AOT reflection reports `false` for closures, reports return-by-reference from the function declaration, uses `#[Deprecated]` metadata, and reports generator functions from lowered generator flags |
+| `ReflectionFunction::isClosure()` / `isDeprecated()` / `returnsReference()` / `isGenerator()` | `new ReflectionFunction($function_name)` | Return retained function predicates; AOT reflection reports `false` for closures, derives `returnsReference()` from the function's declared return-by-reference flag, uses `#[Deprecated]` metadata, and reports generator functions from lowered generator flags |
 | `ReflectionFunction::hasTentativeReturnType()` / `getTentativeReturnType()` / `isDisabled()` | `new ReflectionFunction($function_name)` | Return PHP-compatible defaults for supported functions: no tentative return type and not disabled |
 | `ReflectionFunction::getAttributes()` | `new ReflectionFunction($function_name)` | Return `ReflectionAttribute` objects for function attributes, optionally filtered to one attribute class by `$name` |
 | `ReflectionFunction::getParameters()` | `new ReflectionFunction($function_name)` | Return `ReflectionParameter` objects for the reflected function parameters |
@@ -1376,7 +1408,7 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionMethod::getName()` | `new ReflectionMethod($class_name, $method_name)` or deprecated `new ReflectionMethod("ClassName::method")` | Return the reflected method name, as DECLARED: lookup is case-insensitive, so `new ReflectionMethod(Box::class, "mAtCh")` finds a method written `Match` and reports `Match`, not the lookup text. Every path agrees — the constructor, `ReflectionClass::getMethod()`/`getMethods()`, `getPrototype()`, a parameter's `getDeclaringFunction()`, `get_class_methods()`, and the same reflection inside `eval()` |
 | `ReflectionMethod::getShortName()` / `getNamespaceName()` / `inNamespace()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Return PHP method-name metadata; methods report an empty namespace and `false` for `inNamespace()` |
 | `ReflectionMethod::isInternal()` / `isUserDefined()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Return origin predicates for supported reflected methods |
-| `ReflectionMethod::isClosure()` / `isDeprecated()` / `returnsReference()` / `isGenerator()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Return retained method predicates; AOT reflection reports `false` for closures, reports return-by-reference from the method declaration, uses `#[Deprecated]` metadata, and reports generator methods from lowered generator flags |
+| `ReflectionMethod::isClosure()` / `isDeprecated()` / `returnsReference()` / `isGenerator()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Return retained method predicates; AOT reflection reports `false` for closures, derives `returnsReference()` from the method's declared return-by-reference flag for class, interface, and trait methods (reflected on the trait itself or on a class that uses it) and from a property's `&get` hook declaration, uses `#[Deprecated]` metadata, and reports generator methods from lowered generator flags |
 | `ReflectionMethod::hasTentativeReturnType()` / `getTentativeReturnType()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Return PHP-compatible defaults for supported user methods: no tentative return type |
 | `ReflectionMethod::hasPrototype()` / `getPrototype()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Return retained parent/interface prototype metadata for supported reflected method overrides and interface implementations |
 | `ReflectionMethod::getDeclaringClass()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Return a `ReflectionClass` object for the class-like symbol that declares the reflected method |
@@ -1610,4 +1642,4 @@ Constants are inherited from parents and implemented interfaces (transitively). 
 - Backed property hooks may read and write their own backing slot.
 - `unset()` is supported on typed declared properties (the slot becomes uninitialized), untyped fixed properties selected by reachable removal paths (the slot carries an internal removed marker), and dynamic properties (`stdClass`, undeclared names on `#[AllowDynamicProperties]` classes, where the entry is removed). It is rejected on by-reference properties, packed fields, and dynamic names of a class that also declares `__unset()`. See "`unset()` limitations" above.
 - Class constants must be literal-or-foldable expressions; cyclic constant references are not supported.
-- Class and function attribute names and supported literal args are exposed at runtime through `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and the supported `ReflectionClass`/`ReflectionFunction`/`ReflectionMethod`/`ReflectionProperty`/`ReflectionClassConstant`/`ReflectionEnumUnitCase`/`ReflectionEnumBackedCase::getAttributes()` APIs; function and method parameter names, counts, positions, optional/variadic/by-reference flags, declared-type presence, simple named, union, and intersection type metadata, function and method parameter attributes, supported scalar/null/class-constant/array/object parameter defaults, parameter declaring-class/function metadata, and reflected member/constant declaring-class metadata are exposed through the supported Reflection APIs. `#[\Override]`, `#[\Deprecated]`, and `#[\AllowDynamicProperties]` are enforced/diagnosed/honored at compile time and runtime; `#[\SensitiveParameter]` is parsed but not yet propagated to stack traces.
+- Class and function attribute names and supported literal args are exposed at runtime through `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and the supported `ReflectionClass`/`ReflectionObject`/`ReflectionEnum`/`ReflectionFunction`/`ReflectionMethod`/`ReflectionProperty`/`ReflectionParameter`/`ReflectionClassConstant`/`ReflectionEnumUnitCase`/`ReflectionEnumBackedCase::getAttributes()` APIs; function and method parameter names, counts, positions, optional/variadic/by-reference flags, declared-type presence, simple named, union, and intersection type metadata, function and method parameter attributes, supported scalar/null/class-constant/array/object parameter defaults, parameter declaring-class/function metadata, and reflected member/constant declaring-class metadata are exposed through the supported Reflection APIs. `#[\Override]`, `#[\Deprecated]`, and `#[\AllowDynamicProperties]` are enforced/diagnosed/honored at compile time and runtime; `#[\SensitiveParameter]` is parsed but not yet propagated to stack traces.

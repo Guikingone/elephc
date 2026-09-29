@@ -17,11 +17,12 @@ sidebar:
 | `sleep()` | `sleep($seconds): int` | Sleep for seconds |
 | `usleep()` | `usleep($microseconds): void` | Sleep for microseconds |
 | `getenv()` | `getenv($name = null, $local_only = false): string\|array\|false` | Get one environment variable, or — with no argument — the whole environment as a string-keyed array. Answers `false` for a name that is not set, and `""` for one set to the empty string. `$local_only` is accepted and has no effect: there is no environment here separate from the process's |
-| `putenv()` | `putenv($assignment): bool` | Set an environment variable (`KEY=VALUE`), or remove it when the argument has no `=` |
+| `putenv()` | `putenv($assignment): bool` | Set an environment variable (`KEY=VALUE`), or remove it when the argument has no `=`. Answers the platform's own status, so `false` when libc refuses the change |
 | `define()` | `define($name, $value): bool` | Define a compile-time global constant with a string-literal name |
 | `defined()` | `defined($name): bool` | Check whether a string-literal global or `Class::CONST` name is defined |
 | `constant()` | `constant($name): mixed` | Value of a global constant named by a string literal. AOT has no runtime constant table, so a dynamic name, a `Foo::BAR` class constant, and an unknown name are compile errors |
 | `php_uname()` | `php_uname($mode = "a"): string` | Get system information from the target runtime |
+| `getmypid()` | `getmypid(): int` | The current process ID, read from `getpid()` on every call, so a `pcntl_fork()` child reports its own id |
 | `phpversion()` | `phpversion(?string $extension = null): string\|false` | Get the targeted PHP language version, or one extension's version (`false` if it is not loaded) |
 | `zend_version()` | `zend_version(): string` | Get the Zend Engine version for the compile target |
 | `php_sapi_name()` | `php_sapi_name(): string` | Get the SAPI name (`"cli"`, or `"cli-server"` under `--web`) |
@@ -85,6 +86,11 @@ putenv("LATE=1");
 var_dump(getenv("LATE"));        // string(1) "1"
 var_dump(isset($_ENV["LATE"]));  // bool(false)
 ```
+
+Code run by `eval()` sees the same superglobals from every scope. A fragment
+that names one the compiled program never spelled gets it created with these
+same contents when the fragment starts; see
+[Scope behavior](eval.md#scope-behavior) for how such a value is shared.
 
 #### Known limitation
 
@@ -474,7 +480,7 @@ wrappers are documented in [Streams](streams.md).
 
 > The 13 `stat()` / `lstat()` / `fstat()` fields are inserted in PHP's documented order. Check the return value against `false` before reading fields when the path or stream may be invalid.
 
-> On a registered userspace stream wrapper path (`scheme://…`), the stat family dispatches to the wrapper's `url_stat()` method instead of the filesystem: `stat()`, `lstat()`, `file_exists()`, `filesize()`, `filemtime()`, `is_file()`, `is_dir()`, `is_readable()`, `is_writable()`, `is_writeable()`, and `is_executable()` all consult the wrapper, handing it the same `STREAM_URL_STAT_*` flag values PHP passes. The permission predicates follow PHP's single-triad rule: the owner bits when the reported `uid` matches the process uid, the group bits when the reported `gid` matches the process gid or a supplementary group, the world bits otherwise. See [Streams](streams.md) for wrapper registration.
+> On a registered userspace stream wrapper path (`scheme://…`), the stat family dispatches to the wrapper's `url_stat()` method instead of the filesystem: `stat()`, `lstat()`, `file_exists()`, `filesize()`, `filemtime()`, `fileatime()`, `filectime()`, `fileperms()`, `fileowner()`, `filegroup()`, `fileinode()`, `is_file()`, `is_dir()`, `is_readable()`, `is_writable()`, `is_writeable()`, and `is_executable()` all consult the wrapper, handing it the same `STREAM_URL_STAT_*` flag values PHP passes. The integer getters read the matching `url_stat()` key (`size`, `mtime`, `atime`, `ctime`, `mode`, `uid`, `gid`, `ino`) and return `false` when the wrapper reports the path absent. The permission predicates follow PHP's single-triad rule: the owner bits when the reported `uid` matches the process uid, the group bits when the reported `gid` matches the process gid or a supplementary group, the world bits otherwise. See [Streams](streams.md) for wrapper registration.
 
 ## Path manipulation
 

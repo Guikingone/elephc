@@ -191,6 +191,15 @@ property slot stores the payload at its slot offset and the runtime tag at `offs
 and its literal default must be written as that same `{payload, tag}` pair rather than as
 a pointer to a boxed Mixed cell.
 
+**A tagged scalar reaching a `mixed` parameter must be boxed, and the decision is made on the
+REPRESENTATION rather than the declared type.** `int|null` is the one union
+`PhpType::codegen_repr()` does not map to `Mixed`, so a helper that matches
+`PhpType::Mixed | PhpType::Union(_)` as "already boxed" silently covers it too and emits nothing.
+The callee then reads the raw payload word as a Mixed pointer, and the caller's own
+`__rt_decref_mixed` runs on it — measured as a segfault on `var_export($nullableInt)` whether the
+value held an integer or null (#1040). The same shape is worth checking at any other match arm
+that treats a union as boxed.
+
 ### Pointer values
 
 Pointers are stored as raw 64-bit addresses. An opaque pointer and a typed `ptr<T>` value have the same runtime representation; the type tag only exists in the checker. Null pointers use address `0x0`, and dereference helpers explicitly trap on null via `__rt_ptr_check_nonnull`.
@@ -738,22 +747,24 @@ Indexed arrays and associative arrays now follow **shared-until-modified** seman
 3. If the refcount is already 1, the write proceeds in place
 4. If the refcount is greater than 1, the runtime clones the container structure, retains nested heap-backed children (or re-persists immutable strings/keys), decrements the mutator's old owner slot, rewrites the mutating owner to the clone, and only then performs the write
 
+For hashes, these comparisons use the logical PHP owner count: the physical reference count minus the header's internal lifetime pins. Pins retain storage through callbacks without introducing an extra PHP value owner.
+
 This is what lets PHP-style code such as `$b = $a; $b[0] = 9;` leave `$a` unchanged without requiring deep copies on every assignment. Nested arrays and hashes remain shallow-shared until their own first mutation.
 
-Because both the split in step 4 and any growth relocate the container, a mutating builtin has to publish the new pointer back into the place its receiver was READ from. A plain local is its own frame slot; a **by-reference parameter** is read through a reference cell and must be republished through that cell. Missing that write-back is not a leak but a wrong answer: the caller keeps the pre-split container (so the mutation is invisible) or, after a growth, a pointer into storage the reallocation already freed.
+Copy-on-write splitting and indexed-array growth can relocate the container, so a mutating builtin must publish the returned pointer back into the place its receiver was read from. A plain local is its own frame slot; a **by-reference parameter** is read through a reference cell and must be republished through that cell. Hash growth preserves the separated header and replaces its entry allocation, but callers must still publish the result because the initial copy-on-write split may have changed the header.
 
 ## Hash table layout (associative arrays)
 
 Associative arrays use a separate heap-allocated structure: an open-addressing hash table for lookup plus an insertion-order linked list threaded through the entries.
 
-### Header (40 bytes)
+### Stable header (64 bytes)
 
 ```
-┌──────────┬──────────┬──────────┬──────────┬──────────┐
-│  count   │ capacity │ val_type │   head   │   tail   │
-│ (8 bytes)│ (8 bytes)│ (8 bytes)│ (8 bytes)│ (8 bytes)│
-└──────────┴──────────┴──────────┴──────────┴──────────┘
- offset+0   offset+8   offset+16  offset+24  offset+32
+┌──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┐
+│  count   │ capacity │ val_type │   head   │   tail   │ entries  │   pins   │next_index│
+│ (8 bytes)│ (8 bytes)│ (8 bytes)│ (8 bytes)│ (8 bytes)│ (pointer)│ (8 bytes)│ (8 bytes)│
+└──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┘
+ offset+0   offset+8   offset+16  offset+24  offset+32  offset+40  offset+48  offset+56
 ```
 
 | Field | Size | Description |
@@ -763,10 +774,31 @@ Associative arrays use a separate heap-allocated structure: an open-addressing h
 | `val_type` | 8 bytes | Coarse value-type summary (0=int, 1=str, 2=float, 3=bool, 4=array, 5=assoc, 6=object, 7=mixed, 8=null) |
 | `head` | 8 bytes | Slot index of the first inserted entry, or `-1` when empty |
 | `tail` | 8 bytes | Slot index of the most recently inserted entry, or `-1` when empty |
+| `entries` | 8 bytes | Sole-owned pointer to a separate raw heap allocation containing the slots |
+| `pins` | 8 bytes | Internal lifetime roots included in the physical refcount but excluded from PHP copy-on-write ownership |
+| `next_index` | 8 bytes | Signed next automatic integer key; initially `PHP_INT_MIN`, advancing on integer insertion and saturating at `PHP_INT_MAX` |
+
+Deleting an entry preserves `next_index`. Growth keeps the counter in the stable header, and COW clones copy it even when the highest inserted key is gone. Typed EIR, boxed Mixed, and eval appends consume the same native index rule. A never-indexed hash appends at zero; subsequent negative keys follow PHP's signed successor rule. At saturation, the maximum key can be reused after `unset`, but an occupied maximum raises `Error`. The nonthrowing `__rt_hash_try_next_index` probe reports the same exhaustion condition for native query registration.
+
+Eval reconstructs an unset array as a hash, preserving integer gaps and copying exact index history after the retained entries. Its index callback returns a status without unwinding through Rust; Magician evaluates the RHS before choosing an index and schedules exhaustion through its own exception context. Zend `zval` packing and unpacking preserve the same counter in `nNextFreeElement`.
+
+The header carries the associative array's reference count and heap kind. Entry storage has raw heap kind `0`; the garbage collector reaches its PHP values through the owning header. Deep release frees keys and values, then the entry allocation, then the header. Both allocations participate in heap accounting.
+
+`__rt_hash_pin` retains one physical root and increments `pins`. `__rt_hash_unpin` removes the pin before releasing that root, so final release uses ordinary deep cleanup and may invoke destructors. Each pin must have one matching unpin. A pin keeps the hash reachable during cycle collection without changing ordinary PHP copy-on-write decisions. New hashes and COW clones start with zero pins; growth preserves the original header's pin count.
+
+`__rt_hash_grow` first applies ordinary copy-on-write separation. Rehashing then replaces only the entry allocation. Internal construction writers can use `__rt_hash_grow_owned` to preserve aliases intentionally exposed while an output array is being initialized. This entry skips separation and must not be used for ordinary PHP array writes. Borrowed entry addresses must be reacquired after mutation.
+
+The query-construction removal primitive, `__rt_mbstring_query_hash_remove`, pins its selected root, detaches the entry's key/value owners, repairs insertion-order links, and publishes the tombstone and updated count before invoking destructors. It preserves automatic-index history and exposed root aliases. A write-guard claim prevents double release when an enclosing construction destructor already owns the removed value. Detached owners and the final pin are released through `__rt_cleanup_call`; pending exceptions are returned after cleanup. The helper never accesses the removed entry after callbacks, so destructor insertions, growth, and retargeting remain intact.
+
+`__rt_mbstring_query_hash_enter` returns one lifetime pin on a writable child hash. It preserves a unique child reached through unique ordinary Mixed boxes, excluding existing lifetime pins from PHP ownership. A shared box, shared child, or active write-guard borrow requires a shallow child copy. Persistent PHP reference wrappers are replaced by empty arrays for query entry; they are not traversed as ordinary storage. Dense children are promoted to hashes with retained contents. Replacements use `__rt_mbstring_query_hash_store_array`, the owned-array entry into the shared guarded construction writer. The child is pinned before old-value destruction, and its cursor remains valid after parent retargeting or pending cleanup. The caller must release that returned pin, including after status two.
+
+`__rt_mbstring_query_register` forwards the V5 host's normalized field plan to the shared Rust `elephc_mbstring_query_apply_v1` executor with a versioned native storage table. The executor transfers each newly pinned child before releasing its parent cursor. A failed append probe stops the field before any later nesting-limit removal. For root removal, it first releases the nested cursor, then resolves the writer's live root again so destructor retargeting remains visible. It reports nesting overflow only when that removal instruction is reached. Pending exceptions preserve completed mutations and are returned after every published cursor is released through protected cleanup; fatal storage statuses stop execution. Root selection ignores non-array values and reports unsupported shared indexed promotion as a failure. The native callback remains an internal integration boundary until the public query configuration and output-lvalue adapters are complete.
+
+The complete native query host is `__rt_mbstring_query_invoke`. Its V5 table shares argument cloning/pinning, destructive reference initialization, diagnostics, result materialization, and request-lifetime adoption of displaced values with the V4 capture host. `MbNativeQueryV1` begins with the existing 16-byte capture state, followed by an independent policy context and configuration/filter pointers. The caller keeps this 40-byte record and its context alive and immutable through the call, except for the capture prefix's displaced-owner slot. A missing configuration callback disables query output before argument cloning or initialization; an absent filter selects identity filtering. Configuration and filtering receive their policy context, while ordinary value callbacks retain the original eval context. Owned policy-result leases must be compatible with the native host's existing release callback; static borrowed bytes can use a null owner. The non-unwinding invocation returns value/status/length/kind after cleanup. `__rt_mbstring_query_native` propagates a pending PHP exception only after that shared call returns. Public INI routing, caller argument guards, and PHP lvalue binding remain separate integration requirements.
 
 ### Entries (64 bytes each)
 
-Starting at offset +40, each slot is 64 bytes:
+Starting at the pointer stored at header offset `+40`, each slot is 64 bytes:
 
 ```
 ┌──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┐
@@ -790,7 +822,7 @@ Starting at offset +40, each slot is 64 bytes:
 
 String keys are normalized before lookup or insertion: PHP integer-form numeric strings become integer keys, while leading-zero strings such as `"01"` remain string keys. String keys are hashed with **FNV-1a** (fast, good distribution for short strings); integer keys use a scalar integer mix. Collisions are resolved by **linear probing** — if slot `hash % capacity` is occupied, try `(hash + 1) % capacity`, and so on.
 
-Entry address: `base + 40 + (slot_index × 64)`
+Entry address: `load_pointer(base + 40) + (slot_index × 64)`. Codegen and runtime readers share this calculation through `hash_layout`.
 
 ### Iteration order
 
@@ -806,7 +838,7 @@ Lookup still probes physical buckets, but iteration walks the `head -> next -> .
 
 | | Indexed array | Associative array |
 |---|---|---|
-| Header | 24 bytes | 40 bytes |
+| Header | 24 bytes | 64 bytes, with separate entry storage |
 | Element size | 8 or 16 bytes | 64 bytes (fixed) |
 | Access | O(1) by index | O(1) average by hash |
 | Iteration | Sequential | Insertion-order linked walk over occupied slots |
@@ -1010,7 +1042,7 @@ Converting a boxed `Mixed` value into a concrete scalar, string, or object prope
 | Fill element count | `array_fill()` sizes its result from `$count` | A `$count` past `INT_MAX` (2147483647) never reaches the allocator: the lowering guard raises reference PHP's catchable `ValueError` ("array_fill(): Argument #2 ($count) is too large"). Counts at or below the bound whose payload does not fit the heap still report "Fatal error: heap memory exhausted", which is what reference PHP reports as a memory-limit fatal too |
 | Buffer length | Fixed at `buffer_new<T>()` | A negative length, or a `length * stride` that does not fit in a non-negative machine word, aborts with "Fatal error: buffer_new() length is negative or exceeds the maximum buffer size" |
 | C-string buffers | `_cstr_buf`, `_cstr_buf2` = 4KB each, `_empty_str` = 1 byte | Long converted paths/strings are truncated to buffer size; `_empty_str` is a safe zero-length string pointer |
-| File descriptor state | `_eof_flags`, `_stream_read_filters`, `_stream_write_filters` = 256 bytes each; `_popen_files`, `_dir_handles`, `_glob_handles`, `_zstream_handles`, `_bzstream_handles`, `_iconv_handles`, `_tls_sessions`, `_stream_chunk_size` = 2048 bytes each | Per-fd stream, process, directory, compression, iconv, TLS, and chunk-size bookkeeping for up to 256 descriptors |
+| File descriptor state | `_eof_flags`, `_stream_read_filters`, `_stream_write_filters` = 256 bytes each; `_popen_files`, `_dir_handles`, `_glob_handles`, `_zstream_handles`, `_bzstream_handles`, `_iconv_handles`, `_tls_sessions`, `_stream_chunk_size` = 2048 bytes each; on Apple targets only, `_iconv_write_options` = 256 bytes | Per-fd stream, process, directory, compression, iconv, TLS, and chunk-size bookkeeping for up to 256 descriptors; `_iconv_write_options` holds each `convert.iconv` write filter's own `//TRANSLIT`/`//IGNORE` bits |
 | Stream filter scratch | `_stream_filter_buf`, `_stream_grow_scratch` = 64KB each | Scratch space for stream filters, including length-growing filters such as base64 and quoted-printable encoders |
 | Stream context and callbacks | `_stream_context_options`, `_stream_notification_callback`, `_stream_connect_host`, `_stream_open_opened_path_scratch`, `_url_stat_matched` | Current stream-context options hash, notification callback, TLS peer host, wrapper opened-path scratch, and wrapper url_stat match flag |
 | TLS, compression, iconv, curl, crypto, and BCMath function slots | `_elephc_tls_*_fn`, `_zlib_*_fn`, `_bz2_*_fn`, `_phar_zlib_*_fn`, `_phar_bz2_*_fn`, `_iconv_*_fn`, `_elephc_iconv_*_fn`, `_elephc_curl_*_fn`, `_elephc_crypto_*_fn`, `_elephc_bcmath_*_fn` = 8 bytes per slot | Late-bound function pointers keep optional native support pay-for-use and are published only when the corresponding bridge is linked |
@@ -1057,6 +1089,7 @@ The property-write caller has a leak of its own that this does not reach — thr
 - **General function epilogues** do not blanket-decref all heap locals. They now selectively clean up slots proven `Owned`, and exhaustive `if` / `elseif` / `else` branches can restore that cleanup when every fallthrough branch directly assigns the same heap-backed type to the same local. More dynamic borrowed/control-flow paths still remain excluded on purpose
 - **Container-copying builtins** no longer blindly duplicate borrowed heap handles for common nested payload paths: refcounted runtime variants now retain values before new arrays/hash tables take ownership (`array` literals with spreads, `array_merge`, `array_chunk`, `array_slice`, `array_reverse`, `array_pad`, `array_unique`, `array_splice`, `array_diff`, `array_intersect`, `array_filter`, `array_fill`, `array_combine`, `array_fill_keys`)
 - **Regression coverage now explicitly exercises** local aliases, borrowed nested-container returns, `Owned`/`Borrowed` control-flow merges, and scope-exit paths so future ownership work has focused tripwires instead of relying only on large end-to-end suites
+- **Copies during protected destruction** can observe a Mixed cell whose last owner has already transferred to child release. `__rt_reference_array_copy` clones that borrowed cell's PHP value instead of retaining its zero-owner storage. Hash copies can retain an object whose destructor is active and read it after the original capture completes. Copying nested containers already partway through their own child destruction remains incomplete.
 - **Raw/off-heap ownership cycles** are still outside the collector. `ptr` values, extern-managed buffers, and raw helper allocations (`kind=0`) are not traversed just because an address exists somewhere
 - **Kind-0 resources** (generic/unknown resource kind, including synthetic user-wrapper handles `>= 0x40000000`) are not auto-freed by the Mixed deep-free path — their lifecycle remains managed by the wrapper layer or the user's explicit `close()` call. Kinds 1–4 (native stream fd, HashContext, `popen` pipe, `opendir` stream) are auto-released at scope exit
 - **HashContext reuse after `hash_final()`** is memory-safe but not PHP-equivalent: `elephc_crypto_final` finalizes a *clone* and leaves the original handle live and owned by its Mixed box, so the box's kind-2 destructor frees it exactly once. A second `hash_final()` or a `hash_update()`/`hash_copy()` on the same handle therefore does not double-free or use-after-free (where PHP throws "Supplied resource is not a valid Hash Context resource"), it simply keeps hashing the still-live context (documented in `src/codegen_support/runtime/strings/hash_context.rs`)

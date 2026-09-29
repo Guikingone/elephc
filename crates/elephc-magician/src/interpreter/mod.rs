@@ -12,6 +12,10 @@
 //!   to `RuntimeValueOps`, which will be backed by elephc runtime hooks.
 
 mod array_literals;
+mod call_argument_owners;
+
+use call_argument_owners::*;
+pub(crate) mod array_references;
 pub mod builtin_metadata;
 mod builtin_interfaces;
 mod builtins;
@@ -28,6 +32,8 @@ mod return_type_compat;
 mod return_values;
 mod runtime_ops;
 mod scope_cells;
+mod persistent_references;
+mod superglobals;
 mod statements;
 #[cfg(not(test))]
 mod output_handlers;
@@ -54,6 +60,7 @@ use crate::parser::parse_fragment;
 use crate::scope::{ElephcEvalScope, ScopeCellOwnership, ScopeEntry};
 use crate::value::RuntimeCellHandle;
 use array_literals::*;
+use array_references::eval_owned_reference_target_value;
 use builtin_interfaces::*;
 use builtins::*;
 use constant_eval::*;
@@ -77,6 +84,8 @@ use runtime_ops::*;
 #[cfg(not(test))]
 pub(crate) use pcntl_escape::value_contains_foreign_pcntl_callable;
 use scope_cells::*;
+use persistent_references::*;
+use superglobals::*;
 #[cfg(not(test))]
 pub(crate) use statements::eval_dynamic_destructor_for_object_cell;
 #[cfg(not(test))]
@@ -85,6 +94,8 @@ pub(crate) use statements::eval_object_clone_with_properties_for_ffi;
 pub(crate) use statements::eval_property_set_for_ffi;
 #[cfg(not(test))]
 pub(crate) use output_handlers::eval_ob_handler_callback;
+#[cfg(not(test))]
+pub(crate) use output_handlers::release_ob_handler_callbacks;
 use statements::*;
 use throwables::*;
 use std::ffi::{CStr, CString};
@@ -127,6 +138,7 @@ pub fn execute_program_outcome_with_context(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
+    seed_named_cli_superglobals(program, context, scope, values)?;
     match execute_statements(program.statements(), context, scope, values) {
         Ok(EvalControl::None | EvalControl::ReturnVoid) => values.null().map(EvalOutcome::Value),
         Ok(EvalControl::Return(result)) => {

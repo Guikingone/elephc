@@ -334,6 +334,16 @@ impl ElephcEvalContext {
             .is_some_and(|function| function.set_variadic_index(index))
     }
 
+    /// Records that one native AOT callback is declared `function &name()`.
+    pub fn define_native_function_returns_reference(&mut self, function_name: &str) -> bool {
+        self.native_functions
+            .get_mut(function_name)
+            .is_some_and(|function| {
+                function.set_returns_reference(true);
+                true
+            })
+    }
+
     /// Records one native AOT callback return type.
     pub fn define_native_function_return_type(
         &mut self,

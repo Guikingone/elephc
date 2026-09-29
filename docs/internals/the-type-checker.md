@@ -267,7 +267,7 @@ The type checker computes the type of every expression:
 | `Int & Int` | bitwise | `Int` |
 | `Int <=> Int` | spaceship | `Int` (-1, 0, or 1) |
 | `expr instanceof ClassName` | class/interface metadata check | `Bool` |
-| `expr ?? expr` | null coalescing | Type of the non-null operand |
+| `expr ?? expr` | null coalescing | Left type without `null`, joined with the default's type; the left type alone when the left operand is never null (see [Null-coalesce results](#null-coalesce-results)) |
 | `print expr` | output expression | `Int` (`1`) |
 
 ### Function calls
@@ -381,6 +381,27 @@ initializes. A name that is *also* assigned at top level (`if (!isset($cfg)) { $
 get that assigned type on a slot the probe reads before the store, so the original diagnostic is
 restored for it.
 
+### Null-coalesce results
+
+**Files:** `src/types/checker/inference/expr/null_coalesce.rs`, `src/types/checker/inference/expr/mod.rs`
+
+`value ?? default` removes `null` from the left type and joins what is left with the default's
+type. Arrays widen elementwise, two object arms meet at the supertype one side already accepts (or
+stay a union of both), and an arm that already mixes an object with a scalar keeps a union:
+`?(Contract|int) ?? new Implementation()` is `Contract|int`, which an `is_int()` guard narrows back
+to `Contract`. Every other heterogeneous pair joins to `mixed`, as a ternary's branches do, so a
+pure object arm against a pure scalar arm (`?Contract ?? 'none'`) is `mixed`.
+
+The default is left out entirely when the left operand can never be null, because it is dead code
+there: a fresh value (a literal, `new`, `clone`, a closure, `$this`) or a call whose target
+declares a return type that excludes null (a function, a method called on `$this` or on a
+variable, or a static method). `find() ?? new Other()` over `function find(): Implementation|false`
+is therefore still `Implementation|false`. Storage operands never qualify, whatever their type:
+`??` reads an unassigned or `unset()` variable, a missing array key and an uninitialized property
+as null, and the checker has no definite-assignment analysis to rule those out. Inferred returns do
+not qualify either, since a body that falls off its end returns an implicit `null` its inferred
+type omits, and neither do builtin and extern results.
+
 ## User-defined function checking
 
 **Files:** `src/types/checker/functions.rs`, `src/types/checker/functions/`
@@ -414,7 +435,7 @@ pub struct FunctionSig {
 
 - `param_type_exprs` preserves the exact source `TypeExpr` of each written parameter hint, alongside the resolved `PhpType` in `params`.
 - `param_attributes` carries PHP 8 attribute groups attached to each parameter, for Reflection metadata.
-- `by_ref_return` records `function &f()` / `fn &()` declarations — the function returns a reference (alias) to the returned lvalue rather than a copy. It is also the only source for `ReflectionFunction::returnsReference()` / `ReflectionMethod::returnsReference()`: every reflection record codegen builds for a callable — a class, interface or trait method, the listed entry `getMethods()` returns, and the declaring-function record a parameter's `getDeclaringFunction()` returns — copies it into its `returns_reference` field and none of them bakes a value. A record built without a signature (constants, enum cases, properties) carries `false`.
+- `by_ref_return` records `function &f()` / `fn &()` declarations: the function returns a reference (alias) to the returned lvalue rather than a copy. It is also the only source for `ReflectionFunction::returnsReference()` / `ReflectionMethod::returnsReference()`. Every reflection record codegen builds for a callable (a class, interface or trait method, where the trait's own EIR signature keeps the flag too; the listed entry `getMethods()` returns; and the declaring-function record a parameter's `getDeclaringFunction()` returns) copies it into its `returns_reference` field, and none of them bakes a value. A property hook's `ReflectionMethod` record reads the hook's `&get` declaration (`PropertyHooks::get_by_ref`, or the abstract contract's), and eval reflection reads the same flag through the generated method rows and native-function registration; an abstract or interface `&get` contract, which has no accessor, keeps it on the Magician property metadata (`EvalClassProperty::get_contract_returns_by_ref`, `EvalInterfaceProperty::get_returns_by_ref`, and the `NATIVE_PROPERTY_GET_BY_REF` registration flag for a compiled contract). A record built without a signature (constants, enum cases, properties) carries `false`.
 - `ref_params` tracks which parameters use `&` (pass by reference). The codegen passes the stack address of the argument instead of its value.
 
 #### Storage rules for a declared by-reference argument
@@ -578,7 +599,8 @@ alongside the provenance map:
   `string` parameter still lowers through `mixed_box` — so no assignment can add a name.
 - It **shrinks** when a `string` parameter is assigned something that is not itself bare-`Str`
   (a `mixed` parameter, or a boxed local such as `$c ? $p : $q`), and when the name is bound by
-  reference, since `&` writes are not visible as ordinary assignments.
+  reference, since `&` writes are not visible as ordinary assignments. `++` and `--` also
+  remove the name because EIR stores their result in a boxed `Mixed` slot.
 - It is **intersected** at every control-flow merge: a slot counts as bare `Str` after an `if`
   only if it was one on every path into that point.
 
@@ -587,6 +609,15 @@ lookup sees through exactly the wrappers `expr_alias` treats as transparent — 
 argument, a spread, and an already-elided inner `(string)` — so `return (string)@$s` and
 `(string)(string)$s` behave like `return (string)$s`. If the two disagreed about which
 expression "the operand" is, the result would be a use-after-free rather than a leak.
+
+Assignment expressions require their result storage to be checked as well. For a variable
+target, EIR reloads the target after storing the source; `(string)($a = $b)` borrows `$b` only
+when `$a` still has a bare `Str` slot and `$b` also supplies bare `Str` storage. A boxed target
+such as a `mixed` parameter, or a `string` parameter boxed by an earlier increment, causes the
+outer cast to copy. For a simple array element or other non-local target, EIR reads the
+explicit result target after the write; when that is the original bare `Str` source, it
+remains borrowed. The provenance analysis applies any target-stabilization prelude before
+classifying that result target.
 
 Passing that gate is necessary but not sufficient, because the slot can be bare `Str` while
 holding a DIFFERENT parameter's storage:
@@ -852,6 +883,13 @@ the DESCENDANT's visibility.
 
 `src/types/checker/schema/class_constants.rs` validates typed constant declarations on classes, interfaces, enums, and traits. Validation is deferred until all class-like schemas exist, so object and interface relationships named in constant types resolve. Declared types are recorded in `constant_types`; initializer values are checked strictly against the declared type apart from PHP's allowed int-to-float widening, with a conservative `Mixed` inference accepted when an initializer cannot be narrowed statically. Inherited redeclarations must satisfy covariant type contracts, and constants declared `final` (PHP 8.1+) cannot be redeclared.
 
+`constants` on `ClassInfo` and `InterfaceInfo` is a map and carries no order, so each schema also records `constant_order`, the names in PHP's declaration order:
+- a class lists its own constants as declared, then those its traits bring in (`src/types/traits/merge.rs` sorts a compatible redeclaration back to its own position);
+- an enum interleaves cases and constants by their source spans, since the parser keeps them in two lists;
+- an interface lists its own constants, then each parent interface's.
+
+`ReflectionClass::getConstants()` / `getReflectionConstants()` build PHP's full order from these per-class lists. That order is the class's own names, then the parent chain, then the implemented interfaces, deepest ancestor first. The compiled path does this in `src/codegen/lower_inst/objects/reflection/class_members.rs`, and the eval bridge in `src/codegen/eval_class_constant_helpers.rs`, so compiled and `eval()` Reflection agree. A name missing from a recorded order still appears, after the ordered ones, sorted.
+
 For abstract methods, the checker keeps the inherited signature but intentionally leaves the implementation-class entry unset until a concrete subclass provides a body. Concrete classes are rejected if any abstract or interface requirement remains unresolved after inheritance + trait flattening + interface conformance checks.
 
 When checking property access (`$obj->prop`), the type checker validates that:
@@ -958,6 +996,25 @@ not *spelled a particular way*:
 | `call_user_func_array(…, $dynamic)` | **no** | the arguments are not known, so the contract cannot be asked with them |
 | a name that is also an EXTERN function | **no** | lowering resolves the extern first and never reads this map for it |
 | `$fn = "array_slice"; $fn($assoc, …)` | **no** | lowering resolves that string statically; the checker does not track string-literal callable locals at all |
+
+A call with no entry takes `RuntimeFnId::fallback_result_type` in lowering. For `array_slice()`
+that answer is built from the operand types alone: an associative source keeps its layout and a
+boxed `mixed`/`array` source gets the boxed PHP array type, so the string-literal spelling above
+slices a hash instead of refusing it (issue #1347).
+
+A `call_user_func_array(…, $dynamic)` call reaches the builtin's callable wrapper, whose ABI
+comes from `RuntimeFnId::refine_runtime_callable_wrapper_sig`. The `array_slice()` and
+`array_reverse()` wrappers keep their `$preserve_keys` parameter: they take a boxed source, whose
+result is the boxed PHP array whatever the flag says, so the boxed lowering reads the flag at run
+time instead of the wrapper silently renumbering the keys.
+
+When the contract REJECTS the arguments at a recorded site, the checker reports the rejection only
+if it is a compile-time literal requirement (`CompileErrorKind::AotLiteralRequired`: a
+`preserve_keys` flag, a constant or class name, a `str_word_count()` format). Every lowering of the
+callee needs that argument at compile time, so the direct call's diagnostic is the right one
+(issue #1346). Any other rejection is the direct call's view of its argument types, which can be
+narrower than the callable ABI: `$f = array_reverse(...); $f($mixed)` compiles and runs although
+`array_reverse($mixed)` is refused, so such a rejection falls back to the generic signature path.
 
 This is passed to the [code generator](the-codegen.md), which uses it to:
 - Allocate the right amount of stack space per variable

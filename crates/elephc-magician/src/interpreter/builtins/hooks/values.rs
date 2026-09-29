@@ -12,7 +12,7 @@
 
 use super::super::*;
 use super::super::super::{
-    ElephcEvalContext, EvalStatus, RuntimeCellHandle, RuntimeValueOps,
+    ElephcEvalContext, ElephcEvalScope, EvalStatus, RuntimeCellHandle, RuntimeValueOps,
 };
 use super::arity::{one_arg, three_args, two_args};
 
@@ -110,6 +110,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Intval,
     /// Dispatches `is_bool(...)`.
     IsBool,
+    /// Dispatches `is_countable(...)`.
+    IsCountable,
     /// Dispatches `is_double(...)`.
     IsDouble,
     /// Dispatches `is_finite(...)`.
@@ -210,8 +212,6 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Round,
     /// Dispatches `range(...)`.
     Range,
-    /// Dispatches `mb_ereg_match(...)`.
-    MbEregMatch,
     /// Dispatches `preg_match(...)`.
     PregMatch,
     /// Dispatches `preg_match_all(...)`.
@@ -332,6 +332,7 @@ impl EvalValuesHook {
         self,
         name: &str,
         evaluated_args: &[RuntimeCellHandle],
+        lexical_scope: Option<&ElephcEvalScope>,
         context: &mut ElephcEvalContext,
         values: &mut impl RuntimeValueOps,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -351,7 +352,13 @@ impl EvalValuesHook {
             | Self::ArrayValues
             | Self::Count
             | Self::Range => {
-                eval_array_declared_values_result(name, evaluated_args, context, values)
+                eval_array_declared_values_result(
+                    name,
+                    evaluated_args,
+                    lexical_scope,
+                    context,
+                    values,
+                )
             }
             Self::Asin => one_arg(evaluated_args, values, eval_asin_result),
             Self::Atan => one_arg(evaluated_args, values, eval_atan_result),
@@ -380,7 +387,9 @@ impl EvalValuesHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::Clamp => three_args(evaluated_args, values, eval_clamp_result),
-            Self::Core => eval_core_values_result(name, evaluated_args, context, values),
+            Self::Core => {
+                eval_core_values_result(name, evaluated_args, lexical_scope, context, values)
+            }
             Self::Cos => one_arg(evaluated_args, values, eval_cos_result),
             Self::Cosh => one_arg(evaluated_args, values, eval_cosh_result),
             Self::CountChars => match evaluated_args {
@@ -411,6 +420,9 @@ impl EvalValuesHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::IsBool => one_arg(evaluated_args, values, eval_is_bool_result),
+            Self::IsCountable => one_arg(evaluated_args, values, |value, values| {
+                eval_is_countable_result(value, context, values)
+            }),
             Self::IsDouble => one_arg(evaluated_args, values, eval_is_double_result),
             Self::IsFinite => one_arg(evaluated_args, values, eval_is_finite_result),
             Self::IsFloat => one_arg(evaluated_args, values, eval_is_float_result),
@@ -463,18 +475,24 @@ impl EvalValuesHook {
             },
             Self::Hex2Bin => one_arg(evaluated_args, values, eval_hex2bin_result),
             Self::HtmlEntity => {
-                // htmlspecialchars/htmlentities accept optional flags/encoding args;
-                // like the static runtime they are accepted without effect (ENT_QUOTES).
-                let value = match (name, evaluated_args) {
-                    (_, [value]) => *value,
-                    ("htmlspecialchars" | "htmlentities", [value, _flags]) => *value,
-                    ("htmlspecialchars" | "htmlentities", [value, _flags, _encoding]) => *value,
+                // htmlspecialchars/htmlentities accept optional flags/encoding args; the
+                // flags select quote handling like the compiled helper, the encoding is unused.
+                let (value, flags) = match (name, evaluated_args) {
+                    (_, [value]) => (*value, None),
+                    ("htmlspecialchars" | "htmlentities", [value, flags])
+                    | ("htmlspecialchars" | "htmlentities", [value, flags, _]) => {
+                        (*value, Some(*flags))
+                    }
                     _ => return Err(EvalStatus::RuntimeFatal),
+                };
+                let flags = match flags {
+                    Some(flags) => eval_int_value(flags, values)?,
+                    None => ENT_DEFAULT_FLAGS,
                 };
                 match name {
                     "html_entity_decode" => eval_html_entity_decode_result(value, values),
-                    "htmlentities" => eval_htmlentities_result(value, values),
-                    "htmlspecialchars" => eval_htmlspecialchars_result(value, values),
+                    "htmlentities" => eval_htmlentities_result(value, flags, values),
+                    "htmlspecialchars" => eval_htmlspecialchars_result(value, flags, values),
                     _ => Err(EvalStatus::RuntimeFatal),
                 }
             }
@@ -541,12 +559,16 @@ impl EvalValuesHook {
                 }
                 _ => Err(EvalStatus::RuntimeFatal),
             },
-            Self::MbEregMatch => eval_mb_ereg_match_values_result(evaluated_args, values),
             Self::PregMatch => eval_preg_match_values_result(evaluated_args, values),
             Self::PregMatchAll => eval_preg_match_all_values_result(evaluated_args, values),
             Self::PregReplace => eval_preg_replace_values_result(evaluated_args, values),
             Self::PregReplaceCallback => {
-                eval_preg_replace_callback_values_result(evaluated_args, context, values)
+                eval_preg_replace_callback_values_result(
+                    evaluated_args,
+                    lexical_scope,
+                    context,
+                    values,
+                )
             }
             Self::PregSplit => eval_preg_split_values_result(evaluated_args, values),
             Self::BufferFree => eval_buffer_free_values_result(evaluated_args, values),
@@ -690,13 +712,6 @@ impl EvalValuesHook {
             },
             Self::Iconv => eval_iconv_values(name, evaluated_args, context, values),
             Self::Strlen => match name {
-                "mb_strlen" => match evaluated_args {
-                    [value] => eval_mb_strlen_result(*value, None, context, values),
-                    [value, encoding] => {
-                        eval_mb_strlen_result(*value, Some(*encoding), context, values)
-                    }
-                    _ => Err(EvalStatus::RuntimeFatal),
-                },
                 "strlen" => one_arg(evaluated_args, values, eval_strlen_result),
                 _ => Err(EvalStatus::RuntimeFatal),
             },

@@ -86,10 +86,14 @@ The implementation boundary is documented in
 
 ## Optional regex capability
 
-Dynamic eval source is opaque to compile-time feature detection. Merely linking
-Magician therefore does not link PCRE2 or expose `preg_*` inside evaluated code.
-A program without the capability still compiles; `function_exists("preg_match")`
-returns `false` inside dynamic eval and a call fails at runtime.
+Dynamic eval source is opaque to compile-time feature detection. Its shared
+mbstring output support handles the contract-owned default MIME expression
+without PCRE2. A custom `mbstring.http_output_conv_mimetypes` expression inside
+opaque eval requires the complete `--with-mbstring` capability and its managed
+PCRE2 package. That dependency does not expose `preg_*` inside evaluated code.
+Without the regex capability,
+`function_exists("preg_match")` returns `false` inside dynamic eval and a call
+fails at runtime.
 
 If evaluated source may use regex, declare the managed package and explicitly
 enable the capability:
@@ -101,9 +105,11 @@ elephc --with-regex example.php
 
 The compiler prints a post-compilation reminder when a binary contains dynamic
 eval without regex support. Static source that visibly uses `preg_*`,
-`mb_ereg_match()`, `RegexIterator`, or `RecursiveRegexIterator` continues to
-auto-detect regex and makes the same provider available to dynamic eval. Merely
-declaring PCRE2 in `elephc.toml` never forces it into a binary.
+`RegexIterator`, or `RecursiveRegexIterator` continues to auto-detect regex and
+makes that capability available to dynamic eval. Mbstring regex functions use
+the separate managed Oniguruma provider; `--with-mbstring` enables those calls
+for opaque eval. Merely declaring a package in `elephc.toml` does not enable its
+PHP call surfaces.
 
 ## Scope behavior
 
@@ -137,6 +143,24 @@ alias compiler-known program-global storage, and `global $argc` / `global
 $argv` inside function eval fragments alias the CLI argument globals. Unsetting
 such a local alias removes the alias without unsetting the global value.
 
+Superglobals (`$_SERVER`, `$_ENV`, `$_GET`, `$_POST`, `$_COOKIE`, `$_FILES`,
+`$_REQUEST`, `$_SESSION`) resolve through the global scope from every fragment,
+with no `global` statement, so a fragment running inside a function reads and
+writes the values the compiled program holds, and `unset()` removes the global
+one: it stays undefined for every later read, and eval never creates it again. When a fragment names a CLI
+superglobal that the compiled program never created, eval creates it as the
+fragment starts, the way PHP's `auto_globals_jit` does, with the contents a
+compiled CLI program gives it (see
+[System & I/O](system-and-io.md)): the environment in `$_ENV`, the environment
+plus the CLI keys in `$_SERVER`, and empty request arrays; `$_SESSION` is never
+created. Two differences remain for such an eval-created superglobal. It is
+created when first named rather than at startup, so it includes variables that
+`putenv()` set before that point. And it belongs to the eval global scope of
+the call that created it: top-level fragments share one, but a fragment inside
+a later function call starts from a fresh copy and does not see writes made
+through another call. Naming the superglobal anywhere in the compiled program
+makes it one shared value everywhere.
+
 ## Supported statements
 
 | Construct | Support |
@@ -148,7 +172,7 @@ such a local alias removes the alias without unsetting the global value.
 | Control flow | Braced and single-statement `if`/`elseif`/`else`, `else if`, `while`, `do/while`, `for`, `foreach`, `switch`, `break`, and `continue` are supported. |
 | Exceptions | `throw`, `try`, `catch`, union catches, class-specific catches, optional catch variables, and `finally` are supported. `finally` runs before a fragment returns or propagates a `Throwable`; a control action from `finally` replaces the pending action from the protected body or catch. |
 | Functions | Eval fragments can declare functions. Static locals inside eval-declared functions are initialized once per eval context and persist across later calls through that context. Top-level `static` declarations in separate eval fragments are initialized for each eval execution. |
-| Classes | Eval fragments can declare classes and traits with properties including comma-separated simple property declarations, PHP's legacy `var` public-property marker, asymmetric property write visibility (`private(set)` / `protected(set)`), constructor property promotion including by-reference promotion for variable, array-element, object-property, static-property, property-array-element, static-property-array-element, and default-value targets, concrete property get/set hooks including by-reference get-hook syntax and PHP-compatible explicit set-hook parameter typing, methods, `__construct()`, inheritance, visibility, readonly properties/classes, abstract/final modifiers, trait uses with `insteadof` / `as` adaptations and PHP-compatible property/constant conflict checks, interface implementations, static members, class/interface/trait comma-separated constants including `final` constants, and class-level attributes. Duplicate eval class-like names and PHP-reserved bare class-like declaration/reference names are rejected. |
+| Classes | Eval fragments can declare classes and traits with properties including comma-separated simple property declarations, PHP's legacy `var` public-property marker, asymmetric property write visibility (`private(set)` / `protected(set)`, on declared and promoted properties), constructor property promotion including by-reference promotion for variable, array-element, object-property, static-property, property-array-element, static-property-array-element, and default-value targets, concrete property get/set hooks including by-reference get-hook syntax and PHP-compatible explicit set-hook parameter typing, methods, `__construct()`, inheritance, visibility, readonly properties/classes, abstract/final modifiers, trait uses with `insteadof` / `as` adaptations and PHP-compatible property/constant conflict checks, interface implementations, static members, class/interface/trait comma-separated constants including `final` constants, and class-level attributes. Duplicate eval class-like names and PHP-reserved bare class-like declaration/reference names are rejected. |
 | Enums | Eval fragments can declare pure and `int` / `string` backed enums with cases, comma-separated constants including `final` constants, methods, interface implementations, `::cases()`, `::from()`, `::tryFrom()`, `->name`, and backed `->value`. |
 | Includes | `include`, `include_once`, `require`, and `require_once` execute local filesystem paths from inside fragments. |
 | Namespaces | Both `namespace Name;` and `namespace Name { ... }` forms are supported, including simple and grouped `use`, `use function`, and `use const` declarations. |
@@ -466,9 +490,15 @@ name. `ReflectionMethod::getShortName()` reports the reflected method name,
 while `ReflectionMethod::getNamespaceName()` reports an empty string and
 `inNamespace()` reports `false`, matching PHP's method reflection behavior.
 `ReflectionFunction` and `ReflectionMethod` report eval user-symbol defaults
-through `isInternal()`, `isUserDefined()`, `isClosure()`, `returnsReference()`,
+through `isInternal()`, `isUserDefined()`, `isClosure()`,
 `isGenerator()`, `isVariadic()`, `isStatic()`,
-`hasTentativeReturnType()`, and `getTentativeReturnType()`. `hasReturnType()`
+`hasTentativeReturnType()`, and `getTentativeReturnType()`.
+`returnsReference()` reports the reflected declaration: `true` for a compiled
+`function &f()` or `function &m()`, for an eval-declared `&get` property
+hook, and for an abstract or interface `&get` hook contract, whether eval or
+compiled code declares it. Eval code itself cannot declare a by-reference
+function, method, or closure (the fragment is rejected), so those report
+`false`. `hasReturnType()`
 and `getReturnType()` expose retained eval return type metadata for supported
 named, nullable, union, and intersection declarations, including `void` and
 `never` as builtin non-nullable named types.

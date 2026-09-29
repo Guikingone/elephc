@@ -377,6 +377,69 @@ echo $declaring->returnsReference() ? "y" : "n";
     assert_eq!(out, "ynyny");
 }
 
+/// Verifies a trait's `function &m()` declaration reports through the trait itself (#1259).
+///
+/// A method reflected on the trait reads the trait's own signature, which EIR lowering built with
+/// a baked `by_ref_return: false`; the class that uses the trait always reported the declaration.
+/// Expected output measured on PHP 8.5.10.
+#[test]
+fn test_trait_method_returns_reference_reports_the_declaration() {
+    let out = compile_and_run(
+        r#"<?php
+trait RefTrait {
+    public $w = 2;
+    public function &get() { return $this->w; }
+    public function plain() { return $this->w; }
+}
+class UsesRefTrait { use RefTrait; }
+
+echo (new ReflectionMethod('RefTrait', 'get'))->returnsReference() ? "y" : "n";
+echo (new ReflectionMethod('RefTrait', 'plain'))->returnsReference() ? "y" : "n";
+echo (new ReflectionMethod('UsesRefTrait', 'get'))->returnsReference() ? "y" : "n";
+echo (new ReflectionMethod('UsesRefTrait', 'plain'))->returnsReference() ? "y" : "n";
+$listed = [];
+foreach ((new ReflectionClass('RefTrait'))->getMethods() as $m) {
+    $listed[$m->getName()] = $m->returnsReference();
+}
+echo $listed['get'] ? "y" : "n";
+echo $listed['plain'] ? "y" : "n";
+"#,
+    );
+
+    assert_eq!(out, "ynynyn");
+}
+
+/// Verifies a property's `&get` hook reports `returnsReference()` like PHP (#1261, #1429).
+///
+/// Hook `ReflectionMethod` records carried a baked `false`; they now follow the hook declaration,
+/// for a concrete `&get` body, through `getHooks()`, and for an abstract `&get` contract, while a
+/// plain `get`, a `set`, and a virtual `get` still report `false`. Expected output measured on
+/// PHP 8.5.10.
+#[test]
+fn test_property_hook_returns_reference_follows_get_by_ref() {
+    let out = compile_and_run(
+        r#"<?php
+class HookedBox {
+    public array $items = [] { &get { return $this->items; } }
+    public int $count { get => count($this->items); }
+    public string $name = "" { get => $this->name; set => $value; }
+}
+abstract class AbstractRefBox { abstract public array $items { &get; } }
+
+echo (new ReflectionProperty('HookedBox', 'items'))->getHook(PropertyHookType::Get)->returnsReference() ? "y" : "n";
+echo (new ReflectionProperty('HookedBox', 'count'))->getHook(PropertyHookType::Get)->returnsReference() ? "y" : "n";
+echo (new ReflectionProperty('HookedBox', 'name'))->getHook(PropertyHookType::Get)->returnsReference() ? "y" : "n";
+echo (new ReflectionProperty('HookedBox', 'name'))->getHook(PropertyHookType::Set)->returnsReference() ? "y" : "n";
+foreach ((new ReflectionProperty('HookedBox', 'items'))->getHooks() as $hook) {
+    echo $hook->returnsReference() ? "y" : "n";
+}
+echo (new ReflectionProperty('AbstractRefBox', 'items'))->getHook(PropertyHookType::Get)->returnsReference() ? "y" : "n";
+"#,
+    );
+
+    assert_eq!(out, "ynnnyy");
+}
+
 /// Verifies a Reflection object codegen builds INSIDE another one can be stringified.
 ///
 /// `ReflectionParameter::getDeclaringFunction()` hands back a `ReflectionFunction` that codegen

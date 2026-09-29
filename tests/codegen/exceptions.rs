@@ -1117,3 +1117,18 @@ echo (new ReflectionMethod(Exception::class, '__construct'))->isFinal() ? '1|' :
 "#);
     assert_eq!(out, "1|1|1|1|1|1|1|0|0|");
 }
+
+/// Finality and declaring class survive inheritance, including PDOException's getCode override.
+#[test]
+fn test_inherited_exception_reflection_keeps_finality_and_declaring_class() {
+    let out = compile_and_run(r#"<?php
+$runtime = new ReflectionMethod(RuntimeException::class, 'getMessage');
+$code = new ReflectionMethod(PDOException::class, 'getCode');
+$previous = new ReflectionMethod(PDOException::class, 'getPrevious');
+foreach ([$runtime, $code, $previous] as $method) {
+    echo $method->isFinal() ? 'final:' : 'open:';
+    echo $method->getDeclaringClass()->getName(), '|';
+}
+"#);
+    assert_eq!(out, "final:Exception|final:Exception|final:Exception|");
+}

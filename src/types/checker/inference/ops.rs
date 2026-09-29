@@ -8,7 +8,7 @@
 //! Key details:
 //! - PHP compatibility matters for coercions, operator results, object access, and nullable/union handling.
 
-use crate::errors::CompileError;
+use crate::errors::{CompileError, CompileErrorKind};
 use crate::names::{php_symbol_key, Name};
 use crate::numeric_string::scan_numeric_prefix;
 use crate::parser::ast::{
@@ -1104,8 +1104,20 @@ impl Checker {
         }
         // Ask the builtin contract at this first-class call site so argument-dependent results
         // such as array_slice preserve their checked storage layout.
-        let Ok(Some(result)) = self.check_builtin(name.as_str(), args, span, env) else {
-            return Ok(None);
+        let result = match self.check_builtin(name.as_str(), args, span, env) {
+            Ok(Some(result)) => result,
+            Ok(None) => return Ok(None),
+            // An argument the backend needs as a compile-time literal (a `preserve_keys` flag,
+            // a constant name) is needed by every lowering of this callee: the direct call
+            // refuses it in codegen and the callable wrapper drops or misreads it. Report it
+            // here, with the diagnostic the direct call already gives.
+            Err(error) if error.kind == CompileErrorKind::AotLiteralRequired => {
+                return Err(error);
+            }
+            // Any other rejection is the direct call's own view of its arguments, which can be
+            // narrower than the callable ABI: `$f = array_reverse(...); $f($mixed)` compiles and
+            // runs although `array_reverse($mixed)` is refused. The generic path decides.
+            Err(_) => return Ok(None),
         };
         self.first_class_builtin_call_types.insert(span, result.clone());
         Ok(Some(result))

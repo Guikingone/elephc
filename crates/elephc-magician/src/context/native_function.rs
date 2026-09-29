@@ -25,6 +25,7 @@ pub struct NativeFunction {
     pub(super) param_by_ref: Vec<bool>,
     pub(super) variadic_index: Option<usize>,
     pub(super) return_type: Option<EvalParameterType>,
+    pub(super) returns_reference: bool,
     pub(super) bridge_supported: bool,
     pub(super) shape: Option<NativeCallableShape>,
 }
@@ -46,6 +47,7 @@ impl NativeFunction {
             param_by_ref: Vec::new(),
             variadic_index: None,
             return_type: None,
+            returns_reference: false,
             bridge_supported: true,
             shape: None,
         }
@@ -156,6 +158,17 @@ impl NativeFunction {
     /// Returns the registered declared return type, if any.
     pub fn return_type(&self) -> Option<&EvalParameterType> {
         self.return_type.as_ref()
+    }
+
+    /// Records that the AOT declaration is `function &name()`.
+    pub fn set_returns_reference(&mut self, returns_reference: bool) {
+        self.returns_reference = returns_reference;
+    }
+
+    /// Returns whether the AOT declaration returns by reference, for
+    /// `ReflectionFunction::returnsReference()`.
+    pub const fn returns_reference(&self) -> bool {
+        self.returns_reference
     }
 
     /// Returns whether eval may dispatch this callback through the generated bridge.

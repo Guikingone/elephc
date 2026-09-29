@@ -134,7 +134,7 @@ pub(crate) fn refcount_release_helper(ty: &PhpType) -> Option<&'static str> {
     }
 }
 
-/// Releases the payload of a local reference-counted cell and the cell itself.
+/// Releases one tracked local reference-cell owner and its payload when ownership ends.
 ///
 /// The runtime contains payload exceptions, frees the cell, then propagates the exception.
 /// Scalar payloads use a null release entry; strings and heap values use their typed helper.
@@ -254,6 +254,21 @@ pub fn emit_branch_if_int_result_nonzero(emitter: &mut Emitter, label: &str) {
                 int_result_reg(emitter)
             ));
             emitter.instruction(&format!("jne {}", label));                     // branch when the coerced integer truthiness result is non-zero
+        }
+    }
+}
+
+/// Branches to the target when the previous compare was equal, using the wider unconditional
+/// AArch64 branch range instead of the ±1 MiB conditional-branch range.
+pub fn emit_branch_if_equal_wide(emitter: &mut Emitter, label: &str) {
+    match emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            emitter.instruction("b.ne 1f");                                     // skip the transfer when the previous compare was unequal
+            emitter.instruction(&format!("b {label}"));                        // take the equal edge with the wider branch range
+            emitter.label("1");                                                // resume after the conditional transfer
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            emitter.instruction(&format!("je {label}"));                       // x86_64 conditional branches already cover the generated function size
         }
     }
 }

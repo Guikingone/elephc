@@ -2,7 +2,7 @@
 title: "opcache_compile_file() - internals"
 description: "Compiler internals for opcache_compile_file(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 636
+  order: 637
 ---
 
 ## `opcache_compile_file()` - internals
@@ -38,7 +38,7 @@ function opcache_compile_file(mixed $filename): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

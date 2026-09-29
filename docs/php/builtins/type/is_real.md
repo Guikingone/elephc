@@ -2,7 +2,7 @@
 title: "is_real()"
 description: "Alias of is_float()."
 sidebar:
-  order: 904
+  order: 969
 ---
 
 ## is_real()
@@ -22,6 +22,7 @@ Alias of is_float().
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
 - **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/types/is_real.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_real.rs)).
+- **Strict PHP mode**: hidden - this builtin is an elephc extension with no PHP equivalent, so programs compiled with [`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) treat the name as nonexistent, in compiled code and inside eval'd code.
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -40,6 +40,32 @@ pub(super) fn parse_prefix(
 
     let span = tokens[*pos].1.span;
 
+    // `\PHP_EOL`, `\PHP_INT_MAX`, `\M_PI`, `\true`...: the lexer turns these predefined
+    // constants into dedicated tokens, so the name parser never sees an identifier after the `\`
+    // (#1307). The fully qualified spelling names the same global constant, so it parses as the
+    // bare token. The few that stay constant references keep their fully qualified kind, so a
+    // namespace-local constant of the same name can never shadow them.
+    if tokens[*pos].0 == Token::Backslash {
+        if let Some((next, metadata)) = tokens.get(*pos + 1) {
+            let literal_constant = matches!(next, Token::True | Token::False | Token::Null);
+            if literal_constant || crate::parser::stmt::token_as_import_name(next, metadata).is_some() {
+                *pos += 1;
+                let mut expr = parse_prefix(tokens, pos)?;
+                if let ExprKind::ConstRef(name) = &expr.kind {
+                    if name.kind == crate::names::NameKind::Unqualified {
+                        expr.kind = ExprKind::ConstRef(Name::from_parts(
+                            crate::names::NameKind::FullyQualified,
+                            name.parts.clone(),
+                        ));
+                    }
+                }
+                // The expression starts at the `\`, so diagnostics point at the whole name.
+                expr.span = Span::with_end_from(span, expr.span);
+                return Ok(expr);
+            }
+        }
+    }
+
     match &tokens[*pos].0 {
         Token::Minus => parse_unary(tokens, pos, span, ExprKind::Negate, 35),
         Token::Bang => parse_unary(tokens, pos, span, ExprKind::Not, 35),
@@ -240,6 +266,22 @@ pub(super) fn parse_prefix(
             parse_scoped_static_call(tokens, pos, span, StaticReceiver::Parent, "parent")
         }
         Token::New => parse_new_object(tokens, pos, span),
+        // `$this(...)` invokes the current object exactly like `($this)(...)`: through
+        // `__invoke` only. A plain `__invoke` method call would fall back to `__call`, which PHP
+        // never does for an object invocation.
+        Token::This if matches!(tokens.get(*pos + 1), Some((Token::LParen, _))) => {
+            let this = Expr::new(ExprKind::This, span);
+            *pos += 2;
+            let args = parse_args(tokens, pos, span)?;
+            let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
+            Ok(Expr::new(
+                ExprKind::ExprCall {
+                    callee: Box::new(this),
+                    args,
+                },
+                span,
+            ))
+        }
         Token::This => parse_simple(tokens, pos, span, ExprKind::This),
         Token::Yield => parse_yield(tokens, pos, span),
         other => Err(CompileError::new(

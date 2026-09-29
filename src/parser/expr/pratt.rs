@@ -714,31 +714,125 @@ fn parse_instanceof_target(
     pos: &mut usize,
     span: Span,
 ) -> Result<InstanceOfTarget, CompileError> {
-    match tokens.get(*pos).map(|(token, _)| token) {
-        Some(Token::Self_) => {
-            *pos += 1;
-            Ok(InstanceOfTarget::Name(Name::unqualified("self")))
+    // `self::$fallback` and `Config::$class` read a static property holding the class name.
+    let target = if names_static_property(tokens, *pos) {
+        let target = parse_expr_bp(tokens, pos, 36)?;
+        reject_called_instanceof_target(&target)?;
+        InstanceOfTarget::Expr(Box::new(target))
+    } else {
+        match tokens.get(*pos).map(|(token, _)| token) {
+            Some(Token::Self_) => {
+                *pos += 1;
+                InstanceOfTarget::Name(Name::unqualified("self"))
+            }
+            Some(Token::Parent) => {
+                *pos += 1;
+                InstanceOfTarget::Name(Name::unqualified("parent"))
+            }
+            Some(Token::Static) => {
+                *pos += 1;
+                InstanceOfTarget::Name(Name::unqualified("static"))
+            }
+            // A variable expression names the class at run time: `$name`, `$this->className`,
+            // `$config['type']`.
+            Some(Token::Variable(_)) | Some(Token::This) => {
+                let target = parse_expr_bp(tokens, pos, 36)?;
+                reject_called_instanceof_target(&target)?;
+                InstanceOfTarget::Expr(Box::new(target))
+            }
+            // `(expr)` is the one parenthesized form, and the group is the WHOLE target: PHP
+            // binds nothing after its `)`, so `($f)()` is not a call of the group here.
+            Some(Token::LParen) => {
+                let open_span = tokens[*pos].1.span;
+                *pos += 1;
+                let inner = parse_expr(tokens, pos)?;
+                if !matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::RParen)) {
+                    return Err(CompileError::new(open_span, "Expected closing ')'"));
+                }
+                *pos += 1;
+                InstanceOfTarget::Expr(Box::new(inner))
+            }
+            _ => InstanceOfTarget::Name(parse_name(
+                tokens,
+                pos,
+                span,
+                "Expected class or interface name after 'instanceof'",
+            )?),
         }
-        Some(Token::Parent) => {
-            *pos += 1;
-            Ok(InstanceOfTarget::Name(Name::unqualified("parent")))
-        }
-        Some(Token::Static) => {
-            *pos += 1;
-            Ok(InstanceOfTarget::Name(Name::unqualified("static")))
-        }
-        Some(Token::Variable(_)) | Some(Token::LParen) => {
-            let target = parse_expr_bp(tokens, pos, 36)?;
-            Ok(InstanceOfTarget::Expr(Box::new(target)))
-        }
-        _ => parse_name(
-            tokens,
-            pos,
-            span,
-            "Expected class or interface name after 'instanceof'",
-        )
-        .map(InstanceOfTarget::Name),
+    };
+    // An argument list straight after the target is a call of it, which PHP's grammar has no
+    // place for (`$x instanceof self::$method()` is a syntax error).
+    if let Some((Token::LParen, metadata)) = tokens.get(*pos) {
+        return Err(called_instanceof_target_error(metadata.span));
     }
+    Ok(target)
+}
+
+/// Rejects an `instanceof` target whose variable chain contains a call (issue #1454).
+///
+/// PHP's `class_name_reference` is a class name, `(expr)`, or a variable chain of property
+/// fetches, array dimensions and static properties, never a call: `$x instanceof Foo::$method()`
+/// and `$x instanceof $this->cls()` are syntax errors. The chain parser shared with ordinary
+/// expressions consumes such a call eagerly (`Foo::$method()` even desugars to
+/// `call_user_func`), so the parsed chain is checked instead. Only the chain itself is examined:
+/// a call INSIDE a dimension or a braced property name (`$map[key()]`) is ordinary PHP.
+fn reject_called_instanceof_target(target: &Expr) -> Result<(), CompileError> {
+    match instanceof_target_chain_call(target) {
+        Some(call_span) => Err(called_instanceof_target_error(call_span)),
+        None => Ok(()),
+    }
+}
+
+/// Returns the span of the first call found along an `instanceof` target's variable chain.
+fn instanceof_target_chain_call(expr: &Expr) -> Option<Span> {
+    match &expr.kind {
+        ExprKind::FunctionCall { .. }
+        | ExprKind::ClosureCall { .. }
+        | ExprKind::ExprCall { .. }
+        | ExprKind::MethodCall { .. }
+        | ExprKind::NullsafeMethodCall { .. }
+        | ExprKind::NullsafeDynamicMethodCall { .. }
+        | ExprKind::StaticMethodCall { .. }
+        | ExprKind::FirstClassCallable(_) => Some(expr.span),
+        ExprKind::PropertyAccess { object, .. }
+        | ExprKind::NullsafePropertyAccess { object, .. }
+        | ExprKind::DynamicPropertyAccess { object, .. }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, .. } => {
+            instanceof_target_chain_call(object)
+        }
+        ExprKind::ArrayAccess { array, .. } => instanceof_target_chain_call(array),
+        _ => None,
+    }
+}
+
+/// Builds the diagnostic for a call used as an `instanceof` target.
+fn called_instanceof_target_error(span: Span) -> CompileError {
+    CompileError::new(
+        span,
+        "Cannot use an unparenthesized call as an instanceof target",
+    )
+}
+
+/// Returns true when the tokens at `pos` are a class reference followed by `::$name`, the
+/// static-property form of an `instanceof` target.
+fn names_static_property(tokens: &[SpannedToken], pos: usize) -> bool {
+    let mut cursor = pos;
+    match tokens.get(cursor).map(|(token, _)| token) {
+        Some(Token::Self_ | Token::Parent | Token::Static) => cursor += 1,
+        _ => {
+            while matches!(
+                tokens.get(cursor).map(|(token, _)| token),
+                Some(Token::Identifier(_) | Token::Backslash)
+            ) {
+                cursor += 1;
+            }
+            if cursor == pos {
+                return false;
+            }
+        }
+    }
+    matches!(tokens.get(cursor).map(|(token, _)| token), Some(Token::DoubleColon))
+        && matches!(tokens.get(cursor + 1).map(|(token, _)| token), Some(Token::Variable(_)))
 }
 
 /// Looks up binary operator binding power for Pratt parsing.

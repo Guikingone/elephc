@@ -32,11 +32,11 @@ pub enum LinkError {
     MissingBridge {
         /// Authoritative bridge linker name that could not be materialized.
         name: String,
-        /// Archive this bridge resolves to (`libelephc_web.a`), when known.
+        /// Archive filename or exact path this bridge resolves to, when known.
         ///
-        /// A bridge the table does not describe — a `LinkOrigin::Bridge` item whose name is
-        /// not in `BRIDGES` — has no archive filename, environment override, or candidate
-        /// list to report, so it renders the bare first line and nothing else.
+        /// An unknown named bridge has no archive path or discovery metadata and renders
+        /// only the first line. An unknown bridge with an exact archive path reports that
+        /// path in `needs:` without inventing fallback locations.
         archive: Option<String>,
         /// Per-bridge directory override that takes priority over every search location.
         env_var: Option<String>,
@@ -86,8 +86,18 @@ impl std::fmt::Display for LinkError {
                 // An override that short-circuited discovery gets the opposite advice: the
                 // fallbacks were never consulted, so telling the user to put the archive next
                 // to the binary would send them somewhere this run will not look.
-                match override_dir {
-                    Some(override_dir) => write!(
+                let invalid_file = invalid_archive_filename(archive);
+                match (override_dir, invalid_file) {
+                    (Some(override_dir), Some(filename)) => write!(
+                        formatter,
+                        "\n\n{env_var} is set to {override_dir}, which takes priority over every \
+                         other location, so no other directory was consulted. Replace invalid \
+                         archive {archive} with a non-empty regular file, point {env_var} to a \
+                         directory containing a valid {filename}, or unset {env_var} to search \
+                         the other locations again. `elephc --print-capabilities` lists every \
+                         archive this binary can need."
+                    ),
+                    (Some(override_dir), None) => write!(
                         formatter,
                         "\n\n{env_var} is set to {override_dir}, which takes priority over every \
                          other location — the elephc binary's own directory, a sibling lib/ and \
@@ -96,7 +106,14 @@ impl std::fmt::Display for LinkError {
                          those locations again. `elephc --print-capabilities` lists every \
                          archive this binary can need."
                     ),
-                    None => write!(
+                    (None, Some(filename)) => write!(
+                        formatter,
+                        "\n\nReplace invalid archive {archive} with a non-empty regular \
+                         file, or set {env_var} to a directory containing a valid \
+                         {filename}. `elephc --print-capabilities` lists every archive \
+                         this binary can need."
+                    ),
+                    (None, None) => write!(
                         formatter,
                         "\n\nSet {env_var} to a directory containing {archive}, or keep the \
                          bridge archives next to the elephc binary (or in a sibling lib/). \
@@ -106,6 +123,16 @@ impl std::fmt::Display for LinkError {
             }
         }
     }
+}
+
+/// Returns the filename of `archive` when it is a full path to an entry that exists but is
+/// not a usable archive, which is how the errors distinguish an invalid file from a missing
+/// one: a missing archive is reported by its bare filename.
+fn invalid_archive_filename(archive: &str) -> Option<&str> {
+    Path::new(archive)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| *name != archive)
 }
 
 impl std::error::Error for LinkError {}

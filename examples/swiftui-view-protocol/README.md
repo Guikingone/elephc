@@ -109,5 +109,5 @@ platform-specific.
 macOS on purpose for the original spike: it proved the UI story with the
 toolchain that already worked, leaving the iOS SDK as a separate question. That
 question is now answered — see `scripts/ios-relink-spike.sh` and
-`IOS_TARGET_SPEC.md` — and `run-ios.sh` runs the very same app on a device-class
+`.plans/ios-target.md` — and `run-ios.sh` runs the very same app on a device-class
 arm64 simulator.

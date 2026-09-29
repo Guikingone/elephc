@@ -380,7 +380,21 @@ pub const ECHO_HELPER: &str = "__elephc_var_export_echo";
 /// not declare its own, so unrelated binaries pay nothing and a user definition is not
 /// clobbered. The prelude is hoisted function declarations only, so prepending does not
 /// change top-level execution order.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
+/// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
+/// budget.
 pub fn inject_if_used(
+    program: Program,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
+    crate::compiler_stack::with_compiler_stack(|| {
+        inject_if_used_on_compiler_stack(program, inventory)
+    })
+}
+
+/// The body of [`inject_if_used`], run on the stack `with_compiler_stack` sized.
+fn inject_if_used_on_compiler_stack(
     program: Program,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {

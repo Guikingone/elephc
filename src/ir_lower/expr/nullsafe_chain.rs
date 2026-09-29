@@ -32,7 +32,7 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Option<Lo
 }
 
 /// Reports the boxed representation shared by successful and short-circuited postfix chains.
-pub(super) fn result_storage_type(expr: &Expr) -> Option<PhpType> {
+pub(in crate::ir_lower) fn result_storage_type(expr: &Expr) -> Option<PhpType> {
     flatten_nullsafe_postfix_chain(expr).map(|_| PhpType::Mixed)
 }
 

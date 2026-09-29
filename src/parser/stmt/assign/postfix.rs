@@ -398,6 +398,19 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
         return lower_effectful_static_assignment(lhs_expr, op, rhs, span).map(Some);
     }
+    // A compound update settles a disturbing right-hand side, then captures a mutable index,
+    // exactly as `try_parse_postfix_assignment` does for local and property targets.
+    let mut hoisted = EffectfulTargetLowerer::new(span);
+    let (lhs_expr, rhs) = if matches!(op, AssignmentOperator::Compound(_)) {
+        let rhs = if compound_rhs_can_disturb_index(&lhs_expr, &rhs) {
+            hoisted.stabilize_unconditionally(rhs)
+        } else {
+            rhs
+        };
+        (hoisted.snapshot_update_dimension(lhs_expr), rhs)
+    } else {
+        (lhs_expr, rhs)
+    };
     let value = assignment_value(lhs_expr.clone(), op, rhs, span);
 
     // `self::$b[$k][] = $v` (and its `static::` / `parent::` / `Named::` siblings) is an append
@@ -443,7 +456,7 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
         _ => return Err(CompileError::new(span, "Invalid assignment target")),
     };
 
-    Ok(Some(Stmt::new(stmt, span)))
+    Ok(Some(hoisted.finish_if_used(stmt, span)))
 }
 
 /// Scans tokens starting from `start` (skipping nested parentheses, brackets, and braces)
@@ -585,6 +598,17 @@ pub(crate) fn can_replay_assignment_target(expr: &Expr) -> bool {
         | ExprKind::MagicConstant(_) => true,
         _ => false,
     }
+}
+
+/// Returns whether an update's array base is one whose single dimension gets an index snapshot.
+///
+/// A local, a property, or a static property is written by the statement itself, so its key
+/// can be captured before the read. Deeper places keep their own nested-write handling.
+pub(crate) fn update_dimension_base_is_snapshotted(array: &Expr) -> bool {
+    matches!(
+        array.kind,
+        ExprKind::Variable(_) | ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. }
+    )
 }
 
 /// Returns whether an update must capture an index before its read and write halves.
@@ -850,12 +874,16 @@ impl EffectfulTargetLowerer {
         Expr::new(ExprKind::Variable(name), self.span)
     }
 
-    /// Captures a variable-rooted array index once for both halves of an update.
+    /// Captures a mutable index once for both halves of an update.
+    ///
+    /// Covers one dimension of a local, property, or static-property array: the read reports a
+    /// float key's conversion, and the write must land on that same key even when a diagnostic
+    /// handler reassigns the index variable in between.
     fn snapshot_update_dimension(&mut self, target: Expr) -> Expr {
         let span = target.span;
         match target.kind {
             ExprKind::ArrayAccess { array, index }
-                if matches!(&array.kind, ExprKind::Variable(_)) =>
+                if update_dimension_base_is_snapshotted(&array) =>
             {
                 let index = if update_index_needs_snapshot(&index) {
                     self.stabilize_unconditionally(*index)

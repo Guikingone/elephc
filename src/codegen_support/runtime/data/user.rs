@@ -47,6 +47,10 @@ const EVAL_REFLECTION_METHOD_FLAG_PRIVATE: u64 = 8;
 const EVAL_REFLECTION_METHOD_FLAG_FINAL: u64 = 16;
 const EVAL_REFLECTION_METHOD_FLAG_ABSTRACT: u64 = 32;
 const EVAL_REFLECTION_METHOD_FLAG_PROPERTY_HOOK: u64 = 32768;
+/// Set when the method is declared `function &m()` (or is a `&get` hook), which eval's
+/// `ReflectionMethod::returnsReference()` reports. The bit is property-only in the member-flag
+/// space, where it means private(set), so a method row can carry it without ambiguity.
+const EVAL_REFLECTION_METHOD_FLAG_RETURNS_REFERENCE: u64 = 4096;
 const EVAL_REFLECTION_METHOD_SOURCE_LINE_MASK: u64 = 0x00ff_ffff;
 const EVAL_REFLECTION_METHOD_SOURCE_START_SHIFT: u64 = 16;
 const EVAL_REFLECTION_METHOD_SOURCE_END_SHIFT: u64 = 40;
@@ -413,6 +417,24 @@ pub(crate) fn emit_runtime_data_user(
                 (Some(class_info), Some(class_name)) => {
                     u8::from(class_uses_dynamic_property_tail(class_name, class_info))
                 }
+                _ => 0,
+            };
+            out.push_str(&format!("    .quad {}\n", flag));
+        }
+    }
+
+    // Per-class "the dump walkers append the dynamic-property tail" flags, read by
+    // `__rt_obj_dump_dyn_props`. A class carries the tail exactly when the flag above is
+    // set, EXCEPT when `__debugInfo()` folded into a projection: PHP then prints only the
+    // returned array, so the dynamic properties must stay out of the dump as well.
+    out.push_str(".globl _class_dump_dyn_prop_flags\n_class_dump_dyn_prop_flags:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let flag = match (class_info_by_id.get(&class_id), class_name_by_id.get(&class_id)) {
+                (Some(class_info), Some(class_name)) => u8::from(
+                    class_uses_dynamic_property_tail(class_name, class_info)
+                        && var_dump_debug_info_projection(class_info).is_none(),
+                ),
                 _ => 0,
             };
             out.push_str(&format!("    .quad {}\n", flag));
@@ -1596,7 +1618,10 @@ fn emit_eval_reflection_method_lookup_data(
                 &mut index,
                 interface_name,
                 &declared_name,
-                eval_reflection_interface_method_flags(false),
+                eval_reflection_interface_method_flags(
+                    false,
+                    interface_info.methods.get(method_name.as_str()),
+                ),
                 declaring_interface,
             );
         }
@@ -1621,7 +1646,10 @@ fn emit_eval_reflection_method_lookup_data(
                 &mut index,
                 interface_name,
                 &declared_name,
-                eval_reflection_interface_method_flags(true),
+                eval_reflection_interface_method_flags(
+                    true,
+                    interface_info.static_methods.get(method_name.as_str()),
+                ),
                 declaring_interface,
             );
         }
@@ -1837,6 +1865,9 @@ fn eval_reflection_instance_method_flags(class_info: &ClassInfo, method_name: &s
     if class_info.abstract_methods.contains(method_name) {
         flags |= EVAL_REFLECTION_METHOD_FLAG_ABSTRACT;
     }
+    if class_info.methods.get(method_name).is_some_and(|sig| sig.by_ref_return) {
+        flags |= EVAL_REFLECTION_METHOD_FLAG_RETURNS_REFERENCE;
+    }
     flags
 }
 
@@ -1854,14 +1885,20 @@ fn eval_reflection_static_method_flags(class_info: &ClassInfo, method_name: &str
     if class_info.abstract_static_methods.contains(method_name) {
         flags |= EVAL_REFLECTION_METHOD_FLAG_ABSTRACT;
     }
+    if class_info.static_methods.get(method_name).is_some_and(|sig| sig.by_ref_return) {
+        flags |= EVAL_REFLECTION_METHOD_FLAG_RETURNS_REFERENCE;
+    }
     flags
 }
 
 /// Returns eval ReflectionMethod bitflags for one interface method entry.
-fn eval_reflection_interface_method_flags(is_static: bool) -> u64 {
+fn eval_reflection_interface_method_flags(is_static: bool, signature: Option<&FunctionSig>) -> u64 {
     let mut flags = EVAL_REFLECTION_METHOD_FLAG_PUBLIC | EVAL_REFLECTION_METHOD_FLAG_ABSTRACT;
     if is_static {
         flags |= EVAL_REFLECTION_METHOD_FLAG_STATIC;
+    }
+    if signature.is_some_and(|sig| sig.by_ref_return) {
+        flags |= EVAL_REFLECTION_METHOD_FLAG_RETURNS_REFERENCE;
     }
     flags
 }
@@ -3761,6 +3798,7 @@ mod tests {
             clone_override_property_storage: false,
             scope_dynamic_property_storage: false,
             constants: HashMap::new(),
+            constant_order: Vec::new(),
     constant_deprecations: HashMap::new(),
     constant_types: HashMap::new(),
     constant_visibilities: HashMap::new(),

@@ -2,7 +2,7 @@
 title: "isset()"
 description: "Determines whether a variable is set and is not null."
 sidebar:
-  order: 635
+  order: 636
 ---
 
 ## isset()
@@ -15,7 +15,7 @@ Determines whether a variable is set and is not null.
 
 **Parameters**:
 - `$var` (`mixed`)
-- `...$vars` — variadic: collects excess arguments into `$vars`.
+- `...$vars` - variadic: collects excess arguments into `$vars`.
 
 **Returns**: `bool`
 

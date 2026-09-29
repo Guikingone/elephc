@@ -80,7 +80,7 @@ const X86_64_CONSTRUCTOR_CONTEXT_FRAME_OFFSET: usize = 64;
 ///
 /// A BY-REFERENCE slot is different. `eval_ref_arg_slots` gives constructor slots
 /// `raw_refcounted_owned = true`, so writeback releases the raw slot on the changed and the
-/// unchanged path alike; that release is only balanced when the staging cast acquired an owner.
+/// unchanged path alike. The bridge acquires one owner after argument preparation succeeds.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ConstructorArgOwner {
     /// The argument array keeps the payload alive for the whole native activation.
@@ -421,7 +421,7 @@ fn emit_constructor_x86_64(
     let done_label = "__elephc_eval_value_construct_done_x";
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
-    emitter.instruction(&format!("sub rsp, {}", CONSTRUCTOR_HELPER_FRAME_SIZE));//reserve aligned slots plus a boundary exception handler
+    emitter.instruction(&format!("sub rsp, {}", CONSTRUCTOR_HELPER_FRAME_SIZE)); // reserve aligned slots plus a boundary exception handler
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save the active eval class-scope pointer
     emitter.instruction("mov QWORD PTR [rbp - 56], rcx");                       // save the active eval class-scope length
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save the boxed eval argument array
@@ -1337,6 +1337,9 @@ fn emit_aarch64_constructor_ref_arg_cells(
                 callable_support,
                 ConstructorArgOwner::Owned,
             );
+            if slot.param_ty.codegen_repr() == PhpType::Str {
+                abi::emit_call_label(emitter, "__rt_str_persist");
+            }
             abi::emit_push_result_value(emitter, &slot.param_ty);
         }
     }
@@ -1374,6 +1377,9 @@ fn emit_x86_64_constructor_ref_arg_cells(
                 callable_support,
                 ConstructorArgOwner::Owned,
             );
+            if slot.param_ty.codegen_repr() == PhpType::Str {
+                abi::emit_call_label(emitter, "__rt_str_persist");
+            }
             abi::emit_push_result_value(emitter, &slot.param_ty);
         }
     }
@@ -1436,7 +1442,7 @@ fn emit_aarch64_cast_eval_arg(
         }
         PhpType::Str => {
             emitter.instruction("ldr x0, [x29, #-16]");                         // reload the boxed eval argument for string coercion
-            emitter.instruction("bl __rt_mixed_cast_string");                   // coerce the eval argument to a PHP string pair in x1/x2
+            super::eval_value_helpers::emit_borrowed_eval_string_argument(emitter, label_prefix);
         }
         PhpType::Callable => {
             super::eval_callable_helpers::emit_aarch64_cast_eval_callable_arg(
@@ -1601,7 +1607,7 @@ fn emit_x86_64_cast_eval_arg(
         }
         PhpType::Str => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for string coercion
-            emitter.instruction("call __rt_mixed_cast_string");                 // coerce the eval argument to a PHP string pair
+            super::eval_value_helpers::emit_borrowed_eval_string_argument(emitter, label_prefix);
         }
         PhpType::Callable => {
             super::eval_callable_helpers::emit_x86_64_cast_eval_callable_arg(
@@ -2059,6 +2065,43 @@ mod argument_ownership_tests {
                 true,
             );
             assert_eq!(asm.matches("__rt_incref").count(), 1, "{name}: {asm}");
+        }
+    }
+
+    /// Callable constructor arguments reach the array and invokable-object lookups through
+    /// unconditional AArch64 branches.
+    ///
+    /// The string-name descriptor lookup emitted between the tag ladder and those lookups grows
+    /// with the program's callable names, so a `b.eq` across it can leave the ±1 MiB
+    /// conditional-branch range (#1444). x86_64 keeps its rel32 `je`.
+    #[test]
+    fn callable_constructor_argument_ladder_widens_aarch64_branches() {
+        for name in SUPPORTED_TARGETS {
+            let target = Target::parse(name).unwrap();
+            let asm = constructor_argument_asm(target, PhpType::Callable, false);
+            let lines = asm.lines().map(str::trim).collect::<Vec<_>>();
+            for (suffix, sites) in [("_callable_array", 2), ("_callable_object", 1)] {
+                let reaches = |line: &str, mnemonic: &str| {
+                    line.strip_prefix(mnemonic).is_some_and(|label| label.ends_with(suffix))
+                };
+                match target.arch {
+                    Arch::AArch64 => {
+                        assert!(
+                            !lines.iter().any(|line| reaches(line, "b.eq ")),
+                            "{name}: near branch to {suffix}:\n{asm}"
+                        );
+                        let wide = lines
+                            .windows(2)
+                            .filter(|pair| pair[0] == "b.ne 1f" && reaches(pair[1], "b "))
+                            .count();
+                        assert_eq!(wide, sites, "{name}: wide branches to {suffix}:\n{asm}");
+                    }
+                    Arch::X86_64 => {
+                        let near = lines.iter().filter(|line| reaches(line, "je ")).count();
+                        assert_eq!(near, sites, "{name}: je branches to {suffix}:\n{asm}");
+                    }
+                }
+            }
         }
     }
 

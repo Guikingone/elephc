@@ -352,6 +352,11 @@ impl Checker {
     /// initial param types. Used as a placeholder when a unified variant-group signature is needed
     /// before individual variants are fully resolved. Returns `Ok(None)` if no declaration exists
     /// for the variant.
+    ///
+    /// A recursive call inside an include-loaded variant names the group, so this placeholder is
+    /// what types that self-call while the variant's body is walked. It is built by the same
+    /// `provisional_function_sig` the free-function path uses, so the declared return hint (or
+    /// `Generator` for a body with `yield`) seeds it instead of a blanket `Int` (issue #635).
     fn provisional_variant_group_sig(
         &mut self,
         first_variant: &str,
@@ -360,30 +365,7 @@ impl Checker {
             return Ok(None);
         };
         let param_types = self.initial_function_param_types(first_variant, &decl)?;
-        Ok(Some(FunctionSig {
-            params: param_types,
-            param_type_exprs: decl
-                .param_types
-                .iter()
-                .cloned()
-                .chain(decl.variadic.iter().map(|_| decl.variadic_type.clone()))
-                .collect(),
-            param_attributes: decl.param_attributes.clone(),
-            defaults: decl.defaults,
-            return_type: crate::types::PhpType::Int,
-            declared_return: decl.return_type.is_some(),
-            by_ref_return: false,
-            ref_params: decl.ref_params,
-            declared_params: decl
-                .param_types
-                .iter()
-                .map(|type_ann| type_ann.is_some())
-                .chain(decl.variadic.iter().map(|_| decl.variadic_type.is_some()))
-                .collect(),
-            variadic: decl.variadic,
-            deprecation: None,
-            is_generator: false,
-        }))
+        Ok(Some(self.provisional_function_sig(&decl, param_types)))
     }
 }
 

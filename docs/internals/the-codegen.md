@@ -76,11 +76,19 @@ key for the read without emitting the deprecation again. Missing ordinary
 hash reads likewise avoid repeating the float diagnostic while formatting
 their undefined-key warning.
 Compound hash updates carry the same diagnosed-key marker from the read half
-to `HashSet`. Increment and decrement expressions capture the old element once,
-then calculate and write the new value, so one source operation reports one
-float-key diagnostic. These updates also capture a mutable dimension after
-eager right-hand-side evaluation and before the read, so an error handler
-cannot redirect the write by changing the source index variable.
+to `HashSet`. The marker also reaches the property and static-property write
+paths and the boxed `Mixed` array writer, whose `RuntimeCall` then rebuilds the
+key with `__rt_php_float_to_int`, so a compound update on a local, a property,
+a static property, or a `mixed` local reports one float-key diagnostic.
+Increment and decrement expressions capture the old element once, then
+calculate and write the new value. These updates also capture a mutable
+dimension after eager right-hand-side evaluation and before the read, so an
+error handler cannot redirect the write by changing the source index variable.
+
+A null-coalescing assignment (`$a[$k] ??= $v`) is not a compound update: it
+probes the element with `??` semantics and writes only when the probe produced
+null, so a present element is never written back. The insert converts a float
+key again, and reports that second conversion just as PHP does.
 
 Packed indexed arrays apply the same float-key conversion before `ArrayGet`,
 `ArraySet`, and existence probes. Compound writes reuse the read's diagnosis,
@@ -246,6 +254,27 @@ a generated uniform adapter (`src/codegen/runtime_callable_invoker.rs`) with
 the ABI `(descriptor, argument array) -> Mixed`. The invoker saves and restores
 the caller's callee-saved registers it scratches — `x19`-`x26` on AArch64 and
 `r12`, `rbx`, `r13`-`r15` on x86_64 — in a dedicated frame save area.
+
+### Inline wrappers and branch reach
+
+Some lowerings emit a wrapper or invoker in the middle of the enclosing
+function and jump over it: the `array_map()` and `preg_replace_callback()`
+descriptor callback wrappers, the direct-callback argument adapter, and the
+runtime-callable invokers. Their `label_global()` opens the wrapper's own
+`.text.<symbol>` section on ELF, so the lowering captures
+`Emitter::current_text_section()` before the wrapper and calls
+`reopen_text_section()` after it. Without that, the rest of the enclosing
+function continues inside the wrapper's section, and a conditional branch from
+the function into that tail becomes a cross-section relocation whose distance
+depends on the linker's section layout.
+
+On AArch64, `b.cond` and `cbz`/`cbnz` encode only a ±1 MiB displacement
+(`tbz`/`tbnz` only ±32 KiB). An edge that jumps over code whose size grows with
+the program, such as the runtime-name case tables of callable dispatch, uses
+`abi::emit_branch_if_equal_wide()`: an inverted `b.ne 1f` over an unconditional
+`b`, which reaches ±128 MiB. x86_64 `jcc` relaxes to a rel32 displacement and
+needs no widening. `tests/codegen/callables/branch_reach.rs` pins both rules on
+the runtime-selected callable paths.
 
 ### Static and global storage
 

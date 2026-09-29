@@ -47,6 +47,22 @@ fn test_strict_error_extension_builtin_call_is_undefined() {
     expect_strict_error("<?php $x = ptr_get(1);", "Undefined function: ptr_get");
 }
 
+/// Verifies the four Elephc-only catalog functions are unavailable in strict PHP mode.
+#[test]
+fn test_strict_error_elephc_only_catalog_functions_are_undefined() {
+    for (call, name) in [
+        ("clamp(1, 0, 2)", "clamp"),
+        ("log2(8)", "log2"),
+        ("grapheme_strrev('abc')", "grapheme_strrev"),
+        ("is_real(1.0)", "is_real"),
+    ] {
+        expect_strict_error(
+            &format!("<?php {call};"),
+            &format!("Undefined function: {name}"),
+        );
+    }
+}
+
 /// Verifies the undefined-function diagnostic names the disabled extension so
 /// users understand why a working non-strict program stopped compiling.
 #[test]
@@ -122,17 +138,6 @@ fn test_strict_keeps_php_builtins_working() {
     assert!(
         result.is_ok(),
         "strlen must keep working under --strict-php, got: {result:?}",
-    );
-}
-
-/// Verifies `is_real` stays available under strict mode: it is treated as PHP
-/// for strict purposes even though PHP 8 removed it.
-#[test]
-fn test_strict_keeps_is_real_working() {
-    let result = check_source_strict("<?php var_dump(is_real(1.5));");
-    assert!(
-        result.is_ok(),
-        "is_real must keep working under --strict-php, got: {result:?}",
     );
 }
 

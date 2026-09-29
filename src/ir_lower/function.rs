@@ -10,7 +10,7 @@
 //! - Every lowered function leaves all blocks terminated before validation.
 
 use crate::ir::{
-    Builder, Function, FunctionFlags, FunctionParam, GeneratorSource, Immediate, IrType, Module,
+    Builder, Function, FunctionFlags, FunctionParam, Immediate, IrType, Module,
     Op, Ownership, Terminator,
 };
 use crate::ir_lower::context::{
@@ -206,10 +206,9 @@ pub(crate) fn lower_user_function(
         .get(name)
         .cloned()
         .unwrap_or_else(|| collect_attribute_args(attributes));
-    attach_generator_source_if_needed(
+    mark_generator_if_needed(
         &mut function,
         body,
-        eir_signature.params.len(),
         signature.is_generator,
     );
     let closures = lower_body_into_function(
@@ -329,10 +328,9 @@ pub(crate) fn lower_class_method(
         body_params.insert(0, ("this".to_string(), this_type));
     }
     function.params.extend(function_params(&signature));
-    attach_generator_source_if_needed(
+    mark_generator_if_needed(
         &mut function,
         body,
-        body_params.len(),
         signature.is_generator,
     );
     let closures = lower_body_into_function(
@@ -625,6 +623,9 @@ pub(crate) fn lower_eval_aot_scope_function(
 }
 
 /// Builds fallback method signature metadata from parsed class-like method syntax.
+///
+/// Trait reflection reads this signature, so it keeps the declaration's `function &m()`
+/// flag for `ReflectionMethod::returnsReference()`.
 pub(crate) fn method_signature_from_ast(method: &ClassMethod) -> FunctionSig {
     let mut signature = signature_from_ast_with_variadic(
         &method.params,
@@ -632,6 +633,7 @@ pub(crate) fn method_signature_from_ast(method: &ClassMethod) -> FunctionSig {
         method.variadic.as_deref(),
         method.variadic_by_ref,
     );
+    signature.by_ref_return = method.by_ref_return;
     if !method.variadic_by_ref {
         if let Some(variadic_type) = &method.variadic_type {
             if let Some((_, php_type)) = signature.params.last_mut() {
@@ -1425,9 +1427,7 @@ pub(crate) fn lower_closure_function(
         return_type,
         body,
         signature_captures,
-        parent.classes,
-        parent.functions,
-        parent.builtin_call_types,
+        parent,
     );
     signature.by_ref_return = by_ref_return;
     lower_closure_function_with_signature(
@@ -1474,9 +1474,7 @@ pub(crate) fn lower_closure_function_with_context(
         return_type,
         body,
         signature_captures,
-        parent.classes,
-        parent.functions,
-        parent.builtin_call_types,
+        parent,
     );
     signature.by_ref_return = by_ref_return;
     if let Some(contextual_return_type) = contextual_return_type {
@@ -1534,10 +1532,9 @@ fn lower_closure_function_with_signature(
     function.params.extend(closure_capture_params(captures));
     function.source_signature = Some(source_signature(name, &signature));
     function.signature = Some(eir_runtime_metadata_signature(&signature));
-    attach_generator_source_if_needed(
+    mark_generator_if_needed(
         &mut function,
         body,
-        signature.params.len(),
         signature.is_generator,
     );
     let env = env_with_closure_captures(&signature, captures, parent.web);
@@ -1738,9 +1735,10 @@ fn lower_body_into_function(
     // array, so `__rt_array_ensure_unique` (which only splits at refcount >= 2) stayed inert and
     // every write in the callee landed in the CALLER's storage. Re-bind each by-value container
     // parameter to an owning shadow slot, which restores the refcount the copy-on-write split
-    // depends on. This one site is the single funnel for free functions, methods, static methods
-    // and closures, so every call flavour — including `call_user_func`, dynamic `$f(...)` and
-    // recursion — is covered without any per-flavour code.
+    // depends on. Exact PHP `array` parameters carry a boxed Mixed cell, so the shadow clones that
+    // wrapper as well as retaining its payload. This one site is the single funnel for free
+    // functions, methods, static methods and closures, so every call flavour, including
+    // `call_user_func`, dynamic `$f(...)` and recursion, is covered without per-flavour code.
     //
     // Mixed parameters also need an owning cell: native return values must outlive an eval
     // caller's temporary arguments, and a boxed array mutation must not replace the caller's
@@ -1767,12 +1765,18 @@ fn lower_body_into_function(
         }
     }
     terminate_open_block(&mut ctx);
+    // Cleanup-only loads must follow the final frame representation after every
+    // source-order store has had a chance to widen its local slot.
+    ctx.builder.repair_owned_local_cleanup_load_types();
     // Final storage types are now known: erase deferred loop-store releases that
     // guard slots which never widened to lifetime-tracked storage (issue #534).
     ctx.builder.prune_untracked_release_local_slot_ops();
     // Likewise, erase provisional releases for concrete local loads unless a
     // later store widened their final frame slot to Mixed (issue #538).
     ctx.builder.prune_borrowed_local_load_release_ops();
+    // Provisional exception guards obey the same final-storage boundary. A
+    // concrete slot remains the owner and must survive a throwing call.
+    ctx.builder.prune_borrowed_local_load_guard_ops();
     // Publish the lowering-time ownership proof after provisional local-load
     // releases have been pruned, so codegen can consume EIR metadata instead of
     // maintaining a second producer allow-list (issue #595).
@@ -1814,11 +1818,10 @@ fn add_closures(module: &mut Module, closures: Vec<Function>) {
     }
 }
 
-/// Retains generator source metadata until the EIR backend has native generator-state lowering.
-fn attach_generator_source_if_needed(
+/// Marks a function as a generator using its checked classification and remaining yield tokens.
+fn mark_generator_if_needed(
     function: &mut Function,
     body: &[Stmt],
-    visible_param_count: usize,
     is_generator: bool,
 ) {
     // `is_generator` is the bit the CHECKER recorded from the source body, before any pass ran.
@@ -1838,10 +1841,6 @@ fn attach_generator_source_if_needed(
         return;
     }
     function.flags.is_generator = true;
-    function.generator_source = Some(GeneratorSource {
-        body: body.to_vec(),
-        visible_param_count,
-    });
 }
 
 /// Returns the EIR return type to lower a function body with.
@@ -2053,7 +2052,9 @@ pub(crate) fn eir_signature_with_php_param_contracts(
         }
     }
     if has_dynamic_untyped_param && !signature.declared_return {
-        eir_signature.return_type = dynamic_param_container_return_type(&eir_signature.return_type);
+        eir_signature.return_type = crate::types::dynamic_params::dynamic_param_container_return_type(
+            &eir_signature.return_type,
+        );
     }
     eir_signature
 }
@@ -2118,24 +2119,6 @@ fn magic_method_param_keeps_eir_contract(
                     ))
         }
         _ => false,
-    }
-}
-
-/// Widens inferred container return elements that may be built from dynamic params.
-fn dynamic_param_container_return_type(return_type: &PhpType) -> PhpType {
-    match return_type.codegen_repr() {
-        PhpType::Array(_) => PhpType::Array(Box::new(PhpType::Mixed)),
-        PhpType::AssocArray { key, .. } => PhpType::AssocArray {
-            key,
-            value: Box::new(PhpType::Mixed),
-        },
-        PhpType::Union(members) => PhpType::Union(
-            members
-                .iter()
-                .map(dynamic_param_container_return_type)
-                .collect(),
-        ),
-        other => other,
     }
 }
 
@@ -2224,9 +2207,7 @@ fn closure_signature_from_ast(
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    functions: &std::collections::HashMap<String, FunctionSig>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    ctx: &LoweringContext<'_, '_>,
 ) -> FunctionSig {
     let mut signature =
         signature_from_ast_with_variadic(params, return_type, variadic, variadic_by_ref);
@@ -2241,9 +2222,7 @@ fn closure_signature_from_ast(
                 body,
                 captures,
                 &signature.params,
-                classes,
-                functions,
-                builtin_call_types,
+                ctx,
             )
         {
             signature.return_type = return_ty;
@@ -2259,9 +2238,7 @@ fn direct_closure_return_type(
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    functions: &std::collections::HashMap<String, FunctionSig>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    ctx: &LoweringContext<'_, '_>,
 ) -> Option<PhpType> {
     let [stmt] = body else {
         return None;
@@ -2273,9 +2250,7 @@ fn direct_closure_return_type(
         expr,
         captures,
         params,
-        classes,
-        functions,
-        builtin_call_types,
+        ctx,
     ))
 }
 
@@ -2286,18 +2261,25 @@ fn direct_closure_return_type(
 /// `return $obj->prop` where `$obj` is a captured/parameter object of a known class adopts
 /// the property's declared type, so a `fn &() => $o->items` closure returns the array type
 /// rather than the syntactic integer default. An array literal built out of those same
-/// variables resolves its element/value slots the same way (see
-/// `direct_closure_return_array_type`).
+/// variables and scoped constants resolves its element/value slots the same way (see
+/// `direct_closure_return_array_type`). A call resolves through the same metadata ordinary
+/// call lowering uses, and a call whose callee is only known at runtime is boxed `Mixed`.
 fn direct_closure_return_expr_type(
     expr: &crate::parser::ast::Expr,
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    functions: &std::collections::HashMap<String, FunctionSig>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    ctx: &LoweringContext<'_, '_>,
 ) -> PhpType {
+    if matches!(expr.kind, ExprKind::Null) {
+        return PhpType::Mixed;
+    }
+    // A postfix chain holding `?->` is lowered as one lazy unit whose short-circuit and success
+    // paths share one boxed result, so that box is what the body returns.
+    if let Some(storage) = crate::ir_lower::expr::nullsafe_chain_result_storage_type(expr) {
+        return storage;
+    }
     if let ExprKind::FunctionCall { name, .. } = &expr.kind {
-        if let Some(ty) = builtin_call_types.get(&expr.span) {
+        if let Some(ty) = ctx.builtin_call_types.get(&expr.span) {
             return ty.clone();
         }
         // A USER function is not in `builtin_call_types` -- that map only records builtin call
@@ -2313,9 +2295,43 @@ fn direct_closure_return_expr_type(
         // says. Copying the raw type here stamped `array<string>` on a call that really produces
         // `array<mixed>`, and the caller then read the boxed element with the wrong layout: the
         // element came back as its own pointer printed as an integer. Raised in review.
-        if let Some(sig) = functions.get(name.as_str()) {
+        if let Some(sig) = ctx.functions.get(name.as_str()) {
             return crate::ir_lower::expr::eir_user_function_return_type(sig);
         }
+    }
+    // The other call shapes fell to the same syntactic fallback, whose answer for a call it does
+    // not recognize is `Int`: `function () use ($o) { return $o->name(); }` returned a string
+    // through an int slot and printed 0 (issue #1269), and a captured closure, an expression
+    // call or a pipe did the same (issue #1272). Methods resolve through the metadata their call
+    // lowering reads; a callee chosen at runtime hands back a boxed result.
+    match &expr.kind {
+        ExprKind::MethodCall { object, method, .. } => {
+            let receiver_ty = match &object.kind {
+                ExprKind::This => captures
+                    .iter()
+                    .find(|(capture_name, _, _)| capture_name == "this")
+                    .map(|(_, ty, _)| ty.clone())
+                    .unwrap_or(PhpType::Mixed),
+                _ => direct_closure_return_expr_type(object, captures, params, ctx),
+            };
+            return crate::ir_lower::expr::closure_return_method_call_type(
+                ctx,
+                &receiver_ty,
+                method,
+                expr,
+            );
+        }
+        ExprKind::StaticMethodCall { receiver, method, .. } => {
+            return crate::ir_lower::expr::static_method_call_expr_type_for_ir(
+                ctx, receiver, method,
+            )
+            .unwrap_or(PhpType::Mixed);
+        }
+        ExprKind::ClosureCall { .. }
+        | ExprKind::ExprCall { .. }
+        | ExprKind::Pipe { .. }
+        | ExprKind::NullsafeDynamicMethodCall { .. } => return PhpType::Mixed,
+        _ => {}
     }
     // An array literal returned directly is stamped with this inferred type and its elements
     // are coerced into it by `lower_return_expr`, so its slots must be resolved against the
@@ -2326,9 +2342,7 @@ fn direct_closure_return_expr_type(
                 items,
                 captures,
                 params,
-                classes,
-                functions,
-                builtin_call_types,
+                ctx,
             );
         }
     }
@@ -2338,9 +2352,7 @@ fn direct_closure_return_expr_type(
                 pairs,
                 captures,
                 params,
-                classes,
-                functions,
-                builtin_call_types,
+                ctx,
             );
         }
     }
@@ -2349,22 +2361,25 @@ fn direct_closure_return_expr_type(
             entries,
             captures,
             params,
-            classes,
-            functions,
-            builtin_call_types,
+            ctx,
         );
     }
-    if let ExprKind::ScopedConstantAccess {
-        receiver: crate::parser::ast::StaticReceiver::Named(class_name),
-        name,
-    } = &expr.kind
-    {
-        let normalized = class_name.as_str().trim_start_matches('\\');
-        if let Some(value) = classes
-            .get(normalized)
-            .and_then(|class_info| class_info.constants.get(name))
+    if let ExprKind::ScopedConstantAccess { receiver, name } = &expr.kind {
+        // A descendant can override static::CONST with a different storage type.
+        if matches!(receiver, crate::parser::ast::StaticReceiver::Static) {
+            return PhpType::Mixed;
+        }
+        if let Some(class_name) =
+            crate::ir_lower::expr::static_receiver_class_name(ctx, receiver)
         {
-            return crate::types::checker::infer_expr_type_syntactic(value);
+            if ctx.enums.get(&class_name).is_some_and(|enum_info| {
+                enum_info.cases.iter().any(|case| case.name.as_str() == name.as_str())
+            }) {
+                return PhpType::Mixed;
+            }
+            if let Some(value) = ctx.scoped_constant_value(&class_name, name) {
+                return direct_closure_return_expr_type(&value, captures, params, ctx);
+            }
         }
     }
     if let ExprKind::Variable(name) = &expr.kind {
@@ -2397,7 +2412,7 @@ fn direct_closure_return_expr_type(
                 });
             match receiver_ty {
                 Some(PhpType::Object(class)) => {
-                    if let Some(info) = classes.get(class.trim_start_matches('\\')) {
+                    if let Some(info) = ctx.classes.get(class.trim_start_matches('\\')) {
                         if let Some((_, ty)) =
                             info.properties.iter().find(|(name, _)| name == property)
                         {
@@ -2441,9 +2456,7 @@ fn direct_closure_return_array_type(
     items: &[crate::parser::ast::Expr],
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    functions: &std::collections::HashMap<String, FunctionSig>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    ctx: &LoweringContext<'_, '_>,
 ) -> PhpType {
     let mut elem_ty = PhpType::Never;
     let mut has_hash_spread = false;
@@ -2454,9 +2467,7 @@ fn direct_closure_return_array_type(
                     inner,
                     captures,
                     params,
-                    classes,
-                    functions,
-                    builtin_call_types,
+                    ctx,
                 )
                 .codegen_repr(),
                 PhpType::AssocArray { .. } | PhpType::Mixed
@@ -2468,9 +2479,7 @@ fn direct_closure_return_array_type(
                 item,
                 captures,
                 params,
-                classes,
-                functions,
-                builtin_call_types,
+                ctx,
             ),
         );
     }
@@ -2490,18 +2499,14 @@ fn direct_closure_return_array_item_type(
     item: &crate::parser::ast::Expr,
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    functions: &std::collections::HashMap<String, FunctionSig>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    ctx: &LoweringContext<'_, '_>,
 ) -> PhpType {
     if let ExprKind::Spread(inner) = &item.kind {
         let source = direct_closure_return_array_item_type(
             inner,
             captures,
             params,
-            classes,
-            functions,
-            builtin_call_types,
+            ctx,
         );
         return match source.codegen_repr() {
             PhpType::Array(elem) => match elem.codegen_repr() {
@@ -2521,9 +2526,7 @@ fn direct_closure_return_array_item_type(
         item,
         captures,
         params,
-        classes,
-        functions,
-        builtin_call_types,
+        ctx,
     ))
 }
 
@@ -2538,9 +2541,7 @@ fn direct_closure_return_assoc_literal_type(
     pairs: &[(crate::parser::ast::Expr, crate::parser::ast::Expr)],
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    functions: &std::collections::HashMap<String, FunctionSig>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    ctx: &LoweringContext<'_, '_>,
 ) -> PhpType {
     let mut key_ty = PhpType::Never;
     let mut value_ty = PhpType::Never;
@@ -2553,9 +2554,7 @@ fn direct_closure_return_assoc_literal_type(
             value,
             captures,
             params,
-            classes,
-            functions,
-            builtin_call_types,
+            ctx,
         );
         key_ty = if matches!(key_ty, PhpType::Never) {
             next_key
@@ -2579,9 +2578,7 @@ fn direct_closure_return_mixed_literal_type(
     entries: &[crate::parser::ast::ArrayEntry],
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    functions: &std::collections::HashMap<String, FunctionSig>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    ctx: &LoweringContext<'_, '_>,
 ) -> PhpType {
     let mut value_ty = PhpType::Never;
     for entry in entries {
@@ -2591,9 +2588,7 @@ fn direct_closure_return_mixed_literal_type(
                     source,
                     captures,
                     params,
-                    classes,
-                    functions,
-                    builtin_call_types,
+                    ctx,
                 )
                 .1
             }
@@ -2602,9 +2597,7 @@ fn direct_closure_return_mixed_literal_type(
                 value,
                 captures,
                 params,
-                classes,
-                functions,
-                builtin_call_types,
+                ctx,
             ),
         };
         value_ty = crate::ir_lower::expr::merge_ir_assoc_value_type(value_ty, next_value);
@@ -2624,17 +2617,13 @@ fn direct_closure_return_assoc_spread_entry_types(
     inner: &crate::parser::ast::Expr,
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
-    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    functions: &std::collections::HashMap<String, FunctionSig>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    ctx: &LoweringContext<'_, '_>,
 ) -> (PhpType, PhpType) {
     let source = direct_closure_return_array_item_type(
         inner,
         captures,
         params,
-        classes,
-        functions,
-        builtin_call_types,
+        ctx,
     );
     match source.codegen_repr() {
         PhpType::Array(elem) => (PhpType::Int, elem.codegen_repr()),

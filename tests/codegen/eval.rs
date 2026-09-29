@@ -115,7 +115,7 @@ eval($code);
     )
     .unwrap();
 
-    let compile = elephc_cli_command(&dir)
+    let compile = elephc_cli_command_with_managed_pcre2(&dir)
         .args(["--quiet", "main.php"])
         .output()
         .expect("failed to invoke elephc CLI");
@@ -4401,7 +4401,7 @@ echo STRLEN("abcd");
 echo ":";
 echo \strlen("xy");
 echo ":";
-echo ChOp("value\f");
+echo ChOp("value\v");
 "#;
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
@@ -22727,6 +22727,53 @@ Error:Cannot unset protected(set) property EvalDeclaredAsymErrorBox::$protectedV
     );
 }
 
+/// Verifies eval-declared promoted constructor properties accept PHP 8.4 asymmetric visibility
+/// (issue #823): owner and subclass writes follow the `set` visibility, Reflection reports the
+/// same flags as a declared property, and an outside write throws. Expected output from PHP 8.5.
+#[test]
+fn test_eval_declared_promoted_asymmetric_property_visibility() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalPromotedAsymBase {
+    public function __construct(
+        private(set) int $privateValue,
+        public protected(set) string $protectedName = "base",
+        protected(set) readonly int $id = 3
+    ) {}
+    public function ownerWrite($value) {
+        $this->privateValue = $value;
+    }
+}
+class EvalPromotedAsymChild extends EvalPromotedAsymBase {
+    public function childWrite($name) {
+        $this->protectedName = $name;
+    }
+}
+$box = new EvalPromotedAsymChild(1);
+echo $box->privateValue . ":" . $box->protectedName . ":" . $box->id . ":";
+$box->ownerWrite(7);
+$box->childWrite("child");
+echo $box->privateValue . ":" . $box->protectedName . ":";
+$private = new ReflectionProperty("EvalPromotedAsymBase", "privateValue");
+echo ($private->isPrivateSet() ? "P" : "p") . ($private->isPromoted() ? "R" : "r");
+echo $private->getModifiers() . ":";
+$id = new ReflectionProperty("EvalPromotedAsymBase", "id");
+echo ($id->isProtectedSet() ? "T" : "t") . $id->getModifiers() . ":";
+try {
+    $box->privateValue = 9;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
+"#,
+    );
+    assert_eq!(
+        out,
+        "1:base:3:7:child:PR4129:T2177:Error:Cannot modify private(set) property \
+EvalPromotedAsymBase::$privateValue from global scope"
+    );
+}
+
 /// Verifies eval-declared inherited properties preserve PHP redeclaration invariants.
 #[test]
 fn test_eval_declared_inherited_property_redeclaration_contracts() {
@@ -26245,6 +26292,85 @@ echo ($static->isStatic() ? "S" : "s");');
     );
 }
 
+/// Verifies eval ReflectionFunction/Method `returnsReference()` reads the reflected declaration
+/// instead of a baked `false` (#1260).
+///
+/// Eval cannot declare `function &f()` itself, so its functions, closures, and methods report
+/// `false`; the by-reference declarations it can see are a compiled `function &f()` or
+/// `function &m()`, and an eval-declared `&get` property hook. Expected output measured on
+/// PHP 8.5.10.
+#[test]
+fn test_eval_reflection_returns_reference_reads_declarations() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class AotStore {
+    public $items = [];
+    public function &items() { return $this->items; }
+    public function count() { return count($this->items); }
+}
+class AotBox { public $v = 1; }
+function &aot_ref(AotBox $box) { return $box->v; }
+function aot_value(AotBox $box) { return $box->v; }
+eval('class EvalHooked {
+    public array $items = [] { &get { return $this->items; } }
+    public int $n { get => 1; }
+    public function plain() { return 1; }
+}
+function eval_value() { return 1; }
+echo (new ReflectionFunction("aot_ref"))->returnsReference() ? "R" : "r";
+echo (new ReflectionFunction("aot_value"))->returnsReference() ? "R" : "r";
+echo (new ReflectionFunction("eval_value"))->returnsReference() ? "R" : "r";
+echo (new ReflectionFunction(function () { return 1; }))->returnsReference() ? "R" : "r";
+echo ":";
+echo (new ReflectionMethod("AotStore", "items"))->returnsReference() ? "R" : "r";
+echo (new ReflectionMethod("AotStore", "count"))->returnsReference() ? "R" : "r";
+echo (new ReflectionMethod("EvalHooked", "plain"))->returnsReference() ? "R" : "r";
+echo ":";
+echo (new ReflectionProperty("EvalHooked", "items"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";
+echo (new ReflectionProperty("EvalHooked", "n"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "Rrrr:Rrr:Rr");
+}
+
+/// Verifies eval `returnsReference()` reads an abstract or interface `&get` hook contract, which
+/// has no accessor method to carry the flag: eval-declared abstract class and interface contracts
+/// keep it from their declaration, and a compiled interface contract from its registration. Plain
+/// `get` and `set` contracts stay `false`. Expected output measured on PHP 8.5.10.
+#[test]
+fn test_eval_reflection_returns_reference_reads_get_hook_contracts() {
+    let out = compile_and_run_capture(
+        r#"<?php
+interface AotRefContract { public string $y { &get; } }
+interface AotPlainContract { public int $w { get; } }
+eval('abstract class EvalAbstract {
+    abstract public string $x { &get; }
+    abstract public int $plain { get; }
+}
+interface EvalContract { public string $y { &get; } public int $z { get; set; } }
+echo (new ReflectionProperty("EvalAbstract", "x"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";
+echo (new ReflectionProperty("EvalAbstract", "plain"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";
+echo (new ReflectionProperty("EvalContract", "y"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";
+echo (new ReflectionProperty("EvalContract", "z"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";
+echo (new ReflectionProperty("EvalContract", "z"))->getHook(PropertyHookType::Set)->returnsReference() ? "R" : "r";
+echo ":";
+echo (new ReflectionProperty("AotRefContract", "y"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";
+echo (new ReflectionProperty("AotPlainContract", "w"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "RrRrr:Rr");
+}
+
 /// Verifies eval ReflectionFunction/Method derive deprecation predicates from `#[Deprecated]`.
 #[test]
 fn test_eval_reflection_function_and_method_deprecated_attributes() {
@@ -26869,10 +26995,12 @@ eval('class EvalCycleDropBox {
     public function __construct($name) { $this->name = $name; }
     public function __destruct() { echo "drop:" . $this->name . ":"; }
 }
+gc_disable();
 $box = new EvalCycleDropBox("A");
 $box->self = $box;
 unset($box);
 $collected = gc_collect_cycles();
+gc_enable();
 echo $collected > 0 ? "collected:" : "uncollected:";
 echo "after";');
 "#,

@@ -2,7 +2,7 @@
 title: "unset()"
 description: "Unsets the given variables."
 sidebar:
-  order: 690
+  order: 691
 ---
 
 ## unset()
@@ -15,7 +15,7 @@ Unsets the given variables.
 
 **Parameters**:
 - `$var` (`mixed`)
-- `...$vars` — variadic: collects excess arguments into `$vars`.
+- `...$vars` - variadic: collects excess arguments into `$vars`.
 
 **Returns**: `void`
 

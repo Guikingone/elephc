@@ -2,7 +2,7 @@
 title: "opcache_is_script_cached() - internals"
 description: "Compiler internals for opcache_is_script_cached(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 640
+  order: 641
 ---
 
 ## `opcache_is_script_cached()` - internals
@@ -38,7 +38,7 @@ function opcache_is_script_cached(mixed $filename): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

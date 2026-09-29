@@ -290,6 +290,12 @@ fn test_error_time_wrong_args() {
     expect_error("<?php time(1);", "time() takes no arguments");
 }
 
+/// Verifies that `getmypid()` with any arguments yields a no-args diagnostic (issue #860).
+#[test]
+fn test_error_getmypid_wrong_args() {
+    expect_error("<?php getmypid(1);", "getmypid() takes no arguments");
+}
+
 /// Verifies that `microtime()` with two arguments yields a wrong-args diagnostic.
 #[test]
 fn test_error_microtime_wrong_args() {

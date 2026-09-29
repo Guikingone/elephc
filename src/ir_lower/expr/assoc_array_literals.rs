@@ -11,6 +11,13 @@ use super::*;
 
 /// Lowers an associative array literal.
 pub(super) fn lower_assoc_array_literal(ctx: &mut LoweringContext<'_, '_>, pairs: &[(Expr, Expr)], expr: &Expr) -> LoweredValue {
+    lower_assoc_array_literal_with_guard(ctx, pairs, expr, false)
+}
+
+/// Protects a callback's partially built argument hash until invocation consumes its ownership.
+pub(super) fn lower_assoc_array_literal_with_guard(
+    ctx: &mut LoweringContext<'_, '_>, pairs: &[(Expr, Expr)], expr: &Expr, guarded: bool,
+) -> LoweredValue {
     let hash = ctx.emit_value(
         Op::HashNew,
         Vec::new(),
@@ -19,10 +26,12 @@ pub(super) fn lower_assoc_array_literal(ctx: &mut LoweringContext<'_, '_>, pairs
         Op::HashNew.default_effects(),
         Some(expr.span),
     );
+    if guarded { guard_descriptor_container(ctx, hash, expr.span); }
     for (key, value) in pairs {
         let key = lower_expr(ctx, key);
         let value = lower_expr(ctx, value);
         ctx.emit_void(Op::HashSet, vec![hash.value, key.value, value.value], None, Op::HashSet.default_effects(), Some(expr.span));
+        if guarded { ctx.refresh_argument_array_guard(hash, expr.span); }
     }
     hash
 }
@@ -101,6 +110,10 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
     }
     match &value.kind {
         ExprKind::Null => PhpType::Mixed,
+        ExprKind::Ternary { .. } => {
+            // Use the actual branch-merge representation before choosing hash storage.
+            ir_array_storage_type(materialized_expr_type_for_merge(ctx, value))
+        }
         ExprKind::ConstRef(name) => ctx
             .constant_value(name.as_str())
             .map(|(_, ty)| ir_array_storage_type(ty))
@@ -193,7 +206,20 @@ pub(super) fn scoped_constant_value_type_for_ir(
         return PhpType::Mixed;
     }
     if let Some(const_expr) = ctx.scoped_constant_value(&class_name, member) {
-        return ir_array_storage_type(infer_expr_type_syntactic(&const_expr));
+        // Keep the existing scalar classification, but resolve containers through the same
+        // literal helpers that lower them. Syntactic inference reports Void for null and can
+        // mistake nested scoped constants for strings inside an array initializer.
+        return match &const_expr.kind {
+            ExprKind::Null => PhpType::Mixed,
+            ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, &const_expr),
+            ExprKind::ArrayLiteralAssoc(pairs) => {
+                assoc_array_literal_type_for_ir(ctx, pairs, &const_expr)
+            }
+            ExprKind::ArrayLiteralMixed(entries) => {
+                assoc_array_literal_type_from_entries(ctx, entries, &const_expr)
+            }
+            _ => ir_array_storage_type(infer_expr_type_syntactic(&const_expr)),
+        };
     }
     ir_array_storage_type(infer_expr_type_syntactic(value))
 }

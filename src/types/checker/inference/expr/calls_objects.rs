@@ -7,7 +7,8 @@
 //! Key details:
 //! - Retains constructor, visibility, eval-barrier, callable, and late-static-binding checks.
 
-use super::{body_must_not_use_this, merge_null_coalesce_result_type, Checker};
+use super::null_coalesce::{null_coalesce_result_type, operand_is_never_null};
+use super::{body_must_not_use_this, Checker};
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::pcntl_constants::pcntl_int_constants;
@@ -88,15 +89,11 @@ impl Checker {
                 let probed =
                     crate::types::checker::null_probe::null_probe_env(self, value, env);
                 let probed_env = probed.clone();
-                let vt = self
-                    .infer_null_probe_operand(value, probed_env.as_ref().unwrap_or(env))?;
+                let operand_env = probed_env.as_ref().unwrap_or(env);
+                let vt = self.infer_null_probe_operand(value, operand_env)?;
+                let value_is_never_null = operand_is_never_null(self, value, &vt, operand_env);
                 let dt = self.infer_type(default, env)?;
-                let non_null_value = if Self::union_contains_void(&vt) {
-                    self.strip_void_from_union(&vt)
-                } else {
-                    vt
-                };
-                Ok(merge_null_coalesce_result_type(non_null_value, dt))
+                Ok(null_coalesce_result_type(self, value_is_never_null, vt, dt))
             }
             ExprKind::Pipe { value, callable } => {
                 self.infer_pipe_type(value, callable, expr, env)

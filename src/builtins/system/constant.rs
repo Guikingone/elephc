@@ -66,7 +66,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         _ => None,
     };
     let Some(name) = literal else {
-        return Err(CompileError::new(
+        return Err(CompileError::aot_literal_required(
             cx.span,
             "constant() first argument must be a string literal in AOT mode",
         ));

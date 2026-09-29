@@ -94,6 +94,7 @@ mod class_introspection_mixed;
 mod core_introspection;
 mod reflection_new_instance;
 mod nullable_method_calls;
+mod packed_builtin_args;
 mod method_metadata;
 mod static_method_calls;
 mod scoped_values;
@@ -134,6 +135,7 @@ use array_builtin_args::*;
 use builtin_special_args::*;
 use call_arg_coercion::*;
 use positional_spreads::*;
+use packed_builtin_args::*;
 use named_args::*;
 use named_spreads::*;
 use variadic_args::*;
@@ -189,6 +191,7 @@ pub(crate) use array_access::{
     lower_array_access_from_lowered_receiver, lower_by_ref_foreach_element_source,
 };
 pub(crate) use array_access_types::type_satisfies_array_access_for_ir;
+pub(crate) use assignments::lower_null_coalesce_update_stmt;
 pub(crate) use instanceof_coercions::{
     coerce_array_key_to_int_at_span, coerce_to_int_at_span,
 };
@@ -209,9 +212,12 @@ pub(super) use assoc_array_literals::{
 };
 pub(super) use call_return_types::call_return_type;
 pub(super) use call_return_types::eir_user_function_return_type;
+pub(super) use method_metadata::closure_return_method_call_type;
+pub(super) use nullsafe_chain::result_storage_type as nullsafe_chain_result_storage_type;
 pub(super) use merge_temps::coerce_container_to_mixed_payload;
 pub(super) use nullable_method_calls::lower_dynamic_method_call_with_receiver;
 pub(super) use static_method_calls::static_method_call_expr_type_for_ir;
+pub(crate) use static_method_calls::static_receiver_class_name;
 
 /// Lowers an expression and returns its EIR value.
 pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredValue {

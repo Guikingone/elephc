@@ -283,9 +283,11 @@ rewrite would leave it with NO `yield` at all. Pruning's call sites are describe
 dead-code elimination uses the same helper because it runs later and can delete a yield the
 prune guard has just restored.
 
-Generator-ness itself is not re-derived from the body afterwards. The checker records it on
-`FunctionSig::is_generator` from the SOURCE body, before any pass runs, and lowering reads that
-bit.
+Named functions and methods keep the checker's `FunctionSig::is_generator` bit from the source
+body. Lowering also scans their rewritten bodies and can classify them as generators when that
+bit is false or unavailable. Closures take a different path: `closure_signature_from_ast`
+rechecks the optimized body with `body_contains_yield` during EIR lowering. Preserving a `yield`
+therefore also preserves their generator classification.
 
 PHP decides whether a declaration is a **generator** syntactically, before any folding, and the
 type checker does the same — it types `g()` as `Generator` from the `yield` it can see. These
@@ -309,16 +311,18 @@ coroutine it is — and only a body whose every `yield` is dead pays it.
 It is also whole-body: one dead `yield` blocks propagation, pruning, and dead-code elimination
 in that callable. A surgical "keep one yield, apply the rest" would be tighter (issue #1325).
 
-Dead-code elimination is wrapped by the same helper. `is_generator` keeps the classification
-when a pass deletes the token, which is what stopped the #673 hang, but the body the coroutine
-lowers from still has to contain a `yield`. DCE runs after pruning and collapses shapes the
+Dead-code elimination is wrapped by the same helper. The checker bit preserves generator
+classification for named callables, and the body scan can add it; closure classification is
+derived from the optimized body. The coroutine body still has to contain a `yield`. DCE runs after
+pruning and collapses shapes the
 prune guard has just put back: a constant `elseif` chain is the case that still deleted the
 last `yield` with the pruning guard alone (issue #1085). Reverting that pass's whole body is
 the same trade propagation and pruning already make, and only a callable whose every `yield`
 is dead pays it.
 
-The invariant is both halves. Generator-ness is decided once, syntactically, at check time, and
-a pass that rewrites a callable body must not delete its last `yield`.
+The invariant covers both paths: named callables retain their check-time classification with an
+additive body scan, closures are classified again from the optimized body, and a pass that
+rewrites either body must not delete its last `yield`.
 
 ### Example
 
@@ -404,6 +408,8 @@ if (true) {
 ```
 
 After pruning and normalization, the dead branch disappears entirely. The final dead-code pass then has less structural noise to inspect, and codegen never emits the `pow` path.
+
+`examples/exception-routing/` shows the exception-aware side on a whole program: an order pipeline with a ten-class exception hierarchy writes ten `catch` clauses, and four of them can never run (a handler disjoint from everything the `try` can throw, a handler that cannot match a narrowed `throw $e`, a parent clause after handlers for all of its thrown children, and a child clause shadowed by its parent). `elephc --emit-ir examples/exception-routing/main.php` keeps six handlers, and the two classes and two functions that only the dead clauses referenced never reach EIR, because declaration reachability (Pass 6) runs after this pass.
 
 ## Pass 6: Declaration reachability
 

@@ -544,7 +544,7 @@ pub(super) fn lexical_instance_static_call_signature<'a>(
 }
 
 /// Resolves a static receiver to a concrete class name when lexical metadata is available.
-pub(super) fn static_receiver_class_name(
+pub(crate) fn static_receiver_class_name(
     ctx: &LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
 ) -> Option<String> {

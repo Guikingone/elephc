@@ -245,7 +245,13 @@ pub(super) fn builtin_reflection_owner_class(
         Some(array_type()),
         empty_array(),
     ));
-    methods.push(builtin_reflection_owner_get_attributes_method());
+    // PHP names the class that declares `getAttributes()` in its `$flags` ValueError.
+    let attributes_owner = match name {
+        "ReflectionFunction" | "ReflectionMethod" => "ReflectionFunctionAbstract",
+        "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase" => "ReflectionClassConstant",
+        other => other,
+    };
+    methods.push(builtin_reflection_owner_get_attributes_method(attributes_owner));
     FlattenedClass {
         name: name.to_string(),
         span: dummy(),

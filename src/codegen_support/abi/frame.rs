@@ -20,7 +20,7 @@ use super::registers::{frame_pointer_reg, is_float_register};
 /// On AArch64: allocates `frame_size` bytes, saves x29/x30 in the footer, and establishes x29 as the frame pointer.
 /// On x86_64: pushes rbp, establishes rsp as the frame base, and reserves `frame_size - 16` bytes for locals.
 pub fn emit_frame_prologue(emitter: &mut Emitter, frame_size: usize) {
-    debug_assert!(
+    assert!(
         frame_size >= 16,
         "frame_size must reserve the 16-byte frame footer (x29/x30), got {frame_size}"
     );
@@ -67,7 +67,7 @@ pub fn emit_frame_prologue(emitter: &mut Emitter, frame_size: usize) {
 /// pointer corrects that drift instead of reproducing it into the caller; for an already
 /// balanced body it yields the identical sp/rsp as the old size-based arithmetic.
 pub fn emit_frame_restore(emitter: &mut Emitter, frame_size: usize) {
-    debug_assert!(
+    assert!(
         frame_size >= 16,
         "frame_size must reserve the 16-byte frame footer (x29/x30), got {frame_size}"
     );

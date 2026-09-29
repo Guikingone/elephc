@@ -1372,6 +1372,19 @@ foreach ($m as $k => $v) { echo $k, "=", $v, ";"; }
     assert_eq!(out, "a=p!;b=q!;");
 }
 
+/// A descriptor callback's transient string remains live after later string operations reuse scratch storage.
+#[test]
+fn test_array_map_assoc_descriptor_string_result_owns_bytes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$source = ["A" => chr(233)];
+$mapped = array_map(fn($value) => bin2hex($value), $source);
+echo bin2hex($mapped["A"]), "|", $mapped["A"];
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "6539|e9");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies `array_map()` over a `string => int` hash keeps the source keys.
 /// Fixture: `["a" => 1, "b" => 2]` doubled through an arrow function.
 #[test]
@@ -1719,6 +1732,27 @@ echo implode(",", $w);
 "#,
     );
     assert_eq!(out, "d,c,b,a");
+}
+
+/// Verifies typed first-class-callable callbacks over Mixed elements compile through the
+/// inline argument adapter, which must be minted as a real symbol for `label_global()`.
+#[test]
+fn test_first_class_callable_callbacks_adapt_mixed_elements() {
+    let out = compile_and_run(
+        r#"<?php
+function cmp(int $a, int $b): int { return $a <=> $b; }
+function dbl(int $x): int { return $x * 2; }
+function mk(): array { return [3, "1", 2]; }
+$a = mk();
+usort($a, cmp(...));
+echo json_encode($a), "\n";
+$b = [3, "1", 2];
+usort($b, cmp(...));
+echo json_encode($b), "\n";
+echo json_encode(array_map(dbl(...), mk())), "\n";
+"#,
+    );
+    assert_eq!(out, "[\"1\",2,3]\n[\"1\",2,3]\n[6,2,4]\n");
 }
 
 // --- array_reduce over indexed string arrays (16-byte descriptor slots) ---

@@ -9,6 +9,27 @@
 
 use super::*;
 
+/// Verifies first-class builtin calls keep the compile-time literal rule of their contract.
+///
+/// Each argument below decides what the backend emits, so every spelling of the call needs it at
+/// compile time; the direct call's diagnostic is reported instead of a backend failure or a
+/// silently ignored flag (issue #1346).
+#[test]
+fn test_error_first_class_builtin_non_literal_arguments() {
+    expect_error(
+        "<?php $t = $argc > 0; $f = array_reverse(...); $f([1, 2], $t);",
+        "array_reverse() preserve_keys argument must be a literal bool in AOT mode",
+    );
+    expect_error(
+        "<?php $n = $argc > 5 ? 'A' : 'B'; $f = constant(...); $f($n);",
+        "constant() first argument must be a string literal in AOT mode",
+    );
+    expect_error(
+        "<?php $m = $argc > 5 ? 1 : 0; $f = str_word_count(...); $f('a b', $m);",
+        "str_word_count() format argument must be an integer literal in AOT mode",
+    );
+}
+
 /// An unsupported fourth replacement argument stays rejected through callable syntax.
 #[test]
 fn test_error_capped_string_replace_callable_rejects_fourth_argument() {
@@ -283,11 +304,26 @@ fn test_error_get_declared_traits_wrong_args() {
 #[test]
 fn test_error_class_alias_rejects_runtime_call_shape() {
     // Verifies `class_alias()` with a runtime variable as the second argument
-    // produces a diagnostic because only top-level statements with literal
-    // class names are supported in AOT mode.
+    // produces a diagnostic because only top-level statements with
+    // compile-time-constant class names are supported in AOT mode.
     expect_error(
         r#"<?php class Original {} $alias = "Alias"; class_alias("Original", $alias);"#,
-        "class_alias() is only supported as a top-level statement with literal class names",
+        "class_alias() is only supported as a top-level statement with compile-time-constant class names (string literals, Name::class, or a concatenation of them)",
+    );
+}
+
+/// Verifies `class_alias()` still refuses a class name only known at run time even though
+/// `Name::class` constants are accepted (issue #849): `$object::class` names the runtime class
+/// of an object, and a call inside a function body is not a top-level declaration.
+#[test]
+fn test_error_class_alias_rejects_runtime_class_name_shapes() {
+    expect_error(
+        r#"<?php class Original {} $o = new Original(); class_alias($o::class, "Alias");"#,
+        "class_alias() is only supported as a top-level statement with compile-time-constant class names (string literals, Name::class, or a concatenation of them)",
+    );
+    expect_error(
+        r#"<?php class Original {} function make() { class_alias(Original::class, "Alias"); } make();"#,
+        "class_alias() is only supported as a top-level statement with compile-time-constant class names (string literals, Name::class, or a concatenation of them)",
     );
 }
 
@@ -299,6 +335,22 @@ fn test_error_call_non_callable_variable() {
     // Verifies invoking a non-callable variable (integer) produces a "not a callable"
     // diagnostic at runtime.
     expect_error(r#"<?php $x = 5; $x(1);"#, "not a callable");
+}
+
+/// `$this(...)` in a class without `__invoke` is refused even when the class defines `__call`:
+/// PHP never routes an object invocation through `__call`.
+#[test]
+fn test_error_invoke_this_without_invoke_ignores_call() {
+    expect_error(
+        r#"<?php
+class B {
+    public function __call($m, $a) { return $m; }
+    public function run() { return $this(1); }
+}
+echo (new B())->run();
+"#,
+        "not a callable",
+    );
 }
 
 /// Boxed runtime dispatch still rejects unpacking after an explicit named argument.

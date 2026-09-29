@@ -155,7 +155,8 @@ fn eval_execute_include_code(
         .unwrap_or_default();
     context.set_call_site(file.clone(), dir, 1);
     context.set_file_magic_override(Some(file));
-    let result = execute_statements(program.statements(), context, scope, values);
+    let result = seed_named_cli_superglobals(program.as_ref(), context, scope, values)
+        .and_then(|()| execute_statements(program.statements(), context, scope, values));
     context.set_call_site(previous.0, previous.1, previous.2);
     context.set_file_magic_override(previous.3);
     result

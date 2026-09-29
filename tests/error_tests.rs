@@ -261,6 +261,8 @@ fn resolver_error(src: &str) -> elephc::errors::CompileError {
     result.expect_err("expected resolver to fail")
 }
 
+#[path = "support/locals_retype_fixtures.rs"]
+mod locals_retype_fixtures;
 #[path = "error_tests/syntax.rs"]
 mod syntax;
 #[path = "error_tests/recovery.rs"]
@@ -283,6 +285,8 @@ mod strict_php;
 mod math_builtins;
 #[path = "error_tests/string_builtins.rs"]
 mod string_builtins;
+#[path = "error_tests/mbstring.rs"]
+mod mbstring;
 #[path = "error_tests/io_builtins/mod.rs"]
 mod io_builtins;
 #[path = "error_tests/array_builtins.rs"]

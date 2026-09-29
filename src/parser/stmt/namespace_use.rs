@@ -60,7 +60,7 @@ pub(super) fn parse_namespace_stmt(
     let mut errors = Vec::new();
     while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
         match parse_stmt(tokens, pos) {
-            Ok(stmt) => body.push(stmt),
+            Ok(stmt) => super::push_parsed_stmt(&mut body, stmt),
             Err(error) => {
                 errors.extend(error.flatten());
                 recover_to_statement_boundary(tokens, pos);
@@ -271,7 +271,7 @@ fn parse_group_use_items(
 /// identifier — the lexer emits a dedicated token. Accepting them here keeps such use
 /// declarations parseable; aliases resolve through the normal constant import table because
 /// the same names are seeded in the checker/prescan constant maps.
-fn token_as_import_name(token: &Token, metadata: &crate::lexer::TokenMetadata) -> Option<String> {
+pub(crate) fn token_as_import_name(token: &Token, metadata: &crate::lexer::TokenMetadata) -> Option<String> {
     match token {
         Token::PhpIntMax
         | Token::PhpIntMin

@@ -95,8 +95,10 @@ pub(super) use array_write_core::{
     indexed_array_write_element_type, release_indexed_array_write_operand,
 };
 pub(crate) use array_write_core::{
-    compound_array_write_value_reads_target, lower_array_assign_with_diagnosed_key,
+    desugared_element_update, lower_array_assign_with_diagnosed_key,
 };
+pub(crate) use property_array_writes::lower_property_array_assign_with_diagnosed_key;
+pub(crate) use static_property_writes::lower_static_property_array_assign_with_diagnosed_key;
 pub(super) use array_write_storage::{
     finish_indexed_array_local_write, load_array_local_for_write, prepare_indexed_array_local_write,
     ref_bound_mixed_indexed_array_write,
@@ -104,6 +106,7 @@ pub(super) use array_write_storage::{
 
 /// Lowers one AST statement into the current EIR insertion block.
 pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
+    let _profile = crate::source::scoped_parse_mode(stmt.profile());
     crate::strict_php::with_source_mode(stmt.source_mode, || {
         if !ctx.builder.insertion_block_is_terminated() {
             repr_fixpoint::lower_stmt_at_type_fixpoint(ctx, stmt);

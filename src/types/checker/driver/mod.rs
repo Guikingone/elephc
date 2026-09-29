@@ -354,6 +354,7 @@ pub(super) fn check_types_impl(
                 constants,
                 enum_used_traits,
                 enum_trait_aliases,
+                &stmt.attributes,
                 stmt.span,
                 &mut checker,
                 &mut next_class_id,
@@ -458,6 +459,56 @@ fn report_class_id_inventory(checker: &Checker) {
 
 #[cfg(test)]
 mod tests {
+    /// Abstract enum method declarations retain their status in parallel class metadata.
+    #[test]
+    fn enum_metadata_records_abstract_instance_and_static_methods() {
+        use crate::codegen_support::platform::{Arch, Platform, Target};
+        use crate::parser::ast::{ClassMethod, Visibility};
+        use crate::span::Span;
+
+        let mut checker = super::Checker::new(Target::new(Platform::MacOS, Arch::AArch64));
+        let method = |name: &str, is_static: bool| ClassMethod {
+            name: name.to_string(),
+            visibility: Visibility::Public,
+            is_static,
+            is_abstract: true,
+            is_final: false,
+            has_body: false,
+            params: Vec::new(),
+            param_attributes: Vec::new(),
+            variadic: None,
+            variadic_by_ref: false,
+            variadic_type: None,
+            return_type: None,
+            by_ref_return: false,
+            body: Vec::new(),
+            span: Span::dummy(),
+            attributes: Vec::new(),
+        };
+        let mut next_class_id = 1;
+        crate::types::checker::schema::insert_enum_metadata(
+            "State",
+            None,
+            Vec::new(),
+            &[],
+            &[method("instance", false), method("statik", true)],
+            &[],
+            &[],
+            &[],
+            Span::dummy(),
+            &mut checker,
+            &mut next_class_id,
+        )
+        .expect("record enum metadata");
+        let class = checker.classes.get("State").expect("enum class metadata");
+        assert!(class.abstract_methods.contains("instance"));
+        assert!(class.abstract_static_methods.contains("statik"));
+        assert!(!class.method_impl_classes.contains_key("instance"));
+        assert!(!class.static_method_impl_classes.contains_key("statik"));
+        assert_eq!(class.method_declaring_classes.get("instance").map(String::as_str), Some("State"));
+        assert_eq!(class.static_method_declaring_classes.get("statik").map(String::as_str), Some("State"));
+    }
+
     /// Class ids must not depend on HashMap iteration order.
     ///
     /// THIS TEST CANNOT BE WRITTEN AS "check the same source twice and compare". Rust seeds its
