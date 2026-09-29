@@ -623,6 +623,9 @@ pub(crate) fn lower_eval_aot_scope_function(
 }
 
 /// Builds fallback method signature metadata from parsed class-like method syntax.
+///
+/// Trait reflection reads this signature, so it keeps the declaration's `function &m()`
+/// flag for `ReflectionMethod::returnsReference()`.
 pub(crate) fn method_signature_from_ast(method: &ClassMethod) -> FunctionSig {
     let mut signature = signature_from_ast_with_variadic(
         &method.params,
@@ -630,6 +633,7 @@ pub(crate) fn method_signature_from_ast(method: &ClassMethod) -> FunctionSig {
         method.variadic.as_deref(),
         method.variadic_by_ref,
     );
+    signature.by_ref_return = method.by_ref_return;
     if !method.variadic_by_ref {
         if let Some(variadic_type) = &method.variadic_type {
             if let Some((_, php_type)) = signature.params.last_mut() {

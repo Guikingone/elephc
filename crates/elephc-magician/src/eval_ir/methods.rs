@@ -29,6 +29,9 @@ pub struct EvalClassMethod {
     parameter_is_by_ref: Vec<bool>,
     parameter_is_variadic: Vec<bool>,
     return_type: Option<EvalParameterType>,
+    /// Whether the declaration returns by reference. Eval's grammar has no `function &m()`,
+    /// so only an `&get` property hook sets it.
+    returns_by_ref: bool,
     body: Vec<EvalStmt>,
 }
 
@@ -51,6 +54,7 @@ impl PartialEq for EvalClassMethod {
             && self.parameter_is_by_ref == other.parameter_is_by_ref
             && self.parameter_is_variadic == other.parameter_is_variadic
             && self.return_type == other.return_type
+            && self.returns_by_ref == other.returns_by_ref
             && self.body == other.body
     }
 }
@@ -114,6 +118,7 @@ impl EvalClassMethod {
             parameter_is_by_ref,
             parameter_is_variadic,
             return_type: None,
+            returns_by_ref: false,
             body,
         }
     }
@@ -213,6 +218,17 @@ impl EvalClassMethod {
     pub fn with_return_type(mut self, return_type: Option<EvalParameterType>) -> Self {
         self.return_type = return_type;
         self
+    }
+
+    /// Returns a copy of this method recording whether it is declared to return by reference.
+    pub const fn with_returns_by_ref(mut self, returns_by_ref: bool) -> Self {
+        self.returns_by_ref = returns_by_ref;
+        self
+    }
+
+    /// Returns whether this method is declared to return by reference (an `&get` hook).
+    pub const fn returns_by_ref(&self) -> bool {
+        self.returns_by_ref
     }
 
     /// Returns attributes declared directly on this class method.

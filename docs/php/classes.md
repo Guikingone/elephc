@@ -116,7 +116,13 @@ Classes implementing `ArrayAccess` can use PHP subscript syntax:
 `offsetSet()`, `isset($obj[$key])` dispatches to `offsetExists()`, and
 `unset($obj[$key])` dispatches to `offsetUnset()`. `empty($obj[$key])` asks
 `offsetExists()` first and calls `offsetGet()` to test the value only when the
-offset exists, evaluating the object and the key once.
+offset exists, evaluating the object and the key once, so `offsetGet()` runs on
+the object `offsetExists()` answered for even if that call replaced the variable
+or property holding it. This holds for variables, `$this`, instance and static
+properties declared with an `ArrayAccess` class type, and call results; a nullable
+receiver holding `null` is empty without either call. A nullable static
+property (`static ?Box $box`) is read as a plain value, so `empty()` on it goes
+straight to `offsetGet()`.
 
 `Serializable` is intentionally not provided: it is deprecated since
 PHP 8.1. Use the `__serialize` / `__unserialize` magic methods instead.
@@ -888,7 +894,7 @@ echo sqlSortKeyword(SortDirection::Descending); // DESC
 - `__set($name, $value)` — writing an undeclared property
 - `__isset($name)` — `isset()`/`empty()` on an undeclared or inaccessible property
 - `__unset($name)` — `unset()` of an undeclared or inaccessible property
-- `__invoke(...$args)` — calling an object directly
+- `__invoke(...$args)` — calling an object directly, including `$this(...)` from inside its own class. The class that contains `$this(...)` must declare or inherit `__invoke`: an abstract parent that relies on a subclass's `__invoke` is refused at compile time, where PHP resolves it at run time
 - `__call($name, $args)` — intercepting missing instance methods
 - `__callStatic($name, $args)` — intercepting missing static methods
 
@@ -1402,7 +1408,7 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionMethod::getName()` | `new ReflectionMethod($class_name, $method_name)` or deprecated `new ReflectionMethod("ClassName::method")` | Return the reflected method name, as DECLARED: lookup is case-insensitive, so `new ReflectionMethod(Box::class, "mAtCh")` finds a method written `Match` and reports `Match`, not the lookup text. Every path agrees — the constructor, `ReflectionClass::getMethod()`/`getMethods()`, `getPrototype()`, a parameter's `getDeclaringFunction()`, `get_class_methods()`, and the same reflection inside `eval()` |
 | `ReflectionMethod::getShortName()` / `getNamespaceName()` / `inNamespace()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Return PHP method-name metadata; methods report an empty namespace and `false` for `inNamespace()` |
 | `ReflectionMethod::isInternal()` / `isUserDefined()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Return origin predicates for supported reflected methods |
-| `ReflectionMethod::isClosure()` / `isDeprecated()` / `returnsReference()` / `isGenerator()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Return retained method predicates; AOT reflection reports `false` for closures, derives `returnsReference()` from the method's declared return-by-reference flag for class and interface methods (trait methods still report `false`), uses `#[Deprecated]` metadata, and reports generator methods from lowered generator flags |
+| `ReflectionMethod::isClosure()` / `isDeprecated()` / `returnsReference()` / `isGenerator()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Return retained method predicates; AOT reflection reports `false` for closures, derives `returnsReference()` from the method's declared return-by-reference flag for class, interface, and trait methods (reflected on the trait itself or on a class that uses it) and from a property's `&get` hook declaration, uses `#[Deprecated]` metadata, and reports generator methods from lowered generator flags |
 | `ReflectionMethod::hasTentativeReturnType()` / `getTentativeReturnType()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Return PHP-compatible defaults for supported user methods: no tentative return type |
 | `ReflectionMethod::hasPrototype()` / `getPrototype()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Return retained parent/interface prototype metadata for supported reflected method overrides and interface implementations |
 | `ReflectionMethod::getDeclaringClass()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Return a `ReflectionClass` object for the class-like symbol that declares the reflected method |

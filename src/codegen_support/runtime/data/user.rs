@@ -47,6 +47,10 @@ const EVAL_REFLECTION_METHOD_FLAG_PRIVATE: u64 = 8;
 const EVAL_REFLECTION_METHOD_FLAG_FINAL: u64 = 16;
 const EVAL_REFLECTION_METHOD_FLAG_ABSTRACT: u64 = 32;
 const EVAL_REFLECTION_METHOD_FLAG_PROPERTY_HOOK: u64 = 32768;
+/// Set when the method is declared `function &m()` (or is a `&get` hook), which eval's
+/// `ReflectionMethod::returnsReference()` reports. The bit is property-only in the member-flag
+/// space, where it means private(set), so a method row can carry it without ambiguity.
+const EVAL_REFLECTION_METHOD_FLAG_RETURNS_REFERENCE: u64 = 4096;
 const EVAL_REFLECTION_METHOD_SOURCE_LINE_MASK: u64 = 0x00ff_ffff;
 const EVAL_REFLECTION_METHOD_SOURCE_START_SHIFT: u64 = 16;
 const EVAL_REFLECTION_METHOD_SOURCE_END_SHIFT: u64 = 40;
@@ -1614,7 +1618,10 @@ fn emit_eval_reflection_method_lookup_data(
                 &mut index,
                 interface_name,
                 &declared_name,
-                eval_reflection_interface_method_flags(false),
+                eval_reflection_interface_method_flags(
+                    false,
+                    interface_info.methods.get(method_name.as_str()),
+                ),
                 declaring_interface,
             );
         }
@@ -1639,7 +1646,10 @@ fn emit_eval_reflection_method_lookup_data(
                 &mut index,
                 interface_name,
                 &declared_name,
-                eval_reflection_interface_method_flags(true),
+                eval_reflection_interface_method_flags(
+                    true,
+                    interface_info.static_methods.get(method_name.as_str()),
+                ),
                 declaring_interface,
             );
         }
@@ -1855,6 +1865,9 @@ fn eval_reflection_instance_method_flags(class_info: &ClassInfo, method_name: &s
     if class_info.abstract_methods.contains(method_name) {
         flags |= EVAL_REFLECTION_METHOD_FLAG_ABSTRACT;
     }
+    if class_info.methods.get(method_name).is_some_and(|sig| sig.by_ref_return) {
+        flags |= EVAL_REFLECTION_METHOD_FLAG_RETURNS_REFERENCE;
+    }
     flags
 }
 
@@ -1872,14 +1885,20 @@ fn eval_reflection_static_method_flags(class_info: &ClassInfo, method_name: &str
     if class_info.abstract_static_methods.contains(method_name) {
         flags |= EVAL_REFLECTION_METHOD_FLAG_ABSTRACT;
     }
+    if class_info.static_methods.get(method_name).is_some_and(|sig| sig.by_ref_return) {
+        flags |= EVAL_REFLECTION_METHOD_FLAG_RETURNS_REFERENCE;
+    }
     flags
 }
 
 /// Returns eval ReflectionMethod bitflags for one interface method entry.
-fn eval_reflection_interface_method_flags(is_static: bool) -> u64 {
+fn eval_reflection_interface_method_flags(is_static: bool, signature: Option<&FunctionSig>) -> u64 {
     let mut flags = EVAL_REFLECTION_METHOD_FLAG_PUBLIC | EVAL_REFLECTION_METHOD_FLAG_ABSTRACT;
     if is_static {
         flags |= EVAL_REFLECTION_METHOD_FLAG_STATIC;
+    }
+    if signature.is_some_and(|sig| sig.by_ref_return) {
+        flags |= EVAL_REFLECTION_METHOD_FLAG_RETURNS_REFERENCE;
     }
     flags
 }

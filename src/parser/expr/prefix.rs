@@ -266,6 +266,22 @@ pub(super) fn parse_prefix(
             parse_scoped_static_call(tokens, pos, span, StaticReceiver::Parent, "parent")
         }
         Token::New => parse_new_object(tokens, pos, span),
+        // `$this(...)` invokes the current object exactly like `($this)(...)`: through
+        // `__invoke` only. A plain `__invoke` method call would fall back to `__call`, which PHP
+        // never does for an object invocation.
+        Token::This if matches!(tokens.get(*pos + 1), Some((Token::LParen, _))) => {
+            let this = Expr::new(ExprKind::This, span);
+            *pos += 2;
+            let args = parse_args(tokens, pos, span)?;
+            let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
+            Ok(Expr::new(
+                ExprKind::ExprCall {
+                    callee: Box::new(this),
+                    args,
+                },
+                span,
+            ))
+        }
         Token::This => parse_simple(tokens, pos, span, ExprKind::This),
         Token::Yield => parse_yield(tokens, pos, span),
         other => Err(CompileError::new(
