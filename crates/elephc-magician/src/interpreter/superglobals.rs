@@ -12,15 +12,60 @@
 //! - Contents mirror the compiler's `superglobals::seed_cli_populated_superglobals`: `$_ENV` is
 //!   the environment, `$_SERVER` the environment plus the nine CLI keys, and `$_GET`, `$_POST`,
 //!   `$_COOKIE`, `$_FILES`, `$_REQUEST` empty arrays.
+//! - PHP creates each auto-global once per request, so a superglobal eval code has unset is
+//!   never created again. The record is thread-local, like the strict-PHP flag: an elephc
+//!   program runs every eval on one thread, and tests on separate threads stay independent.
+//!   Under `--web` the request prelude assigns every superglobal natively on each request, so
+//!   eval finds them synchronized and the record only matters after an unset in that request.
 
 use super::builtins::collection_builder::EvalArrayBuilder;
 use super::*;
+use crate::eval_ir::EVAL_CLI_POPULATED_SUPERGLOBALS;
+use std::cell::Cell;
 use std::os::unix::ffi::OsStrExt;
+
+thread_local! {
+    /// One bit per `EVAL_CLI_POPULATED_SUPERGLOBALS` entry that eval code has unset.
+    static UNSET_CLI_SUPERGLOBALS: Cell<u8> = const { Cell::new(0) };
+}
+
+/// Returns the `UNSET_CLI_SUPERGLOBALS` bit for a CLI-populated superglobal name.
+fn cli_superglobal_bit(name: &str) -> Option<u8> {
+    EVAL_CLI_POPULATED_SUPERGLOBALS
+        .iter()
+        .position(|superglobal| *superglobal == name)
+        .map(|index| 1 << index)
+}
+
+/// Records that eval code unset `name`, so no later fragment re-creates it.
+///
+/// Only the CLI-populated superglobals are recorded; any other name is ignored.
+pub(in crate::interpreter) fn note_superglobal_unset(name: &str) {
+    if let Some(bit) = cli_superglobal_bit(name) {
+        UNSET_CLI_SUPERGLOBALS.with(|unset| unset.set(unset.get() | bit));
+    }
+}
+
+/// Returns whether eval code has unset the CLI-populated superglobal `name`.
+fn superglobal_was_unset(name: &str) -> bool {
+    cli_superglobal_bit(name)
+        .is_some_and(|bit| UNSET_CLI_SUPERGLOBALS.with(|unset| unset.get() & bit != 0))
+}
+
+/// Forgets every recorded superglobal unset on the current thread.
+///
+/// Tests that unset a superglobal call this, so a later test that libtest runs on the same
+/// thread still sees superglobals created.
+#[cfg(test)]
+pub(in crate::interpreter) fn reset_unset_superglobals() {
+    UNSET_CLI_SUPERGLOBALS.with(|unset| unset.set(0));
+}
 
 /// Seeds the CLI-populated superglobals `program` names that are not yet visible.
 ///
 /// Inside an executing `eval()` the values land in the global scope (see `scope_cells`), which
-/// in the top-level scope is the eval scope itself.
+/// in the top-level scope is the eval scope itself. A superglobal eval code has unset stays
+/// undefined, as it does in PHP.
 pub(in crate::interpreter) fn seed_named_cli_superglobals(
     program: &EvalProgram,
     context: &mut ElephcEvalContext,
@@ -28,7 +73,7 @@ pub(in crate::interpreter) fn seed_named_cli_superglobals(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     for name in program.cli_superglobals() {
-        if visible_scope_cell(context, scope, name).is_some() {
+        if visible_scope_cell(context, scope, name).is_some() || superglobal_was_unset(name) {
             continue;
         }
         let value = eval_cli_superglobal_value(name, values)?;

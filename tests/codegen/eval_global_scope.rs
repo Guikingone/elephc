@@ -89,3 +89,45 @@ echo array_key_exists("FROM_EVAL", $_ENV) ? $_ENV["FROM_EVAL"] : "lost", "\n";
         output.stderr
     );
 }
+
+/// Unsets a superglobal from a function-scope eval the way PHP does: globally, for good (#935).
+///
+/// Reads and writes of a superglobal inside eval resolve through the global scope, but
+/// `unset()` used to touch only the eval's local scope, so the next read found the global
+/// value again, and a superglobal eval had created (`$_SERVER` here, which the compiled
+/// program never names) was created again by the next fragment naming it. After the unset,
+/// every read (in the same fragment, in a later eval of the same call, in the compiled
+/// function, at top level, and in a top-level eval) now sees it undefined, as in PHP 8.5.10.
+#[test]
+fn test_eval_function_scope_superglobal_unset_is_global() {
+    let source = r#"<?php
+$dyn = $argc > 0;
+$unsetGet = $dyn ? 'unset($_GET); var_dump(isset($_GET));' : '';
+$checkGet = $dyn ? 'var_dump(isset($_GET));' : '';
+$unsetServer = $dyn ? 'unset($_SERVER); var_dump(isset($_SERVER));' : '';
+$checkServer = $dyn ? 'var_dump(isset($_SERVER));' : '';
+$_GET["a"] = "native";
+function f(string $unset, string $check): void {
+    eval($unset);
+    eval($check);
+    var_dump(isset($_GET));
+}
+f($unsetGet, $checkGet);
+var_dump(isset($_GET));
+eval($checkGet);
+function g(string $unset, string $check): void {
+    eval($unset);
+    eval($check);
+}
+g($unsetServer, $checkServer);
+eval($checkServer);
+"#;
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "bool(false)\n".repeat(8));
+    assert!(
+        output.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "unset superglobals leaked: {}",
+        output.stderr
+    );
+}

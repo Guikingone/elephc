@@ -146,7 +146,8 @@ such a local alias removes the alias without unsetting the global value.
 Superglobals (`$_SERVER`, `$_ENV`, `$_GET`, `$_POST`, `$_COOKIE`, `$_FILES`,
 `$_REQUEST`, `$_SESSION`) resolve through the global scope from every fragment,
 with no `global` statement, so a fragment running inside a function reads and
-writes the values the compiled program holds. When a fragment names a CLI
+writes the values the compiled program holds, and `unset()` removes the global
+one: it stays undefined for every later read, and eval never creates it again. When a fragment names a CLI
 superglobal that the compiled program never created, eval creates it as the
 fragment starts, the way PHP's `auto_globals_jit` does, with the contents a
 compiled CLI program gives it (see

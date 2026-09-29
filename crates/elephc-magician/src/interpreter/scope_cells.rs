@@ -206,14 +206,24 @@ pub(in crate::interpreter) fn set_reference_alias(
     Ok(scope.set_reference(target.to_string(), source.to_string(), cell, ownership))
 }
 
-/// Unsets a variable, removing only the local alias when the name is global.
+/// Unsets a variable, removing only the local alias when the name is a `global` alias.
+///
+/// A superglobal is different: PHP unsets the global itself from any scope, so it is unset in
+/// the same global scope its reads and writes resolve through, and recorded so that no later
+/// fragment re-creates it. The released cell, if this scope owned one, goes to the caller.
 pub(in crate::interpreter) fn unset_scope_cell(
+    context: &ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     name: impl Into<String>,
 ) -> Option<RuntimeCellHandle> {
     let name = name.into();
     if scope.is_global_alias(&name) {
         scope.clear_global_alias(&name);
+        return scope.unset_respecting_references(name);
+    }
+    note_superglobal_unset(&name);
+    if let Some(global) = eval_superglobal_scope(context, scope, &name) {
+        return unsafe { global.as_mut() }?.unset_respecting_references(name);
     }
     scope.unset_respecting_references(name)
 }

@@ -379,6 +379,54 @@ fn execute_program_superglobals_resolve_through_the_global_scope() {
     assert!(scope.visible_cell("_SERVER").is_none());
 }
 
+/// Verifies `unset()` of a superglobal inside an eval call reaches the global scope its reads
+/// and writes resolve through, and that no later fragment creates the superglobal again.
+///
+/// PHP unsets the global itself from any scope and creates each auto-global once per request.
+/// A local-only unset left the global scope's value in place, so the very next read saw it; a
+/// CLI superglobal eval created would also have been created again by the next fragment that
+/// named it.
+#[test]
+fn execute_program_superglobal_unset_reaches_the_global_scope() {
+    /// Forgets the recorded superglobal unsets when the test ends, even on a failed assertion.
+    struct ResetUnsetSuperglobals;
+    impl Drop for ResetUnsetSuperglobals {
+        /// Clears this thread's record so later tests still see superglobals created.
+        fn drop(&mut self) {
+            reset_unset_superglobals();
+        }
+    }
+    let _reset = ResetUnsetSuperglobals;
+    let unset_get = parse_fragment(br#"unset($_GET); return isset($_GET);"#).expect("parse eval fragment");
+    let read_get = parse_fragment(br#"return isset($_GET);"#).expect("parse eval fragment");
+    let unset_server =
+        parse_fragment(br#"unset($_SERVER); return isset($_SERVER);"#).expect("parse eval fragment");
+    let read_server = parse_fragment(br#"return isset($_SERVER);"#).expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut global_scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let get = values.assoc_new(0).expect("allocate the program's $_GET");
+    global_scope.set("_GET", get, ScopeCellOwnership::Owned);
+    context.set_global_scope(&mut global_scope);
+    context.push_eval_backtrace_boundary();
+
+    let mut results = Vec::new();
+    for program in [&unset_get, &read_get, &unset_server, &read_server] {
+        let mut scope = ElephcEvalScope::new();
+        results.push(
+            execute_program_with_context(&mut context, program, &mut scope, &mut values)
+                .expect("execute eval ir"),
+        );
+    }
+    context.pop_eval_backtrace_boundary();
+
+    for result in results {
+        assert_eq!(values.get(result), FakeValue::Bool(false));
+    }
+    assert!(global_scope.visible_cell("_GET").is_none());
+    assert!(global_scope.visible_cell("_SERVER").is_none());
+}
+
 /// Verifies a context outside an executing eval call keeps superglobals local.
 ///
 /// A callback can run in a context retained past the native frame that installed its global
