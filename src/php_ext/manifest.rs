@@ -289,7 +289,7 @@ fn validate_source(name: &str, source: &ExtensionSource) -> Result<(), NativeErr
 }
 
 /// Extension names follow PECL: lowercase ASCII, digits, underscore.
-fn validate_extension_name(name: &str) -> Result<(), NativeError> {
+pub(super) fn validate_extension_name(name: &str) -> Result<(), NativeError> {
     if name.is_empty() {
         return Err(manifest_error("extension name must not be empty"));
     }

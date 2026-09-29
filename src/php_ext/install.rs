@@ -33,7 +33,7 @@ use crate::native_deps::{
 };
 
 use super::build::{self, BuildRecord};
-use super::manifest::{ExtensionSource, PhpExtManifest};
+use super::manifest::{validate_extension_name, ExtensionSource, PhpExtManifest};
 use super::source;
 use super::surface::ExtensionSurface;
 
@@ -332,7 +332,15 @@ fn ensure_built(ctx: &mut Context, php_src: &Path, name: &str, source: &Extensio
 }
 
 /// Resolves what `add` should pin: the manifest key and the source to record.
+///
+/// The name becomes a cache path (built, staged, and removed on failure), so it
+/// is validated before anything is fetched or built: the one given on the
+/// command line at once, and a PIE package's, which its own metadata chooses,
+/// as soon as it is known.
 fn pin(ctx: &Context, spec: &AddSpec) -> Result<(String, ExtensionSource), NativeError> {
+    if let AddSpec::Pecl { name, .. } | AddSpec::Path { name, .. } = spec {
+        validate_extension_name(name)?;
+    }
     match spec {
         AddSpec::Path { name, path } => Ok((name.clone(), ExtensionSource::Path { path: path.clone() })),
         AddSpec::Pecl { name, version } => {
@@ -345,6 +353,7 @@ fn pin(ctx: &Context, spec: &AddSpec) -> Result<(String, ExtensionSource), Nativ
         }
         AddSpec::Pie { package, version } => {
             let release = source::pie_resolve(package, version.as_deref())?;
+            validate_extension_name(&release.extension)?;
             let sha256 = fetch_for_pin(ctx, &release.url)?;
             Ok((
                 release.extension.clone(),
