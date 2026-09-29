@@ -1372,3 +1372,29 @@ var_dump($u);
         )
     );
 }
+
+/// `unserialize()` into a tagged `?int` property stores an int and a null as themselves, and
+/// never exposes another value's payload word as an integer. PHP rejects a string, float, bool
+/// or array there with a `TypeError`, which elephc does not raise yet (#1629, `docs/php/types.md`);
+/// the slot holds null instead, rather than a string's heap pointer read as an int. The heap is
+/// not asserted clean: `unserialize()` of an object leaks on main whatever the property type
+/// (#1562).
+#[test]
+fn test_unserialize_mismatched_value_into_nullable_int_property_stores_null() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C { public ?int $n = null; }
+$out = "";
+for ($i = 0; $i < 20 + $argc; $i++) {
+    $out = "";
+    foreach (['i:7;', 'N;', 's:3:"abc";', 'd:1.5;', 'b:1;', 'a:0:{}'] as $payload) {
+        $o = unserialize('O:1:"C":1:{s:1:"n";' . $payload . '}');
+        $out .= json_encode($o->n) . " ";
+    }
+}
+echo $out, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "7 null null null null null \n");
+}

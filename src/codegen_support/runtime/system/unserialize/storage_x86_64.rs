@@ -75,8 +75,9 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r10], rax");                            // store it inline in the slot
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
     emitter.label("__rt_obj_store_prop_tagged");
-    emitter.instruction(&format!("cmp QWORD PTR [rcx], {}", TAGGED_SCALAR_TAG_NULL)); // is the boxed value null?
-    emitter.instruction("je __rt_obj_store_prop_tagged_null");                  // store the canonical tagged null pair
+    // Only an int is stored as one; see the AArch64 variant.
+    emitter.instruction(&format!("cmp QWORD PTR [rcx], {}", TAGGED_SCALAR_TAG_INT)); // is the boxed value an int?
+    emitter.instruction("jne __rt_obj_store_prop_tagged_null");                 // null or a mismatched type: store the canonical tagged null pair
     emitter.instruction("mov rax, QWORD PTR [rcx + 8]");                        // unbox the integer payload
     emitter.instruction("mov QWORD PTR [r10], rax");                            // payload word of the tagged slot
     emitter.instruction(&format!("mov QWORD PTR [r10 + 8], {}", TAGGED_SCALAR_TAG_INT)); // tag word: a non-null tagged int

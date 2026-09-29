@@ -58,9 +58,12 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("str x9, [x8]");                                        // store it inline in the slot
     emitter.instruction("ret");                                                 // property stored
     emitter.label("__rt_obj_store_prop_tagged");
+    // Only an int is stored as one: null, and any value PHP would refuse for `?int` with a
+    // TypeError (a string, float, bool or array, not raised yet), store the canonical null
+    // rather than exposing the box's payload word as an integer.
     emitter.instruction("ldr x9, [x3]");                                        // boxed value tag
-    emitter.instruction(&format!("cmp x9, #{}", TAGGED_SCALAR_TAG_NULL));       // is the boxed value null?
-    emitter.instruction("b.eq __rt_obj_store_prop_tagged_null");                // store the canonical tagged null pair
+    emitter.instruction(&format!("cmp x9, #{}", TAGGED_SCALAR_TAG_INT));        // is the boxed value an int?
+    emitter.instruction("b.ne __rt_obj_store_prop_tagged_null");                // null or a mismatched type: store the canonical tagged null pair
     emitter.instruction("ldr x9, [x3, #8]");                                    // unbox the integer payload
     emitter.instruction("str x9, [x8]");                                        // payload word of the tagged slot
     emitter.instruction(&format!("mov x9, #{}", TAGGED_SCALAR_TAG_INT));        // runtime tag of a non-null tagged int
