@@ -468,7 +468,9 @@ fn return_type(ty: Option<&str>) -> (TypeExpr, Option<CastType>) {
         Some("float") => (TypeExpr::Float, Some(CastType::Float)),
         Some("string") => (TypeExpr::Str, Some(CastType::String)),
         Some("bool") => (TypeExpr::Bool, Some(CastType::Bool)),
-        Some("array") => (t_array(), Some(CastType::Array)),
+        // Not `array`: the checker types an `(array)` cast of a mixed value as
+        // mixed, so the declaration would be refused. The extension's own
+        // arginfo already guarantees the value is an array.
         Some("void") => (TypeExpr::Void, None),
         _ => (t_mixed(), None),
     }

@@ -40,6 +40,8 @@
 #include "zend_smart_string.h"
 #include "zend_weakrefs.h"
 #include "ext/spl/spl_exceptions.h"
+#include "ext/standard/info.h"
+#include "php_ini.h"
 #include "spprintf.h"
 
 #include <stdio.h>
@@ -393,11 +395,42 @@ PHPAPI size_t php_strlcpy(char *dst, const char *src, size_t size) {
     return len;
 }
 
-/* phpinfo() output has no meaning in a compiled binary. */
+PHPAPI size_t php_strlcat(char *dst, const char *src, size_t size) {
+    size_t used = strnlen(dst, size);
+    if (used == size) {
+        return size + strlen(src);
+    }
+    return used + php_strlcpy(dst + used, src, size - used);
+}
+
+/* Output an extension writes itself goes where Elephc's echo goes. */
+PHPAPI size_t php_write(void *buf, size_t size) {
+    return zend_write((const char *)buf, size);
+}
+
+PHPAPI size_t php_printf(const char *format, ...) {
+    va_list args;
+    char *buffer = NULL;
+    va_start(args, format);
+    size_t len = zend_vspprintf(&buffer, 0, format, args);
+    va_end(args);
+    size_t written = zend_write(buffer, len);
+    efree(buffer);
+    return written;
+}
+
+/* phpinfo() output has no meaning in a compiled binary: a hosted extension's
+ * MINFO is never called, but it is still linked. */
 PHPAPI void php_info_print_table_start(void) {}
 PHPAPI void php_info_print_table_end(void) {}
 PHPAPI void php_info_print_table_header(int num_cols, ...) { (void)num_cols; }
 PHPAPI void php_info_print_table_row(int num_cols, ...) { (void)num_cols; }
+PHPAPI void php_info_print_table_row_ex(int num_cols, const char *css, ...) { (void)num_cols; (void)css; }
+PHPAPI void php_info_print_table_colspan_header(int num_cols, const char *header) { (void)num_cols; (void)header; }
+PHPAPI void php_info_print_box_start(int bg) { (void)bg; }
+PHPAPI void php_info_print_box_end(void) {}
+PHPAPI void php_info_print_hr(void) {}
+PHPAPI void display_ini_entries(zend_module_entry *module) { (void)module; }
 
 /* ------------------------------------------------------------ active frame */
 

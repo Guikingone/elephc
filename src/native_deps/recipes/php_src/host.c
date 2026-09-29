@@ -797,8 +797,21 @@ const char *elephc_php_ext_value_key(void *value, int64_t index) {
     if (bucket->key) {
         return ZSTR_VAL(bucket->key);
     }
-    snprintf(decimal, sizeof decimal, ZEND_LONG_FMT, (zend_long)bucket->h);
-    return decimal;
+    /* By hand: PHP's headers redirect snprintf to their own formatter, whose
+     * length modifiers are not the C library's. */
+    zend_long key = (zend_long)bucket->h;
+    zend_ulong magnitude = key < 0 ? (zend_ulong)0 - (zend_ulong)key : (zend_ulong)key;
+    char *end = decimal + sizeof decimal - 1;
+    char *cursor = end;
+    *cursor = '\0';
+    do {
+        *--cursor = (char)('0' + magnitude % 10);
+        magnitude /= 10;
+    } while (magnitude);
+    if (key < 0) {
+        *--cursor = '-';
+    }
+    return cursor;
 }
 
 /* The value of entry `index`, as an engine zval the wrapper walks further. */
