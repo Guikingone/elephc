@@ -27,6 +27,7 @@ mod dominance;
 mod driver;
 mod identity_arith;
 mod inline;
+mod integer_range;
 mod immutable_local_loads;
 mod intervals;
 mod licm;

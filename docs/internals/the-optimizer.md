@@ -810,7 +810,22 @@ classification and integer-sink specialization for checked add/subtract/multiply
 Those passes make
 proven-stable local loads pure and replace transient boxed Mixed arithmetic with
 allocation-free `ichecked_*_to_int` operations only when every use observes an
-integer. After `CheckedIntSink`, `CheckedNumericChain` may fuse a left-associated
+integer. `IntegerRange` then propagates inclusive signed 64-bit intervals through
+constants, branch comparisons, block arguments, masks, shifts, and integer
+arithmetic. It recognizes constant-step loop-carried parameters in natural loops
+and combines their initial value, comparison bound, and update step to constrain
+induction variables on the loop body and back edge.
+
+Checked add, subtract, and multiply instructions become ordinary scalar EIR only
+when the complete operand interval proves that every possible result remains in
+the signed 64-bit range. The proof uses wider intermediate arithmetic and fails
+closed for unknown values, unsupported CFG shapes, exception handlers, invalid
+shifts, or incomplete boxed-value use shapes. Every unproven operation keeps its
+checked PHP overflow-to-float path. This pass runs after `CheckedIntSink`, so it
+can also remove proven-safe checked integer-sink operations without weakening the
+original boxed semantics.
+
+After `IntegerRange`, `CheckedNumericChain` may fuse a left-associated
 add/subtract/multiply chain whose `Mixed` intermediates are used only by the next
 operation, the final integer cast, and removable `Release` instructions into
 `ICheckedNumericChainToInt`; its in-range path stays in i64 registers, while the
