@@ -1080,14 +1080,14 @@ function p(int $n): array {
     $m["c"] = "str" . $n;
     return $m;
 }
-$n = $argc > 1 ? 100 : 10;
+$n = 100 + ($argc > 5 ? 1 : 0);
 $t = 0;
 for ($i = 0; $i < $n; $i++) { $t += count(p($i)); }
 echo $t, "\n";
 "#,
     );
     assert!(out.success, "program exited non-zero: {}", out.stderr);
-    assert_eq!(out.stdout, "60\n");
+    assert_eq!(out.stdout, "600\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
