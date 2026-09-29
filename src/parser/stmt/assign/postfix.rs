@@ -213,6 +213,56 @@ fn parse_complex_ref_assignment(
         ));
     }
     expect_semicolon(tokens, pos)?;
+    let element_target = is_append || matches!(&target.kind, ExprKind::ArrayAccess { .. });
+    if element_target && matches!(&source.kind, ExprKind::ArrayAccess { .. }) {
+        return element_to_element_reference(target, is_append, source, span);
+    }
+    complex_ref_store(target, is_append, source, span)
+}
+
+/// Lowers `$a[$k] = &$b[$j]` (or `$a[$k][] = &$b[$j]`) through a hidden local bound to the
+/// source element.
+///
+/// `$t = &$b[$j]` makes the source element a reference in place and gives `$t` a share of it;
+/// `$a[$k] = &$t` then stores a marker over that SAME reference, so the two elements are one
+/// reference, as in PHP. The trailing `unset` ends only the temp's binding: each element keeps
+/// its own share, and the next execution of the statement binds a fresh one.
+fn element_to_element_reference(
+    target: Expr,
+    is_append: bool,
+    source: Expr,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    let temp = format!("__elephc_ref_elem_{}_{}", span.line, span.col);
+    let temp_expr = Expr::new(ExprKind::Variable(temp.clone()), span);
+    let bind = Stmt::new(
+        StmtKind::RefAssign {
+            target: temp,
+            source,
+        },
+        span,
+    );
+    let store = complex_ref_store(target, is_append, temp_expr.clone(), span)?;
+    let unbind = Stmt::new(
+        StmtKind::ExprStmt(Expr::new(
+            ExprKind::FunctionCall {
+                name: crate::names::Name::unqualified("unset"),
+                args: vec![temp_expr],
+            },
+            span,
+        )),
+        span,
+    );
+    Ok(Stmt::new(StmtKind::Synthetic(vec![bind, store, unbind]), span))
+}
+
+/// Builds the store of an already-parsed complex reference assignment.
+fn complex_ref_store(
+    target: Expr,
+    is_append: bool,
+    source: Expr,
+    span: Span,
+) -> Result<Stmt, CompileError> {
     if is_append {
         if !matches!(&source.kind, ExprKind::Variable(_)) {
             return Err(CompileError::new(
@@ -243,6 +293,9 @@ fn parse_complex_ref_assignment(
         let reference = Expr::new(ExprKind::ArrayReference(Box::new(source)), span);
         let kind = assignment_target_store_stmt(target, reference, span)?;
         return Ok(Stmt::new(kind, span));
+    }
+    if let ExprKind::DynamicPropertyAccess { object, property } = &target.kind {
+        return dynamic_property_reference(target.clone(), object, property, source, span);
     }
     let ExprKind::PropertyAccess { object, property } = &target.kind else {
         return Err(CompileError::new(
@@ -276,6 +329,42 @@ fn parse_complex_ref_assignment(
         span,
     );
     Ok(Stmt::new(StmtKind::Synthetic(vec![assign, bind]), span))
+}
+
+/// Lowers `$object->$name = &$source`: the property becomes the reference `$source` is.
+///
+/// The name is only known at run time, and so, often, is the class (Symfony's DeepClone hydrates
+/// objects of any class through `$object->$name = &$value`). The write stores the marker over
+/// `$source`'s reference cell through the ordinary runtime-named property store, exactly as
+/// `$array[$key] = &$source` stores it in an element: a dynamic property or an untyped declared
+/// one holds the marker, and reads follow it. A typed declared property cannot hold one and keeps
+/// the value it is assigned.
+fn dynamic_property_reference(
+    target: Expr,
+    _object: &Expr,
+    _property: &Expr,
+    source: Expr,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    if !matches!(&source.kind, ExprKind::Variable(_)) {
+        return Err(CompileError::new(
+            span,
+            "Runtime-named property reference targets currently require a variable source",
+        ));
+    }
+    Ok(Stmt::new(
+        StmtKind::ExprStmt(Expr::new(
+            ExprKind::Assignment {
+                target: Box::new(target),
+                value: Box::new(Expr::new(ExprKind::ArrayReference(Box::new(source)), span)),
+                result_target: None,
+                prelude: Vec::new(),
+                conditional_value_temp: None,
+            },
+            span,
+        )),
+        span,
+    ))
 }
 
 /// Lowers an append through a nested array target (`$a[0][] = $value`) into a

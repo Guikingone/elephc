@@ -78,4 +78,6 @@ pub(crate) use spl_autoload::eval_spl_autoload_class;
 pub(crate) use spl_autoload::eval_spl_autoload_classlike_definition;
 pub(crate) use spl_autoload_register::register_spl_autoload_callback_unchecked;
 #[cfg(not(test))]
+pub(crate) use spl_autoload_register::runtime_spl_autoload_callback_is_registered;
+#[cfg(not(test))]
 pub(crate) use spl_autoload_register::unregister_runtime_spl_autoload_callback;

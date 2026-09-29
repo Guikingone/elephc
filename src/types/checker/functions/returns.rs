@@ -35,6 +35,18 @@ pub(crate) struct ReturnInfo {
 /// `Mixed` already admits null and is left alone; an existing union gains `Void` as one more
 /// member rather than nesting; `Void`/`Never` collapse to plain `Void` so a function whose
 /// every path yields null does not become `null|null`.
+/// Returns whether `ty` is a scalar the legacy `string`/`float` return fold absorbs.
+///
+/// KNOWN DIVERGENCE kept on purpose: php returns `5` as `int(5)` from a function whose other
+/// return is a string, where this fold makes it `"5"`. Widening those to `mixed` too is correct but
+/// boxes every such return; it is left for its own measured change.
+fn scalar_absorbed_by_str_or_float(ty: &PhpType) -> bool {
+    matches!(
+        ty,
+        PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Str | PhpType::Float
+    )
+}
+
 fn nullable_return_type(other: &PhpType) -> PhpType {
     match other {
         PhpType::Mixed => PhpType::Mixed,
@@ -207,6 +219,14 @@ impl Checker {
                     strict_types: stmt.strict_types,
                 });
             }
+            // A body folded to a plain block (`if (true) { return false; }` becomes one
+            // before checking) still returns: skipping it dropped that return from the
+            // fold, and the function's type became the other exit's alone.
+            StmtKind::Synthetic(body) => {
+                for s in body {
+                    self.collect_return_infos(s, env, returns);
+                }
+            }
             StmtKind::If {
                 then_body,
                 elseif_clauses,
@@ -281,6 +301,14 @@ impl Checker {
             StmtKind::Return(Some(expr)) => {
                 if let Ok(Some(sig)) = self.resolve_expr_callable_sig(expr, env) {
                     returns.push(sig);
+                }
+            }
+            // A body folded to a plain block (`if (true) { return false; }` becomes one
+            // before checking) still returns: skipping it dropped that return from the
+            // fold, and the function's type became the other exit's alone.
+            StmtKind::Synthetic(body) => {
+                for s in body {
+                    self.collect_return_callable_sigs(s, env, returns);
                 }
             }
             StmtKind::If {
@@ -361,6 +389,14 @@ impl Checker {
             StmtKind::Return(Some(expr)) => {
                 if let Ok(Some(sig)) = self.resolve_expr_callable_array_sig(expr, env) {
                     returns.push(sig);
+                }
+            }
+            // A body folded to a plain block (`if (true) { return false; }` becomes one
+            // before checking) still returns: skipping it dropped that return from the
+            // fold, and the function's type became the other exit's alone.
+            StmtKind::Synthetic(body) => {
+                for s in body {
+                    self.collect_return_callable_array_sigs(s, env, returns);
                 }
             }
             StmtKind::If {
@@ -678,6 +714,15 @@ impl Checker {
                 if members.contains(other) =>
             {
                 PhpType::Union(members.clone())
+            }
+            // `string`/`float` absorb only the SCALARS they can stand for. An array, object,
+            // callable, `mixed` or union is not a string: `if (is_array($x)) { return [1]; }
+            // return "x";` inferred `string` and returned "Array" (with a conversion warning) for
+            // every array -- Twig's `first`/`last` filters over `slice()` among them.
+            (PhpType::Str | PhpType::Float, other) | (other, PhpType::Str | PhpType::Float)
+                if !scalar_absorbed_by_str_or_float(other) =>
+            {
+                PhpType::Mixed
             }
             (PhpType::Str, _) | (_, PhpType::Str) => PhpType::Str,
             (PhpType::Float, _) | (_, PhpType::Float) => PhpType::Float,

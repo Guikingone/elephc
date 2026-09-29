@@ -54,7 +54,6 @@ pub(in crate::interpreter) fn eval_static_property_get_result(
         }
         if let Some(target) = context
             .static_property_alias(&declaring_class, property.name())
-            .cloned()
         {
             return eval_reference_target_value(&target, context, values);
         }
@@ -109,7 +108,6 @@ pub(in crate::interpreter) fn eval_static_property_get_result(
                 }
                 if let Some(target) = context
                     .static_property_alias(&declaring_class, property_name)
-                    .cloned()
                 {
                     return eval_reference_target_value(&target, context, values);
                 }
@@ -159,7 +157,6 @@ pub(in crate::interpreter) fn eval_static_property_get_result(
             }
             if let Some(target) = context
                 .static_property_alias(&declaring_class, property_name)
-                .cloned()
             {
                 return eval_reference_target_value(&target, context, values);
             }
@@ -241,7 +238,6 @@ pub(in crate::interpreter) fn eval_static_property_isset_result(
         }
         let value = if let Some(target) = context
             .static_property_alias(&declaring_class, property.name())
-            .cloned()
         {
             eval_reference_target_value(&target, context, values)?
         } else {
@@ -272,7 +268,6 @@ pub(in crate::interpreter) fn eval_static_property_isset_result(
                 }
                 if let Some(target) = context
                     .static_property_alias(&declaring_class, property_name)
-                    .cloned()
                 {
                     let value = eval_reference_target_value(&target, context, values)?;
                     return Ok(!values.is_null(value)?);
@@ -309,7 +304,6 @@ pub(in crate::interpreter) fn eval_static_property_isset_result(
         }
         if let Some(target) = context
             .static_property_alias(&declaring_class, property_name)
-            .cloned()
         {
             let value = eval_reference_target_value(&target, context, values)?;
             return Ok(!values.is_null(value)?);
@@ -606,6 +600,17 @@ pub(super) fn eval_static_property_reference_bind_result(
             scope,
             values,
         )?;
+        // Bound to another variable, the property's value lives in THAT storage, and every read
+        // goes through the alias first. Recording the variable's current cell as the property's
+        // own value -- with no reference of its own -- left a dangling handle the moment the
+        // variable was reassigned, which the next write through the alias then released.
+        if !matches!(target, EvalReferenceTarget::Cell { .. }) {
+            context.bind_static_property_alias(&declaring_class, property.name(), target);
+            if let Some(previous) = context.take_static_property(&declaring_class, property.name()) {
+                values.release(previous)?;
+            }
+            return Ok(());
+        }
         let value = eval_reference_target_value(&target, context, values)?;
         context.bind_static_property_alias(&declaring_class, property.name(), target);
         if let Some(replaced) =
@@ -808,8 +813,8 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
         }
         if let Some(target) = context
             .static_property_alias(&declaring_class, property.name())
-            .cloned()
         {
+            let writes_another_variable = !matches!(target, EvalReferenceTarget::Cell { .. });
             eval_static_reference_target_write(
                 &declaring_class,
                 property.name(),
@@ -818,6 +823,10 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
                 context,
                 values,
             )?;
+            // The aliased variable now holds the value; the property keeps no copy of its own.
+            if writes_another_variable {
+                return Ok(());
+            }
         }
         if let Some(replaced) =
             context.set_static_property(&declaring_class, property.name(), value)
@@ -857,7 +866,6 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
                 }
                 if let Some(target) = context
                     .static_property_alias(&declaring_class, property_name)
-                    .cloned()
                 {
                     eval_static_reference_target_write(
                         &declaring_class,
@@ -904,7 +912,6 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
         if is_static {
             if let Some(target) = context
                 .static_property_alias(&declaring_class, property_name)
-                .cloned()
             {
                 eval_static_reference_target_write(
                     &declaring_class,

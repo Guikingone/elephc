@@ -32,6 +32,7 @@ pub(crate) mod phar_stream;
 pub mod platform;
 mod prescan;
 mod program_usage;
+pub(crate) mod ref_markers;
 pub(crate) mod reflection;
 pub(crate) mod runtime;
 mod runtime_features;

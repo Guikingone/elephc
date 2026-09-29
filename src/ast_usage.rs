@@ -44,6 +44,9 @@ pub(crate) struct Usage {
     /// `$GLOBALS['app']` on ONE `_eir_global_app` slot; without it the top-level
     /// write lands in a `main` frame slot the function never reads.
     pub(crate) globals_keys: HashSet<String>,
+    /// Variables stored into an array as a reference (`$a[$k] = &$v`, `[&$v]`), which must
+    /// then BE a shareable reference cell rather than an alias of some other storage.
+    pub(crate) array_reference_sources: HashSet<String>,
 }
 
 impl Usage {
@@ -55,6 +58,8 @@ impl Usage {
         self.dynamic_code_load |= other.dynamic_code_load;
         self.uses_late_static |= other.uses_late_static;
         self.globals_keys.extend(other.globals_keys);
+        self.array_reference_sources
+            .extend(other.array_reference_sources);
     }
 
     /// Returns true when a PHP function is referenced case-insensitively.
@@ -82,6 +87,13 @@ pub(crate) fn collect_stmt(stmt: &Stmt) -> Usage {
     let mut usage = Usage::default();
     scan_stmt(stmt, &mut usage);
     usage
+}
+
+/// Returns the variables a statement list stores into arrays as references.
+pub(crate) fn array_reference_sources(statements: &[Stmt]) -> HashSet<String> {
+    let mut usage = Usage::default();
+    scan_program(statements, &mut usage);
+    usage.array_reference_sources
 }
 
 /// Returns whether a statement list needs the runtime called-class identity.
@@ -528,8 +540,13 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                 scan_expr(target, usage);
             }
         }
+        ExprKind::ArrayReference(inner) => {
+            if let ExprKind::Variable(name) = &inner.kind {
+                usage.array_reference_sources.insert(name.clone());
+            }
+            scan_expr(inner, usage);
+        }
         ExprKind::Negate(inner)
-        | ExprKind::ArrayReference(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)

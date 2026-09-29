@@ -85,6 +85,21 @@ impl Checker {
                 )
             })
             .collect();
+        // The callable TARGETS recorded for a variable (`$cb = [$obj, 'm']`, `$cb = f(...)`) are
+        // keyed by name alone. Every parameter is a fresh binding, so a caller's `$callback`
+        // must not describe this body's `$callback`: it did, and the preg prelude's own
+        // `preg_replace_callback($regex, $callback, ...)` re-checked the caller's
+        // `[$first, 'replace']` inside the prelude, where `$first` is undefined.
+        let hidden_callable_targets: Vec<_> = param_types
+            .iter()
+            .map(|(pname, _)| {
+                (
+                    pname.clone(),
+                    self.callable_array_targets.remove(pname),
+                    self.first_class_callable_targets.remove(pname),
+                )
+            })
+            .collect();
         for pname in &callable_param_names {
             if let Some(sig) = self
                 .callable_param_sigs
@@ -213,6 +228,24 @@ impl Checker {
         self.current_loop_storage_scope = previous_loop_storage_scope;
         self.current_by_ref_return = prev_by_ref_return;
         self.callable_param_names = saved_callable_param_names;
+        for (pname, array_target, first_class_target) in hidden_callable_targets {
+            match array_target {
+                Some(target) => {
+                    self.callable_array_targets.insert(pname.clone(), target);
+                }
+                None => {
+                    self.callable_array_targets.remove(&pname);
+                }
+            }
+            match first_class_target {
+                Some(target) => {
+                    self.first_class_callable_targets.insert(pname, target);
+                }
+                None => {
+                    self.first_class_callable_targets.remove(&pname);
+                }
+            }
+        }
         body_check_result?;
         for pname in &callable_param_names {
             if let Some(sig) = self.callable_sigs.get(pname).cloned() {

@@ -238,6 +238,23 @@ pub(super) fn lower_builtin_call_args(
         }
         _ => lower_args_with_signature(ctx, sig, args),
     };
+    // A tagged scalar reaching `array_filter` is a value the checker could not see become an
+    // array (DeepClone's `$topMask[0]`, filled through a by-reference parameter, is typed
+    // `int|null` and holds an array). Box it, so the gradual path checks the payload at run
+    // time -- filtering an array, or throwing php's TypeError for a scalar.
+    let mut lowered = lowered;
+    if canonical == "array_filter" {
+        if let Some(&array) = lowered.first() {
+            if ctx.builder.value_php_type(array).codegen_repr() == PhpType::TaggedScalar {
+                let span = args.first().map_or_else(crate::span::Span::dummy, |arg| arg.span);
+                let value = LoweredValue {
+                    value: array,
+                    ir_type: ctx.builder.value_type(array),
+                };
+                lowered[0] = ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span)).value;
+            }
+        }
+    }
     for (name, ty) in pcntl_outputs {
         ctx.set_local_logical_type(&name, ty);
     }

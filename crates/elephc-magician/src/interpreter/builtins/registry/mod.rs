@@ -295,7 +295,11 @@ pub(in crate::interpreter) fn eval_declared_builtin_direct_call(
             for arg in args {
                 evaluated_args.push(eval_expr(arg, context, scope, values)?);
             }
-            if let Some(result) = values.runtime_builtin_call(runtime_builtin, &evaluated_args)? {
+            let answer = values.runtime_builtin_call(runtime_builtin, &evaluated_args)?;
+            // Released on both outcomes: a declined call falls through to the direct hook, which
+            // evaluates the arguments again.
+            release_builtin_arg_temporaries(args, &evaluated_args, &evaluated_args, answer, values)?;
+            if let Some(result) = answer {
                 return Ok(Some(result));
             }
         } else if spec.direct.is_none() {
@@ -330,11 +334,12 @@ pub(in crate::interpreter) fn eval_declared_builtin_direct_call(
             for arg in args {
                 evaluated_args.push(eval_expr(arg, context, scope, values)?);
             }
+            let originals = evaluated_args.clone();
             let evaluated_args =
                 eval_coerce_string_param_objects(spec, evaluated_args, context, values)?;
-            return values_hook
-                .call(spec.name, &evaluated_args, context, values)
-                .map(Some);
+            let result = values_hook.call(spec.name, &evaluated_args, context, values)?;
+            release_builtin_arg_temporaries(args, &originals, &evaluated_args, Some(result), values)?;
+            return Ok(Some(result));
         }
     }
     if eval_builtin_is_backtrace_visible(spec.name) {
@@ -356,7 +361,15 @@ pub(in crate::interpreter) fn eval_declared_builtin_direct_call(
                 context.push_call_frame(frame);
                 let result = values_hook.call(spec.name, &evaluated_args, context, values);
                 context.pop_call_frame();
-                return result.map(Some);
+                let result = result?;
+                release_builtin_arg_temporaries(
+                    args,
+                    &evaluated_args,
+                    &evaluated_args,
+                    Some(result),
+                    values,
+                )?;
+                return Ok(Some(result));
             }
         }
         let frame = EvalCallFrame::function(spec.name, None, context);
@@ -366,6 +379,38 @@ pub(in crate::interpreter) fn eval_declared_builtin_direct_call(
         return result.map(Some);
     }
     hook.call(spec.name, args, context, scope, values).map(Some)
+}
+
+/// Releases the argument cells a builtin call evaluated for itself and no longer needs.
+///
+/// `eval_expr` hands back either a cell storage still owns (`$var`, a constant, a static
+/// property: `eval_expr_result_aliases_storage`) or a fresh temporary nobody else holds. The
+/// builtins only READ their arguments -- they must, since a variable's cell is borrowed -- so a
+/// temporary was simply dropped: every `mt_rand(1, 1)` or `strlen("ab")` in eval code leaked its
+/// literal cells. `coerced` is the list after `__toString()` conversion; a replacement it holds is
+/// a fresh string of its own. The result is never released: a builtin may answer with an argument.
+fn release_builtin_arg_temporaries(
+    args: &[EvalExpr],
+    originals: &[RuntimeCellHandle],
+    coerced: &[RuntimeCellHandle],
+    result: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for (index, original) in originals.iter().enumerate() {
+        let replacement = coerced.get(index).copied().filter(|cell| cell != original);
+        if let Some(replacement) = replacement {
+            if Some(replacement) != result {
+                values.release(replacement)?;
+            }
+        }
+        let temporary = args
+            .get(index)
+            .is_some_and(|arg| !crate::interpreter::expressions::eval_expr_result_aliases_storage(arg));
+        if temporary && Some(*original) != result {
+            values.release(*original)?;
+        }
+    }
+    Ok(())
 }
 
 /// Dispatches a declaratively migrated builtin from already evaluated argument cells.

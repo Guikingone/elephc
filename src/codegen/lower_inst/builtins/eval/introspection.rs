@@ -132,10 +132,13 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_spl_autoload_register
 ) -> Result<()> {
     super::super::ensure_arg_count_between(inst, "spl_autoload_register", 1, 3)?;
     let callback = expect_operand(inst, 0)?;
-    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
-    if matches!(ctx.value_php_type(callback)?.codegen_repr(), PhpType::Array(element) if element.codegen_repr() != PhpType::Mixed) {
+    // Normalized before the eval frame is reserved: the original array rides on the temporary
+    // stack until the restore below.
+    let normalized = matches!(ctx.value_php_type(callback)?.codegen_repr(), PhpType::Array(element) if element.codegen_repr() != PhpType::Mixed);
+    if normalized {
         crate::codegen::lower_inst::callables::normalize_typed_callable_array_to_mixed(ctx, callback)?;
     }
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     let mut boxed = EvalBoxedOperands::new();
     boxed.extend(store_eval_mixed_operand_at(ctx, callback, EVAL_TEMP_CELL_OFFSET)?);
     let callback_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
@@ -167,6 +170,9 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_spl_autoload_register
     abi::emit_call_label(ctx.emitter, &symbol);
     emit_release_eval_boxed_operands_keeping_int_answer(ctx, &boxed);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    if normalized {
+        crate::codegen::lower_inst::callables::restore_typed_callable_array_after_mixed_use(ctx, callback)?;
+    }
     box_eval_bool_result_if_mixed(ctx, inst);
     store_if_result(ctx, inst)
 }
@@ -190,10 +196,11 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_spl_autoload_unregist
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, "spl_autoload_unregister", 1)?;
     let callback = expect_operand(inst, 0)?;
-    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
-    if matches!(ctx.value_php_type(callback)?.codegen_repr(), PhpType::Array(element) if element.codegen_repr() != PhpType::Mixed) {
+    let normalized = matches!(ctx.value_php_type(callback)?.codegen_repr(), PhpType::Array(element) if element.codegen_repr() != PhpType::Mixed);
+    if normalized {
         crate::codegen::lower_inst::callables::normalize_typed_callable_array_to_mixed(ctx, callback)?;
     }
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     let mut boxed = EvalBoxedOperands::new();
     boxed.extend(store_eval_mixed_operand_at(ctx, callback, EVAL_TEMP_CELL_OFFSET)?);
     let callback_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
@@ -208,6 +215,9 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_spl_autoload_unregist
     abi::emit_call_label(ctx.emitter, &symbol);
     emit_release_eval_boxed_operands_keeping_int_answer(ctx, &boxed);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    if normalized {
+        crate::codegen::lower_inst::callables::restore_typed_callable_array_after_mixed_use(ctx, callback)?;
+    }
     box_eval_bool_result_if_mixed(ctx, inst);
     store_if_result(ctx, inst)
 }

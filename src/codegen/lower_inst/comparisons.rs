@@ -90,6 +90,8 @@ pub(super) fn lower_strict_eq(
         (PhpType::Object(_), PhpType::Object(_))
             | (PhpType::Iterable, PhpType::Iterable)
             | (PhpType::Pointer(_), PhpType::Pointer(_))
+            // Two Closures are identical when they are the same object: the same descriptor.
+            | (PhpType::Callable, PhpType::Callable)
     ) {
         emit_pointer_compare(ctx, lhs, rhs, is_equal)?;
         return store_if_result(ctx, inst);

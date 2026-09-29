@@ -642,6 +642,28 @@ echo $ok ? "true" : "false";
     assert_eq!(out, "true");
 }
 
+/// Verifies registering one array loader twice, from compiled code, keeps ONE registration.
+///
+/// PHP deduplicates by value. Each compiled `spl_autoload_register()` reaches the bridge with a
+/// context of its own, so the check that only looked in that context never found the earlier
+/// registration: the loader ran three times per miss and survived its own unregistration.
+#[test]
+fn test_spl_autoload_register_dedupes_an_array_loader_across_calls() {
+    let out = compile_and_run(
+        r#"<?php
+class K { static function load($c) { echo "load $c\n"; } }
+$a = ['K', 'load'];
+spl_autoload_register($a);
+spl_autoload_register($a);
+spl_autoload_register(['K', 'load']);
+var_dump(class_exists('Nope1'));
+var_dump(spl_autoload_unregister($a));
+var_dump(class_exists('Nope2'));
+"#,
+    );
+    assert_eq!(out, "load Nope1\nbool(false)\nbool(true)\nbool(false)\n");
+}
+
 /// Verifies SPL autoload functions returns empty array.
 #[test]
 fn test_spl_autoload_functions_returns_empty_array() {

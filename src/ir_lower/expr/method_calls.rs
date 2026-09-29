@@ -109,10 +109,15 @@ pub(super) fn lower_method_call(
     {
         return lower_nullable_regular_method_call(ctx, object, method, args, expr);
     }
-    if op == Op::MethodCall && is_reflection_class_new_instance_call(ctx, object.value, method) {
+    if op == Op::MethodCall
+        && is_reflection_class_new_instance_call(ctx, object.value, method)
+        && reflection_class_new_instance_forwards_statically(ctx, Some(object_expr), args)
+    {
         return lower_reflection_class_new_instance(ctx, Some(object_expr), object, args, expr);
     }
-    if op == Op::MethodCall && is_reflection_class_new_instance_args_call(ctx, object.value, method)
+    if op == Op::MethodCall
+        && is_reflection_class_new_instance_args_call(ctx, object.value, method)
+        && reflection_class_new_instance_args_forward_statically(ctx, Some(object_expr), args)
     {
         return lower_reflection_class_new_instance_args(
             ctx,
@@ -234,7 +239,7 @@ pub(super) fn lower_method_call(
         .as_ref()
         .map(|(call_args, _)| call_args.as_slice())
         .unwrap_or(args);
-    let arg_values = lower_args_with_signature(ctx, sig.as_ref(), call_args);
+    let arg_values = lower_user_args_with_signature(ctx, sig.as_ref(), call_args);
     operands.extend(arg_values.iter().copied());
     let data = ctx.intern_string(dispatch_method);
     let call = ctx.emit_value(

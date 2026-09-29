@@ -45,6 +45,37 @@ pub(super) fn lower_reflection_class_new_instance(
     )
 }
 
+/// Returns whether `newInstance()` source arguments can be forwarded to the constructor at
+/// compile time: no run-time spread, and named arguments only against a known constructor.
+///
+/// The other forms -- `newInstance(...$args)`, `newInstanceArgs($args)` with an array only
+/// known at run time -- used to be refused with an "unsupported" fatal. They are ordinary calls
+/// now: the method body spreads its arguments into `new $name(...)`.
+pub(super) fn reflection_class_new_instance_forwards_statically(
+    ctx: &LoweringContext<'_, '_>,
+    object_expr: Option<&Expr>,
+    args: &[Expr],
+) -> bool {
+    let args = reflection_class_new_instance_args(args);
+    if args.iter().any(is_spread_arg) {
+        return false;
+    }
+    !crate::types::call_args::has_named_args(&args)
+        || reflection_class_new_instance_constructor_signature(ctx, object_expr, &args).is_some()
+}
+
+/// Returns whether `newInstanceArgs()` carries an argument array known at compile time that
+/// `reflection_class_new_instance_forwards_statically` accepts.
+pub(super) fn reflection_class_new_instance_args_forward_statically(
+    ctx: &LoweringContext<'_, '_>,
+    object_expr: Option<&Expr>,
+    args: &[Expr],
+) -> bool {
+    reflection_class_new_instance_args_array(ctx, args).is_some_and(|forwarded| {
+        reflection_class_new_instance_forwards_statically(ctx, object_expr, &forwarded)
+    })
+}
+
 /// Lowers `ReflectionClass::newInstanceArgs()` by unpacking one static argument array.
 pub(super) fn lower_reflection_class_new_instance_args(
     ctx: &mut LoweringContext<'_, '_>,

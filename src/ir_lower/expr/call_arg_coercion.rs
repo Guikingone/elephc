@@ -724,7 +724,20 @@ pub(super) fn lower_args_with_signature(
     sig: Option<&FunctionSig>,
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
-    lower_args_with_signature_options(ctx, sig, args, false)
+    lower_args_with_signature_options(ctx, sig, args, false, false)
+}
+
+/// Lowers a USER callable's arguments, packing spreads that land in its variadic tail into the
+/// tail array (`f($fixed, $extra, ...$rest)`).
+///
+/// Builtins keep [`lower_args_with_signature`]: their registry runtime signatures take the source
+/// arguments one operand each and expand a spread themselves (`array_merge_recursive([], ...$r)`).
+pub(super) fn lower_user_args_with_signature(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    lower_args_with_signature_options(ctx, sig, args, false, true)
 }
 
 /// Lowers arguments while preserving omission of trailing default-only parameter slots.
@@ -733,7 +746,7 @@ pub(super) fn lower_args_with_signature_trimming_trailing_defaults(
     sig: Option<&FunctionSig>,
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
-    lower_args_with_signature_options(ctx, sig, args, true)
+    lower_args_with_signature_options(ctx, sig, args, true, false)
 }
 
 /// Applies shared argument planning with optional elision of trailing defaults.
@@ -742,6 +755,7 @@ fn lower_args_with_signature_options(
     sig: Option<&FunctionSig>,
     args: &[Expr],
     trim_trailing_defaults: bool,
+    pack_tail_spreads: bool,
 ) -> Vec<crate::ir::ValueId> {
     let Some(sig) = sig else {
         return lower_args(ctx, args);
@@ -768,10 +782,19 @@ fn lower_args_with_signature_options(
     if let Some(operands) = lower_assoc_spread_only_args(ctx, sig, args) {
         return coerce_operands_to_params(ctx, sig, operands);
     }
-    if args.iter().any(is_spread_arg) {
+    let regular_param_count = crate::types::call_args::regular_param_count(sig);
+    // Spreads that all land in the variadic tail, after every regular parameter has a plain
+    // argument, are packed into the tail array below; any other spread keeps the generic path.
+    let spreads_only_in_variadic_tail = pack_tail_spreads
+        && sig.variadic.is_some()
+        && args.len() > regular_param_count
+        && args
+            .iter()
+            .enumerate()
+            .all(|(index, arg)| !is_spread_arg(arg) || index >= regular_param_count);
+    if args.iter().any(is_spread_arg) && !spreads_only_in_variadic_tail {
         return lower_args(ctx, args);
     }
-    let regular_param_count = crate::types::call_args::regular_param_count(sig);
     let fixed_arg_count = if sig.variadic.is_some() {
         args.len().min(regular_param_count)
     } else {

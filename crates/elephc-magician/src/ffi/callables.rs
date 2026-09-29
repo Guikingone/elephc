@@ -103,13 +103,22 @@ pub unsafe extern "C" fn __elephc_eval_register_spl_autoload(
         if crate::eval_trace::enabled() {
             eprintln!("[elephc-eval-trace] phase=aot_autoload_register stage=registered success={}", result.is_ok());
         }
+        // The answer crosses as an int; the bool cell the registration built is ours to drop,
+        // while the context it was made under is still alive.
+        let answer = match result {
+            Ok(cell) => {
+                let _ = values.release(cell);
+                1
+            }
+            Err(_) => 0,
+        };
         if created_context {
             let context_ptr = context as *mut ElephcEvalContext;
             if context.request_retained_context_free() {
                 crate::ffi::context::finalize_eval_context_free(context_ptr);
             }
         }
-        result.map(|_| 1).unwrap_or(0)
+        answer
     })
     .unwrap_or(0)
 }

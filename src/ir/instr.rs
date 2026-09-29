@@ -454,6 +454,11 @@ pub enum Op {
     HashRefElement,
     /// Binds a hash element to an existing managed reference cell and yields the updated hash.
     HashBindRefElement,
+    /// Makes `container[key]` a PHP reference in place and yields its shared cell, retained for
+    /// the binder. Operands: a container with boxed Mixed elements (indexed or hash), then the
+    /// key. The (possibly split, vivified or hash-promoted) container is stored back to the
+    /// operand's place, as `HashRefElement` does.
+    ElemRefCell,
     HashUnset,
     /// Writes PHP null into `container[key]`, releasing whatever was there.
     ///
@@ -678,6 +683,35 @@ pub enum Op {
 }
 
 impl Op {
+    /// Returns whether a `string` this op produces is a heap payload a Mixed box may take over.
+    ///
+    /// Boxing such a string for a Mixed container moves it into the box instead of copying it,
+    /// so the producer's reference is gone once the write happens. Any other string -- a cast, a
+    /// concatenation, a literal -- is copied by the box and stays the producer's to release. The
+    /// codegen decides which boxing to emit from this answer, and the lowering decides whether to
+    /// release the value after the write from the same one; the two must never disagree.
+    pub fn yields_box_absorbable_string(self) -> bool {
+        use Op::*;
+        matches!(
+            self,
+            Acquire
+                | StrPersist
+                | Call
+                | FunctionVariantCall
+                | ExternCall
+                | MethodCall
+                | NullsafeMethodCall
+                | StaticMethodCall
+                | ClosureCall
+                | CallableDescriptorInvoke
+                | ExprCall
+                | PipeCall
+                | IteratorMethodCall
+                | SplRuntimeCall
+                | FiberRuntimeCall
+        )
+    }
+
     /// Returns the conservative default effect set for this opcode.
     pub fn default_effects(self) -> Effects {
         use Effects as E;
@@ -844,7 +878,7 @@ impl Op {
             ArraySet | HashSet | HashUnset | ArrayPush | HashAppend | OffsetUnset | PropSet
             | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
-            HashRefElement | HashBindRefElement => {
+            HashRefElement | HashBindRefElement | ElemRefCell => {
                 E::READS_HEAP
                     | E::WRITES_HEAP
                     | E::ALLOC_HEAP
@@ -1126,6 +1160,7 @@ impl Op {
             ArraySet => "array_set",
             HashSet => "hash_set",
             HashRefElement => "hash_ref_element",
+            ElemRefCell => "elem_ref_cell",
             HashBindRefElement => "hash_bind_ref_element",
             HashUnset => "hash_unset",
             SlotDetach => "slot_detach",

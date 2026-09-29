@@ -1350,6 +1350,19 @@ impl Checker {
             }
             return Ok(PhpType::Callable);
         }
+        // `Closure::fromCallable($closure)` hands back the very Closure it was given. The literal
+        // forms were rewritten to first-class callables by the name resolver; a value already
+        // known to be a closure needs no conversion at all.
+        if class_name.trim_start_matches('\\') == "Closure"
+            && php_symbol_key(method) == "fromcallable"
+            && args.len() == 1
+            && !matches!(args[0].kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_))
+        {
+            let arg_ty = self.infer_type(&args[0], env)?;
+            if arg_ty.codegen_repr() == PhpType::Callable {
+                return Ok(PhpType::Callable);
+            }
+        }
         if let Some(enum_info) = self.enums.get(class_name).cloned() {
             return self
                 .check_enum_static_call(&enum_info, class_name, method, args, env, expr.span);

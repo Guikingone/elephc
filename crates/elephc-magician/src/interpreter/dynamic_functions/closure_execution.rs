@@ -614,7 +614,7 @@ fn eval_closure_with_optional_binding(
 }
 
 /// Releases owned activation locals while transferring an explicitly returned cell to the caller.
-fn release_activation_scope(
+pub(in crate::interpreter) fn release_activation_scope(
     scope: &mut ElephcEvalScope,
     returned: Option<RuntimeCellHandle>,
     context: &mut ElephcEvalContext,

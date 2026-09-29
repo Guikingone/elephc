@@ -45,14 +45,23 @@ pub(super) fn lower_positional_spread_args_with_signature(
     // descriptor as an array, and the min-length guard would call `ArrayLen` on it — a
     // callable array is exactly two elements by construction, so there is nothing to check.
     let callable_source = matches!(source_ty, PhpType::Callable);
-    // A packed `array<T>` has integer keys by construction; anything gradual may carry names.
-    let may_carry_names = !matches!(source_ty, PhpType::Array(_));
+    // An `iterable` is a bare list-or-hash pointer; boxing it records which, so the gradual
+    // narrowing below takes it like any `mixed` source.
+    let iterable_source = matches!(source_ty, PhpType::Iterable);
+    // An `array<T>` with a concrete element type was inferred from a list and has integer keys.
+    // `array<mixed>` is what a bare `array` DECLARATION types as, and that value may be a hash
+    // at run time: `function f(array $args) { return new $c(...$args); }` handed a
+    // `['b' => 'n']` bound nothing by name. So it takes the named probe like any gradual source.
+    let may_carry_names = !matches!(
+        &source_ty,
+        PhpType::Array(element) if element.codegen_repr() != PhpType::Mixed
+    );
     let spread = lower_expr(ctx, inner);
     // Box a `callable` source so the narrowing below sees a gradual value, then let that
     // narrowing MATERIALIZE it: `__rt_mixed_spread_array` turns a callable descriptor into a real
     // two-element array. Handing the boxed descriptor downstream instead left the hidden variadic
     // tail slicing a descriptor, and the callee's own `count()` then received null.
-    let spread = if callable_source {
+    let spread = if callable_source || iterable_source {
         ctx.box_value_as_mixed(spread, PhpType::Mixed, Some(args[spread_idx].span))
     } else {
         spread
@@ -222,9 +231,16 @@ pub(super) fn indexed_spread_source_type(
     // from PHP's `[$object, 'method']` syntax rebuilds both elements on demand (see
     // `lower_mixed_callable_slot_or_array_get`). The caller boxes it so those reads take the
     // gradual path.
+    // `Iterable` too: a variadic parameter that received a named argument is typed so (its
+    // storage may be a list or a hash). Left out, `new $class(...$args)` over it took the generic
+    // runtime-container path, which bound no named key and returned no object.
     if matches!(
         ty,
-        PhpType::Array(_) | PhpType::Mixed | PhpType::Union(_) | PhpType::Callable
+        PhpType::Array(_)
+            | PhpType::Mixed
+            | PhpType::Union(_)
+            | PhpType::Callable
+            | PhpType::Iterable
     ) {
         Some(ty)
     } else {

@@ -210,6 +210,11 @@ impl Checker {
                     PhpType::Callable if method == "__invoke" => {
                         Ok(dynamic_first_class_callable_sig())
                     }
+                    // The generic `object` names no class either (`$o->me()->m(...)` over an
+                    // untyped `return $this`): it was looked up as the class "" and refused.
+                    PhpType::Object(class_name) if class_name.is_empty() => {
+                        Ok(dynamic_first_class_callable_sig())
+                    }
                     PhpType::Object(class_name) => {
                         let method_key = crate::names::php_symbol_key(method);
                         if let Some(interface_info) = self.interfaces.get(&class_name) {

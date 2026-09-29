@@ -95,9 +95,6 @@ impl ElephcEvalContext {
     pub(crate) fn forget_request_scoped_state(&mut self) {
         self.forget_declared_class_likes();
         self.constants.clear();
-        self.static_properties.clear();
-        self.static_property_aliases.clear();
-        self.static_scope = Box::new(crate::scope::ElephcEvalScope::new());
         self.static_slot_keys.clear();
         self.closures.clear();
         self.closure_objects.clear();

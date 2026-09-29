@@ -18,6 +18,9 @@
 //!   shared cell helper before any container header is dereferenced.
 
 use crate::codegen_support::abi;
+use crate::codegen_support::callable_invoker_args::{
+    ARRAY_GLOBAL_REF_CELL_TAG, ARRAY_LOCAL_REF_CELL_TAG, INVOKER_ARG_REF_CELL_TAG,
+};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
@@ -125,6 +128,31 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.hs __rt_mixed_array_set_skip_release");              // writes past the old end do not replace an existing Mixed cell
     emitter.instruction("add x12, x10, #24");                                   // compute the indexed-array data base
     emitter.instruction("ldr x0, [x12, x9, lsl #3]");                           // load the previous boxed Mixed pointer from the slot
+    emitter.instruction("cbz x0, __rt_mixed_array_set_release_old");            // a null gap is replaced like any value
+    emitter.instruction("ldr x13, [x0]");                                       // inspect the replaced box's tag
+    emitter.instruction(&format!("cmp x13, #{}", ARRAY_GLOBAL_REF_CELL_TAG));   // does the slot own a share of a global reference?
+    emitter.instruction("b.eq __rt_mixed_array_set_owned_ref");                 // a plain write goes through it
+    emitter.instruction(&format!("cmp x13, #{}", ARRAY_LOCAL_REF_CELL_TAG));    // does the slot own a share of a local reference?
+    emitter.instruction("b.ne __rt_mixed_array_set_release_old");               // ordinary boxes are simply replaced
+    emitter.label("__rt_mixed_array_set_owned_ref");
+    emitter.instruction("ldr x14, [sp, #24]");                                  // the incoming box
+    emitter.instruction("cbz x14, __rt_mixed_array_set_store_through");         // a null box is a plain value
+    emitter.instruction("ldr x13, [x14]");                                      // inspect the incoming box's tag
+    emitter.instruction(&format!("cmp x13, #{}", INVOKER_ARG_REF_CELL_TAG));    // is the incoming value a reference too?
+    emitter.instruction("b.eq __rt_mixed_array_set_release_old");               // `=&` rebinds: release this slot's share, store the new one
+    emitter.instruction(&format!("cmp x13, #{}", ARRAY_GLOBAL_REF_CELL_TAG));   // is the incoming value a global reference?
+    emitter.instruction("b.eq __rt_mixed_array_set_release_old");               // `=&` rebinds: release this slot's share, store the new one
+    emitter.instruction(&format!("cmp x13, #{}", ARRAY_LOCAL_REF_CELL_TAG));    // is the incoming value a local reference?
+    emitter.instruction("b.eq __rt_mixed_array_set_release_old");               // `=&` rebinds: release this slot's share, store the new one
+    emitter.label("__rt_mixed_array_set_store_through");
+    emitter.instruction("str x0, [sp, #56]");                                   // keep the slot's marker for the typed-cell fallback
+    emitter.instruction("mov x1, x14");                                         // the incoming box is the value to write through
+    emitter.instruction("mov x2, #0");                                          // a box has no high word
+    emitter.instruction("mov x3, #7");                                          // runtime value tag 7 = boxed Mixed
+    emitter.instruction("bl __rt_ref_marker_store");                            // write the value into the shared reference cell
+    emitter.instruction("cbnz x0, __rt_mixed_array_set_done");                  // the slot keeps its marker; nothing else to store
+    emitter.instruction("ldr x0, [sp, #56]");                                   // a typed cell: replace the marker as before
+    emitter.label("__rt_mixed_array_set_release_old");
     emitter.instruction("bl __rt_decref_mixed");                                // release the overwritten Mixed cell
     emitter.label("__rt_mixed_array_set_skip_release");
 
@@ -377,6 +405,34 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r9, r11");                                         // does this write overwrite an existing slot?
     emitter.instruction("jae __rt_mixed_array_set_skip_release");               // writes past the old end do not replace an existing Mixed cell
     emitter.instruction("mov rax, QWORD PTR [r10 + 24 + r9 * 8]");              // load the previous boxed Mixed pointer from the slot
+    emitter.instruction("test rax, rax");                                       // a null gap is replaced like any value
+    emitter.instruction("jz __rt_mixed_array_set_release_old");                 // release nothing for it
+    emitter.instruction("mov r11, QWORD PTR [rax]");                            // inspect the replaced box's tag
+    emitter.instruction(&format!("cmp r11, {}", ARRAY_GLOBAL_REF_CELL_TAG));    // does the slot own a share of a global reference?
+    emitter.instruction("je __rt_mixed_array_set_owned_ref");                   // a plain write goes through it
+    emitter.instruction(&format!("cmp r11, {}", ARRAY_LOCAL_REF_CELL_TAG));     // does the slot own a share of a local reference?
+    emitter.instruction("jne __rt_mixed_array_set_release_old");                // ordinary boxes are simply replaced
+    emitter.label("__rt_mixed_array_set_owned_ref");
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // the incoming box
+    emitter.instruction("test rsi, rsi");                                       // a null box is a plain value
+    emitter.instruction("jz __rt_mixed_array_set_store_through");               // write it through the reference
+    emitter.instruction("mov r11, QWORD PTR [rsi]");                            // inspect the incoming box's tag
+    emitter.instruction(&format!("cmp r11, {}", INVOKER_ARG_REF_CELL_TAG));     // is the incoming value a reference too?
+    emitter.instruction("je __rt_mixed_array_set_release_old");                 // `=&` rebinds: release this slot's share, store the new one
+    emitter.instruction(&format!("cmp r11, {}", ARRAY_GLOBAL_REF_CELL_TAG));    // is the incoming value a global reference?
+    emitter.instruction("je __rt_mixed_array_set_release_old");                 // `=&` rebinds: release this slot's share, store the new one
+    emitter.instruction(&format!("cmp r11, {}", ARRAY_LOCAL_REF_CELL_TAG));     // is the incoming value a local reference?
+    emitter.instruction("je __rt_mixed_array_set_release_old");                 // `=&` rebinds: release this slot's share, store the new one
+    emitter.label("__rt_mixed_array_set_store_through");
+    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // keep the slot's marker for the typed-cell fallback
+    emitter.instruction("mov rdi, rax");                                        // the slot's marker box
+    emitter.instruction("xor edx, edx");                                        // a box has no high word
+    emitter.instruction("mov ecx, 7");                                          // runtime value tag 7 = boxed Mixed
+    emitter.instruction("call __rt_ref_marker_store");                          // write the value into the shared reference cell
+    emitter.instruction("test rax, rax");                                       // was the value written through?
+    emitter.instruction("jnz __rt_mixed_array_set_done");                       // the slot keeps its marker; nothing else to store
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // a typed cell: replace the marker as before
+    emitter.label("__rt_mixed_array_set_release_old");
     emitter.instruction("call __rt_decref_mixed");                              // release the overwritten Mixed cell
     emitter.label("__rt_mixed_array_set_skip_release");
 

@@ -496,14 +496,12 @@ pub(super) fn apply_loop_storage_contracts(
         let source = ctx.load_local(&name, span);
         match (&source_ty, &target_repr) {
             (PhpType::Array(_), PhpType::AssocArray { .. }) => {
-                let converted = ctx.emit_value(
-                    Op::ArrayToHash,
-                    vec![source.value],
-                    None,
-                    target_ty.clone(),
-                    Op::ArrayToHash.default_effects(),
-                    span,
-                );
+                // The conversion builds a NEW hash, so it has to consume the slot's array: a
+                // plain `ArrayToHash` kept it, and `$s = []; foreach ($keys as $k) { $s[$k] = 1; }`
+                // leaked the empty array and, through the boxed slot, the whole hash per call.
+                let span_or_zero = span.unwrap_or_else(|| Span::new(0, 0));
+                let converted =
+                    ctx.emit_local_array_to_hash_move(&name, source, target_ty.clone(), span_or_zero);
                 ctx.store_mutated_local(&name, converted, target_ty, span);
             }
             (PhpType::Array(_), PhpType::Array(target_element))

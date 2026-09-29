@@ -43,6 +43,14 @@ pub(super) fn lower_assignment_expr(
             return ctx.load_local(target_name, Some(expr.span));
         }
     }
+    // `$object->$name = &$value` (the parser's desugar) is a statement: its marker value is only
+    // ever lowered by the property write itself.
+    if let (ExprKind::DynamicPropertyAccess { object, property }, ExprKind::ArrayReference(_)) =
+        (&target.kind, &value.kind)
+    {
+        lower_dynamic_property_assign(ctx, object, property, value, expr.span);
+        return lower_null(ctx, expr);
+    }
     if let Some(temp_name) = conditional_value_temp {
         if let Some(result) = lower_conditional_non_local_null_coalesce_assignment(
             ctx,
@@ -328,7 +336,10 @@ pub(super) fn lower_dynamic_property_assign(
     let object = box_generic_object_for_dynamic_property(ctx, object, span);
     let property = lower_expr(ctx, property);
     let property = coerce_to_string_at_span(ctx, property, Some(span));
-    let value = lower_expr(ctx, value);
+    // `$object->$name = &$value` stores the marker over `$value`'s reference cell, as an array
+    // element does; any other value lowers exactly as `lower_expr` would.
+    let is_reference = matches!(value.kind, ExprKind::ArrayReference(_));
+    let value = crate::ir_lower::expr::lower_array_reference_or_value(ctx, value);
     ctx.emit_void(
         Op::DynamicPropSet,
         vec![object.value, property.value, value.value],
@@ -341,6 +352,10 @@ pub(super) fn lower_dynamic_property_assign(
     }
     if ctx.value_is_owning_temporary(object) {
         crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
+    }
+    if is_reference {
+        // The property store retains the marker; this write's own share is dropped here.
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }
 }
 

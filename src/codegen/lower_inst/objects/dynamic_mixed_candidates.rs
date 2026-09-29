@@ -519,6 +519,17 @@ pub(super) fn emit_dynamic_new_without_constructor_mixed_candidate(
     candidate: &DynamicNewCandidate,
     result: ValueId,
 ) -> Result<()> {
+    // A stdClass is `[class_id][property hash]` (`runtime::objects::stdclass`), not a declared
+    // slot layout: the generic allocation left the hash null, and the first property write
+    // (`$o->y = 2` on `newInstanceWithoutConstructor()`'s result) faulted.
+    if candidate.class_name == "stdClass" {
+        abi::emit_call_label(ctx.emitter, "__rt_stdclass_new");
+        emit_box_current_owned_value_as_mixed(
+            ctx.emitter,
+            &PhpType::Object(candidate.class_name.clone()),
+        );
+        return ctx.store_result_value(result);
+    }
     emit_object_allocation(
         ctx,
         candidate.class_id,

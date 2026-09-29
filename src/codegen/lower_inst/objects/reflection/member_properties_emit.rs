@@ -103,7 +103,7 @@ pub(super) fn emit_reflection_constructor_property(
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(member) = member {
         emit_reflection_member_object(ctx, "ReflectionMethod", member)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionMethod".to_string()),
         );
@@ -134,7 +134,7 @@ pub(super) fn emit_reflection_method_prototype_property(
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(member) = member {
         emit_reflection_member_object(ctx, "ReflectionMethod", member)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionMethod".to_string()),
         );
@@ -166,7 +166,7 @@ pub(super) fn emit_reflection_parent_class_property(
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(parent_class_name) = parent_class_name {
         emit_full_reflection_class_object(ctx, parent_class_name)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),
         );
@@ -205,7 +205,7 @@ pub(super) fn emit_reflection_declaring_class_property(
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(declaring_class_name) = declaring_class_name {
         emit_shallow_reflection_class_object(ctx, declaring_class_name)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),
         );
@@ -240,7 +240,7 @@ pub(super) fn emit_reflection_enum_property(
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(enum_name) = enum_name {
         emit_shallow_reflection_enum_object(ctx, enum_name)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionEnum".to_string()),
         );

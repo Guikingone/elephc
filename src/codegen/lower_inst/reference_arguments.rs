@@ -897,9 +897,7 @@ pub(super) fn lower_mixed_unbox(ctx: &mut FunctionContext<'_>, inst: &Instructio
             });
         }
         (PhpType::Array(_), Some(Immediate::I64(4))) => {
-            emit_mixed_tag_unbox_guard(ctx, 4, &|given| {
-                format!("Only arrays and Traversables can be unpacked, {} given", given)
-            });
+            return lower_mixed_spread_source_unbox(ctx, inst, &result_ty);
         }
         (PhpType::Iterable, _) => emit_mixed_iterable_unbox_guard(ctx),
         _ => abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox"),
@@ -917,6 +915,75 @@ pub(super) fn lower_mixed_unbox(ctx: &mut FunctionContext<'_>, inst: &Instructio
     } else {
         abi::emit_incref_if_refcounted(ctx.emitter, &result_ty);
     }
+    store_if_result(ctx, inst)
+}
+
+/// Unboxes the gradual source of a `...$spread` into array storage.
+///
+/// A list (tag 4) is cloned into Mixed slots for the invoker, as every gradual unbox to
+/// `array<mixed>` is. A keyed array (tag 5) is unpackable too -- its string keys name parameters --
+/// and it used to meet the list-only guard, which threw "Only arrays and Traversables can be
+/// unpacked, array given". Hash storage already tags each entry and every element read of an
+/// `array<mixed>` value dispatches on the heap kind, so it is retained as it is.
+fn lower_mixed_spread_source_unbox(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    result_ty: &PhpType,
+) -> Result<()> {
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let list_label = ctx.next_label("mixed_spread_list");
+    let hash_label = ctx.next_label("mixed_spread_hash");
+    let wrong_label = ctx.next_label("mixed_spread_wrong_tag");
+    let done_label = ctx.next_label("mixed_spread_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #4");                              // runtime tag 4 is a list source
+            ctx.emitter.instruction(&format!("b.eq {}", list_label));
+            ctx.emitter.instruction("cmp x0, #5");                              // runtime tag 5 is a keyed source
+            ctx.emitter.instruction(&format!("b.eq {}", hash_label));
+            ctx.emitter.instruction(&format!("b {}", wrong_label));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 4");                              // runtime tag 4 is a list source
+            ctx.emitter.instruction(&format!("je {}", list_label));
+            ctx.emitter.instruction("cmp rax, 5");                              // runtime tag 5 is a keyed source
+            ctx.emitter.instruction(&format!("je {}", hash_label));
+            ctx.emitter.instruction(&format!("jmp {}", wrong_label));
+        }
+    }
+    builtins::arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
+        ctx,
+        &wrong_label,
+        &|given| format!("Only arrays and Traversables can be unpacked, {} given", given),
+    );
+
+    ctx.emitter.label(&hash_label);
+    move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
+    abi::emit_incref_if_refcounted(
+        ctx.emitter,
+        &PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        },
+    );
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&list_label);
+    move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
+    if matches!(
+        result_ty,
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed
+    ) {
+        let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+        callable_invoker_args::emit_clone_indexed_array_for_invoker_with_runtime_tag(
+            &result_reg,
+            ctx.emitter,
+        );
+    } else {
+        abi::emit_incref_if_refcounted(ctx.emitter, result_ty);
+    }
+
+    ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
 

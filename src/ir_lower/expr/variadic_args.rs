@@ -160,6 +160,15 @@ pub(super) fn lower_variadic_tail_array(
     let elem_ty = indexed_array_literal_element_type(&array_ty);
     let by_ref_variadic = variadic_param_is_by_ref(sig);
     for item in tail {
+        // `f($fixed, $extra, ...$rest)`: the spread's elements join the variadic after the plain
+        // extras. The generic path handed every source argument over as one operand each, so the
+        // call reached codegen with more operands than parameters and the build failed --
+        // polyfill-mbstring's `mb_convert_variables()` forwarding `$var, ...$vars` is this shape.
+        if let ExprKind::Spread(inner) = &item.kind {
+            let source = lower_expr(ctx, inner);
+            lower_indexed_array_spread_into_array(ctx, array, source, elem_ty.as_ref(), item.span);
+            continue;
+        }
         let value = lower_variadic_tail_source_value(ctx, item, by_ref_variadic, None, &array_ty);
         ctx.emit_void(
             Op::ArrayPush,

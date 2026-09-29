@@ -483,8 +483,24 @@ impl Checker {
                 param_types.push((vp.clone(), PhpType::Iterable));
             } else {
                 let variadic_elem_ty = if args.len() > decl.params.len() {
-                    self.infer_type(&args[decl.params.len()], caller_env)
-                        .unwrap_or(PhpType::Int)
+                    // A real first element: record it, so a later call's respecialization joins
+                    // with it instead of discarding it as the `int` fallback (`w(1); w("s")`
+                    // handed the body "1"). A spread contributes its ELEMENTS' type.
+                    self.param_specialization_seen
+                        .insert((name.to_string(), decl.params.len()));
+                    let first = &args[decl.params.len()];
+                    match &first.kind {
+                        ExprKind::Spread(inner) => match self
+                            .infer_type(inner, caller_env)
+                            .unwrap_or(PhpType::Mixed)
+                            .codegen_repr()
+                        {
+                            PhpType::Array(elem) => *elem,
+                            PhpType::AssocArray { value, .. } => *value,
+                            _ => PhpType::Mixed,
+                        },
+                        _ => self.infer_type(first, caller_env).unwrap_or(PhpType::Int),
+                    }
                 } else {
                     PhpType::Int
                 };

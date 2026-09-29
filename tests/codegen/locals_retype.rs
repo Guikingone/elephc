@@ -3160,12 +3160,8 @@ fn test_by_ref_foreach_object_retype_keeps_associative_keys() {
 /// raw `Str` pairs and start being boxed cells — so this is not a weaker case of the object shape
 /// but the same one with a payload that would fit in a register.
 ///
-/// The heap is pinned at the EXACT residual rather than at "clean", because it is not clean: the
-/// boxed-element path this shape reaches leaves one 48-byte block live at teardown. That residual
-/// is not this rule's — it belongs to the boxed loop array, and the untouched sibling rule shows
-/// it at larger scale (`$nums[$i] = $nums[$i] * 10` in a `for` leaks twelve blocks / 672 bytes on
-/// this same tree, with no `foreach` reference anywhere in it). Pinning the number is what stops
-/// it from growing quietly.
+/// The heap is clean. It used to be pinned at a 48-byte residual that belonged to the boxed loop
+/// array, not to this rule; the ownership fixes to boxed element writes removed it.
 #[test]
 fn test_by_ref_foreach_value_var_takes_an_int_into_a_string_array() {
     let out = compile_and_run_with_heap_debug(
@@ -3178,9 +3174,8 @@ fn test_by_ref_foreach_value_var_takes_an_int_into_a_string_array() {
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "2|3|4|integer");
     assert!(
-        out.stderr
-            .contains("HEAP DEBUG: leak summary: live_blocks=1 live_bytes=48"),
-        "expected the recorded 48-byte boxed-element residual, got: {}",
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
         out.stderr
     );
 }
@@ -3246,10 +3241,9 @@ fn test_by_ref_foreach_without_a_retype_keeps_its_element_type() {
 /// preheader conversion that boxed the slots but left the stores writing raw string pairs into
 /// them.
 ///
-/// The heap is pinned at its residual rather than at "clean" because the program has no
-/// `unset($chunk)`: PHP leaves the value variable bound to the last element after the loop, so the
-/// reference cell and what it reaches are still live at teardown. The `unset` form is the sibling
-/// above, and it is clean.
+/// The program has no `unset($chunk)`, so the value variable is still bound to the last element
+/// at teardown; the heap must be clean anyway, as the `unset` form above is. It used to pin a
+/// four-block residual that the teardown did not release.
 #[test]
 fn test_by_ref_foreach_object_retype_reads_back_as_php_does() {
     let out = compile_and_run_with_heap_debug(
@@ -3261,9 +3255,8 @@ fn test_by_ref_foreach_object_retype_reads_back_as_php_does() {
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "2CC");
     assert!(
-        out.stderr
-            .contains("HEAP DEBUG: leak summary: live_blocks=4 live_bytes=192"),
-        "expected the recorded no-unset residual, got: {}",
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
         out.stderr
     );
 }
@@ -3422,8 +3415,8 @@ fn test_widened_by_ref_param_lent_to_another_matches_its_hand_written_twin() {
 /// fixture would most easily lose: `2c662c5e0c` had just made that call COMPILE, which turned a
 /// refusal into a silently empty label.
 ///
-/// Heap: 1 block / 48 bytes, attributed rather than asserted clean — the returned array itself,
-/// still live at exit. This used to be 8 blocks / 416 bytes: passing `$a`/`$b` into the `?N $p`
+/// Heap: clean. It was 1 block / 48 bytes -- the returned array, never released at exit -- and
+/// before that 8 blocks / 416 bytes: passing `$a`/`$b` into the `?N $p`
 /// constructor parameter boxes each for the Mixed ABI and runs the nullable nominal guard over
 /// that box, which FORWARDS the same cell; the post-call cleanup asked only about the argument
 /// itself and released nothing, so all 3 chain links leaked their boxed guard cell (7 blocks / 368
@@ -3509,9 +3502,8 @@ unset($n);
          byref=a1\n"
     );
     assert!(
-        out.stderr
-            .contains("HEAP DEBUG: leak summary: live_blocks=1 live_bytes=48"),
-        "expected only the live result array to remain (the chain-building leak is fixed), got: {}",
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap (the chain-building leak is fixed), got: {}",
         out.stderr
     );
 }
@@ -3558,9 +3550,10 @@ echo "pop=", $popped->label, "\n";
 /// Control: a loop local that keeps ONE representation leaves its array packed.
 ///
 /// This is what fails if the rule ever degrades to "a value stored into an array is boxed". `$i`
-/// is an `int` on every path, so nothing retypes it, the array stays `array<int>`, and the heap
-/// says so: ONE live block at exit — the array — where boxed elements would leave FOUR, one cell
-/// per element. That block count is the observable half; the values are the other.
+/// is an `int` on every path, so nothing retypes it and the array stays `array<int>`. Both
+/// spellings now end with a clean heap, so the representation is read from the allocation count:
+/// the twin below stores an `int|string` element, which boxes every element -- one more
+/// allocation per element than the packed array needs -- while printing the same thing.
 #[test]
 fn test_a_loop_local_that_keeps_its_type_leaves_its_array_packed() {
     let out = compile_and_run_with_heap_debug(
@@ -3578,10 +3571,37 @@ echo implode(",", $r), "|", count($r), "|", gettype($r[0]);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "0,2,4|3|integer");
     assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap: {}",
         out.stderr
-            .contains("HEAP DEBUG: leak summary: live_blocks=1 live_bytes=48"),
-        "expected ONE live block — a packed int array, not one cell per element: {}",
-        out.stderr
+    );
+    let boxed = compile_and_run_with_heap_debug(
+        r#"<?php
+function evens(int $n): array {
+    $out = [];
+    $i = 0;
+    while ($i < $n) { $out[] = $i % 2 === 0 ? $i * 2 : (string) ($i * 2); $i = $i + 1; }
+    return $out;
+}
+$r = evens($argc + 2);
+echo implode(",", $r), "|", count($r), "|", gettype($r[0]);
+"#,
+    );
+    assert!(boxed.success, "program failed: {}", boxed.stderr);
+    assert_eq!(boxed.stdout, "0,2,4|3|integer");
+    let allocs = |stderr: &str| -> usize {
+        stderr
+            .split("allocs=")
+            .nth(1)
+            .and_then(|rest| rest.split_whitespace().next())
+            .and_then(|count| count.parse().ok())
+            .expect("heap-debug allocation count")
+    };
+    assert!(
+        allocs(&out.stderr) + 3 <= allocs(&boxed.stderr),
+        "expected the packed array to allocate no cell per element: packed {} vs boxed {}",
+        out.stderr,
+        boxed.stderr
     );
 }
 

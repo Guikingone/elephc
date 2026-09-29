@@ -186,6 +186,28 @@ pub(crate) fn unregister_runtime_spl_autoload_callback(
     Ok(false)
 }
 
+/// Reports whether ANY eval context already holds an autoload callback equal to this one.
+///
+/// The generated `spl_autoload_register` passes no context, so each call registers into a fresh
+/// one and the per-context check in [`register_spl_autoload_callback_unchecked`] never saw the
+/// earlier registration: registering one loader twice kept both, and php's single call became
+/// two. The lookup walks the same contexts unregistration does.
+#[cfg(not(test))]
+pub(crate) fn runtime_spl_autoload_callback_is_registered(
+    callback: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    for owner in crate::context::global_eval_autoload_contexts_snapshot() {
+        let Some(context) = (unsafe { owner.as_ref() }) else {
+            continue;
+        };
+        if eval_autoload_callback_position(callback, context, values)?.is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Returns the position of a registered autoload callback equal BY VALUE to this one.
 ///
 /// PHP matches an autoload callback by value: the same `'name'` written at registration and at
@@ -202,7 +224,9 @@ fn eval_autoload_callback_position(
             return Ok(Some(index));
         }
         let equal = values.compare(EvalBinOp::StrictEq, registered, callback)?;
-        if values.truthy(equal)? {
+        let matched = values.truthy(equal);
+        let _ = values.release(equal);
+        if matched? {
             return Ok(Some(index));
         }
     }

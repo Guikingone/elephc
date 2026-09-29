@@ -374,6 +374,53 @@ pub(super) fn lower_hash_ref_element(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `ElemRefCell`: makes `container[key]` a reference in place and yields its cell.
+///
+/// Same protocol as `lower_hash_ref_element`: the runtime returns the container to store back
+/// (split, vivified, or promoted from indexed to hash storage) with the cell, and the container
+/// is republished to the operand's place before the cell becomes the result.
+pub(super) fn lower_elem_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let container = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    let receiver = ReceiverPlace::resolve(ctx, container)?;
+    // A boxed container is mutated inside its box (and a null one vivified into a new box).
+    let helper = if matches!(
+        ctx.value_php_type(container)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        "__rt_mixed_elem_ref_cell"
+    } else {
+        "__rt_elem_ref_cell"
+    };
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            materialize_hash_key_aarch64(ctx, key)?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            ctx.load_value_to_reg(container, "x0")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_call_label(ctx.emitter, helper);
+            abi::emit_push_reg(ctx.emitter, "x1");
+            ctx.store_result_value(container)?;
+            receiver.store_back_value(ctx, container)?;
+            ctx.writeback_global_array_source(container)?;
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            materialize_hash_key_x86_64(ctx, key)?;
+            abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+            ctx.load_value_to_reg(container, "rdi")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+            abi::emit_call_label(ctx.emitter, helper);
+            abi::emit_push_reg(ctx.emitter, "rdx");
+            ctx.store_result_value(container)?;
+            receiver.store_back_value(ctx, container)?;
+            ctx.writeback_global_array_source(container)?;
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Makes a freshly vivified reference cell of a MIXED-valued hash hold a boxed null.
 ///
 /// A reference cell is `{ value@0, inner_tag@8 }`, and the alias local writes it in the hash's

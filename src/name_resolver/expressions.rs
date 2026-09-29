@@ -403,27 +403,25 @@ pub(super) fn resolve_expr(
                     name: resolved_name("__elephc_list_identifiers".to_string()),
                     args: resolved_args,
                 }
-            } else if method_key == "fromcallable"
+            } else if let Some(rewritten) = (method_key == "fromcallable"
                 && resolved_args.len() == 1
                 && matches!(
                     &resolved_receiver,
                     StaticReceiver::Named(name)
                         if name.last_segment().is_some_and(|segment| segment.eq_ignore_ascii_case("Closure"))
                             && !symbols.declares_class_like(&name.as_canonical())
+                ))
+            .then(|| {
+                closure_from_literal_callable(
+                    &resolved_args[0],
+                    current_namespace,
+                    imports,
+                    symbols,
                 )
-                && matches!(&resolved_args[0].kind, ExprKind::StringLiteral(_))
+            })
+            .flatten()
             {
-                let ExprKind::StringLiteral(candidate) = &resolved_args[0].kind else {
-                    unreachable!("Closure::fromCallable literal guard must hold")
-                };
-                ExprKind::FirstClassCallable(CallableTarget::Function(resolved_name(
-                    resolve_function_name(
-                        &parse_callback_name(candidate),
-                        current_namespace,
-                        imports,
-                        symbols,
-                    ),
-                )))
+                rewritten
             } else {
                 ExprKind::StaticMethodCall {
                     receiver: resolved_receiver,
@@ -1018,4 +1016,67 @@ pub(crate) fn date_procedural_alias_arity(name: &str) -> Option<(usize, usize)> 
         _ => return None,
     };
     Some(range)
+}
+
+/// Rewrites `Closure::fromCallable(<literal>)` to the first-class callable php builds from it.
+///
+/// `'name'` becomes `name(...)`, `'Class::m'` and `['Class', 'm']` become `Class::m(...)`,
+/// `[$object, 'm']` becomes `$object->m(...)`, and a closure or first-class callable is returned
+/// as itself (php hands back the same Closure). Anything else stays a runtime call. Only the
+/// function name went through this before; the rest reached the eval bridge, which leaked its
+/// argument and could not accept a compiled Closure at all ("function "" not found").
+/// `arg` is already name-resolved. Callback strings name classes from the root namespace, and
+/// `self`/`parent`/`static` inside one depend on the calling scope, so those stay runtime.
+fn closure_from_literal_callable(
+    arg: &Expr,
+    current_namespace: Option<&str>,
+    imports: &Imports,
+    symbols: &Symbols,
+) -> Option<ExprKind> {
+    let static_target = |class: &str, method: &str| -> Option<ExprKind> {
+        let class = class.trim_start_matches('\\');
+        if class.is_empty()
+            || method.is_empty()
+            || matches!(class.to_ascii_lowercase().as_str(), "self" | "parent" | "static")
+        {
+            return None;
+        }
+        Some(ExprKind::FirstClassCallable(CallableTarget::StaticMethod {
+            receiver: StaticReceiver::Named(resolved_name(class.to_string())),
+            method: php_symbol_key(method),
+        }))
+    };
+    match &arg.kind {
+        ExprKind::StringLiteral(candidate) => match candidate.split_once("::") {
+            Some((class, method)) => static_target(class, method),
+            None => Some(ExprKind::FirstClassCallable(CallableTarget::Function(resolved_name(
+                resolve_function_name(
+                    &parse_callback_name(candidate),
+                    current_namespace,
+                    imports,
+                    symbols,
+                ),
+            )))),
+        },
+        ExprKind::ArrayLiteral(items) => match items.as_slice() {
+            [receiver, method] => {
+                let ExprKind::StringLiteral(method) = &method.kind else {
+                    return None;
+                };
+                if method.contains("::") {
+                    return None;
+                }
+                match &receiver.kind {
+                    ExprKind::StringLiteral(class) => static_target(class, method),
+                    _ => Some(ExprKind::FirstClassCallable(CallableTarget::Method {
+                        object: Box::new(receiver.clone()),
+                        method: php_symbol_key(method),
+                    })),
+                }
+            }
+            _ => None,
+        },
+        ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => Some(arg.kind.clone()),
+        _ => None,
+    }
 }

@@ -37,12 +37,13 @@
 //!   either), and sharing the stack keeps one bound and one `*RECURSION*` policy.
 //!   PHP marks the object only around its BODY, so two sibling references to one
 //!   instance both render in full.
-//! - KNOWN DIVERGENCE: dynamic (undeclared) properties are not rendered, because
-//!   they are not in the descriptor. This matches what elephc's `var_dump`
-//!   already does for the same objects.
+//! - A `stdClass` declares nothing: its properties are the entries of the hash at
+//!   obj+8 (`runtime::objects::stdclass`), rendered by `__rt_print_r_hash`, which
+//!   writes the `(`/`)` lines itself. Dynamic properties of a DECLARED class are
+//!   still not rendered: they are not in the descriptor.
 
 use crate::codegen_support::abi;
-use crate::codegen_support::sentinels::emit_resolve_prop_desc_tag;
+use crate::codegen_support::sentinels::{emit_branch_if_null_container, emit_resolve_prop_desc_tag};
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Byte width of one `_class_prop_desc_*` property row.
@@ -167,6 +168,19 @@ pub fn emit_print_r_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("bl __rt_vd_seen_push");                                // mark the object as being walked
 
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
+    // x11, not x9: the symbol load below materializes its address in x9.
+    emitter.instruction("ldr x11, [x0]");                                       // load the runtime class id from the object header
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_stdclass_class_id", 0);      // load the compile-time stdClass class id
+    emitter.instruction("cmp x11, x10");                                        // is this a stdClass instance?
+    emitter.instruction("b.ne __rt_pr_obj_declared");                           // declared classes walk their descriptor
+    emitter.instruction("ldr x0, [x0, #8]");                                    // load the dynamic-property hash
+    emit_branch_if_null_container(emitter, "x0", "x10", "__rt_pr_obj_declared");
+    emitter.instruction("ldr x1, [sp, #8]");                                    // base indent → hash walker
+    emitter.instruction("bl __rt_print_r_hash");                                // write `<base>(\n`, every property, `<base>)\n`
+    emitter.instruction("bl __rt_vd_seen_pop");                                 // the object is no longer on the walk stack
+    emitter.instruction("b __rt_pr_obj_exit");                                  // object rendered
+    emitter.label("__rt_pr_obj_declared");
     emitter.instruction("ldr x0, [sp, #8]");                                    // base → open helper argument
     emitter.instruction("bl __rt_print_r_open");                                // write `<base>(\n`
 
@@ -338,6 +352,18 @@ fn emit_print_r_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
     emitter.instruction("call __rt_vd_seen_push");                              // mark the object as being walked
 
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
+    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // load the runtime class id from the object header
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_stdclass_class_id", 0);      // load the compile-time stdClass class id
+    emitter.instruction("cmp r9, r10");                                         // is this a stdClass instance?
+    emitter.instruction("jne __rt_pr_obj_declared_x86");                        // declared classes walk their descriptor
+    emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                        // load the dynamic-property hash
+    emit_branch_if_null_container(emitter, "rdi", "r10", "__rt_pr_obj_declared_x86");
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // base indent → hash walker
+    emitter.instruction("call __rt_print_r_hash");                              // write `<base>(\n`, every property, `<base>)\n`
+    emitter.instruction("call __rt_vd_seen_pop");                               // the object is no longer on the walk stack
+    emitter.instruction("jmp __rt_pr_obj_exit_x86");                            // object rendered
+    emitter.label("__rt_pr_obj_declared_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // base → open helper argument
     emitter.instruction("call __rt_print_r_open");                              // write `<base>(\n`
 

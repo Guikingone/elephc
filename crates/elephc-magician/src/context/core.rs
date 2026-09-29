@@ -95,21 +95,11 @@ pub struct ElephcEvalContext {
     pub(super) native_property_types: Arc<HashMap<(String, String), EvalParameterType>>,
     pub(super) native_property_defaults: Arc<HashMap<(String, String), NativeCallableDefault>>,
     pub(super) native_property_attributes: Arc<HashMap<(String, String), Vec<EvalAttribute>>>,
-    /// One scope holding every `static` slot, php's storage for `static $x`.
-    ///
-    /// A scope rather than a map because a WRITE to a static arrives through `set_scope_cell`,
-    /// which only ever holds `&ElephcEvalContext` -- the same shape the global scope already
-    /// solves, and solved the same way: the context owns the scope and hands out a raw pointer.
-    /// `RefCell` was tried first and is wrong here, because it is not `RefUnwindSafe` and the FFI
-    /// crosses a hundred `catch_unwind` boundaries holding this context.
-    pub(super) static_scope: Box<ElephcEvalScope>,
     /// Overrides the key `static` slots hang from, for callables the function name cannot name.
     ///
     /// Only closures need it: `__FUNCTION__` and a backtrace must keep saying `{closure}`, which
     /// is the FUNCTION name, while the statics belong to this closure OBJECT.
     pub(super) static_slot_keys: Vec<String>,
-    pub(super) static_properties: HashMap<(String, String), RuntimeCellHandle>,
-    pub(super) static_property_aliases: HashMap<(String, String), EvalReferenceTarget>,
     pub(super) class_constants: HashMap<(String, String), RuntimeCellHandle>,
     pub(super) include_state: super::request_includes::SharedIncludeState,
     pub(super) claimed_aot_include_classlikes: HashSet<String>,
@@ -237,10 +227,7 @@ impl ElephcEvalContext {
             native_property_types: Arc::default(),
             native_property_defaults: Arc::default(),
             native_property_attributes: Arc::default(),
-            static_scope: Box::new(ElephcEvalScope::new()),
             static_slot_keys: Vec::new(),
-            static_properties: HashMap::new(),
-            static_property_aliases: HashMap::new(),
             class_constants: HashMap::new(),
             include_state: super::request_includes::current_include_state(),
             claimed_aot_include_classlikes: HashSet::new(),
@@ -345,10 +332,7 @@ impl ElephcEvalContext {
             native_property_types: Arc::default(),
             native_property_defaults: Arc::default(),
             native_property_attributes: Arc::default(),
-            static_scope: Box::new(ElephcEvalScope::new()),
             static_slot_keys: Vec::new(),
-            static_properties: HashMap::new(),
-            static_property_aliases: HashMap::new(),
             class_constants: HashMap::new(),
             include_state: super::request_includes::current_include_state(),
             claimed_aot_include_classlikes: HashSet::new(),

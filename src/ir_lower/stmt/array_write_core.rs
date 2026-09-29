@@ -31,6 +31,26 @@ pub(in crate::ir_lower) fn release_persisted_string_operand(
     }
 }
 
+/// Releases a string written into a Mixed container slot when the slot's box COPIED it.
+///
+/// A box takes over a heap string that a call or `StrPersist` produced
+/// (`Op::yields_box_absorbable_string`), so that one is no longer this write's to release --
+/// releasing it freed the string the container now holds. Every other fresh string -- a
+/// `(string)` cast, a concatenation -- is copied into the box and still has to be dropped.
+pub(in crate::ir_lower) fn release_string_copied_into_box(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) {
+    let absorbed = ctx
+        .builder
+        .value_defining_op(value.value)
+        .is_some_and(Op::yields_box_absorbable_string);
+    if !absorbed {
+        release_persisted_string_operand(ctx, value, span);
+    }
+}
+
 /// Releases an indexed-array write operand when the backend retained or copied it.
 pub(in crate::ir_lower) fn release_indexed_array_write_operand(
     ctx: &mut LoweringContext<'_, '_>,
@@ -158,8 +178,14 @@ pub(super) fn lower_array_assign(
     }
     if op == Op::ArraySet {
         index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
-        let array_ty = ctx.builder.value_php_type(array_value.value);
-        value_value = coerce_indexed_array_set_value(ctx, &array_ty, value_value, Some(value.span));
+        // A reference marker is the slot's new IDENTITY, not a value to narrow into the current
+        // element type: casting it to `int` stored the referenced value's copy and dropped the
+        // reference. Left Mixed, the write below widens the container to boxed slots instead.
+        if !matches!(value.kind, ExprKind::ArrayReference(_)) {
+            let array_ty = ctx.builder.value_php_type(array_value.value);
+            value_value =
+                coerce_indexed_array_set_value(ctx, &array_ty, value_value, Some(value.span));
+        }
     }
     if op == Op::BufferSet {
         index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
@@ -376,10 +402,10 @@ pub(super) fn lower_mixed_key_array_set(
     {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }
-    // A string value is boxed for the slot by COPYING it, as on the `HashSet` path above, so a
-    // fresh string -- `$out[$key] = (string) $value` -- is still this write's to drop. Without
-    // it every such element leaked the string the cast had made.
-    release_persisted_string_operand(ctx, value, span);
+    // A fresh string the box COPIED -- `$out[$key] = (string) $value` -- is still this write's
+    // to drop; without it every such element leaked the cast's string. One the box took over (a
+    // call result) is not.
+    release_string_copied_into_box(ctx, value, span);
 }
 
 /// Returns the associative type produced by a string-key write to an indexed array.

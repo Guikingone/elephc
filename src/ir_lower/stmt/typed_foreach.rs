@@ -147,6 +147,17 @@ pub(super) fn lower_foreach(
     // Apply the checker-computed loop header contract before lowering the source expression so
     // an iterated-and-mutated array is loaded with its stable payload representation.
     apply_loop_storage_contracts(ctx, loop_span, Some(array.span));
+    let shared_reference_source =
+        shares_by_ref_foreach_elements(ctx, array, value_var, value_by_ref, body);
+    if let Some(source_name) = shared_reference_source {
+        let loaded = ctx.load_local(source_name, Some(array.span));
+        crate::ir_lower::expr::prepare_local_array_element_reference_container(
+            ctx,
+            array,
+            loaded,
+            array.span,
+        );
+    }
     let (source, source_is_borrowed_fetch) = lower_foreach_source(ctx, array, value_by_ref);
     if ctx.builder.insertion_block_is_terminated() {
         return;
@@ -200,7 +211,15 @@ pub(super) fn lower_foreach(
     if let Some(key_var) = key_var {
         initialize_foreach_mixed_local_if_needed(ctx, key_var, key_needs_null_init, array.span);
     }
-    if value_by_ref {
+    if value_by_ref && shared_reference_source.is_some() {
+        // Each iteration binds the value variable as an owned reference cell; the owner slot
+        // exists before the loop so each iteration can drop the share the previous one bound.
+        if value_needs_null_init {
+            ctx.declare_local(value_var, PhpType::Mixed);
+            ctx.set_local_type(value_var, PhpType::Mixed);
+        }
+        ctx.declare_zeroed_ref_cell_owner(value_var, Some(array.span));
+    } else if value_by_ref {
         let value_ty = foreach_ref_value_type(&source_ty);
         ctx.declare_local(value_var, value_ty.clone());
         ctx.set_local_type(value_var, value_ty);
@@ -272,7 +291,30 @@ pub(super) fn lower_foreach(
         );
         ctx.store_local(key_var, key, PhpType::Mixed, Some(array.span));
     }
-    if value_by_ref {
+    if let (true, Some(source_name)) = (value_by_ref, shared_reference_source) {
+        // The element becomes a reference in place and the value variable shares it, so a body
+        // that stores `&$value` into another array stores the very reference the element is.
+        let key = ctx.emit_value(
+            Op::IterCurrentKey,
+            vec![iterator.value],
+            None,
+            PhpType::Mixed,
+            Op::IterCurrentKey.default_effects(),
+            Some(array.span),
+        );
+        let container = ctx.load_local(source_name, Some(array.span));
+        let cell = ctx.emit_value(
+            Op::ElemRefCell,
+            vec![container.value, key.value],
+            None,
+            PhpType::Mixed,
+            Op::ElemRefCell.default_effects(),
+            Some(array.span),
+        );
+        crate::ir_lower::ownership::release_if_owned(ctx, key, Some(array.span));
+        ctx.bind_owned_ref_cell_ptr(value_var, cell, Some(array.span));
+        ctx.mark_local_initialized(value_var);
+    } else if value_by_ref {
         let element_type = foreach_ref_value_type(&source_ty);
         let slot = ctx.declare_local(value_var, element_type.clone());
         ctx.release_ref_cell_owner(value_var, Some(array.span));
@@ -385,6 +427,42 @@ fn normalize_plain_object_foreach_source(
 /// Returns the lowered source together with whether it came back borrowed from the
 /// fetch-for-write path, which is what tells the caller the loop still owes it a lifetime
 /// reference of its own.
+/// Returns the local array a by-reference `foreach` must iterate as SHARED references.
+///
+/// The ordinary by-reference loop binds the value variable to the element's storage address,
+/// which is enough while the variable is only read and written. A body that stores the variable
+/// itself as a reference -- `$scoped[$name] = &$value`, `[&$value]` -- needs the element to BE a
+/// reference cell other holders can share, which only a local container whose elements are boxed
+/// can provide. Symfony's DeepClone polyfill builds its scope that way.
+fn shares_by_ref_foreach_elements<'a>(
+    ctx: &LoweringContext<'_, '_>,
+    array: &'a Expr,
+    value_var: &str,
+    value_by_ref: bool,
+    body: &[Stmt],
+) -> Option<&'a str> {
+    if !value_by_ref {
+        return None;
+    }
+    let ExprKind::Variable(name) = &array.kind else {
+        return None;
+    };
+    if crate::superglobals::is_superglobal(name) || !ctx.local_slots.contains_key(name.as_str()) {
+        return None;
+    }
+    // A boxed local (an untyped parameter, typically) is iterated the same way: the element is
+    // promoted inside the array its box holds (`__rt_mixed_elem_ref_cell`).
+    if !matches!(
+        ctx.local_type(name).codegen_repr(),
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return None;
+    }
+    crate::ast_usage::array_reference_sources(body)
+        .contains(value_var)
+        .then_some(name.as_str())
+}
+
 fn lower_foreach_source(
     ctx: &mut LoweringContext<'_, '_>,
     array: &Expr,

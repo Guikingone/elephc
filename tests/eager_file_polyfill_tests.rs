@@ -7,15 +7,10 @@
 //! - `cargo test --test eager_file_polyfill_tests` through Rust's test harness.
 //!
 //! Key details:
-//! - Conditional declarations in an INCLUDED file are dropped unless
-//!   `ELEPHC_BIND_CONDITIONAL_INCLUDE_DECLARATIONS=1`, which is off by default and blocked on
-//!   array-element references (`resolver::declarations::conditional_include_declarations_are_bound`).
-//!   An eager file's OWN conditional declarations are not on that path and survive, which is why
-//!   the one-hop test passes and the two-hop one does not.
-//! - MEASURED, and the reason the two-hop case is `#[ignore]` rather than absent: the same fixture
-//!   prints `AB` under a compiler frozen on 2026-09-21 and fatals with `Call to undefined function
-//!   probe_upper()` on the current tree. It is a live regression, it is not caused by anything in
-//!   the same change as this file, and removing every line of that change leaves it unchanged.
+//! - Conditional declarations in an INCLUDED file are bound
+//!   (`resolver::declarations::conditional_include_declarations_are_bound`); they used to be
+//!   dropped behind a gate, which is what the two-hop test pins. An eager file's OWN conditional
+//!   declarations were never on that path.
 //! - `function_exists` cannot be used to observe any of this: it answers false for
 //!   interpreter-declared functions even when calling them works. These tests CALL the function.
 //! - Symfony's `/` route dies on exactly this shape --
@@ -142,18 +137,11 @@ echo probe_upper('ab'), ':', probe_width('abc'), "\n";
 
 /// Tests that a guarded global function reached through an eager file's INCLUDE is declared.
 ///
-/// KNOWN GAP, and the one that keeps Symfony's `/` route from rendering. The second hop puts the
-/// declarations on the include-stripping path, where a conditional declaration is dropped unless
-/// the binding gate is on — and the file is still reported to the runtime as one the compiler
-/// included, so the runtime skips it and nobody declares the function.
-///
-/// Measured: `AB:3` under a compiler frozen on 2026-09-21, `Call to undefined function
-/// probe_upper()` on the current tree. Turning the gate on
-/// (`ELEPHC_BIND_CONDITIONAL_INCLUDE_DECLARATIONS=1`) is not a workaround either — it widens the
-/// closed world until the build refuses `DeepClone.php:631`, `Reference elements in array
-/// literals`.
+/// The second hop puts the declarations on the include-stripping path, where a conditional
+/// declaration used to be dropped while the file was still reported to the runtime as one the
+/// compiler included — so nobody declared the function (`Call to undefined function
+/// probe_upper()`). This is Symfony's `polyfill-mbstring` shape.
 #[test]
-#[ignore = "known gap: a conditional declaration reached through an eager file's include is dropped, and the file is still reported as compiler-included"]
 fn an_eager_file_include_declares_its_guarded_global_functions() {
     let out = compile_and_run_project(
         "eager_polyfill_2hop",

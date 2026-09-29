@@ -1376,6 +1376,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // builtin sets it to 2 around a top-level array body and back to 0 after;
     // `__rt_var_dump_value` bumps it by 2 across each nested container walk.
     out.push_str(&comm_directive("_vd_indent", 8, target));
+    // _vd_ref_pending: set when the value about to be printed is an array element that is a
+    // reference held more than once; `__rt_vd_pad` then prints php's `&` after the indent.
+    out.push_str(&comm_directive("_vd_ref_pending", 8, target));
+    out.push_str(".globl _vd_ampersand\n_vd_ampersand:\n    .ascii \"&\"\n");
     // var_dump object delimiters: `object(` + class name + `)#` + the PHP object
     // handle + ` (` + initialized property count + `) {\n` opens an object on its
     // value line; the shared `_vd_brace_close` closes it. The handle is the same

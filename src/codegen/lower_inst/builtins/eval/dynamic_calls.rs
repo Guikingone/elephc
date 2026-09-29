@@ -488,7 +488,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_method_call(
     emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
-    emit_eval_result_as_type(ctx, &inst.result_php_type)?;
+    emit_eval_owned_result_as_type(ctx, &inst.result_php_type)?;
     abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
     store_if_result(ctx, inst)
 }
@@ -700,7 +700,7 @@ pub(in crate::codegen::lower_inst) fn lower_eval_owned_method_call(
     emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
-    emit_eval_result_as_type(ctx, &inst.result_php_type)?;
+    emit_eval_owned_result_as_type(ctx, &inst.result_php_type)?;
     abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
     store_if_result(ctx, inst)?;
     abi::emit_jump(ctx.emitter, done_label);
@@ -749,7 +749,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_static_method_call(
     emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
-    emit_eval_result_as_type(ctx, &inst.result_php_type)?;
+    emit_eval_owned_result_as_type(ctx, &inst.result_php_type)?;
     abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
     store_if_result(ctx, inst)
 }
@@ -809,7 +809,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_native_frame_static_m
     emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
-    emit_eval_result_as_type(ctx, &inst.result_php_type)?;
+    emit_eval_owned_result_as_type(ctx, &inst.result_php_type)?;
     abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
     store_if_result(ctx, inst)?;
     abi::emit_jump(ctx.emitter, done_label);

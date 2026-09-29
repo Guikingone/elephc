@@ -335,8 +335,8 @@ pub(super) fn lower_property_array_assign(
                 Some(span),
             );
             // The helper stores its own reference to the value, exactly as on the local path
-            // (`array_write_core::lower_mixed_key_array_set`): a boxed temporary and a fresh
-            // string are still this write's to drop.
+            // (`array_write_core::lower_mixed_key_array_set`): a boxed temporary and a string
+            // the box copied are still this write's to drop.
             if matches!(
                 ctx.builder.value_php_type(value.value).codegen_repr(),
                 PhpType::Mixed | PhpType::Union(_)
@@ -344,7 +344,7 @@ pub(super) fn lower_property_array_assign(
             {
                 crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
             }
-            release_persisted_string_operand(ctx, value, span);
+            release_string_copied_into_box(ctx, value, span);
             ctx.emit_void(
                 Op::PropSet,
                 vec![object.value, rewritten.value],

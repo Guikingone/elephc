@@ -114,7 +114,7 @@ pub fn emit_hash_clone_shallow(emitter: &mut Emitter) {
     emitter.instruction("cmp x5, #6");                                          // is this entry's value an object?
     emitter.instruction("b.eq __rt_hash_clone_shallow_value_ref");              // nested refcounted values need retains
     emitter.instruction("cmp x5, #7");                                          // is this entry's value a boxed mixed cell?
-    emitter.instruction("b.eq __rt_hash_clone_shallow_value_ref");              // nested refcounted values need retains
+    emitter.instruction("b.eq __rt_hash_clone_shallow_value_box");              // a box may be a reference the copy must unwrap
     emitter.instruction("cmp x5, #10");                                         // is this entry's value a callable descriptor?
     emitter.instruction("b.eq __rt_hash_clone_shallow_value_ref");              // runtime descriptors need retains; static descriptors are ignored by incref
     emitter.instruction("cmp x5, #11");                                         // is this entry's value a reference cell?
@@ -134,6 +134,14 @@ pub fn emit_hash_clone_shallow(emitter: &mut Emitter) {
     emitter.instruction("ldr x4, [sp, #32]");                                   // x4 = cloned string value length
     emitter.instruction("ldr x5, [sp, #40]");                                   // x5 = string value_tag copied as-is
     emitter.instruction("b __rt_hash_clone_shallow_insert");                    // insert the cloned string value
+
+    emitter.label("__rt_hash_clone_shallow_value_box");
+    emitter.instruction("ldr x0, [sp, #24]");                                   // the source entry's box
+    emitter.instruction("bl __rt_ref_copy_slot");                               // x0 = what the clone holds, retained for it
+    emitter.instruction("mov x3, x0");                                          // the cloned entry's box
+    emitter.instruction("mov x4, xzr");                                         // a box has no high word
+    emitter.instruction("mov x5, #7");                                          // runtime tag 7 = boxed Mixed
+    emitter.instruction("b __rt_hash_clone_shallow_insert");                    // insert it
 
     emitter.label("__rt_hash_clone_shallow_value_ref");
     emitter.instruction("ldr x3, [sp, #24]");                                   // x3 = source refcounted child pointer
@@ -222,7 +230,7 @@ fn emit_hash_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 6");                                          // is the current source entry value an object child pointer that needs a retain?
     emitter.instruction("je __rt_hash_clone_shallow_value_ref");                // retain nested refcounted child pointers for the cloned associative-array owner
     emitter.instruction("cmp r10, 7");                                          // is the current source entry value a boxed mixed child pointer that needs a retain?
-    emitter.instruction("je __rt_hash_clone_shallow_value_ref");                // retain nested refcounted child pointers for the cloned associative-array owner
+    emitter.instruction("je __rt_hash_clone_shallow_value_box");                // a box may be a reference the copy must unwrap
     emitter.instruction("cmp r10, 10");                                         // is the current source entry value a callable descriptor that needs a retain?
     emitter.instruction("je __rt_hash_clone_shallow_value_ref");                // retain runtime descriptors while static descriptor pointers remain unchanged
     emitter.instruction("cmp r10, 11");                                         // is the current source entry value a reference cell?
@@ -242,6 +250,14 @@ fn emit_hash_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [rbp - 56]");                        // reload the cloned string length into the hash-set value_hi register
     emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // reload the string runtime value_tag into the hash-set value_tag register
     emitter.instruction("jmp __rt_hash_clone_shallow_insert");                  // insert the freshly duplicated string payload into the destination associative-array
+
+    emitter.label("__rt_hash_clone_shallow_value_box");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // the source entry's box
+    emitter.instruction("call __rt_ref_copy_slot");                             // rax = what the clone holds, retained for it
+    emitter.instruction("mov rcx, rax");                                        // the cloned entry's box
+    emitter.instruction("xor r8d, r8d");                                        // a box has no high word
+    emitter.instruction("mov r9d, 7");                                          // runtime tag 7 = boxed Mixed
+    emitter.instruction("jmp __rt_hash_clone_shallow_insert");                  // insert it
 
     emitter.label("__rt_hash_clone_shallow_value_ref");
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // load the shared refcounted child pointer that the cloned associative array must retain

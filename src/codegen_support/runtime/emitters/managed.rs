@@ -33,6 +33,8 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_push_str(emitter);
     arrays::emit_array_set_int(emitter);
     arrays::emit_array_set_mixed(emitter);
+    arrays::emit_ref_marker_store(emitter);
+    arrays::emit_elem_ref_cell(emitter);
     arrays::emit_array_set_mixed_key(emitter);
     arrays::emit_array_get_mixed_key(emitter);
     arrays::emit_array_set_refcounted(emitter);

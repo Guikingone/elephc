@@ -3030,8 +3030,18 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.is_ref_bound_local(name) && self.local_type(name).codegen_repr() == PhpType::Mixed {
             return;
         }
+        let boxed_storage = self
+            .local_slots
+            .get(name)
+            .is_some_and(|slot| self.builder.local_php_type(*slot).codegen_repr() == PhpType::Mixed);
+        if boxed_storage && self.local_type(name).codegen_repr() != PhpType::Mixed {
+            // The slot already holds a box (`box_array_reference_sources`); re-boxing it here is
+            // what leaked once per loop iteration.
+            self.set_local_type(name, PhpType::Mixed);
+        }
         if self.local_type(name).codegen_repr() != PhpType::Mixed {
             let source = self.load_local(name, span);
+            let source_ty = self.builder.value_php_type(source.value).codegen_repr();
             let boxed = self.emit_value(
                 Op::MixedBox,
                 vec![source.value],
@@ -3041,6 +3051,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 span,
             );
             self.store_local(name, boxed, PhpType::Mixed, span);
+            // This promotion gives the slot boxed frame storage for the whole function, so the
+            // `string` load above is an unboxing COPY, and boxing it copies it again. Nothing
+            // else owns the first copy: `$x = 'a'; $a[0] = &$x;` leaked one string per call.
+            // Same shape as the `(_, Mixed)` loop storage contract.
+            if source_ty == PhpType::Str
+                && self.builder.value_defining_op(source.value) == Some(Op::LoadLocal)
+            {
+                crate::ir_lower::ownership::release_if_owned(self, source, span);
+            }
         }
         if !self.is_ref_bound_local(name) {
             self.promote_local_ref_cell(name, span);
@@ -3097,7 +3116,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.clear_reflection_method_local(target);
         self.clear_reflection_arg_array_local(target);
         self.clear_fiber_start_sig(target);
+        let was_ref_bound = self.is_ref_bound_local(target);
         self.release_replaced_local_before_ref_alias(target, span);
+        if !was_ref_bound {
+            // Lowered once, executed per iteration: inside a loop the owner slot still holds the
+            // share the previous iteration's alias took, though the name is not ref-bound at
+            // lowering time. Owner slots start zeroed and release zeroes them, so this is a no-op
+            // on the first pass. `for (..) { $v = $i; $r = &$v; }` leaked one share per extra
+            // iteration.
+            self.declare_ref_cell_owner(target, source_ty.clone());
+            self.release_ref_cell_owner(target, span);
+        }
         let source_slot = self.declare_local(source, source_ty.clone());
         let target_slot = self.declare_local(target, source_ty.clone());
         self.set_local_type(target, source_ty.clone());
@@ -3159,6 +3188,54 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         );
         self.mark_ref_bound_local(target);
         self.initialized_slots.insert(target_slot);
+    }
+
+    /// Binds `target` to a reference cell it OWNS a share of, e.g. the cell an array element
+    /// became (`Op::ElemRefCell`). The caller hands over one retained share; the hidden owner slot
+    /// releases it when the binding ends -- a rebind, `unset`, or the scope exit -- so the cell
+    /// outlives whatever container it came from, as a PHP reference does.
+    pub(crate) fn bind_owned_ref_cell_ptr(
+        &mut self,
+        target: &str,
+        cell_ptr: LoweredValue,
+        span: Option<Span>,
+    ) {
+        // A binding lowered once but executed repeatedly -- a loop body -- finds its own previous
+        // share in the owner slot without the name being ref-bound at lowering time, which is the
+        // only case `bind_local_ref_cell_ptr` releases. Release it here; a zeroed owner is a no-op.
+        if !self.is_ref_bound_local(target) {
+            self.release_ref_cell_owner(target, span);
+        }
+        self.bind_local_ref_cell_ptr(target, cell_ptr, PhpType::Mixed, span);
+        let owner = self.declare_ref_cell_owner(target, PhpType::Mixed);
+        self.builder.emit_with_effects(
+            Op::BindRefCellPtr,
+            vec![cell_ptr.value],
+            Some(Immediate::LocalSlot(owner)),
+            IrType::Void,
+            PhpType::Mixed,
+            Ownership::NonHeap,
+            Op::BindRefCellPtr.default_effects(),
+            span,
+        );
+        self.initialized_slots.insert(owner);
+    }
+
+    /// Declares `name`'s hidden reference-cell owner slot and clears it, so a binding lowered
+    /// inside a loop can release "the previous share" on its first iteration too.
+    pub(crate) fn declare_zeroed_ref_cell_owner(&mut self, name: &str, span: Option<Span>) {
+        let owner = self.declare_ref_cell_owner(name, PhpType::Mixed);
+        if self.initialized_slots.contains(&owner) {
+            return;
+        }
+        self.emit_void(
+            Op::ZeroLocalSlot,
+            Vec::new(),
+            Some(Immediate::LocalSlot(owner)),
+            Op::ZeroLocalSlot.default_effects(),
+            span,
+        );
+        self.initialized_slots.insert(owner);
     }
 
     /// Gives `name` a fresh slot when its current one stores a different representation than the

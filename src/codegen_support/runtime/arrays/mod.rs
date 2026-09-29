@@ -67,6 +67,8 @@ mod array_push_refcounted;
 mod array_push_str;
 mod array_set_int;
 mod array_set_mixed;
+mod ref_marker_store;
+mod elem_ref_cell;
 mod array_set_mixed_key;
 mod array_set_refcounted;
 mod array_set_str;
@@ -325,6 +327,8 @@ pub use array_push_str::emit_array_push_str;
 pub use array_set_int::emit_array_set_int;
 /// Emit scalar indexed-array set helper.
 pub use array_set_mixed::emit_array_set_mixed;
+pub use ref_marker_store::emit_ref_marker_store;
+pub use elem_ref_cell::emit_elem_ref_cell;
 /// Emit boxed-Mixed-key indexed/hash array set helper.
 pub use array_set_mixed_key::emit_array_set_mixed_key;
 pub use array_get_mixed_key::emit_array_get_mixed_key;

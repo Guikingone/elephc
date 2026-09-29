@@ -234,6 +234,11 @@ fn parse_expr_bp_inner(
                 };
                 if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
                     *pos += 1; // consume '('
+                    if parse_first_class_callable_parens(tokens, pos)? {
+                        let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
+                        lhs = super::prefix_complex::dynamic_member_closure(lhs, member, span);
+                        continue;
+                    }
                     let dynamic_args = crate::parser::expr::parse_args(tokens, pos, span)?;
                     let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
                     reject_named_args_in_dynamic_call(&dynamic_args, span)?;
@@ -272,6 +277,21 @@ fn parse_expr_bp_inner(
                     ObjectMember::Dynamic(property) => {
                         if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
                             *pos += 1; // consume '('
+                            if parse_first_class_callable_parens(tokens, pos)? {
+                                if nullsafe {
+                                    return Err(CompileError::new(
+                                        arrow_span,
+                                        "Cannot combine nullsafe operator with Closure creation",
+                                    ));
+                                }
+                                let arrow_span = crate::parser::expr::span_through_prev_token(
+                                    tokens, *pos, arrow_span,
+                                );
+                                lhs = super::prefix_complex::dynamic_member_closure(
+                                    lhs, property, arrow_span,
+                                );
+                                continue;
+                            }
                             let dynamic_args =
                                 crate::parser::expr::parse_args(tokens, pos, arrow_span)?;
                             let arrow_span = crate::parser::expr::span_through_prev_token(tokens, *pos, arrow_span);
@@ -384,7 +404,10 @@ fn parse_expr_bp_inner(
                         | ExprKind::ClosureCall { .. }
                         | ExprKind::FunctionCall { .. }
                         | ExprKind::MethodCall { .. }
+                        | ExprKind::NullsafeMethodCall { .. }
                         | ExprKind::StaticMethodCall { .. }
+                        // `$o->m(...)()` / `strlen(...)('ab')`: php calls the Closure it just made.
+                        | ExprKind::FirstClassCallable(_)
                 ) {
                     let call_span = tokens[*pos].1.span;
                     *pos += 1;

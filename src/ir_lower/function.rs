@@ -1420,6 +1420,7 @@ fn lower_body_into_function(
     // the first statement of the bodies that have one.
     ctx.record_non_integer_keyed_locals(body);
     seed_vivified_array_locals(&mut ctx, body, params);
+    box_array_reference_sources(&mut ctx, body, params);
     for stmt in body {
         crate::ir_lower::stmt::lower_stmt(&mut ctx, stmt);
     }
@@ -1476,6 +1477,33 @@ fn seed_vivified_array_locals(
             span,
         );
         crate::ir_lower::stmt::lower_stmt(ctx, &seed);
+    }
+}
+
+/// Gives every local the body stores into an array as a reference (`$a[$k] = &$v`, `[&$v]`)
+/// boxed storage from the entry on.
+///
+/// Such a local ends up as a Mixed reference cell, and when the promotion sits in a loop it is
+/// lowered once but runs every iteration: re-boxing a slot that is already a cell leaked one box
+/// per extra iteration. With the slot boxed from the start, the promotion is only the idempotent
+/// `PromoteLocalRefCell`. Parameters keep their calling convention, and names backed by global
+/// storage have their own home.
+fn box_array_reference_sources(
+    ctx: &mut LoweringContext<'_, '_>,
+    body: &[Stmt],
+    params: &[(String, PhpType)],
+) {
+    let mut names: Vec<String> = crate::ast_usage::array_reference_sources(body)
+        .into_iter()
+        .filter(|name| !params.iter().any(|(param, _)| param == name))
+        .filter(|name| !crate::superglobals::is_superglobal(name))
+        .collect();
+    names.sort();
+    for name in names {
+        if ctx.uses_global_storage_for_seeding(&name) || ctx.local_slots.contains_key(&name) {
+            continue;
+        }
+        ctx.declare_local(&name, PhpType::Mixed);
     }
 }
 

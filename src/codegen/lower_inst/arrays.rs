@@ -2436,6 +2436,10 @@ fn lower_mixed_array_set_x86_64(
 }
 
 /// Stores a fresh boxed-Mixed value through an invoker ref-cell marker on AArch64.
+///
+/// Only the borrowed invoker (11) and request-global (12) markers are written here. A local
+/// reference marker (13) goes to `__rt_array_set_mixed`, whose `__rt_ref_marker_store` also
+/// releases the box the reference held -- this inline transfer overwrote it and leaked it.
 fn emit_mixed_array_set_ref_marker_writeback_aarch64(ctx: &mut FunctionContext<'_>) {
     let runtime_label = ctx.next_label("mixed_array_set_runtime");
     let marker_label = ctx.next_label("mixed_array_set_ref_marker");
@@ -2466,9 +2470,7 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(ctx: &mut FunctionContext<'
     ctx.emitter.instruction(&format!("cmp x12, #{}", INVOKER_ARG_REF_CELL_TAG)); // check whether the slot aliases caller storage
     ctx.emitter.instruction(&format!("b.eq {}", marker_label));                 // borrowed invoker markers use the shared write-through path
     ctx.emitter.instruction(&format!("cmp x12, #{}", ARRAY_GLOBAL_REF_CELL_TAG)); // check whether the slot owns a global reference cell
-    ctx.emitter.instruction(&format!("b.eq {}", marker_label));                 // global reference markers use the shared write-through path
-    ctx.emitter.instruction(&format!("cmp x12, #{}", ARRAY_LOCAL_REF_CELL_TAG)); // check whether the slot owns a local reference cell
-    ctx.emitter.instruction(&format!("b.ne {}", runtime_label));                // ordinary boxed Mixed slots are replaced by the runtime setter
+    ctx.emitter.instruction(&format!("b.ne {}", runtime_label));                // local reference markers and ordinary boxes go to the runtime setter
     ctx.emitter.label(&marker_label);
     ctx.emitter.instruction("ldr x12, [x11, #16]");                             // load the source runtime tag carried by the by-reference marker
     ctx.emitter.instruction("ldr x10, [x11, #8]");                              // load the caller ref-cell address from the marker payload
@@ -2527,9 +2529,7 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(ctx: &mut FunctionContext<'_
     ctx.emitter.instruction(&format!("cmp r11, {}", INVOKER_ARG_REF_CELL_TAG)); // check whether the slot aliases caller storage
     ctx.emitter.instruction(&format!("je {}", marker_label));                   // borrowed invoker markers use the shared write-through path
     ctx.emitter.instruction(&format!("cmp r11, {}", ARRAY_GLOBAL_REF_CELL_TAG)); // check whether the slot owns a global reference cell
-    ctx.emitter.instruction(&format!("je {}", marker_label));                   // global reference markers use the shared write-through path
-    ctx.emitter.instruction(&format!("cmp r11, {}", ARRAY_LOCAL_REF_CELL_TAG)); // check whether the slot owns a local reference cell
-    ctx.emitter.instruction(&format!("jne {}", runtime_label));                 // ordinary boxed Mixed slots are replaced by the runtime setter
+    ctx.emitter.instruction(&format!("jne {}", runtime_label));                 // local reference markers and ordinary boxes go to the runtime setter
     ctx.emitter.label(&marker_label);
     ctx.emitter.instruction("mov r11, QWORD PTR [r10 + 16]");                   // load the source runtime tag carried by the by-reference marker
     ctx.emitter.instruction("mov r10, QWORD PTR [r10 + 8]");                    // load the caller ref-cell address from the marker payload

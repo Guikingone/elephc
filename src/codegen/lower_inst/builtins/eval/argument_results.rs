@@ -359,6 +359,43 @@ pub(super) fn emit_eval_result_as_type(ctx: &mut FunctionContext<'_>, result_ty:
     }
 }
 
+/// Converts an eval call's OWNED Mixed result to its static type, releasing the box when the
+/// conversion leaves a scalar.
+///
+/// The bridge hands the call's result back as a fresh Mixed cell. A Mixed result type keeps it,
+/// and the unboxing arms take their own reference, but the scalar casts only READ it (a string
+/// cast returns a detached copy), so the cell was never released: every eval-dispatched call
+/// typed `string` -- `$reflector->getName()` on a compiled class among them -- leaked the box
+/// and its string.
+pub(super) fn emit_eval_owned_result_as_type(
+    ctx: &mut FunctionContext<'_>,
+    result_ty: &PhpType,
+) -> Result<()> {
+    let repr = result_ty.codegen_repr();
+    if !matches!(
+        repr,
+        PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False
+    ) {
+        return emit_eval_result_as_type(ctx, result_ty);
+    }
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    emit_eval_result_as_type(ctx, result_ty)?;
+    abi::emit_push_result_value(ctx.emitter, &repr);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    match repr {
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+            abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
+        }
+        PhpType::Float => abi::emit_pop_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter)),
+        _ => abi::emit_pop_reg(ctx.emitter, result_reg),
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    Ok(())
+}
+
 /// Clones an eval `array<mixed>` result and rewrites its boxed object slots to raw object pointers.
 fn emit_eval_mixed_array_as_owned_object_array(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {

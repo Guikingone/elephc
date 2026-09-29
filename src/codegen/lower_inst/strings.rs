@@ -33,6 +33,21 @@ pub(super) fn lower_const_str(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     store_if_result(ctx, inst)
 }
 
+/// Writes one constant PHP diagnostic (`Notice: …\n`) through the runtime diagnostic channel,
+/// which honours `@`, the reporting mask and a user error handler.
+pub(super) fn lower_warn(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let data_id = expect_data(inst)?;
+    let (label, len) = ctx.intern_string_data(data_id)?;
+    let (ptr_reg, len_reg) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x1", "x2"),
+        Arch::X86_64 => ("rdi", "rsi"),
+    };
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    Ok(())
+}
+
 /// Lowers a `::class` constant by materializing the interned class-name string.
 pub(super) fn lower_const_class_name(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let data_id = expect_data(inst)?;

@@ -419,25 +419,28 @@ fn web_prelude_functions_visible_through_variable() {
     );
 }
 
-/// Verifies the same `--web`-only name reports false in a build without `--web`, through BOTH
-/// forms — the dynamic table tracks this compilation's actual declarations rather than a fixed
-/// PHP function list.
+/// Verifies a session function answers the same through BOTH forms in a build without `--web`,
+/// and a name no build declares answers false -- the dynamic table tracks this compilation's
+/// actual declarations rather than a fixed PHP function list.
 ///
-/// This is the sentinel for the candidate set: if the dynamic path fell back to a static list of
-/// PHP function names it would report `session_regenerate_id` as existing here.
+/// `session_regenerate_id` used to be the `--web`-only sentinel here (`00`). The session surface
+/// is now declared for CLI builds too (`session_prelude`), because php's CLI SAPI ships
+/// `ext/session`: `php -n` answers `11`, and so must this build.
 #[test]
-fn web_only_function_absent_without_web_flag() {
+fn session_function_present_without_web_flag_in_both_forms() {
     let dir = make_test_dir("fnexists_noweb");
     let src = "<?php \
         $n = 'session_regenerate_id'; \
         echo function_exists($n) ? '1' : '0'; \
         echo function_exists('session_regenerate_id') ? '1' : '0'; \
+        $m = 'session_no_such_function'; \
+        echo function_exists($m) ? '1' : '0'; \
         echo \"\\n\";";
     let bin = compile(&dir, src, "app");
     assert_eq!(
         run_binary(&bin),
-        "00\n",
-        "a --web-only function must be absent from a non-web build in both forms"
+        "110\n",
+        "the CLI session surface exists in both forms, and an undeclared name does not"
     );
 }
 

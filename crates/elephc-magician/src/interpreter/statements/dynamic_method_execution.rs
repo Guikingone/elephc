@@ -302,10 +302,14 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     context.set_strict_types(previous_strict_types);
     context.set_call_line(previous_call_line);
     let returned = return_result.as_ref().ok().copied();
+    // A method's locals are released exactly as a function's are: the scope was dropped with
+    // its owned cells in it, so every `$local = ...` in an eval-declared method leaked its cell,
+    // and a by-value array parameter its separated copy (and through it the whole array).
+    let scope_cleanup = release_activation_scope(&mut method_scope, returned, context, values);
     let arg_cleanup = release_owned_bound_args(&evaluated_args, returned, context, values);
-    let return_result = match (return_result, arg_cleanup) {
-        (Err(status), _) | (_, Err(status)) => Err(status),
-        (Ok(value), Ok(())) => Ok(value),
+    let return_result = match (return_result, scope_cleanup, arg_cleanup) {
+        (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
+        (Ok(value), Ok(()), Ok(())) => Ok(value),
     };
     leave_dynamic_class_method_source(previous_source, context);
     context.pop_magic_scope();
@@ -499,10 +503,14 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     context.set_strict_types(previous_strict_types);
     context.set_call_line(previous_call_line);
     let returned = return_result.as_ref().ok().copied();
+    // A method's locals are released exactly as a function's are: the scope was dropped with
+    // its owned cells in it, so every `$local = ...` in an eval-declared method leaked its cell,
+    // and a by-value array parameter its separated copy (and through it the whole array).
+    let scope_cleanup = release_activation_scope(&mut method_scope, returned, context, values);
     let arg_cleanup = release_owned_bound_args(&evaluated_args, returned, context, values);
-    let return_result = match (return_result, arg_cleanup) {
-        (Err(status), _) | (_, Err(status)) => Err(status),
-        (Ok(value), Ok(())) => Ok(value),
+    let return_result = match (return_result, scope_cleanup, arg_cleanup) {
+        (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
+        (Ok(value), Ok(()), Ok(())) => Ok(value),
     };
     leave_dynamic_class_method_source(previous_source, context);
     context.pop_magic_scope();

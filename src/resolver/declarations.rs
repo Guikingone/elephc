@@ -157,28 +157,23 @@ pub(super) struct ConditionalDeclarationOutcome {
 
 /// Returns whether an INCLUDED file's conditionally declared functions are kept for binding.
 ///
-/// OFF BY DEFAULT, and this is a temporary gate, not a design. Keeping those bodies is what makes
-/// `if (!function_exists('f')) { function f() {…} }` in an included file behave as php does — the
-/// shape every polyfill uses — but it also widens the closed world to every class those bodies
-/// name. That is correct and is the point; php reaches the same code. It is gated only because
-/// one such body currently reaches PHP that elephc cannot yet compile: a reference stored in an
-/// array element. Both spellings the widened world runs into,
+/// ON. Keeping those bodies is what makes `if (!function_exists('f')) { function f() {…} }` in an
+/// included file behave as php does — the shape every polyfill uses, and the one Symfony reaches
+/// through `polyfill-mbstring/bootstrap.php` -> `bootstrap80.php`. It widens the closed world to
+/// every class those bodies name, which is correct: php reaches the same code.
 ///
-///     $pool[] = [&$refs[$k], $value, &$value];   // refused: reference element in an array literal
-///     $value[$k] = &$refs[$rid];                 // refused: complex reference target
+/// It was off while one such body (`symfony/polyfill-deepclone`) reached PHP elephc could not
+/// compile or ran wrongly: references stored in array elements (`[&$refs[$k], $value, &$value]`,
+/// `$value[$k] = &$refs[$rid]`), forward `goto` into a loop body's tail, runtime-named first-class
+/// callables and property references, and reflection through boxed reflectors. Those now compile
+/// and run as php does (`tests/codegen/deepclone_shapes.rs`, `tests/codegen/array_references.rs`).
 ///
-/// are ordinary PHP, and the forms elephc does accept are silently wrong rather than refused
-/// (`$arr[0] = &$a;` and `$x = &$src[0];` both drop the alias). Array-element references are a
-/// missing runtime representation, not a parser restriction, so this stays off until that lands.
-/// Everything in `crate::conditional_functions` that does NOT widen the parse — every conditional
-/// declaration in a file the build already reads whole — is unaffected by this gate and is always
-/// on.
-///
-/// Set `ELEPHC_BIND_CONDITIONAL_INCLUDE_DECLARATIONS=1` to turn it on.
+/// `ELEPHC_BIND_CONDITIONAL_INCLUDE_DECLARATIONS=0` (or `off` / `false`) turns it back off, to
+/// bisect a regression the widened world exposes.
 fn conditional_include_declarations_are_bound() -> bool {
-    matches!(
+    !matches!(
         std::env::var("ELEPHC_BIND_CONDITIONAL_INCLUDE_DECLARATIONS").as_deref(),
-        Ok("1") | Ok("on") | Ok("true")
+        Ok("0") | Ok("off") | Ok("false")
     )
 }
 

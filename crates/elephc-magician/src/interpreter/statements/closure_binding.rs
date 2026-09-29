@@ -43,6 +43,13 @@ pub(super) fn eval_closure_from_callable(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut args = bind_evaluated_function_args(&[String::from("callback")], evaluated_args)?;
     let callback = args.pop().ok_or(EvalStatus::RuntimeFatal)?;
+    // A compiled Closure is already what php hands back -- the same object. The normalizer has
+    // no shape for a compiled descriptor and answered `function "" not found`, which is how
+    // Twig's `ReflectionCallable` failed on a filter whose callable is a closure. A fresh cell
+    // over the same descriptor keeps `===` true and leaves the argument's ownership alone.
+    if values.type_tag(callback)? == EVAL_TAG_CALLABLE {
+        return values.copy_value(callback);
+    }
     let callable = match lexical_scope {
         Some(scope) => eval_callable_from_scope(callback, context, scope, values),
         None => eval_callable(callback, context, values),

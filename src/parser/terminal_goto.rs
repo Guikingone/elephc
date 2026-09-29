@@ -6,14 +6,16 @@
 //! - `crate::parser::stmt::parse_stmt_dispatch()` and executable-scope parsing entry points.
 //!
 //! Key details:
-//! - Only label tails guaranteed to return or throw are supported; arbitrary CFG jumps remain errors.
+//! - Three shapes are supported: a backward jump (a loop), a forward jump within one statement list
+//!   (segments guarded by a jump selector), and a forward jump to a tail that returns or throws
+//!   (a cloned tail). Jumps into loops or across function scopes remain errors, as in PHP.
 //! - Parser-only markers use NUL-prefixed strings, which cannot collide with PHP source strings.
 
 use std::collections::HashMap;
 
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
-use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind};
 use crate::span::Span;
 
 const GOTO_MARKER_PREFIX: &str = "\0elephc-terminal-goto:";
@@ -57,13 +59,16 @@ pub(super) fn parse_label(
 
 /// Rewrites supported gotos within one PHP executable scope without crossing function boundaries.
 ///
-/// Two shapes are supported, tried in this order:
+/// Three shapes are supported, tried in this order:
 /// 1. A BACKWARD jump — every `goto L` for the label sits inside the label's own tail — becomes a
 ///    real loop (see [`desugar_restart_loops`]). This is the "restart" idiom.
-/// 2. A FORWARD jump to a label whose tail always returns or throws becomes a clone of that tail
+/// 2. A FORWARD jump within one statement list to a label whose tail falls through becomes a
+///    guarded segment of that list (see [`desugar_forward_segments`]).
+/// 3. A FORWARD jump to a label whose tail always returns or throws becomes a clone of that tail
 ///    at the jump site (see [`collect_labels`]).
 pub(super) fn desugar_scope(statements: &mut Vec<Stmt>) -> Result<(), CompileError> {
     desugar_restart_loops(statements);
+    desugar_forward_segments(statements);
     let mut labels = HashMap::new();
     collect_labels(statements, &[], &mut labels)?;
     rewrite_gotos(statements, &labels)
@@ -134,6 +139,159 @@ fn desugar_restart_loops(statements: &mut Vec<Stmt>) {
         let loop_index = statements.len() - 1;
         descend_restart_loops(&mut statements[loop_index]);
         index += 1;
+    }
+}
+
+/// Turns forward jumps to labels of one statement list into guarded segments of that list.
+///
+/// Symfony's DeepClone polyfill ends its per-value loop body with two labels that earlier branches
+/// jump to — `goto prepare_value;` skips the property walk, `goto handle_value;` skips everything
+/// up to the bookkeeping — and neither tail returns: the body continues with the next element.
+/// Cloning a tail cannot express that, but splitting the list at its labels can:
+///
+/// ```php
+/// $sel = 0;
+/// do { P0 } while (false);                // `goto Li` → `$sel = i; break <n>;`
+/// if ($sel <= 1) { do { P1 } while (false); }
+/// if ($sel <= 2) { P2 }
+/// ```
+///
+/// Falling off a segment leaves the selector where it was, so the next guard admits it; a jump sets
+/// the selector to its label and leaves the segment, so every guard before the label rejects it and
+/// every one from the label on admits it. Only a segment that jumps is wrapped, and inside it the
+/// `break N` / `continue N` that reach past the wrapper are renumbered to count it, exactly as
+/// [`rewrite_restart_gotos`] does for its synthetic loop.
+///
+/// A label qualifies when every jump to it comes from EARLIER in its list, at any depth of this
+/// function scope, and its tail does not already return or throw on its own (that shape keeps the
+/// cloning strategy). Inner lists are rewritten first, so an outer jump that sits inside an inner
+/// segment counts that segment's wrapper too.
+fn desugar_forward_segments(statements: &mut Vec<Stmt>) {
+    for statement in statements.iter_mut() {
+        for_each_nested_body(statement, &mut desugar_forward_segments);
+    }
+    let mut targets: HashMap<String, usize> = HashMap::new();
+    let mut cut_points: Vec<usize> = Vec::new();
+    for (index, statement) in statements.iter().enumerate() {
+        let Some(name) = marker_name(statement, LABEL_MARKER_PREFIX) else {
+            continue;
+        };
+        let tail = &statements[index + 1..];
+        let forward_only = contains_goto(&statements[..index], name) && !contains_goto(tail, name);
+        let clonable_tail = statements_terminate(tail) && !contains_label_marker(tail);
+        if forward_only && !clonable_tail {
+            cut_points.push(index);
+            targets.insert(name.to_string(), cut_points.len());
+        }
+    }
+    if cut_points.is_empty() {
+        return;
+    }
+    let span = statements[cut_points[0]].span;
+    let selector = format!("__elephc_goto_{}_{}", span.line, span.col);
+    let mut segments: Vec<Vec<Stmt>> = Vec::with_capacity(cut_points.len() + 1);
+    let mut rest = std::mem::take(statements);
+    for &cut in cut_points.iter().rev() {
+        let mut tail = rest.split_off(cut);
+        tail.remove(0); // the label marker itself
+        segments.push(tail);
+    }
+    segments.push(rest);
+    segments.reverse();
+
+    let mut rewritten = vec![Stmt::new(
+        StmtKind::Assign {
+            name: selector.clone(),
+            value: Expr::new(ExprKind::IntLiteral(0), span),
+        },
+        span,
+    )];
+    for (index, mut segment) in segments.into_iter().enumerate() {
+        let jumps = targets.keys().any(|name| contains_goto(&segment, name));
+        if jumps {
+            rewrite_forward_gotos(&mut segment, &targets, &selector, 0);
+            segment = vec![Stmt::new(
+                StmtKind::DoWhile {
+                    body: segment,
+                    condition: Expr::new(ExprKind::BoolLiteral(false), span),
+                },
+                span,
+            )];
+        }
+        if index == 0 {
+            rewritten.extend(segment);
+            continue;
+        }
+        let guard = Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(Expr::new(ExprKind::Variable(selector.clone()), span)),
+                op: BinOp::LtEq,
+                right: Box::new(Expr::new(ExprKind::IntLiteral(index as i64), span)),
+            },
+            span,
+        );
+        rewritten.push(Stmt::new(
+            StmtKind::If {
+                condition: guard,
+                then_body: segment,
+                elseif_clauses: Vec::new(),
+                else_body: None,
+            },
+            span,
+        ));
+    }
+    *statements = rewritten;
+}
+
+/// Replaces each forward `goto` to one of `targets` with the selector store and the `break` that
+/// leaves the segment wrapper, renumbering the levels that now have to count that wrapper.
+///
+/// `depth` is how many `break`-able constructs enclose `statements` within the segment.
+fn rewrite_forward_gotos(
+    statements: &mut [Stmt],
+    targets: &HashMap<String, usize>,
+    selector: &str,
+    depth: usize,
+) {
+    for statement in statements.iter_mut() {
+        if let Some(target) = marker_name(statement, GOTO_MARKER_PREFIX)
+            .and_then(|name| targets.get(name))
+            .copied()
+        {
+            let span = statement.span;
+            statement.kind = StmtKind::Synthetic(vec![
+                Stmt::new(
+                    StmtKind::Assign {
+                        name: selector.to_string(),
+                        value: Expr::new(ExprKind::IntLiteral(target as i64), span),
+                    },
+                    span,
+                ),
+                Stmt::new(StmtKind::Break(depth + 1), span),
+            ]);
+            continue;
+        }
+        match &mut statement.kind {
+            StmtKind::Break(levels) if *levels > depth => *levels += 1,
+            StmtKind::Continue(levels) if *levels > depth => *levels += 1,
+            StmtKind::While { body, .. }
+            | StmtKind::DoWhile { body, .. }
+            | StmtKind::For { body, .. }
+            | StmtKind::Foreach { body, .. } => {
+                rewrite_forward_gotos(body, targets, selector, depth + 1)
+            }
+            StmtKind::Switch { cases, default, .. } => {
+                for (_, body) in cases {
+                    rewrite_forward_gotos(body, targets, selector, depth + 1);
+                }
+                if let Some(body) = default {
+                    rewrite_forward_gotos(body, targets, selector, depth + 1);
+                }
+            }
+            _ => for_each_nested_body(statement, &mut |body| {
+                rewrite_forward_gotos(body, targets, selector, depth)
+            }),
+        }
     }
 }
 

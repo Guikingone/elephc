@@ -226,41 +226,62 @@ pub(super) fn lower_assoc_spread_only_args(
     let mut operands = Vec::with_capacity(sig.params.len());
     for (idx, (param_name, _)) in sig.params.iter().enumerate() {
         let default = sig.defaults.get(idx).and_then(|default| default.as_ref());
-        let param_expr = assoc_spread_param_expr(&spread_expr, param_name, default, arg.span);
+        let param_expr =
+            assoc_spread_param_expr(&spread_expr, idx, param_name, default, arg.span);
         operands.push(lower_expr(ctx, &param_expr).value);
     }
     Some(operands)
 }
 
-/// Builds an expression that reads one named parameter from an associative spread.
+/// Builds an expression that reads one parameter from a spread whose array type has keys that
+/// may be strings: the parameter's name, else its position, else its default.
+///
+/// PHP binds `f(...$a)` per KEY: `$a[0]` goes to the first parameter and `$a['b']` to `$b`, in
+/// the same unpack. This read the name only, so a plain `array $args` spread with a list --
+/// `f(...[1, 2])` held in a variable -- bound every parameter to its default.
 pub(super) fn assoc_spread_param_expr(
     spread_expr: &Expr,
+    position: usize,
     param_name: &str,
     default: Option<&Expr>,
     span: crate::span::Span,
 ) -> Expr {
-    let key = Expr::new(ExprKind::StringLiteral(param_name.to_string()), span);
-    let access = Expr::new(
-        ExprKind::ArrayAccess {
-            array: Box::new(spread_expr.clone()),
-            index: Box::new(key.clone()),
-        },
-        span,
-    );
-    let Some(default) = default else {
-        return access;
+    let read = |key: Expr| {
+        Expr::new(
+            ExprKind::ArrayAccess {
+                array: Box::new(spread_expr.clone()),
+                index: Box::new(key),
+            },
+            span,
+        )
+    };
+    let key_exists = |key: Expr| {
+        Box::new(Expr::new(
+            ExprKind::FunctionCall {
+                name: Name::unqualified("array_key_exists"),
+                args: vec![key, spread_expr.clone()],
+            },
+            span,
+        ))
+    };
+    let name = Expr::new(ExprKind::StringLiteral(param_name.to_string()), span);
+    let index = Expr::new(ExprKind::IntLiteral(position as i64), span);
+    let by_position = match default {
+        Some(default) => Expr::new(
+            ExprKind::Ternary {
+                condition: key_exists(index.clone()),
+                then_expr: Box::new(read(index)),
+                else_expr: Box::new(default.clone()),
+            },
+            span,
+        ),
+        None => read(index),
     };
     Expr::new(
         ExprKind::Ternary {
-            condition: Box::new(Expr::new(
-                ExprKind::FunctionCall {
-                    name: Name::unqualified("array_key_exists"),
-                    args: vec![key, spread_expr.clone()],
-                },
-                span,
-            )),
-            then_expr: Box::new(access),
-            else_expr: Box::new(default.clone()),
+            condition: key_exists(name.clone()),
+            then_expr: Box::new(read(name)),
+            else_expr: Box::new(by_position),
         },
         span,
     )

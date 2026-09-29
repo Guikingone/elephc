@@ -31,6 +31,7 @@ mod reference_metadata;
 mod reflection_registry;
 mod runtime_state;
 mod request_includes;
+mod request_statics;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -62,6 +63,7 @@ pub use native_function::*;
 use normalization::*;
 pub use reference_metadata::*;
 pub(crate) use request_includes::{install_native_include_hooks, NativeIncludeHooks};
+pub(crate) use request_statics::reset_request_statics;
 
 #[cfg(not(test))]
 static GLOBAL_EVAL_CLASSES: OnceLock<Mutex<GlobalEvalClassRegistry>> = OnceLock::new();

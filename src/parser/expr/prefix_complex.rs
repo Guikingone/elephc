@@ -282,6 +282,44 @@ pub(super) fn parse_arrow_closure(
     ))
 }
 
+/// Builds the Closure `$receiver->$name(...)` / `$receiver::$name(...)` stands for.
+///
+/// PHP's first-class callable syntax on a RUNTIME method name has no static target to bind, so it
+/// becomes what it means: a closure forwarding every argument to that method,
+/// `fn(...$args) => call_user_func_array([$receiver, $name], $args)`, capturing the receiver and
+/// the name by value as an arrow function does. Symfony's DeepClone polyfill rebuilds named
+/// closures exactly this way (`$obj->$name(...)`, `$obj::$name(...)`).
+pub(super) fn dynamic_member_closure(receiver: Expr, member: Expr, span: Span) -> Expr {
+    let args = "__elephc_fcc_args".to_string();
+    let body_expr = Expr::new(
+        ExprKind::FunctionCall {
+            name: crate::names::Name::unqualified("call_user_func_array"),
+            args: vec![
+                Expr::new(ExprKind::ArrayLiteral(vec![receiver, member]), span),
+                Expr::new(ExprKind::Variable(args.clone()), span),
+            ],
+        },
+        span,
+    );
+    let captures = infer_arrow_captures(&body_expr, &[], Some(&args));
+    Expr::new(
+        ExprKind::Closure {
+            params: Vec::new(),
+            variadic: Some(args),
+            variadic_by_ref: false,
+            variadic_type: None,
+            return_type: None,
+            body: vec![Stmt::new(StmtKind::Return(Some(body_expr)), span)],
+            is_arrow: true,
+            is_static: false,
+            by_ref_return: false,
+            captures,
+            capture_refs: vec![],
+        },
+        span,
+    )
+}
+
 /// Infers PHP arrow-function implicit captures from free variable reads in the body expression.
 fn infer_arrow_captures(
     body_expr: &Expr,

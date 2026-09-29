@@ -202,6 +202,62 @@ echo $total, "\n";
     );
 }
 
+/// A string a CALL returns is taken over by the Mixed box it is written into -- only a copied
+/// string (the cast above) is the write's to release. Releasing the call's string as well freed
+/// what the container now held: `$out[$i] = label($raw, $i)` read back as garbage bytes, and
+/// PDO's `FETCH_NAMED` rows came back with corrupted column names. `label` recurses so the
+/// inliner leaves it a real call.
+#[test]
+fn test_call_results_written_under_mixed_keys_stay_owned_by_the_array() {
+    assert_no_leak_slope(
+        r#"<?php
+class Holder { public array $a = []; public function name(int $i): string { return strtoupper(chr(97 + $i) . "x"); } public function put(int $n) { for ($i = 0; $i < $n; $i++) { $this->a[$i] = $this->name($i); } } }
+function label(array $raw, int $i): string { if ($i < 0) { return label($raw, 0); } return strtoupper($raw[$i]); }
+function names(array $raw) { $out = []; for ($i = 0; $i < count($raw); $i++) { $out[$i] = label($raw, $i); } return $out; }
+$h = new Holder;
+$total = 0;
+for ($i = 0; $i < __N__; $i++) {
+    $row = names(['ab', 'cd', 'ef']);
+    $total += strlen(implode('', $row));
+    $h->put(3);
+}
+echo $total, ' ', implode(',', names(['x', 'y'])), ' ', implode(',', $h->a), "\n";
+"#,
+        r#"6 X,Y AX,BX,CX
+"#,
+        r#"240 X,Y AX,BX,CX
+"#,
+        false,
+    );
+}
+
+/// References taken inside a loop body are lowered once and run every iteration. Each rebinding
+/// must drop the share the previous iteration took (`$r = &$v`, the by-reference `foreach` that
+/// shares its elements), and a local already promoted to a cell must not be re-boxed or have its
+/// cell's value overwritten without a release (`$a[$i] = &$v`, `[&$v]`). Every one of these leaked
+/// one block per extra iteration.
+#[test]
+fn test_references_taken_in_loops_do_not_leak() {
+    assert_no_leak_slope(
+        r#"<?php
+function aliases() { $sum = 0; for ($i = 0; $i < 3; $i++) { $v = $i; $r = &$v; $r = $r + 1; $sum += $v; } return $sum; }
+function elements() { $a = [0, 0, 0]; for ($i = 0; $i < 3; $i++) { $v = $i; $a[$i] = &$v; } return array_sum($a); }
+function literals() { $pool = []; foreach ([1, 2, 3] as $k) { $v = $k; $pool[] = [&$v]; } return count($pool) + $pool[0][0]; }
+function shared() { $s = []; $vars = ['x' => 1, 'y' => 2]; foreach ($vars as $name => &$value) { $s[$name] = &$value; } unset($value); return $vars['x'] + $vars['y'] + count($s); }
+$total = 0;
+for ($i = 0; $i < __N__; $i++) {
+    $total += aliases() + elements() + literals() + shared();
+}
+echo $total, "\n";
+"#,
+        r#"23
+"#,
+        r#"920
+"#,
+        false,
+    );
+}
+
 /// The eval bridge's owner lookup reads an array callable's first element and never released the
 /// key or the element, so every `is_callable([$object, 'method'])` on a `mixed` value leaked two
 /// blocks in a program that links the bridge.
@@ -276,6 +332,128 @@ echo $total, "\n";
         r#"5
 "#,
         r#"200
+"#,
+        false,
+    );
+}
+
+/// Every way of invoking a callable that the compiler builds a temporary for. The invoker only
+/// borrows its callback, and each shape dropped something: the `[$class, 'm']` array behind
+/// `$class::m()` (and the original of the Mixed copy a typed callable array is converted to), an
+/// immediately invoked closure, the static-method descriptor behind `$a()` on a local, the Mixed
+/// cell a scalar-typed invocation is cast from, and -- in the eval bridge -- the comparison
+/// result and the answer of `spl_autoload_register()`. Measured before: 62 blocks per call.
+#[test]
+fn test_callable_invocation_shapes_do_not_leak() {
+    assert_no_leak_slope(
+        r#"<?php
+class K { static function n() { return 4; } function m() { return "y" . mt_rand(1, 1); } static function s() { return "x" . mt_rand(1, 1); } static function load($c) { } }
+function shapes() {
+    $c = 'K';
+    $a = ['K', 's'];
+    $l = ['K', 'load'];
+    spl_autoload_register($l);
+    spl_autoload_register($l);
+    spl_autoload_unregister($l);
+    return $c::n() . $c::s() . call_user_func([$c, 'n']) . [new K, 'm']() . $a() . call_user_func($a)
+        . (function () { return "z" . mt_rand(1, 1); })() . implode(array_map(['K', 's'], [1]));
+}
+$out = '';
+for ($i = 0; $i < __N__; $i++) { $out = shapes(); }
+echo $out, "\n";
+"#,
+        r#"4x14y1x1x1z1x1
+"#,
+        r#"4x14y1x1x1z1x1
+"#,
+        false,
+    );
+}
+
+/// A reflector over a compiled class, and its eval-dispatched getters. Construction boxed the
+/// member objects and attribute arrays it had just created with a retaining box, the bridge
+/// never released the key and element of each name it read back, and a scalar getter's result
+/// cell was cast and dropped. Measured before: 619 blocks per iteration.
+#[test]
+fn test_reflectors_over_a_compiled_class_do_not_leak() {
+    assert_no_leak_slope(
+        r#"<?php
+class Base {}
+interface Marker {}
+final class Shape extends Base implements Marker {
+    const A = 1.5;
+    public $p = 1;
+    public $q;
+    function m(int $a = 2, $b = 'x') {}
+    static function s() {}
+}
+function reflect() {
+    $class = new ReflectionClass('Shape');
+    $object = new ReflectionObject(new Shape());
+    $method = new ReflectionMethod('Shape', 'm');
+    $property = new ReflectionProperty('Shape', 'p');
+    return $class->getName() . $class->getShortName() . ($class->isFinal() ? 'F' : '-')
+        . ($class->hasMethod('m') ? 'M' : '-') . $class->getConstant('A')
+        . $object->getName() . $method->getNumberOfParameters() . $property->getName();
+}
+$out = '';
+for ($i = 0; $i < __N__; $i++) { $out = reflect(); }
+echo $out, "\n";
+"#,
+        r#"ShapeShapeFM1.5Shape2p
+"#,
+        r#"ShapeShapeFM1.5Shape2p
+"#,
+        false,
+    );
+}
+
+/// Calls from compiled code into eval-declared code. The bridge boxes each argument with a
+/// reference of its own, so the compiled temporary (`[1, 2, $i]`) was never dropped; and a
+/// METHOD activation was torn down without releasing its scope (a function's was), so every
+/// method local leaked, and a by-value array parameter's separated copy kept the caller's array
+/// alive. Measured before: 8 blocks per iteration.
+#[test]
+fn test_calls_into_eval_declared_code_do_not_leak() {
+    assert_no_leak_slope(
+        r#"<?php
+class EvalPrelude {}
+eval('class Z { static function f($a) { return count($a); } static function h() { $t = 5; $u = [1, 2]; return 1; } } function zf($a) { return count($a); }');
+$total = 0;
+for ($i = 0; $i < __N__; $i++) {
+    $total += Z::f([1, 2, $i]) + zf([1, $i]) + Z::h();
+}
+echo $total, "\n";
+"#,
+        r#"6
+"#,
+        r#"240
+"#,
+        false,
+    );
+}
+
+/// Temporaries inside eval-declared code, and the literal forms of `Closure::fromCallable()`.
+/// The interpreter never released the literal arguments a builtin evaluated for itself, nor a
+/// binary or unary operator's temporary operands (and the zero `-1` is computed against); the
+/// bridge's `.` dropped both operands' string casts; and a literal `fromCallable()` reached the
+/// bridge, which kept its argument. Measured before: 27 blocks per iteration.
+#[test]
+fn test_eval_expression_temporaries_do_not_leak() {
+    assert_no_leak_slope(
+        r#"<?php
+class EvalPrelude {}
+eval('class Z { static function t($x) { $a = strlen("ab") . strtoupper($x); $b = -1; "a" . "y"; return $a . $b; } }');
+class K { function m($v) { return "m$v"; } }
+$out = '';
+for ($i = 0; $i < __N__; $i++) {
+    $out = Z::t("q") . Closure::fromCallable([new K, 'm'])(1) . Closure::fromCallable('strtoupper')("z");
+}
+echo $out, "\n";
+"#,
+        r#"2Q-1m1Z
+"#,
+        r#"2Q-1m1Z
 "#,
         false,
     );

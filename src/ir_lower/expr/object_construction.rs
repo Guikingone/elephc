@@ -52,7 +52,7 @@ pub(super) fn lower_new_object(
         );
     }
     let sig = constructor_signature(ctx, class_name).cloned();
-    let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let operands = lower_user_args_with_signature(ctx, sig.as_ref(), args);
     append_optional_constructor_argc_marker(ctx, sig.as_ref(), args, &operands, expr);
     let php_type = PhpType::Object(class_name.as_str().to_string());
     emit_fixed_object_new(ctx, class_name.as_str(), operands, php_type, expr.span)
@@ -539,21 +539,33 @@ pub(super) fn lower_new_dynamic_generic(
     let mut operands = vec![name_value.value];
     let uses_runtime_arg_container =
         args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(args);
+    let mut boxed_container = None;
     if uses_runtime_arg_container {
-        let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
+        let mut arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
             .expect("dynamic constructor arguments always have a runtime container form");
+        // A variadic parameter that received a named argument is typed `iterable` (its storage
+        // may be a list or a hash), and the invoker normalizes only arrays and boxed values. The
+        // box carries the run-time kind; it is ours, so it is released after the call.
+        if ctx.builder.value_php_type(arg_container.value).codegen_repr() == PhpType::Iterable {
+            arg_container = ctx.box_value_as_mixed(arg_container, PhpType::Mixed, Some(expr.span));
+            boxed_container = Some(arg_container);
+        }
         operands.push(arg_container.value);
     } else {
         operands.extend(lower_args(ctx, args));
     }
-    ctx.emit_value(
+    let object = ctx.emit_value(
         Op::DynamicObjectNewMixed,
         operands,
         uses_runtime_arg_container.then_some(Immediate::Bool(true)),
         PhpType::Mixed,
         Op::DynamicObjectNewMixed.default_effects(),
         Some(expr.span),
-    )
+    );
+    if let Some(boxed) = boxed_container {
+        crate::ir_lower::ownership::release_if_owned(ctx, boxed, Some(expr.span));
+    }
+    object
 }
 
 /// Lowers dynamic object construction.

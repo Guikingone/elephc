@@ -495,7 +495,7 @@ fn value_is_same_static_property_load(
                         == slot.symbol,
                 );
             }
-            Op::ArrayToHash | Op::HashRefElement | Op::HashBindRefElement => {
+            Op::ArrayToHash | Op::HashRefElement | Op::HashBindRefElement | Op::ElemRefCell => {
                 let Some(&operand) = inst_ref.operands.first() else {
                     return Ok(false);
                 };

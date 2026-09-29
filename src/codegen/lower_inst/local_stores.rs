@@ -227,6 +227,30 @@ pub(super) fn release_local_ref_cell_owner(
 /// decision sound. The slot is either zero (prologue zero-initializes cleanup
 /// locals, and the null-guarded release helpers skip zero) or an owned value
 /// boxed by a previous retaining store, so releasing it is always balanced.
+/// Releases the Mixed box a promoted slot's cell holds, when the slot's runtime flag says it is
+/// a cell. `offset` is the slot (holding the cell pointer), `state_offset` its representation flag.
+fn emit_release_promoted_cell_box(ctx: &mut FunctionContext<'_>, offset: usize, state_offset: usize) {
+    let raw = ctx.next_label("release_cell_box_raw");
+    let result = abi::int_result_reg(ctx.emitter);
+    let state_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, state_reg, state_offset);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz {}, {}", state_reg, raw));      // a raw slot was released above
+            abi::load_at_offset(ctx.emitter, result, offset);
+            ctx.emitter.instruction(&format!("ldr {}, [{}]", result, result));    // the box the cell holds
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // is the slot a cell right now?
+            ctx.emitter.instruction(&format!("je {}", raw));                        // a raw slot was released above
+            abi::load_at_offset(ctx.emitter, result, offset);
+            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{}]", result, result)); // the box the cell holds
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");                     // the store below replaces it
+    ctx.emitter.label(&raw);
+}
+
 pub(super) fn lower_release_local_slot(
     ctx: &mut FunctionContext<'_>,
     inst_id: InstId,
@@ -242,8 +266,16 @@ pub(super) fn lower_release_local_slot(
         // A merged path can hold either raw storage or a cell pointer. Slots
         // with a runtime representation flag release only the raw path; slots
         // that are always cells (notably by-ref params) remain excluded.
-        if ctx.ref_cell_state_offset(slot).is_some() {
+        if let Some(state_offset) = ctx.ref_cell_state_offset(slot) {
             super::super::frame::emit_owned_local_cleanup(ctx, slot, offset, &ty);
+            // The store this release precedes goes THROUGH the cell once the slot is promoted,
+            // overwriting the box the cell holds. Drop that box here: a loop body that assigns a
+            // local and then takes `&` of it (`$v = $k; $t = [&$v];`) otherwise leaked one box
+            // per iteration after the first. Only boxed storage is handled; a typed cell keeps
+            // the previous behavior.
+            if ty == PhpType::Mixed {
+                emit_release_promoted_cell_box(ctx, offset, state_offset);
+            }
         }
         return Ok(());
     }

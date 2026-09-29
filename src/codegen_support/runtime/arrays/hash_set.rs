@@ -234,9 +234,38 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp x10, #{}", INVOKER_ARG_REF_CELL_TAG));   // does this marker borrow invoker argument storage?
     emitter.instruction("b.eq __rt_hash_set_update_boxed_ref");                 // preserve the marker and write through it
     emitter.instruction(&format!("cmp x10, #{}", ARRAY_GLOBAL_REF_CELL_TAG)); // does this marker own global-variable reference storage?
-    emitter.instruction("b.eq __rt_hash_set_update_boxed_ref");                 // global markers share the same payload contract
+    emitter.instruction("b.eq __rt_hash_set_update_owned_ref");                 // a plain write goes through the reference it owns
     emitter.instruction(&format!("cmp x10, #{}", ARRAY_LOCAL_REF_CELL_TAG));  // does this marker own promoted local reference storage?
     emitter.instruction("b.ne __rt_hash_set_release_any");                      // ordinary boxed Mixed values retain normal replacement ownership
+
+    // -- the bucket owns a share of a reference: `=&` rebinds it, any other write goes through --
+    emitter.label("__rt_hash_set_update_owned_ref");
+    emitter.instruction("ldr x10, [sp, #40]");                                  // load the incoming hash value tag
+    emitter.instruction("cmp x10, #7");                                         // only a boxed incoming value can itself be a reference
+    emitter.instruction("b.ne __rt_hash_set_update_store_through");             // a plain value is written through the reference
+    emitter.instruction("ldr x10, [sp, #24]");                                  // load the incoming box
+    emitter.instruction("cbz x10, __rt_hash_set_update_store_through");         // a null box is a plain value
+    emitter.instruction("ldr x11, [x10]");                                      // inspect the incoming box's tag
+    emitter.instruction(&format!("cmp x11, #{}", INVOKER_ARG_REF_CELL_TAG));   // is the incoming value a reference too?
+    emitter.instruction("b.eq __rt_hash_set_release_any");                      // `=&` rebinds: release this bucket's share, store the new one
+    emitter.instruction(&format!("cmp x11, #{}", ARRAY_GLOBAL_REF_CELL_TAG)); // is the incoming value a global reference?
+    emitter.instruction("b.eq __rt_hash_set_release_any");                      // `=&` rebinds: release this bucket's share, store the new one
+    emitter.instruction(&format!("cmp x11, #{}", ARRAY_LOCAL_REF_CELL_TAG));  // is the incoming value a local reference?
+    emitter.instruction("b.eq __rt_hash_set_release_any");                      // `=&` rebinds: release this bucket's share, store the new one
+    emitter.label("__rt_hash_set_update_store_through");
+    emitter.instruction("mov x0, x9");                                          // the bucket's marker box
+    emitter.instruction("ldr x1, [sp, #24]");                                   // the incoming low payload word
+    emitter.instruction("ldr x2, [sp, #32]");                                   // the incoming high payload word
+    emitter.instruction("ldr x3, [sp, #40]");                                   // the incoming value tag
+    emitter.instruction("bl __rt_ref_marker_store");                            // write the value into the shared reference cell
+    emitter.instruction("cbnz x0, __rt_hash_set_done");                         // the bucket keeps its marker; nothing else to store
+    emitter.instruction("ldr x5, [sp, #0]");                                    // a typed cell: reload the hash table pointer
+    emitter.instruction("ldr x9, [sp, #48]");                                   // reload the probe index
+    emitter.instruction("mov x11, #64");                                        // entry size = 64 bytes
+    emitter.instruction("mul x12, x9, x11");                                    // recompute the slot's byte offset
+    emitter.instruction("add x12, x5, x12");                                    // advance from table base to slot
+    emitter.instruction("add x12, x12, #40");                                   // skip hash header to entry storage
+    emitter.instruction("ldr x9, [x12, #24]");                                  // reload the bucket's marker box
     emitter.label("__rt_hash_set_update_boxed_ref");
     emitter.instruction("ldr x10, [sp, #40]");                                  // load the incoming hash value tag
     emitter.instruction("cmp x10, #7");                                         // reference-marker writes arrive as fresh boxed Mixed values
@@ -511,9 +540,38 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp r13, {}", INVOKER_ARG_REF_CELL_TAG));    // does this marker borrow invoker argument storage?
     emitter.instruction("je __rt_hash_set_update_boxed_ref_x");                 // preserve the marker and write through it
     emitter.instruction(&format!("cmp r13, {}", ARRAY_GLOBAL_REF_CELL_TAG));  // does this marker own global-variable reference storage?
-    emitter.instruction("je __rt_hash_set_update_boxed_ref_x");                 // global markers share the same payload contract
+    emitter.instruction("je __rt_hash_set_update_owned_ref_x");                 // a plain write goes through the reference it owns
     emitter.instruction(&format!("cmp r13, {}", ARRAY_LOCAL_REF_CELL_TAG));   // does this marker own promoted local reference storage?
     emitter.instruction("jne __rt_hash_set_release_any_x");                     // ordinary boxed Mixed values retain normal replacement ownership
+
+    // -- the bucket owns a share of a reference: `=&` rebinds it, any other write goes through --
+    emitter.label("__rt_hash_set_update_owned_ref_x");
+    emitter.instruction("cmp QWORD PTR [rbp - 48], 7");                         // only a boxed incoming value can itself be a reference
+    emitter.instruction("jne __rt_hash_set_update_store_through_x");            // a plain value is written through the reference
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // load the incoming box
+    emitter.instruction("test r10, r10");                                       // a null box is a plain value
+    emitter.instruction("jz __rt_hash_set_update_store_through_x");             // write it through the reference
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // inspect the incoming box's tag
+    emitter.instruction(&format!("cmp r11, {}", INVOKER_ARG_REF_CELL_TAG));    // is the incoming value a reference too?
+    emitter.instruction("je __rt_hash_set_release_any_x");                      // `=&` rebinds: release this bucket's share, store the new one
+    emitter.instruction(&format!("cmp r11, {}", ARRAY_GLOBAL_REF_CELL_TAG));  // is the incoming value a global reference?
+    emitter.instruction("je __rt_hash_set_release_any_x");                      // `=&` rebinds: release this bucket's share, store the new one
+    emitter.instruction(&format!("cmp r11, {}", ARRAY_LOCAL_REF_CELL_TAG));   // is the incoming value a local reference?
+    emitter.instruction("je __rt_hash_set_release_any_x");                      // `=&` rebinds: release this bucket's share, store the new one
+    emitter.label("__rt_hash_set_update_store_through_x");
+    emitter.instruction("mov rdi, r14");                                        // the bucket's marker box
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // the incoming low payload word
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // the incoming high payload word
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // the incoming value tag
+    emitter.instruction("call __rt_ref_marker_store");                          // write the value into the shared reference cell
+    emitter.instruction("test rax, rax");                                       // was the value written through?
+    emitter.instruction("jnz __rt_hash_set_update_done_x");                     // the bucket keeps its marker; nothing else to store
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // a typed cell: reload the hash-table pointer
+    emitter.instruction("mov r12, QWORD PTR [rbp - 56]");                       // reload the probe index
+    emitter.instruction("shl r12, 6");                                          // convert it into a 64-byte entry offset
+    emitter.instruction("add r12, r10");                                        // advance from the table base to the entry
+    emitter.instruction("add r12, 40");                                         // skip the fixed hash header
+    emitter.instruction("mov r14, QWORD PTR [r12 + 24]");                       // reload the bucket's marker box
     emitter.label("__rt_hash_set_update_boxed_ref_x");
     emitter.instruction("cmp QWORD PTR [rbp - 48], 7");                         // reference-marker writes arrive as fresh boxed Mixed values
     emitter.instruction("jne __rt_hash_set_release_any_x");                     // keep the conservative replacement path for non-boxed callers

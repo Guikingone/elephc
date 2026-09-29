@@ -23,6 +23,142 @@ pub(super) fn terminate_method_call_on_null(ctx: &mut LoweringContext<'_, '_>, m
     ctx.builder.terminate(Terminator::Unreachable);
 }
 
+/// Lowers `bindTo()`, `call()` and `__invoke()` on a closure the compiler only knows as `mixed`.
+///
+/// A closure kept in a static property or returned from `??=` reads back boxed, and a boxed
+/// receiver has no Closure candidate in the class-id dispatch: `bindTo` fell through to the eval
+/// bridge, which cannot rebind a compiled closure, and failed with "eval() runtime failed".
+/// DeepClone keeps its hydrator exactly that way (`self::$hydrators['stdClass'] ??= static fn`,
+/// then `->bindTo(null, $class)`). When no class declares a method of that name the receiver can
+/// only be a closure, so it is narrowed to a callable (a guarded conversion) and takes the same
+/// path a `callable`-typed receiver takes.
+fn lower_boxed_closure_method_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    method: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if !matches!(
+        ctx.builder.value_php_type(object.value).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return None;
+    }
+    let key = php_symbol_key(method);
+    if !matches!(key.as_str(), "bindto" | "call" | "__invoke") {
+        return None;
+    }
+    if ctx.classes.iter().any(|(class_name, class_info)| {
+        php_symbol_key(class_name.trim_start_matches('\\')) != "closure"
+            && class_info.methods.contains_key(&key)
+    }) {
+        return None;
+    }
+    let callable = crate::ir_lower::gradual_coercions::coerce_gradual_value_to_boundary(
+        ctx,
+        object,
+        &PhpType::Callable,
+        Some(expr.span),
+    );
+    if key == "__invoke" {
+        return Some(lower_expr_call_from_value(ctx, callable, args, expr));
+    }
+    lower_closure_bind_method(ctx, &callable, method, args, expr)
+}
+
+/// Lowers `$boxed->m(...)` as `call_user_func_array([$boxed, 'm'], [...])` when some class
+/// declares `m` variadic.
+///
+/// A receiver only known as `mixed` has no signature at lowering time, so its arguments go out
+/// one operand each and the class-id dispatch in codegen picks the method. That dispatch has no
+/// way to gather a variadic tail into the array the callee expects, so it dropped every such
+/// class from its candidates and the call fataled "on null" -- `ReflectionClass::newInstance()`
+/// on a reflector kept in an array, or any user `m(...$xs)`. The callable path resolves the class
+/// at run time and binds positional, variadic and named arguments as a direct call would.
+/// By-reference parameters are left to the direct dispatch: an argument array carries values.
+fn lower_boxed_receiver_variadic_method_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    method: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if !matches!(
+        ctx.builder.value_php_type(object.value).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return None;
+    }
+    let key = php_symbol_key(method);
+    let mut declares_variadic = false;
+    for class_info in ctx.classes.values() {
+        let Some(sig) = class_info.methods.get(&key) else {
+            continue;
+        };
+        if sig.ref_params.iter().any(|by_ref| *by_ref) {
+            return None;
+        }
+        declares_variadic |= sig.variadic.is_some();
+    }
+    if !declares_variadic {
+        return None;
+    }
+    let span = expr.span;
+    let argument_array = boxed_receiver_argument_array(args, span)?;
+    // A plain hidden temp holding a reference of its own, as the dynamic-method path does. A
+    // one-shot OWNED temp was read twice -- the callable array's element load moved it out, and
+    // the explicit take after the call released it again -- which only balanced while that array
+    // leaked the element it had retained.
+    let receiver = ctx.declare_hidden_temp(PhpType::Mixed);
+    let object = acquire_borrowed_for_hidden_temp(ctx, object, span);
+    ctx.store_local(&receiver, object, PhpType::Mixed, Some(span));
+    let call = Expr::new(
+        ExprKind::FunctionCall {
+            name: crate::names::Name::unqualified("call_user_func_array"),
+            args: vec![
+                Expr::new(
+                    ExprKind::ArrayLiteral(vec![
+                        Expr::new(ExprKind::Variable(receiver.clone()), span),
+                        Expr::new(ExprKind::StringLiteral(method.to_string()), span),
+                    ]),
+                    span,
+                ),
+                argument_array,
+            ],
+        },
+        span,
+    );
+    Some(lower_expr(ctx, &call))
+}
+
+/// Returns the argument array `call_user_func_array()` takes for one call's source arguments:
+/// positional arguments at their index, named ones under their name, spreads spliced in.
+/// A spread mixed with named arguments has no literal spelling here and keeps the direct path.
+fn boxed_receiver_argument_array(args: &[Expr], span: crate::span::Span) -> Option<Expr> {
+    let has_named = args
+        .iter()
+        .any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }));
+    if !has_named {
+        return Some(Expr::new(ExprKind::ArrayLiteral(args.to_vec()), span));
+    }
+    let mut entries = Vec::with_capacity(args.len());
+    for (index, arg) in args.iter().enumerate() {
+        match &arg.kind {
+            ExprKind::Spread(_) => return None,
+            ExprKind::NamedArg { name, value } => entries.push((
+                Expr::new(ExprKind::StringLiteral(name.clone()), span),
+                value.as_ref().clone(),
+            )),
+            _ => entries.push((
+                Expr::new(ExprKind::IntLiteral(index as i64), span),
+                arg.clone(),
+            )),
+        }
+    }
+    Some(Expr::new(ExprKind::ArrayLiteralAssoc(entries), span))
+}
+
 /// Lowers a nullsafe method call with lazy argument evaluation for nullable receivers.
 pub(super) fn lower_nullsafe_method_call(
     ctx: &mut LoweringContext<'_, '_>,
@@ -198,10 +334,15 @@ pub(super) fn lower_method_call_with_receiver(
     op: Op,
     expr: &Expr,
 ) -> LoweredValue {
-    if op == Op::MethodCall && is_reflection_class_new_instance_call(ctx, object.value, method) {
+    if op == Op::MethodCall
+        && is_reflection_class_new_instance_call(ctx, object.value, method)
+        && reflection_class_new_instance_forwards_statically(ctx, None, args)
+    {
         return lower_reflection_class_new_instance(ctx, None, object, args, expr);
     }
-    if op == Op::MethodCall && is_reflection_class_new_instance_args_call(ctx, object.value, method)
+    if op == Op::MethodCall
+        && is_reflection_class_new_instance_args_call(ctx, object.value, method)
+        && reflection_class_new_instance_args_forward_statically(ctx, None, args)
     {
         return lower_reflection_class_new_instance_args(ctx, None, object, args, expr);
     }
@@ -209,6 +350,14 @@ pub(super) fn lower_method_call_with_receiver(
         && is_reflection_class_new_instance_without_constructor_call(ctx, object.value, method)
     {
         return lower_reflection_class_new_instance_without_constructor(ctx, object, args, expr);
+    }
+    if op == Op::MethodCall {
+        if let Some(call) = lower_boxed_closure_method_call(ctx, object, method, args, expr) {
+            return call;
+        }
+        if let Some(call) = lower_boxed_receiver_variadic_method_call(ctx, object, method, args, expr) {
+            return call;
+        }
     }
     if let Some(receiver) = object_static_method_receiver(ctx, object.value, method) {
         let call = lower_static_method_call(ctx, &receiver, method, args, expr);
@@ -247,7 +396,7 @@ pub(super) fn lower_method_call_with_receiver(
         .as_ref()
         .map(|(call_args, _)| call_args.as_slice())
         .unwrap_or(args);
-    let arg_values = lower_args_with_signature(ctx, sig.as_ref(), call_args);
+    let arg_values = lower_user_args_with_signature(ctx, sig.as_ref(), call_args);
     operands.extend(arg_values.iter().copied());
     let data = ctx.intern_string(dispatch_method);
     let call = ctx.emit_value(
@@ -330,7 +479,17 @@ pub(super) fn acquire_borrowed_for_hidden_temp(
     value: LoweredValue,
     span: Span,
 ) -> LoweredValue {
-    if ctx.value_is_owning_temporary(value) {
+    // A PHP local's load counts as an owning temporary only PROVISIONALLY (builder finalization
+    // prunes the releases emitted on it while the slot stays concrete); a store into a hidden
+    // temp is not such a release, so the local and the temp would both own one reference. The
+    // dynamic method call `$h->$m()` stored `$h` that way and released it with the temp; the
+    // callable array it built leaked a reference that happened to cancel it, until that array
+    // was released too and `$h` died after its first call.
+    let is_named_local_load = matches!(
+        ctx.builder.value_defining_op(value.value),
+        Some(Op::LoadLocal | Op::LoadStaticLocal)
+    ) && !ctx.value_is_owned_temp_load(value.value);
+    if ctx.value_is_owning_temporary(value) && !is_named_local_load {
         return value;
     }
     crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))

@@ -46,7 +46,7 @@
 //! - REMAINING GAP: resources (tag 9) nested inside a container render as
 //!   `NULL` rather than PHP's `resource(N) of type (...)`.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch, ref_markers};
 use crate::codegen_support::abi;
 
 /// `__rt_var_dump_array_int`: emit one `[N]=>\n  int(VAL)\n` block per
@@ -890,9 +890,51 @@ pub fn emit_var_dump_pad(emitter: &mut Emitter) {
     emitter.instruction("b __rt_vd_pad_loop");                                  // continue padding
 
     emitter.label("__rt_vd_pad_done");
+    abi::emit_symbol_address(emitter, "x1", "_vd_ref_pending");                 // is the value on this line a shared reference?
+    emitter.instruction("ldr x0, [x1]");                                        // load the pending flag
+    emitter.instruction("cbz x0, __rt_vd_pad_return");                          // an ordinary value prints no marker
+    emitter.instruction("str xzr, [x1]");                                       // the marker belongs to this line only
+    abi::emit_symbol_address(emitter, "x1", "_vd_ampersand");                   // php prints `&` before a shared reference's type
+    emitter.instruction("mov x2, #1");                                          // len("&") = 1
+    emitter.instruction("bl __rt_vd_write");                                    // write it after the indent
+    emitter.label("__rt_vd_pad_return");
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the pad frame
     emitter.instruction("ret");                                                 // return to caller
+}
+
+/// Sets `_vd_ref_pending` when the `(tag, cell, source)` triple in x0/x1/x2 is a reference element
+/// whose cell has more than one holder, which is when php's var_dump prints `&`.
+///
+/// The count read is the cell's: bound locals and the markers that own it. A marker shared only
+/// by copies of one array counts once here, so that case prints no `&` yet.
+fn emit_flag_shared_reference_aarch64(emitter: &mut Emitter) {
+    emitter.instruction("cmp x0, #12");                                         // a reference element that owns a global cell?
+    emitter.instruction("b.eq __rt_vd_val_ref_count");                          // count its holders
+    emitter.instruction("cmp x0, #13");                                         // a reference element that owns a local cell?
+    emitter.instruction("b.ne __rt_vd_val_ref_counted");                        // nothing to flag
+    emitter.label("__rt_vd_val_ref_count");
+    emitter.instruction("ldr w9, [x1, #-12]");                                  // the cell's holder count
+    emitter.instruction("cmp w9, #1");                                          // held more than once?
+    emitter.instruction("b.ls __rt_vd_val_ref_counted");                        // a lone reference prints as a value
+    abi::emit_symbol_address(emitter, "x9", "_vd_ref_pending");                 // flag the line
+    emitter.instruction("mov x10, #1");                                         // pending = true
+    emitter.instruction("str x10, [x9]");                                       // `__rt_vd_pad` prints the `&`
+    emitter.label("__rt_vd_val_ref_counted");
+}
+
+/// x86_64 variant of `emit_flag_shared_reference_aarch64` (triple in rax/rsi/rdx).
+fn emit_flag_shared_reference_x86_64(emitter: &mut Emitter) {
+    emitter.instruction("cmp rax, 12");                                         // a reference element that owns a global cell?
+    emitter.instruction("je __rt_vd_val_ref_count_x86");                        // count its holders
+    emitter.instruction("cmp rax, 13");                                         // a reference element that owns a local cell?
+    emitter.instruction("jne __rt_vd_val_ref_counted_x86");                     // nothing to flag
+    emitter.label("__rt_vd_val_ref_count_x86");
+    emitter.instruction("cmp DWORD PTR [rsi - 12], 1");                         // held more than once?
+    emitter.instruction("jbe __rt_vd_val_ref_counted_x86");                     // a lone reference prints as a value
+    abi::emit_symbol_address(emitter, "r10", "_vd_ref_pending");                // flag the line
+    emitter.instruction("mov QWORD PTR [r10], 1");                              // `__rt_vd_pad` prints the `&`
+    emitter.label("__rt_vd_val_ref_counted_x86");
 }
 
 /// Emits the Linux x86_64 variant of `__rt_vd_pad`.
@@ -922,6 +964,14 @@ fn emit_var_dump_pad_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_vd_pad_loop_x86");                            // continue padding
 
     emitter.label("__rt_vd_pad_done_x86");
+    abi::emit_symbol_address(emitter, "rax", "_vd_ref_pending");                // is the value on this line a shared reference?
+    emitter.instruction("cmp QWORD PTR [rax], 0");                              // an ordinary value prints no marker
+    emitter.instruction("je __rt_vd_pad_return_x86");                           // skip the marker
+    emitter.instruction("mov QWORD PTR [rax], 0");                              // the marker belongs to this line only
+    abi::emit_symbol_address(emitter, "rsi", "_vd_ampersand");                  // php prints `&` before a shared reference's type
+    emitter.instruction("mov rdx, 1");                                          // len("&") = 1
+    emitter.instruction("call __rt_vd_write");                                  // write it after the indent
+    emitter.label("__rt_vd_pad_return_x86");
     emitter.instruction("add rsp, 16");                                         // release the pad frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to caller
@@ -1094,6 +1144,7 @@ pub fn emit_var_dump_value(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #0]");                                    // save the value low word
     emitter.instruction("str x2, [sp, #8]");                                    // save the value high word
 
+    emitter.label("__rt_vd_val_dispatch");
     emitter.instruction("cmp x0, #7");                                          // boxed Mixed cell?
     emitter.instruction("b.eq __rt_vd_val_mixed");                              // unbox then redispatch
     emitter.instruction("cmp x0, #0");                                          // tag 0 = int
@@ -1112,7 +1163,19 @@ pub fn emit_var_dump_value(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_vd_val_obj");                                // recurse into the object walker
     emitter.instruction("cmp x0, #10");                                         // tag 10 = callable descriptor
     emitter.instruction("b.eq __rt_vd_val_callable");                           // render the descriptor as a Closure object
-    emitter.instruction("b __rt_vd_val_null");                                  // unsupported or null tags render NULL
+    emit_flag_shared_reference_aarch64(emitter);
+    ref_markers::emit_follow_ref_marker_triple(
+        emitter,
+        ("x0", "x1", "x2"),
+        "__rt_vd_val_ref",
+        "__rt_vd_val_null",
+        "__rt_vd_val",
+    );                                                                          // a reference element renders its value; others render NULL
+
+    emitter.label("__rt_vd_val_ref");
+    emitter.instruction("str x1, [sp, #0]");                                    // save the referenced value's low word
+    emitter.instruction("str x2, [sp, #8]");                                    // save the referenced value's high word
+    emitter.instruction("b __rt_vd_val_dispatch");                              // render the referenced value
 
     emitter.label("__rt_vd_val_int");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the integer payload
@@ -1196,6 +1259,23 @@ pub fn emit_var_dump_value(emitter: &mut Emitter) {
     emitter.label("__rt_vd_val_mixed");
     emitter.instruction("ldr x0, [sp, #0]");                                    // boxed Mixed cell pointer
     emitter.instruction("cbz x0, __rt_vd_val_null");                            // defensive: a null cell renders NULL
+    // A reference element unboxes as its value, so its `&` is decided here, from the box.
+    emitter.instruction("ldr x9, [x0]");                                        // the box's tag
+    emitter.instruction("cmp x9, #12");                                         // a reference element that owns a global cell?
+    emitter.instruction("b.eq __rt_vd_val_mixed_ref");                          // count its holders
+    emitter.instruction("cmp x9, #13");                                         // a reference element that owns a local cell?
+    emitter.instruction("b.ne __rt_vd_val_mixed_unbox");                        // an ordinary box prints no marker
+    emitter.label("__rt_vd_val_mixed_ref");
+    emitter.instruction("ldr w9, [x0, #-12]");                                  // containers holding this marker
+    emitter.instruction("ldr x10, [x0, #8]");                                   // the marker's cell
+    emitter.instruction("ldr w10, [x10, #-12]");                                // holders of the cell (markers and bound locals)
+    emitter.instruction("add w9, w9, w10");                                     // every holder of the reference, counting this marker twice
+    emitter.instruction("cmp w9, #2");                                          // held more than once?
+    emitter.instruction("b.ls __rt_vd_val_mixed_unbox");                        // a lone reference prints as a value
+    abi::emit_symbol_address(emitter, "x9", "_vd_ref_pending");                 // flag the line
+    emitter.instruction("mov x10, #1");                                         // pending = true
+    emitter.instruction("str x10, [x9]");                                       // `__rt_vd_pad` prints the `&`
+    emitter.label("__rt_vd_val_mixed_unbox");
     emitter.instruction("bl __rt_mixed_unbox");                                 // x0=inner tag, x1=lo, x2=hi
     emitter.instruction("bl __rt_var_dump_value");                              // redispatch the unboxed scalar/container
     emitter.instruction("b __rt_vd_val_done");                                  // value rendered
@@ -1223,6 +1303,7 @@ fn emit_var_dump_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the value high word
     emitter.instruction("mov rax, rdi");                                        // tag → dispatch register
 
+    emitter.label("__rt_vd_val_dispatch_x86");
     emitter.instruction("cmp rax, 7");                                          // boxed Mixed cell?
     emitter.instruction("je __rt_vd_val_mixed_x86");                            // unbox then redispatch
     emitter.instruction("cmp rax, 0");                                          // tag 0 = int
@@ -1241,7 +1322,19 @@ fn emit_var_dump_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_vd_val_obj_x86");                              // recurse into the object walker
     emitter.instruction("cmp rax, 10");                                         // tag 10 = callable descriptor
     emitter.instruction("je __rt_vd_val_callable_x86");                         // render the descriptor as a Closure object
-    emitter.instruction("jmp __rt_vd_val_null_x86");                            // unsupported or null tags render NULL
+    emit_flag_shared_reference_x86_64(emitter);
+    ref_markers::emit_follow_ref_marker_triple(
+        emitter,
+        ("rax", "rsi", "rdx"),
+        "__rt_vd_val_ref_x86",
+        "__rt_vd_val_null_x86",
+        "__rt_vd_val_x86",
+    );                                                                          // a reference element renders its value; others render NULL
+
+    emitter.label("__rt_vd_val_ref_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the referenced value's low word
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the referenced value's high word
+    emitter.instruction("jmp __rt_vd_val_dispatch_x86");                        // render the referenced value
 
     emitter.label("__rt_vd_val_int_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the integer payload
@@ -1330,6 +1423,21 @@ fn emit_var_dump_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // boxed Mixed cell pointer → RAX
     emitter.instruction("test rax, rax");                                       // defensive null-cell check
     emitter.instruction("jz __rt_vd_val_null_x86");                             // a null cell renders NULL
+    // A reference element unboxes as its value, so its `&` is decided here, from the box.
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // the box's tag
+    emitter.instruction("cmp r10, 12");                                         // a reference element that owns a global cell?
+    emitter.instruction("je __rt_vd_val_mixed_ref_x86");                        // count its holders
+    emitter.instruction("cmp r10, 13");                                         // a reference element that owns a local cell?
+    emitter.instruction("jne __rt_vd_val_mixed_unbox_x86");                     // an ordinary box prints no marker
+    emitter.label("__rt_vd_val_mixed_ref_x86");
+    emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // containers holding this marker
+    emitter.instruction("mov r11, QWORD PTR [rax + 8]");                        // the marker's cell
+    emitter.instruction("add r10d, DWORD PTR [r11 - 12]");                      // every holder of the reference, counting this marker twice
+    emitter.instruction("cmp r10d, 2");                                         // held more than once?
+    emitter.instruction("jbe __rt_vd_val_mixed_unbox_x86");                     // a lone reference prints as a value
+    abi::emit_symbol_address(emitter, "r10", "_vd_ref_pending");                // flag the line
+    emitter.instruction("mov QWORD PTR [r10], 1");                              // `__rt_vd_pad` prints the `&`
+    emitter.label("__rt_vd_val_mixed_unbox_x86");
     emitter.instruction("call __rt_mixed_unbox");                               // rax=inner tag, rdi=lo, rdx=hi
     emitter.instruction("mov rsi, rdi");                                        // unboxed lo → value low argument
     emitter.instruction("mov rdi, rax");                                        // unboxed tag → value tag argument

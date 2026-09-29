@@ -150,14 +150,22 @@ pub(super) fn lower_eval_call_user_func_fallback(
     let dynamic_name = php_symbol_key(callback_name.trim_start_matches('\\'));
     let data = ctx.intern_function_name(&dynamic_name);
     let operands = lower_args(ctx, callback_args);
-    Some(ctx.emit_value(
+    let result = ctx.emit_value(
         Op::EvalFunctionCall,
-        operands,
+        operands.clone(),
         Some(Immediate::Data(data)),
         PhpType::Mixed,
         Op::EvalFunctionCall.default_effects(),
         Some(expr.span),
-    ))
+    );
+    release_owned_call_arg_temporaries(
+        ctx,
+        &operands,
+        Some(result.value),
+        &ReturnArgAlias::None,
+        expr.span,
+    );
+    Some(result)
 }
 
 /// Lowers unresolved `call_user_func_array()` string callbacks through the eval table.

@@ -1196,18 +1196,26 @@ pub(super) fn runtime_string_descriptor_cases(
         return Ok(cases);
     }
     let mut cases = runtime_extern_descriptor_cases(ctx, candidate_names)?;
-    cases.extend(runtime_builtin_descriptor_cases(
-        ctx,
-        source_arg_ty,
-        candidate_names,
-        strict_php,
-    )?);
-    cases.extend(runtime_user_function_descriptor_cases(
-        ctx,
-        source_arg_ty,
-        candidate_names,
-        strict_php,
-    ));
+    let builtin_cases =
+        runtime_builtin_descriptor_cases(ctx, source_arg_ty, candidate_names, strict_php)?;
+    // A user declaration of a builtin's name is one php never makes: the builtin keeps
+    // answering, and executing the declaration would be a redeclaration fatal. It is still
+    // EMITTED when it sits behind a guard (`if (...) { function strlen() {} }`), so both reached
+    // this table under one key and codegen refused the program outright.
+    let builtin_names = builtin_cases
+        .iter()
+        .filter_map(|case| case.php_name.as_deref().map(php_symbol_key))
+        .collect::<std::collections::HashSet<_>>();
+    cases.extend(builtin_cases);
+    cases.extend(
+        runtime_user_function_descriptor_cases(ctx, source_arg_ty, candidate_names, strict_php)
+            .into_iter()
+            .filter(|case| {
+                case.php_name
+                    .as_deref()
+                    .is_none_or(|name| !builtin_names.contains(&php_symbol_key(name)))
+            }),
+    );
     cases.extend(
         runtime_static_method_descriptor_cases(ctx, candidate_names)
             .into_iter()
@@ -2026,13 +2034,14 @@ fn lower_runtime_string_callable_array_descriptor_invoke(
 ) -> Result<()> {
     if ctx.module.required_runtime_features.eval_bridge {
         normalize_typed_callable_array_to_mixed(ctx, callable)?;
-        return lower_runtime_mixed_callable_array_descriptor_invoke(
+        lower_runtime_mixed_callable_array_descriptor_invoke(
             ctx,
             inst,
             callable,
             arg_mixed,
             op_name,
-        );
+        )?;
+        return restore_typed_callable_array_after_mixed_use(ctx, callable);
     }
 
     let static_cases = runtime_static_method_descriptor_cases(ctx, None);
@@ -2108,7 +2117,8 @@ pub(super) fn emit_runtime_callable_array_descriptor_value(
         }
         PhpType::Array(_) => {
             normalize_typed_callable_array_to_mixed(ctx, callable)?;
-            emit_mixed_callable_array_descriptor_value(ctx, callable, op_name)
+            emit_mixed_callable_array_descriptor_value(ctx, callable, op_name)?;
+            restore_typed_callable_array_after_mixed_use(ctx, callable)
         }
         other => Err(CodegenIrError::unsupported(format!(
             "{} for callable-array PHP type {:?}",
@@ -2119,10 +2129,19 @@ pub(super) fn emit_runtime_callable_array_descriptor_value(
 
 /// Copies a typed callable-array candidate into boxed Mixed slots so descriptor selection can
 /// inspect each selector's runtime tag rather than trusting a stale flow-inferred element type.
+///
+/// The copy replaces the array in `callable`'s own storage, and the original is pushed on the
+/// temporary stack: every caller must end the span with
+/// [`restore_typed_callable_array_after_mixed_use`]. Without it neither array had an owner --
+/// an owned `[$class, 'm']` temporary lost its original (three blocks per `$class::m()`), and a
+/// borrowed local's load left the copy behind instead.
 pub(crate) fn normalize_typed_callable_array_to_mixed(
     ctx: &mut FunctionContext<'_>,
     callable: ValueId,
 ) -> Result<()> {
+    let original_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(callable, original_reg)?;
+    abi::emit_push_reg(ctx.emitter, original_reg);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(callable, "x0")?;
@@ -2142,6 +2161,25 @@ pub(crate) fn normalize_typed_callable_array_to_mixed(
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
     ctx.store_result_value(callable)
+}
+
+/// Ends a [`normalize_typed_callable_array_to_mixed`] span: releases the Mixed copy and puts
+/// the original array back in `callable`'s storage, so the value owns (or borrows) exactly what
+/// it did before. The integer result pair survives, for a caller that selected a descriptor.
+pub(crate) fn restore_typed_callable_array_after_mixed_use(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+) -> Result<()> {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let flag_reg = runtime_descriptor_owned_flag_reg(ctx);
+    abi::emit_push_reg_pair(ctx.emitter, result_reg, flag_reg);
+    ctx.load_value_to_reg(callable, result_reg)?;
+    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+    ctx.store_result_value(callable)?;
+    abi::emit_pop_reg_pair(ctx.emitter, result_reg, flag_reg);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    Ok(())
 }
 
 /// Materializes an instance-method descriptor selected from a mixed callable-array value.
@@ -4196,23 +4234,19 @@ fn store_descriptor_invoker_result(
             ctx.store_result_value(result)
         }
         PhpType::Int => {
-            move_result_to_arg(ctx, 0);
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            emit_owned_mixed_result_cast(ctx, "__rt_mixed_cast_int", &PhpType::Int);
             ctx.store_result_value(result)
         }
         PhpType::Bool => {
-            move_result_to_arg(ctx, 0);
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
+            emit_owned_mixed_result_cast(ctx, "__rt_mixed_cast_bool", &PhpType::Bool);
             ctx.store_result_value(result)
         }
         PhpType::Float => {
-            move_result_to_arg(ctx, 0);
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float");
+            emit_owned_mixed_result_cast(ctx, "__rt_mixed_cast_float", &PhpType::Float);
             ctx.store_result_value(result)
         }
         PhpType::Str => {
-            move_result_to_arg(ctx, 0);
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+            emit_owned_mixed_result_cast(ctx, "__rt_mixed_cast_string", &PhpType::Str);
             ctx.store_result_value(result)
         }
         PhpType::TaggedScalar => store_descriptor_invoker_tagged_scalar_result(ctx, result),
@@ -4221,6 +4255,31 @@ fn store_descriptor_invoker_result(
             other
         ))),
     }
+}
+
+/// Casts the invoker's Mixed result to a scalar and releases the box.
+///
+/// Every invoker hands its result back as a fresh Mixed cell. The casts only READ it -- the
+/// string arm returns a persisted copy -- so a scalar-typed `$f()` (a static-method callable
+/// held in a local, `[$class, 'm']()` resolved at compile time) leaked the cell and its string
+/// on every call.
+fn emit_owned_mixed_result_cast(ctx: &mut FunctionContext<'_>, helper: &str, repr: &PhpType) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    move_result_to_arg(ctx, 0);
+    abi::emit_call_label(ctx.emitter, helper);
+    abi::emit_push_result_value(ctx.emitter, repr);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    match repr {
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+            abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
+        }
+        PhpType::Float => abi::emit_pop_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter)),
+        _ => abi::emit_pop_reg(ctx.emitter, result_reg),
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
 }
 
 /// Unboxes a Mixed descriptor result into the inline nullable-int result shape.

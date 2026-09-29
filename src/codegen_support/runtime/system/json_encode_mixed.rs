@@ -11,6 +11,7 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::ref_markers;
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
 /// Emits the `__rt_json_encode_mixed` runtime helper, dispatching on the boxed `Mixed` value_tag.
@@ -58,7 +59,14 @@ pub(crate) fn emit_json_encode_mixed(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_json_encode_mixed_object");                  // encode objects via the public-property descriptor walker
     emitter.instruction("cmp x9, #8");                                          // is the boxed value null?
     emitter.instruction("b.eq __rt_json_encode_mixed_null");                    // encode null via json_encode_null
-    emitter.instruction("b __rt_json_encode_mixed_null");                       // remaining tags (resource, ...) currently encode as null
+    ref_markers::emit_follow_boxed_ref_marker(
+        emitter,
+        "x0",
+        "x9",
+        "__rt_json_encode_mixed",
+        "__rt_json_encode_mixed_null",
+        "__rt_json_encode_mixed",
+    );                                                                          // a reference element encodes its value; resources encode as null
 
     emitter.label("__rt_json_encode_mixed_int");
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the boxed integer payload
@@ -148,7 +156,14 @@ fn emit_json_encode_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_json_encode_mixed_object");                    // encode objects via the public-property descriptor walker
     emitter.instruction("cmp r10, 8");                                          // is the boxed payload null?
     emitter.instruction("je __rt_json_encode_mixed_null");                      // encode explicit null payloads through the shared helper
-    emitter.instruction("jmp __rt_json_encode_mixed_null");                     // remaining tags (resource, ...) currently encode as null on x86_64 too
+    ref_markers::emit_follow_boxed_ref_marker(
+        emitter,
+        "rax",
+        "r10",
+        "__rt_json_encode_mixed",
+        "__rt_json_encode_mixed_null",
+        "__rt_json_encode_mixed",
+    );                                                                          // a reference element encodes its value; resources encode as null
 
     emitter.label("__rt_json_encode_mixed_int");
     emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the boxed integer payload into the standard integer result register

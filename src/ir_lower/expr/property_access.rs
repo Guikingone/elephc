@@ -90,9 +90,81 @@ pub(crate) fn lower_ref_assign_call(
     source: &Expr,
     span: Span,
 ) {
+    match compiled_call_returns_reference(ctx, source) {
+        Some(true) => {}
+        Some(false) => {
+            lower_ref_assign_of_value_call(ctx, target, source, span, true);
+            return;
+        }
+        None => {
+            lower_ref_assign_of_value_call(ctx, target, source, span, false);
+            return;
+        }
+    }
     let cell_ptr = lower_expr(ctx, source);
     let value_type = ctx.builder.value_php_type(cell_ptr.value);
     ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+}
+
+/// Answers whether a call returns a reference CELL: `Some(true)` for a compiled by-reference
+/// callee, `Some(false)` for a compiled by-value one, `None` when no compiled body answers.
+///
+/// Only a by-reference compiled callee returns a cell pointer. A by-value one -- and any call the
+/// eval bridge or a dynamic dispatch answers, which yields a boxed value -- was bound as if its
+/// result were a cell: the next access read the box's tag word as the cell's content and faulted
+/// (`$v = &$obj->byValue(); $v[] = 1;`, or `&$evalObject->ref()`). Closures and callables keep
+/// the cell path: their by-reference forms are resolved where they are lowered.
+fn compiled_call_returns_reference(ctx: &LoweringContext<'_, '_>, source: &Expr) -> Option<bool> {
+    let signature = match &source.kind {
+        ExprKind::FunctionCall { name, .. } => {
+            lookup_folded_name(ctx.functions.keys(), name.as_str().trim_start_matches('\\'))
+                .and_then(|function| ctx.functions.get(&function))
+        }
+        ExprKind::MethodCall { object, method, .. } => instance_callable_object_class(ctx, object)
+            .filter(|class_name| ctx.classes.contains_key(class_name.as_str()))
+            .and_then(|class_name| {
+                class_method_signature(ctx, &class_name, &php_symbol_key(method))
+            }),
+        ExprKind::StaticMethodCall { receiver, method, .. } => {
+            static_method_implementation_signature(ctx, receiver, method)
+        }
+        _ => return Some(true),
+    };
+    signature.map(|signature| signature.by_ref_return)
+}
+
+/// Lowers `$target = &call()` as an ordinary assignment of the returned value, the way php runs a
+/// by-value callee (after its notice, when `notice` says the callee is known to be one).
+fn lower_ref_assign_of_value_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &str,
+    source: &Expr,
+    span: Span,
+    notice: bool,
+) {
+    let assignment = Expr::new(
+        ExprKind::Assignment {
+            target: Box::new(Expr::new(ExprKind::Variable(target.to_string()), span)),
+            value: Box::new(source.clone()),
+            result_target: None,
+            prelude: Vec::new(),
+            conditional_value_temp: None,
+        },
+        span,
+    );
+    let written = lower_expr(ctx, &assignment);
+    crate::ir_lower::ownership::release_if_owned(ctx, written, Some(span));
+    if !notice {
+        return;
+    }
+    let message = ctx.intern_string("Notice: Only variables should be assigned by reference\n");
+    ctx.emit_void(
+        Op::Warn,
+        Vec::new(),
+        Some(Immediate::Data(message)),
+        Op::Warn.default_effects(),
+        Some(span),
+    );
 }
 
 /// Lowers `$target =& $arr[idx]`: promotes the array element to reference storage and binds
@@ -115,6 +187,20 @@ pub(crate) fn lower_ref_assign_array_elem(
         array_value,
         span,
     );
+    if binds_element_as_shared_reference(ctx, array, array_value) {
+        let key = lower_expr(ctx, index);
+        let cell = ctx.emit_value(
+            Op::ElemRefCell,
+            vec![array_value.value, key.value],
+            None,
+            PhpType::Mixed,
+            Op::ElemRefCell.default_effects(),
+            Some(span),
+        );
+        crate::ir_lower::stmt::release_persisted_string_operand(ctx, key, span);
+        ctx.bind_owned_ref_cell_ptr(target, cell, Some(span));
+        return;
+    }
     let mut index_value = lower_expr(ctx, index);
     // Use the array's declared element type (the inline storage shape), not the
     // null-capable `TaggedScalar` result type that `array_access_result_type` widens
@@ -174,13 +260,40 @@ pub(crate) fn lower_ref_assign_array_elem(
     ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
 }
 
+/// Returns whether `$target = &$array[$k]` makes the element a shared reference in place.
+///
+/// A local container whose elements are boxed takes PHP's model directly: the element becomes a
+/// reference marker over a refcounted cell (`Op::ElemRefCell`) and the local owns a share of that
+/// cell. Growing or copying the array then leaves the binding valid, writes through the array
+/// reach the local, and `$b[$j] = &$target` joins the same reference. Property and static
+/// containers keep the address-based ops until their receivers are republished the same way.
+fn binds_element_as_shared_reference(
+    ctx: &LoweringContext<'_, '_>,
+    array: &Expr,
+    array_value: LoweredValue,
+) -> bool {
+    let ExprKind::Variable(name) = &array.kind else {
+        return false;
+    };
+    if crate::superglobals::is_superglobal(name) {
+        return false;
+    }
+    match ctx.builder.value_php_type(array_value.value).codegen_repr() {
+        PhpType::Array(element) => element.codegen_repr() == PhpType::Mixed,
+        PhpType::AssocArray { value, .. } => value.codegen_repr() == PhpType::Mixed,
+        // A boxed local: the element becomes a reference inside the array its box holds.
+        PhpType::Mixed | PhpType::Union(_) => true,
+        _ => false,
+    }
+}
+
 /// Widens a local array's element storage before exposing one element as a writable reference.
 ///
 /// A PHP reference may later receive a value of any type. Concrete indexed/hash element layouts
 /// cannot represent such a write safely, so a plain local source is converted to Mixed-valued
 /// storage and written back before its element address is taken. Containers already using Mixed
 /// slots and non-local receiver shapes are left unchanged for their dedicated place lowerers.
-fn prepare_local_array_element_reference_container(
+pub(crate) fn prepare_local_array_element_reference_container(
     ctx: &mut LoweringContext<'_, '_>,
     array: &Expr,
     array_value: LoweredValue,

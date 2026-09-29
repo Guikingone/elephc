@@ -165,7 +165,7 @@ pub(super) fn emit_reflection_parameter_declaring_function_property(
             metadata.is_deprecated = *is_deprecated;
             metadata.is_generator = *is_generator;
             emit_declaring_function_object(ctx, name, &metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionFunction".to_string()),
             );
@@ -198,7 +198,7 @@ pub(super) fn emit_reflection_parameter_declaring_function_property(
                 name,
                 &metadata,
             )?;
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionMethod".to_string()),
             );
@@ -235,7 +235,7 @@ pub(super) fn emit_reflection_parameter_declaring_class_property(
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(declaring_class_name) = parameter.declaring_class_name.as_deref() {
         emit_shallow_reflection_class_object(ctx, declaring_class_name)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),
         );
@@ -279,7 +279,7 @@ pub(super) fn emit_reflection_parameter_class_property(
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(class_name) = reflection_parameter_class_name(parameter) {
         emit_shallow_reflection_class_object(ctx, class_name)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),
         );
@@ -333,21 +333,21 @@ pub(super) fn emit_reflection_owner_type_property_by_name(
     match type_metadata {
         Some(ReflectionParameterTypeMetadata::Named(type_metadata)) => {
             emit_reflection_named_type_object(ctx, type_metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionNamedType".to_string()),
             );
         }
         Some(ReflectionParameterTypeMetadata::Union(type_metadata)) => {
             emit_reflection_union_type_object(ctx, type_metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionUnionType".to_string()),
             );
         }
         Some(ReflectionParameterTypeMetadata::Intersection(type_metadata)) => {
             emit_reflection_intersection_type_object(ctx, type_metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionIntersectionType".to_string()),
             );

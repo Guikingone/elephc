@@ -214,9 +214,16 @@ pub(super) fn eval_reflection_string_array_to_vec(
     let len = values.array_len(array)?;
     let mut result = Vec::with_capacity(len);
     for position in 0..len {
+        // Both the boxed key and the element come back OWNED; reading the string only borrows
+        // the element. Dropping them leaked a key box and a boxed string copy per name, so every
+        // `new ReflectionClass(X)` bled 3 blocks per property and per method of X.
         let key = values.int(position as i64)?;
-        let value = values.array_get(array, key)?;
-        result.push(eval_reflection_string_arg(value, values)?);
+        let value = values.array_get(array, key);
+        let _ = values.release(key);
+        let value = value?;
+        let name = eval_reflection_string_arg(value, values);
+        let _ = values.release(value);
+        result.push(name?);
     }
     Ok(result)
 }

@@ -352,7 +352,7 @@ fn lower_iterable_spread_into_hash(
 }
 
 /// Lowers an indexed-array spread by appending each source element to the destination.
-pub(super) fn lower_indexed_array_spread_into_array(
+pub(crate) fn lower_indexed_array_spread_into_array(
     ctx: &mut LoweringContext<'_, '_>,
     array: LoweredValue,
     source: LoweredValue,
@@ -405,6 +405,27 @@ pub(super) fn lower_indexed_array_spread_into_array(
         Op::ArrayGet.default_effects(),
         Some(span),
     );
+    // A variadic tail's container type is the callee's, not the source's: `f($s, ...$ints)` into
+    // a `mixed` tail must box each int (it pushed the raw word, which read back as an empty
+    // string). An array literal's container type is derived from the source, so this is a no-op
+    // there.
+    let value = match container_elem_ty {
+        Some(elem) => {
+            let value = crate::ir_lower::gradual_coercions::coerce_gradual_value_to_boundary(
+                ctx,
+                value,
+                elem,
+                Some(span),
+            );
+            super::variadic_args::coerce_variadic_tail_value(
+                ctx,
+                value,
+                &PhpType::Array(Box::new(elem.clone())),
+                span,
+            )
+        }
+        None => value,
+    };
     ctx.emit_void(
         Op::ArrayPush,
         vec![array.value, value.value],

@@ -634,6 +634,7 @@ fn validate_opcode_rules(
         | HashCloneShallow | HashRefElement => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Hash, "Heap(Hash)")
         }
+        ElemRefCell => check_count(inst_id, inst, 2, "2"),
         HashBindRefElement => {
             check_count(inst_id, inst, 3, "3")?;
             check_first_heap(function, inst_id, inst, IrHeapKind::Hash, "Heap(Hash)")

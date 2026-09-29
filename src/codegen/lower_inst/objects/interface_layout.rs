@@ -128,11 +128,22 @@ pub(super) fn uninitialized_property_marker_offsets(class_info: &ClassInfo) -> V
             // line behind it.
             let is_owned_reference = class_info.owned_reference_properties.contains(property)
                 && class_info.property_slot_is_reference(index, property);
+            // An UNTYPED promoted property is born null in PHP, like any untyped property; its
+            // schema default stays absent only so reflection keeps reporting no default. Marking
+            // it made an object built without its constructor (`newInstanceWithoutConstructor()`,
+            // which DeepClone uses) dump `uninitialized(mixed)` and count no properties.
+            let untyped_promoted = class_info.promoted_properties.contains(property)
+                && !class_info
+                    .property_declared_slots
+                    .get(index)
+                    .copied()
+                    .unwrap_or(false);
             let starts_uninitialized = class_info
                 .defaults
                 .get(index)
                 .is_some_and(|default| default.is_none())
-                && !is_owned_reference;
+                && !is_owned_reference
+                && !untyped_promoted;
             if starts_uninitialized {
                 Some(8 + index * 16 + 8)
             } else {

@@ -27,7 +27,9 @@ const EVAL_REFLECTION_CLASS_FLAG_ABSTRACT: u64 = 2;
 const EVAL_REFLECTION_CLASS_FLAG_INTERFACE: u64 = 4;
 const EVAL_REFLECTION_CLASS_FLAG_READONLY: u64 = 32;
 const EVAL_REFLECTION_CLASS_FLAG_INSTANTIABLE: u64 = 64;
+const EVAL_REFLECTION_CLASS_FLAG_CLONEABLE: u64 = 128;
 const EVAL_REFLECTION_CLASS_FLAG_INTERNAL: u64 = 256;
+const EVAL_REFLECTION_CLASS_FLAG_ITERABLE: u64 = 1024;
 const EVAL_REFLECTION_CLASS_SOURCE_LINE_MASK: u64 = 0x00ff_ffff;
 const EVAL_REFLECTION_CLASS_SOURCE_START_SHIFT: u64 = 16;
 const EVAL_REFLECTION_CLASS_SOURCE_END_SHIFT: u64 = 40;
@@ -1934,7 +1936,7 @@ fn emit_eval_reflection_class_lookup_data(
     let mut entries = Vec::new();
     let mut index = 0usize;
     for (class_name, class_info) in sorted_classes {
-        let flags = eval_reflection_class_flags(class_info);
+        let flags = eval_reflection_class_flags(class_name, class_info);
         let source_file = declared_class_source_file(declared_class_source_files, class_name);
         if flags == 0 && source_file.is_none() {
             continue;
@@ -2085,7 +2087,7 @@ fn declared_class_source_file<'a>(
 }
 
 /// Returns eval ReflectionClass flag bits retained for one generated/AOT class.
-fn eval_reflection_class_flags(class_info: &ClassInfo) -> u64 {
+fn eval_reflection_class_flags(class_name: &str, class_info: &ClassInfo) -> u64 {
     let mut flags = 0;
     if class_info.is_final {
         flags |= EVAL_REFLECTION_CLASS_FLAG_FINAL;
@@ -2103,6 +2105,21 @@ fn eval_reflection_class_flags(class_info: &ClassInfo) -> u64 {
     if eval_reflection_class_is_instantiable(class_info) {
         flags |= EVAL_REFLECTION_CLASS_FLAG_INSTANTIABLE;
     }
+    // The run-time `new ReflectionClass($name)` reads these two predicates from this word too, and
+    // it carried neither: every compiled class answered `isCloneable()` false (so DeepClone never
+    // cloned its prototype and built objects through a path that returned null) and
+    // `isIterable()` false for every Iterator.
+    if eval_reflection_class_is_cloneable(class_name, class_info) {
+        flags |= EVAL_REFLECTION_CLASS_FLAG_CLONEABLE;
+    }
+    if !class_info.is_abstract
+        && class_info
+            .interfaces
+            .iter()
+            .any(|name| name == "Iterator" || name == "IteratorAggregate")
+    {
+        flags |= EVAL_REFLECTION_CLASS_FLAG_ITERABLE;
+    }
     // A class the compiler INJECTED -- ArrayObject and its family -- is internal in php's sense:
     // it has no source of its own, which is exactly what the dummy declaration span says. Without
     // the bit the reflection fallback reads "not internal" and answers `isUserDefined()` true for
@@ -2115,6 +2132,37 @@ fn eval_reflection_class_flags(class_info: &ClassInfo) -> u64 {
         class_info.declaration_span.end_line,
     );
     flags
+}
+
+/// Returns php's `ReflectionClass::isCloneable()` for one generated class.
+///
+/// A concrete class is cloneable unless it declares a non-public `__clone`. The classes whose
+/// storage the runtime manages -- throwables, generators, fibers, reflection objects -- are not,
+/// in php as in elephc (their `clone` is refused).
+fn eval_reflection_class_is_cloneable(class_name: &str, class_info: &ClassInfo) -> bool {
+    if class_info.is_abstract {
+        return false;
+    }
+    let key = crate::names::php_symbol_key(class_name.trim_start_matches('\\'));
+    let runtime_managed = matches!(
+        key.as_str(),
+        "throwable" | "error" | "exception" | "generator" | "fiber" | "closure"
+    ) || key.starts_with("reflection")
+        || class_info
+            .parent
+            .as_deref()
+            .is_some_and(|parent| {
+                let parent = crate::names::php_symbol_key(parent.trim_start_matches('\\'));
+                matches!(parent.as_str(), "exception" | "error")
+            });
+    if runtime_managed {
+        return false;
+    }
+    let clone = crate::names::php_symbol_key("__clone");
+    match class_info.method_visibilities.get(&clone) {
+        Some(Visibility::Public) | None => true,
+        Some(_) => false,
+    }
 }
 
 /// Returns php's `ReflectionClass::isInstantiable()` for one generated class.

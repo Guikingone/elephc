@@ -127,6 +127,10 @@ pub(super) fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, 
     // every result type.
     if let Some(target) = ctx.take_pending_static_callable_result() {
         if let Some(value) = lower_static_callable_call(ctx, target, args, expr) {
+            // The direct call never reads the closure object it bypassed.
+            if ctx.value_is_owning_temporary(lowered_callee) {
+                crate::ir_lower::ownership::release_if_owned(ctx, lowered_callee, Some(expr.span));
+            }
             return value;
         }
     }

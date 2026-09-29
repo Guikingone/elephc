@@ -1056,7 +1056,12 @@ impl<'a> FunctionContext<'a> {
         value: ValueId,
     ) -> Result<()> {
         let source_ty = self.load_value_to_result(value)?.codegen_repr();
-        if !matches!(source_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        // A boxed container is one word too: `__rt_mixed_elem_ref_cell` hands back the box to
+        // store, having already released any box it replaced.
+        if !matches!(
+            source_ty,
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_)
+        ) {
             return Err(CodegenIrError::unsupported(format!(
                 "mutated reference-cell container store for PHP type {:?}",
                 source_ty
@@ -1530,24 +1535,7 @@ impl<'a> FunctionContext<'a> {
             .function
             .instruction(inst)
             .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-        Ok(matches!(
-            inst.op,
-            Op::Acquire
-                | Op::StrPersist
-                | Op::Call
-                | Op::FunctionVariantCall
-                | Op::ExternCall
-                | Op::MethodCall
-                | Op::NullsafeMethodCall
-                | Op::StaticMethodCall
-                | Op::ClosureCall
-                | Op::CallableDescriptorInvoke
-                | Op::ExprCall
-                | Op::PipeCall
-                | Op::IteratorMethodCall
-                | Op::SplRuntimeCall
-                | Op::FiberRuntimeCall
-        ))
+        Ok(inst.op.yields_box_absorbable_string())
     }
 
     /// Interns a module data-pool string into the assembly data section.

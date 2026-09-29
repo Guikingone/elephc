@@ -35,9 +35,18 @@ pub(in crate::ir_lower) fn lower_array_reference_or_value(
     let ExprKind::ArrayReference(inner) = &value.kind else {
         return lower_expr(ctx, value);
     };
+    if matches!(inner.kind, ExprKind::ArrayAccess { .. }) {
+        return lower_element_reference_marker(ctx, inner, value.span);
+    }
     let ExprKind::Variable(name) = &inner.kind else {
-        unreachable!("array reference markers require a variable source");
+        unreachable!("array reference markers require a variable or element source");
     };
+    // A by-reference `foreach` value variable that was NOT promoted to a shared cell aliases the
+    // element's raw storage: there is no cell to hand out, and wrapping that address as one
+    // corrupted the heap. Store the value instead -- the reference is lost, the memory is not.
+    if ctx.is_interior_ref_local(name) {
+        return lower_expr(ctx, inner);
+    }
     if crate::superglobals::is_superglobal(name) {
         let data = ctx.intern_global_storage_name(name);
         return ctx.emit_value(
@@ -64,6 +73,35 @@ pub(in crate::ir_lower) fn lower_array_reference_or_value(
         Op::ArrayLocalRefCell.default_effects(),
         Some(value.span),
     )
+}
+
+/// Lowers `&$a[$k]` inside an array literal: the element becomes a reference in place, and the
+/// literal stores a marker over that same reference.
+///
+/// A hidden local is bound to the element exactly as `$t = &$a[$k]` would bind it -- which makes
+/// the element a shared reference and gives the local one share -- the marker takes its own share
+/// from the local, and the hidden binding ends, leaving the element and the literal's slot as the
+/// reference's holders.
+fn lower_element_reference_marker(
+    ctx: &mut LoweringContext<'_, '_>,
+    element: &Expr,
+    span: Span,
+) -> LoweredValue {
+    let temp = ctx.declare_synthetic_php_local(PhpType::Mixed);
+    crate::ir_lower::expr::lower_ref_assign_array_elem(ctx, &temp, element, span);
+    let marker = lower_array_reference_or_value(
+        ctx,
+        &Expr::new(
+            ExprKind::ArrayReference(Box::new(Expr::new(
+                ExprKind::Variable(temp.clone()),
+                span,
+            ))),
+            span,
+        ),
+    );
+    let null = lower_null(ctx, element);
+    ctx.unset_local(&temp, null, Some(span));
+    marker
 }
 
 /// Returns the associative-array type for a literal that contains at least one associative

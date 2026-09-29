@@ -751,9 +751,10 @@ fn parse_array_literal_with_terminator(
 
 /// Parses one array-literal value, preserving a supported leading reference marker.
 ///
-/// Array references may escape the declaring function. For now only web superglobals are
-/// accepted because their global ref-cell storage has request lifetime; ordinary locals keep
-/// the previous explicit diagnostic instead of producing a dangling pointer or a value copy.
+/// `[&$v]` and `[&$a[$k]]` store a reference element: a marker that owns a share of the
+/// variable's (or the element's) reference cell, so the array may outlive the declaring frame.
+/// A deeper place (`&$a[$i][$j]`, `&$o->p`) is not supported yet and is refused here rather than
+/// silently stored by value.
 fn parse_array_literal_value(
     tokens: &[SpannedToken],
     pos: &mut usize,
@@ -764,17 +765,18 @@ fn parse_array_literal_value(
     let span = metadata.span;
     *pos += 1;
     let value = parse_expr(tokens, pos)?;
-    let ExprKind::Variable(name) = &value.kind else {
-        return Err(CompileError::new(
-            span,
-            "Reference elements in array literals currently require a web superglobal variable",
-        ));
+    let supported = match &value.kind {
+        ExprKind::Variable(_) => true,
+        ExprKind::ArrayAccess { array, .. } => matches!(
+            &array.kind,
+            ExprKind::Variable(name) if !crate::superglobals::is_superglobal(name)
+        ),
+        _ => false,
     };
-    if !crate::superglobals::is_superglobal(name) {
+    if !supported {
         return Err(CompileError::new(
             span,
-            "Reference elements in array literals currently support only web superglobals; \
-             ordinary local reference cells cannot yet outlive their declaring scope",
+            "Reference elements in array literals currently require a variable or an element of a local array",
         ));
     }
     Ok(Expr::new(ExprKind::ArrayReference(Box::new(value)), span))

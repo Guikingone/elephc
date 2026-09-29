@@ -248,14 +248,20 @@ fn canonicalize_array_locals(
             continue;
         };
         let array = ctx.load_local(name, Some(span));
-        let converted = ctx.emit_value(
-            op,
-            vec![array.value],
-            None,
-            target.clone(),
-            op.default_effects(),
-            Some(span),
-        );
+        // `ArrayToHash` builds a new hash, so it must consume the slot's array (see
+        // `emit_local_array_to_hash_move`); `ArrayToMixed` converts in place.
+        let converted = if op == Op::ArrayToHash {
+            ctx.emit_local_array_to_hash_move(name, array, target.clone(), span)
+        } else {
+            ctx.emit_value(
+                op,
+                vec![array.value],
+                None,
+                target.clone(),
+                op.default_effects(),
+                Some(span),
+            )
+        };
         ctx.store_mutated_local(name, converted, target.clone(), Some(span));
     }
 }

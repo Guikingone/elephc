@@ -176,7 +176,9 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
             return value;
         }
     }
-    let operands = if is_extern || is_user_function {
+    let operands = if is_user_function {
+        lower_user_args_with_signature(ctx, sig.as_ref(), args)
+    } else if is_extern {
         lower_args_with_signature(ctx, sig.as_ref(), args)
     } else {
         lower_builtin_call_args(ctx, canonical, sig.as_ref(), args)
@@ -247,14 +249,24 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     {
         let dynamic_name = php_symbol_key(canonical.trim_start_matches('\\'));
         let data = ctx.intern_function_name(&dynamic_name);
-        return ctx.emit_value(
+        let call = ctx.emit_value(
             Op::EvalFunctionCall,
-            operands,
+            operands.clone(),
             Some(Immediate::Data(data)),
             PhpType::Mixed,
             Op::EvalFunctionCall.default_effects(),
             Some(expr.span),
         );
+        // The bridge boxes each operand with its own reference and answers with a retained
+        // cell (as for `EvalFunctionCallArray`), so an argument temporary is still ours.
+        release_owned_call_arg_temporaries(
+            ctx,
+            &operands,
+            Some(call.value),
+            &ReturnArgAlias::None,
+            expr.span,
+        );
+        return call;
     }
     let eval_literal = eval_literal_fragment(canonical, args);
     emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span, eval_literal)

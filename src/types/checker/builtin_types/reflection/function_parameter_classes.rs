@@ -338,9 +338,11 @@ pub(super) fn reflection_parameter_default_object_arg(index: usize, span: crate:
 
 /// Returns a public `ReflectionClass::newInstanceWithoutConstructor()` method.
 ///
-/// Eval dispatch supplies the real constructorless allocation. The body remains
-/// a conservative placeholder so the built-in class metadata exposes the PHP
-/// method without forcing ordinary method lowering to construct a class.
+/// A call on a receiver typed `ReflectionClass` never reaches this body: the call site lowers
+/// straight to a constructorless allocation. A receiver the compiler only knows as `mixed` (a
+/// reflector kept in an array, as DeepClone does) dispatches here instead, so the body is that
+/// same call on `$this` -- which the call-site lowering turns into the allocation. It used to
+/// return null, and every such call answered null.
 pub(super) fn builtin_reflection_class_new_instance_without_constructor_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
@@ -358,7 +360,12 @@ pub(super) fn builtin_reflection_class_new_instance_without_constructor_method()
         return_type: Some(mixed_type()),
         by_ref_return: false,
         body: vec![Stmt::new(
-            StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
+            StmtKind::Return(Some(method_call_expr(
+                Expr::new(ExprKind::This, dummy_span),
+                "newInstanceWithoutConstructor",
+                Vec::new(),
+                dummy_span,
+            ))),
             dummy_span,
         )],
         span: dummy_span,

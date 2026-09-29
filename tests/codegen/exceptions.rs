@@ -379,83 +379,79 @@ try {
 }
 
 /// Verifies a terminating assignment receiver inside `return` does not emit a stale result load.
+///
+/// The operand that terminates is a `throw` in the receiver call's argument: these three tests
+/// used `newInstanceArgs()` on a run-time array, which lowered to a fatal until it became an
+/// ordinary call. Any expression that ends the block exercises the same guard.
 #[test]
 fn test_terminating_returned_assignment_receiver_stops_lowering() {
-    let error = compile_and_run_expect_failure(
+    let out = compile_and_run(
         r#"<?php
 class AssignedAfterTermination {
     public int $value = 0;
-    public function __construct(int $value) {
-        $this->value = $value;
-    }
 }
 
-function assign_after_termination(array $arguments): int {
-    $reflection = new ReflectionClass(AssignedAfterTermination::class);
-    return $reflection->newInstanceArgs($arguments)->value = 1;
+function receiver(mixed $unused): AssignedAfterTermination {
+    return new AssignedAfterTermination();
 }
 
-assign_after_termination([0]);
+function assign_after_termination(): int {
+    return receiver(throw new Exception("receiver"))->value = 1;
+}
+
+try {
+    assign_after_termination();
+} catch (Exception $error) {
+    echo $error->getMessage(), "\n";
+}
 "#,
     );
-    assert!(
-        error.contains("unsupported ReflectionClass::newInstanceArgs() argument array"),
-        "{error}"
-    );
+    assert_eq!(out, "receiver\n");
 }
 
 /// Verifies a terminating foreach source does not emit an iterator in the dead block.
 #[test]
 fn test_terminating_foreach_source_stops_lowering() {
-    let error = compile_and_run_expect_failure(
+    let out = compile_and_run(
         r#"<?php
-class IteratedAfterTermination implements IteratorAggregate {
-    public function __construct(int $value) {}
-
-    public function getIterator(): Traversable {
-        return new ArrayIterator([]);
-    }
-}
-
-function iterate_after_termination(array $arguments): void {
-    $reflection = new ReflectionClass(IteratedAfterTermination::class);
-    foreach ($reflection->newInstanceArgs($arguments) as $value) {
+function iterate_after_termination(): void {
+    foreach ((throw new Exception("source")) as $value) {
         echo $value;
     }
 }
 
-iterate_after_termination([0]);
+try {
+    iterate_after_termination();
+} catch (Exception $error) {
+    echo $error->getMessage(), "\n";
+}
 "#,
     );
-    assert!(
-        error.contains("unsupported ReflectionClass::newInstanceArgs() argument array"),
-        "{error}"
-    );
+    assert_eq!(out, "source\n");
 }
 
 /// Verifies a terminating property RHS does not emit the property store in the dead block.
 #[test]
 fn test_terminating_property_assignment_value_stops_lowering() {
-    let error = compile_and_run_expect_failure(
+    let out = compile_and_run(
         r#"<?php
 class PropertyValueAfterTermination {
     public mixed $value = null;
-    public function __construct(int $value) {}
 }
 
-function write_after_termination(array $arguments): void {
-    $target = new PropertyValueAfterTermination(0);
-    $reflection = new ReflectionClass(PropertyValueAfterTermination::class);
-    $target->value = $reflection->newInstanceArgs($arguments);
+function write_after_termination(): void {
+    $target = new PropertyValueAfterTermination();
+    $target->value = throw new Exception("value");
 }
 
-write_after_termination([0]);
+try {
+    write_after_termination();
+} catch (Exception $error) {
+    echo $error->getMessage(), "\n";
+}
 "#,
     );
-    assert!(
-        error.contains("unsupported ReflectionClass::newInstanceArgs() argument array"),
-        "{error}"
-    );
+    assert_eq!(out, "value\n");
 }
 
 /// Throws a custom exception from a callee and catches it in the caller.

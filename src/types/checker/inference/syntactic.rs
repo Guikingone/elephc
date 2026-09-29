@@ -42,7 +42,7 @@ pub fn infer_return_type_syntactic(body: &[Stmt]) -> PhpType {
 fn collect_return_types_syntactic(stmt: &Stmt, types: &mut Vec<PhpType>) {
     match &stmt.kind {
         StmtKind::NamespaceDecl { .. } | StmtKind::UseDecl { .. } => {}
-        StmtKind::NamespaceBlock { body, .. } => {
+        StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body) => {
             for inner in body {
                 collect_return_types_syntactic(inner, types);
             }
@@ -134,6 +134,25 @@ pub(crate) fn wider_type_syntactic(a: &PhpType, b: &PhpType) -> PhpType {
     }
     if matches!((a, b), (PhpType::Bool, PhpType::False) | (PhpType::False, PhpType::Bool)) {
         return PhpType::Bool;
+    }
+    // Same rule as `Checker::wider_type`, which replaces this provisional answer once a method
+    // body is checked: `string`/`float` absorb only scalars. Disagreeing here left every caller
+    // checked before the method pass on `string` while the method returned a boxed array.
+    let absorbed = |ty: &PhpType| {
+        matches!(
+            ty,
+            PhpType::Int
+                | PhpType::Bool
+                | PhpType::False
+                | PhpType::Str
+                | PhpType::Float
+                | PhpType::Void
+        )
+    };
+    if matches!(a, PhpType::Str | PhpType::Float) && !absorbed(b)
+        || matches!(b, PhpType::Str | PhpType::Float) && !absorbed(a)
+    {
+        return PhpType::Mixed;
     }
     if *a == PhpType::Str || *b == PhpType::Str {
         return PhpType::Str;

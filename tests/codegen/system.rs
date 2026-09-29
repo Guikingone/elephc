@@ -2401,8 +2401,8 @@ fn test_preg_match_all_no_matches() {
     assert_eq!(out, "0");
 }
 
-/// Verifies every shim-backed regex family handles an invalid pattern without exposing a
-/// partial handle, invoking callbacks, or returning partially initialized capture data.
+/// Verifies every shim-backed regex family handles an invalid pattern as php does: without
+/// exposing a partial handle, invoking callbacks, or touching the capture array.
 #[test]
 fn test_regex_families_reject_invalid_patterns_safely() {
     let out = compile_and_run(
@@ -2417,10 +2417,13 @@ echo preg_replace_callback("/(/", function($m) use (&$callbackCalls): string {
     $callbackCalls = $callbackCalls + 1;
     return "called";
 }, "subject") . ":" . $callbackCalls . "|";
-echo count(preg_split("/(/", "subject"));
+echo var_export(preg_split("/(/", "subject"), true);
 "#,
     );
-    assert_eq!(out, "0|0:0|0|subject|subject:0|0");
+    // php: a pattern that fails to compile returns false (preg_match, preg_match_all,
+    // preg_split) or null (preg_replace, preg_replace_callback), leaves `$matches` untouched,
+    // and never calls the callback.
+    assert_eq!(out, "0|:1|||:0|false");
 }
 
 /// Verifies `preg_replace` substitutes the first matching occurrence of a literal pattern.

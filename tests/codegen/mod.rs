@@ -74,6 +74,7 @@ mod pdo_ibm;
 mod pdo_sqlsrv;
 mod parse_str;
 mod preg_array_forms;
+mod array_references;
 #[cfg(feature = "pdo-oci")]
 mod pdo_oci;
 #[cfg(feature = "pdo-cubrid")]
@@ -86,12 +87,14 @@ mod xml;
 mod arrays;
 mod calendar;
 mod call_counters;
+mod callable_and_eval_gaps;
 mod callables;
 mod system;
 mod json;
 mod serialize;
 mod regressions;
 mod objects;
+mod deepclone_shapes;
 mod destructors;
 mod references;
 mod runtime_gc;

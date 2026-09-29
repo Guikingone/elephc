@@ -640,20 +640,29 @@ fn eval_expr_dispatch(
             let truthy = eval_truthy_expr(expr, context, scope, values)?;
             values.bool_value(!truthy)
         }
-        EvalExpr::Unary { op, expr } => {
-            let value = eval_expr(expr, context, scope, values)?;
-            match op {
+        EvalExpr::Unary { op, expr: operand } => {
+            let value = eval_expr(operand, context, scope, values)?;
+            // `+x`/`-x` are computed as `0 ± x`; the zero cell and a temporary operand (`-1` is
+            // `Negate(1)`) are this evaluation's to drop, as a binary operator's operands are.
+            let (result, zero) = match op {
                 EvalUnaryOp::Plus => {
                     let zero = values.int(0)?;
-                    values.add(zero, value)
+                    (values.add(zero, value)?, Some(zero))
                 }
                 EvalUnaryOp::Negate => {
                     let zero = values.int(0)?;
-                    values.sub(zero, value)
+                    (values.sub(zero, value)?, Some(zero))
                 }
-                EvalUnaryOp::BitNot => values.bit_not(value),
+                EvalUnaryOp::BitNot => (values.bit_not(value)?, None),
                 EvalUnaryOp::LogicalNot | EvalUnaryOp::ErrorSuppress => unreachable!("handled before unary value evaluation"),
+            };
+            if let Some(zero) = zero.filter(|zero| *zero != result) {
+                eval_release_value(context, values, zero)?;
             }
+            if !eval_expr_result_aliases_storage(operand) && value != result {
+                eval_release_value(context, values, value)?;
+            }
+            Ok(result)
         }
         EvalExpr::Binary { op, left, right } => {
             if *op == EvalBinOp::LogicalAnd {
@@ -670,9 +679,20 @@ fn eval_expr_dispatch(
                 let truthy = eval_truthy_expr(right, context, scope, values)?;
                 return values.bool_value(truthy);
             }
+            let left_is_temporary = !eval_expr_result_aliases_storage(left);
+            let right_is_temporary = !eval_expr_result_aliases_storage(right);
             let left = eval_expr(left, context, scope, values)?;
             let right = eval_expr(right, context, scope, values)?;
-            eval_binary_result(*op, left, right, context, values)
+            let result = eval_binary_result(*op, left, right, context, values)?;
+            // The operator only reads its operands; a temporary one (`"x" . mt_rand()`, the
+            // literal in `$x . "y"`) had no other owner and leaked on every evaluation.
+            if left_is_temporary && left != result {
+                eval_release_value(context, values, left)?;
+            }
+            if right_is_temporary && right != result && right != left {
+                eval_release_value(context, values, right)?;
+            }
+            Ok(result)
         }
     }
 }

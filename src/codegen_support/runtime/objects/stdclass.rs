@@ -15,6 +15,7 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::ref_markers::emit_follow_boxed_ref_marker;
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
 /// Emit `__rt_stdclass_new() → obj_ptr` for both targets.
@@ -253,6 +254,18 @@ fn emit_stdclass_get_aarch64(emitter: &mut Emitter) {
 
     emitter.instruction("cbz x0, __rt_stdclass_get_null");                      // not found → Mixed(null)
     emitter.instruction("mov x0, x1");                                          // hit: stored value is the boxed Mixed pointer
+    // A property bound by reference (`$o->$name = &$v`) stores a marker box; a read yields the
+    // value the reference holds, not the marker (it read as an empty string).
+    emitter.label("__rt_stdclass_get_follow");
+    emit_follow_boxed_ref_marker(
+        emitter,
+        "x0",
+        "x9",
+        "__rt_stdclass_get_follow",
+        "__rt_stdclass_get_value",
+        "__rt_stdclass_get",
+    );
+    emitter.label("__rt_stdclass_get_value");
     emitter.instruction("bl __rt_incref");                                      // retain the stored property cell so the caller owns the result
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
@@ -548,6 +561,16 @@ fn emit_stdclass_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_stdclass_get_null");                           // not found → Mixed(null)
 
     emitter.instruction("mov rax, rdi");                                        // return value = boxed Mixed pointer
+    emitter.label("__rt_stdclass_get_follow");
+    emit_follow_boxed_ref_marker(
+        emitter,
+        "rax",
+        "r10",
+        "__rt_stdclass_get_follow",
+        "__rt_stdclass_get_value",
+        "__rt_stdclass_get",
+    );
+    emitter.label("__rt_stdclass_get_value");
     abi::emit_push_reg(emitter, "rax");
     emitter.instruction("call __rt_incref");                                    // retain the stored property cell so the caller owns the result
     abi::emit_pop_reg(emitter, "rax");

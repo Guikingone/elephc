@@ -70,6 +70,39 @@ pub(super) fn lower_static_property_assign(
             Some(span),
         );
     }
+    // The checker can see a narrowed array where lowering still holds the boxed value -- a
+    // parameter typed `array|string|null`, narrowed by `is_array()` and fed through `array_map()`,
+    // stays a Mixed local here. A list slot with concrete elements cannot take the box (its
+    // elements are raw), and the store failed to compile; polyfill-mbstring's `mb_detect_order()`
+    // writing `self::$encodingList` is this shape. PHP copies the array on assignment anyway, so
+    // the store takes a fresh list of the slot's element type, each element converted with the
+    // same guarded coercion a spread uses.
+    if matches!(
+        ctx.builder.value_php_type(value.value).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        if let Some(PhpType::Array(element)) = static_property_type(ctx, receiver, property) {
+            if element.codegen_repr() != PhpType::Mixed {
+                let list_ty = PhpType::Array(element.clone());
+                let list = ctx.emit_value(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(0)),
+                    list_ty,
+                    Op::ArrayNew.default_effects(),
+                    Some(span),
+                );
+                crate::ir_lower::expr::lower_indexed_array_spread_into_array(
+                    ctx,
+                    list,
+                    value,
+                    Some(&*element),
+                    span,
+                );
+                value = list;
+            }
+        }
+    }
     if static_property_store_retains_independent_value(ctx, receiver, property, value) {
         store_static_property(ctx, receiver, property, value.value, span);
         if ctx.value_is_owning_temporary(value) {

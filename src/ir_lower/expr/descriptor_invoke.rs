@@ -337,11 +337,28 @@ pub(super) fn emit_callable_descriptor_invoke(
     result_type: PhpType,
     span: Span,
 ) -> LoweredValue {
+    // The invoker hands back a Mixed box; codegen converts it in place only to a scalar. A heap
+    // result type (`newInstance(...$args)` is declared `object`) is received boxed and narrowed
+    // here, with the same guarded unbox a gradual value takes at any typed boundary.
+    let narrowed_type = matches!(
+        result_type.codegen_repr(),
+        PhpType::Object(_)
+            | PhpType::Callable
+            | PhpType::Iterable
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+    )
+    .then(|| result_type.clone());
+    let invoke_type = if narrowed_type.is_some() {
+        PhpType::Mixed
+    } else {
+        result_type
+    };
     let result = ctx.emit_value(
         Op::CallableDescriptorInvoke,
         vec![callback.value, arg_container.value],
         callable_profile_immediate(),
-        result_type,
+        invoke_type,
         Op::CallableDescriptorInvoke.default_effects(),
         Some(span),
     );
@@ -349,5 +366,19 @@ pub(super) fn emit_callable_descriptor_invoke(
         crate::ir_lower::ownership::release_if_owned(ctx, arg_container, Some(span));
     }
     write_back_ref_bridges_after(ctx, callback.value, span);
-    result
+    // The invoker only borrows the callback. One built for this call -- the `[$class, 'm']`
+    // array behind `$class::m()`, a literal `[$obj, 'm']()`, the closure
+    // `Closure::fromCallable()` returns -- is dropped here or never.
+    if ctx.value_is_owning_temporary(callback) {
+        crate::ir_lower::ownership::release_if_owned(ctx, callback, Some(span));
+    }
+    match narrowed_type {
+        Some(target) => crate::ir_lower::gradual_coercions::coerce_gradual_value_to_boundary(
+            ctx,
+            result,
+            &target,
+            Some(span),
+        ),
+        None => result,
+    }
 }

@@ -335,6 +335,17 @@ pub(super) fn check_ref_assign(
             }
             let array_ty = checker.infer_type(array, env)?;
             let index_ty = checker.infer_type(index, env)?;
+            // A local holding a boxed value -- an untyped by-reference parameter, typically --
+            // makes the element a reference inside the array the box holds
+            // (`__rt_mixed_elem_ref_cell`), vivifying a null into an empty array as PHP does.
+            if matches!(array.kind, ExprKind::Variable(_))
+                && matches!(array_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+            {
+                env.insert(target.to_string(), PhpType::Mixed);
+                checker.active_ref_params.insert(target.to_string());
+                clear_callable_metadata(checker, target);
+                return Ok(());
+            }
             if !matches!(&array_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
                 return Err(CompileError::new(
                     span,

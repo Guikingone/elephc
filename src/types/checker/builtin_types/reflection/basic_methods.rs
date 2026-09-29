@@ -133,9 +133,8 @@ pub(super) fn builtin_reflection_attribute_new_instance_method() -> ClassMethod 
 /// Returns a public variadic `ReflectionClass::newInstance()` method.
 ///
 /// Direct calls are lowered specially so their source arguments become
-/// constructor arguments for the reflected class. The no-argument body keeps
-/// indirect calls and metadata emission coherent when no argument forwarding is
-/// required.
+/// constructor arguments for the reflected class. A call through a `mixed` receiver runs this
+/// body, which spreads the variadic tail into `new $name(...)` -- it used to drop it.
 pub(super) fn builtin_reflection_class_new_instance_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
@@ -154,16 +153,7 @@ pub(super) fn builtin_reflection_class_new_instance_method() -> ClassMethod {
         by_ref_return: false,
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
-                ExprKind::NewDynamic {
-                    name_expr: Box::new(Expr::new(
-                        ExprKind::PropertyAccess {
-                            object: Box::new(Expr::new(ExprKind::This, dummy_span)),
-                            property: "__name".to_string(),
-                        },
-                        dummy_span,
-                    )),
-                    args: Vec::new(),
-                },
+                reflected_class_new_spreading_args(dummy_span),
                 dummy_span,
             ))),
             dummy_span,
@@ -484,11 +474,30 @@ fn reflection_function_dynamic_call(span: crate::span::Span) -> Expr {
     )
 }
 
+/// Returns `new ($this->__name)(...$args)`, the constructor call behind `newInstance()` and
+/// `newInstanceArgs()` when the receiver reaches the method body.
+fn reflected_class_new_spreading_args(span: crate::span::Span) -> ExprKind {
+    ExprKind::NewDynamic {
+        name_expr: Box::new(Expr::new(
+            ExprKind::PropertyAccess {
+                object: Box::new(Expr::new(ExprKind::This, span)),
+                property: "__name".to_string(),
+            },
+            span,
+        )),
+        args: vec![Expr::new(
+            ExprKind::Spread(Box::new(Expr::new(ExprKind::Variable("args".to_string()), span))),
+            span,
+        )],
+    }
+}
+
 /// Returns a public `ReflectionClass::newInstanceArgs()` method.
 ///
 /// Direct calls are lowered specially so the provided argument array becomes
-/// constructor arguments for the reflected class. The placeholder body keeps
-/// the synthetic class metadata coherent for non-special paths.
+/// constructor arguments for the reflected class. A call through a `mixed` receiver, or with an
+/// array only known at run time, runs this body: `new $name(...$args)`, string keys naming
+/// parameters as php does.
 pub(super) fn builtin_reflection_class_new_instance_args_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
@@ -498,15 +507,10 @@ pub(super) fn builtin_reflection_class_new_instance_args_method() -> ClassMethod
         is_abstract: false,
         is_final: false,
         has_body: true,
-        // `iterable` rather than bare `array`: the checker resolves `array`
-        // to a string-keyed map, which would reject indexed argument lists;
-        // Iterable accepts both array shapes.
-        params: vec![(
-            "args".to_string(),
-            Some(TypeExpr::Iterable),
-            empty_array(),
-            false,
-        )],
+        // php's `array $args`. It was `iterable` once, when a bare `array` resolved to a
+        // string-keyed map and refused indexed lists; the body spreads it, and an iterable has
+        // no spread (nor `(array)` cast) lowering.
+        params: vec![("args".to_string(), Some(array_type()), empty_array(), false)],
         param_attributes: Vec::new(),
         variadic: None,
         variadic_by_ref: false,
@@ -514,7 +518,10 @@ pub(super) fn builtin_reflection_class_new_instance_args_method() -> ClassMethod
         return_type: Some(mixed_type()),
         by_ref_return: false,
         body: vec![Stmt::new(
-            StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
+            StmtKind::Return(Some(Expr::new(
+                reflected_class_new_spreading_args(dummy_span),
+                dummy_span,
+            ))),
             dummy_span,
         )],
         span: dummy_span,

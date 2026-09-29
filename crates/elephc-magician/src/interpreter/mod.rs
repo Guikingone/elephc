@@ -110,6 +110,12 @@ pub(crate) fn register_runtime_spl_autoload_callback(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    // `context` is usually one the bridge just made for this call, so PHP's by-value dedupe
+    // has to look across every context that holds loaders.
+    #[cfg(not(test))]
+    if runtime_spl_autoload_callback_is_registered(callback, values)? {
+        return values.bool_value(true);
+    }
     register_spl_autoload_callback_unchecked(callback, prepend, context, values)
 }
 
@@ -623,13 +629,17 @@ fn eval_bridge_positional_args(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
     args.into_iter()
-        .map(|value| {
-            let (value, ref_target) = eval_invoker_ref_arg_value_and_target(value, None, values)?;
+        .map(|marker| {
+            let (value, ref_target) = eval_invoker_ref_arg_value_and_target(marker, None, values)?;
+            // A by-reference marker is decoded into a FRESH cell over the caller's slot (a
+            // retained box for an array or object). The caller owns the marker, not that cell,
+            // so the call's cleanup must drop it: left unowned, `Z::f($localArray)` kept the
+            // whole array alive once per call. A plain argument is the caller's own box.
             Ok(EvaluatedCallArg {
                 name: None,
                 value,
                 ref_target,
-                owned: false,
+                owned: value != marker,
             })
         })
         .collect()

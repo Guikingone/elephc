@@ -71,21 +71,60 @@ pub(super) fn lower_try_catch(
     let handler_depth = push_try_handler_frame(ctx, handler_token, span);
     lower_block(ctx, try_body);
     pop_try_handler_frame_if_active(ctx, handler_depth);
+    let mut exit_types = Vec::new();
     if !ctx.builder.insertion_block_is_terminated() {
         emit_try_pop_handler(ctx, handler_token, span);
         branch_to(ctx, after_block);
         after_reachable = true;
+        exit_types.push(ctx.local_types_snapshot());
     }
 
     ctx.builder.position_at_end(handler_block);
     ctx.clear_static_callable_locals();
     emit_try_pop_handler(ctx, handler_token, span);
-    after_reachable |= lower_catch_dispatch(ctx, catches, after_block, span);
+    after_reachable |= lower_catch_dispatch(ctx, catches, after_block, &mut exit_types, span);
     ctx.builder.position_at_end(after_block);
     if !after_reachable {
         ctx.builder.terminate(Terminator::Unreachable);
     }
+    join_try_exit_types(ctx, exit_types);
     ctx.clear_static_callable_locals();
+}
+
+/// Resumes after a `try` from the local type facts EVERY edge into it can back.
+///
+/// The code below a `try` is reached from the end of the try body and from the end of each
+/// catch, but lowering resumed from whichever edge it lowered LAST -- the last catch. With
+/// `try { $proto = $r->newInstanceWithoutConstructor(); } catch (E) { $proto = 'O:'; }`, the
+/// slot had been widened to a Mixed box on the try edge and read back as a string: the object
+/// came out as `""`, and DeepClone's `clone self::$prototypes[$class]` saw a string.
+///
+/// Same rule as the `if` join: a name the edges disagree on reads as `mixed` when any edge
+/// left it boxed, and otherwise at its frame slot's storage type, which every store on every
+/// edge already widened to hold what it wrote.
+fn join_try_exit_types(ctx: &mut LoweringContext<'_, '_>, exits: Vec<crate::types::TypeEnv>) {
+    let Some(last) = exits.last().cloned() else {
+        return;
+    };
+    let mut joined = Vec::new();
+    for (name, last_ty) in &last {
+        let reprs = exits
+            .iter()
+            .map(|exit| exit.get(name).map(PhpType::codegen_repr))
+            .collect::<Vec<_>>();
+        if reprs.iter().all(|repr| repr.as_ref() == Some(&last_ty.codegen_repr())) {
+            continue;
+        }
+        if reprs.iter().any(|repr| repr.as_ref() == Some(&PhpType::Mixed)) {
+            joined.push((name.clone(), PhpType::Mixed));
+        } else if let Some(slot) = ctx.local_slots.get(name) {
+            joined.push((name.clone(), ctx.builder.local_php_type(*slot)));
+        }
+    }
+    ctx.restore_local_types(last);
+    for (name, ty) in joined {
+        ctx.set_local_type(&name, ty);
+    }
 }
 
 /// Lowers `try`/`catch`/`finally` using duplicated finalizer bodies for explicit exits.
@@ -222,6 +261,7 @@ pub(super) fn lower_catch_dispatch(
     ctx: &mut LoweringContext<'_, '_>,
     catches: &[CatchClause],
     after_block: BlockId,
+    exit_types: &mut Vec<crate::types::TypeEnv>,
     span: Span,
 ) -> bool {
     let mut after_reachable = false;
@@ -235,6 +275,7 @@ pub(super) fn lower_catch_dispatch(
         if !ctx.builder.insertion_block_is_terminated() {
             branch_to(ctx, after_block);
             after_reachable = true;
+            exit_types.push(ctx.local_types_snapshot());
         }
         ctx.clear_static_callable_locals();
         ctx.builder.position_at_end(next_catch);

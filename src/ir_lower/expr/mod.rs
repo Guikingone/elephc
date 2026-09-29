@@ -214,6 +214,7 @@ pub(crate) use callable_tracking::LoweredCallableArrayAssignment;
 pub(crate) use closures::{body_contains_eval_call, body_writes_local, lower_closure_for_assignment};
 pub(crate) use indexed_array_literals::{
     array_literal_type_for_ir, lower_array_literal_with_expected_type,
+    lower_indexed_array_spread_into_array,
 };
 pub(crate) use array_access::{
     array_access_element_result_type, index_expr_key_type, lowered_index_expr_key_type,
@@ -226,6 +227,7 @@ pub(in crate::ir_lower) use instanceof_coercions::coerce_to_string_at_span;
 pub(crate) use merge_temps::emit_bool_literal;
 pub(crate) use property_access::{
     lower_ref_assign_array_elem, lower_ref_assign_call, lower_ref_assign_dynamic_property,
+    prepare_local_array_element_reference_container,
     lower_ref_assign_property,
 };
 pub(crate) use property_fetch_for_write::lower_by_ref_foreach_property_source;

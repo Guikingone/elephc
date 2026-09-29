@@ -88,8 +88,8 @@ impl ElephcEvalContext {
     /// `ReflectionFunction::getStaticVariables()` does -- sees what the last activation left, and
     /// an activation still on the stack sees what a deeper one wrote.
     pub fn static_local(&self, function_name: &str, name: &str) -> Option<RuntimeCellHandle> {
-        self.static_scope
-            .visible_cell(&Self::static_slot_name(function_name, name))
+        let scope = super::request_statics::request_static_scope_ptr();
+        unsafe { scope.as_ref() }?.visible_cell(&Self::static_slot_name(function_name, name))
     }
 
     /// Returns the scope holding every `static` slot, for alias reads and writes.
@@ -97,8 +97,9 @@ impl ElephcEvalContext {
     /// Handed out as a raw pointer for the same reason `global_scope_ptr` is: a write to a static
     /// reaches this through a shared context, and the alternative -- interior mutability -- is not
     /// `RefUnwindSafe` and would poison every `catch_unwind` in the FFI.
+    /// The scope is the REQUEST's (see `request_statics`), shared by every context.
     pub fn static_scope_ptr(&self) -> *mut ElephcEvalScope {
-        std::ptr::from_ref::<ElephcEvalScope>(&*self.static_scope).cast_mut()
+        super::request_statics::request_static_scope_ptr()
     }
 
     /// Pushes the key this activation's `static` slots hang from.
@@ -140,17 +141,20 @@ impl ElephcEvalContext {
         cell: RuntimeCellHandle,
     ) -> Option<RuntimeCellHandle> {
         let slot = Self::static_slot_name(&function_name.into(), &name.into());
-        let previous = self
-            .static_scope
+        let scope = super::request_statics::request_static_scope_ptr();
+        let previous = unsafe { scope.as_mut() }?
             .set(slot, cell, crate::scope::ScopeCellOwnership::Owned);
         previous.filter(|previous| *previous != cell)
     }
 
     /// Returns a stored static property cell for an eval-declared class.
+    ///
+    /// Static values belong to the request, not to this context (see `request_statics`).
     pub fn static_property(&self, class_name: &str, name: &str) -> Option<RuntimeCellHandle> {
-        self.static_properties
-            .get(&(normalize_class_name(class_name), name.to_string()))
-            .copied()
+        super::request_statics::request_static_property(&(
+            normalize_class_name(class_name),
+            name.to_string(),
+        ))
     }
 
     /// Stores one eval static property cell and returns any replaced distinct cell.
@@ -160,10 +164,19 @@ impl ElephcEvalContext {
         name: impl Into<String>,
         cell: RuntimeCellHandle,
     ) -> Option<RuntimeCellHandle> {
-        let previous = self
-            .static_properties
-            .insert((normalize_class_name(class_name), name.into()), cell);
+        let previous = super::request_statics::set_request_static_property(
+            (normalize_class_name(class_name), name.into()),
+            cell,
+        );
         previous.filter(|previous| *previous != cell)
+    }
+
+    /// Removes one eval static property cell; the caller owns (and releases) what comes back.
+    pub fn take_static_property(&mut self, class_name: &str, name: &str) -> Option<RuntimeCellHandle> {
+        super::request_statics::take_request_static_property(&(
+            normalize_class_name(class_name),
+            name.to_string(),
+        ))
     }
 
     /// Binds one eval static property slot to a persistent PHP reference target.
@@ -173,8 +186,10 @@ impl ElephcEvalContext {
         name: &str,
         target: EvalReferenceTarget,
     ) -> Option<EvalReferenceTarget> {
-        self.static_property_aliases
-            .insert((normalize_class_name(class_name), name.to_string()), target)
+        super::request_statics::bind_request_static_property_alias(
+            (normalize_class_name(class_name), name.to_string()),
+            target,
+        )
     }
 
     /// Returns the persistent reference target bound to one eval static property slot.
@@ -182,9 +197,11 @@ impl ElephcEvalContext {
         &self,
         class_name: &str,
         name: &str,
-    ) -> Option<&EvalReferenceTarget> {
-        self.static_property_aliases
-            .get(&(normalize_class_name(class_name), name.to_string()))
+    ) -> Option<EvalReferenceTarget> {
+        super::request_statics::request_static_property_alias(&(
+            normalize_class_name(class_name),
+            name.to_string(),
+        ))
     }
 
     /// Returns a materialized eval class constant cell.

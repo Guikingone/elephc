@@ -49,6 +49,18 @@ pub(super) fn lower_static_method_call(
         );
         return lower_null(ctx, expr);
     }
+    // `Closure::fromCallable($closure)` is the closure itself (the checker typed it `callable`
+    // only when the argument already was one).
+    if let StaticReceiver::Named(name) = receiver {
+        if name.trim_start_matches('\\') == "Closure"
+            && php_symbol_key(method) == "fromcallable"
+            && args.len() == 1
+            && !matches!(args[0].kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_))
+            && materialized_expr_type_for_merge(ctx, &args[0]).codegen_repr() == PhpType::Callable
+        {
+            return lower_expr(ctx, &args[0]);
+        }
+    }
     // `Closure::bind($closure, $newThis [, $scope])` — static form of bindTo.
     if let StaticReceiver::Named(name) = receiver {
         if name.trim_start_matches('\\') == "Closure"
@@ -71,6 +83,15 @@ pub(super) fn lower_static_method_call(
                 None => {}
             }
             let closure = lower_expr(ctx, &args[0]);
+            // A closure read back from a static property or an array is boxed; the bind op takes
+            // a descriptor, and handing it the box segfaulted. Narrow it the way a `callable`
+            // parameter boundary does.
+            let closure = crate::ir_lower::gradual_coercions::coerce_gradual_value_to_boundary(
+                ctx,
+                closure,
+                &PhpType::Callable,
+                Some(args[0].span),
+            );
             ctx.take_bound_closure_this_class();
             ctx.take_bound_closure_this_gradual();
             ctx.current_class = saved_class;
@@ -116,14 +137,25 @@ pub(super) fn lower_static_method_call(
                 let operands = lower_args_with_signature(ctx, None, args);
                 let name = format!("{}::{}", class_name, dispatch_method);
                 let data = ctx.intern_string(&name);
-                return ctx.emit_value(
+                let call = ctx.emit_value(
                     Op::EvalStaticMethodCall,
-                    operands,
+                    operands.clone(),
                     Some(Immediate::Data(data)),
                     PhpType::Mixed,
                     Op::EvalStaticMethodCall.default_effects(),
                     Some(expr.span),
                 );
+                // The bridge boxes each operand with a reference of its own and answers with a
+                // cell it retained, so a temporary argument -- the `[$object, 'm']` of
+                // `Closure::fromCallable()` -- is still this frame's to drop.
+                release_owned_call_arg_temporaries(
+                    ctx,
+                    &operands,
+                    Some(call.value),
+                    &ReturnArgAlias::None,
+                    expr.span,
+                );
+                return call;
             }
         }
     }
@@ -137,7 +169,7 @@ pub(super) fn lower_static_method_call(
         .as_ref()
         .map(|(call_args, _)| call_args.as_slice())
         .unwrap_or(call_args);
-    let operands = lower_args_with_signature(ctx, sig.as_ref(), call_args);
+    let operands = lower_user_args_with_signature(ctx, sig.as_ref(), call_args);
     let operands =
         coerce_int_backed_enum_string_argument(ctx, receiver, dispatch_method, operands, expr);
     // `parent::__construct(...)` enters a constructor exactly like `new` does, so it carries the
@@ -406,14 +438,24 @@ pub(super) fn lower_static_method_descriptor_call(
         .as_ref()
         .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
         .unwrap_or_else(|| fallback_expr_type(expr));
-    ctx.emit_value(
+    let result = ctx.emit_value(
         Op::ExprCall,
         operands,
         callable_profile_immediate(),
         result_type,
         Op::ExprCall.default_effects(),
         Some(expr.span),
-    )
+    );
+    release_descriptor_after_call(ctx, descriptor, expr);
+    result
+}
+
+/// Drops the descriptor a static-method descriptor call built for itself: the invoker only
+/// borrows it, so `$f()` over a local `['Class', 'method']` left one block per call.
+fn release_descriptor_after_call(ctx: &mut LoweringContext<'_, '_>, descriptor: LoweredValue, expr: &Expr) {
+    if ctx.value_is_owning_temporary(descriptor) {
+        crate::ir_lower::ownership::release_if_owned(ctx, descriptor, Some(expr.span));
+    }
 }
 
 /// Lowers a static-method descriptor call when operands have already been evaluated.
@@ -437,14 +479,16 @@ pub(super) fn lower_static_method_descriptor_value_call(
         .as_ref()
         .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
         .unwrap_or_else(|| fallback_expr_type(expr));
-    Some(ctx.emit_value(
+    let result = ctx.emit_value(
         Op::ExprCall,
         operands,
         callable_profile_immediate(),
         result_type,
         Op::ExprCall.default_effects(),
         Some(expr.span),
-    ))
+    );
+    release_descriptor_after_call(ctx, descriptor, expr);
+    Some(result)
 }
 
 /// Returns the conservative return-to-argument alias summary for static dispatch.

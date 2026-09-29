@@ -419,7 +419,13 @@ impl Checker {
                 // before the closure value is constructed. Use gradual storage because the
                 // closure can replace that cell with any PHP value when it executes.
                 for name in capture_refs {
-                    env.entry(name.clone()).or_insert(PhpType::Mixed);
+                    // A local that only ever held null (`$found = null; function () use
+                    // (&$found) { $found = $v; }`) is exactly as open: typed `Void`, a later
+                    // `new ReflectionFunction($found)` was refused as taking null.
+                    let entry = env.entry(name.clone()).or_insert(PhpType::Mixed);
+                    if matches!(entry, PhpType::Void) {
+                        *entry = PhpType::Mixed;
+                    }
                 }
                 self.infer_type(expr, env)
             }
