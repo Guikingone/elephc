@@ -109,3 +109,41 @@ echo (array_key_last([]) === null) ? "-last-null" : "-last-val";
     );
     assert_eq!(out, "first-null-last-null");
 }
+
+/// PHP 8.3 changed the next implicit key after a negative integer key: `[-5 => "a"]` then
+/// `$a[] = "b"` stores "b" at -4 on 8.3+, and at 0 on 8.2 and earlier, where the next key starts
+/// at 0 and only a key at or above it moves it. The rule applies to a run-time append (local,
+/// parameter, eval) and to the bare entry of a literal. A key that already reached 0 is kept
+/// on every profile. The 8.3+ lines are measured on PHP 8.5.10; the 8.2 lines follow php-src's
+/// pre-8.3 rule. Regression for #1494.
+#[test]
+fn test_append_after_negative_key_follows_the_php_profile() {
+    let source = r#"<?php
+$a = [-5 => "a"];
+$a[] = "b";
+echo implode(",", array_keys($a)), "\n";
+$b = [-5 => "a", "b"];
+echo implode(",", array_keys($b)), "\n";
+$c = [0 => "z"]; unset($c[0]);
+$c[-3] = 1;
+$c[] = 2;
+echo implode(",", array_keys($c)), "\n";
+$d = [-5 => "a", 3 => "b"];
+$d[] = "c";
+echo implode(",", array_keys($d)), "\n";
+function f(array $m): array { $m[] = "x"; return $m; }
+echo implode(",", array_keys(f([-9 => 1]))), "\n";
+$e = eval('$z = [-7 => 1]; $z[] = 2; return $z;');
+echo implode(",", array_keys($e)), "\n";
+"#;
+    let modern = "-5,-4\n-5,-4\n-3,1\n-5,3,4\n-9,-8\n-7,-6\n";
+    assert_eq!(compile_and_run(source), modern);
+    assert_eq!(
+        compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php83),
+        modern
+    );
+    assert_eq!(
+        compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php82),
+        "-5,0\n-5,0\n-3,1\n-5,3,4\n-9,0\n-7,0\n"
+    );
+}
