@@ -28,6 +28,9 @@ pub struct EvalClassProperty {
     has_set_hook: bool,
     requires_get_hook: bool,
     requires_set_hook: bool,
+    /// Whether an abstract `get` contract is declared `&get`. A concrete `&get` hook carries the
+    /// flag on its generated accessor method instead.
+    get_contract_returns_by_ref: bool,
     is_virtual: bool,
     default: Option<EvalExpr>,
 }
@@ -107,6 +110,7 @@ impl EvalClassProperty {
             has_set_hook: false,
             requires_get_hook: false,
             requires_set_hook: false,
+            get_contract_returns_by_ref: false,
             is_virtual: false,
             default,
         }
@@ -136,6 +140,13 @@ impl EvalClassProperty {
         self.requires_get_hook = requires_get_hook;
         self.requires_set_hook = requires_set_hook;
         self.is_virtual = true;
+        self
+    }
+
+    /// Returns a copy of this property recording whether its abstract `get` contract is declared
+    /// `&get`, which `ReflectionMethod::returnsReference()` reports for the contract's hook.
+    pub const fn with_get_contract_returns_by_ref(mut self, returns_by_ref: bool) -> Self {
+        self.get_contract_returns_by_ref = returns_by_ref;
         self
     }
 
@@ -268,6 +279,11 @@ impl EvalClassProperty {
     /// Returns whether this abstract property contract requires write access.
     pub const fn requires_set_hook(&self) -> bool {
         self.requires_set_hook
+    }
+
+    /// Returns whether this abstract property's `get` contract is declared `&get`.
+    pub const fn get_contract_returns_by_ref(&self) -> bool {
+        self.get_contract_returns_by_ref
     }
 
     /// Returns whether this property is virtual instead of backed by object storage.

@@ -167,6 +167,7 @@ pub(super) fn eval_native_abstract_property_registration(
         type_spec,
         requires_get,
         requires_set,
+        get_by_ref: contract.get_by_ref,
     })
 }
 
@@ -189,6 +190,7 @@ pub(super) fn eval_native_interface_property_registration(
         type_spec,
         requires_get,
         requires_set,
+        get_by_ref: contract.get_by_ref,
     })
 }
 

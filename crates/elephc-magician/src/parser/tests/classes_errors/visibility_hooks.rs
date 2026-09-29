@@ -351,6 +351,28 @@ fn parse_fragment_accepts_abstract_class_property_hook_contracts() {
     );
 }
 
+/// Verifies an abstract `&get` property contract keeps its by-reference declaration, which has no
+/// accessor method to carry it, while a plain `get` contract does not.
+#[test]
+fn parse_fragment_keeps_abstract_by_ref_get_hook_contracts() {
+    let program = parse_fragment(
+        br#"abstract class DynEvalAbstractRefHooked {
+    abstract public array $items { &get; }
+    abstract public int $count { get; }
+}"#,
+    )
+    .expect("fragment should parse");
+    let EvalStmt::ClassDecl(class) = &program.statements()[0] else {
+        panic!("expected a class declaration");
+    };
+    let flags: Vec<(&str, bool)> = class
+        .properties()
+        .iter()
+        .map(|property| (property.name(), property.get_contract_returns_by_ref()))
+        .collect();
+    assert_eq!(flags, vec![("items", true), ("count", false)]);
+}
+
 /// Verifies trait abstract property hook contracts lower without concrete accessors.
 #[test]
 fn parse_fragment_accepts_trait_abstract_property_hook_contracts() {

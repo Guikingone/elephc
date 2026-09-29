@@ -476,9 +476,11 @@ through `isInternal()`, `isUserDefined()`, `isClosure()`,
 `isGenerator()`, `isVariadic()`, `isStatic()`,
 `hasTentativeReturnType()`, and `getTentativeReturnType()`.
 `returnsReference()` reports the reflected declaration: `true` for a compiled
-`function &f()` or `function &m()` and for an eval-declared `&get` property
-hook. Eval code itself cannot declare a by-reference function, method, or
-closure (the fragment is rejected), so those report `false`. `hasReturnType()`
+`function &f()` or `function &m()`, for an eval-declared `&get` property
+hook, and for an abstract or interface `&get` hook contract, whether eval or
+compiled code declares it. Eval code itself cannot declare a by-reference
+function, method, or closure (the fragment is rejected), so those report
+`false`. `hasReturnType()`
 and `getReturnType()` expose retained eval return type metadata for supported
 named, nullable, union, and intersection declarations, including `void` and
 `never` as builtin non-nullable named types.

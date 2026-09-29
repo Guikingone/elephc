@@ -121,7 +121,7 @@ impl Parser {
                 if is_static || effective_readonly {
                     return Err(EvalParseError::UnsupportedConstruct);
                 }
-                let (requires_get_hook, requires_set_hook) =
+                let (requires_get_hook, requires_set_hook, get_returns_by_ref) =
                     self.parse_property_hook_contracts()?;
                 let property = EvalClassProperty::with_visibility_static_final_and_readonly(
                     name,
@@ -133,7 +133,8 @@ impl Parser {
                 )
                 .with_type(property_type)
                 .with_set_visibility(set_visibility)
-                .with_abstract_hook_contract(requires_get_hook, requires_set_hook);
+                .with_abstract_hook_contract(requires_get_hook, requires_set_hook)
+                .with_get_contract_returns_by_ref(get_returns_by_ref);
                 return Ok((vec![property], Vec::new()));
             }
             if self.consume(TokenKind::Comma) {

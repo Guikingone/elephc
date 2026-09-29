@@ -26338,6 +26338,39 @@ echo (new ReflectionProperty("EvalHooked", "n"))->getHook(PropertyHookType::Get)
     assert_eq!(out.stdout, "Rrrr:Rrr:Rr");
 }
 
+/// Verifies eval `returnsReference()` reads an abstract or interface `&get` hook contract, which
+/// has no accessor method to carry the flag: eval-declared abstract class and interface contracts
+/// keep it from their declaration, and a compiled interface contract from its registration. Plain
+/// `get` and `set` contracts stay `false`. Expected output measured on PHP 8.5.10.
+#[test]
+fn test_eval_reflection_returns_reference_reads_get_hook_contracts() {
+    let out = compile_and_run_capture(
+        r#"<?php
+interface AotRefContract { public string $y { &get; } }
+interface AotPlainContract { public int $w { get; } }
+eval('abstract class EvalAbstract {
+    abstract public string $x { &get; }
+    abstract public int $plain { get; }
+}
+interface EvalContract { public string $y { &get; } public int $z { get; set; } }
+echo (new ReflectionProperty("EvalAbstract", "x"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";
+echo (new ReflectionProperty("EvalAbstract", "plain"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";
+echo (new ReflectionProperty("EvalContract", "y"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";
+echo (new ReflectionProperty("EvalContract", "z"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";
+echo (new ReflectionProperty("EvalContract", "z"))->getHook(PropertyHookType::Set)->returnsReference() ? "R" : "r";
+echo ":";
+echo (new ReflectionProperty("AotRefContract", "y"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";
+echo (new ReflectionProperty("AotPlainContract", "w"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "RrRrr:Rr");
+}
+
 /// Verifies eval ReflectionFunction/Method derive deprecation predicates from `#[Deprecated]`.
 #[test]
 fn test_eval_reflection_function_and_method_deprecated_attributes() {

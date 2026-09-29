@@ -215,20 +215,26 @@ impl Parser {
         if matches!(self.current(), TokenKind::Equal) {
             return Err(EvalParseError::UnsupportedConstruct);
         }
-        let (requires_get, requires_set) = self.parse_interface_property_hook_contracts()?;
+        let (requires_get, requires_set, get_returns_by_ref) =
+            self.parse_interface_property_hook_contracts()?;
         if set_visibility.is_some() && !requires_set {
             return Err(EvalParseError::UnsupportedConstruct);
         }
         Ok(EvalInterfaceProperty::new(name, requires_get, requires_set)
+            .with_get_returns_by_ref(get_returns_by_ref)
             .with_type(property_type)
             .with_set_visibility(set_visibility))
     }
 
-    /// Parses `{ get; set; }` hook contracts for an abstract or interface property.
-    pub(in crate::parser) fn parse_property_hook_contracts(&mut self) -> Result<(bool, bool), EvalParseError> {
+    /// Parses `{ get; set; }` hook contracts for an abstract or interface property, returning
+    /// whether `get` and `set` are required and whether the `get` contract is `&get`.
+    pub(in crate::parser) fn parse_property_hook_contracts(
+        &mut self,
+    ) -> Result<(bool, bool, bool), EvalParseError> {
         self.expect(TokenKind::LBrace)?;
         let mut requires_get = false;
         let mut requires_set = false;
+        let mut get_returns_by_ref = false;
         while !self.consume(TokenKind::RBrace) {
             if matches!(self.current(), TokenKind::Eof) {
                 return Err(EvalParseError::UnexpectedEof);
@@ -258,6 +264,7 @@ impl Parser {
                     return Err(EvalParseError::UnsupportedConstruct);
                 }
                 requires_get = true;
+                get_returns_by_ref = returns_by_ref;
             } else {
                 if requires_set {
                     return Err(EvalParseError::UnsupportedConstruct);
@@ -268,13 +275,13 @@ impl Parser {
         if !requires_get && !requires_set {
             return Err(EvalParseError::UnsupportedConstruct);
         }
-        Ok((requires_get, requires_set))
+        Ok((requires_get, requires_set, get_returns_by_ref))
     }
 
     /// Parses `{ get; set; }` hook contracts for an interface property.
     pub(in crate::parser) fn parse_interface_property_hook_contracts(
         &mut self,
-    ) -> Result<(bool, bool), EvalParseError> {
+    ) -> Result<(bool, bool, bool), EvalParseError> {
         self.parse_property_hook_contracts()
     }
 
