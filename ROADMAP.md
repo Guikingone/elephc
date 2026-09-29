@@ -1117,6 +1117,7 @@ real-world validation rather than by speculative pass work.
 - [x] Extended `array_chunk()` to associative arrays, with explicit preservation or renumbering of source keys.
 - [x] Corrected Reflection metadata for by-reference returns and filtered attributes, plus runtime diagnostics for string offsets and float array keys.
 - [x] Preserved syntactic generator behavior through optimizer passes, including functions that return a `Generator` without containing `yield`.
+- [x] Corrected nullable integer property inspection, serialization, object-to-array casts, and GC handling across both target backends.
 
 - [ ] Local-to-SSA promotion (`mem2reg`) for eligible non-aliased scalar PHP locals — replace repeated `load_local` / `store_local` traffic with SSA values and block parameters at CFG joins and loop back edges, while conservatively retaining address-taken, by-reference, global/static, refcounted, and otherwise volatile slots in memory. Re-run register allocation on the promoted graph so loop-carried values such as counters and accumulators can remain in registers across the whole loop.
 - [ ] EIR integer range and induction-variable analysis — propagate intervals through constants, comparisons, loop bounds, masks, shifts, and checked `add` / `sub` / `mul`; prove when PHP integer overflow is impossible and rewrite only those operations to unchecked scalar forms. Keep overflow-to-float behavior on every unproven path and cover all supported targets with optimizer-on/off equivalence tests.
