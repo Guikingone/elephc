@@ -14,12 +14,17 @@
 //!   `TypeError("Cannot access offset of type <type> on SplFixedArray")`. The linked-list family
 //!   declares `int $index` and takes weak-mode coercion: any fully numeric string (`" 1"`,
 //!   `"1.0"`, `"+1"`, `"1e0"`) is accepted, a string that is not numeric is a TypeError, and a null
-//!   means `0` (`offsetSet()` alone gives null its own meaning, an append).
+//!   means `0` (`offsetSet()` alone gives null its own meaning, an append). A float must be finite
+//!   and inside the int range (`INF`, `NAN`, `1e20` are `TypeError(... float given)`, and a numeric
+//!   string spelling such a value is `... string given`); a lossy one truncates with PHP's
+//!   `Implicit conversion from float[-string] ... to int loses precision` deprecation. PHP
+//!   8.4 keeps the `SplDoublyLinkedList::` prefix for `SplStack` and `SplQueue` too.
 //! - A type error comes back as the address of a 16-byte `{pointer, length}` name row, the shape of
 //!   `_class_name_entries`, so an object names its class and a scalar names its type through one
 //!   word, and no reference to the offset outlives the call.
-//! - The helper CONSUMES the boxed offset. A float is converted only after the box is released,
-//!   because its diagnostic can run a user error handler that throws.
+//! - The helper CONSUMES the boxed offset, and releases it before any diagnostic: a deprecation or
+//!   warning can run a user error handler that throws, which would strand the box. A lossy
+//!   float-string buffers the string into the diagnostic before the box goes.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -39,13 +44,14 @@ pub(crate) const SPL_OFFSET_STATUS_NULL: i64 = 8;
 
 /// The type names a rejected offset can carry, in `_spl_offset_type_rows` order, as
 /// `(data symbol of the name, name length)`.
-pub(crate) const SPL_OFFSET_TYPE_ROWS: [(&str, usize); 6] = [
+pub(crate) const SPL_OFFSET_TYPE_ROWS: [(&str, usize); 7] = [
     ("_unser_type_string", 6),
     ("_unser_type_null", 4),
     ("_unser_type_array", 5),
     ("_unser_type_resource", 8),
     ("_sprintf_closure_class_name", 7),
     ("_unser_type_object", 6),
+    ("_unser_type_float", 5),
 ];
 const ROW_STRING: i64 = 0;
 const ROW_NULL: i64 = 1;
@@ -53,6 +59,13 @@ const ROW_ARRAY: i64 = 2;
 const ROW_RESOURCE: i64 = 3;
 const ROW_CLOSURE: i64 = 4;
 const ROW_OBJECT: i64 = 5;
+const ROW_FLOAT: i64 = 6;
+/// Bit patterns of 2^63 and -2^63, the bounds PHP's `ZEND_DOUBLE_FITS_LONG` checks against.
+const POSITIVE_2_63: i64 = 0x43e0000000000000;
+const NEGATIVE_2_63: u64 = 0xc3e0000000000000;
+/// PHP's float-string precision deprecation, around the string as written.
+pub(crate) const SPL_FLOAT_STRING_PREFIX: &str = "Deprecated: Implicit conversion from float-string \"";
+pub(crate) const SPL_FLOAT_STRING_SUFFIX: &str = "\" to int loses precision\n";
 
 /// Emits both helpers for the current target.
 pub(crate) fn emit_spl_offset_runtime(emitter: &mut Emitter) {
@@ -131,9 +144,32 @@ fn emit_convert_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cbnz x2, __rt_spl_offset_convert_string_rejected");    // only a fully numeric string coerces
     emitter.instruction("cmp x0, #0");                                          // did it parse as an integer?
     emitter.instruction("b.eq __rt_spl_offset_convert_string_int");             // store the integer
-    emitter.instruction("fmov d0, x1");                                         // a float string truncates like the float it spells
-    emitter.instruction("bl __rt_php_float_to_int");                            // convert without a second diagnostic
-    emitter.instruction("mov x1, x9");                                          // the converted integer
+    emitter.instruction("str x1, [sp, #16]");                                   // keep the float's bits
+    emitter.instruction("fmov d0, x1");                                         // the float the string spells
+    emit_int_range_check_aarch64(emitter, "__rt_spl_offset_convert_string_rejected");
+    emitter.instruction("bl __rt_php_float_to_int");                            // truncate toward zero
+    emitter.instruction("str x9, [sp, #40]");                                   // the integer is the index
+    emitter.instruction("scvtf d1, x9");                                        // rebuild the integer as a float
+    emitter.instruction("ldr d0, [sp, #16]");                                   // reload the float the string spells
+    emitter.instruction("fcmp d0, d1");                                         // was the conversion exact?
+    emitter.instruction("b.eq __rt_spl_offset_convert_string_exact");           // "1.0" converts silently
+    abi::emit_symbol_address(emitter, "x1", "_spl_float_string_prefix");
+    emitter.instruction(&format!("mov x2, #{}", SPL_FLOAT_STRING_PREFIX.len())); // deprecation prefix length
+    emitter.instruction("bl __rt_diag_warning_fragment");                       // start the float-string deprecation
+    emitter.instruction("ldp x1, x2, [sp, #24]");                               // the string as written, still borrowed from the box
+    emitter.instruction("bl __rt_diag_warning_fragment");                       // quote it in the deprecation
+    emitter.instruction("ldr x0, [sp]");                                        // the owned boxed offset
+    emitter.instruction("bl __rt_decref_mixed");                                // release it before the handler can run
+    abi::emit_symbol_address(emitter, "x1", "_spl_float_string_suffix");
+    emitter.instruction(&format!("mov x2, #{}", SPL_FLOAT_STRING_SUFFIX.len())); // deprecation suffix length
+    emitter.instruction("bl __rt_diag_warning");                                // finish the deprecation, which may run the handler
+    emitter.instruction("ldr x1, [sp, #40]");                                   // the converted index
+    emitter.instruction(&format!("mov x0, #{}", SPL_OFFSET_STATUS_INT));        // status: converted
+    emitter.instruction("b __rt_spl_offset_convert_return");                    // the box is already released
+    emitter.label("__rt_spl_offset_convert_string_exact");
+    emitter.instruction(&format!("mov x9, #{}", SPL_OFFSET_STATUS_INT));        // status: converted
+    emitter.instruction("str x9, [sp, #16]");                                   // record the status
+    emitter.instruction("b __rt_spl_offset_convert_release");                   // release the box and return
     emitter.label("__rt_spl_offset_convert_string_int");
     emitter.instruction("str x1, [sp, #40]");                                   // the integer is the index
     emitter.instruction(&format!("mov x9, #{}", SPL_OFFSET_STATUS_INT));        // status: converted
@@ -148,9 +184,20 @@ fn emit_convert_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_decref_mixed");                                // release it before a diagnostic can run user code
     emitter.instruction("ldr x9, [sp, #24]");                                   // the float's bits
     emitter.instruction("fmov d0, x9");                                         // pass the float
+    emitter.instruction("ldr x9, [sp, #8]");                                    // reload the mode
+    emitter.instruction(&format!("cmp x9, #{}", SPL_OFFSET_MODE_FIXED));        // SplFixedArray converts any float like an array key
+    emitter.instruction("b.eq __rt_spl_offset_convert_float_convert");          // with the array-key diagnostics
+    emit_int_range_check_aarch64(emitter, "__rt_spl_offset_convert_float_rejected");
+    emitter.label("__rt_spl_offset_convert_float_convert");
     emitter.instruction("bl __rt_float_key_to_int");                            // truncate with PHP's float-to-int diagnostics
     emitter.instruction("mov x1, x0");                                          // the converted integer is the index
     emitter.instruction(&format!("mov x0, #{}", SPL_OFFSET_STATUS_INT));        // status: converted
+    emitter.instruction("b __rt_spl_offset_convert_return");                    // the box is already released
+
+    emitter.label("__rt_spl_offset_convert_float_rejected");
+    abi::emit_symbol_address(emitter, "x1", "_spl_offset_type_rows");
+    emitter.instruction(&format!("add x1, x1, #{}", ROW_FLOAT * 16));           // report the float type name
+    emitter.instruction("mov x0, #1");                                          // status: type error
     emitter.instruction("b __rt_spl_offset_convert_return");                    // the box is already released
 
     emitter.label("__rt_spl_offset_convert_null");
@@ -315,9 +362,32 @@ fn emit_convert_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jnz __rt_spl_offset_convert_string_rejected_x");       // anything else is a type error
     emitter.instruction("cmp rax, 0");                                          // did it parse as an integer?
     emitter.instruction("je __rt_spl_offset_convert_string_int_x");             // store the integer
-    emitter.instruction("movq xmm0, rdi");                                      // a float string truncates like the float it spells
-    emitter.instruction("call __rt_php_float_to_int");                          // convert without a second diagnostic
-    emitter.instruction("mov rdi, r11");                                        // the converted integer
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // keep the float's bits
+    emitter.instruction("movq xmm0, rdi");                                      // the float the string spells
+    emit_int_range_check_x86_64(emitter, "__rt_spl_offset_convert_string_rejected_x");
+    emitter.instruction("call __rt_php_float_to_int");                          // truncate toward zero
+    emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // the integer is the index
+    emitter.instruction("cvtsi2sd xmm1, r11");                                  // rebuild the integer as a float
+    emitter.instruction("movq xmm0, QWORD PTR [rbp - 24]");                     // reload the float the string spells
+    emitter.instruction("ucomisd xmm0, xmm1");                                  // was the conversion exact?
+    emitter.instruction("je __rt_spl_offset_convert_string_exact_x");           // "1.0" converts silently
+    emitter.instruction("lea rdi, [rip + _spl_float_string_prefix]");           // deprecation prefix
+    emitter.instruction(&format!("mov rsi, {}", SPL_FLOAT_STRING_PREFIX.len())); // deprecation prefix length
+    emitter.instruction("call __rt_diag_warning_fragment");                     // start the float-string deprecation
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // the string as written, still borrowed from the box
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // and its length
+    emitter.instruction("call __rt_diag_warning_fragment");                     // quote it in the deprecation
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // the owned boxed offset
+    emitter.instruction("call __rt_decref_mixed");                              // release it before the handler can run
+    emitter.instruction("lea rdi, [rip + _spl_float_string_suffix]");           // deprecation suffix
+    emitter.instruction(&format!("mov rsi, {}", SPL_FLOAT_STRING_SUFFIX.len())); // deprecation suffix length
+    emitter.instruction("call __rt_diag_warning");                              // finish the deprecation, which may run the handler
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // the converted index
+    emitter.instruction(&format!("mov rax, {}", SPL_OFFSET_STATUS_INT));        // status: converted
+    emitter.instruction("jmp __rt_spl_offset_convert_return_x");                // the box is already released
+    emitter.label("__rt_spl_offset_convert_string_exact_x");
+    emitter.instruction(&format!("mov QWORD PTR [rbp - 24], {}", SPL_OFFSET_STATUS_INT)); // status: converted
+    emitter.instruction("jmp __rt_spl_offset_convert_release_x");               // release the box and return
     emitter.label("__rt_spl_offset_convert_string_int_x");
     emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // the integer is the index
     emitter.instruction(&format!("mov QWORD PTR [rbp - 24], {}", SPL_OFFSET_STATUS_INT)); // status: converted
@@ -330,9 +400,19 @@ fn emit_convert_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // the owned box holds nothing the float needs
     emitter.instruction("call __rt_decref_mixed");                              // release it before a diagnostic can run user code
     emitter.instruction("movq xmm0, QWORD PTR [rbp - 32]");                     // pass the float
+    emitter.instruction(&format!("cmp QWORD PTR [rbp - 16], {}", SPL_OFFSET_MODE_FIXED)); // SplFixedArray converts any float like an array key
+    emitter.instruction("je __rt_spl_offset_convert_float_convert_x");          // with the array-key diagnostics
+    emit_int_range_check_x86_64(emitter, "__rt_spl_offset_convert_float_rejected_x");
+    emitter.label("__rt_spl_offset_convert_float_convert_x");
     emitter.instruction("call __rt_float_key_to_int");                          // truncate with PHP's float-to-int diagnostics
     emitter.instruction("mov rdi, rax");                                        // the converted integer is the index
     emitter.instruction(&format!("mov rax, {}", SPL_OFFSET_STATUS_INT));        // status: converted
+    emitter.instruction("jmp __rt_spl_offset_convert_return_x");                // the box is already released
+
+    emitter.label("__rt_spl_offset_convert_float_rejected_x");
+    emitter.instruction("lea rdi, [rip + _spl_offset_type_rows]");              // the type-name rows
+    emitter.instruction(&format!("add rdi, {}", ROW_FLOAT * 16));               // report the float type name
+    emitter.instruction("mov rax, 1");                                          // status: type error
     emitter.instruction("jmp __rt_spl_offset_convert_return_x");                // the box is already released
 
     emitter.label("__rt_spl_offset_convert_null_x");
@@ -428,4 +508,34 @@ fn emit_throw_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // release the local frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("jmp __rt_throw_current");                              // unwind, or report it uncaught and exit like PHP
+}
+
+/// Branches to `rejected` unless the float in `d0` fits PHP's int range: not NaN, below 2^63 and
+/// at or above -2^63 (`ZEND_DOUBLE_FITS_LONG`). Leaves `d0` intact; clobbers `x9` and `d1`.
+fn emit_int_range_check_aarch64(emitter: &mut Emitter, rejected: &str) {
+    emitter.instruction("fcmp d0, d0");                                         // is the float NaN?
+    emitter.instruction(&format!("b.vs {rejected}"));                           // NaN is not an int
+    abi::emit_load_int_immediate(emitter, "x9", POSITIVE_2_63);
+    emitter.instruction("fmov d1, x9");                                         // 2^63, the first float past the int range
+    emitter.instruction("fcmp d0, d1");                                         // too large (INF included)?
+    emitter.instruction(&format!("b.ge {rejected}"));                           // the float does not fit an int
+    abi::emit_load_int_immediate(emitter, "x9", NEGATIVE_2_63 as i64);
+    emitter.instruction("fmov d1, x9");                                         // -2^63, the smallest int
+    emitter.instruction("fcmp d0, d1");                                         // too small (-INF included)?
+    emitter.instruction(&format!("b.lt {rejected}"));                           // the float does not fit an int
+}
+
+/// Jumps to `rejected` unless the float in `xmm0` fits PHP's int range: not NaN, below 2^63 and
+/// at or above -2^63 (`ZEND_DOUBLE_FITS_LONG`). Leaves `xmm0` intact; clobbers `r10` and `xmm1`.
+fn emit_int_range_check_x86_64(emitter: &mut Emitter, rejected: &str) {
+    emitter.instruction("ucomisd xmm0, xmm0");                                  // is the float NaN?
+    emitter.instruction(&format!("jp {rejected}"));                             // NaN is not an int
+    abi::emit_load_int_immediate(emitter, "r10", POSITIVE_2_63);
+    emitter.instruction("movq xmm1, r10");                                      // 2^63, the first float past the int range
+    emitter.instruction("ucomisd xmm0, xmm1");                                  // too large (INF included)?
+    emitter.instruction(&format!("jae {rejected}"));                            // the float does not fit an int
+    abi::emit_load_int_immediate(emitter, "r10", NEGATIVE_2_63 as i64);
+    emitter.instruction("movq xmm1, r10");                                      // -2^63, the smallest int
+    emitter.instruction("ucomisd xmm0, xmm1");                                  // too small (-INF included)?
+    emitter.instruction(&format!("jb {rejected}"));                             // the float does not fit an int
 }

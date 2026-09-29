@@ -38,4 +38,4 @@ pub(crate) use fixed_array::emit_fixed_array_runtime;
 /// Emits the shared SPL offset conversion and offset TypeError helpers.
 pub(crate) use offset_convert::emit_spl_offset_runtime;
 /// The type-name rows a rejected SPL offset reports, emitted as `_spl_offset_type_rows`.
-pub(crate) use offset_convert::SPL_OFFSET_TYPE_ROWS;
+pub(crate) use offset_convert::{SPL_FLOAT_STRING_PREFIX, SPL_FLOAT_STRING_SUFFIX, SPL_OFFSET_TYPE_ROWS};
