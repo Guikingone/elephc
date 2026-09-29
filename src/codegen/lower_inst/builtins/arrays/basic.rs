@@ -178,13 +178,27 @@ pub(crate) fn lower_array_pad(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let array = expect_operand(inst, 0)?;
     let target_size = expect_operand(inst, 1)?;
     let pad_value = expect_operand(inst, 2)?;
-    let source_elem_ty = array_pad_source_element_type(ctx.value_php_type(array)?)?;
+    let mut source_elem_ty = array_pad_source_element_type(ctx.value_php_type(array)?)?;
     let pad_value_ty = ctx.value_php_type(pad_value)?.codegen_repr();
     let result_elem_ty =
         result_array_element_type("array_pad", &inst.result_php_type.codegen_repr())?;
+    // The empty `[]` placeholder holds no elements of its own, so the pad value decides the
+    // layout; the checker types that result by the pad value too.
+    let empty_source = matches!(source_elem_ty, PhpType::Void | PhpType::Never);
+    if empty_source && require_array_pad_element_layout(&pad_value_ty).is_ok() {
+        source_elem_ty = pad_value_ty.clone();
+    }
     require_array_pad_value_type(&source_elem_ty, &pad_value_ty)?;
     require_array_pad_result_type(&source_elem_ty, &result_elem_ty)?;
     lower_array_pad_call(ctx, array, target_size, pad_value, &source_elem_ty)?;
+    if empty_source {
+        // The helpers inherit the element shape from the source, which the placeholder lacks.
+        crate::codegen::emit_array_value_type_stamp(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            &source_elem_ty,
+        );
+    }
     normalize_indexed_array_result(ctx, "array_pad", &source_elem_ty, &result_elem_ty)?;
     store_if_result(ctx, inst)
 }

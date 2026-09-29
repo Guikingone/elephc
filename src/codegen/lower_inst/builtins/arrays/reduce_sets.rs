@@ -132,11 +132,16 @@ pub(crate) fn lower_array_diff(ctx: &mut FunctionContext<'_>, inst: &Instruction
         let first_ty = ctx.value_php_type(*first)?.codegen_repr();
         let second_ty = ctx.value_php_type(*second)?.codegen_repr();
         if let (PhpType::Array(first_elem), PhpType::Array(second_elem)) = (&first_ty, &second_ty) {
+            let first_elem = first_elem.codegen_repr();
             let second_elem = second_elem.codegen_repr();
-            if first_elem.codegen_repr() == PhpType::Str
-                && matches!(second_elem, PhpType::Str | PhpType::Never | PhpType::Void)
+            let empty = |ty: &PhpType| matches!(ty, PhpType::Never | PhpType::Void);
+            // Either side may be the empty `[]` placeholder: `array_diff($strings, [])` keeps
+            // everything, `array_diff([], $strings)` keeps nothing, and both only read the
+            // placeholder's zero length.
+            if (first_elem == PhpType::Str && (second_elem == PhpType::Str || empty(&second_elem)))
+                || (empty(&first_elem) && second_elem == PhpType::Str)
             {
-                return lower_array_diff_str(ctx, inst, *first, *second);
+                return lower_array_diff_str(ctx, inst, *first, *second, &first_elem);
             }
         }
     }
@@ -149,18 +154,21 @@ pub(crate) fn lower_array_diff(ctx: &mut FunctionContext<'_>, inst: &Instruction
     )
 }
 
-/// Calls `__rt_array_diff_str` for two indexed string arrays (the second may be empty).
+/// Calls `__rt_array_diff_str` for two indexed string arrays, either of which may be the empty
+/// `[]` placeholder.
 ///
 /// The helper duplicates every kept string into a fresh 16-byte-slot array renumbered from zero,
-/// like the integer helper, and the result is stamped as a string array.
+/// like the integer helper, and the result is stamped as a string array. The static result is
+/// the first operand's type, so it is checked against `first_elem_ty`.
 fn lower_array_diff_str(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     first: ValueId,
     second: ValueId,
+    first_elem_ty: &PhpType,
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, "array_diff", 2)?;
-    require_set_op_result_type("array_diff", &PhpType::Str, &inst.result_php_type.codegen_repr())?;
+    require_set_op_result_type("array_diff", first_elem_ty, &inst.result_php_type.codegen_repr())?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(first, "x0")?;

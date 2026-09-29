@@ -1035,3 +1035,71 @@ echo $n, "\n";
     assert_eq!(out.stdout, "1140\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// The empty `[]` placeholder as the FIRST operand takes the other side's element type.
+///
+/// `array_merge([], $strings)` was filled and stamped correctly by the runtime, but its static
+/// result stayed `array<never>`, so every read answered the missing-element sentinel:
+/// `var_dump($m[0])` printed `NULL` and `foreach` echoed empty values. Main had the same gap for
+/// a boxed second operand (`array_merge([], [1, "two"])` printed nothing for `$m[1]`) and refused
+/// object or nested-array results at the checker. `array_pad([], $n, $v)` was refused for every
+/// pad type and `array_diff([], $strings)` for strings. The calls are DIRECT: a bare `array`
+/// parameter would box the operand and hide the static type. Runs under `--heap-debug`, with a
+/// loop over the new shapes. Review follow-up for #675; every expectation is php 8.4's output.
+#[test]
+fn test_array_builtins_with_empty_first_operand() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class B { public int $n = 4; }
+$s = ["alpha", "bravo"];
+$m = array_merge([], $s);
+echo count($m), ":";
+var_dump($m[0]);
+foreach ($m as $v) { echo $v, ","; }
+echo "\n";
+$mi = array_merge([], [1, 2]);
+echo "int=", count($mi), $mi[1], "\n";
+$mf = array_merge([], [1.5, 2.5]);
+echo "float=", count($mf), $mf[1], "\n";
+$mo = array_merge([], [new B(), new B()]);
+echo "obj=", count($mo), $mo[1]->n, "\n";
+$ma = array_merge([], [[1, 2], [3]]);
+echo "arr=", count($ma), count($ma[0]), $ma[1][0], "\n";
+$mm = array_merge([], [1, "two"]);
+echo "mixed=", count($mm), $mm[1], "\n";
+$p = array_pad([], 2, "s");
+echo "pad-str=", count($p), $p[0], $p[1], "\n";
+$pi = array_pad([], -3, 7);
+echo "pad-int=", count($pi), $pi[2], "\n";
+$d = array_diff([], $s);
+echo "diff-empty-first=", count($d), "\n";
+$c = array_chunk([], 2);
+echo "chunk-empty=", count($c), "\n";
+$n = 0;
+for ($i = 0; $i < 20 + ($argc > 5 ? 1 : 0); $i++) {
+    $n += count(array_merge([], $s)) + count(array_merge([], [new B()]));
+    $n += count(array_pad([], 3, "p" . $i)) + count(array_diff([], $s));
+}
+echo "loop=", $n, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "2:string(5) \"alpha\"\n",
+            "alpha,bravo,\n",
+            "int=22\n",
+            "float=22.5\n",
+            "obj=24\n",
+            "arr=223\n",
+            "mixed=2two\n",
+            "pad-str=2ss\n",
+            "pad-int=37\n",
+            "diff-empty-first=0\n",
+            "chunk-empty=0\n",
+            "loop=120\n",
+        )
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
