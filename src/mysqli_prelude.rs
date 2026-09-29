@@ -54,7 +54,17 @@ mod statement;
 /// pipeline (and the test harnesses) can record the "mysqli" PHP surface for
 /// `extension_loaded()` reporting using the same detection that decides
 /// prelude injection.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): the scan walks the whole
+/// program, so an embedder calling it without the CLI driver's wrapper gets the same stack budget.
 pub fn program_uses_mysqli(program: &[Stmt]) -> bool {
+    crate::compiler_stack::with_compiler_stack(|| {
+        program_uses_mysqli_on_compiler_stack(program)
+    })
+}
+
+/// The body of [`program_uses_mysqli`], run on the stack `with_compiler_stack` sized.
+fn program_uses_mysqli_on_compiler_stack(program: &[Stmt]) -> bool {
     detect::program_uses_mysqli(program)
 }
 
@@ -73,7 +83,23 @@ pub fn program_uses_mysqli(program: &[Stmt]) -> bool {
 /// reachability (`forced_groups`) exactly like `--with-pdo` — without it, a
 /// program with no static mysqli reference would have the forced surface
 /// dead-code-eliminated out of the binary.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
+/// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
+/// budget.
 pub fn inject_if_used(
+    program: Program,
+    force: bool,
+    php_version: PhpVersion,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
+    crate::compiler_stack::with_compiler_stack(|| {
+        inject_if_used_on_compiler_stack(program, force, php_version, inventory)
+    })
+}
+
+/// The body of [`inject_if_used`], run on the stack `with_compiler_stack` sized.
+fn inject_if_used_on_compiler_stack(
     program: Program,
     force: bool,
     php_version: PhpVersion,

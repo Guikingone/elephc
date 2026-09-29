@@ -47,7 +47,38 @@ use super::*;
 /// turns [`PreloadVerdict::compile_error`] into a hard compile failure BEFORE injection, exactly
 /// as reference PHP fatals at startup before running a line of the script, and independently of
 /// whether the program calls any OPcache function at all.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
+/// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
+/// budget.
 pub fn inject_if_used(
+    program: Program,
+    php_version: PhpVersion,
+    web: bool,
+    entry_path: Option<&str>,
+    manifest: &[ScriptEntry],
+    overrides: &[(String, String)],
+    preload: Option<&PreloadStatistics>,
+    strict: bool,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> (Program, ManifestBakeSites) {
+    crate::compiler_stack::with_compiler_stack(|| {
+        inject_if_used_on_compiler_stack(
+            program,
+            php_version,
+            web,
+            entry_path,
+            manifest,
+            overrides,
+            preload,
+            strict,
+            inventory,
+        )
+    })
+}
+
+/// The body of [`inject_if_used`], run on the stack `with_compiler_stack` sized.
+fn inject_if_used_on_compiler_stack(
     program: Program,
     php_version: PhpVersion,
     web: bool,
