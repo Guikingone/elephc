@@ -274,13 +274,16 @@ fn emit_offset_get_aarch64(emitter: &mut Emitter) {
 /// Throws TypeError if offset is not an integer; throws OutOfBoundsException if out of range.
 fn emit_offset_set_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_offset_set");
-    emitter.instruction("sub sp, sp, #80");                                     // reserve offset-set frame
-    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #64");                                    // establish offset-set frame
+    emitter.instruction("sub sp, sp, #112");                                    // reserve offset-set frame
+    emitter.instruction("stp x29, x30, [sp, #96]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #96");                                    // establish offset-set frame
     emitter.instruction("str x0, [sp, #0]");                                    // save receiver
     emitter.instruction("str x1, [sp, #8]");                                    // save boxed offset
     emitter.instruction("str x2, [sp, #16]");                                   // save owned Mixed value
+    emitter.instruction("ldr x0, [sp, #16]");                                   // the owned value, guarded while the offset converts
+    super::super::exceptions::guards::guard(emitter, 64, 96);
     emit_unbox_saved_offset_aarch64(emitter);
+    super::super::exceptions::guards::unguard(emitter, 64, 96);
     emitter.instruction("ldr x12, [sp, #24]");                                  // reload offset tag
     emitter.instruction(&format!("cmp x12, #{}", INT_TAG));                     // fixed-array offsets must be integers
     emitter.instruction("b.ne __rt_spl_fixed_offset_set_type_throw");           // reject non-integer offsets
@@ -307,14 +310,14 @@ fn emit_offset_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload rejected owned Mixed value
     emitter.instruction("bl __rt_decref_mixed");                                // release rejected value before throwing
     emitter.instruction("ldr x2, [sp, #32]");                                   // the rejected offset's type-name row
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer before throwing
-    emitter.instruction("add sp, sp, #80");                                     // release offset-set frame before throwing
+    emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer before throwing
+    emitter.instruction("add sp, sp, #112");                                    // release offset-set frame before throwing
     emit_fixed_offset_type_throw_aarch64(emitter);
     emitter.label("__rt_spl_fixed_offset_set_range_throw");
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload rejected owned Mixed value
     emitter.instruction("bl __rt_decref_mixed");                                // release rejected value
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer before throwing
-    emitter.instruction("add sp, sp, #80");                                     // release offset-set frame before throwing
+    emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer before throwing
+    emitter.instruction("add sp, sp, #112");                                    // release offset-set frame before throwing
     emit_throw_exception_aarch64(
         emitter,
         "_spl_out_of_bounds_exception_class_id",
@@ -322,8 +325,8 @@ fn emit_offset_set_aarch64(emitter: &mut Emitter) {
         SPL_FIXED_OFFSET_RANGE_MSG_LEN,
     );
     emitter.label("__rt_spl_fixed_offset_set_done");
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #80");                                     // release offset-set frame
+    emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #112");                                    // release offset-set frame
     emitter.instruction("ret");                                                 // return void
 }
 
@@ -943,11 +946,14 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_offset_set");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for offsetSet
     emitter.instruction("mov rbp, rsp");                                        // establish offsetSet frame
-    emitter.instruction("sub rsp, 64");                                         // reserve receiver, offset, value, tag, payload, and cursor spills
+    emitter.instruction("sub rsp, 96");                                         // reserve receiver, offset, value, tag, payload, and cursor spills
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save receiver
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save boxed offset
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save owned Mixed value
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // the owned value, guarded while the offset converts
+    super::super::exceptions::guards::guard(emitter, 64, 96);
     emit_unbox_saved_offset_x86_64(emitter);
+    super::super::exceptions::guards::unguard(emitter, 64, 96);
     emitter.instruction("mov r12, QWORD PTR [rbp - 32]");                       // reload offset tag
     emitter.instruction(&format!("cmp r12, {}", INT_TAG));                      // fixed-array offsets must be integers
     emitter.instruction("jne __rt_spl_fixed_offset_set_type_throw");            // reject non-integer offsets
@@ -974,13 +980,13 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload rejected owned Mixed value
     emitter.instruction("call __rt_decref_mixed");                              // release rejected value before throwing
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // the rejected offset's type-name row
-    emitter.instruction("add rsp, 64");                                         // release offsetSet frame before throwing
+    emitter.instruction("add rsp, 96");                                         // release offsetSet frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
     emit_fixed_offset_type_throw_x86_64(emitter);
     emitter.label("__rt_spl_fixed_offset_set_range_throw");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload rejected owned Mixed value
     emitter.instruction("call __rt_decref_mixed");                              // release rejected value
-    emitter.instruction("add rsp, 64");                                         // release offsetSet frame before throwing
+    emitter.instruction("add rsp, 96");                                         // release offsetSet frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
     emit_throw_exception_x86_64(
         emitter,
@@ -989,7 +995,7 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
         SPL_FIXED_OFFSET_RANGE_MSG_LEN,
     );
     emitter.label("__rt_spl_fixed_offset_set_done");
-    emitter.instruction("add rsp, 64");                                         // release offsetSet frame
+    emitter.instruction("add rsp, 96");                                         // release offsetSet frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return void
 }

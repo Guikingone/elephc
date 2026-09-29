@@ -1114,15 +1114,20 @@ fn emit_offset_index_prefix_aarch64(
 /// logical offset to physical slot. Throws TypeError or OutOfRangeException on invalid offset.
 fn emit_offset_set_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_offset_set");
-    emitter.instruction("sub sp, sp, #80");                                     // reserve offset-set helper frame
-    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #64");                                    // establish a frame for nested release/append calls
+    emitter.instruction("sub sp, sp, #112");                                    // reserve offset-set helper frame
+    emitter.instruction("stp x29, x30, [sp, #96]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #96");                                    // establish a frame for nested release/append calls
     emitter.instruction("str x0, [sp, #0]");                                    // save receiver
     emitter.instruction("str x1, [sp, #8]");                                    // save boxed offset argument
     emitter.instruction("str x2, [sp, #16]");                                   // save owned Mixed value argument
-    emitter.instruction("mov x0, x1");                                          // pass the owned boxed offset to the converter
+    emitter.instruction("ldr x0, [sp, #16]");                                   // the owned value, guarded while the offset converts
+    super::super::exceptions::guards::guard(emitter, 64, 96);
+    emitter.instruction("ldr x0, [sp, #8]");                                    // pass the owned boxed offset to the converter
     emitter.instruction(&format!("mov x1, #{}", SPL_OFFSET_MODE_LIST_NULLABLE)); // the list's rules, reporting a null to append
     emitter.instruction("bl __rt_spl_offset_convert");                          // convert the offset and release its box
+    emitter.instruction("stp x0, x1, [sp, #24]");                               // keep the status and index across the unguard
+    super::super::exceptions::guards::unguard(emitter, 64, 96);
+    emitter.instruction("ldp x0, x1, [sp, #24]");                               // reload the status and index
     emitter.instruction("str x0, [sp, #24]");                                   // save the status (the int or null tag, or a type error)
     emitter.instruction("str x1, [sp, #32]");                                   // save the integer index or the rejected type's name row
     emitter.instruction("ldr x12, [sp, #24]");                                  // reload offset tag
@@ -1164,14 +1169,14 @@ fn emit_offset_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload rejected owned Mixed value
     emitter.instruction("bl __rt_decref_mixed");                                // release rejected value before throwing
     emitter.instruction("ldr x2, [sp, #32]");                                   // the rejected offset's type-name row
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer before throwing
-    emitter.instruction("add sp, sp, #80");                                     // release offset-set frame before throwing
+    emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer before throwing
+    emitter.instruction("add sp, sp, #112");                                    // release offset-set frame before throwing
     emit_dll_offset_type_throw_aarch64(emitter, "set");
     emitter.label("__rt_spl_dll_offset_set_range_throw");
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload owned Mixed value rejected by invalid offset
     emitter.instruction("bl __rt_decref_mixed");                                // release rejected value to avoid leaking argument ownership
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer before throwing
-    emitter.instruction("add sp, sp, #80");                                     // release offset-set frame before throwing
+    emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer before throwing
+    emitter.instruction("add sp, sp, #112");                                    // release offset-set frame before throwing
     emit_throw_exception_aarch64(
         emitter,
         "_spl_out_of_range_exception_class_id",
@@ -1179,8 +1184,8 @@ fn emit_offset_set_aarch64(emitter: &mut Emitter) {
         SPL_DLL_OFFSET_SET_RANGE_MSG_LEN,
     );
     emitter.label("__rt_spl_dll_offset_set_done");
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #80");                                     // release offset-set helper frame
+    emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #112");                                    // release offset-set helper frame
     emitter.instruction("ret");                                                 // return void
 }
 
@@ -2305,13 +2310,20 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_offset_set");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for offsetSet
     emitter.instruction("mov rbp, rsp");                                        // establish offsetSet frame
-    emitter.instruction("sub rsp, 64");                                         // reserve receiver, offset, value, tag, payload, and storage spills
+    emitter.instruction("sub rsp, 96");                                         // reserve receiver, offset, value, tag, payload, and storage spills
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save receiver
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save boxed offset argument
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save owned Mixed value argument
-    emitter.instruction("mov rdi, rsi");                                        // pass the owned boxed offset to the converter
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // the owned value, guarded while the offset converts
+    super::super::exceptions::guards::guard(emitter, 64, 96);
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // pass the owned boxed offset to the converter
     emitter.instruction(&format!("mov rsi, {}", SPL_OFFSET_MODE_LIST_NULLABLE)); // the list's rules, reporting a null to append
     emitter.instruction("call __rt_spl_offset_convert");                        // convert the offset and release its box
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // keep the status across the unguard
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // keep the index or name row across the unguard
+    super::super::exceptions::guards::unguard(emitter, 64, 96);
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the status
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the index or name row
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the status (the int or null tag, or a type error)
     emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // save the integer index or the rejected type's name row
     emitter.instruction("mov r12, QWORD PTR [rbp - 32]");                       // reload offset tag
@@ -2354,13 +2366,13 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload rejected owned Mixed value
     emitter.instruction("call __rt_decref_mixed");                              // release rejected value before throwing
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // the rejected offset's type-name row
-    emitter.instruction("add rsp, 64");                                         // release offsetSet frame before throwing
+    emitter.instruction("add rsp, 96");                                         // release offsetSet frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
     emit_dll_offset_type_throw_x86_64(emitter, "set");
     emitter.label("__rt_spl_dll_offset_set_range_throw");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload owned Mixed value rejected by invalid offset
     emitter.instruction("call __rt_decref_mixed");                              // release rejected value to avoid leaking argument ownership
-    emitter.instruction("add rsp, 64");                                         // release offsetSet frame before throwing
+    emitter.instruction("add rsp, 96");                                         // release offsetSet frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
     emit_throw_exception_x86_64(
         emitter,
@@ -2369,7 +2381,7 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
         SPL_DLL_OFFSET_SET_RANGE_MSG_LEN,
     );
     emitter.label("__rt_spl_dll_offset_set_done");
-    emitter.instruction("add rsp, 64");                                         // release offsetSet frame
+    emitter.instruction("add rsp, 96");                                         // release offsetSet frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return void
 }

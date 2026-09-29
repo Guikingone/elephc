@@ -161,6 +161,14 @@ pub(crate) fn emit_runtime_data_fixed(
     for (symbol, len) in crate::codegen_support::runtime::spl::SPL_OFFSET_TYPE_ROWS {
         out.push_str(&format!("    .quad {symbol}\n    .quad {len}\n"));
     }
+    out.push_str(&format!(
+        ".globl _spl_float_string_prefix\n_spl_float_string_prefix:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::spl::SPL_FLOAT_STRING_PREFIX
+    ));
+    out.push_str(&format!(
+        ".globl _spl_float_string_suffix\n_spl_float_string_suffix:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::spl::SPL_FLOAT_STRING_SUFFIX
+    ));
     out.push_str(".globl _sprintf_closure_class_name\n_sprintf_closure_class_name:\n    .ascii \"Closure\"\n");
     out.push_str(".globl _mbstring_tostring_name\n_mbstring_tostring_name:\n    .ascii \"__toString\"\n");
     out.push_str(".globl _mbstring_warning_prefix\n_mbstring_warning_prefix:\n    .ascii \"Warning: \"\n");
