@@ -377,7 +377,7 @@ pub(crate) fn simulate_switch_body_constant_env(
 ///
 /// - `cases`: All switch cases with their expressions and bodies
 /// - `default`: Optional default case body
-/// - `entry_case`: Starting case index (None means start from default after all cases)
+/// - `entry_case`: Starting case index (None means entering at the default, where it sits)
 /// - `incoming_env`: Constant environment before the switch
 /// - Returns: Some(updated env) if execution can reach a terminal point, None if block exits
 pub(crate) fn simulate_switch_entry_constant_env(
@@ -387,25 +387,30 @@ pub(crate) fn simulate_switch_entry_constant_env(
     incoming_env: &ConstantEnv,
 ) -> Option<ConstantEnv> {
     let mut env = incoming_env.clone();
+    // The bodies in execution order: `default` sits at its source position among the cases,
+    // so falling off a case runs the default only when the default follows it, and falling off
+    // the default runs the cases written after it.
+    let default_position = default
+        .map(|body| crate::optimize::control::switch_default_position(cases, body));
+    let mut bodies: Vec<&[Stmt]> = cases.iter().map(|(_, body)| body.as_slice()).collect();
+    if let (Some(body), Some(position)) = (default, default_position) {
+        bodies.insert(position, body);
+    }
+    let start = match (entry_case, default_position) {
+        (Some(index), Some(position)) if index >= position => index + 1,
+        (Some(index), _) => index,
+        (None, Some(position)) => position,
+        (None, None) => return Some(env),
+    };
 
-    if let Some(start_index) = entry_case {
-        for (_, body) in cases.iter().skip(start_index) {
-            match simulate_switch_body_constant_env(body, env) {
-                SwitchConstantPathOutcome::FallsThrough(updated) => env = updated,
-                SwitchConstantPathOutcome::Breaks(updated) => return Some(updated),
-                SwitchConstantPathOutcome::ExitsCurrentBlock => return None,
-            }
+    for body in &bodies[start..] {
+        match simulate_switch_body_constant_env(body, env) {
+            SwitchConstantPathOutcome::FallsThrough(updated) => env = updated,
+            SwitchConstantPathOutcome::Breaks(updated) => return Some(updated),
+            SwitchConstantPathOutcome::ExitsCurrentBlock => return None,
         }
     }
-
-    match default {
-        Some(default_body) => match simulate_switch_body_constant_env(default_body, env) {
-            SwitchConstantPathOutcome::FallsThrough(updated)
-            | SwitchConstantPathOutcome::Breaks(updated) => Some(updated),
-            SwitchConstantPathOutcome::ExitsCurrentBlock => None,
-        },
-        None => Some(env),
-    }
+    Some(env)
 }
 
 /// Merges constant environments across all paths through a switch statement by

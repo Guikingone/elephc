@@ -136,6 +136,10 @@ This pass is still intentionally local and conservative. Today it focuses on:
 - simple `if` merges where every fallthrough branch agrees on the same scalar value
 - conservative `switch` merges when all possible exit paths agree on the same scalar value
 - known-subject `switch` merges that only simulate the selected entry and its fallthrough suffix
+- `switch` bodies and labels propagated from the facts they can actually see: each label after
+  the writes of the labels before it, and each body with the writes of every label and of every
+  body that can fall into it invalidated. The exit simulation runs `default` at its source
+  position among the cases, so falling off a case reaches the default only when it follows
 - conservative `try` / `catch` merges when every reachable fallthrough handler path agrees on the same scalar value
 - non-throwing `try` bodies that keep unreachable `catch` writes out of the post-`try` constant environment
 - recognizing uniform scalar assignment outcomes from local merge expressions such as `?:` and `match`
