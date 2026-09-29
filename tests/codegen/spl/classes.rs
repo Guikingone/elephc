@@ -703,3 +703,82 @@ echo $n, "\n";
     assert_eq!(out.stdout, "500\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// The linked-list family's `int $index` takes a float only when it fits an int: `INF`, `-INF`
+/// and `NAN` are `TypeError(... float given)` and a numeric string spelling an out-of-range
+/// value (`"1e19"`, `"18446744073709551616"`) is `... string given`, where they used to address a
+/// wrapped slot. A lossy float or float-string truncates with PHP's deprecation, and an exact
+/// one (`"1.0"`) converts silently. `SplFixedArray` keeps the array-key float diagnostics PHP 8.4
+/// emits for it. Review follow-up for #1623.
+#[test]
+fn test_spl_offset_float_rules_follow_each_container() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $no, string $msg) { echo "[diag] ", $msg, "\n"; return true; });
+function mk(): SplDoublyLinkedList { $o = new SplDoublyLinkedList(); $o->push("zero"); $o->push("one"); $o->push("two"); return $o; }
+$l = mk();
+foreach ([INF, -INF, NAN, 1.5] as $k) {
+    try { echo $l[$k], "\n"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+foreach (["1e19", "18446744073709551616", "2.5", "1.0"] as $k) {
+    try { echo $l[$k], "\n"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+try { $l->offsetSet(INF, "x"); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { unset($l[NAN]); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+echo $l[0], count($l), "\n";
+$f = new SplFixedArray(3);
+$f[0] = "zero"; $f[1] = "one";
+echo $f[1.5], "|", $f[INF], "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "SplDoublyLinkedList::offsetGet(): Argument #1 ($index) must be of type int, float given\n",
+            "SplDoublyLinkedList::offsetGet(): Argument #1 ($index) must be of type int, float given\n",
+            "SplDoublyLinkedList::offsetGet(): Argument #1 ($index) must be of type int, float given\n",
+            "[diag] Implicit conversion from float 1.5 to int loses precision\n",
+            "one\n",
+            "SplDoublyLinkedList::offsetGet(): Argument #1 ($index) must be of type int, string given\n",
+            "SplDoublyLinkedList::offsetGet(): Argument #1 ($index) must be of type int, string given\n",
+            "[diag] Implicit conversion from float-string \"2.5\" to int loses precision\n",
+            "two\n",
+            "one\n",
+            "SplDoublyLinkedList::offsetSet(): Argument #1 ($index) must be of type ?int, float given\n",
+            "SplDoublyLinkedList::offsetUnset(): Argument #1 ($index) must be of type int, float given\n",
+            "zero3\n",
+            "[diag] Implicit conversion from float 1.5 to int loses precision\n",
+            "one|[diag] The float INF is not representable as an int, cast occurred\n",
+            "zero\n",
+        )
+    );
+}
+
+/// A float offset's diagnostic runs the user error handler while `offsetSet()` still owns the
+/// value; a handler that throws must not strand it. The value is registered with the unwinder
+/// across the conversion, so both containers stay heap-clean over a loop. Review follow-up for
+/// #1623.
+#[test]
+fn test_spl_offset_set_with_throwing_float_diagnostic_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+set_error_handler(function (int $no, string $msg) { throw new RuntimeException($msg); });
+$n = 0;
+for ($i = 0; $i < 40 + ($argc > 5 ? 1 : 0); $i++) {
+    $f = new SplFixedArray(3);
+    try { $f[1.5] = "v" . $i; } catch (RuntimeException $e) { $n += 1; }
+    $l = new SplDoublyLinkedList();
+    $l->push("a"); $l->push("b");
+    try { $l[1.5] = "w" . $i; } catch (RuntimeException $e) { $n += 1; }
+    try { $l["1.5"] = "x" . $i; } catch (RuntimeException $e) { $n += 1; }
+    try { $v = $l["1.5"]; } catch (RuntimeException $e) { $n += 1; }
+    $n += count($l);
+}
+restore_error_handler();
+echo $n, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "240\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
