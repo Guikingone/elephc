@@ -26,7 +26,7 @@ pub(super) fn lower_array_map_mixed_callback(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmp x0, #8");                              // a null callback returns the single source array unchanged
-            ctx.emitter.instruction(&format!("b.eq {identity}"));               // bypass callable resolution for the identity form
+            abi::emit_branch_if_equal_wide(ctx.emitter, &identity);             // bypass callable resolution and its runtime-name case tables
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp rax, 8");                              // a null callback returns the single source array unchanged

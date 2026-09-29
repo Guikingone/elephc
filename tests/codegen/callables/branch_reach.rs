@@ -1,5 +1,5 @@
 //! Purpose:
-//! Pins the text-section placement of runtime-selected callable dispatch.
+//! Pins the branch forms and text-section placement of runtime-selected callable dispatch.
 //!
 //! Called from:
 //! - The codegen integration harness through the callables module.
@@ -7,13 +7,15 @@
 //! Key details:
 //! - Inline callback wrappers open their own ELF text section; the caller's section must be
 //!   reopened after them so the caller's conditional branches never become cross-section.
+//! - AArch64 `b.cond` reaches only ±1 MiB, so edges that skip runtime-name case tables use an
+//!   inverted `b.cond` over an unconditional `b`; x86_64 keeps its rel32 `jcc`.
 
 use crate::support::*;
 use std::collections::HashMap;
 use std::fs;
 
 /// Runtime-selected callables passed to `array_map()`, `array_filter()`, a variable call, and
-/// `pcntl_signal()`, the first of which emits an inline descriptor callback wrapper.
+/// `pcntl_signal()`, which together emit every widened Mixed callable edge outside eval.
 const MIXED_CALLABLE_FIXTURE: &str = r#"<?php
 class Inv {
     public function __invoke($x) { return "inv:" . $x; }
@@ -26,6 +28,16 @@ echo json_encode(array_filter(["a"], $callback)), "\n";
 echo $callback("z"), "\n";
 pcntl_signal(SIGUSR1, $callback);
 "#;
+
+/// Label stems of the Mixed callable edges that jump over runtime-name case tables.
+const WIDE_EDGE_STEMS: &[&str] = &[
+    "array_map_null_callback",
+    "array_filter_null_callback",
+    "mixed_callable_array",
+    "mixed_callable_object",
+    "pcntl_signal_mixed_scalar",
+    "pcntl_signal_mixed_bool_error",
+];
 
 /// Emits the fixture's assembly for one target through the CLI and returns its text.
 fn emit_fixture_assembly(target: &str) -> String {
@@ -83,6 +95,13 @@ fn cross_section_conditional_branches(assembly: &str) -> Vec<String> {
         .collect()
 }
 
+/// Returns true when `label` is one minted label of `stem`, such as `.L_eir_main_<stem>_12`.
+fn is_stem_label(label: &str, stem: &str) -> bool {
+    label
+        .rsplit_once('_')
+        .is_some_and(|(head, id)| id.bytes().all(|b| b.is_ascii_digit()) && head.ends_with(stem))
+}
+
 /// Verifies inline callback wrappers leave the caller's conditional branches in its section.
 ///
 /// The tail of a function that emitted an `array_map()` descriptor wrapper used to continue
@@ -99,5 +118,34 @@ fn test_inline_callback_wrappers_keep_conditional_branches_in_the_callers_sectio
             "{target}: cross-section conditional branches:\n{}",
             crossing.join("\n")
         );
+    }
+}
+
+/// Verifies the Mixed callable edges over runtime-name case tables are widened on AArch64.
+///
+/// The code those edges skip grows with the program's callable names, so a ±1 MiB `b.eq` there
+/// stops linking in large programs (#1444). x86_64 keeps its rel32 `je`.
+#[test]
+fn test_mixed_callable_edges_over_case_tables_use_wide_aarch64_branches() {
+    for target in ["linux-aarch64", "macos-aarch64", "linux-x86_64"] {
+        let assembly = emit_fixture_assembly(target);
+        let lines = assembly.lines().map(str::trim).collect::<Vec<_>>();
+        for stem in WIDE_EDGE_STEMS {
+            let reaches = |line: &str, mnemonic: &str| {
+                line.strip_prefix(mnemonic).is_some_and(|label| is_stem_label(label, stem))
+            };
+            if target.ends_with("x86_64") {
+                assert!(lines.iter().any(|line| reaches(line, "je ")), "{target}: no je to {stem}");
+                continue;
+            }
+            assert!(
+                !lines.iter().any(|line| reaches(line, "b.eq ")),
+                "{target}: near b.eq to {stem}"
+            );
+            assert!(
+                lines.windows(2).any(|pair| pair[0] == "b.ne 1f" && reaches(pair[1], "b ")),
+                "{target}: no inverted b.ne over an unconditional b to {stem}"
+            );
+        }
     }
 }
