@@ -504,9 +504,9 @@ pub(crate) fn lower_sleep(
 
 /// Lowers `strtotime(datetime[, baseTimestamp])` through the shared parser runtime helper.
 ///
-/// Returns PHP's `int|false`: the `__rt_strtotime` `i64::MIN` parse-failure sentinel is boxed as
-/// `Mixed` `false`, and every other value (including a real `-1` pre-epoch timestamp) is boxed as
-/// a `Mixed` integer, so `=== false`, `=== -1`, and `echo` all observe the distinct results.
+/// Returns PHP's `int|false`: a parse failure (the `__rt_strtotime` success flag is clear) is boxed
+/// as `Mixed` `false`, and every parsed timestamp (including a real `-1` and a real `i64::MIN`) is
+/// boxed as a `Mixed` integer, so `=== false`, `=== -1`, and `echo` all observe distinct results.
 /// Supports PHP's optional `$baseTimestamp`. (The `__elephc_strtotime_raw` alias keeps the plain
 /// `-1` integer shape for the synthetic `DateTime` internals.)
 pub(crate) fn lower_strtotime(
@@ -518,17 +518,16 @@ pub(crate) fn lower_strtotime(
     store_if_result(ctx, inst)
 }
 
-/// Boxes the `__rt_strtotime` integer result into a `Mixed` `int|false` cell: the `i64::MIN`
-/// parse-failure sentinel becomes boxed `false` (runtime tag 3), and any other value becomes a
-/// boxed integer (runtime tag 0), preserving a genuine `-1` timestamp as a distinct integer.
+/// Boxes the `__rt_strtotime` integer result into a `Mixed` `int|false` cell: a cleared success
+/// flag (`x1`/`rdx`) becomes boxed `false` (runtime tag 3), and a parsed timestamp becomes a boxed
+/// integer (runtime tag 0). Deciding on the flag rather than on the value keeps every timestamp an
+/// integer, a genuine `-1` and a genuine `i64::MIN` (`@-9223372036854775808`) included.
 fn emit_box_strtotime_int_or_false(ctx: &mut FunctionContext<'_>) {
     let false_label = ctx.next_label("strtotime_box_false");
     let done_label = ctx.next_label("strtotime_box_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("movz x13, #0x8000, lsl #48");              // load the i64::MIN parse-failure sentinel
-            ctx.emitter.instruction("cmp x0, x13");                             // did the parse fail?
-            ctx.emitter.instruction(&format!("b.eq {}", false_label));          // failure → box PHP false instead of an integer
+            ctx.emitter.instruction(&format!("cbz x1, {}", false_label));       // success flag clear → box PHP false instead of an integer
             ctx.emitter.instruction("mov x1, x0");                              // Mixed payload low word = the parsed timestamp
             ctx.emitter.instruction("mov x2, #0");                              // integer payloads do not use the high word
             ctx.emitter.instruction("mov x0, #0");                              // runtime tag 0 = int
@@ -542,9 +541,8 @@ fn emit_box_strtotime_int_or_false(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.label(&done_label);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("movabs r10, -9223372036854775808");        // load the i64::MIN parse-failure sentinel
-            ctx.emitter.instruction("cmp rax, r10");                            // did the parse fail?
-            ctx.emitter.instruction(&format!("je {}", false_label));            // failure → box PHP false instead of an integer
+            ctx.emitter.instruction("test rdx, rdx");                           // did the parse succeed?
+            ctx.emitter.instruction(&format!("jz {}", false_label));            // success flag clear → box PHP false instead of an integer
             ctx.emitter.instruction("mov rdi, rax");                            // Mixed payload low word = the parsed timestamp
             ctx.emitter.instruction("xor esi, esi");                            // integer payloads do not use the high word
             ctx.emitter.instruction("mov rax, 0");                              // runtime tag 0 = int
@@ -563,14 +561,14 @@ fn emit_box_strtotime_int_or_false(ctx: &mut FunctionContext<'_>) {
 /// Lowers the internal `__elephc_strtotime_raw(datetime[, baseTimestamp])` alias.
 ///
 /// Backs the synthetic `DateTime` constructor and `modify()`. Marshals the same runtime ABI
-/// as `strtotime`, but maps the `i64::MIN` parse-failure sentinel to `-1` so callers store the
-/// timestamp directly as the legacy `-1` in-object failure value.
+/// as `strtotime`, but maps a parse failure to `-1` so callers store the timestamp directly as
+/// the legacy `-1` in-object failure value.
 pub(crate) fn lower_elephc_strtotime_raw(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     emit_strtotime_marshal(ctx, inst, "__elephc_strtotime_raw")?;
-    emit_strtotime_sentinel_to_minus_one(ctx);
+    emit_strtotime_failure_to_minus_one(ctx);
     store_if_result(ctx, inst)
 }
 
@@ -659,24 +657,22 @@ fn emit_strtotime_marshal(
     Ok(())
 }
 
-/// Maps the `__rt_strtotime` `i64::MIN` parse-failure sentinel to `-1` in the integer result.
+/// Maps a failed `__rt_strtotime` parse (success flag clear) to `-1` in the integer result.
 ///
-/// Keeps `-1` itself usable as a real pre-epoch timestamp: only the sentinel is rewritten, so
-/// the synthetic `DateTime` callers that store the raw integer observe PHP's `false`-on-failure
-/// contract as the legacy `-1` in-object value.
-fn emit_strtotime_sentinel_to_minus_one(ctx: &mut FunctionContext<'_>) {
+/// Keeps `-1` itself usable as a real pre-epoch timestamp: only a failure is rewritten, so the
+/// synthetic `DateTime` callers that store the raw integer observe PHP's `false`-on-failure
+/// contract as the legacy `-1` in-object value, and a parsed `i64::MIN` stays a timestamp.
+fn emit_strtotime_failure_to_minus_one(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("movz x13, #0x8000, lsl #48");              // load the i64::MIN parse-failure sentinel
-            ctx.emitter.instruction("cmp x0, x13");                             // did the parse fail?
             ctx.emitter.instruction("mov x13, #-1");                            // legacy in-object failure value
-            ctx.emitter.instruction("csel x0, x13, x0, eq");                    // sentinel → -1, otherwise keep the timestamp
+            ctx.emitter.instruction("cmp x1, #0");                              // did the parse fail (success flag clear)?
+            ctx.emitter.instruction("csel x0, x13, x0, eq");                    // failure → -1, otherwise keep the timestamp
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("movabs r10, -9223372036854775808");        // load the i64::MIN parse-failure sentinel
-            ctx.emitter.instruction("cmp rax, r10");                            // did the parse fail?
             ctx.emitter.instruction("mov r10, -1");                             // legacy in-object failure value
-            ctx.emitter.instruction("cmove rax, r10");                          // sentinel → -1, otherwise keep the timestamp
+            ctx.emitter.instruction("test rdx, rdx");                           // did the parse fail (success flag clear)?
+            ctx.emitter.instruction("cmovz rax, r10");                          // failure → -1, otherwise keep the timestamp
         }
     }
 }

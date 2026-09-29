@@ -466,6 +466,15 @@ Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are
   `class_implements()` lists only the directly declared interfaces; it omits their transitive
   parents and the implicit `UnitEnum`/`BackedEnum` interfaces. An enum declared inside `eval()`
   already reports both, like PHP.
+- `strtotime()` answers `false` for some strings PHP parses. After an `@<timestamp>` it accepts
+  only the one timezone token PHP ignores (`"@123 UTC"`, `"@123abc"`); a relative offset, time,
+  zone identifier, UTC offset, or strtotime keyword after the epoch (`"@123 +1 day"`,
+  `"@123 12:30"`, `"@123 Europe/Rome"`, `"@123 noon"`) is not evaluated. An ISO date needs a
+  four-digit year and two-digit time fields (`"99-01-01"` and `"2020-01-05 9:30"` are `false`),
+  and a military zone letter after a time (`"2024-06-15 12:30x"`, which PHP reads as UTC-11) is
+  not recognized. Inside `eval()`, `strtotime()` supports only `now` and zero-padded ISO dates,
+  and answers `-1` rather than `false` for anything else. See [System & I/O](./system-and-io.md)
+  for the forms that are supported.
 - `empty($box['k'])` on a **nullable static property** holding an `ArrayAccess` object
   (`public static ?Box $box`) calls `offsetGet()` without asking `offsetExists()` first, where
   PHP asks `offsetExists()` and skips `offsetGet()` for a missing offset. That property reads as
