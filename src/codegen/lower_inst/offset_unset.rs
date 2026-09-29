@@ -80,20 +80,37 @@ pub(super) fn lower_offset_unset(ctx: &mut FunctionContext<'_>, inst: &Instructi
         }
     }
     ctx.emitter.label(&object);
+    // `offsetUnset()` receives the offset exactly as written (`"12"` stays a string, `1.5` a
+    // float), so the key is boxed from its own value rather than normalized as an array key.
+    // The helper takes ownership of that box: a borrowed `mixed` key is retained first.
+    let key_ty = ctx.value_php_type(key)?;
+    ctx.load_value_to_result(key)?;
+    if key_ty.codegen_repr() == PhpType::Mixed {
+        abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    } else {
+        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &key_ty);
+    }
+    let boxed_key = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, boxed_key);
+    // The runtime's SPL containers still take the normalized key; see the helper.
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x9, [x9, #8]");                        // load the unboxed object
-            abi::emit_push_reg(ctx.emitter, "x9");
             hashes::materialize_hash_key_aarch64(ctx, key)?;
-            abi::emit_pop_reg(ctx.emitter, "x0");
+            ctx.emitter.instruction("mov x3, x2");                              // pass the normalized key high word
+            ctx.emitter.instruction("mov x2, x1");                              // pass the normalized key low word
+            abi::emit_pop_reg(ctx.emitter, "x1");
+            ctx.load_value_to_reg(cell, "x9")?;
+            ctx.emitter.instruction("ldr x0, [x9, #8]");                        // pass the unboxed object
             abi::emit_call_label(ctx.emitter, "__rt_mixed_object_offset_unset");
             ctx.emitter.instruction(&format!("b {done}"));                      // the object answered through offsetUnset or threw
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov r10, QWORD PTR [r10 + 8]");            // load the unboxed object
-            abi::emit_push_reg(ctx.emitter, "r10");
             hashes::materialize_hash_key_x86_64(ctx, key)?;
-            abi::emit_pop_reg(ctx.emitter, "rdi");
+            ctx.emitter.instruction("mov rcx, rdx");                            // pass the normalized key high word
+            ctx.emitter.instruction("mov rdx, rsi");                            // pass the normalized key low word
+            abi::emit_pop_reg(ctx.emitter, "rsi");
+            ctx.load_value_to_reg(cell, "r10")?;
+            ctx.emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");            // pass the unboxed object
             abi::emit_call_label(ctx.emitter, "__rt_mixed_object_offset_unset");
             ctx.emitter.instruction(&format!("jmp {done}"));                    // the object answered through offsetUnset or threw
         }

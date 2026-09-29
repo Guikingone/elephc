@@ -599,3 +599,70 @@ var_dump($f->m);
     );
     assert_eq!(out, "bool(false)\n");
 }
+
+/// `offsetUnset()` receives the offset exactly as written when the object sits in a boxed
+/// property: `"12"` stays a string, `1.5` a float, `true` a bool and `null` null, rather than the
+/// normalized array key. An `SplFixedArray` in the same cell still accepts the numeric string
+/// `"1"`. Review follow-up for #750.
+#[test]
+fn test_unset_offset_of_boxed_array_access_passes_the_original_key() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag implements ArrayAccess {
+    public array $log = [];
+    public function offsetExists(mixed $o): bool { return false; }
+    public function offsetGet(mixed $o): mixed { return null; }
+    public function offsetSet(mixed $o, mixed $v): void {}
+    public function offsetUnset(mixed $o): void { $this->log[] = gettype($o) . ":" . var_export($o, true); }
+}
+class Loose { public $bag; }
+class Holder { public mixed $bag; }
+$l = new Loose();
+$l->bag = new Bag();
+$m = $argc > 50 ? 3 : "k" . $argc;
+unset($l->bag["12"], $l->bag[12], $l->bag[1.5], $l->bag[true], $l->bag[null], $l->bag[$m], $l->bag["x" . $argc]);
+echo implode(" ", $l->bag->log), "\n";
+$f = new SplFixedArray(3);
+$f[1] = "one";
+$h = new Holder();
+$h->bag = $f;
+unset($h->bag["1"]);
+var_dump($f[1]);
+"#,
+    );
+    assert_eq!(
+        out,
+        "string:'12' integer:12 double:1.5 boolean:true NULL:NULL string:'k1' string:'x1'\nNULL\n"
+    );
+}
+
+/// Boxing the original offset for `offsetUnset()` leaves the heap clean over a loop, for literal,
+/// computed and `mixed` keys alike. Review follow-up for #750.
+#[test]
+fn test_unset_offset_of_boxed_array_access_original_key_heap_is_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Bag implements ArrayAccess {
+    public array $log = [];
+    public function offsetExists(mixed $o): bool { return false; }
+    public function offsetGet(mixed $o): mixed { return null; }
+    public function offsetSet(mixed $o, mixed $v): void {}
+    public function offsetUnset(mixed $o): void { $this->log[] = gettype($o); }
+}
+class Loose { public $bag; }
+function run(int $argc): string {
+    $l = new Loose();
+    $l->bag = new Bag();
+    $m = $argc > 50 ? 3 : "k" . $argc;
+    unset($l->bag["12"], $l->bag[12], $l->bag[1.5], $l->bag[true], $l->bag[null], $l->bag[$m], $l->bag["x" . $argc]);
+    return implode(" ", $l->bag->log);
+}
+$out = "";
+for ($i = 0; $i < 40 + ($argc > 5 ? 1 : 0); $i++) { $out = run($argc); }
+echo $out, "\n";
+"#,
+    );
+    assert!(out.success, "program exited non-zero: {}", out.stderr);
+    assert_eq!(out.stdout, "string integer double boolean NULL string string\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
