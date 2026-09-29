@@ -100,30 +100,7 @@ impl Checker {
             }
         }
 
-        let provisional_sig = FunctionSig {
-            params: param_types.clone(),
-            param_type_exprs: decl
-                .param_types
-                .iter()
-                .cloned()
-                .chain(decl.variadic.iter().map(|_| decl.variadic_type.clone()))
-                .collect(),
-            param_attributes: decl.param_attributes.clone(),
-            defaults: decl.defaults.clone(),
-            return_type: self.provisional_return_type(decl),
-            declared_return: decl.return_type.is_some(),
-            by_ref_return: decl.by_ref_return,
-            ref_params: decl.ref_params.clone(),
-            deprecation: None,
-            is_generator: false,
-            declared_params: decl
-                .param_types
-                .iter()
-                .map(|type_ann| type_ann.is_some())
-                .chain(decl.variadic.iter().map(|_| decl.variadic_type.is_some()))
-                .collect(),
-            variadic: decl.variadic.clone(),
-        };
+        let provisional_sig = self.provisional_function_sig(decl, param_types.clone());
         self.functions.insert(name.to_string(), provisional_sig);
 
         let mut return_type = PhpType::Void;
@@ -333,6 +310,47 @@ impl Checker {
         }
 
         Ok(return_type)
+    }
+
+    /// Builds the *provisional* signature published before a free function's body is walked.
+    ///
+    /// Shared by the two places that publish one: `resolve_function_signature` (under the
+    /// function's own name) and the variant-group path in
+    /// `crate::types::checker::driver::functions` (under the group's PHP-visible name, which is
+    /// what a recursive call inside an include-loaded variant spells). Keeping one builder keeps
+    /// one provisional policy: a variant group used to publish its own copy with a hardcoded
+    /// `Int` return, so a recursive include-loaded `: string` function was rejected with
+    /// `return type expects Str, got Int` although the same function compiled when declared in
+    /// the main file (issue #635).
+    pub(in crate::types::checker) fn provisional_function_sig(
+        &self,
+        decl: &FnDecl,
+        param_types: Vec<(String, PhpType)>,
+    ) -> FunctionSig {
+        FunctionSig {
+            params: param_types,
+            param_type_exprs: decl
+                .param_types
+                .iter()
+                .cloned()
+                .chain(decl.variadic.iter().map(|_| decl.variadic_type.clone()))
+                .collect(),
+            param_attributes: decl.param_attributes.clone(),
+            defaults: decl.defaults.clone(),
+            return_type: self.provisional_return_type(decl),
+            declared_return: decl.return_type.is_some(),
+            by_ref_return: decl.by_ref_return,
+            ref_params: decl.ref_params.clone(),
+            deprecation: None,
+            is_generator: false,
+            declared_params: decl
+                .param_types
+                .iter()
+                .map(|type_ann| type_ann.is_some())
+                .chain(decl.variadic.iter().map(|_| decl.variadic_type.is_some()))
+                .collect(),
+            variadic: decl.variadic.clone(),
+        }
     }
 
     /// Picks the return type for the *provisional* signature published before a free
