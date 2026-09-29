@@ -303,6 +303,137 @@ echo serialize(unserialize("d:1.0E+20;")), "\n";
     assert_eq!(out, "bool(true)\nbool(true)\nd:1.0E+20;\n");
 }
 
+/// `serialize()` leaves out every typed property that was never initialized, whatever its
+/// visibility, and counts only the ones it writes, as PHP does. Reading such a slot used to print
+/// its uninitialized marker as a value, or crash on a string property. The round trip keeps the
+/// property uninitialized, so assigning it later serializes it normally. Measured on PHP 8.5.10.
+#[test]
+fn test_serialize_omits_uninitialized_typed_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class Account {
+    private int $id;
+    private int $version = 3;
+    protected string $owner;
+    protected string $label = 'main';
+    public ?int $limit = null;
+    public array $tags;
+    public float $rate;
+}
+$account = new Account();
+echo str_replace("\0", '~', serialize($account)), "\n";
+$copy = unserialize(serialize($account));
+echo get_class($copy), "\n";
+$copy->tags = ['a'];
+$copy->rate = 1.5;
+echo str_replace("\0", '~', serialize($copy)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "O:7:\"Account\":3:{s:16:\"~Account~version\";i:3;s:8:\"~*~label\";s:4:\"main\";",
+            "s:5:\"limit\";N;}\n",
+            "Account\n",
+            "O:7:\"Account\":5:{s:16:\"~Account~version\";i:3;s:8:\"~*~label\";s:4:\"main\";",
+            "s:5:\"limit\";N;s:4:\"tags\";a:1:{i:0;s:1:\"a\";}s:4:\"rate\";d:1.5;}\n",
+        )
+    );
+}
+
+/// `__sleep()` writes only the named properties that hold a value, and the count in front of the
+/// body covers exactly those: an uninitialized typed property (a `Closure` one included, which
+/// must not trigger the Closure refusal) is left out, as in PHP. The count is only known once
+/// every name was looked up, so it is written after the body and moved in front of it; nested
+/// `__sleep()` objects, a back-reference and a two-digit count keep the payload byte-exact and
+/// round-trippable. Measured on PHP 8.5.10.
+#[test]
+fn test_serialize_sleep_counts_only_initialized_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class Inner {
+    public int $id;
+    public string $tag = 'in';
+    public function __sleep(): array { return ['id', 'tag']; }
+}
+class Wide {
+    public int $p0 = 0; public int $p1 = 1; public int $p2 = 2; public int $p3 = 3;
+    public int $p4 = 4; public int $p5 = 5; public int $p6 = 6; public int $p7 = 7;
+    public int $p8 = 8; public int $p9 = 9; public int $p10 = 10; public int $gap;
+    public Inner $inner;
+    public ?Inner $again = null;
+    public array $list = [];
+    public function __sleep(): array {
+        return ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'p8', 'p9', 'p10', 'gap', 'inner', 'again', 'list'];
+    }
+}
+class Task {
+    public Closure $callback;
+    public int $n = 3;
+    public function __sleep(): array { return ['callback', 'n']; }
+}
+$wide = new Wide();
+$wide->inner = new Inner();
+$wide->again = $wide->inner;
+$wide->list = [new Inner(), 'x'];
+$wire = serialize($wide);
+echo $wire, "\n";
+$copy = unserialize($wire);
+echo $copy->p10, " ", $copy->inner->tag, " ", var_export($copy->again === $copy->inner, true), "\n";
+echo serialize(new Task()), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "O:4:\"Wide\":14:{s:2:\"p0\";i:0;s:2:\"p1\";i:1;s:2:\"p2\";i:2;s:2:\"p3\";i:3;",
+            "s:2:\"p4\";i:4;s:2:\"p5\";i:5;s:2:\"p6\";i:6;s:2:\"p7\";i:7;s:2:\"p8\";i:8;",
+            "s:2:\"p9\";i:9;s:3:\"p10\";i:10;s:5:\"inner\";O:5:\"Inner\":1:{s:3:\"tag\";s:2:\"in\";}",
+            "s:5:\"again\";r:13;s:4:\"list\";a:2:{i:0;O:5:\"Inner\":1:{s:3:\"tag\";s:2:\"in\";}",
+            "i:1;s:1:\"x\";}}\n",
+            "10 in true\n",
+            "O:4:\"Task\":1:{s:1:\"n\";i:3;}\n",
+        )
+    );
+}
+
+/// `unserialize()` initializes the typed properties it restores, including ones declared without
+/// a default: reading them works afterwards, and serializing the copy again reproduces the
+/// payload (a still-uninitialized nested property stays left out). The restored slots used to
+/// keep their uninitialized marker, so reads failed and a second `serialize()` dropped them.
+/// Measured on PHP 8.5.10.
+#[test]
+fn test_unserialize_initializes_typed_properties_without_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+class Point {
+    public int $x;
+    public array $tags;
+    public Point $next;
+    public mixed $m;
+    public function __construct() { $this->x = 1; $this->tags = ['a']; $this->m = 'k'; }
+}
+$p = new Point();
+$p->next = new Point();
+$wire = serialize($p);
+echo $wire, "\n";
+$copy = unserialize($wire);
+echo $copy->next->x, " ", $copy->tags[0], " ", $copy->m, "\n";
+echo serialize($copy) === $wire ? "same\n" : "changed\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "O:5:\"Point\":4:{s:1:\"x\";i:1;s:4:\"tags\";a:1:{i:0;s:1:\"a\";}",
+            "s:4:\"next\";O:5:\"Point\":3:{s:1:\"x\";i:1;s:4:\"tags\";a:1:{i:0;s:1:\"a\";}",
+            "s:1:\"m\";s:1:\"k\";}s:1:\"m\";s:1:\"k\";}\n",
+            "1 a k\n",
+            "same\n",
+        )
+    );
+}
+
 /// Verifies object serialization (Stage A): public/protected/private mangled keys,
 /// declaration order, mixed-typed properties, null, nested objects, and objects
 /// inside indexed/associative arrays — all byte-exact with the PHP interpreter.

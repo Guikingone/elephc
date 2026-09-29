@@ -268,6 +268,34 @@ namespace {
     );
 }
 
+/// A `Closure`-typed property that was never assigned holds no Closure, so `serialize()` leaves it
+/// out like any uninitialized typed property instead of refusing the object; once assigned, the
+/// Closure is refused. Measured on PHP 8.5.10.
+#[test]
+fn test_serialize_skips_an_uninitialized_closure_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Job {
+    public Closure $callback;
+    public int $n = 1;
+}
+$job = new Job();
+echo serialize($job), "\n";
+$job->callback = fn() => 1;
+try {
+    echo serialize($job), "\n";
+} catch (Exception $e) {
+    echo get_class($e), " ", $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "O:3:\"Job\":1:{s:1:\"n\";i:1;}\n\
+         Exception Serialization of 'Closure' is not allowed\n"
+    );
+}
+
 /// Catching `unserialize()` refusals in a loop leaves a clean heap: the refused class, whether the
 /// program declares it (a user subclass, a builtin) or not (`Generator` here), is refused by the
 /// allocation-free preflight before the decoder allocates its object, its box, or an enclosing

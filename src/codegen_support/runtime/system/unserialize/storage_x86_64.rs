@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Manually boxed values preserve heap markers while parsed ownership moves into final storage.
+//! - Every store writes the slot's high word (the string length, or zero), which clears the
+//!   uninitialized marker a typed property without a default starts with.
 
 use crate::codegen_support::emit::Emitter;
 
@@ -68,6 +70,7 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("je __rt_obj_store_prop_arr");                          // convert the parsed hash to an indexed array
     emitter.instruction("mov rax, QWORD PTR [rcx + 8]");                        // typed scalar/object/hash: unbox the low word
     emitter.instruction("mov QWORD PTR [r10], rax");                            // store it inline in the slot
+    emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // the high word marks the typed property initialized
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
     emitter.label("__rt_obj_store_prop_arr");
     emitter.instruction("mov QWORD PTR [rbp - 64], r8");                        // save the property byte offset across the call
@@ -76,6 +79,7 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // object pointer
     emitter.instruction("add r10, QWORD PTR [rbp - 64]");                       // slot = object + byte offset
     emitter.instruction("mov QWORD PTR [r10], rax");                            // store the indexed-array pointer
+    emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // the high word marks the typed property initialized
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
     emitter.label("__rt_obj_store_prop_str");
     emitter.instruction("mov rax, QWORD PTR [rcx + 8]");                        // string pointer from the box
@@ -88,6 +92,7 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, 8");                                          // is the boxed value null?
     emitter.instruction("je __rt_obj_store_prop_mixed_null");                   // store the null sentinel
     emitter.instruction("mov QWORD PTR [r10], rcx");                            // store the boxed Mixed cell pointer
+    emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // the high word marks the typed property initialized
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
     emitter.label("__rt_obj_store_prop_mixed_null");
     crate::codegen_support::abi::emit_load_int_immediate(emitter, "r11", crate::codegen_support::NULL_SENTINEL);
