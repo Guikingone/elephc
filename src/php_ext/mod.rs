@@ -1,37 +1,28 @@
 //! Purpose:
-//! Hosting support for real PHP extensions: deriving their callable surface and
-//! deciding whether they can be hosted at all.
+//! Hosting real PHP extensions — PECL releases, PIE packages, or a local
+//! source tree — inside compiled Elephc programs.
 //!
 //! Called from:
-//! - Not yet wired into the pipeline. This module is self-contained and tested
-//!   in isolation while the surrounding plumbing (recipe, manifest section,
-//!   codegen) is built.
+//! - `elephc php-ext …` (install side) and the compile pipeline (use side).
 //!
 //! Key details:
-//! - `stub` reads an extension's own `*.stub.php` rather than a hand-maintained
-//!   catalogue, so signatures cannot drift from the extension they describe.
-//! - `admission` refuses, at declaration time, extensions that would link
-//!   cleanly and then silently do nothing — the failure static linking misses.
-
-//! - `manifest` owns the `[php-ext]` section, mirroring `native_deps::manifest`
-//!   so declaring an extension never disturbs `[native]` or hand-written TOML.
-
-//! - `recipe` decides how an extension is compiled, as an inspectable value kept
-//!   separate from running the commands.
-
-//! - `shim` carries the Zend stand-in as embedded C, following the
-//!   `pcre2_shim.c` precedent rather than the pure-Rust bridge-crate pattern.
-
-//! - `call` describes the ABI-level call sequence for a hosted function, kept
-//!   separate from emitting it.
-
-//! - `build` executes a plan with a real toolchain, archiving the shim once
-//!   rather than folding a copy into every extension.
+//! - An extension is built from source by evaluating its own `config.m4`
+//!   (`config_m4`, `build`), against the `php-src` catalog package: the PHP
+//!   headers plus `libelephc_zend.a`, which is the Zend engine's real
+//!   data-structure code with a small host layer standing in for the VM.
+//! - Its surface is read by running its MINIT and walking what it registered
+//!   (`surface`), then declared to the compiler as ordinary PHP functions,
+//!   classes and constants that call through the engine (`prelude`).
+//! - `manifest` owns the `[php-ext]` section of `elephc.toml`; `install` and
+//!   `cli` run `elephc php-ext add/install/remove/list`; `source` fetches PECL
+//!   and PIE archives; `admission` refuses extensions that hook the VM.
 
 pub mod admission;
 pub mod build;
-pub mod call;
+pub mod cli;
+pub mod config_m4;
+pub mod install;
 pub mod manifest;
-pub mod recipe;
-pub mod shim;
-pub mod stub;
+pub mod prelude;
+pub mod source;
+pub mod surface;

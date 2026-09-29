@@ -78,12 +78,6 @@ pub enum Verdict {
     },
 }
 
-impl Verdict {
-    pub fn is_refused(&self) -> bool {
-        matches!(self, Verdict::Refuse { .. })
-    }
-}
-
 /// Judge an extension from the symbols it needs and the symbols the shim already
 /// provides. Both are given as the linker spells them; no rewriting occurs.
 pub fn judge(required: &[CSymbol], provided_by_shim: &BTreeSet<String>) -> Verdict {
@@ -164,7 +158,7 @@ mod tests {
     #[test]
     fn refuses_engine_hooks_in_elf_spelling_too() {
         let elf = syms(&["zend_execute_ex", "emalloc"]);
-        assert!(judge(&elf, &empty_shim()).is_refused());
+        assert!(matches!(judge(&elf, &empty_shim()), Verdict::Refuse { .. }));
     }
 
     /// simdjson: C++ but with no path to a fatal, so no destructor hazard.

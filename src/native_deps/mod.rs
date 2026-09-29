@@ -7,9 +7,9 @@
 //! Key details:
 //! - Native commands own materialization; compilation resolution is read-only and never falls back to system libraries.
 
-mod archive;
-mod cache;
-mod catalog;
+pub(crate) mod archive;
+pub(crate) mod cache;
+pub(crate) mod catalog;
 mod cli;
 mod doctor;
 mod download;
@@ -18,15 +18,15 @@ mod lockfile;
 mod manifest;
 mod materialize;
 mod orchestration;
-mod php_headers_list;
+pub(crate) mod php_src_headers;
 mod prune;
-mod project;
+pub(crate) mod project;
 mod receipt;
 mod recipe;
-mod recipes;
+pub(crate) mod recipes;
 mod requirements;
 mod resolver;
-mod toolchain;
+pub(crate) mod toolchain;
 mod util;
 
 use std::path::Path;

@@ -1,10 +1,12 @@
 /* php_config.h — Elephc's configuration for hosting PHP extensions.
  *
  * php's own configure generates ~2200 lines here, almost all of which describe
- * php's .c files (which library is present, which syscall exists). Elephc never
- * compiles php — only extensions — so the headers consult a small fraction of
- * it. This file is that fraction, derived by compiling against an empty config
- * and adding only what the compiler demanded.
+ * php's .c files (which library is present, which syscall exists). Elephc
+ * compiles only extensions and the engine's data-structure units (hash tables,
+ * strings, argument parsing, objects), none of which probe the system, so the
+ * headers consult a small fraction of it. This file is that fraction, derived
+ * by compiling against an empty config and adding only what the compiler
+ * demanded.
  *
  * That it is small is the point: it is the piece Elephc owns, and it is what
  * makes "extensions compiled against headers we control" literal.
