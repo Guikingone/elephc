@@ -1152,6 +1152,47 @@ fclose($m);
     assert_eq!(out, "4");
 }
 
+/// Verifies a `convert.iconv` write filter keeps its own `//TRANSLIT` choice while the iconv
+/// bridge converts the same charset pair between its writes.
+///
+/// Apple's iconv (Citrus-based since macOS 14) keeps the transliterate and discard options on
+/// the converter it shares between every descriptor of one charset pair, and each
+/// `iconv_open()` or option change rewrites them. The write filter keeps its descriptor open
+/// across writes, so a bridge `iconv()` call in between used to decide how the filter's next
+/// write converted: a plain filter started transliterating after an `ASCII//TRANSLIT` call, and
+/// a `//TRANSLIT` filter stopped after a plain one. The first half checks that a plain filter
+/// never approximates `é` (PHP rejects the write, elephc writes the prefix, and neither
+/// transliterates); the second that a `//TRANSLIT` filter approximates it on both writes.
+///
+/// glibc keeps the options on each descriptor, so this passes on Linux before and after the
+/// fix and can only fail on macOS. The bridge call comes first because it installs the UTF-8
+/// `LC_CTYPE` that glibc's `//TRANSLIT` needs. The approximation is the platform iconv's: `e`
+/// under glibc, `'e` under Apple's.
+#[test]
+fn test_stream_filter_iconv_write_keeps_its_options_across_bridge_conversions() {
+    let out = compile_and_run(
+        r#"<?php
+$plain = fopen("php://temp", "r+");
+stream_filter_append($plain, "convert.iconv.UTF-8/ASCII", STREAM_FILTER_WRITE);
+echo iconv("UTF-8", "ASCII//TRANSLIT", "caf\u{e9}"), "|";
+@fwrite($plain, "d\u{e9}j\u{e0}");
+rewind($plain);
+echo str_contains(stream_get_contents($plain), "e") ? "transliterated" : "plain", "|";
+fclose($plain);
+$translit = fopen("php://temp", "r+");
+stream_filter_append($translit, "convert.iconv.UTF-8/ASCII//TRANSLIT", STREAM_FILTER_WRITE);
+fwrite($translit, "caf\u{e9}|");
+echo iconv("UTF-8", "ASCII", "plain"), "|";
+fwrite($translit, "caf\u{e9}");
+rewind($translit);
+echo stream_get_contents($translit);
+fclose($translit);
+"#,
+    );
+    let cafe = if cfg!(any(target_os = "macos", target_os = "ios")) { "caf'e" } else { "cafe" };
+    assert_eq!(out, format!("{cafe}|plain|plain|{cafe}|{cafe}"));
+}
+
 /// Verifies compiled PHP output for stream filter base64 encode pads correctly.
 #[test]
 fn test_stream_filter_base64_encode_pads_correctly() {
