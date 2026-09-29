@@ -265,7 +265,11 @@ impl<'a> Interpreter<'a> {
             "AC_DEFINE" | "AC_DEFINE_UNQUOTED" => {
                 let define = self.expand(arg(0)).trim().to_string();
                 if !define.is_empty() {
-                    let value = if args.len() > 1 { self.expand(arg(1)).trim().to_string() } else { "1".to_string() };
+                    let value = if args.len() > 1 {
+                        self.define_value(arg(1), name == "AC_DEFINE_UNQUOTED")
+                    } else {
+                        "1".to_string()
+                    };
                     self.config.defines.insert(define, if value.is_empty() { "1".to_string() } else { value });
                 }
             }
@@ -394,6 +398,27 @@ impl<'a> Interpreter<'a> {
 
     /// Expands `$VAR`, `${VAR}` and backtick commands in shell text, and drops
     /// the quote characters themselves.
+    /// A define's replacement text as configure writes it into confdefs.h,
+    /// through a heredoc: C quotes survive (`["1.2.3"]` stays a string
+    /// literal), and only `AC_DEFINE_UNQUOTED` expands `$var` and backticks.
+    fn define_value(&self, text: &str, unquoted: bool) -> String {
+        if !unquoted {
+            return text.trim().to_string();
+        }
+        // A heredoc keeps quotes that the shell-word expansion would strip:
+        // shield them, expand, then put them back.
+        const ESCAPED_QUOTE: char = '\u{1}';
+        const QUOTE: char = '\u{2}';
+        const APOSTROPHE: char = '\u{3}';
+        let shielded = text.replace("\\\"", &ESCAPED_QUOTE.to_string()).replace('"', &QUOTE.to_string()).replace('\'', &APOSTROPHE.to_string());
+        self.expand(&shielded)
+            .replace(ESCAPED_QUOTE, "\\\"")
+            .replace(QUOTE, "\"")
+            .replace(APOSTROPHE, "'")
+            .trim()
+            .to_string()
+    }
+
     fn expand(&self, text: &str) -> String {
         let text = &self.expand_dir_macros(text);
         let bytes = text.as_bytes();
@@ -1184,5 +1209,20 @@ fi
         let script = "PHP_ARG_ENABLE(x, x, x)\nMODE=b\nif test \"$MODE\" = \"a\"; then\n  AC_DEFINE(A)\nelif test \"$MODE\" = \"b\"; then\n  AC_DEFINE(B)\nelse\n  AC_DEFINE(C)\nfi\nPHP_NEW_EXTENSION(x, x.c, $ext_shared)\n";
         let config = evaluate(script, &env("x")).expect("evaluates");
         assert_eq!(config.defines.keys().collect::<Vec<_>>(), vec!["B"]);
+    }
+
+    /// configure writes a define's value through a heredoc: a C string literal
+    /// keeps its quotes, and only the UNQUOTED form expands variables.
+    #[test]
+    fn a_define_keeps_its_c_string_quotes() {
+        let script = "PHP_ARG_ENABLE(x, x, x)\nVER=2.0\n\
+            AC_DEFINE([EXT_VERSION], [\"1.2.3\"], [Extension version])\n\
+            AC_DEFINE([EXT_LITERAL], [\"$VER\"], [kept as written])\n\
+            AC_DEFINE_UNQUOTED([EXT_BUILT], [\"$VER\"], [expanded])\n\
+            PHP_NEW_EXTENSION(x, x.c, $ext_shared)\n";
+        let config = evaluate(script, &env("x")).expect("evaluates");
+        assert_eq!(config.defines.get("EXT_VERSION").map(String::as_str), Some("\"1.2.3\""));
+        assert_eq!(config.defines.get("EXT_LITERAL").map(String::as_str), Some("\"$VER\""));
+        assert_eq!(config.defines.get("EXT_BUILT").map(String::as_str), Some("\"2.0\""));
     }
 }
