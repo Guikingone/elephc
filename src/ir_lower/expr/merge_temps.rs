@@ -128,7 +128,15 @@ pub(super) fn php_type_allows_null(php_type: &PhpType) -> bool {
 }
 
 /// Estimates the value type an expression will materialize during branch lowering.
+///
+/// A postfix chain holding a `?->` anywhere (`$o?->items()`, `$o?->child()->items()`,
+/// `$o?->list[0]`) lowers into one boxed `Mixed` temp whether or not the receiver is null, so it
+/// answers that storage before any arm reads a declaration: a declared `array<int>` there would
+/// size the merge temp for a raw array and store the box into it.
 pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> PhpType {
+    if let Some(storage) = nullsafe_chain::result_storage_type(expr) {
+        return storage;
+    }
     match &expr.kind {
         ExprKind::Variable(name) => normalize_value_php_type(ctx.local_type(name).codegen_repr()),
         ExprKind::ErrorSuppress(inner) => materialized_expr_type_for_merge(ctx, inner),
@@ -159,23 +167,19 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         // to its element count, a string arm to `0` and an object arm to `0` (#1501). So each
         // one reads the metadata its own lowering reads, and when there is none it answers
         // `Mixed`: a `Mixed` temp boxes whatever the arm materializes, where any narrower guess
-        // stores a value of one shape into a slot declared as another.
+        // stores a value of one shape into a slot declared as another. The `?->` forms never
+        // reach here: the chain check above answers them.
         ExprKind::ArrayAccess { array, .. } => {
             array_access_expr_value_type_for_ir(ctx, array).unwrap_or(PhpType::Mixed)
         }
         ExprKind::PropertyAccess { object, property } => {
             property_access_expr_type_for_ir(ctx, object, property).unwrap_or(PhpType::Mixed)
         }
-        ExprKind::NullsafePropertyAccess { object, property } => {
-            nullsafe_property_access_expr_type_for_ir(ctx, object, property)
-                .unwrap_or(PhpType::Mixed)
-        }
         ExprKind::StaticPropertyAccess { receiver, property } => {
             static_property_result_type(ctx, receiver, property, expr)
         }
         ExprKind::FunctionCall { .. }
         | ExprKind::MethodCall { .. }
-        | ExprKind::NullsafeMethodCall { .. }
         | ExprKind::StaticMethodCall { .. } => {
             call_expr_type_for_merge(ctx, expr).unwrap_or(PhpType::Mixed)
         }
@@ -186,8 +190,6 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         | ExprKind::ExprCall { .. }
         | ExprKind::Pipe { .. }
         | ExprKind::DynamicPropertyAccess { .. }
-        | ExprKind::NullsafeDynamicPropertyAccess { .. }
-        | ExprKind::NullsafeDynamicMethodCall { .. }
         | ExprKind::NewDynamic { .. }
         | ExprKind::Clone(_)
         | ExprKind::Assignment { .. }
@@ -196,7 +198,7 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
     }
 }
 
-/// Returns the result type a function, method, nullsafe-method, or static-method call
+/// Returns the result type a function, method, or static-method call
 /// materializes, read from the same declared metadata its lowering uses, or `None` when that
 /// metadata is unavailable (an unknown receiver, a `__call`/`__callStatic` redispatch, or a
 /// call the eval barrier routes dynamically), which the caller then types `Mixed`.
@@ -220,9 +222,6 @@ fn call_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Optio
         }
         ExprKind::MethodCall { object, method, .. } => {
             method_call_expr_type_for_ir(ctx, object, method)?
-        }
-        ExprKind::NullsafeMethodCall { object, method, .. } => {
-            nullsafe_method_call_expr_type_for_ir(ctx, object, method)?
         }
         ExprKind::StaticMethodCall { receiver, method, .. } => {
             static_method_call_expr_type_for_ir(ctx, receiver, method)?

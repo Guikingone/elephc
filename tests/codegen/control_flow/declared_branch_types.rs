@@ -372,3 +372,42 @@ echo $total;
         out.stderr
     );
 }
+
+/// Verifies a `?->` chain arm is merged as the boxed `Mixed` its lowering produces even when the
+/// method's inferred return is a concrete `array<int>` and the receiver is never null: typing
+/// the merge temp from the declaration stored the box into a raw-array slot, so `count()` and
+/// element reads saw the box's bytes. Covers `?:`, ternary and `match` arms, a chain continuing
+/// after `?->`, and an index on the chain, in a loop under `--heap-debug`.
+#[test]
+fn test_nullsafe_chain_arm_with_inferred_array_return_merges_as_mixed() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Box {
+    public function items() { return [1, 2, 3]; }
+    public function more() { return [9, 8]; }
+    public function none() { return []; }
+    public function map() { return ["a" => 1, "b" => 2]; }
+    public function self(): Box { return $this; }
+}
+$o = new Box();
+$out = "";
+for ($i = 0; $i < 20 + $argc; $i++) {
+    $a = $o?->items() ?: $o?->more();
+    $b = $o?->none() ?: $o?->more();
+    $c = $i % 2 ? $o?->self()->items() : [0];
+    $d = $argc > 0 ? $o?->map() : ["z" => 0];
+    $e = match ($argc) { 1 => $o?->items()[2], default => 0 };
+    $f = $o?->self()?->more() ?: [];
+    $out = count($a) . $a[1] . count($b) . $b[0] . count($c) . count($d) . $d["b"] . $e . count($f) . $f[1];
+}
+echo $out, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "3229122328\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
