@@ -348,28 +348,24 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #48]");                                   // record the persisted mixed-cast string to release once its bytes are copied
     emitter.instruction("b __rt_implode_copy_value");                           // copy the cast string payload into the result buffer
 
-    // -- raw scalar element arms: 8-byte payloads formatted through the shared scratch --
+    // -- raw scalar element arms: 8-byte payloads formatted in the reserved destination --
     //
-    // `__rt_itoa`/`__rt_ftoa` write into `_concat_buf` at `_concat_off`, so these obey the same
-    // CURSOR invariant the mixed arm above does: publish the live destination first, restore the
-    // loop registers after. Nothing is ALLOCATED here — both formatters answer with a pointer
-    // into that shared scratch — so the owned-temporary slot stays zero and the release below is
-    // correctly skipped.
+    // Like the tagged arm above: reserve `MIXED_CAST_HEADROOM` first (growing if the join is
+    // too close to its capacity), then format with `__rt_itoa_into` / `__rt_ftoa_into` straight
+    // into that window. The formatters never touch `_concat_buf` at `_concat_off`, so a join near
+    // the end of the 64 KiB scratch cannot have them write past it. Nothing is ALLOCATED here,
+    // so the owned-temporary slot stays zero and the release below is correctly skipped.
     emitter.label("__rt_implode_raw_int_elem");
-    emit_aarch64_scalar_slot_address(emitter);
+    emit_aarch64_scalar_reserve(emitter, "raw_int");
     emitter.instruction("ldr x0, [x12]");                                       // load the raw integer element
-    emit_aarch64_scalar_cast_prologue(emitter, "raw_int");
-    emitter.instruction("bl __rt_itoa");                                        // format the integer as decimal text → x1=ptr, x2=len
-    emit_aarch64_scalar_cast_epilogue(emitter);
-    emitter.instruction("b __rt_implode_copy_value");                           // copy the formatted digits into the result buffer
+    emit_aarch64_scalar_format_into(emitter, "__rt_itoa_into");
+    emitter.instruction("b __rt_implode_copy_value");                           // compact the right-aligned digits to the destination cursor
 
     emitter.label("__rt_implode_raw_float_elem");
-    emit_aarch64_scalar_slot_address(emitter);
+    emit_aarch64_scalar_reserve(emitter, "raw_float");
     emitter.instruction("ldr d0, [x12]");                                       // load the raw double element into the FP argument register
-    emit_aarch64_scalar_cast_prologue(emitter, "raw_float");
-    emitter.instruction("bl __rt_ftoa");                                        // format the double with PHP's precision=14 layout → x1=ptr, x2=len
-    emit_aarch64_scalar_cast_epilogue(emitter);
-    emitter.instruction("b __rt_implode_copy_value");                           // copy the formatted float text into the result buffer
+    emit_aarch64_scalar_format_into(emitter, "__rt_ftoa_into");
+    emitter.instruction("b __rt_implode_copy_value");                           // the text already sits at the destination cursor
 
     // PHP stringifies bool as "1"/"" — NOT "1"/"0" — which is why false takes a zero-length
     // copy instead of going through the formatter at all.
@@ -377,11 +373,10 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emit_aarch64_scalar_slot_address(emitter);
     emitter.instruction("ldr x0, [x12]");                                       // load the raw bool element
     emitter.instruction("cbz x0, __rt_implode_raw_bool_false_elem");            // false renders as the empty string
+    emit_aarch64_scalar_reserve(emitter, "raw_booltrue");
     emitter.instruction("mov x0, #1");                                          // true renders as the single character "1"
-    emit_aarch64_scalar_cast_prologue(emitter, "raw_booltrue");
-    emitter.instruction("bl __rt_itoa");                                        // format the 1 as text → x1=ptr, x2=len
-    emit_aarch64_scalar_cast_epilogue(emitter);
-    emitter.instruction("b __rt_implode_copy_value");                           // copy the single character into the result buffer
+    emit_aarch64_scalar_format_into(emitter, "__rt_itoa_into");
+    emitter.instruction("b __rt_implode_copy_value");                           // compact the single character to the destination cursor
 
     emitter.label("__rt_implode_raw_bool_false_elem");
     emitter.instruction("mov x2, #0");                                          // a zero-length element copies nothing and still takes its glue
@@ -438,16 +433,18 @@ fn emit_x86_64_scalar_slot_address(emitter: &mut Emitter) {
     emitter.instruction("lea rcx, [r8 + rcx + 24]");                            // compute the address of the current scalar slot after the fixed array header
 }
 
-/// Publishes the LIVE destination cursor as `_concat_off` before an x86_64 formatter call.
+/// Reserves `MIXED_CAST_HEADROOM` destination bytes on x86_64, then re-addresses the current
+/// raw 8-byte element slot in `rcx` and leaves the live destination cursor in `r10`.
 ///
-/// The x86_64 mirror of [`emit_aarch64_scalar_cast_prologue`], including its reason for going
-/// through the shared publish helper rather than open-coding the scratch-only form.
-///
-/// The element payload is already in its argument register (`rax` or `xmm0`), which the shared
-/// helper leaves alone: it reads `r10` and clobbers only `rcx`, `rdx`, `r8` and `r9`.
-fn emit_x86_64_scalar_cast_prologue(emitter: &mut Emitter, site: &str) {
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the live implode destination cursor, the helper's input
-    emit_implode_publish_offset_x86_64(emitter, site);
+/// The reservation may grow the join into a new block, which relocates the cursor and clobbers
+/// the scratch registers, so the slot address is computed only afterwards.
+fn emit_x86_64_scalar_reserve(emitter: &mut Emitter, site: &str) {
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // live destination cursor for the headroom check
+    emitter.instruction("xor r8d, r8d");                                        // no pending source bytes across the growth call
+    emitter.instruction(&format!("mov r9, {}", MIXED_CAST_HEADROOM));           // room the formatter may write into the destination
+    emit_implode_ensure_room_x86_64(emitter, site);
+    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // restore the loop cursor after possible growth
+    emit_x86_64_scalar_slot_address(emitter);
 }
 
 /// Moves an x86_64 formatter's `rax`/`rdx` answer into the shared copy loop's registers.
@@ -467,37 +464,37 @@ fn emit_aarch64_scalar_slot_address(emitter: &mut Emitter) {
     emitter.instruction("add x12, x12, #24");                                   // skip the 24-byte array header
 }
 
-/// Saves the AArch64 loop registers and publishes the LIVE destination cursor as `_concat_off`.
+/// Reserves `MIXED_CAST_HEADROOM` destination bytes on AArch64, then re-addresses the current
+/// raw 8-byte element slot in `x12`.
 ///
-/// See the CURSOR invariant at the top of this file: `__rt_itoa` and `__rt_ftoa` both format
-/// into `_concat_buf` at `_concat_off`, so an offset left parked at the implode result START
-/// would write over the glue and element bytes already copied.
-///
-/// The publish goes through the shared `emit_implode_publish_offset_aarch64` rather than being
-/// open-coded, so these arms obey the same two-destination rule the boxed-Mixed arm and the
-/// finalizer already do: a SCRATCH destination reserves what it has written, a GROWN one holds
-/// no scratch and restores the entry offset.
-///
-/// Measured, so the comment does not overstate it: the open-coded scratch-only form is not
-/// observably wrong TODAY. It publishes `cursor - _concat_buf`, and `__rt_itoa` then writes at
-/// `_concat_buf + offset`, so the arithmetic cancels back to the real cursor and the preceding
-/// `MIXED_CAST_HEADROOM` reservation keeps that write in bounds. It is wrong in the sense that
-/// matters for a shared invariant: it publishes a nonsense offset that only works by accident,
-/// and it silently opts these three arms out of any future change to the helper.
-///
-/// `site` names the labels the shared helper emits, so every arm needs its own.
-fn emit_aarch64_scalar_cast_prologue(emitter: &mut Emitter, site: &str) {
-    emitter.instruction("str x9, [sp, #56]");                                   // save destination cursor across the scalar format call
-    emitter.instruction("str x10, [sp, #64]");                                  // save array length across the scalar format call
-    emitter.instruction("str x11, [sp, #72]");                                  // save loop index across the scalar format call
-    emit_implode_publish_offset_aarch64(emitter, site);
+/// The reservation may grow the join into a new block, which relocates the cursor in `x9` and
+/// clobbers `x3`, so the array base is reloaded and the slot address computed afterwards.
+fn emit_aarch64_scalar_reserve(emitter: &mut Emitter, site: &str) {
+    emitter.instruction(&format!("mov x15, #{}", MIXED_CAST_HEADROOM));         // room the formatter may write into the destination
+    emit_implode_ensure_room_aarch64(emitter, site);
+    emitter.instruction("ldr x3, [sp, #16]");                                   // reload the array pointer after possible growth
+    emit_aarch64_scalar_slot_address(emitter);
 }
 
-/// Restores the AArch64 loop registers clobbered by a scalar formatter call.
-fn emit_aarch64_scalar_cast_epilogue(emitter: &mut Emitter) {
-    emitter.instruction("ldr x9, [sp, #56]");                                   // restore destination cursor after the scalar format call
-    emitter.instruction("ldr x10, [sp, #64]");                                  // restore array length after the scalar format call
-    emitter.instruction("ldr x11, [sp, #72]");                                  // restore loop index after the scalar format call
+/// Formats the loaded AArch64 element straight into the reserved window at the cursor `x9`,
+/// preserving the loop registers, and leaves the text in `x1`/`x2` for the copy loop.
+///
+/// `formatter` is `__rt_itoa_into` (value in `x0`, answers `x0`=ptr, `x1`=len) or
+/// `__rt_ftoa_into` (value in `d0`, answers `x1`=ptr, `x2`=len); both write only inside the
+/// window, never into `_concat_buf` at `_concat_off`.
+fn emit_aarch64_scalar_format_into(emitter: &mut Emitter, formatter: &str) {
+    emitter.instruction("str x9, [sp, #56]");                                   // preserve the live result cursor across formatting
+    emitter.instruction("str x10, [sp, #64]");                                  // preserve array length across formatting
+    emitter.instruction("str x11, [sp, #72]");                                  // preserve the element cursor across formatting
+    emitter.instruction("mov x1, x9");                                          // format directly in the reserved implode destination window
+    emitter.instruction(&format!("bl {}", formatter));                          // write the text inside the window only
+    if formatter == "__rt_itoa_into" {
+        emitter.instruction("mov x2, x1");                                      // move the formatted length into the copy-loop argument
+        emitter.instruction("mov x1, x0");                                      // move the formatted slice pointer into the copy-loop argument
+    }
+    emitter.instruction("ldr x9, [sp, #56]");                                   // restore the live result cursor
+    emitter.instruction("ldr x10, [sp, #64]");                                  // restore array length
+    emitter.instruction("ldr x11, [sp, #72]");                                  // restore the element cursor
 }
 
 /// Emits the x86_64 Linux variant of `__rt_implode`.
@@ -651,26 +648,26 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current concat-buffer destination cursor after casting
     emitter.instruction("jmp __rt_implode_copy");                               // copy the cast string payload into the result buffer
 
-    // -- raw scalar element arms: 8-byte payloads formatted through the shared scratch --
+    // -- raw scalar element arms: 8-byte payloads formatted in the reserved destination --
     //
-    // Same CURSOR invariant as the mixed arm: `__rt_itoa`/`__rt_ftoa` format into `_concat_buf`
-    // at `_concat_off`, so the live destination is published first. Neither ALLOCATES, so the
-    // owned-temporary slot stays zero and the release below is correctly skipped.
+    // Same scheme as the AArch64 arms: reserve `MIXED_CAST_HEADROOM`, then format with
+    // `__rt_itoa_into` / `__rt_ftoa_into` straight into that window, never through `_concat_buf`
+    // at `_concat_off`. Neither ALLOCATES, so the owned-temporary slot stays zero.
     emitter.label("__rt_implode_raw_int_elem");
-    emit_x86_64_scalar_slot_address(emitter);
-    emitter.instruction("mov rax, QWORD PTR [rcx]");                            // load the raw integer element into the integer-to-string input register
-    emit_x86_64_scalar_cast_prologue(emitter, "raw_int");
-    emitter.instruction("call __rt_itoa");                                      // format the integer as decimal text → rax=ptr, rdx=len
+    emit_x86_64_scalar_reserve(emitter, "raw_int");
+    emitter.instruction("mov rdi, QWORD PTR [rcx]");                            // pass the raw integer element to the destination formatter
+    emitter.instruction("mov rsi, r10");                                        // format directly in the reserved implode destination window
+    emitter.instruction("call __rt_itoa_into");                                 // write decimal digits → rax=ptr, rdx=len
     emit_x86_64_scalar_copy_setup(emitter);
-    emitter.instruction("jmp __rt_implode_copy");                               // copy the formatted digits into the result buffer
+    emitter.instruction("jmp __rt_implode_copy");                               // compact the right-aligned digits to the destination cursor
 
     emitter.label("__rt_implode_raw_float_elem");
-    emit_x86_64_scalar_slot_address(emitter);
+    emit_x86_64_scalar_reserve(emitter, "raw_float");
     emitter.instruction("movsd xmm0, QWORD PTR [rcx]");                         // load the raw double element into the FP argument register
-    emit_x86_64_scalar_cast_prologue(emitter, "raw_float");
-    emitter.instruction("call __rt_ftoa");                                      // format the double with PHP's precision=14 layout → rax=ptr, rdx=len
+    emitter.instruction("mov rsi, r10");                                        // format directly in the reserved implode destination window
+    emitter.instruction("call __rt_ftoa_into");                                 // write PHP's precision=14 text → rax=ptr, rdx=len
     emit_x86_64_scalar_copy_setup(emitter);
-    emitter.instruction("jmp __rt_implode_copy");                               // copy the formatted float text into the result buffer
+    emitter.instruction("jmp __rt_implode_copy");                               // the text already sits at the destination cursor
 
     // PHP stringifies bool as "1"/"" — NOT "1"/"0" — which is why false takes a zero-length
     // copy instead of going through the formatter at all.
@@ -679,11 +676,12 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rcx]");                            // load the raw bool element
     emitter.instruction("test rax, rax");                                       // false renders as the empty string
     emitter.instruction("jz __rt_implode_raw_bool_false_elem");                 // skip the formatter entirely for false
-    emitter.instruction("mov rax, 1");                                          // true renders as the single character "1"
-    emit_x86_64_scalar_cast_prologue(emitter, "raw_booltrue");
-    emitter.instruction("call __rt_itoa");                                      // format the 1 as text → rax=ptr, rdx=len
+    emit_x86_64_scalar_reserve(emitter, "raw_booltrue");
+    emitter.instruction("mov rdi, 1");                                          // true renders as the single character "1"
+    emitter.instruction("mov rsi, r10");                                        // format directly in the reserved implode destination window
+    emitter.instruction("call __rt_itoa_into");                                 // write the digit → rax=ptr, rdx=len
     emit_x86_64_scalar_copy_setup(emitter);
-    emitter.instruction("jmp __rt_implode_copy");                               // copy the single character into the result buffer
+    emitter.instruction("jmp __rt_implode_copy");                               // compact the single character to the destination cursor
 
     emitter.label("__rt_implode_raw_bool_false_elem");
     emitter.instruction("xor r9, r9");                                          // a zero-length element copies nothing and still takes its glue
