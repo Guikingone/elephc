@@ -341,6 +341,39 @@ echo str_replace("\0", '~', serialize($copy)), "\n";
     );
 }
 
+/// The default walk counts the initialized properties before writing any of them and checks each
+/// slot again as it writes it, exactly like php-src's `php_var_serialize_intern`. So when writing
+/// an earlier property runs a hook that initializes or unsets a later one, the payload is PHP's own,
+/// count and all, even though PHP cannot unserialize it either. Measured on PHP 8.5.10.
+#[test]
+fn test_serialize_counts_properties_before_writing_them_like_php() {
+    let out = compile_and_run(
+        r#"<?php
+class Outer { public ?Inner $in = null; public int $later; }
+class Inner {
+    public Outer $outer;
+    public function __sleep(): array { $this->outer->later = 5; return []; }
+}
+$o = new Outer(); $i = new Inner(); $i->outer = $o; $o->in = $i;
+echo serialize($o), "\n";
+class Outer2 { public ?Inner2 $in = null; public int $later = 3; }
+class Inner2 {
+    public Outer2 $outer;
+    public function __sleep(): array { $outer = $this->outer; unset($outer->later); return []; }
+}
+$o2 = new Outer2(); $i2 = new Inner2(); $i2->outer = $o2; $o2->in = $i2;
+echo serialize($o2), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "O:5:\"Outer\":1:{s:2:\"in\";O:5:\"Inner\":0:{}s:5:\"later\";i:5;}\n",
+            "O:6:\"Outer2\":2:{s:2:\"in\";O:6:\"Inner2\":0:{}}\n",
+        )
+    );
+}
+
 /// `__sleep()` writes only the named properties that hold a value, and the count in front of the
 /// body covers exactly those: an uninitialized typed property (a `Closure` one included, which
 /// must not trigger the Closure refusal) is left out, as in PHP. The count is only known once

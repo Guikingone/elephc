@@ -717,7 +717,10 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [x13]");                                       // load the property row count
     emitter.instruction("str x3, [sp, #24]");                                   // save the property row count
     // -- PHP leaves a typed property that was never initialized out of the payload, so the
-    //    declared count only covers the rows whose slot does not carry the uninitialized marker --
+    //    declared count only covers the rows whose slot does not carry the uninitialized marker.
+    //    Like php-src's php_var_serialize_intern, the count is taken before any property is
+    //    written and each slot is checked again as it is written, so a hook that initializes or
+    //    unsets a later property meanwhile yields exactly PHP's (inconsistent) payload --
     abi::emit_load_int_immediate(emitter, "x16", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     emitter.instruction("ldr x7, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("mov x0, #0");                                          // initialized-property count = 0
@@ -1652,7 +1655,10 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [r11]");                            // load the property row count
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the property row count
     // -- PHP leaves a typed property that was never initialized out of the payload, so the
-    //    declared count only covers the rows whose slot does not carry the uninitialized marker --
+    //    declared count only covers the rows whose slot does not carry the uninitialized marker.
+    //    Like php-src's php_var_serialize_intern, the count is taken before any property is
+    //    written and each slot is checked again as it is written, so a hook that initializes or
+    //    unsets a later property meanwhile yields exactly PHP's (inconsistent) payload --
     abi::emit_load_int_immediate(emitter, "r9", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
     emitter.instruction("xor eax, eax");                                        // initialized-property count = 0
