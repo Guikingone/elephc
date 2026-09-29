@@ -566,6 +566,7 @@ thread_local! {
     /// Directories `archive_search_dirs()` answers on the current test thread instead of the
     /// executable- and environment-derived list, so discovery tests drive the production path
     /// against directories they own without mutating process-wide state other tests read.
+    /// While it is installed, `override_dir()` also ignores an inherited `ELEPHC_<NAME>_LIB_DIR`.
     static TEST_ARCHIVE_SEARCH_DIRS: std::cell::RefCell<Option<Vec<PathBuf>>> =
         const { std::cell::RefCell::new(None) };
 }
@@ -678,11 +679,8 @@ impl BridgeStaticlib {
 
     /// Locates this bridge archive, auto-building it in a source checkout if needed.
     fn archive_path(&self) -> Result<PathBuf, LinkError> {
-        if let Ok(env_dir) = std::env::var(self.env_var) {
-            if !env_dir.is_empty() {
-                return self
-                    .validate_override_archive(&self.archive_filename(), Path::new(&env_dir));
-            }
+        if let Some(env_dir) = self.override_dir() {
+            return self.validate_override_archive(&self.archive_filename(), Path::new(&env_dir));
         }
         if let Some(archive) = self.find_archive() {
             if self.lib_name == "elephc_pdo"
@@ -743,10 +741,8 @@ impl BridgeStaticlib {
         debug_assert_eq!(self.lib_name, "elephc_magician");
         let filename = self.magician_curl_archive_filename();
 
-        if let Ok(env_dir) = std::env::var(self.env_var) {
-            if !env_dir.is_empty() {
-                return self.validate_override_archive(&filename, Path::new(&env_dir));
-            }
+        if let Some(env_dir) = self.override_dir() {
+            return self.validate_override_archive(&filename, Path::new(&env_dir));
         }
 
         if let Some(archive) = self.find_named_archive(&filename) {
@@ -1029,6 +1025,18 @@ impl BridgeStaticlib {
                 self.missing_override_error(filename, directory)
             }
         })
+    }
+
+    /// Returns this bridge's non-empty `ELEPHC_<NAME>_LIB_DIR` override directory, if set.
+    ///
+    /// A test that installed its own search directories on this thread gets `None`: it replaces
+    /// the whole environment-derived lookup, so an override inherited from the developer's
+    /// shell cannot short-circuit the discovery it sets up.
+    fn override_dir(&self) -> Option<String> {
+        if test_archive_search_dirs().is_some() {
+            return None;
+        }
+        std::env::var(self.env_var).ok().filter(|directory| !directory.is_empty())
     }
 
     /// The directories an archive is looked for in, in the order they are tried.
@@ -2132,15 +2140,11 @@ mod tests {
     /// `validate_archive`. This drives `archive_path()` itself, the entry point linking uses,
     /// so the search, the validation and the `looked in:` context all come from the same
     /// `archive_search_dirs()` list: the directories up to the match are listed, the one after
-    /// it is not.
+    /// it is not. The installed directories also set aside an inherited `ELEPHC_TLS_LIB_DIR`,
+    /// so the test checks discovery whatever the developer's shell exports.
     #[test]
     fn dangling_archive_link_stops_production_discovery_with_its_search_context() {
         let bridge = bridge_for_library("elephc_tls").expect("tls bridge");
-        assert!(
-            std::env::var_os(bridge.env_var).is_none(),
-            "{} short-circuits the discovery this test drives",
-            bridge.env_var
-        );
         let filename = bridge.archive_filename();
         let base = std::env::temp_dir().join(format!(
             "elephc-dangling-archive-{}",
