@@ -981,3 +981,22 @@ namespace {
     );
     assert_eq!(out, "Function\\Lib\\g|Function\\Lib\\Foo\nmade\nFunction\\Lib\\g\n");
 }
+
+/// A qualified name whose segment spells a predefined constant (`\Vendor\PHP_EOL`,
+/// `PHP_EOL\Sub`) is a class name, as in PHP, while `\PHP_EOL`, `\PHP_INT_MAX` and `\true`
+/// still read the global constants. Review follow-up for #826.
+#[test]
+fn test_constant_named_segments_in_qualified_names() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+class Box {}
+$o = new Box();
+echo $o instanceof \Vendor\PHP_EOL ? "y" : "n", "\n";
+echo $o instanceof PHP_EOL\Sub ? "y" : "n", "\n";
+echo \Vendor\PHP_EOL::class, "|", \PHP_EOL === "\n" ? "nl" : "x", "\n";
+echo strlen(\PHP_EOL), " ", \PHP_INT_MAX > 0 ? "big" : "small", " ", \true ? "t" : "f", "\n";
+"#,
+    );
+    assert_eq!(out, "n\nn\nVendor\\PHP_EOL|nl\n1 big t\n");
+}

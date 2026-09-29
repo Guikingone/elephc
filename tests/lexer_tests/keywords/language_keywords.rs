@@ -590,3 +590,33 @@ fn test_nullable_and_union_type_tokens() {
 }
 
 // --- Magic constants ---
+
+/// Verifies a predefined-constant token inside or at the head of a qualified name lexes as an
+/// identifier (`Vendor\PHP_EOL`, `PHP_EOL\Sub`), while a lone leading `\` keeps the constant
+/// token so `\PHP_EOL` and `\true` still read the global constant.
+#[test]
+fn test_constant_tokens_glued_into_a_name_lex_as_identifiers() {
+    let ident = |name: &str| Token::Identifier(name.into());
+    assert_eq!(
+        tokens("<?php \\Vendor\\PHP_EOL; PHP_EOL\\Sub; \\PHP_EOL; \\true;"),
+        vec![
+            Token::OpenTag,
+            Token::Backslash,
+            ident("Vendor"),
+            Token::Backslash,
+            ident("PHP_EOL"),
+            Token::Semicolon,
+            ident("PHP_EOL"),
+            Token::Backslash,
+            ident("Sub"),
+            Token::Semicolon,
+            Token::Backslash,
+            Token::PhpEol,
+            Token::Semicolon,
+            Token::Backslash,
+            Token::True,
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}

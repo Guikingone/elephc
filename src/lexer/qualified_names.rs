@@ -16,6 +16,9 @@
 //! - A word is a segment only when it touches the `\` in the source, and a leading word only
 //!   when a further word touches that `\` too. `new \Foo`, `echo \strlen($s)` and
 //!   `use function \Lib\f;` keep their keywords, and `Default\{A}` is not a name, as in PHP.
+//! - A predefined constant the lexer tokenizes (`PHP_EOL`, `E_ALL`-style tokens, `true`) is a
+//!   segment only inside a name (`Vendor\PHP_EOL`) or at its head (`PHP_EOL\Foo`). After a
+//!   lone leading `\` it stays the constant: `\PHP_EOL` is the fully qualified global constant.
 //! - A leading `namespace\` stays the `namespace` keyword: it is PHP's relative-name prefix
 //!   (`namespace\Foo` is `Foo` in the current namespace), never a segment spelled `namespace`.
 //!   After a separator (`\Demo\Namespace\Subject`) it is an ordinary segment.
@@ -27,10 +30,7 @@ use super::{SpannedToken, Token};
 /// words are left alone; spans and metadata are kept.
 pub(super) fn identify_reserved_name_segments(tokens: &mut [SpannedToken]) {
     for index in 0..tokens.len() {
-        if matches!(tokens[index].0, Token::Identifier(_))
-            || is_constant_token(&tokens[index].0)
-            || !is_word(tokens, index)
-        {
+        if matches!(tokens[index].0, Token::Identifier(_)) || !is_word(tokens, index) {
             continue;
         }
         let after_separator = index > 0
@@ -41,7 +41,14 @@ pub(super) fn identify_reserved_name_segments(tokens: &mut [SpannedToken]) {
             && tokens_touch(tokens, index)
             && is_word(tokens, index + 2)
             && tokens_touch(tokens, index + 1);
-        if !(after_separator || leads_name) {
+        // A constant token is a segment only inside a name (`Vendor\PHP_EOL`, `PHP_EOL\Foo`):
+        // after a lone leading `\` it is the fully qualified global constant (`\PHP_EOL`).
+        let segment = if is_constant_token(&tokens[index].0) {
+            leads_name || (after_separator && follows_word(tokens, index - 1))
+        } else {
+            after_separator || leads_name
+        };
+        if !segment {
             continue;
         }
         let (token, metadata) = &tokens[index];
@@ -83,6 +90,12 @@ fn is_constant_token(token: &Token) -> bool {
             | Token::PhpOs
             | Token::DirectorySeparator
     )
+}
+
+/// Returns whether the `\` at `separator` is glued to a word before it, so the word after it
+/// is an inner segment of a qualified name rather than the first one.
+fn follows_word(tokens: &[SpannedToken], separator: usize) -> bool {
+    separator > 0 && is_word(tokens, separator - 1) && tokens_touch(tokens, separator - 1)
 }
 
 /// Returns whether the token at `index` is spelled as a PHP label: an identifier, a keyword,
