@@ -327,17 +327,7 @@ fn transfer_helpers(throwables: &[String]) -> Vec<Stmt> {
             s_assign("__elephc_map", e_array(vec![])),
             counted_loop(vec![
                 s_assign("__elephc_key", key()),
-                // Written with a typed key: a mixed one appends instead.
-                s_if(
-                    call("is_int", vec![e_var("__elephc_key")]),
-                    vec![s_array_assign("__elephc_map", e_cast(CastType::Int, e_var("__elephc_key")), recurse())],
-                    vec![],
-                    Some(vec![s_array_assign(
-                        "__elephc_map",
-                        e_cast(CastType::String, e_var("__elephc_key")),
-                        recurse(),
-                    )]),
-                ),
+                s_array_assign("__elephc_map", e_var("__elephc_key"), recurse()),
             ]),
             s_return(e_var("__elephc_map")),
         ])
@@ -738,20 +728,6 @@ fn wrapper(extension: &InstalledExtension, function: &SurfaceFunction, local: &s
                         None,
                     ));
                 }
-                if param.by_ref {
-                    body.push(s_if(
-                        has(e_str(&param.name)),
-                        vec![s_throw(e_new(
-                            "\\Error",
-                            vec![e_str(&format!(
-                                "{}(): Elephc cannot write argument ${} back when it is passed by name yet; pass it by position",
-                                function.name, param.name
-                            ))],
-                        ))],
-                        vec![],
-                        None,
-                    ));
-                }
             }
             e_var("__elephc_argc")
         }
@@ -826,14 +802,20 @@ fn wrapper(extension: &InstalledExtension, function: &SurfaceFunction, local: &s
             body.push(s_assign(&param.name, written_back(index as i64)));
         }
     }
+    // Into whichever key the caller gave, position or name: both reach the
+    // caller's variable through the by-reference tail.
     if let Some(Tail::Optional { params }) = &plan.tail {
         for (position, param) in params.iter().enumerate() {
             if param.by_ref {
-                let write = vec![
-                    s_assign("__elephc_back", written_back(fixed_count + position as i64)),
-                    typed_tail_write(position),
-                ];
-                body.push(s_if(has(e_int(position as i64)), write, vec![], None));
+                let back = |key: Expr| {
+                    vec![s_array_assign(OPTIONAL_TAIL, key, written_back(fixed_count + position as i64))]
+                };
+                body.push(s_if(
+                    has(e_int(position as i64)),
+                    back(e_int(position as i64)),
+                    vec![(has(e_str(&param.name)), back(e_str(&param.name)))],
+                    None,
+                ));
             }
         }
     }
@@ -853,28 +835,6 @@ fn wrapper(extension: &InstalledExtension, function: &SurfaceFunction, local: &s
         }));
     }
     builder.body(body).build()
-}
-
-/// `$__elephc_optional[position] = $__elephc_back`, written as the scalar type
-/// the value holds. A `mixed` value written into a by-reference variadic
-/// element is not carried back to the caller's variable on the current
-/// backend, while a typed one is; casting to the type it already has makes
-/// the write a typed one without changing the value.
-fn typed_tail_write(position: usize) -> Stmt {
-    let back = || e_var("__elephc_back");
-    let write = |value: Expr| vec![s_array_assign(OPTIONAL_TAIL, e_int(position as i64), value)];
-    let arms = [
-        ("is_bool", CastType::Bool),
-        ("is_int", CastType::Int),
-        ("is_float", CastType::Float),
-        ("is_string", CastType::String),
-    ];
-    let mut clauses: Vec<(Expr, Vec<Stmt>)> = arms
-        .into_iter()
-        .map(|(test, cast)| (call(test, vec![back()]), write(e_cast(cast, back()))))
-        .collect();
-    let (first_test, first_body) = clauses.remove(0);
-    s_if(first_test, first_body, clauses, Some(write(back())))
 }
 
 /// A declaration for a function whose parameters cannot be passed yet. It is

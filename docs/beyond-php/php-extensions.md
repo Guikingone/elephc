@@ -150,9 +150,7 @@ arguments the extension wrote are written back even when it then throws.
   holding a value of the type the extension writes (`$success = false;
   apcu_fetch("k", $success);`). Elephc types a variable by its storage: a
   variable that has only ever held `null` stays `null`, and an undefined
-  variable is refused at compile time. An optional by-reference argument
-  must be passed by position: passed by name, the call raises an `Error`
-  before it starts, since Elephc cannot write it back yet.
+  variable is refused at compile time.
 - **Extensions are built for the host target.** Their surface is read by
   running them, so cross-installing for another target is not supported yet.
 - Arrays that contain objects cost one small allocation per call that is not
