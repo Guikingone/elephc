@@ -590,3 +590,31 @@ var_dump((new ReflectionClass('C'))->getDefaultProperties()['s']);
         "s,ps,bs,x,n,pr,bx,bp\nbs,bps,bx,bp\ns,ps,bs\nbs,bps\nstring(1) \"b\"\n"
     );
 }
+
+/// A child that redeclares an inherited property lists it where the child declares it, among its
+/// own properties and before the parent's: the redeclaration keeps the parent's storage slot, so
+/// ordering by slot put `$a` and `$x` at the parent's position. Review follow-up for #1489.
+#[test]
+fn test_reflection_lists_redeclared_properties_in_the_childs_order() {
+    let out = compile_and_run(
+        r#"<?php
+class P {
+    public static $a = 1;
+    public static $b = 2;
+    public $x = 10;
+    public $y = 20;
+}
+class C extends P {
+    public static $z = 3;
+    public static $a = 4;
+    public $w = 30;
+    public $x = 11;
+}
+$r = new ReflectionClass(C::class);
+echo implode(",", array_keys($r->getStaticProperties())), "\n";
+echo implode(",", array_keys($r->getDefaultProperties())), "\n";
+echo implode(",", $r->getStaticProperties()), "|", implode(",", $r->getDefaultProperties()), "\n";
+"#,
+    );
+    assert_eq!(out, "z,a,b\nz,a,b,w,x,y\n3,4,2|3,4,2,30,11,20\n");
+}
