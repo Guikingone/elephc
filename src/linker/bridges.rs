@@ -1324,12 +1324,16 @@ mod tests {
     /// therefore called a pre-change `libelephc_magician.a` fresh, linked it, and the compiled
     /// program answered `Fatal error: eval() runtime failed` for a two-argument `ksort()`
     /// inside `eval()`.
+    ///
+    /// The edited source receives an explicit later timestamp because some CI overlay
+    /// filesystems assign the same timestamp to consecutive writes.
     #[test]
     fn staleness_follows_the_bridges_path_dependencies() {
         let bridge = bridge_for_library("elephc_magician").expect("magician bridge");
         let workspace = scratch("staleness_path_deps");
         let bridge_dir = workspace.join("crates").join(bridge.crate_name);
         let shared_dir = workspace.join("crates/elephc-builtin-contract");
+        let shared_source = shared_dir.join("src/lib.rs");
         std::fs::create_dir_all(bridge_dir.join("src")).expect("create bridge crate");
         std::fs::create_dir_all(shared_dir.join("src")).expect("create shared crate");
         std::fs::write(
@@ -1339,18 +1343,30 @@ mod tests {
         )
         .expect("write bridge manifest");
         std::fs::write(bridge_dir.join("src/lib.rs"), "// bridge").expect("write bridge source");
-        std::fs::write(shared_dir.join("src/lib.rs"), "// shared").expect("write shared source");
+        std::fs::write(&shared_source, "// shared").expect("write shared source");
 
         // Written last, so nothing in either crate is newer than the archive yet.
         let archive = workspace.join("libelephc_magician.a");
         std::fs::write(&archive, "archive").expect("write archive");
+        let archive_time = std::fs::metadata(&archive)
+            .and_then(|metadata| metadata.modified())
+            .expect("read archive mtime");
         assert!(
             !bridge.sources_are_newer_than(&workspace, &archive),
             "an archive newer than every source must not be called stale"
         );
 
-        std::fs::write(shared_dir.join("src/lib.rs"), "// shared, edited")
-            .expect("rewrite shared source");
+        std::fs::write(&shared_source, "// shared, edited").expect("rewrite shared source");
+        std::fs::File::options()
+            .write(true)
+            .open(&shared_source)
+            .and_then(|source| {
+                source.set_times(
+                    std::fs::FileTimes::new()
+                        .set_modified(archive_time + std::time::Duration::from_secs(1)),
+                )
+            })
+            .expect("set edited source mtime");
         assert!(
             bridge.sources_are_newer_than(&workspace, &archive),
             "an edit to a path dependency must make the archive stale"

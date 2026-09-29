@@ -181,8 +181,8 @@ pub fn emit_hash_unset(emitter: &mut Emitter) {
     emitter.instruction("stp xzr, xzr, [x12, #8]");                             // clear the released key pointer and key length
     emitter.instruction("stp xzr, xzr, [x12, #24]");                            // clear the removed payload words before callback entry
     emitter.instruction("str xzr, [x12, #40]");                                 // retire the old value tag with its payload
-    emitter.instruction("ldr x15, [sp, #32]");                                 // a capture guard may already own the detached payload
-    emitter.instruction("cbz x15, __rt_hash_unset_done");                      // leave that owner for the outer release
+    emitter.instruction("ldr x15, [sp, #32]");                                  // a capture guard may already own the detached payload
+    emitter.instruction("cbz x15, __rt_hash_unset_done");                       // leave that owner for the outer release
     emitter.instruction("cmp x14, #8");                                         // null values have no heap owner
     emitter.instruction("b.eq __rt_hash_unset_done");                           // return with the removal already committed
     emitter.instruction("cmp x14, #1");                                         // string values release through the uniform dispatcher
@@ -366,7 +366,7 @@ fn emit_hash_unset_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r8 + 32], 0");                          // clear the payload high word
     emitter.instruction("mov QWORD PTR [r8 + 40], 0");                          // retire the old value tag with its payload
     emitter.instruction("cmp QWORD PTR [rbp - 40], 0");                         // a capture guard may already own the detached payload
-    emitter.instruction("je __rt_hash_unset_done");                            // leave that owner for the outer release
+    emitter.instruction("je __rt_hash_unset_done");                             // leave that owner for the outer release
     emitter.instruction("cmp r9, 8");                                           // null values have no heap owner
     emitter.instruction("je __rt_hash_unset_done");                             // return with the removal already committed
     emitter.instruction("cmp r9, 1");                                           // string values release through the uniform dispatcher

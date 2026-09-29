@@ -118,7 +118,7 @@ fn emit_take(emitter: &mut Emitter) {
             emitter.label("__rt_array_take_entry");
             emitter.instruction("mov rax, QWORD PTR [rax + 40]");               // locate the separately allocated hash entries
             emitter.instruction("shl r11, 6");                                  // each hash bucket occupies sixty-four bytes
-            emitter.instruction("add r11, rax");                               // select the entry in the separate storage
+            emitter.instruction("add r11, rax");                                // select the entry in the separate storage
             emitter.instruction("mov rdi, QWORD PTR [r11 + 8]");                // borrow the selected key's low word
             emitter.instruction("mov rsi, QWORD PTR [r11 + 16]");               // borrow its length or integer sentinel
             abi::store_at_offset(emitter, "rdi", 32);
@@ -232,7 +232,7 @@ fn emit_hash_pop(emitter: &mut Emitter) {
             emitter.instruction("mov r11, QWORD PTR [rdi + 32]");               // load the insertion-order tail slot index
             emitter.instruction("mov rdi, QWORD PTR [rdi + 40]");               // locate the separately allocated hash entries
             emitter.instruction("shl r11, 6");                                  // scale the tail index by the sixty-four-byte bucket size
-            emitter.instruction("add r11, rdi");                               // select the entry in the separate storage
+            emitter.instruction("add r11, rdi");                                // select the entry in the separate storage
             emitter.instruction("mov rdi, QWORD PTR [r11 + 8]");                // preserve the tail key low word
             emitter.instruction("mov rsi, QWORD PTR [r11 + 16]");               // preserve the tail key high word
             abi::store_at_offset(emitter, "rdi", 16);
