@@ -83,6 +83,18 @@ pub(crate) const TAGGED_SCALAR_TAG_NULL: i64 = 8;
 /// This is an internal array-storage tag, not a boxed Mixed runtime value tag.
 pub(crate) const TAGGED_SCALAR_ARRAY_VALUE_TYPE: i64 = 11;
 
+/// Value tag a class property descriptor (`_class_vd_desc_*`, `_class_prop_desc_*`,
+/// `_class_json_desc_*`, `_class_serprop_*`) carries for an inline `{payload, tag}` slot.
+///
+/// A `?int` property stores its runtime tag in the slot's HIGH word, so no single static tag
+/// describes it: `0` would render a null as the sentinel integer, and `7` (the tag every other
+/// union gets) makes the walker dereference the integer payload as a Mixed cell pointer — the
+/// segfault `var_dump($objectWithNullableInt)` hit (#1503). Walkers replace this marker with
+/// the slot's high word before dispatching, via [`emit_resolve_tagged_scalar_property_tag`].
+/// It is deliberately outside the runtime value tag range (0-10), and the GC descriptor never
+/// carries it: there a tagged slot is `0`, since it owns no heap reference.
+pub(crate) const TAGGED_SCALAR_PROPERTY_TAG: u64 = 12;
+
 /// Uniform low-byte heap kinds shared by allocation producers, ownership dispatchers and GC.
 ///
 /// These values describe top-level managed allocations. They are unrelated to Mixed runtime
@@ -228,6 +240,27 @@ pub(crate) fn emit_branch_if_tagged_scalar_null(emitter: &mut Emitter, label: &s
         Arch::X86_64 => {
             emitter.instruction(&format!("cmp rdx, {}", TAGGED_SCALAR_TAG_NULL)); // does the tagged scalar carry the runtime null tag?
             emitter.instruction(&format!("je {}", label));                      // branch when the tagged scalar is PHP null
+        }
+    }
+}
+
+/// Replaces a property descriptor's [`TAGGED_SCALAR_PROPERTY_TAG`] in `tag_reg` with the
+/// runtime tag the slot itself carries in its high word, already loaded into `high_word_reg`.
+/// Every other descriptor tag passes through unchanged, so a walker can run this right after
+/// loading a row's tag and keep its existing `(tag, low word, high word)` dispatch.
+pub(crate) fn emit_resolve_tagged_scalar_property_tag(
+    emitter: &mut Emitter,
+    tag_reg: &str,
+    high_word_reg: &str,
+) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {}, #{}", tag_reg, TAGGED_SCALAR_PROPERTY_TAG)); // is this an inline tagged-scalar property slot?
+            emitter.instruction(&format!("csel {}, {}, {}, eq", tag_reg, high_word_reg, tag_reg)); // such a slot carries its runtime tag in its high word
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {}, {}", tag_reg, TAGGED_SCALAR_PROPERTY_TAG)); // is this an inline tagged-scalar property slot?
+            emitter.instruction(&format!("cmove {}, {}", tag_reg, high_word_reg)); // such a slot carries its runtime tag in its high word
         }
     }
 }

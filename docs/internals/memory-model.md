@@ -195,6 +195,17 @@ The callee then reads the raw payload word as a Mixed pointer, and the caller's 
 value held an integer or null (#1040). The same shape is worth checking at any other match arm
 that treats a union as boxed.
 
+The per-class property descriptors the runtime walkers read (`_class_vd_desc_*` for `var_dump`,
+`_class_prop_desc_*` for `print_r`/`var_export`, `_class_json_desc_*`, `_class_serprop_*` for
+`serialize`/`unserialize`/`get_object_vars`/`(array)`) had the same hole: a `?int` property got
+the union's static tag 7, so every walker dereferenced the integer payload as a Mixed cell
+pointer (#1503). No static tag can describe that slot, because its tag is only known at run
+time, so those descriptors carry `TAGGED_SCALAR_PROPERTY_TAG` (12) instead, and each walker
+replaces it with the slot's high word before dispatching
+(`emit_resolve_tagged_scalar_property_tag`). `unserialize` writes the `{payload, tag}` pair
+back into such a slot. The GC descriptor (`_class_gc_desc_*`) records the slot as `0`: it owns
+no heap reference, and tag 7 there had handed the payload to decref, clone and cycle marking.
+
 ### Pointer values
 
 Pointers are stored as raw 64-bit addresses. An opaque pointer and a typed `ptr<T>` value have the same runtime representation; the type tag only exists in the checker. Null pointers use address `0x0`, and dereference helpers explicitly trap on null via `__rt_ptr_check_nonnull`.
