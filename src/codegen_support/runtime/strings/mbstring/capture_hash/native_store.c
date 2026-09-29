@@ -65,6 +65,10 @@ void *fixture_allocate(size_t size) {
     ++live;
     return owner + 1;
 }
+/* A freed block is quarantined, never returned to malloc: `is_live` matches by address, and a
+   reused address would make a stale pointer look live again (`!is_live(array)` after an indexed
+   array is promoted and its storage reused by a persisted string). The payload is scribbled so a
+   runtime read of freed memory still shows; the fixture's allocation count is bounded anyway. */
 void fixture_free(void *) __asm__("fixture_free");
 void fixture_free(void *value) {
     for (size_t i = 0; i < allocated; ++i) {
@@ -72,7 +76,9 @@ void fixture_free(void *value) {
             allocations[i].live = 0;
             CHECK(live > 0);
             --live;
-            free(header(value));
+            size_t size = header(value)->size;
+            memset(value, 0xdd, size ? size : 8);
+            header(value)->refs = 0;
             return;
         }
     }
