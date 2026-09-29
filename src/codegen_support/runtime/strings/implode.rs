@@ -769,9 +769,10 @@ mod tests {
         assert_eq!(asm.matches("add rsp, 112").count(), 1);
     }
 
-    /// The element arms that format through concat scratch: boxed Mixed, raw int, raw float,
-    /// and true bool. Tagged nullable ints format directly into the reserved result destination.
-    const FORMATTING_ARMS: usize = 4;
+    /// The element arms that format through concat scratch: only boxed Mixed. Raw int, raw
+    /// float, true bool and tagged nullable ints format directly into the reserved result
+    /// destination, so they publish nothing.
+    const FORMATTING_ARMS: usize = 1;
 
     /// The owned mixed-cast slot must be cleared at the TOP of every element iteration, so a
     /// borrowed (typed-array) element can never inherit the previous iteration's owned pointer
@@ -792,8 +793,8 @@ mod tests {
     }
 
     /// Pins the ARM64 cursor discipline: the LIVE destination cursor is published as
-    /// `_concat_off` before every nested cast (so `__rt_ftoa`/`__rt_itoa` format past the bytes
-    /// already joined), and the finalizer stamps the ABSOLUTE end offset instead of adding the
+    /// `_concat_off` before the nested Mixed cast (so the cast formats past the bytes already
+    /// joined), and the finalizer stamps the ABSOLUTE end offset instead of adding the
     /// result length to whatever `_concat_off` the nested cast left behind.
     ///
     /// Every site branches on where the destination lives. A scratch destination publishes
@@ -883,8 +884,9 @@ mod tests {
             let asm = emitter.output();
             assert_eq!(
                 asm.matches(grow).count(),
-                4,
-                "glue, element, mixed-cast, and tagged-scalar headroom must each grow on {:?}",
+                7,
+                "glue, element, mixed-cast, tagged-scalar and the raw int, float and bool \
+                 headroom must each grow on {:?}",
                 target.arch
             );
             assert!(

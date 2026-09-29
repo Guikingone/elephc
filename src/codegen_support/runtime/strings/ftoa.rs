@@ -195,23 +195,22 @@ fn emit_ftoa_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: ftoa (precision=14, PHP zend_gcvt layout) ---");
     // Frame: [rbp - 56 .. rbp - 8) snprintf scratch, [rbp - 64] caller destination (0 means
     // `_concat_buf` at `_concat_off`).
+    // Both entries are frameless and only pick the destination; the body builds the frame, so
+    // it is entered exactly as a called function is and its `snprintf` call stays aligned.
     emitter.label_global("__rt_ftoa");
-    emitter.instruction("push rbp");                                            // save the caller frame pointer before using stack locals
-    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the formatting helper
-    emitter.instruction("sub rsp, 64");                                         // reserve aligned scratch space for the snprintf result
-    emitter.instruction("mov QWORD PTR [rbp - 64], 0");                         // no caller destination: format into _concat_buf at _concat_off
+    emitter.instruction("xor esi, esi");                                        // no caller destination: format into _concat_buf at _concat_off
     emitter.instruction("jmp __rt_ftoa_body");                                  // share the formatter body
 
     // `__rt_ftoa_into`: the same formatter writing into the caller window in rsi.
     emitter.label_global("__rt_ftoa_into");
-    emitter.instruction("push rbp");                                            // save the caller frame pointer before using stack locals
-    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the formatting helper
-    emitter.instruction("sub rsp, 64");                                         // reserve aligned scratch space for the snprintf result
-    emitter.instruction("mov QWORD PTR [rbp - 64], rsi");                       // remember the caller destination across snprintf
-    emitter.instruction("jmp __rt_ftoa_body");                                  // share the formatter body
+    emitter.instruction("jmp __rt_ftoa_body");                                  // share the formatter body with the destination in rsi
 
     // The shared body is its own global symbol; see the AArch64 variant.
     emitter.label_global("__rt_ftoa_body");
+    emitter.instruction("push rbp");                                            // save the caller frame pointer before using stack locals
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the formatting helper
+    emitter.instruction("sub rsp, 64");                                         // reserve aligned scratch space for the snprintf result
+    emitter.instruction("mov QWORD PTR [rbp - 64], rsi");                       // remember the caller destination (or 0) across snprintf
     emitter.instruction("lea rdi, [rbp - 56]");                                 // snprintf destination = stack scratch buffer
     emitter.instruction("mov esi, 48");                                         // scratch buffer size limit
     abi::emit_symbol_address(emitter, "rdx", "_fmt_g");
