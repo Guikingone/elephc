@@ -1934,6 +1934,70 @@ var_dump($f(pick()));
     );
 }
 
+/// A callable `array_slice()` honors a `$preserve_keys` flag the checker cannot see.
+///
+/// `call_user_func_array($f, $args)` hands its arguments over at run time, so the builtin's
+/// callable wrapper receives the flag as a runtime parameter. The wrapper used to drop it and
+/// always renumbered integer keys: `[5 => "x", 9 => "y"]` sliced at 1 with `true` answered
+/// `[0 => "y"]` instead of `[9 => "y"]`. Hashes with string keys, lists, truthy and falsy
+/// non-bool flags, an omitted flag, and a callable held in an array all keep PHP's keys.
+/// Expected output is verbatim PHP 8.5.10.
+#[test]
+fn test_callable_array_slice_honors_a_runtime_preserve_keys_flag() {
+    let out = compile_and_run(
+        r#"<?php
+$f = array_slice(...);
+$args = [[5 => "x", 9 => "y"], 1, 1, true];
+echo json_encode(call_user_func_array($f, $args)), "|";
+$args[3] = false;
+echo json_encode(call_user_func_array($f, $args)), "|";
+$args = [["a" => 1, 5 => 2, 9 => 3], 1, null, "1"];
+echo json_encode(call_user_func_array($f, $args)), "|";
+$args[3] = 0;
+echo json_encode(call_user_func_array($f, $args)), "|";
+$args = [[10, 20, 30, 40], 1, 2, true];
+echo json_encode(call_user_func_array($f, $args)), "|";
+$args = [[10, 20, 30, 40], -2];
+echo json_encode(call_user_func_array($f, $args)), "|";
+$fns = ["slice" => $f];
+echo json_encode($fns["slice"]([5 => "x", 9 => "y"], 0, 1, true)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"9\":\"y\"}|[\"y\"]|{\"5\":2,\"9\":3}|[2,3]|{\"1\":20,\"2\":30}|[30,40]|{\"5\":\"x\"}\n"
+    );
+}
+
+/// A callable `array_reverse()` honors a `$preserve_keys` flag the checker cannot see.
+///
+/// Like `array_slice()`, its callable wrapper dropped the flag, so `call_user_func_array($r,
+/// [[1, 2, 3], true])` through a runtime argument array answered `[3, 2, 1]` instead of keeping
+/// the keys `2, 1, 0`. The boxed reversal already reads the flag at run time; the wrapper now
+/// forwards it. Expected output is verbatim PHP 8.5.10.
+#[test]
+fn test_callable_array_reverse_honors_a_runtime_preserve_keys_flag() {
+    let out = compile_and_run(
+        r#"<?php
+$r = array_reverse(...);
+$args = [[1, 2, 3], true];
+echo json_encode(call_user_func_array($r, $args)), "|";
+$args[1] = false;
+echo json_encode(call_user_func_array($r, $args)), "|";
+$args = [["x" => 1, 5 => [2], 9 => "three"], "1"];
+echo json_encode(call_user_func_array($r, $args)), "|";
+$args[1] = 0;
+echo json_encode(call_user_func_array($r, $args)), "|";
+$fns = ["rev" => $r];
+echo json_encode($fns["rev"]([7, 8], true)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"2\":3,\"1\":2,\"0\":1}|[3,2,1]|{\"9\":\"three\",\"5\":[2],\"x\":1}|{\"0\":\"three\",\"1\":[2],\"x\":1}|{\"1\":8,\"0\":7}\n"
+    );
+}
+
 /// A callable-builtin result map must keep same-coordinate included calls independent.
 #[test]
 fn test_first_class_builtin_result_types_do_not_collide_across_included_files() {

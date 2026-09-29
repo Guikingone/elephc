@@ -1065,19 +1065,17 @@ impl RuntimeFnId {
                 set_callable_param_type(sig, 1, PhpType::Mixed);
                 sig.return_type = PhpType::Mixed;
             }
-            // `array_reverse()`'s `$preserve_keys` and `array_slice()`'s `$preserve_keys` pick
-            // between an indexed array and an integer-keyed hash, so the backend needs them as
-            // compile-time literals. A dynamic callable wrapper receives runtime parameters, so
-            // the flag is dropped from the wrapper ABI exactly like `count()`'s `$mode`; the
-            // wrapper then always renumbers integer keys. `array_slice()`'s return type is pinned
-            // to the boxed PHP array its boxed-source helper materializes, because the wrapper has
-            // no per-call-site checked type to read and its source may be a list or a hash.
-            RuntimeFnId::ArrayReverse => truncate_callable_params(sig, 1),
+            // `array_chunk()`'s `$preserve_keys` picks between nested lists and nested
+            // integer-keyed hashes, so the backend needs it as a compile-time literal. A dynamic
+            // callable wrapper receives runtime parameters, so the flag is dropped from the
+            // wrapper ABI exactly like `count()`'s `$mode`. `array_reverse()` and `array_slice()`
+            // keep every parameter: their wrappers take a boxed source, whose result is the boxed
+            // PHP array whatever the flag says, so the boxed lowering reads `$preserve_keys` at
+            // runtime (the invoker converts a dynamic argument with PHP truthiness for the `bool`
+            // parameter). `array_slice()`'s return type is pinned to that boxed PHP array,
+            // because the wrapper has no per-call-site checked type to read.
             RuntimeFnId::ArrayChunk => truncate_callable_params(sig, 2),
-            RuntimeFnId::ArraySlice => {
-                truncate_callable_params(sig, 3);
-                sig.return_type = PhpType::php_array();
-            }
+            RuntimeFnId::ArraySlice => sig.return_type = PhpType::php_array(),
             RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct => {
                 set_callable_param_type(sig, 0, PhpType::php_array());
                 sig.return_type = PhpType::Mixed;

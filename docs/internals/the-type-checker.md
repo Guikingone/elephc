@@ -970,6 +970,12 @@ that answer is built from the operand types alone: an associative source keeps i
 boxed `mixed`/`array` source gets the boxed PHP array type, so the string-literal spelling above
 slices a hash instead of refusing it (issue #1347).
 
+A `call_user_func_array(…, $dynamic)` call reaches the builtin's callable wrapper, whose ABI
+comes from `RuntimeFnId::refine_runtime_callable_wrapper_sig`. The `array_slice()` and
+`array_reverse()` wrappers keep their `$preserve_keys` parameter: they take a boxed source, whose
+result is the boxed PHP array whatever the flag says, so the boxed lowering reads the flag at run
+time instead of the wrapper silently renumbering the keys.
+
 When the contract REJECTS the arguments at a recorded site, the checker reports the rejection only
 if it is a compile-time literal requirement (`CompileErrorKind::AotLiteralRequired`: a
 `preserve_keys` flag, a constant or class name, a `str_word_count()` format). Every lowering of the

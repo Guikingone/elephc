@@ -241,6 +241,41 @@ for ($i = 0; $i < 2; $i++) {
     assert_eq!(out, r#"{"a":1,"b":2}|{"a":2,"b":2}|"#);
 }
 
+/// A key-preserving slice of a boxed payload through the callable wrapper owns its elements.
+///
+/// `call_user_func_array(array_slice(...), $args)` passes `$preserve_keys` at run time, and a
+/// list payload is then sliced into a hash by `__rt_array_slice_to_hash`. On x86_64 that helper
+/// handed its retain the wrong register, so the result shared its arrays with the source without
+/// owning them. Hash payloads go through `__rt_hash_slice` with the same flag. Expected output
+/// is verbatim PHP 8.5.10.
+#[test]
+fn test_callable_array_slice_keeping_keys_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$f = array_slice(...);
+for ($i = 0; $i < 3; $i++) {
+    $rows = [["id" => $i], ["id" => $i + 1], "tail" . $i];
+    foreach ([true, false] as $keep) {
+        $args = [$rows, 1, null, $keep];
+        $slice = call_user_func_array($f, $args);
+        echo json_encode($slice), "|";
+    }
+    $args = [["k" => [$i], 4 => "v" . $i, 8 => [$i, $i]], 1, 2, true];
+    echo json_encode(call_user_func_array($f, $args)), "|";
+}
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        concat!(
+            r#"{"1":{"id":1},"2":"tail0"}|[{"id":1},"tail0"]|{"4":"v0","8":[0,0]}|"#,
+            r#"{"1":{"id":2},"2":"tail1"}|[{"id":2},"tail1"]|{"4":"v1","8":[1,1]}|"#,
+            r#"{"1":{"id":3},"2":"tail2"}|[{"id":3},"tail2"]|{"4":"v2","8":[2,2]}|"#,
+        )
+    );
+    assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
+}
+
 /// Slicing boxed hash and list payloads in a loop releases every intermediate array and box.
 #[test]
 fn test_array_slice_on_mixed_receiver_is_heap_clean() {
