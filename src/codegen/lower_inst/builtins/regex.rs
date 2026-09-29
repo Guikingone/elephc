@@ -235,6 +235,9 @@ fn preg_replace_callback_target(
 }
 
 /// Emits a descriptor callback wrapper that adapts regex matches to callable descriptors.
+///
+/// Reopens the caller's text section after the wrapper so the rest of the caller stays in
+/// its own ELF section instead of continuing inside the wrapper's.
 fn emit_descriptor_callback_wrapper(ctx: &mut FunctionContext<'_>) -> String {
     let wrapper_label = ctx.next_global_label("preg_replace_descriptor_callback_wrapper");
     let done_label = ctx.next_label("preg_replace_descriptor_callback_after_wrapper");
@@ -247,8 +250,10 @@ fn emit_descriptor_callback_wrapper(ctx: &mut FunctionContext<'_>) -> String {
         descriptor_return_type: Some(PhpType::Str),
         invocation_scope_class_id: ctx.lexical_class_id(),
     };
+    let enclosing = ctx.emitter.current_text_section();
     abi::emit_jump(ctx.emitter, &done_label);
     crate::codegen::emit_callback_wrapper(ctx.emitter, &wrapper);
+    ctx.emitter.reopen_text_section(enclosing);
     ctx.emitter.label(&done_label);
     wrapper_label
 }

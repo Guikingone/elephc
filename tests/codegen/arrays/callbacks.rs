@@ -1734,6 +1734,27 @@ echo implode(",", $w);
     assert_eq!(out, "d,c,b,a");
 }
 
+/// Verifies typed first-class-callable callbacks over Mixed elements compile through the
+/// inline argument adapter, which must be minted as a real symbol for `label_global()`.
+#[test]
+fn test_first_class_callable_callbacks_adapt_mixed_elements() {
+    let out = compile_and_run(
+        r#"<?php
+function cmp(int $a, int $b): int { return $a <=> $b; }
+function dbl(int $x): int { return $x * 2; }
+function mk(): array { return [3, "1", 2]; }
+$a = mk();
+usort($a, cmp(...));
+echo json_encode($a), "\n";
+$b = [3, "1", 2];
+usort($b, cmp(...));
+echo json_encode($b), "\n";
+echo json_encode(array_map(dbl(...), mk())), "\n";
+"#,
+    );
+    assert_eq!(out, "[\"1\",2,3]\n[\"1\",2,3]\n[6,2,4]\n");
+}
+
 // --- array_reduce over indexed string arrays (16-byte descriptor slots) ---
 
 /// Verifies `array_reduce()` folds an indexed string array into an integer accumulator,

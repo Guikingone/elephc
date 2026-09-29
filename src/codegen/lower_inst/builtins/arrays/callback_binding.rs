@@ -87,6 +87,10 @@ pub(super) fn static_sort_callback_binding(
 }
 
 /// Adapts boxed runtime callback arguments to a direct callback's declared ABI types.
+///
+/// The adapter is emitted inline through `emit_callback_wrapper()`, whose `label_global()`
+/// needs a real symbol name and opens the adapter's own ELF text section, so the caller's
+/// section is reopened after it and the rest of the caller does not continue inside it.
 pub(super) fn adapt_direct_callback_visible_args(
     ctx: &mut FunctionContext<'_>,
     target_label: String,
@@ -117,7 +121,7 @@ pub(super) fn adapt_direct_callback_visible_args(
         )));
     }
 
-    let wrapper_label = ctx.next_label("direct_callback_arg_adapter");
+    let wrapper_label = ctx.next_global_label("direct_callback_arg_adapter");
     let done_label = ctx.next_label("direct_callback_after_arg_adapter");
     let wrapper = DeferredCallbackWrapper {
         label: wrapper_label.clone(),
@@ -128,8 +132,10 @@ pub(super) fn adapt_direct_callback_visible_args(
         descriptor_return_type: None,
         invocation_scope_class_id: ctx.lexical_class_id(),
     };
+    let enclosing = ctx.emitter.current_text_section();
     abi::emit_jump(ctx.emitter, &done_label);
     crate::codegen::emit_callback_wrapper(ctx.emitter, &wrapper);
+    ctx.emitter.reopen_text_section(enclosing);
     ctx.emitter.label(&done_label);
     Ok((
         wrapper_label,
