@@ -33514,3 +33514,100 @@ echo function_exists("sodium_crypto_box_seal") ? "y" : "n";');
         )
     );
 }
+
+/// Verifies eval code calling a compiled static method with a `string ...$paths` variadic.
+///
+/// The compiled body stores that tail as a packed string array and is specialized on it, but the
+/// interpreter handed it boxed Mixed slots: Symfony's `Path::join()`, called from an interpreted
+/// class, ran `array_filter()` over them and asked the allocator for 8 GB ("heap memory
+/// exhausted"). Expected output is php 8.5.10's.
+#[test]
+fn test_eval_call_to_compiled_string_variadic_static_method() {
+    let out = compile_and_run(
+        r#"<?php
+final class Path {
+    public static function join(string ...$paths): string {
+        return implode('/', array_filter($paths, fn ($p) => $p !== ''));
+    }
+    public static function first(string $a, string ...$rest): string {
+        return $a . '+' . count($rest) . ':' . implode(',', $rest);
+    }
+}
+echo Path::join('a', '', 'c'), "\n";
+eval('
+echo Path::join("/var", "", "assets.json"), "\n";
+echo Path::join("x"), "|", Path::join(), "\n";
+echo Path::first("q", "w", "e"), "\n";
+$parts = ["m", "n"];
+echo Path::join(...$parts), "\n";
+');
+"#,
+    );
+    assert_eq!(out, "a/c\n/var/assets.json\nx|\nq+2:w,e\nm/n\n");
+}
+
+/// Verifies eval code can open `php://stdout` and `php://stderr` in any write mode.
+///
+/// The interpreter's `fopen()` knew no `php://std*` stream, so Monolog's `StreamHandler`
+/// (`fopen('php://stderr', 'a')`, the Symfony demo's production log target) threw "could not be
+/// opened in append mode" on every request. Closing one must not close the process descriptor.
+/// Expected output is php 8.5.10's.
+#[test]
+fn test_eval_opens_php_std_streams() {
+    let out = compile_and_run(
+        r#"<?php
+eval('
+foreach (["a", "ab", "w", "wb"] as $m) {
+    $h = fopen("php://stderr", $m);
+    echo $m, "=", is_resource($h) ? "ok" : "no", "\n";
+    fclose($h);
+}
+$o = fopen("php://stdout", "a");
+fwrite($o, "through-stdout\n");
+fclose($o);
+$o = fopen("PHP://STDOUT", "w");
+fwrite($o, "again\n");
+');
+echo "end\n";
+"#,
+    );
+    assert_eq!(out, "a=ok\nab=ok\nw=ok\nwb=ok\nthrough-stdout\nagain\nend\n");
+}
+
+/// Verifies compiled `method_exists()` / `property_exists()` see the members of an object whose
+/// class the interpreter declared.
+///
+/// A compiled frame with no eval context of its own answered from the native class tables, which
+/// only know the compiled parent. Twig's compiled `Template::getTemplateForMacro()` asks
+/// `method_exists($this, 'macro_render_language_selector')` of a template class loaded at run
+/// time, so every page using a macro failed with "Macro ... is not defined". Expected output is
+/// php 8.5.10's.
+#[test]
+fn test_compiled_member_exists_sees_an_interpreted_subclass() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class Template {
+    public function has(string $name): bool { return method_exists($this, $name); }
+    public function has2(string $name): bool { eval('$x = 1;'); return method_exists($this, $name); }
+    abstract public function name(): string;
+}
+function probe(object $o, string $m): string { return method_exists($o, $m) ? "y" : "n"; }
+function prop(object $o, string $p): string { return property_exists($o, $p) ? "y" : "n"; }
+$code = 'class Tpl_abc extends Template {
+    public $shown = 1;
+    public function name(): string { return "tpl"; }
+    public function macro_render(): string { return "macro!"; }
+    private function secret(): void {}
+}
+return new Tpl_abc();' . ($argc > 5 ? '' : '');
+$t = eval($code);
+echo $t->name(), " ", $t->has('macro_render') ? "has" : "missing", " ", $t->has('nope') ? "has" : "missing", "\n";
+echo probe($t, 'macro_render'), probe($t, 'name'), probe($t, 'secret'), probe($t, 'has'), probe($t, 'zzz'), "\n";
+echo prop($t, 'shown'), prop($t, 'hidden'), "\n";
+class Plain { public $p; public function m() {} }
+echo probe(new Plain(), 'm'), probe(new Plain(), 'x'), prop(new Plain(), 'p'), "\n";
+echo $t->has2('macro_render') ? "has2" : "missing2", "\n";
+"#,
+    );
+    assert_eq!(out, "tpl has missing\nyyyyn\nyn\nyny\nhas2\n");
+}

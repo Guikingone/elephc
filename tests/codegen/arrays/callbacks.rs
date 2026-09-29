@@ -2132,3 +2132,63 @@ echo json_encode(run(['k' => 'v', 'o' => new Holder()]));
     );
     assert_eq!(out, r#"["v","x",2,{"a":"x","b":2}]"#);
 }
+
+/// Verifies php's user-comparator set functions in compiled code and in eval().
+///
+/// `array_udiff_assoc()` and its seven siblings did not exist at all, and the interpreter had
+/// none of the family (nor `array_diff_assoc()`/`array_intersect_assoc()`). Symfony's
+/// `UrlGenerator::doGenerate()` calls `array_udiff_assoc()` for every generated URL, so every
+/// Twig page of the Symfony demo died on its first `path()`. Expected output is php 8.5.10's.
+#[test]
+fn test_user_comparator_set_functions_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ['a' => 'green', 'b' => 'brown', 'c' => 'blue', 'red', 10 => 'x'];
+$b = ['a' => 'GREEN', 'B' => 'brown', 'yellow', 'red', 11 => 'x'];
+$c = ['A' => 'green', 'c' => 'Blue'];
+$vcmp = fn ($x, $y) => strcasecmp((string) $x, (string) $y);
+$kcmp = fn ($x, $y) => strcasecmp((string) $x, (string) $y);
+echo json_encode(array_udiff_assoc($a, $b, $vcmp)), "\n";
+echo json_encode(array_udiff_uassoc($a, $b, $vcmp, $kcmp)), "\n";
+echo json_encode(array_diff_ukey($a, $b, $kcmp)), "\n";
+echo json_encode(array_diff_uassoc($a, $b, $c, $kcmp)), "\n";
+echo json_encode(array_uintersect_assoc($a, $b, $vcmp)), "\n";
+echo json_encode(array_uintersect_uassoc($a, $b, $vcmp, $kcmp)), "\n";
+echo json_encode(array_intersect_ukey($a, $b, $c, $kcmp)), "\n";
+echo json_encode(array_intersect_uassoc($a, $b, $kcmp)), "\n";
+eval('
+$a = ["a" => "green", "b" => "brown", "c" => "blue", "red", 10 => "x"];
+$b = ["a" => "GREEN", "B" => "brown", "yellow", "red", 11 => "x"];
+$c = ["A" => "green", "c" => "Blue"];
+$vcmp = fn ($x, $y) => strcasecmp((string) $x, (string) $y);
+echo json_encode(array_udiff_assoc($a, $b, $vcmp)), "\n";
+echo json_encode(array_udiff_uassoc($a, $b, $vcmp, "strcasecmp")), "\n";
+echo json_encode(array_diff_ukey($a, $b, "strcasecmp")), "\n";
+echo json_encode(array_intersect_ukey($a, $b, $c, "strcasecmp")), "\n";
+echo json_encode(array_diff_assoc($a, $b)), json_encode(array_intersect_assoc($a, $b)), "\n";
+echo json_encode(array_udiff([1, 5, 3], [3], fn ($x, $y) => $x <=> $y)), "\n";
+echo json_encode(array_uintersect([1, 5, 3], [3, 1], fn ($x, $y) => $x <=> $y)), "\n";
+');
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "{\"b\":\"brown\",\"c\":\"blue\",\"0\":\"red\",\"10\":\"x\"}\n",
+            "{\"c\":\"blue\",\"0\":\"red\",\"10\":\"x\"}\n",
+            "{\"c\":\"blue\",\"10\":\"x\"}\n",
+            "{\"c\":\"blue\",\"0\":\"red\",\"10\":\"x\"}\n",
+            "{\"a\":\"green\"}\n",
+            "{\"a\":\"green\",\"b\":\"brown\"}\n",
+            "{\"a\":\"green\"}\n",
+            "{\"b\":\"brown\"}\n",
+            "{\"b\":\"brown\",\"c\":\"blue\",\"0\":\"red\",\"10\":\"x\"}\n",
+            "{\"c\":\"blue\",\"0\":\"red\",\"10\":\"x\"}\n",
+            "{\"c\":\"blue\",\"10\":\"x\"}\n",
+            "{\"a\":\"green\"}\n",
+            "{\"a\":\"green\",\"b\":\"brown\",\"c\":\"blue\",\"0\":\"red\",\"10\":\"x\"}[]\n",
+            "[1,5]\n",
+            "{\"0\":1,\"2\":3}\n",
+        )
+    );
+}

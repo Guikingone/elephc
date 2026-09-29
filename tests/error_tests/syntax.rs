@@ -669,3 +669,9 @@ fn test_error_reference_element_in_keyed_and_legacy_array_literals() {
         "ordinary local reference cells cannot yet outlive their declaring scope",
     );
 }
+
+/// Verifies that a unary plus with no operand is a syntax error, like a unary minus.
+#[test]
+fn test_error_unary_plus_without_operand() {
+    expect_error("<?php echo +;", "Unexpected token");
+}

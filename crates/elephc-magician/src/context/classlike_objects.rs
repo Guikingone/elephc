@@ -194,12 +194,22 @@ impl ElephcEvalContext {
         let enum_name = self
             .resolve_enum_name(enum_name)
             .unwrap_or_else(|| enum_name.trim_start_matches('\\').to_string());
-        self.enum_cases
-            .get(&(
-                normalize_class_name(&enum_name),
-                normalize_enum_case_name(case_name),
-            ))
-            .copied()
+        let key = (
+            normalize_class_name(&enum_name),
+            normalize_enum_case_name(case_name),
+        );
+        if let Some(case) = self.enum_cases.get(&key).copied() {
+            return Some(case);
+        }
+        // An enum declared by ANOTHER context (a class file the autoloader included from a
+        // compiled frame gets a context of its own) is imported by `sync_global_eval_classes`,
+        // but its case singletons were made over there. Symfony's `ReflectionExtractor::MAP_TYPES`
+        // reads `TypeIdentifier::INT->value` right after the autoloader declared the enum.
+        #[cfg(not(test))]
+        if self.enums.contains_key(&key.0) {
+            return global_eval_enum_case(&key.0, &key.1).map(|(case, _)| case);
+        }
+        None
     }
 
     /// Stores a materialized singleton case object and returns any replaced distinct cell.
@@ -209,13 +219,13 @@ impl ElephcEvalContext {
         case_name: &str,
         cell: RuntimeCellHandle,
     ) -> Option<RuntimeCellHandle> {
-        let previous = self.enum_cases.insert(
-            (
-                normalize_class_name(enum_name),
-                normalize_enum_case_name(case_name),
-            ),
-            cell,
+        let key = (
+            normalize_class_name(enum_name),
+            normalize_enum_case_name(case_name),
         );
+        #[cfg(not(test))]
+        register_global_eval_enum_case(key.0.clone(), key.1.clone(), cell);
+        let previous = self.enum_cases.insert(key, cell);
         previous.filter(|previous| *previous != cell)
     }
 
@@ -224,12 +234,18 @@ impl ElephcEvalContext {
         let enum_name = self
             .resolve_enum_name(enum_name)
             .unwrap_or_else(|| enum_name.trim_start_matches('\\').to_string());
-        self.enum_case_values
-            .get(&(
-                normalize_class_name(&enum_name),
-                normalize_enum_case_name(case_name),
-            ))
-            .copied()
+        let key = (
+            normalize_class_name(&enum_name),
+            normalize_enum_case_name(case_name),
+        );
+        if let Some(value) = self.enum_case_values.get(&key).copied() {
+            return Some(value);
+        }
+        #[cfg(not(test))]
+        if self.enums.contains_key(&key.0) {
+            return global_eval_enum_case(&key.0, &key.1).and_then(|(_, value)| value);
+        }
+        None
     }
 
     /// Stores a materialized backing value and returns any replaced distinct cell.
@@ -239,13 +255,13 @@ impl ElephcEvalContext {
         case_name: &str,
         cell: RuntimeCellHandle,
     ) -> Option<RuntimeCellHandle> {
-        let previous = self.enum_case_values.insert(
-            (
-                normalize_class_name(enum_name),
-                normalize_enum_case_name(case_name),
-            ),
-            cell,
+        let key = (
+            normalize_class_name(enum_name),
+            normalize_enum_case_name(case_name),
         );
+        #[cfg(not(test))]
+        register_global_eval_enum_case_value(key.0.clone(), key.1.clone(), cell);
+        let previous = self.enum_case_values.insert(key, cell);
         previous.filter(|previous| *previous != cell)
     }
 

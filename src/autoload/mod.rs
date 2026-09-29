@@ -12,6 +12,7 @@
 //!   loaded, which `crate::opcache_prelude` bakes into the OPcache script manifest.
 
 mod alias;
+pub mod deferral;
 mod composer_files;
 mod dynamic_contracts;
 mod index;
@@ -131,6 +132,7 @@ pub fn run_collecting_included_with_defines_and_sources(
     let mut included: HashSet<PathBuf> = HashSet::new();
     let mut nested_includes: HashSet<PathBuf> = HashSet::new();
     let mut declaration_sources = DeclarationSourceFiles::default();
+    let mut deferred: Vec<PathBuf> = Vec::new();
     // -- prefix always-included files first --
     // Eager source manifests declare files that must always be included. Preserve
     // declaration order so their top-level statements execute before the entry program.
@@ -145,8 +147,18 @@ pub fn run_collecting_included_with_defines_and_sources(
     for path in registry.always_included_files() {
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         if included.insert(canonical.clone()) {
+            // An eager file the compiler cannot parse is handed to the runtime whole, exactly as
+            // a half-taken one is below: php requires it at startup and so will the program.
             let (loaded, loaded_includes, loaded_sources) =
-                load_autoloaded_file(&canonical, base_dir, defines)?;
+                match load_autoloaded_file(&canonical, base_dir, defines) {
+                    Ok(loaded) => loaded,
+                    Err(AutoloadFileError::Unparsed(error)) => {
+                        report_deferred_class_file(&canonical, &error);
+                        included.remove(&canonical);
+                        continue;
+                    }
+                    Err(error) => return Err(error.into_compile_error()),
+                };
             // TAKE IT WHOLE OR NOT AT ALL. A conditional declaration under this eager file was
             // dropped instead of bound AND nothing in its subtree bound that name, so splicing
             // what is left would publish a file the compiler only half-took: the runtime skips
@@ -287,6 +299,7 @@ pub fn run_collecting_included_with_defines_and_sources(
                         &mut included,
                         &mut nested_includes,
                         &mut declaration_sources,
+                        &mut deferred,
                         0,
                     )?;
                     if !bundle.is_empty() {
@@ -307,6 +320,12 @@ pub fn run_collecting_included_with_defines_and_sources(
     }
 
     included.extend(nested_includes);
+    // A deferred class file was never read into the program, so it must not be reported as
+    // compile-time included: the runtime primes the include guard of every reported file, and
+    // the autoloader's `include` would then be skipped and the class never declared.
+    for path in &deferred {
+        included.remove(path);
+    }
     let mut loaded_files: Vec<PathBuf> = included.into_iter().collect();
     loaded_files.sort();
     Ok((program, loaded_files, declaration_sources))
@@ -543,6 +562,125 @@ fn autoload_target_can_bind(
     })
 }
 
+/// Returns the class-like a file's top-level `if (!interface_exists(X::class)) { throw ...; }`
+/// guard demands when nothing can supply it: not declared by the file, not already known, and not
+/// resolvable by the autoloader.
+///
+/// php runs such a guard when the autoloader first includes the file, so loading it THROWS, and
+/// only code that actually asks for the class ever sees that. Symfony's `HttpClient::create()`
+/// names `AmpHttpClient` behind `class_exists(AmpRequest::class)`; `AmpHttpClient.php` opens with
+/// `if (!interface_exists(DelegateHttpClient::class)) { throw new \LogicException(...); }`.
+/// Compiled into the program, its file-scope statements ran at boot and every request died on
+/// "the amphp/http-client package is not installed" although nothing ever constructed the client.
+/// Such a file is left to the runtime autoloader, which throws the same exception at the same
+/// moment php would.
+fn unsatisfiable_file_scope_guard(
+    program: &Program,
+    declared: &HashSet<String>,
+    registry: &Registry,
+) -> Option<String> {
+    let local = collect_declared_fqns(program)
+        .into_iter()
+        .map(|name| crate::names::php_symbol_key(&name))
+        .collect::<HashSet<_>>();
+    let available = |name: &str| {
+        let key = crate::names::php_symbol_key(name);
+        local.contains(&key)
+            || declared
+                .iter()
+                .any(|declared| crate::names::php_symbol_key(declared) == key)
+            || resolve_class(name, registry).is_some()
+    };
+    file_scope_guard_classes(program)
+        .into_iter()
+        .find(|name| !available(name))
+}
+
+/// Collects the class-likes named by top-level `if (!class_exists(X::class)) { throw ...; }`
+/// guards (also `interface_exists`, `trait_exists`, `enum_exists`, and a literal class name),
+/// looking through namespace blocks. Only a guard whose body throws and that has no other branch
+/// counts: anything else is ordinary conditional code.
+fn file_scope_guard_classes(program: &[Stmt]) -> Vec<String> {
+    let mut out = Vec::new();
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::NamespaceBlock { body, .. } => out.extend(file_scope_guard_classes(body)),
+            StmtKind::If {
+                condition,
+                then_body,
+                elseif_clauses,
+                else_body,
+            } if elseif_clauses.is_empty()
+                && else_body.is_none()
+                && then_body.first().is_some_and(stmt_throws) =>
+            {
+                if let Some(name) = negated_existence_probe(condition) {
+                    out.push(name);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Returns true for a `throw` statement.
+fn stmt_throws(stmt: &Stmt) -> bool {
+    match &stmt.kind {
+        StmtKind::Throw(_) => true,
+        StmtKind::ExprStmt(expr) => matches!(expr.kind, ExprKind::Throw(_)),
+        _ => false,
+    }
+}
+
+/// Returns `X` for `!class_exists(X::class)` and its siblings, when the probe autoloads.
+fn negated_existence_probe(condition: &Expr) -> Option<String> {
+    let ExprKind::Not(inner) = &condition.kind else {
+        return None;
+    };
+    let ExprKind::FunctionCall { name, args } = &inner.kind else {
+        return None;
+    };
+    let function = name.as_canonical().trim_start_matches('\\').to_ascii_lowercase();
+    if !matches!(
+        function.as_str(),
+        "class_exists" | "interface_exists" | "trait_exists" | "enum_exists"
+    ) {
+        return None;
+    }
+    // `class_exists(X::class, false)` does not run the autoloader, and whether X exists then
+    // depends on load order the compiler does not model.
+    let autoloads = match args.get(1).map(|arg| &arg.kind) {
+        None => true,
+        Some(ExprKind::BoolLiteral(value)) => *value,
+        Some(_) => false,
+    };
+    if !autoloads {
+        return None;
+    }
+    let class = match &args.first()?.kind {
+        ExprKind::ClassConstant {
+            receiver: crate::parser::ast::StaticReceiver::Named(name),
+        } => name.as_canonical().trim_start_matches('\\').to_string(),
+        ExprKind::StringLiteral(name) => name.trim_start_matches('\\').to_string(),
+        _ => return None,
+    };
+    (!class.is_empty()).then_some(class)
+}
+
+/// Reports a class file whose file-scope guard would throw, left to the runtime autoloader.
+fn report_throwing_class_file(path: &Path, missing: &str) {
+    crate::errors::report_warning(&crate::errors::CompileWarning::new(
+        Span::dummy(),
+        &format!(
+            "autoload: '{}' is not compiled (its file-scope guard throws: '{}' is not \
+             available); its classes are loaded at run time by the autoloader instead",
+            path.display(),
+            missing
+        ),
+    ));
+}
+
 /// Finds the direct class-like dependencies of the requested declaration in one loaded source.
 fn direct_binding_dependencies(program: &Program, target: &str) -> Option<Vec<String>> {
     let target_key = crate::names::php_symbol_key(target.trim_start_matches('\\'));
@@ -637,6 +775,11 @@ const AUTOLOAD_BUNDLE_MAX_DEPTH: usize = 64;
 ///
 /// Returns an empty program when the target cannot bind here, which is the caller's signal to
 /// insert nothing — the path stays in `included` either way, exactly as before.
+///
+/// A class file the compiler cannot PARSE is not a build failure: it is pushed onto `deferred`
+/// and left to the runtime autoloader, which is what php does with every class file — it
+/// parses one only when something asks for the class. The caller takes deferred paths back out
+/// of the compile-time inclusion set, or the runtime would skip the include as already done.
 #[allow(clippy::too_many_arguments)]
 fn load_autoloaded_bundle(
     fqn: &str,
@@ -648,11 +791,25 @@ fn load_autoloaded_bundle(
     included: &mut HashSet<PathBuf>,
     nested_includes: &mut HashSet<PathBuf>,
     declaration_sources: &mut DeclarationSourceFiles,
+    deferred: &mut Vec<PathBuf>,
     depth: usize,
 ) -> Result<Program, CompileError> {
     let (loaded, loaded_includes, loaded_sources) =
-        load_autoloaded_file(canonical, base_dir, defines)?;
+        match load_autoloaded_file(canonical, base_dir, defines) {
+            Ok(loaded) => loaded,
+            Err(AutoloadFileError::Unparsed(error)) => {
+                report_deferred_class_file(canonical, &error);
+                deferred.push(canonical.to_path_buf());
+                return Ok(Vec::new());
+            }
+            Err(AutoloadFileError::Fatal(error)) => return Err(error),
+        };
     if !autoload_target_can_bind(&loaded, fqn, declared, registry) {
+        return Ok(Vec::new());
+    }
+    if let Some(missing) = unsatisfiable_file_scope_guard(&loaded, declared, registry) {
+        report_throwing_class_file(canonical, &missing);
+        deferred.push(canonical.to_path_buf());
         return Ok(Vec::new());
     }
 
@@ -682,6 +839,7 @@ fn load_autoloaded_bundle(
                 included,
                 nested_includes,
                 declaration_sources,
+                deferred,
                 depth + 1,
             )?);
         }
@@ -693,6 +851,52 @@ fn load_autoloaded_bundle(
     Ok(bundle)
 }
 
+/// Why one autoloaded file could not be taken into the compiled program.
+#[derive(Debug)]
+enum AutoloadFileError {
+    /// The compiler's lexer or parser refused the file. php only parses a class file when
+    /// something asks for the class, so this is not a build failure: the file is left to the
+    /// runtime autoloader.
+    Unparsed(CompileError),
+    /// Anything else, which still stops the build.
+    Fatal(CompileError),
+}
+
+impl From<CompileError> for AutoloadFileError {
+    /// Every error past parsing keeps stopping the build.
+    fn from(error: CompileError) -> Self {
+        AutoloadFileError::Fatal(error)
+    }
+}
+
+impl AutoloadFileError {
+    /// Hands back the underlying diagnostic, for callers that treat both kinds alike.
+    fn into_compile_error(self) -> CompileError {
+        match self {
+            AutoloadFileError::Unparsed(error) | AutoloadFileError::Fatal(error) => error,
+        }
+    }
+}
+
+/// Reports a class file the compiler could not parse and has left to the runtime autoloader.
+fn report_deferred_class_file(path: &Path, error: &CompileError) {
+    let at = if error.span == Span::dummy() {
+        String::new()
+    } else {
+        format!(":{}:{}", error.span.line, error.span.col)
+    };
+    crate::errors::report_warning(&crate::errors::CompileWarning::new(
+        Span::dummy(),
+        &format!(
+            "autoload: '{}'{} could not be parsed ({}); its classes are not compiled and are \
+             loaded at run time by the autoloader instead",
+            path.display(),
+            at,
+            error.message
+        ),
+    ));
+}
+
 /// Load, parse, and resolve a single autoloaded PHP file, returning its statements plus the
 /// canonical paths of every `include`/`require` target the file itself pulled in (surfaced for
 /// the OPcache script manifest — see [`run_collecting_included`]).
@@ -700,7 +904,7 @@ fn load_autoloaded_file(
     path: &Path,
     base_dir: &Path,
     defines: &HashSet<String>,
-) -> Result<(Program, Vec<PathBuf>, DeclarationSourceFiles), CompileError> {
+) -> Result<(Program, Vec<PathBuf>, DeclarationSourceFiles), AutoloadFileError> {
     let content = crate::source::read_physical_source(path).map_err(|e| {
         CompileError::new(
             Span::dummy(),
@@ -710,9 +914,9 @@ fn load_autoloaded_file(
     let file_label = path.display().to_string();
     let source_mode = crate::source::SourceMode::from_path(path);
     let tokens = crate::lexer::tokenize_with_mode(&content, source_mode)
-        .map_err(|e| e.with_file(file_label.clone()))?;
+        .map_err(|e| AutoloadFileError::Unparsed(e.with_file(file_label.clone())))?;
     let parsed = crate::parser::parse_with_mode(&tokens, source_mode)
-        .map_err(|e| e.with_file(file_label.clone()))?;
+        .map_err(|e| AutoloadFileError::Unparsed(e.with_file(file_label.clone())))?;
     let parsed =
         crate::source::finalize_physical_program(parsed, path, source_mode, defines)?;
     let (resolved, nested_includes, included_sources) =
@@ -1317,6 +1521,22 @@ fn collect_declaration_source_files(
             crate::parser::ast::StmtKind::NamespaceBlock { body, .. }
             | crate::parser::ast::StmtKind::Synthetic(body) => {
                 collect_declaration_source_files(body, source_file, sources);
+            }
+            // A conditional declaration is still declared by this file (`symfony/security-core`
+            // puts its `ExpressionLanguage` in the `else` of a `class_exists()` guard).
+            crate::parser::ast::StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body,
+                ..
+            } => {
+                collect_declaration_source_files(then_body, source_file, sources);
+                for (_, body) in elseif_clauses {
+                    collect_declaration_source_files(body, source_file, sources);
+                }
+                if let Some(body) = else_body {
+                    collect_declaration_source_files(body, source_file, sources);
+                }
             }
             _ => {}
         }

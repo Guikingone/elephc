@@ -1863,3 +1863,25 @@ fn test_runtime_non_numeric_string_coerces_to_zero() {
     let out = compile_and_run(r#"<?php $x = $argc > 99 ? "1" : "hi"; var_dump($x + 1);"#);
     assert_eq!(out, "int(1)\n");
 }
+
+/// Unary plus is `$x * 1`: a numeric string becomes an int or float, a bool or null an int, and
+/// it binds like unary minus. Inputs derive from `$argc` so no operand folds at compile time.
+/// Expected output is php 8.5's. Before the fix `+` in prefix position was a parse error.
+#[test]
+fn test_unary_plus_converts_like_multiplication_by_one() {
+    let out = compile_and_run(
+        r#"<?php
+$n = $argc > 0 ? 5 : 2;
+$s = $argc > 0 ? "7.5" : "1";
+$t = $argc > 0 ? "12" : "1";
+$b = $argc > 0;
+$z = $argc > 5 ? 1 : null;
+var_dump(+$n, +$s, +$t, +$b, +$z, -+$n, +-$n, 2 - +$n, +$n * 3);
+echo random_int(-$n, +$n) <= $n ? "ok" : "no", "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(5)\nfloat(7.5)\nint(12)\nint(1)\nint(0)\nint(-5)\nint(-5)\nint(-3)\nint(15)\nok\n"
+    );
+}

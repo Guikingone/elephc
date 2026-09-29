@@ -24,6 +24,11 @@ pub(super) fn emit_aarch64_values_classes(emitter: &mut Emitter) {
     emitter.instruction("mov x2, xzr");                                         // bool payloads do not use a high word
     emitter.instruction("b __rt_mixed_from_value");                             // box the bool payload and return to Rust
 
+    // `Fiber::getCurrent()` for interpreted code: the compiled call is an intrinsic with no
+    // method body the interpreter could dispatch to.
+    label_c_global(emitter, "__elephc_eval_value_fiber_current");
+    emitter.instruction("b __rt_fiber_get_current");                            // box the running fiber (or null) and return to Rust
+
     label_c_global(emitter, "__elephc_eval_value_new_object");
     emitter.instruction("sub sp, sp, #32");                                     // allocate a wrapper frame with object and boxed-result slots
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across runtime calls

@@ -718,10 +718,10 @@ struct InventoryFailure {
 impl BackendInventory {
     /// Reads the inventory switch from the process environment.
     fn from_env() -> Self {
-        Self::new(matches!(
-            std::env::var(BACKEND_INVENTORY_VAR).as_deref(),
-            Ok("1")
-        ))
+        Self::new(
+            matches!(std::env::var(BACKEND_INVENTORY_VAR).as_deref(), Ok("1"))
+                || super::collects_backend_refusals(),
+        )
     }
 
     /// Returns true when every body is scanned for its first refusal instead of stopping.
@@ -804,7 +804,9 @@ impl BackendInventory {
         if !self.enabled || self.failures.is_empty() {
             return Ok(());
         }
-        Err(CodegenIrError::invalid_module(self.report()))
+        let mut error = CodegenIrError::invalid_module(self.report());
+        error.failed_bodies = self.failures.iter().map(|failure| (failure.body.clone(), failure.detail.clone())).collect();
+        Err(error)
     }
 
     /// Renders a cause histogram followed by per-body diagnostic details.
@@ -1788,6 +1790,13 @@ fn emit_static_property_default_value(
     value: &LiteralDefaultValue,
 ) -> Result<()> {
     match value {
+        // Only object allocation builds an enum-case default; a static property never gets one.
+        LiteralDefaultValue::EnumCase { .. } | LiteralDefaultValue::InitThunk { .. } => {
+            return Err(CodegenIrError::unsupported(format!(
+                "enum case default for static property {}::${}",
+                class_name, property
+            )));
+        }
         LiteralDefaultValue::Int(value) => {
             let int_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_load_int_immediate(ctx.emitter, int_reg, *value);

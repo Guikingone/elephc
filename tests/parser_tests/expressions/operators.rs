@@ -325,6 +325,42 @@ fn test_bitwise_not_parses() {
     );
 }
 
+/// Verifies that unary plus `+$x` parses as `$x * 1`, which is exactly what php compiles it to.
+#[test]
+fn test_unary_plus_parses_as_multiplication_by_one() {
+    let stmts = parse_source("<?php echo +$x;");
+    assert_eq!(
+        echoed_expr(&stmts),
+        &Expr::binop(Expr::var("x"), BinOp::Mul, Expr::int_lit(1)).kind
+    );
+}
+
+/// Verifies the binding power of unary plus matches unary minus: it binds tighter than `*`,
+/// so `+$a * $b` is `($a * 1) * $b`, and `2 - +$a` keeps the subtraction outermost.
+#[test]
+fn test_unary_plus_binding_power_matches_unary_minus() {
+    let stmts = parse_source("<?php echo +$a * $b;");
+    assert_eq!(
+        echoed_expr(&stmts),
+        &Expr::binop(
+            Expr::binop(Expr::var("a"), BinOp::Mul, Expr::int_lit(1)),
+            BinOp::Mul,
+            Expr::var("b"),
+        )
+        .kind
+    );
+    let stmts = parse_source("<?php echo 2 - +$a;");
+    assert_eq!(
+        echoed_expr(&stmts),
+        &Expr::binop(
+            Expr::int_lit(2),
+            BinOp::Sub,
+            Expr::binop(Expr::var("a"), BinOp::Mul, Expr::int_lit(1)),
+        )
+        .kind
+    );
+}
+
 /// Verifies that `<?php echo $arr[0]();` parses as an ExprCall node whose callee is an
 /// ArrayAccess. This exercises callable expressions where the callee is a subscript result.
 #[test]

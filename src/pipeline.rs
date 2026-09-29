@@ -11,7 +11,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process;
 use std::time::Instant;
 
@@ -396,6 +396,12 @@ pub(crate) fn compile(config: CliConfig) {
     // functions and folds a differently cased call (`\SODIUM_CRYPTO_BOX_SEAL()`) onto them.
     // The late gate after autoload expansion covers code only an autoloaded class reaches.
     let ast = crate::sodium_prelude::inject_if_used(ast, &mut prelude_inventory);
+    // `password_hash()`/`password_verify()` and friends, bcrypt over `elephc_crypto`; the late
+    // gate below covers a call only an autoloaded class makes.
+    let ast = crate::password_prelude::inject_if_used(ast, &mut prelude_inventory);
+    // php 8.5's `array_first()`/`array_last()`; the late gate below covers autoloaded callers.
+    let ast = crate::array_edge_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::array_ucompare_prelude::inject_if_used(ast, &mut prelude_inventory);
     timings.record_since("hash-prelude", phase_started);
 
     // Inject the `ext/curl` prelude (the `CurlHandle` class and the `curl_*` wrappers over
@@ -518,9 +524,12 @@ pub(crate) fn compile(config: CliConfig) {
     crate::progress::phase("opcache-preload");
     let phase_started = Instant::now();
     let mut preload_compiled_whole: Vec<std::path::PathBuf> = Vec::new();
+    let mut preload_class_files: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
     let ast = match preloaded_declarations(&ini_overrides, parent, &defines, &autoload_registry) {
         Ok(Some(preloaded)) => {
             preload_compiled_whole = preloaded.compiled_whole;
+            preload_class_files = preloaded.class_files;
             let declared = crate::opcache_preload_sources::declared_names(&ast);
             let mut combined = crate::opcache_preload_sources::without_redeclarations(
                 preloaded.declarations,
@@ -628,6 +637,11 @@ pub(crate) fn compile(config: CliConfig) {
     // `ext/sodium` sealed boxes: Symfony's `SodiumVault` is autoloaded, so this gate reads the
     // complete program too, and it keeps `SodiumException` for code the interpreter runs.
     let ast = crate::sodium_prelude::inject_if_used(ast, &mut prelude_inventory);
+    // Symfony's `NativePasswordHasher` is autoloaded, so its `password_verify()` call is only
+    // visible here.
+    let ast = crate::password_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::array_edge_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::array_ucompare_prelude::inject_if_used(ast, &mut prelude_inventory);
     // `Attribute`'s TARGET_* constants are named by every attribute class declaration, including
     // ones only the interpreter reads at run time.
     let ast = crate::attribute_prelude::inject_if_used(ast, &mut prelude_inventory);
@@ -743,23 +757,147 @@ pub(crate) fn compile(config: CliConfig) {
         strict_locals,
         registers_autoloader: autoload_registry.rule_count() > 0,
     };
-    let mut check_result = match types::check_with_target_and_options(&ast, target, check_options) {
-        Ok(result) => result,
-        Err(e) => {
-            crate::progress::clear();
-            // Name the file each error was written in. The autoload pass spliced every discovered
-            // file into one program, so the `line:col` the checker reports lives in a coordinate
-            // space shared by hundreds of files and identifies nothing on its own. The checker
-            // recorded the enclosing declaration; `declaration_source_files` is the map from that
-            // name to its path — the same one `Reflection*::getFileName()` reads.
-            let declaration_paths = declaration_source_file_paths(
-                &declaration_source_files,
-                &entry_included_sources,
-            );
-            errors::report(&e.resolve_declaration_files(&declaration_paths));
-            process::exit(1);
-        }
+    // A class file the autoload pass loaded is one php would only have parsed when something
+    // asked for the class. When the checker refuses one, that file is handed back to the runtime
+    // autoloader (see `autoload::deferral`) and the rest of the program is checked again; the
+    // classes that depended on it fall the same way on the next round.
+    // A class `opcache.preload` supplied is one php's autoloader would equally have loaded, so the
+    // same holds for the preloaded graph. The entry's own static includes and Composer's eager
+    // `files` are never deferrable: nothing at run time would load them again.
+    let mut ast = ast;
+    let mut opcache_autoloaded_files = opcache_autoloaded_files;
+    let mut deferral_class_files = preload_class_files;
+    deferral_class_files.extend(
+        declaration_source_files
+            .class_likes
+            .iter()
+            .map(|(name, path)| (name.clone(), path.clone())),
+    );
+    let deferrable_class_files: HashSet<PathBuf> = {
+        let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let mut fixed: HashSet<PathBuf> = autoload_registry
+            .always_included_files()
+            .iter()
+            .map(|path| canonical(path))
+            .collect();
+        fixed.extend(
+            entry_included_sources
+                .class_likes
+                .values()
+                .chain(entry_included_sources.functions.values())
+                .map(|path| canonical(Path::new(path))),
+        );
+        fixed.insert(canonical(Path::new(filename)));
+        opcache_autoloaded_files
+            .iter()
+            .map(|path| canonical(path))
+            .chain(deferral_class_files.values().map(|path| canonical(Path::new(path))))
+            .filter(|path| !fixed.contains(path))
+            .collect()
     };
+    let mut deferred_class_files: HashSet<PathBuf> = HashSet::new();
+    // A re-run the backend asked for (`autoload::deferral::BackendDeferral`) starts with the files
+    // an earlier round already handed back; they were reported when they were first handed back.
+    for path in crate::autoload::deferral::inherited_deferred_files() {
+        let path = path.canonicalize().unwrap_or(path);
+        if deferrable_class_files.contains(&path) {
+            deferred_class_files.insert(path);
+        }
+    }
+    if !deferred_class_files.is_empty() {
+        crate::autoload::deferral::propagate_to_subclasses(
+            &ast,
+            &deferral_class_files,
+            &deferrable_class_files,
+            &mut deferred_class_files,
+        );
+        ast = crate::autoload::deferral::remove_deferred_declarations(
+            ast,
+            &deferral_class_files,
+            &deferred_class_files,
+        );
+    }
+    let mut check_result = loop {
+        let e = match types::check_with_target_and_options(&ast, target, check_options) {
+            Ok(result) => break result,
+            Err(e) => e,
+        };
+        let mut newly_deferred = crate::autoload::deferral::deferrable_class_files(
+            &e,
+            &deferral_class_files,
+            &deferrable_class_files,
+        );
+        // A file already handed back cannot be handed back again: an error still naming one is
+        // not going away by another round, so it is reported.
+        newly_deferred.retain(|path, _| {
+            !deferred_class_files.contains(
+                &Path::new(path)
+                    .canonicalize()
+                    .unwrap_or_else(|_| PathBuf::from(path)),
+            )
+        });
+        if !newly_deferred.is_empty() {
+            for (path, message) in &newly_deferred {
+                errors::report_warning(&errors::CompileWarning::new(
+                    Span::dummy(),
+                    &format!(
+                        "autoload: '{path}' is not compiled ({message}); its classes are loaded \
+                         at run time by the autoloader instead"
+                    ),
+                ));
+                deferred_class_files.insert(
+                    Path::new(path)
+                        .canonicalize()
+                        .unwrap_or_else(|_| PathBuf::from(path)),
+                );
+            }
+            for path in crate::autoload::deferral::propagate_to_subclasses(
+                &ast,
+                &deferral_class_files,
+                &deferrable_class_files,
+                &mut deferred_class_files,
+            ) {
+                errors::report_warning(&errors::CompileWarning::new(
+                    Span::dummy(),
+                    &format!(
+                        "autoload: '{}' is not compiled (a class it declares extends, implements \
+                         or uses one that is not); its classes are loaded at run time by the \
+                         autoloader instead",
+                        path.display()
+                    ),
+                ));
+            }
+            ast = crate::autoload::deferral::remove_deferred_declarations(
+                ast,
+                &deferral_class_files,
+                &deferred_class_files,
+            );
+            continue;
+        }
+        crate::progress::clear();
+        // Name the file each error was written in. The autoload pass spliced every discovered
+        // file into one program, so the `line:col` the checker reports lives in a coordinate
+        // space shared by hundreds of files and identifies nothing on its own. The checker
+        // recorded the enclosing declaration; `declaration_source_files` is the map from that
+        // name to its path — the same one `Reflection*::getFileName()` reads.
+        let mut declaration_paths = declaration_source_file_paths(
+            &declaration_source_files,
+            &entry_included_sources,
+        );
+        // Preloaded classes name their files too; the autoloaded and entry maps win.
+        for (name, path) in &deferral_class_files {
+            declaration_paths.entry(name.clone()).or_insert_with(|| path.clone());
+        }
+        errors::report(&e.resolve_declaration_files(&declaration_paths));
+        process::exit(1);
+    };
+    // A deferred file was never compiled, so the runtime must not treat it as already included.
+    opcache_autoloaded_files.retain(|path| {
+        !deferred_class_files.contains(&path.canonicalize().unwrap_or_else(|_| path.clone()))
+    });
+    preload_compiled_whole.retain(|path| {
+        !deferred_class_files.contains(&path.canonicalize().unwrap_or_else(|_| path.clone()))
+    });
     timings.record_since("typecheck", phase_started);
     decl_trace("after typecheck", &ast);
     if let Ok(target) = std::env::var("ELEPHC_DECL_TRACE") {
@@ -1080,7 +1218,21 @@ pub(crate) fn compile(config: CliConfig) {
     }
     timings.record_since("ir-opt", phase_started);
 
+    // With class files the runtime could load instead, the backend collects EVERY body it
+    // refuses rather than stopping at the first, so one re-run can hand them all back.
+    let deferral = if deferrable_class_files.is_empty() {
+        None
+    } else {
+        codegen::collect_backend_refusals(true);
+        Some(crate::autoload::deferral::BackendDeferral::for_module(
+            &ir_module,
+            &deferral_class_files,
+            &deferrable_class_files,
+            &deferred_class_files,
+        ))
+    };
     backend::emit_and_link(backend::BackendInputs {
+        deferral,
         filename,
         with_crates: &with_crates,
         linked_php_surfaces: &linked_php_surfaces,

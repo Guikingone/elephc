@@ -491,6 +491,14 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    // `Fiber::getCurrent()` is a compiler intrinsic, not a method body the bridge can call:
+    // Monolog's `Logger::addRecord()` asks it on every log call, and interpreted it fataled.
+    if evaluated_args.is_empty()
+        && class_name.trim_start_matches('\\').eq_ignore_ascii_case("Fiber")
+        && method_name.eq_ignore_ascii_case("getCurrent")
+    {
+        return values.fiber_current();
+    }
     let signature_owner = bridge_scope.unwrap_or(class_name);
     let signature = context.native_static_method_signature(signature_owner, method_name);
     let return_type = signature.as_ref().and_then(|signature| signature.return_type().cloned());

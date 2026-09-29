@@ -581,6 +581,24 @@ impl Checker {
                 }
                 _ => target.fallback_type(),
             },
+            // A scalar or array can never be an instance of a class, so the guard's true edge is
+            // unreachable. Keeping the current type there keeps the local's storage honest:
+            // narrowing a `bool` slot to `Markup` made the backend refuse to load it (Twig's
+            // compiled `($tmp = !$x) && $tmp instanceof Markup ? (string) $tmp : $tmp`).
+            PhpType::Int
+            | PhpType::Float
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Str
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+                if matches!(
+                    target,
+                    GuardTarget::Exact(PhpType::Object(_)) | GuardTarget::UnknownObject
+                ) =>
+            {
+                current.clone()
+            }
             _ => target.fallback_type(),
         }
     }

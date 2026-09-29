@@ -926,10 +926,19 @@ pub(in crate::codegen) fn lower_runtime_object_method_call(
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    abi::emit_call_label(
-        ctx.emitter,
-        &method_symbol(&target.impl_class, &target.method_key),
-    );
+    // The receiver's class is only its DECLARED type: the object is often a subclass that
+    // overrides the method, and when the declared class is abstract (`abstract class T implements
+    // \Stringable` with no `__toString` of its own) there is no body under its name at all, so a
+    // direct call to it did not even link. Late-bound methods go through the vtable, exactly as an
+    // ordinary `$o->m()` does.
+    if let Some(slot) = target.dynamic_slot {
+        super::method_resolution::emit_dynamic_instance_method_call(ctx, slot);
+    } else {
+        abi::emit_call_label(
+            ctx.emitter,
+            &method_symbol(&target.impl_class, &target.method_key),
+        );
+    }
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_runtime_object_call_result(ctx, inst, &target.return_ty)?;

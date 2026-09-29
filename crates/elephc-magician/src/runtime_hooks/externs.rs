@@ -351,6 +351,8 @@ unsafe extern "C" {
     /// Enters (non-zero) or leaves (zero) one runtime `@` diagnostic-suppression scope.
     pub(super) fn __elephc_eval_diag_suppression(enter: u64);
     pub(super) fn __elephc_eval_value_null() -> *mut RuntimeCell;
+    /// Boxes the running `Fiber` object, or null on the main thread.
+    pub(super) fn __elephc_eval_value_fiber_current() -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_bool(value: u64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_int(value: i64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_resource(value: i64) -> *mut RuntimeCell;

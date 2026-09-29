@@ -128,6 +128,29 @@ pub(in crate::interpreter) fn eval_expr_is_owning_temporary(expr: &EvalExpr) -> 
     )
 }
 
+/// Returns the reference target for a property argument, or `None` when it cannot be bound.
+///
+/// An argument is prepared as a potential by-reference target before the callee is known, and
+/// most callees take it by value. A readonly property (or an enum case's `name`/`value`) cannot
+/// be bound by reference, but reading it for a by-value parameter is ordinary php:
+/// Symfony's `CompiledAssetMapperConfigReader::configExists()` passes `$this->directory`, a
+/// promoted readonly property, to `Path::join()`, and refusing it here killed every page that
+/// renders an asset URL.
+fn property_ref_target_if_bindable(
+    object: RuntimeCellHandle,
+    property: String,
+    access_scope: ElephcEvalExecutionScope,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Option<EvalReferenceTarget> {
+    validate_property_ref_target(object, &property, context, values).ok()?;
+    Some(EvalReferenceTarget::ObjectProperty {
+        object,
+        property,
+        access_scope,
+    })
+}
+
 /// Emits the source argument that failed under opt-in runtime tracing.
 fn trace_call_arg_error(
     index: usize,
@@ -211,30 +234,23 @@ pub(in crate::interpreter) fn eval_call_arg_value(
             let access_scope = context.execution_scope();
             let object = eval_expr(object, context, caller_scope, values)?;
             let value = eval_property_get_result(object, property, context, values)?;
-            validate_property_ref_target(object, property, context, values)?;
-            Ok((
-                value,
-                Some(EvalReferenceTarget::ObjectProperty {
-                    object,
-                    property: property.clone(),
-                    access_scope,
-                }),
-            ))
+            let target = property_ref_target_if_bindable(
+                object,
+                property.clone(),
+                access_scope,
+                context,
+                values,
+            );
+            Ok((value, target))
         }
         EvalExpr::DynamicPropertyGet { object, property } => {
             let access_scope = context.execution_scope();
             let object = eval_expr(object, context, caller_scope, values)?;
             let property = eval_dynamic_member_name(property, context, caller_scope, values)?;
             let value = eval_property_get_result(object, &property, context, values)?;
-            validate_property_ref_target(object, &property, context, values)?;
-            Ok((
-                value,
-                Some(EvalReferenceTarget::ObjectProperty {
-                    object,
-                    property,
-                    access_scope,
-                }),
-            ))
+            let target =
+                property_ref_target_if_bindable(object, property, access_scope, context, values);
+            Ok((value, target))
         }
         EvalExpr::StaticPropertyGet {
             class_name,

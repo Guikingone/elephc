@@ -142,6 +142,15 @@ pub trait RuntimeValueOps {
         value: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Appends one byte string, which need not be UTF-8, to a runtime string-array cell.
+    fn string_array_push_bytes(
+        &mut self,
+        array: RuntimeCellHandle,
+        value: &[u8],
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.string_array_push(array, &String::from_utf8_lossy(value))
+    }
+
     /// Creates a runtime associative-array cell with room for at least `capacity` elements.
     fn assoc_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus>;
 
@@ -679,6 +688,12 @@ pub trait RuntimeValueOps {
 
     /// Creates a runtime null cell.
     fn null(&mut self) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Returns `Fiber::getCurrent()`: the running compiled `Fiber` object, or null on the main
+    /// thread. A host with no fibers is always on the main thread.
+    fn fiber_current(&mut self) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.null()
+    }
 
     /// Creates a runtime bool cell.
     fn bool_value(&mut self, value: bool) -> Result<RuntimeCellHandle, EvalStatus>;

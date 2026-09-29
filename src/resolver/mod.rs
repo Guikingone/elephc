@@ -39,6 +39,58 @@ use discovery::discover_include_declarations;
 use engine::resolve_stmts;
 use state::ResolveState;
 
+thread_local! {
+    /// Whether an included file the compiler cannot parse is skipped instead of failing the
+    /// build. Raised only while `opcache.preload` is resolved; see
+    /// [`skip_unparseable_includes`].
+    static SKIP_UNPARSEABLE_INCLUDES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Restores the previous unparseable-include policy when dropped.
+pub(crate) struct SkipUnparseableIncludesGuard {
+    previous: bool,
+}
+
+impl Drop for SkipUnparseableIncludesGuard {
+    /// Puts back the policy that was active before [`skip_unparseable_includes`].
+    fn drop(&mut self) {
+        SKIP_UNPARSEABLE_INCLUDES.with(|flag| flag.set(self.previous));
+    }
+}
+
+/// Makes an included file the compiler cannot parse a warning instead of a build failure, for as
+/// long as the returned guard lives.
+///
+/// Used for `opcache.preload`, whose requires only feed declarations into the closed world: a file
+/// left out there is still loaded at run time by the autoloader, exactly as php loads a class it
+/// did not preload. The entry program's own includes keep failing the build.
+pub(crate) fn skip_unparseable_includes() -> SkipUnparseableIncludesGuard {
+    let previous = SKIP_UNPARSEABLE_INCLUDES.with(|flag| flag.replace(true));
+    SkipUnparseableIncludesGuard { previous }
+}
+
+/// Returns whether the unparseable-include policy is active, without reporting anything.
+pub(super) fn skipping_unparseable_includes() -> bool {
+    SKIP_UNPARSEABLE_INCLUDES.with(std::cell::Cell::get)
+}
+
+/// Returns whether an unparseable include is skipped, and reports it when it is.
+pub(super) fn skips_unparseable_include(path: &Path, error: &CompileError) -> bool {
+    if !SKIP_UNPARSEABLE_INCLUDES.with(std::cell::Cell::get) {
+        return false;
+    }
+    crate::errors::report_warning(&crate::errors::CompileWarning::new(
+        Span::dummy(),
+        &format!(
+            "opcache.preload: '{}' could not be parsed ({}); it is not preloaded and its classes \
+             are loaded at run time by the autoloader instead",
+            path.display(),
+            error.message
+        ),
+    ));
+    true
+}
+
 /// Maximum nested include depth accepted by both discovery and resolution.
 ///
 /// This bound is independent of parser delimiter depth: a long acyclic include

@@ -251,59 +251,30 @@ fn test_rawurldecode() {
     assert_eq!(out, "hello world");
 }
 
-/// KNOWN LIMITATION PIN — `urlencode()`/`rawurlencode()` percent-encode ASCII DIGITS, on
-/// every target that generates their runtime helper assembly, not only the machine this
-/// test executes on.
+/// `urlencode()`/`rawurlencode()` pass ASCII digits through, as php does.
 ///
-/// `src/codegen_support/runtime/strings/urlencode.rs` and `rawurlencode.rs` both check
-/// A-Z, then a-z, then 0-9, using a chain of "not in this range -> check safe punctuation"
-/// branches (AArch64: `cmp w12, #65; b.lt chk_safe`; x86_64: `cmp dl, 65; jb chk_safe`).
-/// For ANY byte below `'A'` (0x41) — which includes every ASCII digit, 0x30-0x39 — the
-/// VERY FIRST comparison already takes that early-exit branch, so the dedicated 0-9
-/// comparison later in the SAME function is unreachable: a digit falls through to the
-/// `- _ .` punctuation checks, misses all three, and gets percent-encoded like any other
-/// unsafe byte. `urlencode("42")` answers `"%34%32"`; PHP answers `"42"`.
-///
-/// TRACED BY HAND THROUGH BOTH NON-AARCH64/AARCH64 CODE PATHS IN THE PINNED SOURCE, not
-/// assumed: `emit_urlencode`/`emit_rawurlencode` (AArch64) and `emit_urlencode_linux_x86_64`/
-/// `emit_rawurlencode_linux_x86_64` (the one x86_64 variant this project emits — there is
-/// no separate macOS-x86_64 target) use the IDENTICAL check order and the IDENTICAL
-/// early-exit branch for a sub-`'A'` byte, so this bug reproduces on every supported
-/// target today, not only the one this test actually runs on. (An earlier review pass on
-/// this branch flagged a target DIVERGENCE — AArch64 broken, x86_64 fixed. Re-reading the
-/// current pinned source line by line, including simulating both branch sequences for the
-/// byte `'4'` (0x34) by hand, found no such divergence: both targets share one code shape
-/// and one bug. If a future change makes the targets diverge, THIS comment's claim — not
-/// the earlier one — is the one to correct alongside it.)
-///
-/// PRE-EXISTING, NOT INTRODUCED BY curl. Found during `CURLFile`/`CURLStringFile`
-/// review as a shared-builtin bug outside curl's own scope to fix — the curl
-/// `CURLOPT_POSTFIELDS` array path once built a SELF-CONTAINED
-/// encoder specifically to route around it for an array-to-urlencoded form that
-/// has since been replaced with real `multipart/form-data`. Pinned HERE, in the
-/// strings area where the bug actually lives, rather than in `tests/codegen/curl/` —
-/// `crate::curl_prelude`'s multipart array walker never calls `urlencode()`/
-/// `rawurlencode()` at all (binary-safe `multipart/form-data` parts need no percent
-/// encoding), so this bug has no effect on curl uploads either way.
-///
-/// UPDATE THIS TEST, DO NOT DELETE IT, when the bug is fixed: swap the expected values for
-/// PHP's own (`"42"`, `"a1b2"`, twice each).
+/// Both runtime helpers used to test A-Z first with a "below 'A' -> check punctuation" branch,
+/// and every digit sits below 'A', so the 0-9 test after it was unreachable and `"42"` came back
+/// as `"%34%32"` on every target. The digit range is now tested first. The inputs derive from
+/// `$argc` so the calls reach the runtime helpers: a literal argument is folded at compile time
+/// by Rust code that was always right, which is how this survived the literal-only tests.
+/// Expected output is php 8.5's.
 #[test]
-fn test_urlencode_and_rawurlencode_percent_encode_digits_pre_existing_bug() {
+fn test_urlencode_and_rawurlencode_pass_digits_through() {
     let out = compile_and_run(
         r#"<?php
-echo urlencode("42"), ":";
-echo urlencode("a1b2"), ":";
-echo rawurlencode("42"), ":";
-echo rawurlencode("a1b2");"#,
+$n = $argc > 0 ? "42" : "";
+$m = $argc > 0 ? "a1b2 9-_.~Z" : "";
+echo urlencode($n), ":";
+echo urlencode($m), ":";
+echo rawurlencode($n), ":";
+echo rawurlencode($m), ":";
+echo urlencode("42"), ":", rawurlencode("a1b2"), ":";
+echo http_build_query(["page" => $argc > 0 ? 10 : 1, "b" => [2, 3]]);"#,
     );
     assert_eq!(
         out,
-        "%34%32:a%31b%32:%34%32:a%31b%32",
-        "this pins a KNOWN, pre-existing bug: PHP answers 42:a1b2:42:a1b2. If this now \
-         fails with PHP's own values, urlencode()/rawurlencode() were fixed on this \
-         target — update the expected string here (do not delete the test), and check \
-         whether the other two targets were fixed together or now diverge."
+        "42:a1b2+9-_.%7EZ:42:a1b2%209-_.~Z:42:a1b2:page=10&b%5B0%5D=2&b%5B1%5D=3"
     );
 }
 

@@ -288,6 +288,50 @@ pub(super) fn apply_native_callable_variadic_arg_type(
         let value = eval_method_parameter_value(param_type, value, context, values)?;
         bound_arg.value = values.array_set(bound_arg.value, key, value)?;
     }
+    pack_native_string_variadic(param_type, bound_arg, values)
+}
+
+/// Rebuilds a positional `string ...$x` tail in the packed layout the compiled callee reads.
+///
+/// A compiled function stores a `string`-typed variadic as a string array (a pointer and a
+/// length per slot), and its body is specialized on that. The tail built above has boxed Mixed
+/// slots, which a specialized loop reads as garbage: Symfony's `Path::join()` called from an
+/// interpreted class ran `array_filter()` over it and asked the allocator for 8 GB. Only the
+/// plain non-nullable `string` shape is packed here; other scalar element types have no
+/// interpreter-side builder yet, and a tail with named (string) keys stays as it is.
+fn pack_native_string_variadic(
+    param_type: &EvalParameterType,
+    bound_arg: &mut BoundMethodArg,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if param_type.allows_null()
+        || param_type.is_intersection()
+        || param_type.variants() != [EvalParameterTypeVariant::String]
+    {
+        return Ok(());
+    }
+    let len = values.array_len(bound_arg.value)?;
+    let mut items = Vec::with_capacity(len);
+    for position in 0..len {
+        let key = values.array_iter_key(bound_arg.value, position)?;
+        if values.type_tag(key)? != EVAL_TAG_INT {
+            return Ok(());
+        }
+        // `array_get` hands back an owned cell; only its bytes are kept.
+        let value = values.array_get(bound_arg.value, key)?;
+        let bytes = values.string_bytes(value);
+        values.release(value)?;
+        items.push(bytes?);
+    }
+    let mut packed = values.string_array_new(len)?;
+    for item in &items {
+        packed = values.string_array_push_bytes(packed, item)?;
+    }
+    // Nothing else references the boxed tail built by the binder, and the packed one is this
+    // call's to release once the callee has been handed it.
+    let previous = std::mem::replace(&mut bound_arg.value, packed);
+    bound_arg.owned = true;
+    values.release(previous)?;
     Ok(())
 }
 

@@ -20,6 +20,20 @@ use super::super::interfaces::{build_property_contract, merge_property_contract}
 use super::state::ClassBuildState;
 use super::{collect_attribute_args, collect_attribute_names};
 
+/// Returns whether an inherited property of the same name is an ANCESTOR's private one.
+///
+/// A private property is not inherited in PHP, so a subclass may declare its own property of
+/// that name with the other staticness: `symfony/mime`'s `AbstractHeader` has a
+/// `private static $encoder` and its subclass `ParameterizedHeader` a `private $encoder`.
+/// Only a conflict with a visible (or same-class) declaration is a redeclaration error.
+fn is_ancestor_private(
+    declaring_class: &str,
+    visibility: Option<&Visibility>,
+    class: &FlattenedClass,
+) -> bool {
+    visibility == Some(&Visibility::Private) && !declaring_class.eq_ignore_ascii_case(&class.name)
+}
+
 /// Applies property schema validation and metadata for all static and instance
 /// properties declared in `class`. Static properties are validated for PHP
 /// inheritance rules (final, visibility, override) and inserted into
@@ -78,7 +92,13 @@ fn apply_static_property(
             ),
         ));
     }
-    if state.property_declaring_classes.contains_key(&prop.name) {
+    if state
+        .property_declaring_classes
+        .get(&prop.name)
+        .is_some_and(|declaring| {
+            !is_ancestor_private(declaring, state.property_visibilities.get(&prop.name), class)
+        })
+    {
         return Err(CompileError::new(
             prop.span,
             &format!(
@@ -219,7 +239,13 @@ fn apply_instance_property(
         ));
     }
     validate_asymmetric_visibility(prop)?;
-    if state.static_property_declaring_classes.contains_key(&prop.name) {
+    if state
+        .static_property_declaring_classes
+        .get(&prop.name)
+        .is_some_and(|declaring| {
+            !is_ancestor_private(declaring, state.static_property_visibilities.get(&prop.name), class)
+        })
+    {
         return Err(CompileError::new(
             prop.span,
             &format!(
@@ -450,7 +476,10 @@ fn apply_private_parent_property_shadowing(
     let declared_ty = resolve_property_declared_type(checker, &class.name, prop)?;
     let is_declared_slot = declared_ty.is_some();
     let ty = if let Some(declared_ty) = declared_ty {
-        checker.validate_declared_default_type(
+        // The SCHEMA-time validator, as every other property path uses: a class-constant default
+        // (`private int $s = CascadingStrategy::NONE;`) cannot be typed until class constants
+        // exist, and the plain validator read it syntactically as a string.
+        checker.validate_schema_declared_default_type(
             &declared_ty,
             prop.default.as_ref(),
             prop.span,

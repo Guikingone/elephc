@@ -50,11 +50,16 @@ pub(in crate::interpreter) fn eval_builtin_array_declared_call(
         "array_values" => super::array_values::eval_array_values_declared_call(args, context, scope, values),
         "array_is_list" => super::array_is_list::eval_array_is_list_declared_call(args, context, scope, values),
         "array_key_first" => super::array_key_first::eval_array_key_first_declared_call(args, context, scope, values),
+        "array_first" => super::array_first::eval_array_edge_declared_call(super::array_first::ArrayEdge::First, args, context, scope, values),
+        "array_last" => super::array_first::eval_array_edge_declared_call(super::array_first::ArrayEdge::Last, args, context, scope, values),
         "array_key_last" => super::array_key_last::eval_array_key_last_declared_call(args, context, scope, values),
         "count" => super::count::eval_count_declared_call(args, context, scope, values),
         "current" => super::current::eval_current_declared_call(args, context, scope, values),
         "key" => super::key::eval_key_declared_call(args, context, scope, values),
         "range" => super::range::eval_range_declared_call(args, context, scope, values),
+        name if super::array_ucompare::is_array_ucompare_builtin(name) => {
+            super::array_ucompare::eval_array_ucompare_declared_call(name, args, context, scope, values)
+        }
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }

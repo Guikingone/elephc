@@ -90,6 +90,11 @@ macro_rules! impl_lifecycle_scalar_ops {
         Self::handle(unsafe { __elephc_eval_value_null() })
     }
 
+    /// Boxes the running `Fiber` (or null) through the generated runtime wrapper.
+    fn fiber_current(&mut self) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_fiber_current() })
+    }
+
     /// Creates a boxed bool Mixed cell through the generated runtime wrapper.
     fn bool_value(&mut self, value: bool) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_bool(u64::from(value)) })

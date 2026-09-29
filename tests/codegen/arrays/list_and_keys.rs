@@ -109,3 +109,33 @@ echo (array_key_last([]) === null) ? "-last-null" : "-last-val";
     );
     assert_eq!(out, "first-null-last-null");
 }
+
+/// Verifies php 8.5's array_first()/array_last() in compiled code and in eval().
+///
+/// Neither existed, and a Symfony container generated on php 8.5 calls
+/// `\array_first(\array_intersect_key(...))` while it is interpreted: every request of the
+/// Symfony demo died on "eval() fragment uses an unsupported construct". Expected output is
+/// php 8.5.10's.
+#[test]
+fn test_array_first_and_array_last_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ['host' => 'localhost', 'other' => 1, 'x' => [2]];
+var_dump(array_first(array_intersect_key($a, ['host' => 0])));
+var_dump(array_last($a));
+var_dump(array_first([]), array_last([]));
+$list = [3 => 'c', 1 => 'a'];
+echo array_first($list), array_last($list), "\n";
+eval('
+$b = ["h" => "localhost", "other" => 1];
+var_dump(\array_first(\array_intersect_key($b, ["h" => 0])));
+var_dump(\array_last($b), \array_first([]));
+');
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(9) \"localhost\"\narray(1) {\n  [0]=>\n  int(2)\n}\nNULL\nNULL\nca\n\
+         string(9) \"localhost\"\nint(1)\nNULL\n"
+    );
+}

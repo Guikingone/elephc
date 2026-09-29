@@ -26,6 +26,15 @@ macro_rules! impl_collection_call_ops {
         array: RuntimeCellHandle,
         value: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.string_array_push_bytes(array, value.as_bytes())
+    }
+
+    /// Appends raw bytes: the generated wrapper takes a pointer and a length, not UTF-8.
+    fn string_array_push_bytes(
+        &mut self,
+        array: RuntimeCellHandle,
+        value: &[u8],
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe {
             __elephc_eval_value_string_array_push(
                 array.as_ptr(),

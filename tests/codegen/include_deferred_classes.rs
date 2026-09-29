@@ -208,3 +208,147 @@ fn test_class_exists_without_autoload_reports_a_probe_only_class_as_unloaded() {
         "before=false\nprobe=true\nafter=true\nused=optional/true\n"
     );
 }
+
+/// The Composer-shaped autoloader these tests share: an object whose `loadClass` includes the
+/// class file through a path built at run time.
+const DEFERRAL_LOADER: &str = r#"<?php
+class Loader {
+    public function __construct(private string $dir) {}
+    public function loadClass($class) {
+        $file = $this->dir . "/src/" . $class . ".php";
+        if (is_file($file)) { include $file; return true; }
+        return null;
+    }
+}
+$l = new Loader(__DIR__);
+spl_autoload_register([$l, "loadClass"], true, true);
+echo (new Good())->hi(), "|", (new Lazy())->hi(), "|", (new Refs())->hi(), "\n";
+"#;
+
+/// An autoloaded class file the compiler cannot type-check or parse is handed to the runtime
+/// autoloader instead of failing the build, and its classes still work.
+///
+/// php parses a class file only when something asks for the class. `Lazy` has a method php
+/// accepts and only fails when CALLED (`: int` returning a string); elephc's checker refuses it
+/// at compile time. `Refs` uses a construct elephc's parser refuses (a reference element in an
+/// array literal). Both used to stop the whole build — for the Symfony demo, one such file among
+/// hundreds (`Translator.php`) did. Now each is left out of the compiled world with a warning,
+/// the runtime autoloader includes it, and the interpreter runs it. Expected output is php 8.5's.
+#[test]
+fn test_autoloaded_class_the_compiler_refuses_is_loaded_at_run_time() {
+    let out = compile_cli_files_and_run(
+        &[
+            ("main.php", DEFERRAL_LOADER),
+            ("src/Good.php", "<?php\nclass Good { public function hi() { return \"good\"; } }\n"),
+            (
+                "src/Lazy.php",
+                "<?php\nclass Lazy {\n    public function bad(): int { return \"not an int\"; }\n    public function hi() { return \"lazy\"; }\n}\n",
+            ),
+            (
+                "src/Refs.php",
+                "<?php\nclass Refs { public function hi() { $x = \"refs\"; $a = [&$x]; $a[0] .= \"!\"; return $x; } }\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "good|lazy|refs!\n");
+}
+
+/// A class file whose top-level guard throws because an optional package is missing is loaded
+/// only when something asks for its class, and the exception it throws then is catchable.
+///
+/// This is Symfony's `AmpHttpClient.php` (`if (!interface_exists(DelegateHttpClient::class))
+/// { throw new \LogicException(...); }`), named by `HttpClient::create()` behind a probe that
+/// is false without amphp. Compiled into the program, the guard ran at boot and every request of
+/// the Symfony demo died on "the amphp/http-client package is not installed". The file is now
+/// left to the runtime autoloader, and the exception it throws when a `new` does demand it
+/// reaches the caller's `catch`, as in php. Expected output is php 8.5's.
+#[test]
+fn test_class_file_whose_guard_throws_loads_only_on_demand() {
+    let out = compile_cli_files_and_run(
+        &[
+            ("composer.json", r#"{"autoload":{"psr-4":{"Lib\\":"src/"}}}"#),
+            (
+                "src/Amp.php",
+                "<?php\nnamespace Lib;\n\nif (!interface_exists(MissingDep::class)) {\n    throw new \\LogicException('Amp needs MissingDep, which is not installed');\n}\n\nfinal class Amp implements Client {}\n",
+            ),
+            ("src/Native.php", "<?php\nnamespace Lib;\n\nfinal class Native implements Client {}\n"),
+            ("src/Client.php", "<?php\nnamespace Lib;\n\ninterface Client {}\n"),
+            (
+                "main.php",
+                r#"<?php
+class Loader {
+    public function __construct(private string $dir) {}
+    public function loadClass($class) {
+        $file = $this->dir . '/src/' . substr($class, 4) . '.php';
+        if (str_starts_with($class, 'Lib\\') && is_file($file)) {
+            require $file;
+        }
+    }
+}
+spl_autoload_register([new Loader(__DIR__), 'loadClass']);
+
+function make_client(bool $fancy): Lib\Client {
+    if ($fancy) {
+        return new Lib\Amp();
+    }
+    return new Lib\Native();
+}
+
+echo get_class(make_client($argc > 5)), "\n";
+try {
+    make_client($argc < 5);
+} catch (\LogicException $e) {
+    echo "caught: ", $e->getMessage(), "\n";
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "Lib\\Native\ncaught: Amp needs MissingDep, which is not installed\n");
+}
+
+/// An enum the runtime autoloader declares is usable, case for case and by identity, from a
+/// class another autoloaded file declares.
+///
+/// Each file a compiled autoloader includes runs in an eval context of its own. The enum's
+/// declaration reached the other contexts, its case singletons did not, so Symfony's
+/// `ReflectionExtractor::MAP_TYPES = ['integer' => TypeIdentifier::INT->value, ...]` died on
+/// "unsupported ClassConstantFetch expression". Expected output is php 8.5.10's.
+#[test]
+fn test_enum_cases_are_shared_between_autoloaded_files() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "src/TypeId.php",
+                "<?php\nnamespace Lib;\n\nenum TypeId: string {\n    case INT = 'int';\n    case FLOAT = 'float';\n}\n",
+            ),
+            (
+                "src/Extractor.php",
+                "<?php\nnamespace Lib;\n\nclass Extractor {\n    private const MAP_TYPES = [\n        'integer' => TypeId::INT->value,\n        'double' => TypeId::FLOAT->value,\n    ];\n    public static function map(): array { return self::MAP_TYPES; }\n    public static function int(): TypeId { return TypeId::INT; }\n}\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+class Loader {
+    public function __construct(private string $dir) {}
+    public function loadClass($class) {
+        $file = $this->dir . '/src/' . substr($class, 4) . '.php';
+        if (str_starts_with($class, 'Lib\\') && is_file($file)) {
+            require $file;
+        }
+    }
+}
+spl_autoload_register([new Loader(__DIR__), 'loadClass']);
+$code = 'echo implode(",", \Lib\Extractor::map()), "\n";'
+    . 'var_dump(\Lib\Extractor::int() === \Lib\TypeId::INT, \Lib\TypeId::from("float") === \Lib\TypeId::FLOAT);'
+    . ($argc > 5 ? '' : '');
+eval($code);
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "int,float\nbool(true)\nbool(true)\n");
+}

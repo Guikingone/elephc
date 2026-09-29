@@ -9,7 +9,7 @@
 //! - Only the `require`/`include` operations the file performs are kept; everything else is dropped.
 //! - The resolver follows each one, so the whole preloaded world arrives as ordinary declarations.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::errors::CompileError;
@@ -75,12 +75,22 @@ pub fn preload_declarations(
     if requires.is_empty() {
         return Ok(PreloadedDeclarations::default());
     }
+    // A preloaded file the compiler cannot parse is left out of the closed world rather than
+    // failing the build: php's autoloader still loads its classes at run time, as it does for
+    // any class the preload file did not name.
+    let _skip_unparseable = crate::resolver::skip_unparseable_includes();
     let preload_dir = preload_path.parent().unwrap_or(base_dir);
-    let (resolved, _, _) = crate::resolver::resolve_collecting_includes_with_defines_and_sources(
-        requires,
-        preload_dir,
-        defines,
-    )?;
+    let (resolved, _, sources) =
+        crate::resolver::resolve_collecting_includes_with_defines_and_sources(
+            requires,
+            preload_dir,
+            defines,
+        )?;
+    let mut class_files: HashMap<String, String> = sources
+        .class_likes
+        .into_iter()
+        .map(|(name, path)| (crate::names::php_symbol_key(name.trim_start_matches('\\')), path))
+        .collect();
     // The classes are named INSIDE the graph, not in the entry script: elephc's own preload file
     // requires Symfony's generated one, and that is where the 121 `$classes[] = '…';` lines live.
     // So the search runs over the RESOLVED program, and whatever it finds is resolved in a second
@@ -89,11 +99,17 @@ pub fn preload_declarations(
     let resolved = if named.is_empty() {
         resolved
     } else {
-        let (extra, _, _) = crate::resolver::resolve_collecting_includes_with_defines_and_sources(
-            named,
-            preload_dir,
-            defines,
-        )?;
+        let (extra, _, extra_sources) =
+            crate::resolver::resolve_collecting_includes_with_defines_and_sources(
+                named,
+                preload_dir,
+                defines,
+            )?;
+        for (name, path) in extra_sources.class_likes {
+            class_files
+                .entry(crate::names::php_symbol_key(name.trim_start_matches('\\')))
+                .or_insert(path);
+        }
         let already = declared_names(&resolved);
         let mut merged = resolved;
         merged.extend(without_redeclarations(extra, &already));
@@ -105,6 +121,7 @@ pub fn preload_declarations(
     Ok(PreloadedDeclarations {
         declarations: retain_declarations(resolved),
         compiled_whole,
+        class_files,
     })
 }
 
@@ -124,6 +141,10 @@ pub struct PreloadedDeclarations {
     /// warm request is the interpreter re-executing included top levels, and
     /// `App_KernelProdContainer.php` is in that set with its 1,186 symbols already compiled in.
     pub compiled_whole: Vec<std::path::PathBuf>,
+    /// The physical file declaring each class-like the graph supplied, keyed like every symbol
+    /// table (`php_symbol_key`). A preloaded class php could equally have autoloaded, so this is
+    /// what lets `autoload::deferral` hand one the checker refuses back to the runtime.
+    pub class_files: HashMap<String, String>,
 }
 
 /// Appends the path of every include guard whose body is entirely declarations.

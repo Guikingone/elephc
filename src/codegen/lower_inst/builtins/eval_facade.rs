@@ -256,6 +256,17 @@ pub(in crate::codegen::lower_inst) fn lower_eval_member_exists(
     eval::lower_eval_member_exists(ctx, inst, target, member, name)
 }
 
+/// Emits a null-context member-existence probe for an object an eval context may own.
+pub(in crate::codegen::lower_inst) fn emit_eval_member_exists_owner_probe(
+    ctx: &mut FunctionContext<'_>,
+    target: ValueId,
+    member: ValueId,
+    name: &str,
+    matched_label: &str,
+) -> Result<()> {
+    eval::emit_eval_member_exists_owner_probe(ctx, target, member, name, matched_label)
+}
+
 /// Lowers post-eval class-relation probes against eval dynamic metadata.
 pub(in crate::codegen::lower_inst) fn lower_eval_class_relation(
     ctx: &mut FunctionContext<'_>,

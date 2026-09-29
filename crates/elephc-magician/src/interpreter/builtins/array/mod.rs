@@ -40,6 +40,8 @@ mod array_slice;
 mod array_splice;
 mod array_sum;
 mod array_is_list;
+mod array_first;
+mod array_ucompare;
 mod array_key_first;
 mod array_key_last;
 mod array_unique;

@@ -513,6 +513,15 @@ pub fn execute_context_try_new_object_named_outcome(
     }
     if !context.has_class(class_name) {
         if let Err(status) = eval_spl_autoload_classlike_definition(class_name, context, values) {
+            // Loading the class file can itself THROW: a file guarded by
+            // `if (!interface_exists(X::class)) { throw new \LogicException(...); }` does, when X
+            // is not installed. php hands that exception to the `new` expression's caller, which
+            // may catch it; returning the bare status made it an uncatchable fatal.
+            if status == EvalStatus::UncaughtThrowable {
+                if let Some(thrown) = context.take_pending_throw() {
+                    return Ok(Some(EvalOutcome::Throwable(thrown)));
+                }
+            }
             if crate::eval_trace::enabled() {
                 eprintln!(
                     "[elephc-eval-trace] phase=try_new_object_error stage=autoload class={class_name:?} status={status:?}",
