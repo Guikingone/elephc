@@ -159,7 +159,7 @@ fn parse_checked_tokens(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileE
             }
         } else {
             match stmt::parse_stmt(tokens, &mut pos) {
-                Ok(stmt) => stmts.push(stmt),
+                Ok(stmt) => stmt::push_parsed_stmt(&mut stmts, stmt),
                 Err(error) => {
                     errors.extend(error.flatten());
                     stmt::recover_to_statement_boundary(tokens, &mut pos);

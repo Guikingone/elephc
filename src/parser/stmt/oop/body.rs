@@ -7,6 +7,8 @@
 //!
 //! Key details:
 //! - Modifier and member parsing must preserve PHP visibility and abstract/static/final/readonly rules.
+//! - Every property and constant a declarator list emits carries the span of its own declarator
+//!   (name plus optional initializer), not the span of the whole declaration.
 
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
@@ -236,7 +238,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                 &modifiers,
                 &member_attributes,
                 &mut constants,
-                "class",
+                owner_kind,
             )?;
             continue;
         }
@@ -289,10 +291,11 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                         "Expected a property name after ',' in the declaration list",
                     ));
                 };
+                let name_span = tokens[*pos].1.span;
                 *pos += 1;
                 if properties.iter().any(|property| property.name == prop_name) {
                     return Err(CompileError::new(
-                        member_span,
+                        name_span,
                         &format!("Cannot redeclare property ${}", prop_name),
                     ));
                 }
@@ -302,6 +305,10 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                 } else {
                     None
                 };
+                // This declarator's own extent: `$b = 2` in `public int $a = 1, $b = 2;`, so a
+                // diagnostic or an IDE range about `$b` points at `$b` (issue #1140).
+                let declarator_span =
+                    crate::parser::expr::span_through_prev_token(tokens, *pos, name_span);
                 let more_declarators =
                     matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Comma));
                 let (hooks, hook_accessors) = if more_declarators {
@@ -398,7 +405,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                     by_ref: false,
                     is_promoted: false,
                     default,
-                    span: member_span,
+                    span: declarator_span,
                     attributes: member_attributes.clone(),
                 });
                 if !more_declarators {
@@ -837,8 +844,11 @@ fn parse_interface_body(
 /// Shared by the class-like and interface parsers because they had already drifted: the interface
 /// copy still required a semicolon straight after the first value, so
 /// `interface Limits { const MIN = 1, MAX = 10; }` reported `Expected ';'` while the identical
-/// class declaration compiled. `owner_kind` only names the owner in the duplicate-name
-/// diagnostic; everything else is the same language rule.
+/// class declaration compiled. `owner_kind` (`class`, `trait`, `enum` or `interface`) only names
+/// the owner in the duplicate-name diagnostic; everything else is the same language rule.
+///
+/// Each emitted `ClassConst` carries the span of its own declarator, `B = 2` in
+/// `const A = 1, B = 2;`, rather than the span of the whole declaration (issue #1140).
 ///
 /// Expects `*pos` on the `const` token and leaves it past the terminating `;`.
 #[allow(clippy::too_many_arguments)]
@@ -854,6 +864,7 @@ fn parse_constant_declarator_list(
     *pos += 1; // consume `const`
     let type_expr = parse_optional_class_const_type(tokens, pos, member_span);
     loop {
+        let name_span = tokens.get(*pos).map_or(member_span, |(_, meta)| meta.span);
         // PHP 8 allows semi-reserved keywords as class-constant names, except `class`,
         // which is reserved for the `Foo::class` name fetch.
         let const_name = match tokens.get(*pos).map(|(t, _)| t) {
@@ -882,7 +893,7 @@ fn parse_constant_declarator_list(
         };
         if constants.iter().any(|c: &ClassConst| c.name == const_name) {
             return Err(CompileError::new(
-                member_span,
+                name_span,
                 &format!("Cannot redeclare {} constant {}", owner_kind, const_name),
             ));
         }
@@ -893,6 +904,8 @@ fn parse_constant_declarator_list(
             "Expected '=' after class constant name",
         )?;
         let value = parse_expr(tokens, pos)?;
+        let declarator_span =
+            crate::parser::expr::span_through_prev_token(tokens, *pos, name_span);
         let more_declarators = matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Comma));
         if more_declarators {
             *pos += 1;
@@ -905,7 +918,7 @@ fn parse_constant_declarator_list(
             is_final: modifiers.is_final,
             type_expr: type_expr.clone(),
             value,
-            span: member_span,
+            span: declarator_span,
             attributes: member_attributes.to_vec(),
         });
         if !more_declarators {

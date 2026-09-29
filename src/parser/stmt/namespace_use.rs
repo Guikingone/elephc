@@ -60,7 +60,7 @@ pub(super) fn parse_namespace_stmt(
     let mut errors = Vec::new();
     while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
         match parse_stmt(tokens, pos) {
-            Ok(stmt) => body.push(stmt),
+            Ok(stmt) => super::push_parsed_stmt(&mut body, stmt),
             Err(error) => {
                 errors.extend(error.flatten());
                 recover_to_statement_boundary(tokens, pos);
