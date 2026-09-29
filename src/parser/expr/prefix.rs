@@ -628,6 +628,8 @@ fn parse_array_literal_with_terminator(
             }
         } else if is_assoc {
             if mixed_elems.is_empty() {
+                // The synthesized key keeps the element's span: the profile scan tells an
+                // implicit entry from a written key by it (`detect::assoc_pair_matches`).
                 let key = Expr::new(ExprKind::IntLiteral(next_auto_key), expr.span);
                 assoc_elems.push((key, expr));
             } else {

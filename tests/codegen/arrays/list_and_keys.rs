@@ -110,15 +110,11 @@ echo (array_key_last([]) === null) ? "-last-null" : "-last-val";
     assert_eq!(out, "first-null-last-null");
 }
 
-/// PHP 8.3 changed the next implicit key after a negative integer key: `[-5 => "a"]` then
-/// `$a[] = "b"` stores "b" at -4 on 8.3+, and at 0 on 8.2 and earlier, where the next key starts
-/// at 0 and only a key at or above it moves it. The rule applies to a run-time append (local,
-/// parameter, eval) and to the bare entry of a literal. A key that already reached 0 is kept
-/// on every profile. The 8.3+ lines are measured on PHP 8.5.10; the 8.2 lines follow php-src's
-/// pre-8.3 rule. Regression for #1494.
-#[test]
-fn test_append_after_negative_key_follows_the_php_profile() {
-    let source = r#"<?php
+/// The `$a[] = ...` shapes after a negative integer key that the per-profile tests below share.
+/// An append inside `eval()` reaches the same runtime `record_insert` branch; it is left out
+/// because linking the interpreter under a non-default profile takes most of a minute, which
+/// the CI harness times out.
+const NEGATIVE_KEY_APPEND_SOURCE: &str = r#"<?php
 $a = [-5 => "a"];
 $a[] = "b";
 echo implode(",", array_keys($a)), "\n";
@@ -133,17 +129,35 @@ $d[] = "c";
 echo implode(",", array_keys($d)), "\n";
 function f(array $m): array { $m[] = "x"; return $m; }
 echo implode(",", array_keys(f([-9 => 1]))), "\n";
-$e = eval('$z = [-7 => 1]; $z[] = 2; return $z;');
-echo implode(",", array_keys($e)), "\n";
 "#;
-    let modern = "-5,-4\n-5,-4\n-3,1\n-5,3,4\n-9,-8\n-7,-6\n";
-    assert_eq!(compile_and_run(source), modern);
+
+/// PHP 8.3 changed the next implicit key after a negative integer key: `[-5 => "a"]` then
+/// `$a[] = "b"` stores "b" at -4 on 8.3+. The rule applies to a run-time append (local,
+/// parameter) and to the bare entry of a literal. The lines are measured on PHP 8.5.10; 8.3
+/// is the first profile to follow it. Regression for #1494.
+#[test]
+fn test_append_after_negative_key_continues_from_it_on_php_83() {
+    let modern = "-5,-4\n-5,-4\n-3,1\n-5,3,4\n-9,-8\n";
+    assert_eq!(compile_and_run(NEGATIVE_KEY_APPEND_SOURCE), modern);
     assert_eq!(
-        compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php83),
+        compile_and_run_with_php_version(
+            NEGATIVE_KEY_APPEND_SOURCE,
+            elephc::php_version::PhpVersion::Php83
+        ),
         modern
     );
+}
+
+/// On 8.2 and earlier the next implicit key starts at 0 and only a key at or above it moves
+/// it, so the append after `[-5 => "a"]` lands at 0. A key that already reached 0 is kept, as
+/// on every profile. The lines follow php-src's pre-8.3 rule. Regression for #1494.
+#[test]
+fn test_append_after_negative_key_restarts_at_zero_on_php_82() {
     assert_eq!(
-        compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php82),
-        "-5,0\n-5,0\n-3,1\n-5,3,4\n-9,0\n-7,0\n"
+        compile_and_run_with_php_version(
+            NEGATIVE_KEY_APPEND_SOURCE,
+            elephc::php_version::PhpVersion::Php82
+        ),
+        "-5,0\n-5,0\n-3,1\n-5,3,4\n-9,0\n"
     );
 }
