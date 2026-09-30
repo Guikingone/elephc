@@ -151,6 +151,43 @@ pub(super) fn load_ref_cell_local_to_result_as(
     Ok(ty)
 }
 
+/// Reads the boxed Mixed in the integer result register as an OWNED callable descriptor.
+///
+/// A box holding a compiled closure (tag 10) yields its descriptor, retained, exactly as the
+/// plain unbox does. Anything else is an interpreted callable: `$v instanceof Closure ? $v() : …`
+/// narrowed a slot holding an eval closure OBJECT to `callable`, and the call then jumped through
+/// the object as if it were a descriptor. The invoker helper builds a bridge descriptor for it,
+/// already owned by the caller.
+fn emit_mixed_local_to_owned_callable_descriptor(ctx: &mut FunctionContext<'_>) {
+    let convert = ctx.next_label("mixed_local_callable_convert");
+    let done = ctx.next_label("mixed_local_callable_done");
+    let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+    abi::emit_push_reg(ctx.emitter, &result_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #10");                             // runtime tag 10 already holds a compiled callable descriptor
+            ctx.emitter.instruction(&format!("b.ne {}", convert));              // an interpreted callable needs a bridge descriptor
+            ctx.emitter.instruction("mov x0, x1");                              // take the existing descriptor payload
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 10");                             // runtime tag 10 already holds a compiled callable descriptor
+            ctx.emitter.instruction(&format!("jne {}", convert));               // an interpreted callable needs a bridge descriptor
+            ctx.emitter.instruction("mov rax, rdi");                            // take the existing descriptor payload
+        }
+    }
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Callable);
+    ctx.emit_branch(&done);
+    ctx.emitter.label(&convert);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &result_reg, 0);
+    abi::emit_call_label(
+        ctx.emitter,
+        crate::codegen::runtime_callable_invoker::INVOKER_CALLABLE_ARG_HELPER,
+    );
+    ctx.emitter.label(&done);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+}
+
 /// Converts a loaded local slot value to the SSA result representation requested by EIR.
 pub(in crate::codegen) fn coerce_loaded_local_to_result_type(
     ctx: &mut FunctionContext<'_>,
@@ -181,6 +218,10 @@ pub(in crate::codegen) fn coerce_loaded_local_to_result_type(
         (PhpType::Mixed, PhpType::Str) => {
             move_int_result_to_first_arg(ctx);
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+            Ok(())
+        }
+        (PhpType::Mixed, PhpType::Callable) if ctx.module.required_runtime_features.eval_bridge => {
+            emit_mixed_local_to_owned_callable_descriptor(ctx);
             Ok(())
         }
         (PhpType::Mixed, PhpType::Array(_))

@@ -64,7 +64,7 @@ impl ElephcEvalContext {
     /// destroyed (`unregister_global_eval_functions_for_context`), so a hit here names a context
     /// that is still alive — the same one `global_eval_function_owner_context` dispatches through.
     pub fn has_function(&self, name: &str) -> bool {
-        if self.functions.contains_key(name) || self.native_functions.contains_key(name) {
+        if self.functions.contains_key(name) || self.has_active_native_function(name) {
             return true;
         }
         #[cfg(not(test))]

@@ -156,6 +156,9 @@ struct EvalNativeFunctionRegistration {
     name: String,
     signature: FunctionSig,
     bridge_supported: bool,
+    /// For a conditionally declared function registered under its public name: the module
+    /// symbol of its "active variant" slot, which says whether php would see it declared yet.
+    active_slot_symbol: Option<String>,
 }
 
 /// A module-local method signature that can be registered with the eval context.

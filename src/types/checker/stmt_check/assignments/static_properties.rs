@@ -144,6 +144,23 @@ pub(super) fn check_static_property_array_push(
         PhpType::Int | PhpType::Void if !target.property_has_declared_type => {
             PhpType::Array(Box::new(val_ty.clone()))
         }
+        // A keyed write earlier (`static::$map[$name] = $v`) made the slot a hash, and php appends
+        // to a hash exactly as to a list: the next integer key. The instance-property push already
+        // merges this way (`updated_array_property_push_type`); the static one refused it, which
+        // is how `Env::extend()` — a named OR an appended adapter — refused its whole class file.
+        PhpType::AssocArray { key, value } => {
+            let merged_value = checker
+                .merge_array_element_type(&value, &val_ty)
+                .unwrap_or(PhpType::Mixed);
+            let merged_key = checker
+                .merge_array_element_type(&key, &PhpType::Int)
+                .unwrap_or(PhpType::Mixed);
+            PhpType::AssocArray {
+                key: Box::new(merged_key),
+                value: Box::new(merged_value),
+            }
+        }
+        PhpType::Mixed => PhpType::Mixed,
         PhpType::Buffer(_) => {
             return Err(CompileError::new(
                 span,

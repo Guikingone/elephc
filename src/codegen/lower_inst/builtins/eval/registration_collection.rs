@@ -10,19 +10,51 @@
 use super::*;
 
 /// Collects global PHP functions that can use the descriptor-invoker bridge.
+///
+/// A conditionally declared function (`if (!function_exists('f')) { function f() {} }`) is a
+/// variant behind a public-name dispatcher; it is registered under that PUBLIC name, calling the
+/// dispatcher, and exists for eval only while its active-variant slot is filled. The variants'
+/// own internal names are never PHP-visible, so they are not registered.
 pub(super) fn eval_native_function_registrations(
     ctx: &FunctionContext<'_>,
 ) -> Vec<EvalNativeFunctionRegistration> {
-    ctx.module
+    let groups = crate::ir::function_variants::collect_dispatch_groups(ctx.module);
+    let variant_names: std::collections::HashSet<String> = groups
+        .iter()
+        .flat_map(|group| group.variants.iter().map(|name| php_symbol_key(name)))
+        .collect();
+    let mut registrations: Vec<EvalNativeFunctionRegistration> = ctx
+        .module
         .functions
         .iter()
         .filter(|function| function_has_eval_metadata(function))
+        .filter(|function| !variant_names.contains(&php_symbol_key(&function.name)))
         .map(|function| EvalNativeFunctionRegistration {
             name: function.name.clone(),
             signature: function_signature_from_eir(function),
             bridge_supported: eval_native_function_bridge_supported(function),
+            active_slot_symbol: None,
         })
-        .collect()
+        .collect();
+    for group in &groups {
+        if group.name.starts_with('_') {
+            continue;
+        }
+        let Some(variant) =
+            crate::ir::function_variants::variant_callee_for_group(ctx.module, &group.name)
+        else {
+            continue;
+        };
+        registrations.push(EvalNativeFunctionRegistration {
+            name: group.name.clone(),
+            signature: function_signature_from_eir(variant),
+            // The variant's own name is internal (`__elephc_conditional_fn_…`), which
+            // `function_has_eval_metadata` refuses; only its signature decides here.
+            bridge_supported: function_signature_can_bridge_with_eval(variant),
+            active_slot_symbol: Some(crate::names::function_variant_active_symbol(&group.name)),
+        });
+    }
+    registrations
 }
 
 /// Collects AOT method signatures whose metadata can be exposed to eval.

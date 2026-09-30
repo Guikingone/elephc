@@ -80,6 +80,14 @@ fn emit_invoker_callee_saved_restores(emitter: &mut Emitter) {
     }
 }
 
+/// Module-global helper converting the boxed Mixed in the integer result register into the
+/// callable descriptor a `callable`/`Closure` parameter holds, returned in the same register.
+///
+/// Every module defines it (`eval_callable_helpers::emit_invoker_callable_arg_helper`): with the
+/// eval bridge it also turns interpreted callbacks into bridge descriptors, without it an existing
+/// descriptor is the only callable a box can hold.
+pub(crate) const INVOKER_CALLABLE_ARG_HELPER: &str = "__elephc_invoker_callable_arg";
+
 /// Runtime invoker metadata emitted beside callable descriptors.
 pub(super) struct RuntimeCallableInvoker<'a> {
     pub(super) label: &'a str,
@@ -2412,6 +2420,13 @@ fn coerce_result_to_type(
                     Arch::X86_64 => emitter.instruction("mov rax, rdi"),        // move the unboxed container pointer into the integer result
                 }
             }
+            // A `callable`/`Closure` parameter takes a DESCRIPTOR, and the box is not one: an
+            // interpreted closure handed to a compiled `function f(Closure $c) { return $c(); }`
+            // made `f` jump through the box as if it were a descriptor. The module helper keeps an
+            // existing descriptor and builds one for anything else the bridge can call.
+            PhpType::Callable => {
+                abi::emit_call_label(emitter, INVOKER_CALLABLE_ARG_HELPER);
+            }
             // A nullable int parameter takes the inline tagged-scalar pair, not the box. Passing
             // the box through handed the callee its ADDRESS as the int: a compiled
             // `mb_str_split(?string $string, ?int $length = 1, ...)` called from eval read
@@ -2493,6 +2508,7 @@ fn can_coerce_result_to_type(source_ty: &PhpType, target_ty: &PhpType) -> bool {
                 | PhpType::Object(_)
                 | PhpType::Iterable
                 | PhpType::TaggedScalar
+                | PhpType::Callable
                 | PhpType::Mixed
                 | PhpType::Union(_)
         );

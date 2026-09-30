@@ -169,9 +169,32 @@ pub(super) fn lower_static_property_array_push(
         return;
     }
 
+    // A hash-typed slot (a keyed write came first: `static::$map[$name] = $v`) appends at the
+    // next integer key through the hash writer, which publishes a relocated table back into the
+    // loaded value, and that value goes back into the slot. The generic placeholder below would
+    // read the slot as a box and drop the write.
+    if let Some(property_ty) =
+        static_property_type(ctx, receiver, property).filter(is_assoc_array_type)
+    {
+        let property_value = load_static_property_as(ctx, receiver, property, property_ty, span);
+        let value = lower_expr(ctx, value);
+        ctx.emit_void(
+            Op::RuntimeCall,
+            vec![property_value.value, value.value],
+            None,
+            effects_lookup::runtime_effects(),
+            Some(span),
+        );
+        release_persisted_string_operand(ctx, value, span);
+        store_static_property(ctx, receiver, property, property_value.value, span);
+        return;
+    }
+
     let property_value = load_static_property(ctx, receiver, property, span);
     let value = lower_expr(ctx, value);
-    if static_property_may_be_eval_dynamic(ctx, receiver) {
+    let boxed_slot = static_property_type(ctx, receiver, property)
+        .is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Mixed));
+    if boxed_slot || static_property_may_be_eval_dynamic(ctx, receiver) {
         ctx.emit_void(
             Op::MixedArrayAppend,
             vec![property_value.value, value.value],

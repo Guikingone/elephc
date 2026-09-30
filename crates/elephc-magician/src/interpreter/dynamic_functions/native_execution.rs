@@ -9,6 +9,27 @@
 
 use super::*;
 
+thread_local! {
+    /// The eval contexts currently inside a call to a registered AOT function, innermost last.
+    ///
+    /// The generated invoker converts a boxed argument into a `callable` descriptor when the
+    /// parameter is typed `callable`/`Closure`, and an interpreted callback that is not a Closure
+    /// object (a function name, an array callable) has no owner context of its own. The context
+    /// that made the call is the one php would resolve that name in.
+    static NATIVE_CALL_CONTEXTS: std::cell::RefCell<Vec<usize>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Returns the eval context of the innermost interpreted call into a registered AOT function.
+pub(crate) fn current_native_call_context() -> *mut ElephcEvalContext {
+    NATIVE_CALL_CONTEXTS.with(|contexts| {
+        contexts
+            .borrow()
+            .last()
+            .map_or(std::ptr::null_mut(), |context| *context as *mut ElephcEvalContext)
+    })
+}
+
 /// Evaluates a registered AOT function through its descriptor-compatible invoker.
 pub(in crate::interpreter) fn eval_native_function(
     function: NativeFunction,
@@ -56,7 +77,15 @@ pub(in crate::interpreter) fn eval_native_function_with_values(
     if let Some((hooks, scope)) = global_sync {
         unsafe { (hooks.eval_to_native)(scope) };
     }
+    NATIVE_CALL_CONTEXTS.with(|contexts| {
+        contexts
+            .borrow_mut()
+            .push(context as *mut ElephcEvalContext as usize)
+    });
     let result = unsafe { function.call(arg_array) };
+    NATIVE_CALL_CONTEXTS.with(|contexts| {
+        contexts.borrow_mut().pop();
+    });
     if let Some((hooks, scope)) = global_sync {
         unsafe { (hooks.native_to_eval)(scope) };
     }

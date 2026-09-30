@@ -78,6 +78,7 @@ use return_type_compat::*;
 use return_values::*;
 pub use runtime_ops::{aot_member_names_uncached, AotMemberNameKind, RuntimeValueOps};
 pub(crate) use builtins::eval_class_name_is_a_bridge;
+pub(crate) use dynamic_functions::current_native_call_context;
 pub(crate) use builtins::eval_spl_autoload_class as eval_spl_autoload_class_bridge;
 pub(crate) use builtins::eval_spl_autoload_classlike_definition;
 use runtime_ops::*;

@@ -456,6 +456,12 @@ fn finalize_user_asm(
         eval_callable_support_needed,
         eval_bridge,
     );
+    eval_callable_helpers::emit_invoker_callable_arg_helper(
+        module,
+        &mut emitter,
+        &mut data,
+        &eval_callable_support,
+    );
     if eval_bridge {
         // After the callable support: a `\Closure`-typed property slot converts the boxed eval
         // callback into a descriptor with the same cast a `callable` parameter uses.

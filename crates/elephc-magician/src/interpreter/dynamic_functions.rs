@@ -21,6 +21,7 @@ pub(in crate::interpreter) use closure_execution::*;
 pub(in crate::interpreter) use function_binding::*;
 pub(in crate::interpreter) use method_binding::*;
 pub(in crate::interpreter) use native_execution::*;
+pub(crate) use native_execution::current_native_call_context;
 
 /// Evaluates an eval-declared user function with PHP-style argument binding.
 pub(in crate::interpreter) fn eval_dynamic_function(

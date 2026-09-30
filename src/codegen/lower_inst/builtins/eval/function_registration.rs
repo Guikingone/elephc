@@ -98,6 +98,15 @@ pub(super) fn register_eval_native_function(
         name_len,
         registration.bridge_supported,
     );
+    if let Some(active_slot_symbol) = &registration.active_slot_symbol {
+        register_eval_native_function_active_slot(
+            ctx,
+            context_offset,
+            &name_label,
+            name_len,
+            active_slot_symbol,
+        );
+    }
     let param_type_specs = eval_native_callable_param_type_specs(&registration.signature);
     for (index, (param_name, _)) in registration.signature.params.iter().enumerate() {
         register_eval_native_function_param(
