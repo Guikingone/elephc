@@ -15,6 +15,37 @@ use crate::parser::ast::{Program, StmtKind};
 use super::usage::scan_program;
 use super::{prune_unreachable_declarations, PreludeInventory, PruneOptions};
 
+/// Folded class-name strings keep runtime static-callable targets without rooting unrelated classes.
+#[test]
+fn prune_keeps_runtime_static_callable_class_after_class_constant_folding() {
+    let program = crate::optimize::fold_constants(parse(r#"<?php
+class Formatter { public static function join(string $value): string { return $value; } }
+class Unrelated { public static function other(): string { return "unused"; } }
+function choose_name(string $value): string { return $value; }
+$class = choose_name(Formatter::class);
+$method = choose_name("join");
+echo call_user_func([$class, $method], "value");
+"#));
+    let mut check = crate::types::check(&program).expect("folded fixture must type check");
+    let inventory = PreludeInventory::new();
+    let roots = HashSet::new();
+    let program = prune_unreachable_declarations(
+        program,
+        &mut check,
+        PruneOptions {
+            inventory: &inventory,
+            forced_groups: &roots,
+            exported_functions: &roots,
+            eval_forced: false,
+        },
+    );
+    assert!(has_class(&program, "Formatter"));
+    assert!(has_method(&program, "Formatter", "join"));
+    assert!(check.classes["Formatter"].static_methods.contains_key("join"));
+    assert!(!has_class(&program, "Unrelated"));
+    assert!(!check.classes.contains_key("Unrelated"));
+}
+
 /// Parses one PHP fixture without running resolution or optimization passes.
 fn parse(source: &str) -> Program {
     let tokens = crate::lexer::tokenize(source).expect("fixture must tokenize");
