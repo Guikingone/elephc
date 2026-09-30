@@ -16,6 +16,8 @@ mod builtin_json;
 mod builtin_spl_classes;
 mod builtin_class_gate;
 mod builtin_spl_exceptions;
+/// Shared builtin SPL parent edges for checker injection and exception-flow analysis.
+pub(crate) use builtin_spl_exceptions::SPL_EXCEPTION_HIERARCHY;
 /// builtin_stdclass
 pub(crate) mod builtin_stdclass;
 mod builtin_types;

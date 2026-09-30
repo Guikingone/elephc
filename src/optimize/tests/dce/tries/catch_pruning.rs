@@ -10,6 +10,22 @@
 
 use super::*;
 
+/// An Exception handler shadows SPL subclasses even without checker hierarchy metadata.
+#[test]
+fn test_ast_only_dce_prunes_spl_catch_shadowed_by_exception() {
+    let tokens = crate::lexer::tokenize(r#"<?php
+try { unknown_call(); }
+catch (Exception $exception) { echo 'exception'; }
+catch (RuntimeException $runtime) { echo 'runtime'; }
+catch (Error $error) { echo 'error'; }
+"#).unwrap();
+    let program = eliminate_dead_code(crate::parser::parse(&tokens).unwrap());
+    let StmtKind::Try { catches, .. } = &program[0].kind else { panic!("expected try"); };
+    assert_eq!(catches.len(), 2);
+    assert_eq!(catches[0].exception_types, ["Exception"]);
+    assert_eq!(catches[1].exception_types, ["Error"]);
+}
+
 /// Verifies that DCE drops all catch clauses when the try body cannot throw.
 ///
 /// Non-throwing try bodies make all catch clauses unreachable dead code.
