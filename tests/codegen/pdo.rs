@@ -2852,6 +2852,44 @@ fn test_pdo_exception_internal_methods_keep_final_exception_metadata() {
     }
 }
 
+/// PDO's widened getCode return must not satisfy a stricter user interface contract.
+#[test]
+fn test_pdo_exception_get_code_rejects_strict_user_interface_contracts() {
+    for declaration in [
+        "interface CodeContract { public function getCode(): int; }",
+        "interface CodeContract extends Throwable { public function getCode(): int; }",
+    ] {
+        let source = format!("<?php {declaration} class BadPdoError extends PDOException implements CodeContract {{}}");
+        let tokens = elephc::lexer::tokenize(&source).unwrap();
+        let program = elephc::parser::parse(&tokens).unwrap();
+        let program = elephc::autoload::collect_aliases(program);
+        let mut inventory = elephc::optimize::reachability::PreludeInventory::new();
+        let program = elephc::pdo_prelude::inject_if_used(program, false, &mut inventory);
+        let program = elephc::name_resolver::resolve(program).unwrap();
+        let Err(error) = elephc::types::check(&program) else {
+            panic!("PDO's SQLSTATE exemption must not bypass a user-declared int contract");
+        };
+        assert!(error.message.contains("getcode") && error.message.contains("return type"), "{}", error.message);
+    }
+}
+
+/// Inheriting Throwable's unchanged contract preserves PDO's intentional SQLSTATE widening.
+#[test]
+fn test_pdo_exception_get_code_accepts_inherited_throwable_contract() {
+    let source = "<?php interface UserThrowable extends Throwable {} class GoodPdoError extends PDOException implements UserThrowable {}";
+    let tokens = elephc::lexer::tokenize(source).unwrap();
+    let program = elephc::parser::parse(&tokens).unwrap();
+    let program = elephc::autoload::collect_aliases(program);
+    let mut inventory = elephc::optimize::reachability::PreludeInventory::new();
+    let program = elephc::pdo_prelude::inject_if_used(program, false, &mut inventory);
+    let program = elephc::name_resolver::resolve(program).unwrap();
+    let checked = elephc::types::check(&program).expect("an unchanged inherited Throwable contract remains valid");
+    assert_eq!(
+        checked.interfaces["UserThrowable"].method_declaring_interfaces["getcode"],
+        "Throwable",
+    );
+}
+
 /// A user class extending PDOException compiles and inherits the prelude's final `getCode()`
 /// instead of being re-validated against `Throwable::getCode()`, as PHP allows (issue #1320).
 /// Expected output measured on PHP 8.5.10.

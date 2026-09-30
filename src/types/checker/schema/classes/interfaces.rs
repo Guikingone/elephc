@@ -582,9 +582,15 @@ fn validate_interface_method(
         .get(method_name)
         .map(String::as_str)
         .unwrap_or(&class.name);
-    let return_compatible = [contract_owner, implementing_class, class.name.as_str()]
+    // Only Throwable's original contract has PDO's internal SQLSTATE exception.
+    // A user interface can inherit that contract, but its own getCode declaration cannot.
+    let required_owner = interface_info.method_declaring_interfaces
+        .get(method_name).map(String::as_str).unwrap_or(interface_name);
+    let pdo_throwable_exemption = php_symbol_key(required_owner) == "throwable"
+        && [contract_owner, implementing_class, class.name.as_str()]
         .into_iter()
-        .any(|owner| is_pdo_exception_get_code_contract(owner, method_name, &actual_sig.return_type))
+        .any(|owner| is_pdo_exception_get_code_contract(owner, method_name, &actual_sig.return_type));
+    let return_compatible = pdo_throwable_exemption
         || late_static_compatible.unwrap_or_else(|| {
             interface_self_return_conforms(
                 checker,
