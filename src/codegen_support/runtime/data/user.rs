@@ -3765,6 +3765,38 @@ mod tests {
         );
     }
 
+    /// Static abstractness comes from declarations even after concrete bodies are trimmed.
+    #[test]
+    fn test_eval_static_abstract_flags_survive_emission_trimming_on_all_targets() {
+        let mut info = empty_class_info(1, "unused");
+        info.is_abstract = true;
+        for method in ["make", "required"] {
+            info.static_methods.insert(method.to_string(), direct_method_signature());
+            info.static_method_declaring_classes
+                .insert(method.to_string(), "StaticMetadata".to_string());
+        }
+        info.abstract_static_methods.insert("required".to_string());
+        info.static_method_impl_classes
+            .insert("make".to_string(), "StaticMetadata".to_string());
+        assert_eq!(
+            info.static_method_impl_classes.remove("make").as_deref(),
+            Some("StaticMetadata"),
+        );
+        let classes = HashMap::from([("StaticMetadata".to_string(), info)]);
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let asm = emit_runtime_data_user(
+                &HashSet::new(), &HashMap::new(), &HashMap::new(), &HashSet::new(),
+                &HashMap::new(), &[], &[], &HashMap::new(), &HashMap::new(),
+                &classes, &HashMap::new(), &HashSet::new(), None, true, None,
+                Target::parse(name).expect("supported target"),
+            )
+            .unwrap();
+            let methods = asm.split("_eval_reflection_methods:\n").nth(1).unwrap();
+            assert_eq!(methods.lines().nth(4).unwrap().trim(), ".quad 3", "{name}: concrete static");
+            assert_eq!(methods.lines().nth(11).unwrap().trim(), ".quad 35", "{name}: declared abstract static");
+        }
+    }
+
     /// All supported targets retain hook lookup rows while marking only virtual storage and real accessors.
     #[test]
     fn test_eval_hook_metadata_flags_on_every_supported_target() {
