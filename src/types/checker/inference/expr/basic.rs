@@ -150,11 +150,9 @@ impl Checker {
                 for entry in entries {
                     let next = match entry {
                         ArrayEntry::Spread(source) => {
-                            match self.infer_type(source, env)?.codegen_repr() {
-                                PhpType::Array(elem) => elem.codegen_repr(),
-                                PhpType::AssocArray { value, .. } => value.codegen_repr(),
-                                _ => PhpType::Mixed,
-                            }
+                            // The entry contains an ExprKind::Spread node. Its inference already
+                            // returns the source's element type, including nested array elements.
+                            self.infer_type(source, env)?
                         }
                         ArrayEntry::Keyed(key, value) => {
                             self.infer_type(key, env)?;

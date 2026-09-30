@@ -9,6 +9,27 @@
 
 use super::*;
 
+/// A mixed literal spread unwraps its source once, preserving nested container element types.
+#[test]
+fn test_mixed_literal_spread_preserves_nested_element_type() {
+    use elephc::types::PhpType;
+    for source in [
+        "<?php $rows = [...[[1], [2]], 'last' => [3]];",
+        "<?php $source = ['first' => [1], 'second' => [2]]; $rows = [...$source, 'last' => [3]];",
+        "<?php $rows = [...[1, 2], 'last' => 3];",
+    ] {
+        let checked = check_source_full(source).expect("valid spread");
+        let expected_value = if source.contains("[3]") {
+            PhpType::Array(Box::new(PhpType::Int))
+        } else {
+            PhpType::Int
+        };
+        assert_eq!(checked.global_env.get("rows"), Some(&PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed), value: Box::new(expected_value),
+        }));
+    }
+}
+
 /// Direct scalar property references need writeback support distinct from nested array origins.
 #[test]
 fn test_error_by_ref_argument_rejects_direct_property_storage() {
