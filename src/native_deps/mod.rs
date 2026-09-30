@@ -34,6 +34,7 @@ pub use catalog::{packages, ArchiveFormat, PackageSpec, PackageVersion, SourceAr
 pub use cli::{native_help, parse_native_args, NativeCommand, NativeOptions, NativeParseOutcome};
 pub use error::{NativeError, NativeErrorKind};
 pub use orchestration::NativeRunOutput;
+pub use project::{discover_for_source, ProjectPaths};
 pub use requirements::NativeRequirement;
 pub use resolver::{resolve_for_compilation, resolve_for_compilation_in_cache, ResolvedNativePackage};
 

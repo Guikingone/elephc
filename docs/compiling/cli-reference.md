@@ -759,6 +759,40 @@ PHP's parsed fallback value. Runtime mutation of Core response defaults and raw
 encoding inheritance remains incomplete. The environment overrides below remain
 specific to the documented OPcache keys.
 
+### In the project file
+
+A project can state its directives once, in the `[ini]` table of its
+`elephc.toml`, instead of on every compile:
+
+```toml
+[ini]
+"opcache.enable_cli" = true
+"opcache.jit" = "tracing"
+"opcache.memory_consumption" = 256
+```
+
+elephc reads the nearest `elephc.toml` above the compiled PHP file, the same
+file [native dependencies](native-dependencies.md#project-discovery-and-files)
+use, on every compile. Each entry becomes one `--ini KEY=VALUE`, with the value
+spelled as a `php.ini` line would give it: a string as written, a number in
+decimal, `true` as `1` and `false` as the empty string. A TOML number is taken
+for its value, not its spelling (`0x10` becomes `16`, `1.0` becomes `1`); quote
+a value to hand the directive exact text. A dotted name may be quoted, written
+bare (`opcache.enable_cli = true`), or split into a sub-table
+(`[ini.opcache]` then `enable_cli = true`); all three name the same directive.
+
+These fail the compile, with a message naming the file:
+
+- a directive named twice in the file, under any two spellings;
+- a value with no INI equivalent: an array, a date, `inf` or `nan`;
+- a file that is not valid TOML, whatever section is broken;
+- a file the project search refuses, such as a symlinked `elephc.toml`.
+
+A `--ini` on the command line wins over the file for the same directive. String
+values are passed through unchanged, so a relative path means what it means
+with `--ini`. `examples/project-ini` is a program compiled this way; it prints
+what PHP prints with the same values given as `-d` flags.
+
 ### Runtime overrides: `ELEPHC_INI_*`
 
 Once a binary is built, a directive can still be re-pointed for a single run

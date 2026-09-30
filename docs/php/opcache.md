@@ -576,7 +576,8 @@ in registration order, then 54 `opcache.*` sorted). Pinned by
 Two mechanisms, both documented in full on the
 [CLI reference](../compiling/cli-reference.md#ini-directives):
 
-- **`--ini KEY=VALUE`** — compile time, the analogue of `php -d`. It moves both
+- **`--ini KEY=VALUE`**, or the same entry in the `[ini]` table of the
+  project's `elephc.toml` — compile time, the analogue of `php -d`. It moves both
   `ini_get()` (the raw string) and
   `opcache_get_configuration()['directives']` (the normalized value) together.
   The value first goes through PHP's INI *scanner*, which rewrites the boolean
