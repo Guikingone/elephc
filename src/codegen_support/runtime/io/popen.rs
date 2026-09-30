@@ -15,12 +15,14 @@
 //!   that is not `"r"`, `"rb"`, `"w"` or `"wb"` with a ValueError, and calls libc with the
 //!   STRIPPED mode. MEASURED on `php -n` 8.5.6 against elephc:
 //!
+//!   ```text
 //!       mode   php                                      elephc (before)
 //!       r      handle                                   handle
 //!       rb     handle                                   FALSE
 //!       w      handle                                   handle
 //!       wb     handle                                   FALSE
 //!       r+     ValueError: popen(): Argument #2 …       handle
+//!   ```
 //!
 //!   macOS libc refuses `"rb"` outright, which is where the two `false`s came from, and `"r+"`
 //!   it accepts, which is where the missing refusal came from.

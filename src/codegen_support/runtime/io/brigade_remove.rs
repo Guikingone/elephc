@@ -12,9 +12,11 @@
 //! - MEASURED on `php -n` 8.5.6, a write filter over `"abc"` (`scratchpad/qp/a/bucket2.php`,
 //!   `bucket3.php`):
 //!
+//!   ```text
 //!       append the same bucket three times          php 'ABC'   elephc 'ABCABCABC'
 //!       append, set data = "ZZZ", append again      php 'ZZZ'   elephc 'ZZZZZZ'
 //!       append then PREPEND the same bucket         php 'abc'   elephc 'abcabc'
+//!   ```
 //!
 //!   The second line is what pins the rule down: php answers `'ZZZ'` and not `'abcZZZ'`, so the
 //!   brigade never held two entries — one entry, read at flush time, showing whatever the object

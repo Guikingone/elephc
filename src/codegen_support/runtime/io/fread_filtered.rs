@@ -23,9 +23,11 @@
 //!   no separate empty call in that case. MEASURED on `php -n` 8.5.6 with a filter printing its
 //!   own arguments, over 8320 bytes at a chunk of 8192:
 //!
+//!   ```text
 //!       php://temp     8192 closing=0 eof=0 | 128 closing=1 eof=1                (TWO calls)
 //!       php://memory   8192 closing=0 eof=0 | 128 closing=0 eof=0 | 0 closing=1  (three)
 //!       plain file     the same three
+//!   ```
 //!
 //!   php differs by BACKEND because its temp stream raises `eof` on the read that drains it and
 //!   its memory stream raises it a read later; the rule above is the same for all three.

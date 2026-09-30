@@ -18,10 +18,12 @@
 //!   descriptor — both are answered before this is reached.
 //! - php has FOUR wordings for a failed WRITE, all MEASURED on `php -n` 8.5.6:
 //!
+//!   ```text
 //!       plain fd opened "r"            fwrite(): Write of 4 bytes failed with errno=9 …
 //!       socket whose peer is gone      fwrite(): Send of 4 bytes failed with errno=32 Broken pipe
 //!       data:// in any mode            fwrite(): Stream is not writable
 //!       php://temp, php://memory "r"   SILENT, just bool(false)
+//!   ```
 //!
 //!   The THIRD is `__rt_not_writable_notice` below: php refuses on the wrapper's OPS, which the
 //!   data wrapper has none of, so the recorded mode never enters into it — `data://` opened `"w"`

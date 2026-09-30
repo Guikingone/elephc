@@ -313,8 +313,10 @@ fn emit_file_put_contents_linux_x86_64(emitter: &mut Emitter) {
 /// php locates the wrapper first and the data wrapper OPENS in any mode — it simply has no write
 /// function, so the write is what fails. MEASURED on `php -n` 8.5.6, both spellings:
 ///
+/// ```text
 ///     file_put_contents('data://text/plain,cccc', 'x')  Notice: … Stream is not writable / false
 ///     file_put_contents('data:text/plain,cccc', 'x')    the same
+/// ```
 ///
 /// elephc never consulted a wrapper here and opened the whole URL as a FILENAME, so it answered
 /// `Warning: file_put_contents(data://text/plain,cccc): Failed to open stream: No such file or

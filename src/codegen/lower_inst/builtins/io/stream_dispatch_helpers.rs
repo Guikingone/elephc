@@ -173,9 +173,11 @@ pub(super) fn store_accept_peer_name(ctx: &mut FunctionContext<'_>, value: Value
 /// reference before it attempts anything and overwrites it only on success, so the two are
 /// different answers — MEASURED on `php -n` 8.5.6:
 ///
+/// ```text
 ///     a non-socket handle        false, $address === null
 ///     a connected TCP socket     'ping', $address === ''
 ///     a UDP socket with a sender 'pong', $address === '127.0.0.1:PORT'
+/// ```
 ///
 /// The runtime already tells them apart: `__rt_stream_socket_recvfrom` zeroes the stashed
 /// pointer on failure, and its empty-address path allocates a one-byte buffer precisely so the

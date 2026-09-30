@@ -50,8 +50,10 @@ pub fn emit_resource_id_burn(emitter: &mut Emitter) {
 /// nodes, so the second one would take a second id and every resource after it would be one
 /// higher than php's. MEASURED on `php -n` 8.5.6, `tmpfile()` then `stream_filter_prepend()`:
 ///
+/// ```text
 ///     php     stream 4, filter 5, stream 6, filter 7
 ///     elephc  stream 4, filter 6, stream 7, filter 9
+/// ```
 ///
 /// Rewinding between the two creates makes the pair share one id, which is what php shows.
 /// The two nodes are an implementation detail — only one handle ever reaches the program — and
