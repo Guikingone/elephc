@@ -840,3 +840,47 @@ try {
     );
     assert_eq!(out, "TypeError caught\n");
 }
+
+/// `Class::$p[] = $v` appends at the next integer key once a keyed write made the slot a hash,
+/// for untyped and `array`-typed static properties, and on a slot holding a boxed array.
+#[test]
+fn test_static_property_push_onto_keyed_and_boxed_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+class Reg {
+    protected static $adapters = [];
+    public static $names = [];
+    public static array $typed = [];
+    public static $boxed;
+    public static function extend(Closure $callback, $name = null) {
+        if (!is_null($name)) { static::$adapters[$name] = $callback; } else { static::$adapters[] = $callback; }
+    }
+    public static function run() {
+        $out = [];
+        foreach (static::$adapters as $k => $adapter) { $out[] = $k . '=' . $adapter(); }
+        return implode(',', $out);
+    }
+    public static function add($k, string $v) {
+        if ($k !== null) { self::$names[$k] = $v; } else { self::$names[] = $v; }
+        self::$typed['x' . $v] = strlen($v);
+        self::$typed[] = $v . '!';
+    }
+}
+Reg::extend(fn () => 'a', 'first');
+Reg::extend(fn () => 'b');
+Reg::extend(fn () => 'c');
+echo Reg::run(), "\n";
+Reg::add('a', 'one');
+Reg::add(null, 'two');
+Reg::add(5, 'three');
+Reg::add(null, 'four');
+Reg::$boxed = $argc > 5 ? 'str' : [1];
+Reg::$boxed[] = 2;
+echo json_encode(Reg::$names), "\n", json_encode(Reg::$typed), "\n", json_encode(Reg::$boxed), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "first=a,0=b,1=c\n{\"a\":\"one\",\"0\":\"two\",\"5\":\"three\",\"6\":\"four\"}\n{\"xone\":3,\"0\":\"one!\",\"xtwo\":3,\"1\":\"two!\",\"xthree\":5,\"2\":\"three!\",\"xfour\":4,\"3\":\"four!\"}\n[1,2]\n"
+    );
+}

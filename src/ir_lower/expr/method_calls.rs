@@ -204,6 +204,20 @@ pub(super) fn lower_method_call(
             return call;
         }
     }
+    // A receiver typed only `object` may be an instance of ANY class with this method, including
+    // one the interpreter declared, so the signature found for it is one candidate's and cannot
+    // place named arguments: `function f(object $o) { $o->m(b: 1); }` bound `b` by whichever
+    // compiled class happened to declare `m`. The boxed-receiver path hands the names to the
+    // runtime as `call_user_func_array` keys, which is php's own rule.
+    if op == Op::MethodCall
+        && dispatch_method == method
+        && crate::types::call_args::has_named_args(args)
+    {
+        if let Some(call) = lower_boxed_receiver_variadic_method_call(ctx, object, method, args, expr)
+        {
+            return call;
+        }
+    }
     if let Some(call) = lower_runtime_spread_method_call(
         ctx,
         object,

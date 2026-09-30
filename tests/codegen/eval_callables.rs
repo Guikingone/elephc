@@ -2816,3 +2816,78 @@ eval('try { ($GLOBALS["f"])("x"); echo "no throw"; } catch (NotFound $e) { echo 
     );
     assert_eq!(out, "caught nf:x");
 }
+
+/// A function declared inside `if (!function_exists(...))` is callable from eval under its public
+/// name once its declaration ran, and one whose guard stayed false does not exist for eval, which
+/// may then declare the name itself.
+#[test]
+fn test_eval_calls_conditionally_declared_compiled_function() {
+    let out = compile_and_run(
+        r#"<?php
+if (!function_exists('cond_value')) {
+    function cond_value($value, ...$args) { return $value instanceof Closure ? $value(...$args) : $value; }
+}
+if (function_exists('strlen') === false) {
+    function strlen_never($x) { return -1; }
+}
+echo cond_value(3), "|";
+eval('echo cond_value(5), "|", cond_value(fn () => 6), "|", cond_value(fn ($a) => $a * 2, 7), "|";');
+eval('echo function_exists("strlen_never") ? "declared" : "absent", "|";');
+eval('function strlen_never($x) { return "eval"; } echo strlen_never(1);');
+"#,
+    );
+    assert_eq!(out, "3|5|6|14|absent|eval");
+}
+
+/// An interpreted callable handed to a compiled `Closure`/`callable` parameter becomes a
+/// descriptor at the bridge: closures, function names, array and static-string callables, through
+/// a variadic spread, and through a `mixed` parameter narrowed by `instanceof Closure`.
+#[test]
+fn test_eval_callables_reach_compiled_callable_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+function call_typed(Closure $value) { return $value(); }
+function call_callable(callable $value) { return $value(); }
+function call_spread($value, ...$args) { return $value(...$args); }
+function call_narrowed($value) { return $value instanceof Closure ? $value() : $value; }
+function named_five() { return 5; }
+class Box { public function nine() { return 9; } public static function ten() { return 10; } }
+echo call_spread(fn () => 1), call_narrowed(2), "|";
+eval('echo call_typed(fn () => 3), call_callable(function () { return 4; }), "|";');
+eval('echo call_spread(fn ($a) => $a + 1, 4), call_spread(fn () => 6), "|";');
+eval('echo call_narrowed(fn () => 7), call_narrowed(8), "|";');
+eval('echo call_callable("named_five"), call_callable([new Box(), "nine"]), call_callable("Box::ten"), "|";');
+eval('function ev_fn() { return "e"; } echo call_callable("ev_fn");');
+"#,
+    );
+    assert_eq!(out, "12|34|56|78|5910|e");
+}
+
+/// Named arguments to a method of an object the compiled site cannot type (an eval-declared
+/// class, or any receiver typed only `object`) bind by name at run time instead of by position.
+#[test]
+fn test_named_args_bind_by_name_on_open_receivers() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvBuilder {
+    public function withRouting(?Closure $using = null, array|string|null $web = null, ?string $commands = null, ?string $health = null, string $apiPrefix = "api") {
+        return ($using === null ? "null" : "closure") . "|" . var_export($web, true) . "|" . var_export($commands, true) . "|" . var_export($health, true) . "|" . $apiPrefix;
+    }
+}');
+class Local { public function withRouting($a = 1, $web = 2, $health = 3) { return "$a/$web/$health"; } }
+function via_object(object $o) { return $o->withRouting(health: 'H', web: 'W'); }
+$cls = 'EvBuilder';
+$b = new $cls();
+echo $b->withRouting(web: 'w.php', commands: 'c.php', health: '/up'), "\n";
+echo $b->withRouting(null, 'x', health: '/h'), "\n";
+echo via_object($b), "\n";
+echo via_object(new Local()), "\n";
+$m = $argc > 5 ? $b : new Local();
+echo $m->withRouting(health: 'h2'), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "null|'w.php'|'c.php'|'/up'|api\nnull|'x'|NULL|'/h'|api\nnull|'W'|NULL|'H'|api\n1/W/H\n1/2/h2\n"
+    );
+}
