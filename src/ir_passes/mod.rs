@@ -30,6 +30,7 @@ mod inline;
 mod immutable_local_loads;
 mod intervals;
 mod licm;
+mod local_scope;
 mod liveness;
 mod loops;
 mod mem2reg;

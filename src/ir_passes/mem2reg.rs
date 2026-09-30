@@ -41,6 +41,7 @@ impl IrPass for Mem2Reg {
     fn run(&self, function: &mut Function, _data: &mut DataPool) -> bool {
         if function.flags.is_generator
             || has_exception_handlers(function)
+            || super::local_scope::has_dynamic_eval(function)
             || function.instructions.iter().any(|inst| inst.op.name().starts_with("eval_"))
         {
             return false;
@@ -253,11 +254,13 @@ fn live_in(function: &Function, facts: &SlotFacts, order: &[BlockId]) -> Vec<boo
     live
 }
 
-/// Computes which block entries are definitely preceded by a store to this slot.
+/// Computes definite stores from the greatest fixpoint, preserving loop invariants.
 fn defined_in(facts: &SlotFacts, preds: &[Vec<BlockId>], order: &[BlockId]) -> Vec<bool> {
-    let mut incoming = vec![false; facts.stores.len()];
-    let mut outgoing = facts.stores.clone();
+    let mut incoming = vec![true; facts.stores.len()];
+    let mut outgoing = vec![true; facts.stores.len()];
     let entry = order[0];
+    incoming[entry.as_raw() as usize] = false;
+    outgoing[entry.as_raw() as usize] = facts.stores[entry.as_raw() as usize];
     let mut changed = true;
     while changed {
         changed = false;
@@ -273,7 +276,6 @@ fn defined_in(facts: &SlotFacts, preds: &[Vec<BlockId>], order: &[BlockId]) -> V
             }
         }
     }
-    incoming[entry.as_raw() as usize] = false;
     incoming
 }
 
@@ -316,7 +318,7 @@ fn promote_slot(
 
     let mut end_values = vec![None; function.blocks.len()];
     let mut neutralized = Vec::new();
-    rename_block(
+    rename_blocks(
         function,
         function.entry,
         slot,
@@ -339,9 +341,9 @@ fn promote_slot(
     !neutralized.is_empty()
 }
 
-/// Walks the dominator tree while carrying the current SSA definition of one local.
+/// Walks the dominator tree iteratively while carrying one local's SSA definition.
 #[allow(clippy::too_many_arguments)]
-fn rename_block(
+fn rename_blocks(
     function: &Function,
     block: BlockId,
     slot: LocalSlotId,
@@ -352,43 +354,36 @@ fn rename_block(
     replacements: &mut HashMap<ValueId, ValueId>,
     neutralized: &mut Vec<InstId>,
 ) {
-    let raw = block.as_raw() as usize;
-    let mut current = phi_values[raw].or(incoming);
-    for &inst_id in &function.blocks[raw].instructions {
-        let inst = &function.instructions[inst_id.as_raw() as usize];
-        if inst.immediate != Some(Immediate::LocalSlot(slot)) {
-            continue;
-        }
-        match inst.op {
-            Op::LoadLocal => {
-                let value = inst.result.expect("eligible load has a result");
-                replacements.insert(value, current.expect("eligible load is defined"));
-                neutralized.push(inst_id);
+    let mut work = vec![(block, incoming)];
+    while let Some((block, incoming)) = work.pop() {
+        let raw = block.as_raw() as usize;
+        let mut current = phi_values[raw].or(incoming);
+        for &inst_id in &function.blocks[raw].instructions {
+            let inst = &function.instructions[inst_id.as_raw() as usize];
+            if inst.immediate != Some(Immediate::LocalSlot(slot)) {
+                continue;
             }
-            Op::StoreLocal => {
-                let mut value = inst.operands[0];
-                while let Some(&next) = replacements.get(&value) {
-                    value = next;
+            match inst.op {
+                Op::LoadLocal => {
+                    let value = inst.result.expect("eligible load has a result");
+                    replacements.insert(value, current.expect("eligible load is defined"));
+                    neutralized.push(inst_id);
                 }
-                current = Some(value);
-                neutralized.push(inst_id);
+                Op::StoreLocal => {
+                    let mut value = inst.operands[0];
+                    while let Some(&next) = replacements.get(&value) {
+                        value = next;
+                    }
+                    current = Some(value);
+                    neutralized.push(inst_id);
+                }
+                _ => {}
             }
-            _ => {}
         }
-    }
-    end_values[raw] = current;
-    for &child in dominance.children(block) {
-        rename_block(
-            function,
-            child,
-            slot,
-            current,
-            phi_values,
-            dominance,
-            end_values,
-            replacements,
-            neutralized,
-        );
+        end_values[raw] = current;
+        for &child in dominance.children(block).iter().rev() {
+            work.push((child, current));
+        }
     }
 }
 

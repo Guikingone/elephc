@@ -112,3 +112,70 @@ fn test_mem2reg_preserves_by_reference_local() {
     assert_eq!(run_variant(source, false), "7");
     assert_eq!(run_variant(source, true), "7");
 }
+
+/// Dynamic eval sees a scalar written after its call site on later loop iterations.
+#[test]
+fn test_mem2reg_keeps_dynamic_eval_visible_local_in_memory() {
+    let source = r#"<?php
+function repeat_eval(string $code): void {
+    for ($i = 0; $i < 3; $i++) {
+        if ($i > 0) { eval($code); }
+        $n = 7;
+        if (strlen($code) > 1000) { $n = 9; }
+        echo "step\n";
+    }
+}
+repeat_eval('echo "n=$n\\n";');
+"#;
+    let expected = "step\nn=7\nstep\nn=7\nstep\n";
+    assert_eq!(run_variant(source, false), expected);
+    assert_eq!(run_variant(source, true), expected);
+}
+
+/// Dead-store and immutable-load passes also retain a single later eval-visible store.
+#[test]
+fn test_mem2reg_keeps_single_store_visible_to_dynamic_eval() {
+    let source = r#"<?php
+function repeat_eval(string $code): void {
+    for ($i = 0; $i < 3; $i++) {
+        if ($i > 0) { eval($code); }
+        $n = 7;
+        echo "step\n";
+    }
+}
+repeat_eval('echo "n=$n\\n";');
+"#;
+    let expected = "step\nn=7\nstep\nn=7\nstep\n";
+    assert_eq!(run_variant(source, false), expected);
+    assert_eq!(run_variant(source, true), expected);
+}
+
+/// A scalar defined before a loop remains promotable when its back edge has no store.
+#[test]
+fn test_mem2reg_promotes_read_only_loop_value() {
+    let source = "<?php $x = $argc; if ($argc > 5) { $x = 3; } $i = 0; $s = 0; while ($i < 3) { $s = ($s + $x) & 255; $i++; } echo $s;";
+    let optimized = main_ir(source, true);
+    assert!(!optimized.contains("load_local slot[1]"), "loop-invariant scalar is promoted: {optimized}");
+    assert_eq!(run_variant(source, false), "3");
+    assert_eq!(run_variant(source, true), "3");
+}
+
+/// A promoted loop value survives runtime string work before its next use.
+#[test]
+fn test_mem2reg_preserves_value_across_runtime_call() {
+    let source = "<?php $x = $argc; if ($argc > 5) { $x = 3; } $sum = 0; $i = 0; while ($i < 3) { echo strlen('z' . $argc); $sum = ($sum + $x) & 255; $i++; } echo $sum;";
+    let optimized = main_ir(source, true);
+    assert!(!optimized.contains("load_local slot[1]"), "loop value is promoted: {optimized}");
+    assert_eq!(run_variant(source, false), "2223");
+    assert_eq!(run_variant(source, true), "2223");
+}
+
+/// Loop-carried scalar swaps preserve parallel edge-copy semantics.
+#[test]
+fn test_mem2reg_preserves_swap_across_back_edge() {
+    let source = "<?php $a = $argc; $b = 2; $i = 0; while ($i < 3) { $t = $a; $a = $b; $b = $t; $i++; } echo $a, ':', $b;";
+    let optimized = main_ir(source, true);
+    assert!(optimized.contains("while.cond("), "swap uses loop parameters: {optimized}");
+    assert_eq!(run_variant(source, false), "2:1");
+    assert_eq!(run_variant(source, true), "2:1");
+}

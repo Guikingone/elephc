@@ -11,7 +11,7 @@
 use crate::codegen::platform::{AppleVariant, Arch, Platform, Target};
 use crate::ir::{
     validate_function, Builder, DataPool, Function, Immediate, IrType, LocalKind, LocalSlotId,
-    Op, Ownership, Terminator,
+    Op, Ownership, SwitchCase, Terminator,
 };
 use crate::ir_passes::driver::IrPass;
 use crate::ir_passes::mem2reg::Mem2Reg;
@@ -342,6 +342,120 @@ fn keeps_eval_visible_local_in_memory() {
         b.terminate(Terminator::Return { value: Some(loaded) });
     }
     validate_function(&function).expect("input EIR is valid");
+    assert!(!promote(&mut function));
+    assert_eq!(traffic(&function, slot), 2);
+}
+
+/// Dynamic eval uses a profiled language-construct call and can read later-declared locals.
+#[test]
+fn keeps_dynamic_eval_visible_local_in_memory() {
+    let mut function = Function::new("dynamic_eval_scope".into(), IrType::I64, PhpType::Int);
+    let slot = function.add_local(Some("value".into()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+    {
+        let mut b = Builder::new(&mut function);
+        let entry = b.create_named_block("entry", vec![]);
+        b.set_entry(entry);
+        b.position_at_end(entry);
+        b.emit(Op::LanguageConstructCall, vec![],
+            Some(Immediate::ProfiledData { data: crate::ir::DataId::from_raw(0), strict_php: false }),
+            IrType::Void, PhpType::Void, Ownership::NonHeap);
+        let value = b.emit_const_i64(9);
+        b.emit_store_local(slot, value);
+        let result = b.emit_load_local(slot, IrType::I64, PhpType::Int);
+        b.terminate(Terminator::Return { value: Some(result) });
+    }
+    validate_function(&function).expect("input EIR is valid");
+    assert!(!promote(&mut function));
+    assert_eq!(traffic(&function, slot), 2);
+}
+
+/// A definition before a loop must stay definite through a read-only back edge.
+#[test]
+fn promotes_read_only_loop_value() {
+    let mut function = Function::new("loop_invariant".into(), IrType::I64, PhpType::Int);
+    let slot = function.add_local(Some("bound".into()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+    {
+        let mut b = Builder::new(&mut function);
+        let entry = b.create_named_block("entry", vec![]);
+        let header = b.create_named_block("header", vec![]);
+        let body = b.create_named_block("body", vec![]);
+        let exit = b.create_named_block("exit", vec![]);
+        b.set_entry(entry);
+        b.position_at_end(entry);
+        let initial = b.emit_const_i64(7);
+        b.emit_store_local(slot, initial);
+        b.terminate(Terminator::Br { target: header, args: vec![] });
+        b.position_at_end(header);
+        let bound = b.emit_load_local(slot, IrType::I64, PhpType::Int);
+        b.terminate(Terminator::CondBr {
+            cond: bound, then_target: body, then_args: vec![], else_target: exit, else_args: vec![],
+        });
+        b.position_at_end(body);
+        b.terminate(Terminator::Br { target: header, args: vec![] });
+        b.position_at_end(exit);
+        b.terminate(Terminator::Return { value: Some(bound) });
+    }
+    validate_function(&function).expect("input EIR is valid");
+    assert!(promote(&mut function));
+    validate_function(&function).expect("promoted EIR is valid");
+    assert_eq!(traffic(&function, slot), 0);
+}
+
+/// Every switch edge supplies the promoted local to a shared target parameter.
+#[test]
+fn promotes_value_carried_by_switch_edges() {
+    let mut function = Function::new("switch_values".into(), IrType::I64, PhpType::Int);
+    let slot = function.add_local(Some("value".into()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+    let (entry, join, initial) = {
+        let mut b = Builder::new(&mut function);
+        let entry = b.create_named_block("entry", vec![]);
+        let join = b.create_named_block("join", vec![]);
+        b.set_entry(entry);
+        b.position_at_end(entry);
+        let initial = b.emit_const_i64(7);
+        b.emit_store_local(slot, initial);
+        let scrutinee = b.emit_const_i64(1);
+        b.terminate(Terminator::Switch {
+            scrutinee,
+            cases: vec![
+                SwitchCase { value: 1, target: join, args: vec![] },
+                SwitchCase { value: 2, target: join, args: vec![] },
+            ],
+            default: join,
+            default_args: vec![],
+        });
+        b.position_at_end(join);
+        let result = b.emit_load_local(slot, IrType::I64, PhpType::Int);
+        b.terminate(Terminator::Return { value: Some(result) });
+        (entry, join, initial)
+    };
+    validate_function(&function).expect("input EIR is valid");
+    assert!(promote(&mut function));
+    validate_function(&function).expect("promoted EIR is valid");
+    assert_eq!(traffic(&function, slot), 0);
+    let Some(Terminator::Switch { cases, default_args, .. }) =
+        function.block(entry).unwrap().terminator.as_ref() else { panic!("switch survives promotion") };
+    assert!(cases.iter().all(|case| case.args == vec![initial]));
+    assert_eq!(default_args, &vec![initial]);
+    assert_eq!(function.block(join).unwrap().params.len(), 1);
+}
+
+/// Implicit catch edges keep try/catch functions outside scalar promotion.
+#[test]
+fn keeps_exception_handler_function_in_memory() {
+    let mut function = Function::new("with_handler".into(), IrType::I64, PhpType::Int);
+    let slot = function.add_local(Some("value".into()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+    {
+        let mut b = Builder::new(&mut function);
+        let entry = b.create_named_block("entry", vec![]);
+        b.set_entry(entry);
+        b.position_at_end(entry);
+        b.emit(Op::TryPushHandler, vec![], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+        let initial = b.emit_const_i64(7);
+        b.emit_store_local(slot, initial);
+        let result = b.emit_load_local(slot, IrType::I64, PhpType::Int);
+        b.terminate(Terminator::Return { value: Some(result) });
+    }
     assert!(!promote(&mut function));
     assert_eq!(traffic(&function, slot), 2);
 }

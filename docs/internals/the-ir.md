@@ -1879,7 +1879,9 @@ Then it materializes:
 instructions on eligible PHP scalar locals with SSA values. It adds block
 parameters where values live into a CFG join or loop header, and each incoming
 edge supplies its predecessor's current value. Loads that can run before any
-explicit store remain in memory.
+explicit store remain in memory. Definite-store analysis starts from the
+greatest fixed point, so a value written before a loop remains eligible when
+the back edge only reads it.
 
 Promotion requires ordinary integer, boolean, or float local storage with only
 plain load/store accesses. Address escapes, by-reference uses, global and static
@@ -1931,6 +1933,11 @@ disjoint from every register those volatile-safe lowerings touch:
 |---|---|---|---|---|
 | Caller-saved | `x12`–`x15` | `d16`–`d23` | `rsi`,`rdi`,`r8`,`r9` | `xmm2`–`xmm7` |
 | Callee-saved | `x21`–`x28` | `d8`–`d14` | `rbx` | (none) |
+
+An edge carrying a lifetime-tracked block parameter may call a runtime retain
+while copying its arguments. The predecessor terminator and destination entry
+therefore count as clobber points. Scalar values carried alongside that heap
+parameter use callee-saved registers or spill slots until the copy completes.
 
 This is especially valuable on x86_64, where the callee-saved integer pool is
 just `rbx` and there are no callee-saved XMM registers at all: call-free integer
