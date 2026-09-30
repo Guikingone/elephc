@@ -156,6 +156,34 @@ pub(super) fn lower_boxed_array_key_sort(
     store_if_result(ctx, inst)
 }
 
+/// Sorts a boxed receiver by value, keeping every key with its value like php.
+///
+/// The same route as the key sorts: promotion installs a unique hash in the cell, and the
+/// value sorters (`__rt_hash_asort`, `__rt_hash_arsort`, `__rt_hash_natsort`,
+/// `__rt_hash_natcasesort`) only relink its entries, their stubs choosing mode and comparator.
+pub(super) fn lower_boxed_array_value_sort(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    name: &str,
+    helper: &str,
+) -> Result<()> {
+    prepare_boxed_array_receiver(ctx, array, name)?;
+    let arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    ctx.load_value_to_reg(array, arg)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_cell_promote_to_hash");
+    require_valid_array_result(ctx, name);
+    abi::emit_reg_move(ctx.emitter, arg, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, helper);
+    let result = if inst.result_php_type.codegen_repr() == crate::types::PhpType::Bool {
+        1
+    } else {
+        0x7fff_ffff_ffff_fffe
+    };
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), result);
+    store_if_result(ctx, inst)
+}
+
 /// Throws before consuming an invalid cell or payload returned by an array runtime helper.
 fn require_valid_array_result(ctx: &mut FunctionContext<'_>, name: &str) {
     let valid = ctx.next_label("array_mutation_valid");
