@@ -102,6 +102,7 @@ pub(crate) fn propagate_abstract_return_types(checker: &mut Checker) {
 /// - `backing_type`: optional `TypeExpr` for backed enums
 /// - `cases`: parsed enum case declarations
 /// - `span`: source location for error reporting
+/// - `is_internal`: whether compiler-generated source declared the enum (`ClassInfo::is_internal`)
 /// - `used_traits` / `trait_aliases`: flattened direct enum trait-use metadata
 /// - `attributes`: the declaration's own attribute groups, recorded for reflection
 /// - `checker`: type checker state (classes, interfaces, enums, resolve_type_expr)
@@ -125,6 +126,7 @@ pub(crate) fn build_enum_info(
     trait_aliases: &[(String, String)],
     attributes: &[crate::parser::ast::AttributeGroup],
     span: crate::span::Span,
+    is_internal: bool,
     checker: &mut Checker,
     next_class_id: &mut u64,
 ) -> Result<(), CompileError> {
@@ -245,6 +247,7 @@ pub(crate) fn build_enum_info(
         used_traits,
         trait_aliases,
         span,
+        is_internal,
         checker,
         next_class_id,
     )?;
@@ -285,6 +288,7 @@ pub(crate) fn insert_enum_metadata(
     used_traits: &[String],
     trait_aliases: &[(String, String)],
     declaration_span: crate::span::Span,
+    is_internal: bool,
     checker: &mut Checker,
     next_class_id: &mut u64,
 ) -> Result<(), CompileError> {
@@ -498,6 +502,7 @@ pub(crate) fn insert_enum_metadata(
         ClassInfo {
             class_id: *next_class_id,
             declaration_span,
+            is_internal,
             parent: None,
             is_abstract: false,
             is_final: true,

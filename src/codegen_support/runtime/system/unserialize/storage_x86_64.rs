@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Manually boxed values preserve heap markers while parsed ownership moves into final storage.
+//! - Every store writes the slot's high word (the string length, or zero), which clears the
+//!   uninitialized marker a typed property without a default starts with.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::sentinels::{
@@ -73,6 +75,7 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("je __rt_obj_store_prop_tagged");                       // store the payload and its runtime tag inline
     emitter.instruction("mov rax, QWORD PTR [rcx + 8]");                        // typed scalar/object/hash: unbox the low word
     emitter.instruction("mov QWORD PTR [r10], rax");                            // store it inline in the slot
+    emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // the high word marks the typed property initialized
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
     emitter.label("__rt_obj_store_prop_tagged");
     // Only an int is stored as one; see the AArch64 variant.
@@ -94,6 +97,7 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // object pointer
     emitter.instruction("add r10, QWORD PTR [rbp - 64]");                       // slot = object + byte offset
     emitter.instruction("mov QWORD PTR [r10], rax");                            // store the indexed-array pointer
+    emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // the high word marks the typed property initialized
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
     emitter.label("__rt_obj_store_prop_str");
     emitter.instruction("mov rax, QWORD PTR [rcx + 8]");                        // string pointer from the box
@@ -106,6 +110,7 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     // (`=== null`, var_dump, json_encode) dereferenced it.
     emitter.label("__rt_obj_store_prop_mixed");
     emitter.instruction("mov QWORD PTR [r10], rcx");                            // store the boxed Mixed cell pointer
+    emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // the high word marks the typed property initialized
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
     emitter.label("__rt_obj_store_prop_next");
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the row index

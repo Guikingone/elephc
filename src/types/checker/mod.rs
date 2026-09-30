@@ -144,6 +144,10 @@ pub(crate) struct Checker {
     /// Canonical class names declared in the program, available for forward references
     /// before the full class definitions are available.
     pub declared_classes: HashSet<String>,
+    /// Canonical names of the classes declared by compiler-generated statements (an injected
+    /// prelude, `SourceMode::Internal`). Together with the builtins that have no source span,
+    /// these are the classes `ClassInfo::is_internal` marks as elephc's own.
+    pub internal_class_decls: HashSet<String>,
     /// Enum definitions collected during the first pass, keyed by canonical name.
     pub enums: HashMap<String, EnumInfo>,
     /// Canonical interface names declared in the program, available for forward references

@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Parsed Mixed ownership is transferred into object slots or rebuilt indexed arrays without extra retains.
+//! - Every store writes the slot's high word (the string length, or zero), which clears the
+//!   uninitialized marker a typed property without a default starts with.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::sentinels::{
@@ -56,6 +58,7 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_obj_store_prop_tagged");                     // store the payload and its runtime tag inline
     emitter.instruction("ldr x9, [x3, #8]");                                    // typed scalar/object/hash: unbox the low word
     emitter.instruction("str x9, [x8]");                                        // store it inline in the slot
+    emitter.instruction("str xzr, [x8, #8]");                                   // the high word marks the typed property initialized
     emitter.instruction("ret");                                                 // property stored
     emitter.label("__rt_obj_store_prop_tagged");
     // Only an int is stored as one: null, and any value PHP would refuse for `?int` with a
@@ -81,6 +84,7 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_hash_to_indexed_array");                       // materialize a native indexed array
     emitter.instruction("ldp x8, x30, [sp], #16");                              // restore the slot address and return address
     emitter.instruction("str x0, [x8]");                                        // store the indexed-array pointer
+    emitter.instruction("str xzr, [x8, #8]");                                   // the high word marks the typed property initialized
     emitter.instruction("ret");                                                 // property stored
     emitter.label("__rt_obj_store_prop_str");
     emitter.instruction("ldr x9, [x3, #8]");                                    // string pointer from the box
@@ -93,6 +97,7 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     // (`=== null`, var_dump, json_encode) dereferenced it.
     emitter.label("__rt_obj_store_prop_mixed");
     emitter.instruction("str x3, [x8]");                                        // store the boxed Mixed cell pointer
+    emitter.instruction("str xzr, [x8, #8]");                                   // the high word marks the typed property initialized
     emitter.instruction("ret");                                                 // property stored
     emitter.label("__rt_obj_store_prop_next");
     emitter.instruction("add x13, x13, #1");                                    // advance to the next row

@@ -99,6 +99,16 @@ pub(super) fn check_types_impl(
 
     let (mut flattened_classes, mut flattened_enums, flatten_errors) = flatten_classes(program);
     errors.extend(flatten_errors);
+    // A prelude parsed from PHP text gives its classes real spans, so the statement's source
+    // mode is what tells them apart from the program's own classes (`ClassInfo::is_internal`).
+    checker.internal_class_decls = program
+        .iter()
+        .filter(|stmt| stmt.source_mode == crate::source::SourceMode::Internal)
+        .filter_map(|stmt| match &stmt.kind {
+            StmtKind::ClassDecl { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
     // Resolve the relative class types `self`/`static`/`parent` in every member type annotation
     // now that inheritance and trait flattening have settled the concrete enclosing class. This
     // single pass feeds the schema signatures, the body-check pass, and codegen (which all read
@@ -356,6 +366,7 @@ pub(super) fn check_types_impl(
                 enum_trait_aliases,
                 &stmt.attributes,
                 stmt.span,
+                stmt.source_mode == crate::source::SourceMode::Internal,
                 &mut checker,
                 &mut next_class_id,
             ) {
@@ -496,6 +507,7 @@ mod tests {
             &[],
             &[],
             Span::dummy(),
+            false,
             &mut checker,
             &mut next_class_id,
         )

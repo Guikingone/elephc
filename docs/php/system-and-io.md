@@ -380,7 +380,14 @@ formatter, so float output matches `json_encode`'s precision.
 
 Objects serialize as `O:<len>:"<Class>":<count>:{...}` with PHP's exact property-key
 mangling: public properties use the bare name, protected use `\0*\0name`, and private
-use `\0Class\0name`. Properties are emitted in declaration order (inherited first).
+use `\0Class\0name`. Properties are emitted in declaration order (inherited first). A typed
+property that was never initialized is left out, and not counted, as in PHP.
+
+Instances of the builtin classes PHP marks not serializable (the Reflection family, `Closure`,
+`Generator`, `Fiber`, the `SplFileInfo` family, `Phar`/`PharData`, and the PDO, curl, gd and
+XML handles, plus their subclasses) throw `Exception("Serialization of '<Class>' is not
+allowed")`. `unserialize()` refuses the same classes with `Unserialization of '<Class>' is not
+allowed` as soon as it reads the class name, before it builds anything else in the payload.
 
 Serialization magic methods are honoured:
 
@@ -391,7 +398,8 @@ Serialization magic methods are honoured:
   is treated as a string/int-keyed array so `$data['key']` works (a bare `array` hint
   otherwise resolves to an integer-indexed array).
 - **`__sleep(): array`** — serializes only the named properties, in `__sleep()`'s order,
-  using their mangled keys.
+  using their mangled keys. A named typed property that was never initialized is left out and
+  not counted, as in PHP; an unknown name is left out too, without PHP's warning.
 - **`__wakeup(): void`** — runs after properties are injected (when `__unserialize()` is
   not defined).
 

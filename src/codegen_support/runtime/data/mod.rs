@@ -172,8 +172,76 @@ pub(crate) const OBJECT_NOT_ARRAY_SUFFIX: &str = " as array";
 /// allowed` (php-src's `ZEND_ACC_NOT_SERIALIZABLE`), wherever the object sits: nested in an array
 /// or behind `mixed` too, so the class name is only known at run time.
 pub(crate) const SERIALIZATION_DENIED_PREFIX: &str = "Serialization of '";
-/// Suffix for PHP's catchable Exception when an object's class forbids serialization.
+/// Suffix for PHP's catchable Exception when an object's class forbids serialization, shared by
+/// the `unserialize()` direction.
 pub(crate) const SERIALIZATION_DENIED_SUFFIX: &str = "' is not allowed";
+/// Prefix for PHP's catchable Exception when `unserialize()` meets a class that forbids it.
+///
+/// php-src refuses a `ZEND_ACC_NOT_SERIALIZABLE` class right after looking it up, before it
+/// creates the object or decodes its body, and names the class as declared rather than as the
+/// wire spells it: `Unserialization of 'ReflectionClass' is not allowed`.
+pub(crate) const UNSERIALIZATION_DENIED_PREFIX: &str = "Unserialization of '";
+/// PHP spelling of the class a Closure value reports when `serialize()` refuses it.
+pub(crate) const CLOSURE_CLASS_NAME: &str = "Closure";
+/// The builtin classes elephc registers (natively or through a prelude) that PHP refuses to
+/// serialize or unserialize, spelled as PHP declares them.
+///
+/// These are the classes php-src flags `ZEND_ACC_NOT_SERIALIZABLE`, directly or through a parent,
+/// intersected with the builtin class catalog; measured on PHP 8.5.10 by unserializing every
+/// declared class, plus the `PDO` driver subclasses of extensions that build did not load. A PHP
+/// internal elephc does not register (`WeakMap`, `ReflectionType`, ...) is absent on purpose: a
+/// user class may carry that name and must serialize like any other user class. A listed name
+/// refuses a declared class only when elephc itself declares it (`ClassInfo::is_internal`), since
+/// a program that does not load the curl or PDO prelude may declare a `CurlHandle` of its own.
+/// Every entry is listed, subclasses included, because the `unserialize()` refusal must also
+/// recognize a class the program never declares, and so cannot walk its ancestry.
+pub(crate) const NOT_SERIALIZABLE_BUILTIN_CLASSES: &[&str] = &[
+    "CURLFile",
+    "Closure",
+    "CurlHandle",
+    "CurlMultiHandle",
+    "CurlShareHandle",
+    "CurlSharePersistentHandle",
+    "DirectoryIterator",
+    "Fiber",
+    "FilesystemIterator",
+    "GdImage",
+    "Generator",
+    "GlobIterator",
+    "InternalIterator",
+    "PDO",
+    "PDORow",
+    "PDOStatement",
+    "Pdo\\Dblib",
+    "Pdo\\Firebird",
+    "Pdo\\Ibm",
+    "Pdo\\Mysql",
+    "Pdo\\Odbc",
+    "Pdo\\Pgsql",
+    "Pdo\\Sqlite",
+    "Phar",
+    "PharData",
+    "PharFileInfo",
+    "RecursiveDirectoryIterator",
+    "ReflectionAttribute",
+    "ReflectionClass",
+    "ReflectionClassConstant",
+    "ReflectionEnum",
+    "ReflectionEnumBackedCase",
+    "ReflectionEnumUnitCase",
+    "ReflectionFunction",
+    "ReflectionIntersectionType",
+    "ReflectionMethod",
+    "ReflectionNamedType",
+    "ReflectionObject",
+    "ReflectionParameter",
+    "ReflectionProperty",
+    "ReflectionUnionType",
+    "SplFileInfo",
+    "SplFileObject",
+    "SplTempFileObject",
+    "XMLParser",
+];
 /// Prefix for PHP's catchable Error when a name and its positional alias both arrive.
 ///
 /// A descriptor argument container can carry BOTH the positional key `0` and the name of the

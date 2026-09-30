@@ -72,6 +72,7 @@ impl Checker {
             interfaces: HashMap::new(),
             classes: HashMap::new(),
             declared_classes: HashSet::new(),
+            internal_class_decls: HashSet::new(),
             enums: HashMap::new(),
             declared_interfaces: HashSet::new(),
             declared_traits: HashSet::new(),
