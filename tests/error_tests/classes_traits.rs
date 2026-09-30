@@ -971,3 +971,32 @@ fn test_error_cannot_override_final_exception_get_code() {
         "Cannot override final method Exception::getCode",
     );
 }
+
+/// Verifies a source class that merely shares the name of the compiler-injected `PDOException`
+/// gets no exemption: its real spans keep it off the prelude's SQLSTATE `getCode()` hatch, so
+/// overriding `getCode()` still reports `Exception` as the declaring class of the final method.
+#[test]
+fn test_error_user_pdo_exception_cannot_override_final_get_code() {
+    expect_error(
+        "<?php class PDOException extends Exception { public function getCode(): string|int { return 'HY000'; } }",
+        "Cannot override final method Exception::getCode",
+    );
+    expect_error(
+        "<?php namespace App; class PDOException extends \\Exception { public function getCode(): string|int { return 'HY000'; } }",
+        "Cannot override final method Exception::getCode",
+    );
+}
+
+/// Verifies `Error` shares the final Throwable accessors with `Exception`, and the diagnostic
+/// names `Error` as the declaring class, also for a subclass reached through `TypeError`.
+#[test]
+fn test_error_cannot_override_final_error_methods() {
+    expect_error(
+        "<?php class AppError extends Error { public function getMessage(): string { return 'custom'; } }",
+        "Cannot override final method Error::getMessage",
+    );
+    expect_error(
+        "<?php class AppTypeError extends TypeError { public function getPrevious(): ?Throwable { return null; } }",
+        "Cannot override final method Error::getPrevious",
+    );
+}

@@ -482,6 +482,16 @@ Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are
   a plain `mixed` value, so its class is not known when `empty()` is lowered. Variables, `$this`,
   instance properties (nullable or not), non-nullable static properties and call results all go
   through `offsetExists()` first.
+- `PDOException::getCode()` returns PDO's SQLSTATE string (`"HY000"`) only when the receiver is
+  statically a `PDOException`: a `catch (PDOException $e)` block, or a parameter or property
+  declared `PDOException`. Through a `Throwable`, `Exception`, or `RuntimeException` receiver
+  (`catch (Exception $e)`, a `getPrevious()` result, a `Throwable` parameter) elephc types
+  `getCode()` as `int` and reads the driver's integer code (`errorInfo[1]`), where PHP returns the
+  SQLSTATE string; an `instanceof PDOException` check on such a variable does not change that,
+  and `$e->errorInfo` does not compile on it (the property is declared on `PDOException` only).
+  Catch `PDOException`, or after the `instanceof` check pass the exception to a parameter
+  declared `PDOException`: through that receiver both `getCode()` and `$e->errorInfo[0]` give the
+  SQLSTATE. See [PDO](./pdo.md#pdoexception-shape).
 
 ### Filesystem functions not implemented
 
