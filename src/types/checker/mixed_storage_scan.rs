@@ -749,7 +749,8 @@ fn type_guard_subject(condition: &Expr) -> Option<(&str, PhpType)> {
             let target = match crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str()
             {
                 "is_int" | "is_integer" | "is_long" => PhpType::Int,
-                "is_float" | "is_double" | "is_real" => PhpType::Float,
+                "is_float" | "is_double" => PhpType::Float,
+                "is_real" if !crate::strict_php::is_enabled() => PhpType::Float,
                 "is_string" => PhpType::Str,
                 "is_bool" => PhpType::Bool,
                 "is_null" => PhpType::Void,
@@ -1292,4 +1293,24 @@ fn callee_may_bind_arguments_by_ref(checker: &Checker, name: &Name) -> bool {
 /// without the `String` this walk would allocate at EVERY call node in the body.
 fn is_eval_call(name: &str) -> bool {
     name.trim_start_matches('\\').eq_ignore_ascii_case("eval")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The storage scan must not classify strict-PHP userland is_real as a float guard.
+    #[test]
+    fn strict_user_is_real_is_not_a_storage_type_guard() {
+        let condition = Expr::new(ExprKind::FunctionCall {
+            name: Name::unqualified("is_real"),
+            args: vec![Expr::new(ExprKind::Variable("value".into()), crate::span::Span::dummy())],
+        }, crate::span::Span::dummy());
+        assert!(matches!(type_guard_subject(&condition), Some(("value", PhpType::Float))));
+        {
+            let _guard = crate::strict_php::scoped_enable();
+            assert!(type_guard_subject(&condition).is_none());
+        }
+        assert!(type_guard_subject(&condition).is_some());
+    }
 }
