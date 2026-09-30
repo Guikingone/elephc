@@ -9,6 +9,30 @@
 
 use super::*;
 
+/// Dedicated predefined-constant tokens remain names inside qualified references.
+#[test]
+fn test_qualified_predefined_constant_names() {
+    for spelling in [r"\Demo\Math\NAN", r"Math\PHP_EOL", r"\App\STDIN"] {
+        let stmts = parse_source(&format!("<?php echo {spelling};"));
+        let ExprKind::ConstRef(name) = echoed_expr(&stmts) else {
+            panic!("expected qualified constant reference");
+        };
+        assert_eq!(name.as_canonical(), spelling.trim_start_matches('\\'));
+    }
+}
+
+/// Qualified class contexts must not interpret INF as a floating-point value.
+#[test]
+fn test_qualified_predefined_class_names() {
+    for source in [r"<?php new \INF;", r"<?php \INF::class;", r"<?php \INF::method();"] {
+        let stmts = parse_source(source);
+        let StmtKind::ExprStmt(expr) = &stmts[0].kind else {
+            panic!("expected expression statement");
+        };
+        assert!(matches!(expr.kind, ExprKind::NewObject { .. } | ExprKind::ClassConstant { .. } | ExprKind::StaticMethodCall { .. }), "{:?}", expr.kind);
+    }
+}
+
 /// Parses a namespace declaration with semicolon syntax and a use group import
 /// that combines class, function, and const imports with aliases.
 #[test]
