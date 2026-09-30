@@ -453,3 +453,40 @@ try {
     );
     assert_eq!(out, "straight:denied");
 }
+
+/// A function or method with NO declared return type returns null when control falls off its
+/// end, even when its return paths made the checker type it `mixed`; only a declared `: mixed`
+/// refuses that.
+#[test]
+fn test_untyped_mixed_function_falls_off_with_null() {
+    let out = compile_and_run(
+        r#"<?php
+function gc($x) {
+    if ($x === 1) { return new stdClass; }
+    if ($x === 2) { return; }
+    foreach ([5, 6] as $a) {
+        if ($x === $a) { return 'found'; }
+    }
+}
+var_dump(gc(1), gc(2), gc(5), gc(9));
+class C {
+    protected $map = [];
+    protected function find($k) {
+        if (! is_null($b = $this->map[$k] ?? null)) { return $b; }
+        if (empty($this->map)) { return; }
+        foreach ($this->map as $v) { if ($v === $k) { return $v; } }
+    }
+    public function get($k) { return $this->find($k); }
+    public function set($k, $v) { $this->map[$k] = $v; }
+}
+$c = new C();
+var_dump($c->get('a'));
+$c->set('a', 'x');
+var_dump($c->get('a'), $c->get('zz'));
+"#,
+    );
+    assert_eq!(
+        out,
+        "object(stdClass)#1 (0) {\n}\nNULL\nstring(5) \"found\"\nNULL\nNULL\nstring(1) \"x\"\nNULL\n"
+    );
+}
