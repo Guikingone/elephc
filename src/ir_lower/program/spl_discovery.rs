@@ -99,9 +99,25 @@ fn push_eval_bridge_builtin_spl_methods(methods: &mut Vec<(String, String)>, mod
         if class_name.starts_with("__Elephc") {
             continue;
         }
+        // The regex iterators call the `preg_*` helpers, an optional capability (`pcre2`) that
+        // only `--with-regex` or a compiled regex call turns on. Forcing their constructors here
+        // would make every eval-bridge program require that native package; without it, an
+        // interpreted `new RegexIterator(...)` could not match anything anyway.
+        if !module.required_runtime_features.regex && is_regex_iterator_class(class_name) {
+            continue;
+        }
         push_supported_builtin_spl_method_for_receiver(methods, module, class_name, &construct_key);
         push_builtin_spl_metadata_methods(methods, module, class_name);
     }
+}
+
+/// Returns true for `RegexIterator` and `RecursiveRegexIterator`, whose bodies need the optional
+/// regex runtime capability.
+fn is_regex_iterator_class(class_name: &str) -> bool {
+    matches!(
+        php_symbol_key(class_name.trim_start_matches('\\')).as_str(),
+        "regexiterator" | "recursiveregexiterator"
+    )
 }
 
 /// Finds builtin SPL methods whose symbols are required by already-lowered EIR.
