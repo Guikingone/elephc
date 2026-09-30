@@ -21567,19 +21567,43 @@ fclose($h);
 
 /// Named source order evaluates and roots the params hash before the context expression.
 /// Callback discovery must follow the staged ownership values back to that literal hash.
+///
+/// The params land on the DEFAULT context, which is the one a context-less `fopen()` reads —
+/// a notifier set on a fresh `stream_context_create()` stays on that context, as in php. The
+/// callback is observed through `STREAM_NOTIFY_CONNECT` on a served request: php sends no
+/// notification at all for a refused connection, so a closed port can show nothing.
 #[test]
 fn test_stream_notification_callback_survives_wrapped_named_params() {
+    let (_server, port) = spawn_http_server(b"ok");
+    let out = compile_and_run(
+        &r#"<?php
+$ok = stream_context_set_params(
+    params: ['notification' => function($code) { if ($code === 2) echo "W" . $code . ";"; }],
+    context: stream_context_get_default()
+);
+$f = fopen('http://127.0.0.1:PHP_TEST_PORT/', 'r');
+echo $f === false ? "closed" : "open";
+fclose($f);
+"#
+        .replace("PHP_TEST_PORT", &port.to_string()),
+    );
+    assert_eq!(out, "W2;open");
+}
+
+/// Verifies a refused connection sends the notifier nothing, as php's http wrapper does.
+///
+/// MEASURED on php -n 8.5.10: `STREAM_NOTIFY_FAILURE` reports an HTTP error STATUS; a connect
+/// that never happens reaches no notifier. elephc fired code 9 for it.
+#[test]
+fn test_stream_notification_is_silent_for_a_refused_connection() {
     let out = compile_and_run(
         r#"<?php
-$ctx = stream_context_set_params(
-    params: ['notification' => function($code) { echo "W" . $code . ";"; }],
-    context: stream_context_create()
-);
-$f = fopen('http://127.0.0.1:1/', 'r');
+$ctx = stream_context_create([], ['notification' => function($code) { echo "N" . $code . ";"; }]);
+$f = @fopen('http://127.0.0.1:1/', 'r', false, $ctx);
 echo $f === false ? "closed" : "open";
 "#,
     );
-    assert_eq!(out, "W9;closed");
+    assert_eq!(out, "closed");
 }
 
 /// Verifies php runs a wrapper class's `__construct()` — and runs it FIRST.

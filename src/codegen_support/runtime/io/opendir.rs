@@ -113,13 +113,15 @@ pub fn emit_opendir(emitter: &mut Emitter) {
     emitter.label("__rt_opendir_fail");
     // -- php says WHY, in `scandir()`'s wording, and elephc said nothing --
     // MEASURED: `Warning: opendir(nope): Failed to open directory: No such file or directory`.
-    super::path_op_warning::emit_libc_call_aarch64(
+    // `dir()` opens through here, and php names `dir(...)`: a published name wins.
+    super::path_op_warning::emit_libc_call_published_aarch64(
         emitter,
         "_warn_opendir_head",
         OPENDIR_WARNING_HEAD.len(),
         Some("[sp, #24]"),
         "_scandir_open_warn_mid",
         SCANDIR_OPEN_WARNING_MIDDLE.len(),
+        "__rt_opendir_head_ready",
     );
     emitter.instruction("mov x0, #-1");                                         // -1 reports an opendir failure
     emitter.instruction("mov x1, #0");                                          // failed opens have no backend auxiliary owner
@@ -223,13 +225,14 @@ fn emit_opendir_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_opendir_fail_x86");
     // See the AArch64 counterpart: php says WHY, in `scandir()`'s wording.
-    super::path_op_warning::emit_libc_call_x86_64(
+    super::path_op_warning::emit_libc_call_published_x86_64(
         emitter,
         "_warn_opendir_head",
         OPENDIR_WARNING_HEAD.len(),
         Some("[rbp - 16]"),
         "_scandir_open_warn_mid",
         SCANDIR_OPEN_WARNING_MIDDLE.len(),
+        "__rt_opendir_head_ready_x86",
     );
     emitter.instruction("mov rax, -1");                                         // -1 reports an opendir failure
     emitter.instruction("xor edx, edx");                                        // failed opens have no backend auxiliary owner

@@ -871,7 +871,12 @@ pub(super) fn capture_stream_notification_callback(
     params: ValueId,
 ) -> Result<()> {
     let done = ctx.next_label("sctx_notification_absent");
-    load_stream_notification_param_descriptor(ctx, params, &done)?;
+    load_stream_notification_param_descriptor(
+        ctx,
+        params,
+        &done,
+        "stream_context_create(): Argument #1 ($options) must be an array with valid callbacks as values, ",
+    )?;
     callable_descriptor::emit_retain_current_descriptor(ctx.emitter);
     store_current_result_as_stream_notification_callback(ctx);
     ctx.emitter.label(&done);
@@ -885,7 +890,12 @@ pub(super) fn apply_stream_context_notification_param(
     params: ValueId,
 ) -> Result<()> {
     let done = ctx.next_label("sctx_notification_unchanged");
-    load_stream_notification_param_descriptor(ctx, params, &done)?;
+    load_stream_notification_param_descriptor(
+        ctx,
+        params,
+        &done,
+        "stream_context_set_params(): Argument #1 ($context) must be an array with valid callbacks as values, ",
+    )?;
     callable_descriptor::emit_retain_current_descriptor(ctx.emitter);
     store_current_result_as_stream_notification_callback(ctx);
     load_context_state_to_result(ctx, context, "stream_context_set_params")?;
@@ -899,13 +909,20 @@ pub(super) fn apply_stream_context_notification_param(
 /// Both direct callable entries and callable values boxed behind Mixed storage
 /// are accepted. Missing or non-callable entries branch to `absent_label`
 /// without modifying the current context notifier.
+///
+/// `refusal_prefix` opens the `TypeError` for a value that is not callable at all. php always
+/// names argument #1, whichever builtin parsed the params, so `stream_context_create()` names
+/// `$options` and `stream_context_set_params()` names `$context`.
 pub(super) fn load_stream_notification_param_descriptor(
     ctx: &mut FunctionContext<'_>,
     params: ValueId,
     absent_label: &str,
+    refusal_prefix: &str,
 ) -> Result<()> {
     let direct = ctx.next_label("sctx_notification_direct");
     let normalized = ctx.next_label("sctx_notification_normalized");
+    let boxed = ctx.next_label("sctx_notification_boxed");
+    let judge = ctx.next_label("sctx_notification_judge");
     let (key, key_len) = ctx.data.add_string(b"notification");
     ctx.load_value_to_result(params)?;
     emit_skip_unless_assoc_array(ctx, absent_label);
@@ -918,11 +935,14 @@ pub(super) fn load_stream_notification_param_descriptor(
             ctx.emitter.instruction("cmp x3, #10");                             // is the entry a direct callable descriptor?
             ctx.emitter.instruction(&format!("b.eq {}", direct));               // direct callables already expose their descriptor in x1
             ctx.emitter.instruction("cmp x3, #7");                              // is the entry boxed behind Mixed storage?
-            ctx.emitter.instruction(&format!("b.ne {}", absent_label));         // reject non-callable parameter values
+            ctx.emitter.instruction(&format!("b.eq {}", boxed));                // unbox it before judging it
+            ctx.emitter.instruction("mov x0, x3");                              // the entry's own tag, for the validation below
+            ctx.emitter.instruction(&format!("b {}", judge));
+            ctx.emitter.label(&boxed);
             ctx.emitter.instruction("mov x0, x1");                              // pass the boxed parameter value to Mixed unboxing
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
             ctx.emitter.instruction("cmp x0, #10");                             // did the Mixed cell contain a callable descriptor?
-            ctx.emitter.instruction(&format!("b.ne {}", absent_label));         // reject boxed non-callable values
+            ctx.emitter.instruction(&format!("b.ne {}", judge));                // anything else is judged php's way
             ctx.emitter.instruction("mov x0, x1");                              // move the unboxed descriptor into the canonical result register
             ctx.emitter.instruction(&format!("b {}", normalized));              // join direct and boxed callable paths
             ctx.emitter.label(&direct);
@@ -938,19 +958,130 @@ pub(super) fn load_stream_notification_param_descriptor(
             ctx.emitter.instruction("cmp rcx, 10");                             // is the entry a direct callable descriptor?
             ctx.emitter.instruction(&format!("je {}", direct));                 // direct callables already expose their descriptor in rdi
             ctx.emitter.instruction("cmp rcx, 7");                              // is the entry boxed behind Mixed storage?
-            ctx.emitter.instruction(&format!("jne {}", absent_label));          // reject non-callable parameter values
+            ctx.emitter.instruction(&format!("je {}", boxed));                  // unbox it before judging it
+            ctx.emitter.instruction("mov rax, rcx");                            // the entry's own tag, for the validation below
+            ctx.emitter.instruction(&format!("jmp {}", judge));
+            ctx.emitter.label(&boxed);
             ctx.emitter.instruction("mov rax, rdi");                            // pass the boxed parameter value to Mixed unboxing
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
             ctx.emitter.instruction("cmp rax, 10");                             // did the Mixed cell contain a callable descriptor?
-            ctx.emitter.instruction(&format!("jne {}", absent_label));          // reject boxed non-callable values
+            ctx.emitter.instruction(&format!("jne {}", judge));                 // anything else is judged php's way
             ctx.emitter.instruction("mov rax, rdi");                            // move the unboxed descriptor into the canonical result register
             ctx.emitter.instruction(&format!("jmp {}", normalized));            // join direct and boxed callable paths
             ctx.emitter.label(&direct);
             ctx.emitter.instruction("mov rax, rdi");                            // move the direct descriptor into the canonical result register
         }
     }
+    let after_judge = ctx.next_label("sctx_notification_judged");
+    abi::emit_jump(ctx.emitter, &after_judge);
+    ctx.emitter.label(&judge);
+    emit_judge_notification_callback(ctx, absent_label, refusal_prefix);
+    ctx.emitter.label(&after_judge);
     ctx.emitter.label(&normalized);
     Ok(())
+}
+
+/// Throws php's `TypeError` for a `notification` param that is not callable at all.
+///
+/// Entered with the value's runtime tag in the result register and its payload in the unbox
+/// payload pair (x1/x2, rdi/rsi). php-src's `parse_context_params()` runs `zend_is_callable_ex()`
+/// and reports its reason after `must be an array with valid callbacks as values, `: a
+/// non-array non-string says `no array or string given`, and an array says what is wrong with its
+/// shape. A value that IS callable without being a descriptor — an invokable object,
+/// `[$object, "method"]` — is accepted and, as before, not installed: it branches to `accepted`.
+/// So is every string; see the string arm for why.
+fn emit_judge_notification_callback(ctx: &mut FunctionContext<'_>, accepted: &str, prefix: &str) {
+    let string = ctx.next_label("sctx_notify_string");
+    let indexed = ctx.next_label("sctx_notify_indexed");
+    let assoc = ctx.next_label("sctx_notify_assoc");
+    let object = ctx.next_label("sctx_notify_object");
+    let not_array_or_string = ctx.next_label("sctx_notify_neither");
+    let wrong_count = ctx.next_label("sctx_notify_wrong_count");
+    let bad_first = ctx.next_label("sctx_notify_bad_first");
+    let array_shape = ctx.next_label("sctx_notify_array_shape");
+    let (tag, lo, hi, arg0) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x0", "x1", "x2", "x0"),
+        Arch::X86_64 => ("rax", "rdi", "rsi", "rdi"),
+    };
+    for (value_tag, label) in [(1, &string), (4, &indexed), (5, &assoc), (6, &object)] {
+        emit_branch_if_reg_equals(ctx, tag, value_tag, label);
+    }
+    abi::emit_jump(ctx.emitter, &not_array_or_string);
+
+    // -- a string is accepted whatever it names --
+    // php refuses a name no function answers to (`function "nope" not found or invalid function
+    // name`), but here a user function that nothing CALLS is eliminated before code generation,
+    // so the run-time table cannot tell it from a missing one: `["notification" => "my_notify"]`
+    // would throw for a program php runs. A string is accepted, as it always was, and not
+    // installed — string notifiers are not dispatched yet.
+    ctx.emitter.label(&string);
+    abi::emit_jump(ctx.emitter, accepted);
+
+    // -- arrays: callable shapes pass; the reason for the rest depends on the member count --
+    for (label, helper) in [(&indexed, "__rt_is_callable_array"), (&assoc, "__rt_is_callable_assoc")] {
+        ctx.emitter.label(label);
+        abi::emit_push_reg_pair(ctx.emitter, lo, hi);
+        if arg0 != lo {
+            ctx.emitter.instruction(&format!("mov {arg0}, {lo}"));              // the array
+        }
+        abi::emit_call_label(ctx.emitter, helper);
+        abi::emit_pop_reg_pair(ctx.emitter, lo, hi);
+        let not_callable = ctx.next_label("sctx_notify_array_not_callable");
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &not_callable);
+        abi::emit_jump(ctx.emitter, accepted);
+        ctx.emitter.label(&not_callable);
+        abi::emit_jump(ctx.emitter, &array_shape);
+    }
+    ctx.emitter.label(&array_shape);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("ldr x9, [{lo}]"));                // the member count from the header
+            ctx.emitter.instruction("cmp x9, #2");
+            ctx.emitter.instruction(&format!("b.ne {wrong_count}"));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp QWORD PTR [{lo}], 2"));       // the member count from the header
+            ctx.emitter.instruction(&format!("jne {wrong_count}"));
+        }
+    }
+    abi::emit_jump(ctx.emitter, &bad_first);
+    ctx.emitter.label(&wrong_count);
+    super::super::super::exceptions::emit_type_error(
+        ctx,
+        &format!("{prefix}array callback must have exactly two members"),
+    );
+    ctx.emitter.label(&bad_first);
+    super::super::super::exceptions::emit_type_error(
+        ctx,
+        &format!("{prefix}first array member is not a valid class name or object"),
+    );
+
+    // -- an object: invokable passes, anything else is neither an array nor a string --
+    ctx.emitter.label(&object);
+    if arg0 != lo {
+        ctx.emitter.instruction(&format!("mov {arg0}, {lo}"));                  // the object
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_is_callable_object");
+    let not_invokable = ctx.next_label("sctx_notify_not_invokable");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &not_invokable);
+    abi::emit_jump(ctx.emitter, accepted);
+    ctx.emitter.label(&not_invokable);
+    ctx.emitter.label(&not_array_or_string);
+    super::super::super::exceptions::emit_type_error(ctx, &format!("{prefix}no array or string given"));
+}
+
+/// Branches to `label` when `reg` holds the small immediate `value`.
+fn emit_branch_if_reg_equals(ctx: &mut FunctionContext<'_>, reg: &str, value: i64, label: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {reg}, #{value}"));
+            ctx.emitter.instruction(&format!("b.eq {label}"));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {reg}, {value}"));
+            ctx.emitter.instruction(&format!("je {label}"));
+        }
+    }
 }
 
 /// Stores the loaded callable descriptor into `_stream_notification_callback`.

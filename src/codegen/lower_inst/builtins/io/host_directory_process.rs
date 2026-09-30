@@ -10,6 +10,9 @@
 use super::*;
 use crate::codegen_support::runtime::data::{DISK_FREE_SPACE_WARNING, DISK_TOTAL_SPACE_WARNING};
 use crate::codegen_support::runtime::io::{SOCKET_WARNING_FSOCKOPEN};
+use crate::codegen_support::runtime::resources::layout::{
+    STREAM_BACKEND_DIRECTORY, STREAM_BACKEND_GLOB_DIRECTORY, STREAM_BACKEND_USER_DIRECTORY,
+};
 
 /// Lowers `disk_free_space(path)` through the shared disk-space runtime helper.
 pub(crate) fn lower_disk_free_space(
@@ -243,7 +246,11 @@ pub(crate) fn lower_opendir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     emit_request_default_stream_context_handle(ctx);
     let path = expect_operand(inst, 0)?;
     load_string_to_result(ctx, path, "opendir path")?;
+    let delegated = super::publish_delegating_open_name(ctx, inst);
     abi::emit_call_label(ctx.emitter, "__rt_opendir");
+    if delegated {
+        super::filesystem_ops::emit_open_diag_name(ctx, None);
+    }
     box_stream_fd_or_false_result_kind(ctx, "opendir", 4, true, true);
     emit_publish_last_directory_handle(ctx);
     store_if_result(ctx, inst)
@@ -396,6 +403,7 @@ pub(crate) fn lower_readdir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         ctx.emitter.instruction("mov rdi, rax");                                // pass the opaque directory handle to state resolution
     }
     abi::emit_call_label(ctx.emitter, "__rt_stream_state");
+    emit_require_directory_backend(ctx, "readdir");
     if matches!(ctx.emitter.target.arch, Arch::X86_64) {
         ctx.emitter.instruction("mov rdi, rax");                                // pass authoritative StreamState to typed directory iteration
     }
@@ -404,11 +412,59 @@ pub(crate) fn lower_readdir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     store_if_result(ctx, inst)
 }
 
+/// Throws php's `TypeError` unless the `StreamState` in the result register is a directory.
+///
+/// php's directory family takes any stream resource at the type level and then refuses one that
+/// is not a directory: `readdir(fopen($f, "r"))` is `TypeError: readdir(): Argument #1
+/// ($dir_handle) must be a valid Directory resource`. elephc answered `false` and went on. A
+/// native, glob or userspace directory passes; the state pointer is left where it was.
+fn emit_require_directory_backend(ctx: &mut FunctionContext<'_>, name: &str) {
+    let ok = ctx.next_label("directory_backend_ok");
+    let refuse = ctx.next_label("directory_backend_refused");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {ok}"));                  // no state: the typed helper answers false itself
+            ctx.emitter.instruction(&format!("ldr x9, [x0, #{}]", STREAM_BACKEND_KIND_OFFSET)); // the backend discriminator
+            for kind in [STREAM_BACKEND_DIRECTORY, STREAM_BACKEND_GLOB_DIRECTORY, STREAM_BACKEND_USER_DIRECTORY] {
+                ctx.emitter.instruction(&format!("cmp x9, #{kind}"));
+                ctx.emitter.instruction(&format!("b.eq {ok}"));                 // one of the directory backends
+            }
+            ctx.emitter.instruction(&format!("b {refuse}"));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");
+            ctx.emitter.instruction(&format!("jz {ok}"));                       // no state: the typed helper answers false itself
+            ctx.emitter.instruction(&format!("mov r9, QWORD PTR [rax + {}]", STREAM_BACKEND_KIND_OFFSET)); // the backend discriminator
+            for kind in [STREAM_BACKEND_DIRECTORY, STREAM_BACKEND_GLOB_DIRECTORY, STREAM_BACKEND_USER_DIRECTORY] {
+                ctx.emitter.instruction(&format!("cmp r9, {kind}"));
+                ctx.emitter.instruction(&format!("je {ok}"));                   // one of the directory backends
+            }
+            ctx.emitter.instruction(&format!("jmp {refuse}"));
+        }
+    }
+    ctx.emitter.label(&refuse);
+    super::super::super::exceptions::emit_type_error(
+        ctx,
+        &format!("{name}(): Argument #1 ($dir_handle) must be a valid Directory resource"),
+    );
+    ctx.emitter.label(&ok);
+}
+
 /// Lowers `closedir(dir_handle)` for libc, glob, and userspace-wrapper handles.
 pub(crate) fn lower_closedir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count_between(inst, "closedir", 0, 1)?;
     match directory_handle_source(ctx, inst)? {
-        DirectoryHandleSource::Operand(handle) => begin_stream_close(ctx, handle, "closedir")?,
+        DirectoryHandleSource::Operand(handle) => {
+            // php refuses a stream that is not a directory BEFORE closing anything, so the
+            // backend is checked on its own resolution ahead of the close sequence.
+            load_open_stream_handle_to_result(ctx, handle, "closedir")?;
+            if matches!(ctx.emitter.target.arch, Arch::X86_64) {
+                ctx.emitter.instruction("mov rdi, rax");                        // pass the opaque handle to state resolution
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_stream_state");
+            emit_require_directory_backend(ctx, "closedir");
+            begin_stream_close(ctx, handle, "closedir")?
+        }
         DirectoryHandleSource::LastOpened => {
             // The slot is validated with php's own wording BEFORE the close sequence, so a
             // closed or empty slot never reaches `begin_stream_close`'s different diagnostic.
@@ -447,6 +503,7 @@ pub(crate) fn lower_rewinddir(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         ctx.emitter.instruction("mov rdi, rax");                                // pass the opaque directory handle to state resolution
     }
     abi::emit_call_label(ctx.emitter, "__rt_stream_state");
+    emit_require_directory_backend(ctx, "rewinddir");
     if matches!(ctx.emitter.target.arch, Arch::X86_64) {
         ctx.emitter.instruction("mov rdi, rax");                                // pass authoritative StreamState to typed directory rewind
     }

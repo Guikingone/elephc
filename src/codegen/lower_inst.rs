@@ -178,6 +178,12 @@ fn publish_diagnostic_location(ctx: &mut FunctionContext<'_>, inst: &Instruction
     let Some(span) = inst.span else {
         return;
     };
+    // A compiler-built node has no line of its own to name. The ones that warn are the bodies of
+    // preludes standing in for php's internal functions (`gzopen()` opening through `fopen()`),
+    // and php names the CALLER's line for those, which is the location already published.
+    if !span.is_from_source() {
+        return;
+    }
     publish_diagnostic_line(ctx, span.line);
 }
 

@@ -71,7 +71,7 @@ pub fn emit_http(emitter: &mut Emitter) {
     // -- connect the TCP socket (x0/x1 hold the address — possibly overridden by proxy above) --
     emitter.instruction("bl __rt_stream_socket_client");                        // connect to the HTTP server, x0 = fd
     emitter.instruction("cmp x0, #0");                                          // did the connection fail?
-    emitter.instruction("b.lt __rt_http_open_fail");                            // propagate the failure
+    emitter.instruction("b.lt __rt_http_open_fail_unconnected");                // php notifies nothing for a failed connect
     emitter.instruction("str x0, [sp, #0]");                                    // save the connected socket descriptor
 
     // -- fire STREAM_NOTIFY_CONNECT (code 2) for the context notification --
@@ -467,6 +467,15 @@ pub fn emit_http(emitter: &mut Emitter) {
     emitter.syscall(6);
     emitter.instruction("b __rt_http_open_fail");                               // report the failed open
 
+    // -- a connection that never opened: php's http wrapper sends no notification at all
+    //    (its STREAM_NOTIFY_FAILURE reports an HTTP error STATUS). MEASURED on php -n 8.5.10
+    //    against a refused port: a registered notifier is never called. --
+    emitter.label("__rt_http_open_fail_unconnected");
+    emitter.instruction("mov x0, #-1");                                         // -1 signals a failed http:// open
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return the failure result
+
     emitter.label("__rt_http_open_fail");
     // -- fire STREAM_NOTIFY_FAILURE (code 9, ERR) before returning -1 --
     emitter.instruction("mov x0, #9");                                          // notification code 9 = STREAM_NOTIFY_FAILURE
@@ -520,7 +529,7 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     // -- connect the TCP socket (rdi/rsi hold the address — possibly proxy-overridden) --
     emitter.instruction("call __rt_stream_socket_client");                      // connect to the HTTP server, rax = fd
     emitter.instruction("cmp rax, 0");                                          // did the connection fail?
-    emitter.instruction("jl __rt_http_open_fail_x86");                          // propagate the failure
+    emitter.instruction("jl __rt_http_open_fail_unconnected_x86");              // php notifies nothing for a failed connect
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the connected socket descriptor
 
     // -- fire STREAM_NOTIFY_CONNECT (code 2) for the context notification --
@@ -877,6 +886,13 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the connected socket descriptor
     emitter.instruction("call close");                                          // close the HTTP connection
     emitter.instruction("jmp __rt_http_open_fail_x86");                         // report the failed open
+
+    // -- a connection that never opened sends no notification; see the AArch64 arm. --
+    emitter.label("__rt_http_open_fail_unconnected_x86");
+    emitter.instruction("mov rax, -1");                                         // -1 signals a failed http:// open
+    emitter.instruction("add rsp, 80");                                         // release the helper frame (matches the prologue's sub rsp, 80)
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the failure result
 
     emitter.label("__rt_http_open_fail_x86");
     // -- fire STREAM_NOTIFY_FAILURE (code 9, ERR) before returning -1 --

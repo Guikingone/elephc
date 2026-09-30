@@ -28,17 +28,22 @@
 //! - `$context` is accepted and IGNORED, the way `mkdir()`/`rmdir()`/`opendir()` already accept
 //!   it. Refusing the argument outright would make `dir($p, $ctx)` a compile error on a signature
 //!   php documents.
-//! - MEASURED DIVERGENCES against php 8.5.6, both inherited from `opendir()` rather than added
-//!   here: php warns `dir(<path>): Failed to open directory: No such file or directory` for a
-//!   directory it cannot open, where elephc's `opendir()` is silent and so this is too; and php's
-//!   methods throw `TypeError: Directory::read(): cannot use Directory resource after it has been
-//!   closed`, where the underlying builtin reports the closed handle in its own words. The VALUES
-//!   — `Directory|false`, `$path`, `$handle`, the readdir-order listing, `read()`'s `string|false`,
-//!   `rewind()`/`close()` returning null — all match.
+//! - SPEAKS AS php's internal function: `dir()`'s failed open warns `dir(<path>): Failed to open
+//!   directory: ...` on the CALLER's line (the body is built with synthetic spans and `opendir()`
+//!   publishes the delegating name, see `delegating_prelude_builtin`), and each method refuses a
+//!   closed handle with php's own `TypeError: Directory::read(): cannot use Directory resource
+//!   after it has been closed`. `Directory` refuses clone and serialization through the builtin
+//!   class lists php-src's flags correspond to. MEASURED against php -n 8.5.10.
 
+pub(crate) mod build;
 mod detect;
 
-/// The elephc-PHP directory prelude: the `Directory` class and the `dir()` function.
+/// The PHP this surface used to be injected as, kept only as the migration oracle's reference.
+///
+/// `#[cfg(test)]` is the whole point: `build::dir_declarations()` produces the same AST this
+/// parses to — `build_oracle_tests` below compares them node by node — so no real compile
+/// tokenizes it any more.
+#[cfg(test)]
 pub(crate) const DIR_PRELUDE_SRC: &str = r#"<?php
 
 final class Directory {
@@ -54,21 +59,31 @@ final class Directory {
 
     public function read(): string|false {
         $handle = $this->handle;
+        if (!is_resource($handle)) {
+            throw new \TypeError('Directory::read(): cannot use Directory resource after it has been closed');
+        }
         return readdir($handle);
     }
 
     public function rewind(): void {
         $handle = $this->handle;
+        if (!is_resource($handle)) {
+            throw new \TypeError('Directory::rewind(): cannot use Directory resource after it has been closed');
+        }
         rewinddir($handle);
     }
 
     public function close(): void {
         $handle = $this->handle;
+        if (!is_resource($handle)) {
+            throw new \TypeError('Directory::close(): cannot use Directory resource after it has been closed');
+        }
         closedir($handle);
     }
 }
 
 function dir(string $directory, mixed $context = null): Directory|false {
+    $_unused = $context;
     $handle = opendir($directory);
     if ($handle === false) {
         return false;
@@ -92,8 +107,30 @@ pub fn inject_if_used(program: crate::parser::ast::Program) -> crate::parser::as
     if !detect::program_uses_directory(&program) || detect::program_declares_directory(&program) {
         return program;
     }
-    let tokens = crate::lexer::tokenize(DIR_PRELUDE_SRC).expect("dir prelude must tokenize");
-    let mut combined = crate::parser::parse_internal(&tokens).expect("dir prelude must parse");
+    // BUILT, not parsed: see `build`.
+    let mut combined = build::dir_declarations();
     combined.extend(program);
     combined
+}
+
+#[cfg(test)]
+mod build_oracle_tests {
+    /// Verifies the BUILT declarations are the same AST the PHP form parses to.
+    ///
+    /// The comparison strips spans, because the two constructions cannot agree on source positions
+    /// and never needed to.
+    #[test]
+    fn built_declarations_match_the_php_form() {
+        let tokens =
+            crate::lexer::tokenize(super::DIR_PRELUDE_SRC).expect("the PHP form must tokenize");
+        let parsed = crate::parser::parse_internal(&tokens).expect("the PHP form must parse");
+        let built = super::build::dir_declarations();
+        assert_eq!(built.len(), parsed.len(), "declaration count");
+        for (built_stmt, parsed_stmt) in built.iter().zip(parsed.iter()) {
+            assert_eq!(
+                crate::synthetic_class::transcribe::strip_spans(&format!("{built_stmt:?}")),
+                crate::synthetic_class::transcribe::strip_spans(&format!("{parsed_stmt:?}")),
+            );
+        }
+    }
 }

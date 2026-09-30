@@ -267,6 +267,42 @@ pub(super) fn emit_libc_call_aarch64(
     mid: &str,
     mid_len: usize,
 ) {
+    emit_libc_call_aarch64_with(emitter, head, head_len, path_slot, mid, mid_len, None);
+}
+
+/// [`emit_libc_call_aarch64`] for a helper a DELEGATING builtin may run on: when a caller has
+/// published the name php prints (`_rt_open_diag_prefix`, see `emit_open_diag_name`), that head
+/// replaces `head`. `dir()` opens through `opendir()` and php names `dir(...)`. `published_label`
+/// must be unique in the runtime.
+pub(super) fn emit_libc_call_published_aarch64(
+    emitter: &mut Emitter,
+    head: &str,
+    head_len: usize,
+    path_slot: Option<&str>,
+    mid: &str,
+    mid_len: usize,
+    published_label: &str,
+) {
+    emit_libc_call_aarch64_with(
+        emitter,
+        head,
+        head_len,
+        path_slot,
+        mid,
+        mid_len,
+        Some(published_label),
+    );
+}
+
+fn emit_libc_call_aarch64_with(
+    emitter: &mut Emitter,
+    head: &str,
+    head_len: usize,
+    path_slot: Option<&str>,
+    mid: &str,
+    mid_len: usize,
+    published_label: Option<&str>,
+) {
     let errno_function = match emitter.platform {
         crate::codegen_support::platform::Platform::MacOS => "__error",
         crate::codegen_support::platform::Platform::Linux => "__errno_location",
@@ -282,6 +318,9 @@ pub(super) fn emit_libc_call_aarch64(
     }
     abi::emit_symbol_address(emitter, "x0", head);
     emitter.instruction(&format!("mov x1, #{head_len}"));
+    if let Some(label) = published_label {
+        super::fopen::emit_published_prefix_aarch64(emitter, label);             // a delegating caller's own name
+    }
     abi::emit_symbol_address(emitter, "x3", mid);
     emitter.instruction(&format!("mov x4, #{mid_len}"));
     emitter.instruction("bl __rt_path_op_warning");
@@ -295,6 +334,39 @@ pub(super) fn emit_libc_call_x86_64(
     path_slot: Option<&str>,
     mid: &str,
     mid_len: usize,
+) {
+    emit_libc_call_x86_64_with(emitter, head, head_len, path_slot, mid, mid_len, None);
+}
+
+/// The x86_64 counterpart of [`emit_libc_call_published_aarch64`].
+pub(super) fn emit_libc_call_published_x86_64(
+    emitter: &mut Emitter,
+    head: &str,
+    head_len: usize,
+    path_slot: Option<&str>,
+    mid: &str,
+    mid_len: usize,
+    published_label: &str,
+) {
+    emit_libc_call_x86_64_with(
+        emitter,
+        head,
+        head_len,
+        path_slot,
+        mid,
+        mid_len,
+        Some(published_label),
+    );
+}
+
+fn emit_libc_call_x86_64_with(
+    emitter: &mut Emitter,
+    head: &str,
+    head_len: usize,
+    path_slot: Option<&str>,
+    mid: &str,
+    mid_len: usize,
+    published_label: Option<&str>,
 ) {
     let errno_function = match emitter.platform {
         crate::codegen_support::platform::Platform::MacOS => "__error",
@@ -311,6 +383,9 @@ pub(super) fn emit_libc_call_x86_64(
     }
     abi::emit_symbol_address(emitter, "rdi", head);
     emitter.instruction(&format!("mov rsi, {head_len}"));
+    if let Some(label) = published_label {
+        super::fopen::emit_published_prefix_x86(emitter, label);                 // a delegating caller's own name
+    }
     abi::emit_symbol_address(emitter, "rcx", mid);
     emitter.instruction(&format!("mov r8, {mid_len}"));
     emitter.instruction("call __rt_path_op_warning");

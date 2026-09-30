@@ -10,10 +10,24 @@
 use super::*;
 
 /// Lowers `fopen(filename, mode)` and boxes stream resources or PHP false.
+///
+/// Inside a prelude that stands in for a php builtin (`gzopen()`), the open's warnings speak in
+/// that builtin's name; see `delegating_prelude_builtin`.
 pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let delegated = super::publish_delegating_open_name(ctx, inst);
+    let callee = super::delegating_prelude_builtin(ctx, inst).unwrap_or("fopen");
+    let result = lower_fopen_as(ctx, inst, callee);
+    if delegated {
+        super::filesystem_ops::emit_open_diag_name(ctx, None);
+    }
+    result
+}
+
+/// The body of [`lower_fopen`], naming `callee` where php names the builtin it runs for.
+fn lower_fopen_as(ctx: &mut FunctionContext<'_>, inst: &Instruction, callee: &str) -> Result<()> {
     // php names THIS builtin in the two lines a refused `php://` URL prints, and the
     // run-time opener sees only a path; publish them before any open can reach it.
-    emit_publish_wrapper_open_callee(ctx, "fopen");
+    emit_publish_wrapper_open_callee(ctx, callee);
     // php throws rather than warning for an empty filename — see `emit_empty_path_value_error`.
     if let Some(path) = inst.operands.get(0).copied() {
         super::emit_empty_path_value_error(ctx, path, super::EMPTY_PATH_MESSAGE)?;

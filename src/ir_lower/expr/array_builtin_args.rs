@@ -172,54 +172,6 @@ pub(super) fn promote_key_preserving_sort_receiver(
     ctx.store_prepared_mutated_local(local, hash, assoc_ty, Some(span));
 }
 
-/// Lowers `sort($local)` / `rsort($local)` on an `array|false`-union local as unbox-then-sort.
-///
-/// `$d = scandir($dir); sort($d);` stores a BOXED value, and the by-reference receiver path
-/// hands codegen a Mixed-typed operand the sort dispatch refuses. The union is only visible
-/// HERE, at lowering time: the local is loaded, unboxed through the same `ExpectArrayArg`
-/// wrap the positional family uses (a runtime `false` throws php's TypeError, worded as php
-/// words it), and the raw array is sorted IN PLACE — so the box keeps pointing at the sorted
-/// storage and the local needs no write-back. php's `sort()` returns `true`; the sort
-/// builtins here are declared `Void`, so the call's value is the shared null sentinel,
-/// matching every other sort call site.
-pub(super) fn lower_union_array_in_place_sort(
-    ctx: &mut LoweringContext<'_, '_>,
-    name: &str,
-    args: &[Expr],
-    expr: &Expr,
-) -> Option<LoweredValue> {
-    let canonical = php_symbol_key(name.trim_start_matches('\\'));
-    let runtime = match canonical.as_str() {
-        "sort" => crate::ir::RuntimeFnId::Sort,
-        "rsort" => crate::ir::RuntimeFnId::Rsort,
-        _ => return None,
-    };
-    if args.len() != 1 || crate::types::call_args::has_named_args(args) {
-        return None;
-    }
-    let ExprKind::Variable(local) = &args[0].kind else {
-        return None;
-    };
-    let local_ty = ctx.local_type(local);
-    local_ty.array_or_false_member()?;
-    // The unbox-or-throw wrap hands the sort machinery a RAW array typed with the union's
-    // member (a runtime `false` throws php's TypeError first). The box is its array's sole
-    // owner, so the copy-on-write split sees refcount 1 and leaves the storage in place: the
-    // in-place sort is visible through the box, and the local needs no write-back.
-    let loaded = ctx.load_local(local, Some(args[0].span));
-    let mut values = vec![loaded.value];
-    wrap_array_or_false_args_impl(ctx, &canonical, Some("array"), 0, args, &mut values);
-    ctx.emit_void(
-        Op::RuntimeCall,
-        values,
-        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(runtime))),
-        Op::RuntimeCall.default_effects(),
-        Some(expr.span),
-    );
-    Some(lower_null(ctx, expr))
-}
-
-
 /// Wraps `array|false` union arguments to array-taking builtins in an unbox-or-throw call.
 ///
 /// The wrapped value is a raw array pointer typed with the union's array member, so the

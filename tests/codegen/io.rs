@@ -53,6 +53,8 @@ mod null_stream_argument;
 mod resource_id_numbering;
 #[path = "io/directory_as_a_file.rs"]
 mod directory_as_a_file;
+#[path = "io/internal_function_refusals.rs"]
+mod internal_function_refusals;
 #[path = "io/zlib_string_functions.rs"]
 mod zlib_string_functions;
 #[path = "io/filesystem.rs"]

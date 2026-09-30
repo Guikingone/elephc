@@ -536,6 +536,40 @@ fn emit_dynamic_php_filter_read_route(
     Ok(done)
 }
 
+/// The php builtin whose name a stream builtin's open-failure warning must print, when the call
+/// sits in a prelude body standing in for that builtin.
+///
+/// php reports its ACTIVE function: `gzopen()` opens through the same stream layer `fopen()` does
+/// and warns `gzopen(f.gz): Failed to open stream`, and `dir()` warns in its own name over
+/// `opendir()`. A prelude body is the compiled form of those internal functions, so a builtin it
+/// calls speaks for it. Two facts must hold: the enclosing function is a prelude-provided php
+/// builtin, and the call is BUILT code (a synthetic span) — a program that declares its own
+/// `gzopen()` suppresses the prelude, and its `fopen()` keeps its own name.
+pub(super) fn delegating_prelude_builtin(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> Option<&'static str> {
+    if inst.span.is_some_and(|span| span.is_from_source()) {
+        return None;
+    }
+    let contract = elephc_builtin_contract::lookup(&ctx.function.name)?;
+    (contract.kind == elephc_builtin_contract::BuiltinKind::PreludeProvided && !contract.internal)
+        .then_some(contract.name)
+}
+
+/// Publishes the delegating prelude's name (see [`delegating_prelude_builtin`]) for the
+/// open-failure warnings of the call being lowered, answering whether it did; a caller that gets
+/// `true` clears it with `super::filesystem_ops::emit_open_diag_name(ctx, None)` after the call.
+pub(super) fn publish_delegating_open_name(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> bool {
+    let Some(name) = delegating_prelude_builtin(ctx, inst) else {
+        return false;
+    };
+    let (prefix, prefix_len) = ctx.data.add_string(format!("Warning: {name}(").as_bytes());
+    let (bare, bare_len) = ctx.data.add_string(name.as_bytes());
+    filesystem_ops::emit_open_diag_name(ctx, Some((&prefix, prefix_len, &bare, bare_len)));
+    true
+}
+
 /// Whether the libraries a RUN-TIME path may need are linked: the PHAR bridge, libz and libbz2.
 ///
 /// The checker links all three together for any stream call whose path is not a literal

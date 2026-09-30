@@ -242,6 +242,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_file(emitter);
     io::emit_stat(emitter);
     io::emit_stat_ext(emitter);
+    io::emit_same_file(emitter);
     io::emit_stat_array(emitter);
     io::emit_fs(emitter);
     io::emit_getcwd(emitter);

@@ -124,6 +124,9 @@ pub(crate) fn lower_copy(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     if let Some(path) = inst.operands.get(0).copied() {
         super::emit_empty_path_value_error(ctx, path, super::EMPTY_PATH_MESSAGE)?;
     }
+    let refused = ctx.next_label("copy_refused");
+    let done = ctx.next_label("copy_done");
+    emit_copy_endpoint_guard(ctx, inst, &refused)?;
     // php names the function the USER called in every one of these warnings. `__rt_copy` is
     // `__rt_file_get_contents` followed by `__rt_file_put_contents`, and left to themselves those
     // two name THEMSELVES — so a failed copy reported `file_get_contents(missing.txt)`.
@@ -139,7 +142,68 @@ pub(crate) fn lower_copy(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     // Unconditionally: the slots are global, and a name left behind would make the next
     // `file_get_contents()` in the program call itself `copy`.
     emit_open_diag_name(ctx, None);
-    result
+    result?;
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&refused);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    store_if_result(ctx, inst)?;
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Refuses the endpoints php refuses before `copy()` opens anything, branching to `refused` then.
+///
+/// php-src's `php_copy_file_ctx()` stats both paths first: a directory on either side is a
+/// warning naming which argument, and two paths that name ONE file (same device and inode, by any
+/// spelling or hard link) fail silently. The last is not cosmetic: opening the destination for
+/// writing would truncate the source before a byte of it was read. A path that does not stat
+/// passes, so the open that follows reports it in php's words.
+fn emit_copy_endpoint_guard(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    refused: &str,
+) -> Result<()> {
+    let source = inst.operands.first().copied();
+    let target = inst.operands.get(1).copied();
+    let (Some(source), Some(target)) = (source, target) else {
+        return Ok(());
+    };
+    for (path, ordinal) in [(source, "first"), (target, "second")] {
+        let not_dir = ctx.next_label("copy_endpoint_not_dir");
+        load_string_to_result(ctx, path, "copy")?;
+        abi::emit_call_label(ctx.emitter, "__rt_is_dir");
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &not_dir);
+        super::fopen_core::emit_static_diag_warning(
+            ctx,
+            &format!("Warning: copy(): The {ordinal} argument to copy() function cannot be a directory\n"),
+        );
+        abi::emit_jump(ctx.emitter, refused);
+        ctx.emitter.label(&not_dir);
+    }
+    load_string_to_result(ctx, source, "copy")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => abi::emit_push_reg_pair(ctx.emitter, "x1", "x2"),
+        Arch::X86_64 => abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx"),
+    }
+    load_string_to_result(ctx, target, "copy")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x3, x1");                              // the destination path
+            ctx.emitter.instruction("mov x4, x2");
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");                    // the source path
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // the destination path
+            ctx.emitter.instruction("mov rsi, rdx");
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");                  // the source path
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_same_file");
+    let distinct = ctx.next_label("copy_endpoints_distinct");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &distinct);
+    abi::emit_jump(ctx.emitter, refused);                                       // one file on both ends: php answers false, silently
+    ctx.emitter.label(&distinct);
+    Ok(())
 }
 
 /// Whether `copy()`'s source names a wrapper only the LOWERING resolves.

@@ -233,7 +233,7 @@ fn emit_published_name_aarch64(emitter: &mut Emitter, done_label: &str) {
 }
 
 /// [`emit_published_name_aarch64`] for the `Warning: <callee>(` prefix.
-fn emit_published_prefix_aarch64(emitter: &mut Emitter, done_label: &str) {
+pub(super) fn emit_published_prefix_aarch64(emitter: &mut Emitter, done_label: &str) {
     abi::emit_load_symbol_to_reg(emitter, "x9", "_rt_open_diag_prefix_len", 0);
     emitter.instruction(&format!("cbz x9, {done_label}"));
     abi::emit_load_symbol_to_reg(emitter, "x0", "_rt_open_diag_prefix", 0);
@@ -252,7 +252,7 @@ fn emit_published_name_x86(emitter: &mut Emitter, done_label: &str) {
 }
 
 /// The x86_64 counterpart of [`emit_published_prefix_aarch64`].
-fn emit_published_prefix_x86(emitter: &mut Emitter, done_label: &str) {
+pub(super) fn emit_published_prefix_x86(emitter: &mut Emitter, done_label: &str) {
     abi::emit_load_symbol_to_reg(emitter, "r11", "_rt_open_diag_prefix_len", 0);
     emitter.instruction("test r11, r11");
     emitter.instruction(&format!("jz {done_label}"));

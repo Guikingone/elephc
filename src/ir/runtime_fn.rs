@@ -2299,6 +2299,9 @@ impl RuntimeFnId {
                 | RuntimeFnId::Stat
                 | RuntimeFnId::Lstat
                 | RuntimeFnId::Fstat
+                // `readdir()` persists the entry name it read (`__rt_str_persist`) or answers
+                // `false`; it never hands back the handle it was given.
+                | RuntimeFnId::Readdir
         ) {
             return BuiltinResultOwnership::Fresh;
         }

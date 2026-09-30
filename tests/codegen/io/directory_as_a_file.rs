@@ -122,3 +122,47 @@ unlink("big.txt");
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Verifies `copy()` refuses a directory DESTINATION in php's words, before opening anything.
+#[test]
+fn test_copy_refuses_a_directory_destination() {
+    let out = compile_and_run_capture(
+        r#"<?php
+mkdir("dstdir");
+file_put_contents("src.txt", "payload");
+var_dump(copy("src.txt", "dstdir"));
+unlink("src.txt");
+rmdir("dstdir");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\n");
+    assert_eq!(
+        out.diagnostics,
+        "Warning: copy(): The second argument to copy() function cannot be a directory\n"
+    );
+}
+
+/// Verifies copying a file onto ITSELF fails silently and leaves the bytes alone.
+///
+/// php-src stats both ends and answers false when they share device and inode — through any
+/// spelling of the path or a hard link. elephc opened the destination for writing first, which
+/// truncated the very file it was about to read: the copy answered true and the file was empty.
+#[test]
+fn test_copy_onto_the_same_file_keeps_its_bytes() {
+    let out = compile_and_run_capture(
+        r#"<?php
+file_put_contents("same.txt", "payload");
+link("same.txt", "same_link.txt");
+var_dump(copy("same.txt", "same.txt"));
+var_dump(copy("same.txt", "./same.txt"));
+var_dump(copy("same.txt", "same_link.txt"));
+echo file_get_contents("same.txt"), "\n";
+unlink("same_link.txt");
+unlink("same.txt");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\nbool(false)\nbool(false)\npayload\n");
+    assert_eq!(out.diagnostics, "");
+}
