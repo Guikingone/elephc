@@ -73,6 +73,30 @@ pub(super) fn validate_declared_class_aot_interface_members(
             context,
             false,
         ) {
+            if crate::eval_trace::enabled() {
+                eprintln!(
+                    "[elephc-eval-trace] phase=aot_interface_method_mismatch class={:?} owner={:?} method={:?} declaring_class={declaring_class:?} actual_visibility={:?} required_static={} actual_static={} has_signature={}",
+                    class.name(),
+                    requirement.owner,
+                    requirement.name,
+                    method.visibility(),
+                    requirement.is_static,
+                    method.is_static(),
+                    requirement.signature.is_some(),
+                );
+                if std::env::var_os("ELEPHC_EVAL_TRACE_SIGNATURES").is_some() {
+                    eprintln!(
+                        "[elephc-eval-trace] required_signature={:?}\n[elephc-eval-trace] actual_params={:?} defaults={:?} by_ref={:?} variadic={:?} types={:?} return={:?}",
+                        requirement.signature,
+                        method.params(),
+                        method.parameter_defaults(),
+                        method.parameter_is_by_ref(),
+                        method.parameter_is_variadic(),
+                        method.parameter_types(),
+                        method.return_type(),
+                    );
+                }
+            }
             return Err(EvalStatus::RuntimeFatal);
         }
     }

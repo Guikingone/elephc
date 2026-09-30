@@ -703,3 +703,25 @@ try { echo marked(new Base()), "\n"; } catch (TypeError $e) { echo "TypeError\n"
     );
     assert_eq!(out, "req\nmarked\nTypeError\nTypeError\n");
 }
+
+/// An interpreted class implements a compiled interface whose OTHER implementation calls
+/// `func_get_args()`: the hidden variadic that call adds to the whole method family is ABI only
+/// and is not part of the contract the interpreter checks.
+#[test]
+fn test_eval_class_implements_interface_whose_compiled_implementation_reads_func_get_args() {
+    let out = compile_and_run(
+        r#"<?php
+interface Dispatcher { public function dispatch($event, $payload = [], $halt = false); }
+class Fake implements Dispatcher {
+    public function dispatch($event, $payload = [], $halt = false) { return 'fake:' . count(func_get_args()); }
+}
+eval('class Real implements Dispatcher { public function dispatch($event, $payload = [], $halt = false) { return "real:" . $event; } }');
+$cls = 'Real';
+$d = new $cls();
+echo $d->dispatch('boot'), "|", $d instanceof Dispatcher ? 'yes' : 'no', "\n";
+function fire(Dispatcher $d) { return $d->dispatch('x', [], true); }
+echo fire($d), "|", fire(new Fake()), "\n";
+"#,
+    );
+    assert_eq!(out, "real:boot|yes\nreal:x|fake:3\n");
+}

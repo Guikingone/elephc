@@ -1587,7 +1587,11 @@ fn terminate_open_block(ctx: &mut LoweringContext<'_, '_>, is_generator: bool) {
     }
     if matches!(ctx.return_php_type, PhpType::Mixed) {
         ctx.emit_eval_scope_finalizer(None);
-        if is_generator {
+        // Only a DECLARED `: mixed` refuses to fall off the end. A function with no return type
+        // whose paths the checker merged into `mixed` returns null there, as php does: Laravel's
+        // `Container::getContextualConcrete()` ends in a `foreach` and threw this TypeError out
+        // of every `make()`.
+        if is_generator || !ctx.return_type_is_declared {
             let value = emit_default_return_value(ctx);
             ctx.builder
                 .terminate(Terminator::Return { value: Some(value) });

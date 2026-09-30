@@ -398,7 +398,8 @@ pub(super) fn collect_eval_native_interface_instance_methods(
             .to_string(),
             method_name: method_name.clone(),
             is_static: false,
-            signature: signature.clone(),
+            // The contract as PHP declares it: the hidden `func_get_args()` variadic is ABI only.
+            signature: crate::func_args::php_visible_signature(signature),
             bridge_supported: false,
         });
     }
@@ -422,7 +423,8 @@ pub(super) fn collect_eval_native_interface_static_methods(
             .to_string(),
             method_name: method_name.clone(),
             is_static: true,
-            signature: signature.clone(),
+            // The contract as PHP declares it: the hidden `func_get_args()` variadic is ABI only.
+            signature: crate::func_args::php_visible_signature(signature),
             bridge_supported: false,
         });
     }

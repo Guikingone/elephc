@@ -133,6 +133,36 @@ pub(crate) fn sig_collects_surplus_args(sig: &FunctionSig) -> bool {
     sig.variadic.as_deref() == Some(HIDDEN_ARGS_PARAM)
 }
 
+/// Returns `sig` as PHP declares it: without the hidden variadic this pass appends.
+///
+/// The hidden parameter is an ABI detail, and `method_families::propagate` spreads it across a
+/// whole interface family so every implementation shares one call shape. A PHP-visible contract
+/// must not carry it: handed to the interpreter as an interface requirement, it demanded a
+/// variadic parameter from every class implementing the interface there, and refused
+/// `class Dispatcher implements DispatcherContract` because another implementation of that
+/// interface happened to call `func_get_args()`.
+pub(crate) fn php_visible_signature(sig: &FunctionSig) -> FunctionSig {
+    if !sig_collects_surplus_args(sig) {
+        return sig.clone();
+    }
+    let mut visible = sig.clone();
+    if visible
+        .params
+        .last()
+        .is_some_and(|(name, _)| name == HIDDEN_ARGS_PARAM)
+    {
+        let keep = visible.params.len() - 1;
+        visible.params.truncate(keep);
+        visible.param_type_exprs.truncate(keep);
+        visible.param_attributes.truncate(keep);
+        visible.defaults.truncate(keep);
+        visible.ref_params.truncate(keep);
+        visible.declared_params.truncate(keep);
+    }
+    visible.variadic = None;
+    visible
+}
+
 /// Returns whether the program declares a function or method named after one of the three
 /// introspection constructs.
 ///
