@@ -163,6 +163,15 @@ pub(crate) fn compile_cli_file_and_run_with_flags(source: &str, flags: &[&str]) 
     compile_cli_file_and_run_with_native_and_flags(source, &[], false, flags)
 }
 
+/// Compiles a CLI fixture once with flags and executes each requested argument vector.
+pub(crate) fn compile_cli_file_and_run_with_flags_per_argv(
+    source: &str,
+    flags: &[&str],
+    argvs: &[&[&str]],
+) -> Vec<String> {
+    compile_cli_file_and_run_with_native_and_flags_per_argv(source, &[], false, flags, argvs)
+}
+
 /// Compiles a CLI fixture with arbitrary compiler FLAGS and asserts compilation FAILS.
 ///
 /// The real-CLI counterpart to `compile_cli_file_and_run_with_flags`: exercises the same
@@ -205,6 +214,20 @@ fn compile_cli_file_and_run_with_native_and_flags(
     managed_pcre2: bool,
     flags: &[&str],
 ) -> String {
+    compile_cli_file_and_run_with_native_and_flags_per_argv(
+        source, defines, managed_pcre2, flags, &[&[]],
+    )
+    .remove(0)
+}
+
+/// Shares CLI compilation while preserving each run's arguments and success assertion.
+fn compile_cli_file_and_run_with_native_and_flags_per_argv(
+    source: &str,
+    defines: &[&str],
+    managed_pcre2: bool,
+    flags: &[&str],
+    argvs: &[&[&str]],
+) -> Vec<String> {
     let dir = make_cli_test_dir("elephc_cli_test");
 
     let php_path = dir.join("main.php");
@@ -230,14 +253,18 @@ fn compile_cli_file_and_run_with_native_and_flags(
     );
 
     let bin_path = dir.join("main");
-    let output = run_binary(&bin_path, &dir);
-    assert!(
-        output.status.success(),
-        "CLI-compiled binary exited with error"
-    );
+    let outputs = argvs.iter().map(|args| {
+        let output = run_binary_with_args(&bin_path, &dir, args);
+        assert!(
+            output.status.success(),
+            "CLI-compiled binary exited with error for {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+        String::from_utf8(output.stdout).unwrap()
+    }).collect();
 
     let _ = fs::remove_dir_all(&dir);
-    String::from_utf8(output.stdout).unwrap()
+    outputs
 }
 
 // Compiles a PHP source string and runs the resulting binary, asserting that it
@@ -324,6 +351,15 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
 /// Provides the Compile and run files helper used by the projects module.
 pub(crate) fn compile_and_run_files(files: &[(&str, &str)], main_file: &str) -> String {
     compile_and_run_files_with_defines(files, main_file, &[])
+}
+
+/// Compiles a multi-file fixture once and checks every requested argument vector.
+pub(crate) fn compile_and_run_files_per_argv(
+    files: &[(&str, &str)],
+    main_file: &str,
+    argvs: &[&[&str]],
+) -> Vec<String> {
+    compile_and_run_files_with_defines_per_argv(files, main_file, &[], argvs)
 }
 
 // Compiles a multi-file PHP project and runs the binary, asserting it fails at runtime.
@@ -421,6 +457,16 @@ pub(crate) fn compile_and_run_files_with_defines(
     main_file: &str,
     defines: &[&str],
 ) -> String {
+    compile_and_run_files_with_defines_per_argv(files, main_file, defines, &[&[]]).remove(0)
+}
+
+/// Shares project resolution and linking between ordinary and multi-run fixture helpers.
+fn compile_and_run_files_with_defines_per_argv(
+    files: &[(&str, &str)],
+    main_file: &str,
+    defines: &[&str],
+    argvs: &[&[&str]],
+) -> Vec<String> {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
@@ -499,16 +545,20 @@ pub(crate) fn compile_and_run_files_with_defines(
         link_requirements_for_runtime_features(&check_result, runtime_features);
     // user assembly is already platform-correct (emitters handle platform at emit time)
 
-    let elephc_out = assemble_and_run(
+    let outputs = assemble_and_run_capture_per_argv(
         &user_asm,
         &runtime_obj_for_asm(&runtime_asm),
         &dir,
         &required_libraries,
         &default_link_paths(),
         &[],
+        argvs,
     );
     let _ = fs::remove_dir_all(&dir);
-    elephc_out
+    outputs.into_iter().zip(argvs).map(|(output, args)| {
+        assert!(output.success, "project binary failed for {args:?}: {}", output.stderr);
+        output.stdout
+    }).collect()
 }
 
 // Returns true if compilation of a multi-file PHP project fails (type-check or earlier).

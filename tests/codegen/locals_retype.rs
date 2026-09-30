@@ -825,14 +825,15 @@ fn test_implicit_retype_int_to_string_with_ir_opt_off() {
     assert_eq!(out, "ciao");
 }
 
-/// The branch-divergent mixed-storage marking, unoptimized.
+/// Both branch-divergent mixed-storage arms execute with EIR optimization disabled.
 #[test]
 fn test_marked_local_across_branches_with_ir_opt_off() {
-    let out = compile_cli_file_and_run_with_flags(
+    let out = compile_cli_file_and_run_with_flags_per_argv(
         "<?php if ($argc > 5) { $a = 1; } else { $a = \"s\" . $argc; } echo $a;",
         &["--ir-opt=off"],
+        &[&[], &["a", "b", "c", "d", "e"]],
     );
-    assert_eq!(out, "s1");
+    assert_eq!(out, ["s1", "1"]);
 }
 
 // ---------------------------------------------------------------------------
@@ -1276,13 +1277,14 @@ fn test_retype_of_a_program_wide_global_name_still_runs() {
 /// name back out of `Mixed` in the guarded branch, and the assignment there became a hard
 /// `cannot reassign $a from int to string` in BOTH modes. With the mark authoritative on every
 /// assignment path, the guarded store is boxed like every other store of the name.
-/// PHP 8.4 prints `s` (argc is 1, so the else arm binds `"s"` and `is_int` is false).
+/// The bare run leaves the string unchanged; one argument executes the guarded string store.
 #[test]
 fn test_marked_local_assigned_inside_a_type_guarded_branch() {
-    let out = compile_and_run(
+    let out = compile_and_run_per_argv(
         "<?php if ($argc > 1) { $a = 1; } else { $a = \"s\"; } if (is_int($a)) { $a = \"z\"; } echo $a;",
+        &[&[], &["x"]],
     );
-    assert_eq!(out, "s");
+    assert_eq!(out, ["s", "z"]);
 }
 
 /// READING a marked local inside a type-guarded branch answers correctly on both arms.
@@ -1319,19 +1321,23 @@ probe($argc + 1);"#,
 }
 
 /// The same fixture must not leak: the guarded store goes through the boxed slot the mark declared,
-/// not through a fresh one.
+/// not through a fresh one. Both the guarded store and the untouched string arm execute.
 #[test]
 fn test_marked_local_assigned_inside_a_type_guarded_branch_leaves_a_clean_heap() {
-    let out = compile_and_run_with_heap_debug(
+    let runs = compile_and_run_with_heap_debug_per_argv(
         "<?php if ($argc > 1) { $a = 1; } else { $a = \"s\" . $argc; } if (is_int($a)) { $a = \"z\"; } echo $a;",
+        &[&[], &["x"]],
     );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "s1");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a clean heap, got: {}",
-        out.stderr
-    );
+    assert_eq!(runs.len(), 2);
+    for (out, expected) in runs.iter().zip(["s1", "z"]) {
+        assert!(out.success, "program failed: {}", out.stderr);
+        assert_eq!(out.stdout, expected);
+        assert!(
+            out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+            "expected a clean heap, got: {}",
+            out.stderr
+        );
+    }
 }
 
 /// The three by-VALUE capture shapes the replay used to get wrong, each printing what PHP prints.
@@ -1453,7 +1459,7 @@ fn test_guarded_region_shapes_run_php_identically() {
 /// release builds died too). Keying the map by `(span, name)` lets both decisions coexist.
 #[test]
 fn test_two_marked_names_at_one_shared_position_both_compile() {
-    let out = compile_and_run_files(
+    let out = compile_and_run_files_per_argv(
         &[
             (
                 "main.php",
@@ -1465,8 +1471,9 @@ fn test_two_marked_names_at_one_shared_position_both_compile() {
             ),
         ],
         "main.php",
+        &[&[], &["x"]],
     );
-    assert_eq!(out, "5|5|");
+    assert_eq!(out, ["5|5|", "2|2|"]);
 }
 
 /// A retype inside an array-representation fixed point region: the statement that retypes is
@@ -2303,12 +2310,14 @@ fn test_require_once_makes_a_top_level_unset_kill_ineligible() {
 /// The pre-scan's divergence rule is about branching, not about which statement introduces it —
 /// this pins the `switch` shape alongside the `if`/`else` one the feature is usually shown with.
 /// The mark is depth-gated by nothing, which is exactly why it reaches inside the arms.
+/// Bare and one-argument runs exercise both the integer and string stores.
 #[test]
 fn test_marked_local_assigned_across_switch_arms() {
-    let out = compile_and_run(
+    let out = compile_and_run_per_argv(
         "<?php switch ($argc) { case 1: $a = 0; break; default: $a = \"ciao\"; } echo $a, \"|\"; var_dump($a);",
+        &[&[], &["x"]],
     );
-    assert_eq!(out, "0|int(0)\n");
+    assert_eq!(out, ["0|int(0)\n", "ciao|string(4) \"ciao\"\n"]);
 }
 
 /// The mixed-storage WARNING the `switch` shape produces, and its `--strict-locals` rejection.
