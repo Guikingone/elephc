@@ -79,6 +79,18 @@ pub fn run_collecting_included(
 
 /// Runs autoload expansion while applying conditional symbols to every physical file loaded.
 pub fn run_collecting_included_with_defines(
+    program: Program,
+    base_dir: &Path,
+    registry: &Registry,
+    defines: &HashSet<String>,
+) -> Result<(Program, Vec<PathBuf>), CompileError> {
+    crate::compiler_stack::with_compiler_stack(|| {
+        run_collecting_included_on_compiler_stack(program, base_dir, registry, defines)
+    })
+}
+
+/// Expands autoloads after the public entry point has established the recursive stack budget.
+fn run_collecting_included_on_compiler_stack(
     mut program: Program,
     base_dir: &Path,
     registry: &Registry,
