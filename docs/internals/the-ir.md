@@ -526,8 +526,16 @@ persist and ownership-transfer boxing path and do not consume this marker.
 Each instruction and terminator carries an `Effects` summary. The builder
 assigns a conservative opcode or semantic-descriptor default; after the complete
 module is lowered, an effect-refinement fixed point may replace the summary on
-explicitly refinable direct calls, instance calls, and property reads. Final
+explicitly refinable direct calls, named static calls (including inherited
+implementations), instance calls, and property reads. Forwarding static receivers
+and unresolved closure, descriptor, or pipe targets retain conservative defaults
+until their target is proven by a lowering-specific contract. Final
 effects are immutable after validation and remain PHP-observable.
+
+Caller-visible summaries omit `ConcatReset`: it restores frame-private scratch
+bookkeeping rather than PHP state. The instruction itself retains `writes_global`
+so intra-function passes preserve its ordering. Genuine PHP-global writes,
+output, allocation, and exception effects continue to flow into call summaries.
 
 ```rust
 pub struct Effects {
