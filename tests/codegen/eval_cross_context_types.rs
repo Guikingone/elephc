@@ -681,3 +681,25 @@ echo eval('InterpreterGhostFactory::makeConsumer($container); return "ok";');
     );
     assert_eq!(out, "ok");
 }
+
+/// A compiled parameter typed with a class only the interpreter declares accepts that class's
+/// instances (and an interface only the interpreted subclass implements), and still throws
+/// `TypeError` for an object that is not one.
+#[test]
+fn test_compiled_parameter_typed_with_interpreted_class_accepts_its_instances() {
+    let out = compile_and_run(
+        r#"<?php
+interface Marker {}
+class Base { public function kind() { return 'base'; } }
+eval('class Req extends Base implements Marker { public function kind() { return "req"; } }');
+function handle(Req $r) { return $r->kind(); }
+function marked(Marker $m) { return 'marked'; }
+function make(): Base { $c = $GLOBALS['argc'] > 5 ? 'Base' : 'Req'; return new $c(); }
+echo handle(make()), "\n";
+echo marked(make()), "\n";
+try { echo handle(new Base()), "\n"; } catch (TypeError $e) { echo "TypeError\n"; }
+try { echo marked(new Base()), "\n"; } catch (TypeError $e) { echo "TypeError\n"; }
+"#,
+    );
+    assert_eq!(out, "req\nmarked\nTypeError\nTypeError\n");
+}

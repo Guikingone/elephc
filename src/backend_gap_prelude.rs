@@ -1112,7 +1112,11 @@ pub fn inject_if_used(
     // And so is `htmlspecialchars()`'s fourth parameter: the backend helper always
     // double-encodes, so `$double_encode = false` is answered by a prelude loop.
     let needs_htmlspecialchars = usage.references("htmlspecialchars");
+    // And so are `array_any()` / `array_all()`, whose native runtime walks only a dense list and
+    // passes the predicate no key.
+    let needs_array_find = usage.references("array_any") || usage.references("array_all");
     if sources.is_empty()
+        && !needs_array_find
         && !needs_addcslashes
         && !needs_htmlspecialchars
         && !inject_randomizer
@@ -1128,6 +1132,11 @@ pub fn inject_if_used(
         return program;
     }
     let mut combined = Vec::new();
+    if needs_array_find {
+        let declarations = crate::array_find_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
     if needs_htmlspecialchars {
         let declarations = crate::htmlspecialchars_prelude::declarations();
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);

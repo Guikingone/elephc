@@ -234,6 +234,22 @@ pub(super) fn lower_backend_gap_builtin_shape(
             expr,
         ));
     }
+    // `array_any()` / `array_all()` go to the PHP helpers wholesale: php hands the predicate the
+    // value AND the key, over any array, and the native runtime walks a dense list passing only the
+    // value. `src/array_find_prelude.rs` has the helpers.
+    if (builtin == "array_any" || builtin == "array_all") && args.len() == 2 {
+        let helper = if builtin == "array_any" {
+            crate::array_find_prelude::ARRAY_ANY_NAME
+        } else {
+            crate::array_find_prelude::ARRAY_ALL_NAME
+        };
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(helper),
+            args,
+            expr,
+        ));
+    }
     // A callback the lowering cannot recover a native pointer for -- a boxed callable in a local,
     // a parameter, a property -- has no static binding for the array runtime, so the whole call
     // goes to the PHP helper, which calls it the way php does. `twig/twig`'s

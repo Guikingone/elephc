@@ -1406,6 +1406,33 @@ echo array_all([1, -2, 3], "pos") ? "y" : "n";
     assert_eq!(out, "yn");
 }
 
+/// Verifies array_any() / array_all() walk keyed arrays and gradual values holding an array, and
+/// hand the predicate the key as its second argument, as php does.
+#[test]
+fn test_array_any_all_keyed_and_gradual_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+$list = [3, 5, 8];
+var_dump(array_any($list, fn ($v, $k) => $k === 2), array_all($list, fn ($v, $k) => $k < 3));
+$map = ['a' => 'x', 'b' => 'yy'];
+var_dump(array_any($map, fn ($v, $k) => $k === 'b' && strlen($v) === 2), array_all($map, fn ($v) => is_string($v)));
+function files($key) { return $key === 'none' ? null : ($key === 'one' ? 'f' : ['f', 'g']); }
+function hasFile($key) {
+    if (! is_array($files = files($key))) {
+        $files = [$files];
+    }
+    return array_any($files, fn ($file) => $file === 'g');
+}
+var_dump(hasFile('none'), hasFile('one'), hasFile('many'));
+var_dump(array_any([], fn () => true), array_all([], fn () => false));
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nbool(false)\nbool(true)\nbool(false)\nbool(true)\n"
+    );
+}
+
 /// Verifies array_find / array_any / array_all are callable case-insensitively.
 /// Fixture: mixed-case spellings over a small numeric array.
 #[test]

@@ -523,10 +523,34 @@ fn lower_generic_object_nominal_guard(
         )
         .map(Some);
     }
+    let eval_bridge = ctx.module.required_runtime_features.eval_bridge;
     let Some((target_id, target_kind)) = target_metadata else {
-        // An unresolved nominal declaration can name an optional runtime type that is not part
-        // of the compiled program. The exact-name case was accepted above; any other statically
-        // known object cannot be proven compatible without inventing hierarchy metadata.
+        // An unresolved nominal declaration can name a class the RUNTIME declares: a class file
+        // handed to the autoloader, whose instances the interpreter builds. The bridge knows its
+        // hierarchy, so it answers; `$app->handleRequest(Request::capture())` refused every
+        // request while the request class was interpreted.
+        if eval_bridge {
+            let accepted = ctx.next_label("generic_object_boundary_eval_accepted");
+            let rejected = ctx.next_label("generic_object_boundary_eval_rejected");
+            super::builtins::emit_eval_object_is_a_named_fallback(
+                ctx,
+                value,
+                &target_name,
+                &accepted,
+                &rejected,
+            )?;
+            ctx.emitter.label(&rejected);
+            let message =
+                nominal_object_type_error_message(boundary, &target_name, false, "object");
+            exceptions::emit_type_error(ctx, &message);
+            ctx.emitter.label(&accepted);
+            ctx.load_value_to_result(value)?;
+            store_nominal_object_result(ctx, inst, &source_ty)?;
+            return Ok(Some(()));
+        }
+        // Without the bridge nothing can declare it later. The exact-name case was accepted
+        // above; any other statically known object cannot be proven compatible without inventing
+        // hierarchy metadata.
         let message = nominal_object_type_error_message(
             boundary,
             &target_name,
@@ -551,6 +575,24 @@ fn lower_generic_object_nominal_guard(
         }
     }
     abi::emit_pop_reg(ctx.emitter, source_reg);
+    // An interpreted subclass may implement an interface its compiled ancestor does not, which
+    // only the bridge can see.
+    if eval_bridge {
+        let eval_accepted = ctx.next_label("generic_object_boundary_eval_match");
+        let rejected = ctx.next_label("generic_object_boundary_rejected");
+        super::builtins::emit_eval_object_is_a_named_fallback(
+            ctx,
+            value,
+            &target_name,
+            &eval_accepted,
+            &rejected,
+        )?;
+        ctx.emitter.label(&eval_accepted);
+        ctx.load_value_to_result(value)?;
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        ctx.emit_branch(&accepted);
+        ctx.emitter.label(&rejected);
+    }
     let message = match boundary {
         NominalObjectBoundary::Parameter => {
             format!("Argument must be of type {}, object given", target_name)

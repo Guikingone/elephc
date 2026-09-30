@@ -52,6 +52,8 @@ pub mod attribute_prelude;
 pub(crate) mod append_vivify;
 pub mod ast_usage;
 mod array_filter_prelude;
+/// `array_any()` / `array_all()` as AST-built prelude declarations.
+mod array_find_prelude;
 mod array_walk_prelude;
 mod preg_match_all_prelude;
 mod preg_array_prelude;
