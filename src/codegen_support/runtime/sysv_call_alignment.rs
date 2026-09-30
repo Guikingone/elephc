@@ -52,7 +52,7 @@ const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
     //    registers, so nothing observes it. The fix is a `sub rsp, 8` / `add rsp, 8` pair
     //    around each call, which is why these are cheap but not free: several are hot leaves.
     ("__rt_strtolower", "frameless: calls __rt_strcopy, integer-only assembly"),
-    ("__rt_hash_key_hash", "frameless: calls __rt_hash_fnv1a, integer-only assembly"),
+    ("__rt_hash_key_hash", "frameless: calls __rt_hash_bytes, integer-only assembly"),
     ("__rt_hash_key_eq", "frameless: calls __rt_str_eq, integer-only assembly"),
     ("__rt_array_rand", "frameless: calls __rt_random_uniform, integer-only assembly"),
     ("__rt_mixed_is_empty", "frameless: calls __rt_mixed_unbox, integer-only assembly"),

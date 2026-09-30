@@ -62,7 +62,9 @@ pub use native_defaults::*;
 pub use native_function::*;
 use normalization::*;
 pub use reference_metadata::*;
-pub(crate) use request_includes::{install_native_include_hooks, NativeIncludeHooks};
+pub(crate) use request_includes::{
+    install_native_include_hooks, request_include_marks, NativeIncludeHooks,
+};
 pub(crate) use request_statics::reset_request_statics;
 
 #[cfg(not(test))]

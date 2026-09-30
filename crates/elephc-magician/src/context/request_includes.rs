@@ -115,6 +115,15 @@ pub(crate) unsafe fn install_native_include_hooks(
     unsafe { state.install_native(hooks) }
 }
 
+/// What the current request's inclusion state says about one canonical path, read without a
+/// context: `(included, compiler_included)`. Every generated-code context shares this state, so
+/// the answer is the one any of them would give.
+pub(crate) fn request_include_marks(path: &Path) -> (bool, bool) {
+    let state = current_include_state();
+    let state = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    (state.contains(path), state.compiler_included(path))
+}
+
 /// Generated-code contexts belong to the current worker request. Standalone unit
 /// contexts default to isolated requests; sharing is explicit in lifecycle tests.
 pub(super) fn current_include_state() -> SharedIncludeState {

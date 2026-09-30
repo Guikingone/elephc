@@ -322,3 +322,102 @@ fn explicitly_empty_preload_matches_the_default() {
     assert_eq!(err, "", "{err:?}");
     assert_eq!(run_binary(&bin), "count=9\npreload=absent\n");
 }
+
+/// A file the preload script names with `opcache_compile_file()` is compiled, not run, and a
+/// runtime include of it runs that compiled code: php's opcache splits a file the same way. Each
+/// include re-runs the file (fresh objects, one `1`-free `return` value), `require_once` answers
+/// `true` once the file ran, a path spelled with `..` reaches the same unit, and a file the
+/// preload did NOT name still goes through the interpreter -- including one that reads the
+/// includer's variable, which only an include in the caller's scope can see.
+#[test]
+fn opcache_compile_file_units_run_compiled_includes() {
+    let dir = make_test_dir("opcache_preload_units");
+    let write = |name: &str, content: &str| fs::write(dir.join(name), content).unwrap();
+    write(
+        "preload.php",
+        "<?php\nopcache_compile_file(__DIR__ . '/routes.php');\nopcache_compile_file(__DIR__ . '/bundles.php');\n",
+    );
+    write(
+        "routes.php",
+        r#"<?php
+return [
+    false,
+    ['/' => [[['_route' => 'home', '_controller' => 'App\\Controller::home'], null, ['GET' => 0], null, false]]],
+    [0 => '{^(?|/greet/([^/]++)(*:25))/?$}sDu'],
+    PHP_INT_SIZE * 2,
+    \App\Thing::class,
+];
+"#,
+    );
+    write(
+        "bundles.php",
+        "<?php\nreturn ['First' => new \\App\\Thing('first'), 'Second' => new \\App\\Thing('second')];\n",
+    );
+    write("other.php", "<?php\nreturn ['other' => $seed ?? 'no seed'];\n");
+    write(
+        "main.php",
+        r#"<?php
+namespace App;
+class Thing {
+    public static int $built = 0;
+    public function __construct(public string $name) { self::$built++; }
+}
+function load(string $file): mixed { $seed = 'from load'; return require $file; }
+function loadOnce(string $file): mixed { return require_once $file; }
+$dir = $argc > 5 ? '/nowhere' : __DIR__;
+$routes = load("$dir/routes.php");
+echo json_encode($routes), "\n";
+echo load("$dir/../" . basename($dir) . "/routes.php") === $routes ? "equal" : "different", "\n";
+$bundles = load("$dir/bundles.php");
+echo implode(',', array_map(fn ($b) => $b->name, $bundles)), ' built=', Thing::$built, "\n";
+$more = load("$dir/bundles.php");
+echo $more['First'] === $bundles['First'] ? "same object" : "fresh objects", ' built=', Thing::$built, "\n";
+var_export(loadOnce("$dir/routes.php"));
+echo "\n";
+var_export(loadOnce("$dir/other.php"));
+echo "\n";
+var_export(loadOnce("$dir/other.php"));
+echo "\n";
+echo json_encode(load("$dir/other.php")), "\n";
+"#,
+    );
+    let mut cmd = Command::new(elephc_bin());
+    cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.current_dir(&dir);
+    cmd.arg(dir.join("main.php"));
+    cmd.arg("--ini").arg("opcache.enable_cli=1");
+    cmd.arg("--ini").arg(format!("opcache.preload={}", dir.join("preload.php").display()));
+    let output = cmd.output().expect("failed to spawn elephc");
+    assert!(
+        output.status.success(),
+        "elephc compile failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let bin = dir.join("main");
+    assert_eq!(
+        run_binary(&bin),
+        r#"[false,{"\/":[[{"_route":"home","_controller":"App\\Controller::home"},null,{"GET":0},null,false]]},["{^(?|\/greet\/([^\/]++)(*:25))\/?$}sDu"],16,"App\\Thing"]
+equal
+first,second built=2
+fresh objects built=4
+true
+array (
+  'other' => 'no seed',
+)
+true
+{"other":"from load"}
+"#
+    );
+    // Only `other.php` may reach the interpreter: two of its three includes run it (the second
+    // `require_once` is answered without it), and none of the five unit includes may.
+    let traced = Command::new(&bin)
+        .env("ELEPHC_EVAL_TRACE", "ffi")
+        .output()
+        .expect("failed to run compiled binary");
+    let bridge_includes = String::from_utf8_lossy(&traced.stderr)
+        .lines()
+        .filter(|line| line.contains("__elephc_eval_include") && !line.contains("__elephc_eval_include_"))
+        .count();
+    assert_eq!(bridge_includes, 2, "{}", String::from_utf8_lossy(&traced.stderr));
+}

@@ -518,9 +518,22 @@ pub(crate) fn compile(config: CliConfig) {
     crate::progress::phase("opcache-preload");
     let phase_started = Instant::now();
     let mut preload_compiled_whole: Vec<std::path::PathBuf> = Vec::new();
-    let ast = match preloaded_declarations(&ini_overrides, parent, &defines, &autoload_registry) {
+    let mut preload_include_units: Vec<crate::ir::IncludeUnit> = Vec::new();
+    let preload_cache_enabled = crate::opcache::state::opcache_cache_enabled_with_overrides(
+        php_version.version_id(),
+        web,
+        &ini_overrides,
+    );
+    let ast = match preloaded_declarations(
+        &ini_overrides,
+        preload_cache_enabled,
+        parent,
+        &defines,
+        &autoload_registry,
+    ) {
         Ok(Some(preloaded)) => {
             preload_compiled_whole = preloaded.compiled_whole;
+            preload_include_units = preloaded.include_units;
             let declared = crate::opcache_preload_sources::declared_names(&ast);
             let mut combined = crate::opcache_preload_sources::without_redeclarations(
                 preloaded.declarations,
@@ -871,7 +884,10 @@ pub(crate) fn compile(config: CliConfig) {
                 .any(|name| name.eq_ignore_ascii_case(normalized)),
         )
     });
-    let exported_function_names: HashSet<String> = exported_functions.keys().cloned().collect();
+    let mut exported_function_names: HashSet<String> = exported_functions.keys().cloned().collect();
+    // Nothing in the program calls an include unit by name -- a runtime include reaches it through
+    // the unit table -- so it is rooted here, like an export, or pruning would drop it.
+    exported_function_names.extend(preload_include_units.iter().map(|unit| unit.function.clone()));
     let ast = optimize::prune_unreachable_declarations(
         ast,
         &mut check_result,
@@ -1021,6 +1037,16 @@ pub(crate) fn compile(config: CliConfig) {
     // The preload graph's fully-declared files belong in the same set: the compiler took each
     // of them whole, so an `include_once` reaching one at runtime must answer "already included"
     // rather than re-run a top level whose declarations are already in the binary.
+    ir_module.include_units = preload_include_units
+        .iter()
+        .filter(|unit| {
+            ir_module
+                .functions
+                .iter()
+                .any(|function| function.name.eq_ignore_ascii_case(&unit.function))
+        })
+        .cloned()
+        .collect();
     let mut compile_time_inclusions = opcache_autoloaded_files.clone();
     compile_time_inclusions.extend(preload_compiled_whole);
     crate::autoload::record_compile_time_inclusions(
@@ -1240,6 +1266,7 @@ fn classlike_activation_source_paths(
 /// wrote the file.
 fn preloaded_declarations(
     ini_overrides: &[(String, String)],
+    cache_enabled: bool,
     base_dir: &Path,
     defines: &std::collections::HashSet<String>,
     autoload: &autoload::Registry,
@@ -1251,6 +1278,11 @@ fn preloaded_declarations(
     else {
         return Ok(None);
     };
+    // php does not preload when the accelerator is off, and does not even look at the path: a
+    // CLI build without `opcache.enable_cli=1` preloads nothing, as `preload_verdict` reports.
+    if !cache_enabled {
+        return Ok(None);
+    }
     let Some(path) = crate::opcache_preload_sources::resolve_preload_path(directive, base_dir)
     else {
         return Ok(None);

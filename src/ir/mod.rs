@@ -44,8 +44,8 @@ pub use instr::{
     MixedNumericOp, NominalObjectBoundary, Op, PassOrigin, PhpTypePredicate, RuntimeId,
 };
 pub use module::{
-    ClassTable, ConstScalar, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl, InterfaceTable,
-    Module, PackedLayoutTable, TraitMethodInfo,
+    ClassTable, ConstScalar, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl, IncludeUnit,
+    InterfaceTable, Module, PackedLayoutTable, TraitMethodInfo,
 };
 pub use pcntl_runtime::{PcntlRuntime, PcntlTargetSupport};
 pub use print::{print_function, print_module};

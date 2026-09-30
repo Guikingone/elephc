@@ -255,6 +255,139 @@ pub(in crate::codegen) fn emit_state_helpers(module: &Module, emitter: &mut Emit
     emit_prime(emitter, &table, count);
     emit_deferred_class_helpers(module, emitter, data);
     emit_source_activate(module, emitter, data);
+    emit_include_unit_lookup(module, emitter, data);
+}
+
+/// Label of the include-unit lookup: string path in -> unit record or 0 out.
+pub(in crate::codegen) const INCLUDE_UNIT_LOOKUP: &str = "__rt_include_unit_lookup";
+
+/// Byte offset of a unit record's function address.
+pub(in crate::codegen) const INCLUDE_UNIT_FUNCTION_OFFSET: usize = 16;
+
+/// Byte offset of a unit record's guard-cell address.
+pub(in crate::codegen) const INCLUDE_UNIT_GUARD_OFFSET: usize = 24;
+
+/// Label of the include-unit pre-filter: string path in (preserved) -> 1 when its last component
+/// names a unit, 0 otherwise.
+pub(in crate::codegen) const INCLUDE_UNIT_CANDIDATE: &str = "__rt_include_unit_candidate";
+
+/// Bytes per include-unit record.
+const UNIT_RECORD: usize = 48;
+
+/// Emits the include-unit table, `__rt_include_unit_candidate` and `__rt_include_unit_lookup`.
+///
+/// One 48-byte record per unit: canonical path, its length, the unit function, the guard cell the
+/// source table already owns for that path (so a unit run and an interpreted include of the same
+/// file mark ONE cell), and where the path's last component starts. The lookup takes the
+/// canonical path as a string (x1/x2, rax/rdx) and answers the record or 0. The table holds only
+/// the few files the preload script named, so it is scanned rather than hashed.
+///
+/// The candidate test exists because canonicalizing is the expensive half: a request's other
+/// dynamic includes -- Composer's `files`, autoloaded classes -- would each pay a `realpath` only to
+/// miss. A file keeps its last component through canonicalization unless that component is itself
+/// a symlink, and such a file simply is not recognized as a unit: it is interpreted, as before.
+fn emit_include_unit_lookup(module: &Module, emitter: &mut Emitter, data: &mut DataSection) {
+    if module.include_units.is_empty() {
+        return;
+    }
+    let cataloged = |path: &std::path::Path| {
+        module
+            .source_catalog()
+            .is_some_and(|catalog| catalog.iter().any(|(_, source)| source.canonical_path == path))
+    };
+    let mut words = Vec::new();
+    for unit in &module.include_units {
+        if !cataloged(&unit.canonical_path) {
+            continue;
+        }
+        let key = unit.canonical_path.as_os_str().as_encoded_bytes().to_vec();
+        let (path, length) = data.add_string(&key);
+        let basename_offset = key.iter().rposition(|byte| *byte == b'/').map_or(0, |slash| slash + 1);
+        words.extend([
+            DataWord::Symbol(path),
+            DataWord::U64(length as u64),
+            DataWord::Symbol(crate::names::function_symbol(&unit.function)),
+            DataWord::Symbol(include_guard_symbol(&unit.canonical_path)),
+            DataWord::U64(basename_offset as u64),
+            DataWord::U64(0),
+        ]);
+    }
+    let count = words.len() / 6;
+    let table = if count == 0 { None } else { Some(data.add_words(words)) };
+    emit_include_unit_candidate(emitter, table.as_deref(), count);
+    emitter.blank();
+    emitter.comment("--- runtime: include unit lookup ---");
+    if emitter.target.arch == Arch::AArch64 { emitter.raw(".align 2"); }
+    emitter.label_global(INCLUDE_UNIT_LOOKUP);
+    let Some(table) = table else {
+        match emitter.target.arch {
+            Arch::AArch64 => emitter.instruction("mov x0, #0"),                 // no unit reachable
+            Arch::X86_64 => emitter.instruction("xor eax, eax"),                // no unit reachable
+        }
+        abi::emit_return(emitter);
+        return;
+    };
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(emitter, "x9", &table);
+            emitter.instruction(&format!("mov x10, #{count}"));                 // records left to inspect
+            emitter.label("__rt_include_unit_lookup_record");
+            emitter.instruction("cbz x10, __rt_include_unit_lookup_miss");      // every record inspected
+            emitter.instruction("ldr x11, [x9, #8]");                           // this record's path length
+            emitter.instruction("cmp x11, x2");                                 // same length as the requested path?
+            emitter.instruction("b.ne __rt_include_unit_lookup_next");
+            emitter.instruction("ldr x12, [x9]");                               // this record's path bytes
+            emitter.instruction("mov x13, #0");                                 // byte index
+            emitter.label("__rt_include_unit_lookup_byte");
+            emitter.instruction("cmp x13, x2");                                 // every byte matched?
+            emitter.instruction("b.eq __rt_include_unit_lookup_hit");
+            emitter.instruction("ldrb w14, [x12, x13]");                        // record byte
+            emitter.instruction("ldrb w15, [x1, x13]");                         // requested byte
+            emitter.instruction("cmp w14, w15");
+            emitter.instruction("b.ne __rt_include_unit_lookup_next");
+            emitter.instruction("add x13, x13, #1");
+            emitter.instruction("b __rt_include_unit_lookup_byte");
+            emitter.label("__rt_include_unit_lookup_next");
+            emitter.instruction(&format!("add x9, x9, #{UNIT_RECORD}"));        // next record
+            emitter.instruction("sub x10, x10, #1");
+            emitter.instruction("b __rt_include_unit_lookup_record");
+            emitter.label("__rt_include_unit_lookup_hit");
+            emitter.instruction("mov x0, x9");                                  // answer the matching record
+            emitter.instruction("ret");
+            emitter.label("__rt_include_unit_lookup_miss");
+            emitter.instruction("mov x0, #0");                                  // no unit for this path
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(emitter, "r9", &table);
+            emitter.instruction(&format!("mov r10, {count}"));                  // records left to inspect
+            emitter.label("__rt_include_unit_lookup_record");
+            emitter.instruction("test r10, r10");                               // every record inspected?
+            emitter.instruction("jz __rt_include_unit_lookup_miss");
+            emitter.instruction("cmp QWORD PTR [r9 + 8], rdx");                 // same length as the requested path?
+            emitter.instruction("jne __rt_include_unit_lookup_next");
+            emitter.instruction("mov r11, QWORD PTR [r9]");                     // this record's path bytes
+            emitter.instruction("xor ecx, ecx");                                // byte index
+            emitter.label("__rt_include_unit_lookup_byte");
+            emitter.instruction("cmp rcx, rdx");                                // every byte matched?
+            emitter.instruction("je __rt_include_unit_lookup_hit");
+            emitter.instruction("mov r8b, BYTE PTR [r11 + rcx]");               // record byte
+            emitter.instruction("cmp r8b, BYTE PTR [rax + rcx]");               // against the requested byte
+            emitter.instruction("jne __rt_include_unit_lookup_next");
+            emitter.instruction("inc rcx");
+            emitter.instruction("jmp __rt_include_unit_lookup_byte");
+            emitter.label("__rt_include_unit_lookup_next");
+            emitter.instruction(&format!("add r9, {UNIT_RECORD}"));             // next record
+            emitter.instruction("dec r10");
+            emitter.instruction("jmp __rt_include_unit_lookup_record");
+            emitter.label("__rt_include_unit_lookup_hit");
+            emitter.instruction("mov rax, r9");                                 // answer the matching record
+            emitter.instruction("ret");
+            emitter.label("__rt_include_unit_lookup_miss");
+            emitter.instruction("xor eax, eax");                                // no unit for this path
+            emitter.instruction("ret");
+        }
+    }
 }
 
 /// What a table scan does with a record whose path matches.
@@ -707,4 +840,114 @@ fn emit_prime(emitter: &mut Emitter, table: &str, count: usize) {
     abi::emit_frame_restore(emitter, 16);
     emitter.label(&already);
     abi::emit_return(emitter);
+}
+
+/// Emits `__rt_include_unit_candidate`: whether the path's last component is some unit's.
+/// Preserves the path registers (x1/x2, rax/rdx) for the caller's `realpath`.
+fn emit_include_unit_candidate(emitter: &mut Emitter, table: Option<&str>, count: usize) {
+    emitter.blank();
+    emitter.comment("--- runtime: include unit candidate ---");
+    if emitter.target.arch == Arch::AArch64 { emitter.raw(".align 2"); }
+    emitter.label_global(INCLUDE_UNIT_CANDIDATE);
+    let Some(table) = table else {
+        match emitter.target.arch {
+            Arch::AArch64 => emitter.instruction("mov x0, #0"),                 // no unit reachable
+            Arch::X86_64 => emitter.instruction("xor eax, eax"),                // no unit reachable
+        }
+        abi::emit_return(emitter);
+        return;
+    };
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x3, x2");                                  // scan back from the end of the path
+            emitter.label("__rt_include_unit_candidate_scan");
+            emitter.instruction("cbz x3, __rt_include_unit_candidate_base");    // no slash: the whole path is the name
+            emitter.instruction("sub x4, x3, #1");
+            emitter.instruction("ldrb w5, [x1, x4]");
+            emitter.instruction("cmp w5, #47");                                 // '/'
+            emitter.instruction("b.eq __rt_include_unit_candidate_base");
+            emitter.instruction("mov x3, x4");
+            emitter.instruction("b __rt_include_unit_candidate_scan");
+            emitter.label("__rt_include_unit_candidate_base");
+            emitter.instruction("add x6, x1, x3");                              // x6 = the last component
+            emitter.instruction("sub x7, x2, x3");                              // x7 = its length
+            abi::emit_symbol_address(emitter, "x9", table);
+            emitter.instruction(&format!("mov x10, #{count}"));                 // records left to inspect
+            emitter.label("__rt_include_unit_candidate_record");
+            emitter.instruction("cbz x10, __rt_include_unit_candidate_miss");
+            emitter.instruction("ldr x11, [x9, #8]");                           // record path length
+            emitter.instruction("ldr x12, [x9, #32]");                          // where its last component starts
+            emitter.instruction("sub x13, x11, x12");                           // that component's length
+            emitter.instruction("cmp x13, x7");
+            emitter.instruction("b.ne __rt_include_unit_candidate_next");
+            emitter.instruction("ldr x14, [x9]");
+            emitter.instruction("add x14, x14, x12");                           // the record's last component
+            emitter.instruction("mov x13, #0");
+            emitter.label("__rt_include_unit_candidate_byte");
+            emitter.instruction("cmp x13, x7");
+            emitter.instruction("b.eq __rt_include_unit_candidate_hit");
+            emitter.instruction("ldrb w15, [x14, x13]");
+            emitter.instruction("ldrb w5, [x6, x13]");
+            emitter.instruction("cmp w15, w5");
+            emitter.instruction("b.ne __rt_include_unit_candidate_next");
+            emitter.instruction("add x13, x13, #1");
+            emitter.instruction("b __rt_include_unit_candidate_byte");
+            emitter.label("__rt_include_unit_candidate_next");
+            emitter.instruction(&format!("add x9, x9, #{UNIT_RECORD}"));
+            emitter.instruction("sub x10, x10, #1");
+            emitter.instruction("b __rt_include_unit_candidate_record");
+            emitter.label("__rt_include_unit_candidate_hit");
+            emitter.instruction("mov x0, #1");                                  // a unit has this file name
+            emitter.instruction("ret");
+            emitter.label("__rt_include_unit_candidate_miss");
+            emitter.instruction("mov x0, #0");                                  // no unit can match this path
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rcx, rdx");                                // scan back from the end of the path
+            emitter.label("__rt_include_unit_candidate_scan");
+            emitter.instruction("test rcx, rcx");
+            emitter.instruction("jz __rt_include_unit_candidate_base");         // no slash: the whole path is the name
+            emitter.instruction("cmp BYTE PTR [rax + rcx - 1], 47");            // '/'
+            emitter.instruction("je __rt_include_unit_candidate_base");
+            emitter.instruction("dec rcx");
+            emitter.instruction("jmp __rt_include_unit_candidate_scan");
+            emitter.label("__rt_include_unit_candidate_base");
+            emitter.instruction("lea rsi, [rax + rcx]");                        // rsi = the last component
+            emitter.instruction("mov rdi, rdx");
+            emitter.instruction("sub rdi, rcx");                                // rdi = its length
+            abi::emit_symbol_address(emitter, "r9", table);
+            emitter.instruction(&format!("mov r10, {count}"));                  // records left to inspect
+            emitter.label("__rt_include_unit_candidate_record");
+            emitter.instruction("test r10, r10");
+            emitter.instruction("jz __rt_include_unit_candidate_miss");
+            emitter.instruction("mov r11, QWORD PTR [r9 + 8]");                 // record path length
+            emitter.instruction("sub r11, QWORD PTR [r9 + 32]");                // minus where its last component starts
+            emitter.instruction("cmp r11, rdi");
+            emitter.instruction("jne __rt_include_unit_candidate_next");
+            emitter.instruction("mov r11, QWORD PTR [r9]");
+            emitter.instruction("add r11, QWORD PTR [r9 + 32]");                // the record's last component
+            emitter.instruction("xor ecx, ecx");
+            emitter.label("__rt_include_unit_candidate_byte");
+            emitter.instruction("cmp rcx, rdi");
+            emitter.instruction("je __rt_include_unit_candidate_hit");
+            emitter.instruction("mov r8b, BYTE PTR [r11 + rcx]");
+            emitter.instruction("cmp r8b, BYTE PTR [rsi + rcx]");
+            emitter.instruction("jne __rt_include_unit_candidate_next");
+            emitter.instruction("inc rcx");
+            emitter.instruction("jmp __rt_include_unit_candidate_byte");
+            emitter.label("__rt_include_unit_candidate_next");
+            emitter.instruction(&format!("add r9, {UNIT_RECORD}"));
+            emitter.instruction("dec r10");
+            emitter.instruction("jmp __rt_include_unit_candidate_record");
+            emitter.label("__rt_include_unit_candidate_hit");
+            emitter.instruction("mov r8d, 1");                                  // a unit has this file name
+            emitter.instruction("jmp __rt_include_unit_candidate_done");
+            emitter.label("__rt_include_unit_candidate_miss");
+            emitter.instruction("xor r8d, r8d");                                // no unit can match this path
+            emitter.label("__rt_include_unit_candidate_done");
+            // The answer travels in r8: rax still holds the path for the caller's realpath.
+            emitter.instruction("ret");
+        }
+    }
 }

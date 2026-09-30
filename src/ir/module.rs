@@ -78,6 +78,9 @@ pub struct Module {
     /// included" at runtime; a statically-resolved `include` is deliberately NOT in it, because
     /// its body is emitted inline and its guard is set when that code actually runs.
     pub preincluded_sources: std::collections::BTreeSet<std::path::PathBuf>,
+    /// Files the closed world compiled as callable units (`opcache_compile_file()` in the preload
+    /// script), so a runtime `include` of one calls compiled code instead of interpreting it.
+    pub include_units: Vec<IncludeUnit>,
     /// LOWERCASE names of compiled classes that must still answer `class_exists($n, false)` false.
     ///
     /// A closed-world build declares everything it compiled from the first instruction. For a
@@ -151,12 +154,25 @@ pub struct Module {
     pub web: bool,
 }
 
+/// One file the compiler turned into a function, and the path a runtime include reaches it by.
+///
+/// php's `opcache_compile_file()` compiles a file without running it, and a later `include` runs
+/// the cached code. The compiled equivalent is a function whose body is the file's top level:
+/// `canonical_path` is what a runtime include resolves to, `function` the PHP name of that
+/// function, which returns what the include evaluates to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IncludeUnit {
+    pub canonical_path: std::path::PathBuf,
+    pub function: String,
+}
+
 impl Module {
     /// Creates an empty module for the given target.
     pub fn new(target: Target) -> Self {
         Self {
             source_catalog: None,
             preincluded_sources: Default::default(),
+            include_units: Vec::new(),
             deferred_class_loads: Default::default(),
             runtime_bound_functions: Default::default(),
             ref_param_escaping_callees: Default::default(),

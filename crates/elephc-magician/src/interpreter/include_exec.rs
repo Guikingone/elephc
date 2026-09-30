@@ -182,6 +182,37 @@ fn reincluding_compiler_included_sources() -> bool {
     REINCLUDE_COMPILER_INCLUDED_SOURCES.with(|flag| flag.get())
 }
 
+/// Answers a compiled `include`/`require` without a context, when the interpreter would answer it
+/// without running anything: an `_once` form of a file this request already included, or a
+/// statement include of a file the compiled program already included. `false` means "not
+/// answered here", and the caller takes the full bridge path, which also owns every diagnostic.
+///
+/// WHY. The full path creates an eval context and flushes every local of the calling compiled
+/// function into an eval scope, then reloads them, only to reach the same two early returns as
+/// [`eval_resolved_include`]. Composer's `$requireFile` closure pays that for each of its `files`
+/// on every request, although the compiled program included all of them at startup.
+///
+/// Only an absolute plain path is taken: a relative one depends on `include_path` and the calling
+/// file, and a stream wrapper never names a compiled source.
+pub(crate) fn fast_include_answer(path: &str, once: bool, value_discarded: bool) -> bool {
+    if !path.starts_with('/') || path.contains("://") {
+        return false;
+    }
+    let include_key = eval_include_key(std::path::Path::new(path));
+    let (included, compiler_included) = crate::context::request_include_marks(&include_key);
+    if once && included {
+        return true;
+    }
+    if value_discarded && !reincluding_compiler_included_sources() && compiler_included {
+        if crate::eval_trace::enabled() {
+            eprintln!("[elephc-eval-trace] kind=include phase=include_fast_skip path={include_key:?}");
+        }
+        crate::runtime_hooks::activate_compiled_source(&include_key);
+        return true;
+    }
+    false
+}
+
 /// Runs one include whose path is already a string and already resolved to a filesystem path.
 #[allow(clippy::too_many_arguments)]
 fn eval_resolved_include(

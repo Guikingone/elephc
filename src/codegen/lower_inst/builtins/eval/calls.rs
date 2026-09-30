@@ -74,6 +74,12 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_dynamic_include(
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, "dynamic include", 1)?;
     let path = expect_operand(inst, 0)?;
+    let unit_done = emit_include_unit_dispatch(ctx, inst, path, once)?;
+    let fast_done = if once || value_discarded {
+        emit_dynamic_include_fast_path(ctx, inst, path, once, value_discarded)?
+    } else {
+        None
+    };
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     // Scope synchronization owns the generic temp-cell slot, so preserve the borrowed
     // path in the otherwise-unused saved-code pointer slot until the include call.
@@ -125,7 +131,211 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_dynamic_include(
     reload_eval_global_scope(ctx, &sync_globals)?;
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
-    store_if_result(ctx, inst)
+    store_if_result(ctx, inst)?;
+    if let Some(done) = fast_done {
+        ctx.emitter.label(&done);
+    }
+    if let Some(done) = unit_done {
+        ctx.emitter.label(&done);
+    }
+    Ok(())
+}
+
+/// Runs a compiled include unit when the path names one: absolute, canonicalized through the
+/// realpath cache, and found in the unit table. The `_once` forms answer `true` for a file already
+/// included, exactly as the interpreter does from the same guard cell; otherwise the cell is
+/// marked BEFORE the unit runs, as php marks a file before executing it, and the unit's return
+/// value is the include's value. Anything else falls through to the paths below.
+///
+/// Returns the label the unit path jumps to, or `None` when the module has no unit or the path
+/// operand cannot carry a string.
+fn emit_include_unit_dispatch(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    path: ValueId,
+    once: bool,
+) -> Result<Option<String>> {
+    if ctx.module.include_units.is_empty() {
+        return Ok(None);
+    }
+    let path_ty = ctx.value_php_type(path)?.codegen_repr();
+    let boxed = match path_ty {
+        PhpType::Str => false,
+        PhpType::Mixed | PhpType::Union(_) => true,
+        _ => return Ok(None),
+    };
+    let skip = ctx.next_label("include_unit_skip");
+    let run = ctx.next_label("include_unit_run");
+    let done = ctx.next_label("include_unit_done");
+    let lookup = crate::codegen::source_units::INCLUDE_UNIT_LOOKUP;
+    let candidate = crate::codegen::source_units::INCLUDE_UNIT_CANDIDATE;
+    let function_offset = crate::codegen::source_units::INCLUDE_UNIT_FUNCTION_OFFSET;
+    let guard_offset = crate::codegen::source_units::INCLUDE_UNIT_GUARD_OFFSET;
+    ctx.load_value_to_result(path)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            if boxed {
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+                ctx.emitter.instruction("cmp x0, #1");                          // runtime tag 1 = string
+                ctx.emitter.instruction(&format!("b.ne {skip}"));
+            }
+            ctx.emitter.instruction(&format!("cbz x2, {skip}"));                // an empty path names no unit
+            ctx.emitter.instruction("ldrb w9, [x1]");                           // first path byte
+            ctx.emitter.instruction("cmp w9, #47");                             // absolute ('/') paths only
+            ctx.emitter.instruction(&format!("b.ne {skip}"));
+            abi::emit_call_label(ctx.emitter, candidate);                       // x0 = 1 when a unit has this file name
+            ctx.emitter.instruction(&format!("cbz x0, {skip}"));                // spare every other include the realpath
+            abi::emit_call_label(ctx.emitter, "__rt_realpath");                 // x1/x2 = owned canonical path, or 0/0
+            ctx.emitter.instruction(&format!("cbz x1, {skip}"));                // an unresolvable path names no unit
+            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // keep the canonical path to free it
+            abi::emit_call_label(ctx.emitter, lookup);                          // x0 = unit record, or 0
+            ctx.emitter.instruction("str x0, [sp, #8]");                        // park the record where the length was
+            ctx.emitter.instruction("ldr x0, [sp]");                            // the canonical path buffer
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free");                // it was only needed for the lookup
+            ctx.emitter.instruction("ldp x0, x9, [sp], #16");                   // x9 = unit record
+            ctx.emitter.instruction(&format!("cbz x9, {skip}"));                // no unit for this file
+            ctx.emitter.instruction(&format!("ldr x10, [x9, #{guard_offset}]")); // the file's guard cell
+            ctx.emitter.instruction("ldr x11, [x10]");                          // 0 until something includes the file
+            if once {
+                ctx.emitter.instruction(&format!("cbz x11, {run}"));            // first inclusion: run the unit
+                ctx.emitter.instruction("mov x0, #1");                          // already included: the include is `true`
+                emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+                store_if_result(ctx, inst)?;
+                abi::emit_jump(ctx.emitter, &done);
+                ctx.emitter.label(&run);
+            } else {
+                ctx.emitter.instruction(&format!("cbnz x11, {run}"));           // keep a compiler mark as it is
+            }
+            if !once {
+                ctx.emitter.instruction("mov x11, #1");                         // included by this request
+                ctx.emitter.instruction("str x11, [x10]");
+                ctx.emitter.label(&run);
+            } else {
+                ctx.emitter.instruction("mov x11, #1");                         // included by this request
+                ctx.emitter.instruction("str x11, [x10]");
+            }
+            ctx.emitter.instruction(&format!("ldr x9, [x9, #{function_offset}]")); // the unit function
+            ctx.emitter.instruction("blr x9");                                  // x0 = the include's value
+        }
+        Arch::X86_64 => {
+            if boxed {
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+                ctx.emitter.instruction("cmp rax, 1");                          // runtime tag 1 = string
+                ctx.emitter.instruction(&format!("jne {skip}"));
+                ctx.emitter.instruction("mov rax, rdi");                        // string bytes
+                ctx.emitter.instruction("mov rdx, rsi");                        // string length
+            }
+            ctx.emitter.instruction("test rdx, rdx");                           // an empty path names no unit
+            ctx.emitter.instruction(&format!("jz {skip}"));
+            ctx.emitter.instruction("cmp BYTE PTR [rax], 47");                  // absolute ('/') paths only
+            ctx.emitter.instruction(&format!("jne {skip}"));
+            abi::emit_call_label(ctx.emitter, candidate);                       // r8 = 1 when a unit has this file name
+            ctx.emitter.instruction("test r8, r8");
+            ctx.emitter.instruction(&format!("jz {skip}"));                     // spare every other include the realpath
+            abi::emit_call_label(ctx.emitter, "__rt_realpath");                 // rax/rdx = owned canonical path, or 0/0
+            ctx.emitter.instruction("test rax, rax");                           // an unresolvable path names no unit
+            ctx.emitter.instruction(&format!("jz {skip}"));
+            ctx.emitter.instruction("push rax");                                // keep the canonical path to free it
+            ctx.emitter.instruction("push rdx");
+            abi::emit_call_label(ctx.emitter, lookup);                          // rax = unit record, or 0
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // park the record where the length was
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");            // the canonical path buffer
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free");                // it was only needed for the lookup
+            ctx.emitter.instruction("pop r9");                                  // r9 = unit record
+            ctx.emitter.instruction("add rsp, 8");                              // drop the freed pointer's slot
+            ctx.emitter.instruction("test r9, r9");                             // no unit for this file?
+            ctx.emitter.instruction(&format!("jz {skip}"));
+            ctx.emitter.instruction(&format!("mov r10, QWORD PTR [r9 + {guard_offset}]")); // the file's guard cell
+            ctx.emitter.instruction("cmp QWORD PTR [r10], 0");                  // 0 until something includes the file
+            if once {
+                ctx.emitter.instruction(&format!("je {run}"));                  // first inclusion: run the unit
+                ctx.emitter.instruction("mov eax, 1");                          // already included: the include is `true`
+                emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+                store_if_result(ctx, inst)?;
+                abi::emit_jump(ctx.emitter, &done);
+                ctx.emitter.label(&run);
+                ctx.emitter.instruction("mov QWORD PTR [r10], 1");              // included by this request
+            } else {
+                ctx.emitter.instruction(&format!("jne {run}"));                 // keep a compiler mark as it is
+                ctx.emitter.instruction("mov QWORD PTR [r10], 1");              // included by this request
+                ctx.emitter.label(&run);
+            }
+            ctx.emitter.instruction(&format!("mov r9, QWORD PTR [r9 + {function_offset}]")); // the unit function
+            ctx.emitter.instruction("call r9");                                 // rax = the include's value
+        }
+    }
+    store_if_result(ctx, inst)?;
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&skip);
+    Ok(Some(done))
+}
+
+/// Asks `__elephc_eval_include_fast` first when the include may need nothing run: an `_once`
+/// form, or a statement include of a file the compiled program already included. On an answer
+/// the include evaluates to `true` and the bridge call, with its context and its scope flush and
+/// reload, is jumped over; otherwise execution falls through to it.
+///
+/// Returns the label the answered path jumps to, or `None` when the path operand's type cannot
+/// carry a string (the bridge then reports whatever php reports).
+fn emit_dynamic_include_fast_path(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    path: ValueId,
+    once: bool,
+    value_discarded: bool,
+) -> Result<Option<String>> {
+    let path_ty = ctx.value_php_type(path)?.codegen_repr();
+    let boxed = match path_ty {
+        PhpType::Str => false,
+        PhpType::Mixed | PhpType::Union(_) => true,
+        _ => return Ok(None),
+    };
+    let slow = ctx.next_label("dynamic_include_slow");
+    let done = ctx.next_label("dynamic_include_done");
+    let flags = i64::from(once) | (i64::from(value_discarded) << 1);
+    ctx.load_value_to_result(path)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            if boxed {
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+                ctx.emitter.instruction("cmp x0, #1");                          // runtime tag 1 = string; anything else takes the bridge
+                ctx.emitter.instruction(&format!("b.ne {}", slow));
+            }
+            ctx.emitter.instruction("mov x0, x1");                              // path bytes
+            ctx.emitter.instruction("mov x1, x2");                              // path length
+            ctx.emitter.instruction(&format!("mov x2, #{}", flags));            // the include's once / value-discarded flags
+        }
+        Arch::X86_64 => {
+            if boxed {
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+                ctx.emitter.instruction("cmp rax, 1");                          // runtime tag 1 = string; anything else takes the bridge
+                ctx.emitter.instruction(&format!("jne {}", slow));
+                // The unboxed string already sits in rdi (bytes) and rsi (length).
+            } else {
+                ctx.emitter.instruction("mov rdi, rax");                        // path bytes
+                ctx.emitter.instruction("mov rsi, rdx");                        // path length
+            }
+            ctx.emitter.instruction(&format!("mov edx, {}", flags));            // the include's once / value-discarded flags
+        }
+    }
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_include_fast");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz w0, {}", slow));              // not answered: take the bridge
+            ctx.emitter.instruction("mov x0, #1");                              // the include evaluates to true
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test eax, eax");                           // was the include answered?
+            ctx.emitter.instruction(&format!("jz {}", slow));                   // not answered: take the bridge
+            ctx.emitter.instruction("mov eax, 1");                              // the include evaluates to true
+        }
+    }
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+    store_if_result(ctx, inst)?;
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&slow);
+    Ok(Some(done))
 }
 
 /// Calls a pre-lowered internal EIR function for no-scope literal eval fragments.

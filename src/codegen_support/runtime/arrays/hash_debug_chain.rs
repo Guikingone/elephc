@@ -20,7 +20,7 @@ pub(crate) const HASH_CHAIN_MSG: &str =
 ///
 /// A corrupted chain is invisible until something iterates it, and by then the walk is already
 /// reading whatever sits in an unoccupied slot -- for the Symfony `--web` preload build that
-/// surfaces as `__rt_hash_fnv1a` hashing a foreign heap header as a five-byte key, four requests
+/// surfaces as `__rt_hash_bytes` hashing a foreign heap header as a five-byte key, four requests
 /// into a worker's life and nowhere near whatever broke it. Walking the chain where a hash is
 /// about to be USED turns that into a report at the first operation that sees the damage.
 ///

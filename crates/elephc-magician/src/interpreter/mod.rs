@@ -180,6 +180,12 @@ pub fn execute_program_outcome_with_context(
 }
 
 /// Executes an already materialized runtime include and preserves escaping Throwable cells.
+/// Context-free answer for a compiled include the interpreter would not run; see
+/// `include_exec::fast_include_answer`.
+pub(crate) fn fast_include_answer(path: &str, once: bool, value_discarded: bool) -> bool {
+    include_exec::fast_include_answer(path, once, value_discarded)
+}
+
 pub fn execute_include_outcome_with_context(
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,

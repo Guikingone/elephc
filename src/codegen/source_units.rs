@@ -7,6 +7,10 @@ use std::fmt::Write;
 use std::path::Path;
 mod bridge;
 pub(super) use bridge::{deferred_class_symbol, emit_state_helpers, emit_state_install, PRIMED};
+pub(in crate::codegen) use bridge::{
+    INCLUDE_UNIT_CANDIDATE, INCLUDE_UNIT_FUNCTION_OFFSET, INCLUDE_UNIT_GUARD_OFFSET,
+    INCLUDE_UNIT_LOOKUP,
+};
 
 /// Encodes the exact canonical path into an assembly-safe, collision-free symbol.
 /// Identity lookup still uses SourceId/catalog metadata, never decoding this name.

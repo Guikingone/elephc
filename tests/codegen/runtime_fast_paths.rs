@@ -334,3 +334,54 @@ if ($argc > 5) { eval('class Sub extends Item {}'); }
     );
     assert_eq!(out, "3002 item linear\n");
 }
+
+/// A compiled include first asks the interpreter's include state directly, without an eval
+/// context or a copy of the caller's locals: a repeated `include_once` answers `true` there. What
+/// it cannot answer must still behave exactly as before -- a plain `require` of an already
+/// included file runs it again, `include` sees and keeps the caller's variables, a missing file is
+/// `false` -- whichever spelling of the path reaches the file.
+#[test]
+fn include_fast_path_keeps_php_include_semantics() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "main.php",
+                r#"<?php
+require_once __DIR__ . "/lib.php";
+function load(string $f, int $n): mixed { $local = $n * 2; $r = include $f; return [$r, $local]; }
+function once(string $f) { $x = 5; $v = include_once $f; return var_export($v, true) . ":$x"; }
+function stmt(string $f) { $keep = "k"; require $f; return $keep; }
+$dir = __DIR__;
+echo helper_from_lib(), "\n";
+echo stmt("$dir/lib.php"), "\n";
+echo stmt("$dir/../" . basename($dir) . "/lib.php"), "\n";
+echo once("$dir/side.php"), "\n";
+echo once("$dir/side.php"), "\n";
+echo json_encode(load("$dir/data.php", 3)), "\n";
+echo json_encode(load("$dir/data.php", 4)), "\n";
+echo once("$dir/data.php"), "\n";
+echo @once("$dir/missing.php"), "\n";
+if ($argc > 9) { eval("echo 1;"); }
+"#,
+            ),
+            (
+                "lib.php",
+                r#"<?php
+if (!function_exists('helper_from_lib')) {
+    function helper_from_lib(): string { return "lib"; }
+}
+echo "lib body ran\n";
+"#,
+            ),
+            ("data.php", "<?php\nreturn [\"answer\" => 42, \"who\" => basename(__FILE__)];\n"),
+            ("side.php", "<?php\necho \"side ran\\n\";\n"),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "lib body ran\nlib\nlib body ran\nk\nlib body ran\nk\nside ran\n1:5\ntrue:5\n\
+         [{\"answer\":42,\"who\":\"data.php\"},6]\n[{\"answer\":42,\"who\":\"data.php\"},8]\n\
+         true:5\nfalse:5\n"
+    );
+}

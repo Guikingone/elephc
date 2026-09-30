@@ -71,11 +71,13 @@ pub fn preload_declarations(
     // Symfony writes every require as `__DIR__.'/…'` or `dirname(__DIR__, 3).'/…'`.
     let parsed =
         crate::source::finalize_physical_program(parsed, preload_path, source_mode, defines)?;
-    let requires = include_statements(&parsed);
+    let preload_dir = preload_path.parent().unwrap_or(base_dir);
+    let mut requires = include_statements(&parsed);
+    let (unit_functions, include_units) = compile_file_units(&parsed, preload_dir, defines);
+    requires.extend(unit_functions);
     if requires.is_empty() {
         return Ok(PreloadedDeclarations::default());
     }
-    let preload_dir = preload_path.parent().unwrap_or(base_dir);
     let (resolved, _, _) = crate::resolver::resolve_collecting_includes_with_defines_and_sources(
         requires,
         preload_dir,
@@ -105,6 +107,7 @@ pub fn preload_declarations(
     Ok(PreloadedDeclarations {
         declarations: retain_declarations(resolved),
         compiled_whole,
+        include_units,
     })
 }
 
@@ -124,6 +127,218 @@ pub struct PreloadedDeclarations {
     /// warm request is the interpreter re-executing included top levels, and
     /// `App_KernelProdContainer.php` is in that set with its 1,186 symbols already compiled in.
     pub compiled_whole: Vec<std::path::PathBuf>,
+    /// The files `opcache_compile_file()` named that became callable units, each with the
+    /// function that runs its top level. See [`compile_file_units`].
+    pub include_units: Vec<crate::ir::IncludeUnit>,
+}
+
+/// Turns every eligible file the preload script names with `opcache_compile_file()` into a
+/// function whose body is that file's top level.
+///
+/// php's `opcache_compile_file()` compiles a file without running it, and a later `include` of it
+/// runs the cached code. A compiled binary gets the same split from a function: the unit is
+/// `function __elephc_include_unit_<id>(): mixed { return require '<canonical path>'; }`, which
+/// the resolver expands exactly as it expands any static value include, guard handling and
+/// `return` value included. A runtime include whose path resolves to the file then calls the unit
+/// instead of handing the file to the interpreter. See `lower_dynamic_include`.
+///
+/// An include runs in its CALLER's scope, while the unit runs in its own. The two agree only for a
+/// file that cannot observe the difference, so [`unit_file_is_eligible`] admits a deliberately
+/// small shape and everything else keeps being interpreted: that costs time, never correctness.
+fn compile_file_units(
+    program: &[Stmt],
+    preload_dir: &Path,
+    defines: &HashSet<String>,
+) -> (Program, Vec<crate::ir::IncludeUnit>) {
+    let mut targets = Vec::new();
+    collect_compile_file_targets(program, &mut targets);
+    let mut functions = Vec::new();
+    let mut units: Vec<crate::ir::IncludeUnit> = Vec::new();
+    for (argument, span) in targets {
+        let Some(literal) = fold_literal_path(&argument) else {
+            continue;
+        };
+        let path = Path::new(&literal);
+        let path = if path.is_absolute() { path.to_path_buf() } else { preload_dir.join(path) };
+        let Ok(canonical) = path.canonicalize() else {
+            continue;
+        };
+        if units.iter().any(|unit| unit.canonical_path == canonical)
+            || !unit_file_is_eligible(&canonical, defines)
+        {
+            continue;
+        }
+        let function = unit_function_name(&canonical);
+        functions.push(unit_function_decl(&function, &canonical, span));
+        units.push(crate::ir::IncludeUnit { canonical_path: canonical, function });
+    }
+    (functions, units)
+}
+
+/// Appends the argument of every `opcache_compile_file(<one argument>)` statement.
+fn collect_compile_file_targets(body: &[Stmt], out: &mut Vec<(Expr, Span)>) {
+    for stmt in body {
+        match &stmt.kind {
+            StmtKind::ExprStmt(expr) => {
+                if let ExprKind::FunctionCall { name, args } = &expr.kind {
+                    let is_compile_file = name
+                        .last_segment()
+                        .is_some_and(|base| base.eq_ignore_ascii_case("opcache_compile_file"));
+                    if is_compile_file && args.len() == 1 {
+                        out.push((args[0].clone(), stmt.span));
+                    }
+                }
+            }
+            StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body) => {
+                collect_compile_file_targets(body, out);
+            }
+            StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body,
+                ..
+            } => {
+                collect_compile_file_targets(then_body, out);
+                for (_, body) in elseif_clauses {
+                    collect_compile_file_targets(body, out);
+                }
+                if let Some(body) = else_body {
+                    collect_compile_file_targets(body, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Folds a path built from string literals and `.`; `__DIR__` is a literal by this point.
+fn fold_literal_path(expr: &Expr) -> Option<String> {
+    match &expr.kind {
+        ExprKind::StringLiteral(value) => Some(value.clone()),
+        ExprKind::BinaryOp {
+            left,
+            op: crate::parser::ast::BinOp::Concat,
+            right,
+        } => Some(fold_literal_path(left)? + &fold_literal_path(right)?),
+        _ => None,
+    }
+}
+
+/// Whether a file can run as its own function without anyone telling the difference.
+///
+/// Admitted: `namespace` and `use` statements, then one final `return <expression>` built only
+/// from literals, arrays, constants, `X::class`/`X::CONST` of a NAMED class, `new` of a named
+/// class and operators over those. Nothing in that shape reads or writes a variable, depends on
+/// the calling class (`self`, `static`, `$this`, a closure's bound scope), declares a symbol, or
+/// includes another file -- which are exactly the ways an include's scope shows through.
+fn unit_file_is_eligible(path: &Path, defines: &HashSet<String>) -> bool {
+    let Ok(content) = crate::source::read_physical_source(path) else {
+        return false;
+    };
+    let mode = crate::source::SourceMode::from_path(path);
+    let Ok(tokens) = crate::lexer::tokenize_with_mode(&content, mode) else {
+        return false;
+    };
+    let Ok(parsed) = crate::parser::parse_with_mode(&tokens, mode) else {
+        return false;
+    };
+    let Ok(program) = crate::source::finalize_physical_program(parsed, path, mode, defines) else {
+        return false;
+    };
+    unit_body_is_eligible(&program)
+}
+
+/// The statement-level half of [`unit_file_is_eligible`].
+fn unit_body_is_eligible(body: &[Stmt]) -> bool {
+    let mut returned = false;
+    for stmt in body {
+        if returned {
+            return false;
+        }
+        match &stmt.kind {
+            StmtKind::NamespaceDecl { .. } | StmtKind::UseDecl { .. } => {}
+            StmtKind::Return(Some(value)) if unit_expr_is_eligible(value) => returned = true,
+            _ => return false,
+        }
+    }
+    returned
+}
+
+/// The expression-level half of [`unit_file_is_eligible`]: an allow-list, so a construct it does
+/// not know keeps the file interpreted.
+fn unit_expr_is_eligible(expr: &Expr) -> bool {
+    use crate::parser::ast::StaticReceiver;
+    match &expr.kind {
+        ExprKind::StringLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null
+        | ExprKind::ConstRef(_) => true,
+        ExprKind::ClassConstant { receiver } | ExprKind::ScopedConstantAccess { receiver, .. } => {
+            matches!(receiver, StaticReceiver::Named(_))
+        }
+        ExprKind::ArrayLiteral(items) => items.iter().all(unit_expr_is_eligible),
+        ExprKind::ArrayLiteralAssoc(pairs) => pairs
+            .iter()
+            .all(|(key, value)| unit_expr_is_eligible(key) && unit_expr_is_eligible(value)),
+        ExprKind::NewObject { args, .. } => args.iter().all(unit_expr_is_eligible),
+        ExprKind::Negate(inner) | ExprKind::Not(inner) => unit_expr_is_eligible(inner),
+        ExprKind::BinaryOp { left, right, .. } => {
+            unit_expr_is_eligible(left) && unit_expr_is_eligible(right)
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            unit_expr_is_eligible(condition)
+                && unit_expr_is_eligible(then_expr)
+                && unit_expr_is_eligible(else_expr)
+        }
+        _ => false,
+    }
+}
+
+/// Names a unit after its canonical path, so the same file always gets the same function.
+fn unit_function_name(canonical: &Path) -> String {
+    let hash = canonical
+        .as_os_str()
+        .as_encoded_bytes()
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        });
+    format!("__elephc_include_unit_{hash:016x}")
+}
+
+/// Builds `function <name>(): mixed { return require '<canonical>'; }`.
+fn unit_function_decl(name: &str, canonical: &Path, span: Span) -> Stmt {
+    let path = Expr::new(ExprKind::StringLiteral(canonical.display().to_string()), span);
+    let require = Expr::new(
+        ExprKind::IncludeValue {
+            path: Box::new(path),
+            once: false,
+            required: true,
+        },
+        span,
+    );
+    Stmt::new(
+        StmtKind::FunctionDecl {
+            name: name.to_string(),
+            params: Vec::new(),
+            param_attributes: Vec::new(),
+            variadic: None,
+            variadic_by_ref: false,
+            variadic_type: None,
+            return_type: Some(crate::parser::ast::TypeExpr::Named(crate::names::Name::unqualified(
+                "mixed",
+            ))),
+            by_ref_return: false,
+            body: vec![Stmt::new(StmtKind::Return(Some(require)), span)],
+        },
+        span,
+    )
 }
 
 /// Appends the path of every include guard whose body is entirely declarations.

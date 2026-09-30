@@ -151,6 +151,39 @@ const INCLUDE_FLAG_ONCE: u64 = 1;
 /// The include was written as a statement, so nothing reads the value it evaluates to.
 const INCLUDE_FLAG_VALUE_DISCARDED: u64 = 2;
 
+/// Answers a compiled include without an eval context when nothing has to run: `1` means the
+/// include evaluates to `true` and is done, `0` means the caller must take `__elephc_eval_include`.
+/// `flags` is the same word `__elephc_eval_include` takes.
+///
+/// # Safety
+/// `path` must be null or readable for `length` bytes for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_include_fast(path: *const u8, length: u64, flags: u64) -> i32 {
+    if path.is_null() {
+        return 0;
+    }
+    std::panic::catch_unwind(|| {
+        let bytes = unsafe { std::slice::from_raw_parts(path, length as usize) };
+        let Ok(path) = std::str::from_utf8(bytes) else {
+            return 0;
+        };
+        #[cfg(not(test))]
+        {
+            i32::from(interpreter::fast_include_answer(
+                path,
+                flags & INCLUDE_FLAG_ONCE != 0,
+                flags & INCLUDE_FLAG_VALUE_DISCARDED != 0,
+            ))
+        }
+        #[cfg(test)]
+        {
+            let _ = (path, flags);
+            0
+        }
+    })
+    .unwrap_or(0)
+}
+
 /// Executes one runtime include/require against a materialized caller scope.
 ///
 /// # Safety

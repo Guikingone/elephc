@@ -52,7 +52,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_sort_int(emitter, true);
     arrays::emit_sort_str(emitter, false);
     arrays::emit_sort_str(emitter, true);
-    arrays::emit_hash_fnv1a(emitter);
+    arrays::emit_hash_bytes(emitter);
     arrays::emit_hash_key_hash(emitter);
     arrays::emit_hash_key_eq(emitter);
     arrays::emit_hash_normalize_key(emitter);

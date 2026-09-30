@@ -129,7 +129,7 @@ mod hash_count;
 mod hash_append;
 mod hash_clone_shallow;
 mod hash_debug_chain;
-mod hash_fnv1a;
+mod hash_bytes;
 mod hash_free_deep;
 mod hash_get;
 mod hash_grow;
@@ -445,7 +445,7 @@ pub use ref_cell::{
     emit_ref_cell_store,
 };
 /// Emit managed PHP reference-cell ownership and dereference helpers.
-pub use hash_fnv1a::emit_hash_fnv1a;
+pub use hash_bytes::emit_hash_bytes;
 /// Emit FNV-1a hash helper.
 pub use hash_free_deep::emit_hash_free_deep;
 /// Emit deep hash free helper.

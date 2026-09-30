@@ -29,7 +29,7 @@ use crate::codegen_support::platform::Arch;
 ///   and `2^j * C` has its low `j` bits all zero. Without it every power-of-two key at or above
 ///   the capacity (PHP's `E_*` levels, bit flags) shared slot 0 and probed linearly: a 15-level
 ///   `ErrorHandler::$loggers` rewrite ran 19x slower than php.
-/// - Otherwise: delegates to `__rt_hash_fnv1a` to hash the string key byte-by-byte.
+/// - Otherwise: delegates to `__rt_hash_bytes` to hash the string key.
 pub fn emit_hash_key_hash(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_key_hash_linux_x86_64(emitter);
@@ -44,7 +44,7 @@ pub fn emit_hash_key_hash(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_hash_key_hash_int");                         // integer keys use a scalar hash path
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // preserve the caller frame before delegating to the string hash
     emitter.instruction("mov x29, sp");                                         // establish a minimal frame for the nested call
-    emitter.instruction("bl __rt_hash_fnv1a");                                  // hash the string key using the existing byte-wise FNV-1a helper
+    emitter.instruction("bl __rt_hash_bytes");                                  // hash the string key word by word
     emitter.instruction("ldp x29, x30, [sp], #16");                             // restore the caller frame after the nested helper returns
     emitter.instruction("ret");                                                 // return the string hash to the caller
 
@@ -71,7 +71,7 @@ pub fn emit_hash_key_hash(emitter: &mut Emitter) {
 ///
 /// # Behavior
 /// - Mirrors the ARM64 path: sentinel check on `rsi`, integer-key multiplicative hash path,
-///   or string-hash delegation to `__rt_hash_fnv1a`.
+///   or string-hash delegation to `__rt_hash_bytes`.
 fn emit_hash_key_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_key_hash ---");
@@ -79,7 +79,7 @@ fn emit_hash_key_hash_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("cmp rsi, -1");                                         // check whether key_hi is the integer-key sentinel
     emitter.instruction("je __rt_hash_key_hash_int");                           // integer keys use a scalar hash path
-    emitter.instruction("call __rt_hash_fnv1a");                                // hash the string key using the existing byte-wise FNV-1a helper
+    emitter.instruction("call __rt_hash_bytes");                                // hash the string key word by word
     emitter.instruction("ret");                                                 // return the string hash to the caller
 
     emitter.label("__rt_hash_key_hash_int");
