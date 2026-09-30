@@ -546,6 +546,11 @@ fn evaluate_plain_assignment_location(
                 ownership: entry.map_or(ScopeCellOwnership::Owned, |entry| entry.flags().ownership),
             })
         }
+        // `$$name = v`: the name is evaluated once, then the write is an ordinary variable write.
+        EvalExpr::DynamicVar(name) => {
+            let name = eval_dynamic_member_name(name, context, scope, values)?;
+            evaluate_plain_assignment_location(&EvalExpr::LoadVar(name), context, scope, values)
+        }
         EvalExpr::PropertyGet { object, property } => {
             let object = eval_expr(object, context, scope, values)?;
             Ok(EvaluatedLocation::Property {

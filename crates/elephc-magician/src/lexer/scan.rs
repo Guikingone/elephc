@@ -359,6 +359,11 @@ impl<'a> Lexer<'a> {
             self.bump_char();
             return Ok(TokenKind::DollarLBrace);
         }
+        // `$$name`: the name of the variable is the value of `$name`. The inner `$` is lexed on
+        // the next call, so `$$$x` nests the same way.
+        if self.peek_char() == Some('$') {
+            return Ok(TokenKind::Dollar);
+        }
         let name = self.lex_ident();
         if name.is_empty() {
             return Err(EvalParseError::ExpectedVariable);

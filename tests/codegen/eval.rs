@@ -33716,3 +33716,20 @@ echo $t->has2('macro_render') ? "has2" : "missing2", "\n";
     );
     assert_eq!(out, "tpl has missing\nyyyyn\nyn\nyny\nhas2\n");
 }
+
+/// Variable-variables parse and run in evaluated code: `$$name` and `${expr}` read and write
+/// the variable the value names, inside a function too. Carbon's `Date::set()` writes
+/// `$$name = self::monthToInt($value, $name);` and the whole trait used to be a parse error.
+#[test]
+fn test_eval_variable_variables_read_and_write() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$name = "x"; ${"y"} = 4; echo $y, "\n";');
+eval('$n = "x"; $x = 1; echo $$n, "\n";');
+eval('$name = "x"; $$name = 5; echo $x, "\n";');
+eval('function vv($name, $value) { $x = 0; $$name = $value; return $x; } echo vv("x", 7), "\n";');
+eval('$a = "b"; $b = "c"; $c = "deep"; echo $$$a, "\n";');
+"#,
+    );
+    assert_eq!(out, "4\n1\n5\n7\ndeep\n");
+}

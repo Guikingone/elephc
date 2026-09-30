@@ -45,6 +45,8 @@ impl Token {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum TokenKind {
     DollarLBrace,
+    /// A `$` followed by another `$`: the outer sigil of a variable-variable (`$$name`).
+    Dollar,
     DollarIdent(String),
     Ident(String),
     Magic(EvalMagicConst),
@@ -170,6 +172,7 @@ impl TokenKind {
     fn php_spelling(&self) -> &'static str {
         match self {
             Self::DollarLBrace => "${",
+            Self::Dollar => "$",
             Self::Plus => "+",
             Self::PlusPlus => "++",
             Self::PlusEqual => "+=",

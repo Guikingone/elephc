@@ -454,6 +454,7 @@ fn collect_arrow_expr_variables(expr: &EvalExpr, names: &mut Vec<String>) {
         | EvalExpr::DynamicClassNameFetch { class_name: expr }
         | EvalExpr::Include { path: expr, .. }
         | EvalExpr::Clone(expr)
+        | EvalExpr::DynamicVar(expr)
         | EvalExpr::Print(expr)
         | EvalExpr::Throw(expr)
         | EvalExpr::Unary { expr, .. } => collect_arrow_expr_variables(expr, names),

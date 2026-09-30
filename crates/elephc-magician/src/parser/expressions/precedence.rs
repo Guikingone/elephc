@@ -637,6 +637,7 @@ pub(in crate::parser) fn is_assignment_target(target: &EvalExpr) -> bool {
     matches!(
         target,
         EvalExpr::LoadVar(_)
+            | EvalExpr::DynamicVar(_)
             | EvalExpr::ArrayGet { .. }
             | EvalExpr::PropertyGet { .. }
             | EvalExpr::DynamicPropertyGet { .. }

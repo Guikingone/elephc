@@ -445,6 +445,7 @@ pub(super) fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str)
         EvalExpr::Include { path, .. }
         | EvalExpr::Cast { expr: path, .. }
         | EvalExpr::Clone(path)
+        | EvalExpr::DynamicVar(path)
         | EvalExpr::Print(path)
         | EvalExpr::Throw(path)
         | EvalExpr::Unary { expr: path, .. } => eval_expr_uses_this_property(path, property_name),
