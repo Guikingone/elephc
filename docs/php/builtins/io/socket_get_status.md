@@ -2,7 +2,7 @@
 title: "socket_get_status()"
 description: "Retrieves header/meta data from streams/file pointers (alias of stream_get_meta_data)."
 sidebar:
-  order: 235
+  order: 378
 ---
 
 ## socket_get_status()
@@ -21,9 +21,9 @@ Retrieves header/meta data from streams/file pointers (alias of stream_get_meta_
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/socket_get_status.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/socket_get_status.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/socket_get_status.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/socket_get_status.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

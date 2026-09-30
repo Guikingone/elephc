@@ -2,7 +2,7 @@
 title: "gzencode()"
 description: "Compresses a string with the gzip framing."
 sidebar:
-  order: 429
+  order: 824
 ---
 
 ## gzencode()
@@ -22,10 +22,10 @@ Compresses a string with the gzip framing.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through a compiler-injected PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected gz prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

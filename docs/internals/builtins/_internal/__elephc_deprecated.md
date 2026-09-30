@@ -1,16 +1,16 @@
 ---
-title: "__elephc_deprecated() — internals"
+title: "__elephc_deprecated() - internals"
 description: "Compiler internals for __elephc_deprecated(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 551
+  order: 1148
 ---
 
-## `__elephc_deprecated()` — internals
+## `__elephc_deprecated()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_deprecated.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_deprecated.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:560](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L560) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:688](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L688) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -48,8 +48,8 @@ function __elephc_deprecated(string $message): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 
-- _No user-facing reference — this is a compiler internal helper._
+- _No user-facing reference - this is a compiler internal helper._

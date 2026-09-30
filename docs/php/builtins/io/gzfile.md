@@ -2,7 +2,7 @@
 title: "gzfile()"
 description: "Reads an entire gz-file into an array of lines."
 sidebar:
-  order: 202
+  order: 345
 ---
 
 ## gzfile()
@@ -21,10 +21,10 @@ Reads an entire gz-file into an array of lines.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through a compiler-injected PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected gz prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

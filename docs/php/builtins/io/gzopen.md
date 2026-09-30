@@ -2,7 +2,7 @@
 title: "gzopen()"
 description: "Opens a gz-file pointer on the zlib compression wrapper."
 sidebar:
-  order: 205
+  order: 348
 ---
 
 ## gzopen()
@@ -22,10 +22,10 @@ Opens a gz-file pointer on the zlib compression wrapper.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through a compiler-injected PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected gz prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

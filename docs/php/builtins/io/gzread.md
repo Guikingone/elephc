@@ -2,7 +2,7 @@
 title: "gzread()"
 description: "Reads up to length bytes from a gz-file pointer."
 sidebar:
-  order: 208
+  order: 351
 ---
 
 ## gzread()
@@ -21,10 +21,10 @@ Reads up to length bytes from a gz-file pointer.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through a compiler-injected PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected gz prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -1,11 +1,11 @@
 ---
-title: "gzpassthru() — internals"
+title: "gzpassthru() - internals"
 description: "Compiler internals for gzpassthru(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 206
+  order: 349
 ---
 
-## `gzpassthru()` — internals
+## `gzpassthru()` - internals
 
 ## Where it lives
 
@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Implemented by a compiler-injected PHP prelude.
+- Implemented by the compiler-injected gz prelude.
 
 ## Semantic descriptor
 
@@ -38,7 +38,7 @@ function gzpassthru(mixed $stream): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

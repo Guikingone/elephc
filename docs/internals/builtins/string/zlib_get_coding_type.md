@@ -1,11 +1,11 @@
 ---
-title: "zlib_get_coding_type() — internals"
+title: "zlib_get_coding_type() - internals"
 description: "Compiler internals for zlib_get_coding_type(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 510
+  order: 978
 ---
 
-## `zlib_get_coding_type()` — internals
+## `zlib_get_coding_type()` - internals
 
 ## Where it lives
 
@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Implemented by a compiler-injected PHP prelude.
+- Implemented by the compiler-injected gz prelude.
 
 ## Semantic descriptor
 
@@ -38,7 +38,7 @@ function zlib_get_coding_type(): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

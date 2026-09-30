@@ -2,7 +2,7 @@
 title: "http_clear_last_response_headers()"
 description: "Clears the last HTTP response headers captured by an http:// stream."
 sidebar:
-  order: 214
+  order: 357
 ---
 
 ## http_clear_last_response_headers()
@@ -22,7 +22,7 @@ Clears the last HTTP response headers captured by an http:// stream.
 - **Compiled (AOT)**: supported by the Elephc code generator.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

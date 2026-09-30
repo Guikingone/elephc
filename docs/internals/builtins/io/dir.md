@@ -1,11 +1,11 @@
 ---
-title: "dir() — internals"
+title: "dir() - internals"
 description: "Compiler internals for dir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 167
+  order: 310
 ---
 
-## `dir()` — internals
+## `dir()` - internals
 
 ## Where it lives
 
@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Implemented by a compiler-injected PHP prelude.
+- Implemented by the compiler-injected dir prelude.
 
 ## Semantic descriptor
 
@@ -38,7 +38,7 @@ function dir(string $directory, mixed $context = null): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

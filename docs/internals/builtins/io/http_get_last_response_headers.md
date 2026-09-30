@@ -1,16 +1,16 @@
 ---
-title: "http_get_last_response_headers() — internals"
+title: "http_get_last_response_headers() - internals"
 description: "Compiler internals for http_get_last_response_headers(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 215
+  order: 358
 ---
 
-## `http_get_last_response_headers()` — internals
+## `http_get_last_response_headers()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/http_get_last_response_headers.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/http_get_last_response_headers.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:551](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L551) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:688](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L688) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -29,7 +29,7 @@ sidebar:
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
-- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+- **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
 
@@ -48,7 +48,7 @@ function http_get_last_response_headers(): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

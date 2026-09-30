@@ -2,7 +2,7 @@
 title: "diskfreespace()"
 description: "Returns available space in filesystem or disk partition (alias of disk_free_space)."
 sidebar:
-  order: 168
+  order: 311
 ---
 
 ## diskfreespace()
@@ -21,9 +21,9 @@ Returns available space in filesystem or disk partition (alias of disk_free_spac
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/diskfreespace.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/diskfreespace.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/diskfreespace.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/diskfreespace.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

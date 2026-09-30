@@ -1,16 +1,16 @@
 ---
-title: "stream_context_set_options() — internals"
+title: "stream_context_set_options() - internals"
 description: "Compiler internals for stream_context_set_options(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 247
+  order: 390
 ---
 
-## `stream_context_set_options()` — internals
+## `stream_context_set_options()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_context_set_options.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_context_set_options.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:551](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L551) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:688](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L688) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -29,7 +29,7 @@ sidebar:
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
-- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+- **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
 

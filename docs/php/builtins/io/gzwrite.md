@@ -2,7 +2,7 @@
 title: "gzwrite()"
 description: "Writes a string to a gz-file pointer."
 sidebar:
-  order: 212
+  order: 355
 ---
 
 ## gzwrite()
@@ -22,10 +22,10 @@ Writes a string to a gz-file pointer.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through a compiler-injected PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected gz prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

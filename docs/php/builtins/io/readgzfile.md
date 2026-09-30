@@ -2,7 +2,7 @@
 title: "readgzfile()"
 description: "Outputs a gz-file and answers the byte count."
 sidebar:
-  order: 231
+  order: 374
 ---
 
 ## readgzfile()
@@ -21,10 +21,10 @@ Outputs a gz-file and answers the byte count.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through a compiler-injected PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected gz prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -1,11 +1,11 @@
 ---
-title: "gzencode() — internals"
+title: "gzencode() - internals"
 description: "Compiler internals for gzencode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 429
+  order: 824
 ---
 
-## `gzencode()` — internals
+## `gzencode()` - internals
 
 ## Where it lives
 
@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Implemented by a compiler-injected PHP prelude.
+- Implemented by the compiler-injected gz prelude.
 
 ## Semantic descriptor
 
@@ -38,7 +38,7 @@ function gzencode(string $data, int $level = -1, int $encoding = 31): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -1,11 +1,11 @@
 ---
-title: "zlib_encode() — internals"
+title: "zlib_encode() - internals"
 description: "Compiler internals for zlib_encode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 509
+  order: 977
 ---
 
-## `zlib_encode()` — internals
+## `zlib_encode()` - internals
 
 ## Where it lives
 
@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Implemented by a compiler-injected PHP prelude.
+- Implemented by the compiler-injected gz prelude.
 
 ## Semantic descriptor
 
@@ -38,7 +38,7 @@ function zlib_encode(string $data, int $encoding, int $level = -1): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

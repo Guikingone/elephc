@@ -2,7 +2,7 @@
 title: "gzgets()"
 description: "Gets one line from a gz-file pointer."
 sidebar:
-  order: 204
+  order: 347
 ---
 
 ## gzgets()
@@ -21,10 +21,10 @@ Gets one line from a gz-file pointer.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through a compiler-injected PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected gz prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

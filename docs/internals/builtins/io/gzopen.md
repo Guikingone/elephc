@@ -1,11 +1,11 @@
 ---
-title: "gzopen() — internals"
+title: "gzopen() - internals"
 description: "Compiler internals for gzopen(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 205
+  order: 348
 ---
 
-## `gzopen()` — internals
+## `gzopen()` - internals
 
 ## Where it lives
 
@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Implemented by a compiler-injected PHP prelude.
+- Implemented by the compiler-injected gz prelude.
 
 ## Semantic descriptor
 
@@ -38,7 +38,7 @@ function gzopen(string $filename, string $mode, int $use_include_path = 0): mixe
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

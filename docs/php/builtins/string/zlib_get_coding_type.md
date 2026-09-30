@@ -2,7 +2,7 @@
 title: "zlib_get_coding_type()"
 description: "Returns the compression the output layer applied, or false when none did."
 sidebar:
-  order: 510
+  order: 978
 ---
 
 ## zlib_get_coding_type()
@@ -19,10 +19,10 @@ Returns the compression the output layer applied, or false when none did.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through a compiler-injected PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected gz prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -2,7 +2,7 @@
 title: "similar_text()"
 description: "Calculates the similarity between two strings."
 sidebar:
-  order: 469
+  order: 937
 ---
 
 ## similar_text()
@@ -25,7 +25,7 @@ Calculates the similarity between two strings.
 - **Compiled (AOT)**: supported by the Elephc code generator.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

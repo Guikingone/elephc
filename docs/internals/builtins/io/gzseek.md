@@ -1,11 +1,11 @@
 ---
-title: "gzseek() — internals"
+title: "gzseek() - internals"
 description: "Compiler internals for gzseek(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 210
+  order: 353
 ---
 
-## `gzseek()` — internals
+## `gzseek()` - internals
 
 ## Where it lives
 
@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Implemented by a compiler-injected PHP prelude.
+- Implemented by the compiler-injected gz prelude.
 
 ## Semantic descriptor
 
@@ -38,7 +38,7 @@ function gzseek(mixed $stream, int $offset, int $whence = 0): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 
