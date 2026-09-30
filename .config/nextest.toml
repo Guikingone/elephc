@@ -431,18 +431,17 @@ platform = 'cfg(target_os = "macos")'
 filter = 'binary(codegen_tests)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
-# Linux AArch64 codegen shards run two fixtures at once on shared ARM64 runners.
-# Multi-compile mbstring, eval, and ownership tests repeatedly reached 60s on both
-# attempts while the rest of their shards passed. Keep the 60s slow warning and
-# allow the same outer budget as macOS; the compiled-program watchdog remains 60s.
+# These multi-compile mbstring, eval, and ownership families reached 60s on both
+# attempts in Linux AArch64 shards. Limit the larger outer budget to the observed
+# families; unrelated codegen tests retain the strict 60s guard.
 [[profile.default.overrides]]
 platform = 'cfg(all(target_os = "linux", target_arch = "aarch64"))'
-filter = 'binary(codegen_tests)'
+filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(=codegen::io::output_handler_exceptions::test_output_handler_exceptions_false_disables_handler))'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
 platform = 'cfg(all(target_os = "linux", target_arch = "aarch64"))'
-filter = 'binary(codegen_tests)'
+filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(=codegen::io::output_handler_exceptions::test_output_handler_exceptions_false_disables_handler))'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 # Two more Core eval GC fixtures outside the `test_core_eval_` naming family. Each compiles,
