@@ -1224,6 +1224,54 @@ fn test_null_coalesce_joins_object_and_scalar_arms_as_a_union() {
     );
 }
 
+/// `$this` is never null, so coalescing it cannot add the fallback object's type.
+#[test]
+fn test_null_coalesce_this_keeps_the_receiver_type() {
+    let result = check_source_full(&format!(
+        "<?php {NULL_COALESCE_CLASSES} class SelfRepo {{ public function pick() {{ return $this ?? new Other(); }} }}"
+    )).expect("this coalesce must type-check");
+    assert_eq!(result.classes["SelfRepo"].methods["pick"].return_type,
+        PhpType::Object("SelfRepo".to_string()));
+}
+
+/// All lexical static-call spellings trust the same declared non-null return contract.
+#[test]
+fn test_null_coalesce_lexical_static_calls_drop_the_default() {
+    let result = check_source_full(&format!(
+        "<?php {NULL_COALESCE_CLASSES} class ChildRepo extends Repo {{ \
+         public function pickSelf() {{ return self::first() ?? new Other(); }} \
+         public function pickParent() {{ return parent::first() ?? new Other(); }} \
+         public function pickStatic() {{ return static::first() ?? new Other(); }} }}"
+    )).expect("lexical static coalesces must type-check");
+    let expected = PhpType::Union(vec![PhpType::Object("Implementation".to_string()), PhpType::False]);
+    for method in ["pickself", "pickparent", "pickstatic"] {
+        assert_eq!(result.classes["ChildRepo"].methods[method].return_type, expected, "{method}");
+    }
+}
+
+/// An unset parameter and an absent array key cannot make their fallback unreachable.
+#[test]
+fn test_null_coalesce_unset_parameter_and_missing_key_keep_fallback_types() {
+    let result = check_source_full(&format!(
+        "<?php {NULL_COALESCE_CLASSES} \
+         function replaced(Implementation $value) {{ unset($value); return $value ?? new Other(); }} \
+         $list = [new Implementation()]; $r = $list[99] ?? new Other();"
+    )).expect("absent storage coalesces must type-check");
+    assert_eq!(result.functions["replaced"].return_type, PhpType::Object("Other".to_string()));
+    assert_eq!(result.global_env.get("r"), Some(&PhpType::Union(vec![
+        PhpType::Object("Implementation".to_string()), PhpType::Object("Other".to_string()),
+    ])));
+}
+
+/// A pure nullable interface arm joined with a scalar remains Mixed rather than an object union.
+#[test]
+fn test_null_coalesce_nullable_contract_and_string_remains_mixed() {
+    let result = check_source_full(&format!(
+        "<?php {NULL_COALESCE_CLASSES} function label(?Contract $value) {{ return $value ?? 'none'; }}"
+    )).expect("nullable interface coalesce must type-check");
+    assert_eq!(result.functions["label"].return_type, PhpType::Mixed);
+}
+
 /// An empty branch contributes no element values, so `[]` merged with
 /// `array<int>` retains `array<int>` instead of widening unnecessarily.
 #[test]
