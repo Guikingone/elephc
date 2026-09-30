@@ -120,10 +120,16 @@ pub(super) fn prepare_ref_place_args(
         let place = stabilize_place(ctx, place_arg);
         // php reads a by-reference element or property WITHOUT a warning: a missing one is
         // created as null by the binding itself. `??` is the quiet read with that same answer.
-        let read = if matches!(
-            place.kind,
-            ExprKind::ArrayAccess { .. } | ExprKind::DynamicPropertyAccess { .. }
-        ) {
+        // Only for the shapes whose element may not exist yet in a way the typed path never
+        // meets: an element of a GRADUAL container and a property named at run time. A typed
+        // container keeps its plain read, whose ownership the heap-debug suite pins.
+        let quiet_read = match &place.kind {
+            ExprKind::DynamicPropertyAccess { .. } => true,
+            ExprKind::ArrayAccess { array, .. } => static_place_type(ctx, array)
+                .is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))),
+            _ => false,
+        };
+        let read = if quiet_read {
             let quiet = Expr::new(
                 ExprKind::NullCoalesce {
                     value: Box::new(place.clone()),

@@ -587,6 +587,22 @@ fn emit_mixed_method_candidate_object_argument_guard(
         ctx.emitter.label(&accepted_label);
         return Ok(());
     }
+    // An object the interpreter built, of a class only it declares or of an interpreted subclass,
+    // is answered by the bridge; the native matcher sees only compiled hierarchies. Laravel's
+    // interpreted `Illuminate\Http\Request` reached `handleRequest(Request $request)` this way.
+    if ctx.module.required_runtime_features.eval_bridge {
+        let native_fallback = ctx.next_label("mixed_method_object_argument_native");
+        super::builtins::emit_eval_object_is_a_named_fallback(
+            ctx,
+            value,
+            target_name,
+            &accepted_label,
+            &native_fallback,
+        )?;
+        ctx.emitter.label(&native_fallback);
+        ctx.load_value_to_result(value)?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    }
     if let Some((target_id, target_kind)) = objects::classify_named_target(ctx, target_name) {
         match ctx.emitter.target.arch {
             Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),           // matcher takes the unboxed object payload in its first argument register

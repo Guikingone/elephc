@@ -1029,3 +1029,83 @@ echo $f('a'), $f('b'), "\n";
     );
     assert_eq!(out, "w2{\"0\":1,\"k\":1}\n12\n");
 }
+
+/// A by-reference parameter returned after a builtin mutated it keeps the caller's variable
+/// alive whether the caller keeps the result or discards it.
+#[test]
+fn test_returned_by_ref_parameter_survives_a_discarded_result() {
+    let out = compile_and_run(
+        r#"<?php
+function f1(array &$t) { $t['x'] = 1; return $t; }
+function f2(array &$t) { sort($t); return $t; }
+function f3(&$t) { sort($t); return $t; }
+$e = [];
+f1($e);
+echo json_encode($e), "\n";
+$g = [3, 1];
+f2($g);
+echo json_encode($g), "\n";
+$h = [3, 1];
+f3($h);
+echo json_encode($h), "\n";
+$i = [5, 4];
+$r = f2($i);
+echo json_encode($i), json_encode($r), "\n";
+"#,
+    );
+    assert_eq!(out, "{\"x\":1}\n[1,3]\n[1,3]\n[4,5][4,5]\n");
+}
+
+/// An element of a gradual by-reference container, and a property named at run time, pass by
+/// reference: the callee's writes reach the caller's storage, a missing element is created
+/// silently, and a recursive dot-path setter (Laravel's `data_set` shape) builds nested arrays.
+#[test]
+fn test_by_ref_elements_of_gradual_containers_and_dynamic_properties() {
+    let out = compile_and_run(
+        r#"<?php
+if (! function_exists('path_set')) {
+    function path_set(&$target, $key, $value)
+    {
+        $segments = is_array($key) ? $key : explode('.', $key);
+        $segment = array_shift($segments);
+        if (is_array($target)) {
+            if ($segments) {
+                if (! array_key_exists($segment, $target)) {
+                    $target[$segment] = [];
+                }
+                path_set($target[$segment], $segments, $value);
+            } else {
+                $target[$segment] = $value;
+            }
+        } elseif (is_object($target)) {
+            if ($segments) {
+                if (! isset($target->{$segment})) {
+                    $target->{$segment} = [];
+                }
+                path_set($target->{$segment}, $segments, $value);
+            } else {
+                $target->{$segment} = $value;
+            }
+        }
+        return $target;
+    }
+}
+function put(&$t, $k, $v) { $t[$k] = $v; }
+function nest(&$t, $keys, $v) { $k = array_shift($keys); if ($keys) { nest($t[$k], $keys, $v); } else { $t[$k] = $v; } }
+$a = ['x' => ['y' => 1]];
+path_set($a, 'x.z', 2);
+echo json_encode($a), "\n";
+$o = new stdClass();
+path_set($o, 'p.q', 3);
+echo json_encode($o), "\n";
+$b = [];
+put($b, 'k', 'v');
+nest($b, ['m', 'n'], 4);
+echo json_encode($b), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"x\":{\"y\":1,\"z\":2}}\n{\"p\":{\"q\":3}}\n{\"k\":\"v\",\"m\":{\"n\":4}}\n"
+    );
+}
