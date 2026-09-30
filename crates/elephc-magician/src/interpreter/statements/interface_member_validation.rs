@@ -335,6 +335,18 @@ pub(super) fn validate_method_aot_parent_override(
     )? else {
         return Ok(());
     };
+    // `#[\ReturnTypeWillChange]` is php's own waiver for a return type that differs from an
+    // internal parent's TENTATIVE one (`DateTime::createFromFormat(): DateTime|false`, which
+    // Carbon overrides as `?static`). Without it php only deprecates the mismatch; with it php
+    // says nothing. The parameters are still checked.
+    let required = if eval_attributes_have_global_builtin_attribute(
+        method.attributes(),
+        "ReturnTypeWillChange",
+    ) {
+        required.with_return_type(None)
+    } else {
+        required
+    };
     if !class_method_satisfies_interface_signature(
         method,
         class.name(),

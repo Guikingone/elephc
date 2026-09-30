@@ -33733,3 +33733,29 @@ eval('$a = "b"; $b = "c"; $c = "deep"; echo $$$a, "\n";');
     );
     assert_eq!(out, "4\n1\n5\n7\ndeep\n");
 }
+
+/// An interpreted subclass of a compiled builtin overrides a method whose return type php only
+/// treats as tentative, under `#[\ReturnTypeWillChange]` (Carbon's `createFromFormat(): ?static`
+/// over `DateTime::createFromFormat(): DateTime|false`); the class used to be refused.
+#[test]
+fn test_eval_override_with_return_type_will_change_over_compiled_parent() {
+    let out = compile_and_run(
+        r#"<?php
+$d = DateTime::createFromFormat('Y-m-d', '2020-01-02');
+echo $d->format('Y'), "\n";
+eval('namespace Lib; use DateTime; use ReturnTypeWillChange;
+class MyDate extends DateTime {
+    #[ReturnTypeWillChange]
+    public static function createFromFormat($format, $time, $timezone = null): ?static
+    {
+        $d = parent::createFromFormat($format, $time);
+        return $d === false ? null : new static($d->format("Y-m-d"));
+    }
+}');
+$cls = 'Lib\MyDate';
+$x = $cls::createFromFormat('Y-m-d', '2021-03-04');
+echo get_class($x), " ", $x->format('Y-m-d'), "\n";
+"#,
+    );
+    assert_eq!(out, "2020\nLib\\MyDate 2021-03-04\n");
+}

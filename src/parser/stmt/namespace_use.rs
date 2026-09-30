@@ -324,14 +324,23 @@ fn parse_use_name(
 
     let mut parts = Vec::new();
     loop {
-        match tokens.get(*pos) {
-            Some((token, metadata))
-                if name_part_from_token(token, metadata).is_some()
-                    || token_as_import_name(token, metadata).is_some() =>
-            {
-                let part = name_part_from_token(token, metadata)
-                    .or_else(|| token_as_import_name(token, metadata))
-                    .expect("import name part was checked immediately above");
+        // After a separator any reserved word is a segment: `use Foo\Default\Bar;` is valid PHP 8.
+        let after_separator = !parts.is_empty() || kind == NameKind::FullyQualified;
+        let part = tokens.get(*pos).and_then(|(token, metadata)| {
+            name_part_from_token(token, metadata)
+                .or_else(|| token_as_import_name(token, metadata))
+                .or_else(|| {
+                    after_separator
+                        .then(|| {
+                            crate::parser::stmt::names::qualified_name_part_from_token(
+                                token, metadata,
+                            )
+                        })
+                        .flatten()
+                })
+        });
+        match part {
+            Some(part) => {
                 parts.push(part);
                 *pos += 1;
             }
