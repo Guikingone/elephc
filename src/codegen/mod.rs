@@ -21,6 +21,7 @@ mod enum_singletons;
 mod eval_argument_owners;
 mod eval_callable_helpers;
 mod eval_class_constant_helpers;
+mod class_id_dispatch;
 mod eval_constructor_helpers;
 mod eval_method_helpers;
 mod eval_property_helpers;

@@ -65,7 +65,13 @@ pub(super) fn lower(
 /// shared with the interpreter's, which is the point -- the operand is lowered by the compiler
 /// while the property it reaches may be owned by an eval context, and both sides have to agree
 /// that the fetch is quiet.
+///
+/// Without the bridge no eval context can own the receiver, so the scope has nothing to tell
+/// anyone and emits nothing.
 fn lower_eval_quiet_property_fetch(ctx: &mut FunctionContext<'_>, enter: bool) -> Result<()> {
+    if !ctx.module.required_runtime_features.eval_bridge {
+        return Ok(());
+    }
     let symbol = ctx.emitter.target.extern_symbol(if enter {
         "__elephc_eval_quiet_property_fetch_push"
     } else {

@@ -580,11 +580,7 @@ pub(in crate::codegen::lower_inst) fn lower_eval_owned_property_get(
             abi::int_result_reg(ctx.emitter),
         );
     }
-    let owner_probe = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_object_has_dynamic_owner");
-    abi::emit_call_label(ctx.emitter, &owner_probe);
+    abi::emit_call_label(ctx.emitter, "__rt_eval_object_has_owner");
     abi::emit_branch_if_int_result_zero(ctx.emitter, miss_label);
     lower_eval_property_get(ctx, inst, object, property)?;
     abi::emit_jump(ctx.emitter, done_label);
@@ -626,8 +622,7 @@ pub(in crate::codegen::lower_inst) fn lower_eval_owned_method_call(
             abi::int_arg_reg_name(ctx.emitter.target, 0),
             abi::int_result_reg(ctx.emitter));
     }
-    let owner_probe = ctx.emitter.target.extern_symbol("__elephc_eval_object_has_dynamic_owner");
-    abi::emit_call_label(ctx.emitter, &owner_probe);
+    abi::emit_call_label(ctx.emitter, "__rt_eval_object_has_owner");
     abi::emit_branch_if_int_result_zero(ctx.emitter, miss_label);
     let arg_count = inst.operands.len().saturating_sub(1);
     let args_offset = EVAL_STACK_BYTES;

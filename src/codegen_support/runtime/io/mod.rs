@@ -183,7 +183,9 @@ pub(crate) use modify::emit_modify;
 pub(crate) use principal_lookup::emit_principal_lookup;
 pub(crate) use pathinfo_array::emit_pathinfo_array;
 pub(crate) use pathinfo_str::emit_pathinfo_str;
-pub(crate) use realpath::emit_realpath;
+pub(crate) use realpath::{
+    emit_realpath, emit_realpath_cache_invalidate, REALPATH_CACHE_ENTRY_BYTES, REALPATH_CACHE_SLOTS,
+};
 pub(crate) use scandir::emit_scandir;
 pub(crate) use stat::emit_stat;
 pub(crate) use stat_array::emit_stat_array;

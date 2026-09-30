@@ -35,6 +35,7 @@ use super::eval_ref_arg_helpers::{
 use super::eval_callable_helpers::{EVAL_ARG_BOXED_VALUE_AARCH64_OFFSET, EVAL_ARG_BOXED_VALUE_X86_64_OFFSET,
     EVAL_ARG_CONTEXT_AARCH64_OFFSET};
 use super::eval_callable_helpers::EvalCallableDescriptorSupport;
+use super::class_id_dispatch::{emit_class_id_switch, ClassIdSwitch};
 
 /// Method metadata needed by eval method-call bridge dispatch.
 #[derive(Clone)]
@@ -817,7 +818,7 @@ fn emit_aarch64_method_exception_boundary_push(
         "add x0, x29, #{}",
         handler_offset + TRY_HANDLER_JMP_BUF_OFFSET
     ));                                                                         // pass the boundary jmp_buf to setjmp
-    emitter.bl_c("setjmp");                                                      // snapshot the bridge stack before entering native methods
+    emitter.bl_setjmp();                                                      // snapshot the bridge stack before entering native methods
     emitter.instruction(&format!("cbnz x0, {}", escape_label));                 // non-zero setjmp result means a method Throwable escaped
 }
 
@@ -860,7 +861,7 @@ fn emit_x86_64_method_exception_boundary_push(
         "lea rdi, [rbp - {}]",
         handler_base - TRY_HANDLER_JMP_BUF_OFFSET
     ));                                                                         // pass the boundary jmp_buf to setjmp
-    emitter.bl_c("setjmp");                                                      // snapshot the bridge stack before entering native methods
+    emitter.bl_setjmp();                                                      // snapshot the bridge stack before entering native methods
     emitter.instruction("test eax, eax");                                       // did control arrive through longjmp?
     emitter.instruction(&format!("jne {}", escape_label));                      // non-zero setjmp result means a method Throwable escaped
 }
@@ -907,18 +908,18 @@ fn emit_aarch64_method_dispatch(
     slots: &[EvalMethodSlot],
     fail_label: &str,
 ) {
-    for (class_id, class_slots) in grouped_slots(slots) {
-        let next_label = format!("__elephc_eval_method_next_{}", class_id);
-        emitter.instruction("ldr x9, [sp, #16]");                               // reload the unboxed object pointer before this class test
-        emitter.instruction("ldr x9, [x9]");                                    // load the receiver class id for method dispatch
-        abi::emit_load_int_immediate(emitter, "x10", class_id as i64);
-        emitter.instruction("cmp x9, x10");                                     // compare receiver class id against this eval bridge class
-        emitter.instruction(&format!("b.ne {}", next_label));                   // try the next class when ids differ
-        for slot in class_slots {
+    let groups = grouped_slots(slots).into_iter().collect::<Vec<_>>();
+    let ids = groups.iter().map(|(class_id, _)| *class_id).collect::<Vec<_>>();
+    let load_id = |emitter: &mut Emitter, reg: &str| {
+        emitter.instruction(&format!("ldr {}, [sp, #16]", reg));                // reload the unboxed object pointer before this class test
+        emitter.instruction(&format!("ldr {0}, [{0}]", reg));                   // load the receiver class id for method dispatch
+    };
+    let switch = ClassIdSwitch { load_id: &load_id, stem: "__elephc_eval_method", suffix: "" };
+    emit_class_id_switch(emitter, &switch, &ids, &mut |emitter, index| {
+        for slot in &groups[index].1 {
             emit_aarch64_method_name_compare(module, emitter, data, slot, fail_label);
         }
-        emitter.label(&next_label);
-    }
+    });
 }
 
 /// Emits x86_64 class-id and method-name dispatch for helper method bodies.
@@ -929,18 +930,18 @@ fn emit_x86_64_method_dispatch(
     slots: &[EvalMethodSlot],
     fail_label: &str,
 ) {
-    for (class_id, class_slots) in grouped_slots(slots) {
-        let next_label = format!("__elephc_eval_method_next_{}_x", class_id);
-        emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                   // reload the unboxed object pointer before this class test
-        emitter.instruction("mov r11, QWORD PTR [r11]");                        // load the receiver class id for method dispatch
-        abi::emit_load_int_immediate(emitter, "r10", class_id as i64);
-        emitter.instruction("cmp r11, r10");                                    // compare receiver class id against this eval bridge class
-        emitter.instruction(&format!("jne {}", next_label));                    // try the next class when ids differ
-        for slot in class_slots {
+    let groups = grouped_slots(slots).into_iter().collect::<Vec<_>>();
+    let ids = groups.iter().map(|(class_id, _)| *class_id).collect::<Vec<_>>();
+    let load_id = |emitter: &mut Emitter, reg: &str| {
+        emitter.instruction(&format!("mov {}, QWORD PTR [rbp - 24]", reg));     // reload the unboxed object pointer before this class test
+        emitter.instruction(&format!("mov {0}, QWORD PTR [{0}]", reg));         // load the receiver class id for method dispatch
+    };
+    let switch = ClassIdSwitch { load_id: &load_id, stem: "__elephc_eval_method", suffix: "_x" };
+    emit_class_id_switch(emitter, &switch, &ids, &mut |emitter, index| {
+        for slot in &groups[index].1 {
             emit_x86_64_method_name_compare(module, emitter, data, slot, fail_label);
         }
-        emitter.label(&next_label);
-    }
+    });
 }
 
 /// Emits ARM64 class-name and method-name dispatch for static method helper bodies.
@@ -1022,13 +1023,17 @@ fn emit_aarch64_builtin_throwable_method_dispatch(
     data: &mut DataSection,
     class_ids: &[u64],
 ) {
-    for class_id in class_ids {
-        let next_label = format!("__elephc_eval_builtin_throwable_method_next_{}", class_id);
-        emitter.instruction("ldr x9, [sp, #16]");                               // reload the unboxed object pointer before this builtin Throwable test
-        emitter.instruction("ldr x9, [x9]");                                    // load the receiver class id for builtin Throwable dispatch
-        abi::emit_load_int_immediate(emitter, "x10", *class_id as i64);
-        emitter.instruction("cmp x9, x10");                                     // compare receiver class id against this builtin Throwable class
-        emitter.instruction(&format!("b.ne {}", next_label));                   // try the next builtin Throwable class when ids differ
+    let ids = super::eval_constructor_helpers::sorted_class_ids(class_ids);
+    let load_id = |emitter: &mut Emitter, reg: &str| {
+        emitter.instruction(&format!("ldr {}, [sp, #16]", reg));                // reload the unboxed object pointer before this builtin Throwable test
+        emitter.instruction(&format!("ldr {0}, [{0}]", reg));                   // load the receiver class id for builtin Throwable dispatch
+    };
+    let switch = ClassIdSwitch {
+        load_id: &load_id,
+        stem: "__elephc_eval_builtin_throwable_method",
+        suffix: "",
+    };
+    emit_class_id_switch(emitter, &switch, &ids, &mut |emitter, _| {
         for (method, label, _, _) in BUILTIN_THROWABLE_SCALAR_GETTERS {
             emit_aarch64_builtin_throwable_method_name_branch(module, emitter, data, method, label);
         }
@@ -1043,8 +1048,7 @@ fn emit_aarch64_builtin_throwable_method_dispatch(
             previous_method,
             previous_label,
         );
-        emitter.label(&next_label);
-    }
+    });
 }
 
 /// Emits x86_64 class-id and method-name dispatch for compact Throwable methods.
@@ -1054,13 +1058,17 @@ fn emit_x86_64_builtin_throwable_method_dispatch(
     data: &mut DataSection,
     class_ids: &[u64],
 ) {
-    for class_id in class_ids {
-        let next_label = format!("__elephc_eval_builtin_throwable_method_next_{}_x", class_id);
-        emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                   // reload the unboxed object pointer before this builtin Throwable test
-        emitter.instruction("mov r11, QWORD PTR [r11]");                        // load the receiver class id for builtin Throwable dispatch
-        abi::emit_load_int_immediate(emitter, "r10", *class_id as i64);
-        emitter.instruction("cmp r11, r10");                                    // compare receiver class id against this builtin Throwable class
-        emitter.instruction(&format!("jne {}", next_label));                    // try the next builtin Throwable class when ids differ
+    let ids = super::eval_constructor_helpers::sorted_class_ids(class_ids);
+    let load_id = |emitter: &mut Emitter, reg: &str| {
+        emitter.instruction(&format!("mov {}, QWORD PTR [rbp - 24]", reg));     // reload the unboxed object pointer before this builtin Throwable test
+        emitter.instruction(&format!("mov {0}, QWORD PTR [{0}]", reg));         // load the receiver class id for builtin Throwable dispatch
+    };
+    let switch = ClassIdSwitch {
+        load_id: &load_id,
+        stem: "__elephc_eval_builtin_throwable_method",
+        suffix: "_x",
+    };
+    emit_class_id_switch(emitter, &switch, &ids, &mut |emitter, _| {
         for (method, label, _, _) in BUILTIN_THROWABLE_SCALAR_GETTERS {
             emit_x86_64_builtin_throwable_method_name_branch(module, emitter, data, method, label);
         }
@@ -1075,8 +1083,7 @@ fn emit_x86_64_builtin_throwable_method_dispatch(
             previous_method,
             previous_label,
         );
-        emitter.label(&next_label);
-    }
+    });
 }
 
 /// Emits one ARM64 method-name comparison for a compact Throwable method.

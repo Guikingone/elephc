@@ -316,6 +316,22 @@ unsafe fn eval_dynamic_class_like_exists_inner(
     autoload: i32,
     kind: DynamicClassLikeKind,
 ) -> i32 {
+    // Compiled code with no eval context of its own asks here for every `class_exists()` it
+    // makes, and building a fallback context with a copy of the AOT metadata cost more than the
+    // probe. A compiled class-like needs neither: when the generated tables hold it and it may be
+    // answered (loaded, or autoloading allowed), the answer is the one the full path gives.
+    if ctx.is_null() {
+        let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
+            return 0;
+        };
+        let mut values = ElephcRuntimeOps::with_context(std::ptr::null());
+        if eval_runtime_has_class_like(&mut values, &name, kind)
+            && (autoload != 0 || runtime_hooks::compiled_class_is_loaded(&name))
+        {
+            runtime_hooks::mark_compiled_class_loaded(&name);
+            return 1;
+        }
+    }
     let mut fallback_context;
     let context = if let Some(context) = ctx.as_mut() {
         context

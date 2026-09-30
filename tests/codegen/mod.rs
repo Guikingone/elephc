@@ -88,6 +88,7 @@ mod arrays;
 mod calendar;
 mod call_counters;
 mod callable_and_eval_gaps;
+mod runtime_fast_paths;
 mod callables;
 mod system;
 mod json;

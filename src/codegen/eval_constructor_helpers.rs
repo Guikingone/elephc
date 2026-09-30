@@ -37,6 +37,7 @@ use super::eval_ref_arg_helpers::{
 use super::eval_callable_helpers::{EVAL_ARG_BOXED_VALUE_AARCH64_OFFSET, EVAL_ARG_BOXED_VALUE_X86_64_OFFSET,
     EVAL_ARG_CONTEXT_AARCH64_OFFSET};
 use super::eval_callable_helpers::EvalCallableDescriptorSupport;
+use super::class_id_dispatch::{emit_class_id_switch, ClassIdSwitch};
 
 /// Every builtin Throwable the eval bridge can construct from a runtime string.
 ///
@@ -492,7 +493,7 @@ fn emit_aarch64_constructor_exception_boundary_push(emitter: &mut Emitter, escap
         "add x0, x29, #{}",
         handler_offset + TRY_HANDLER_JMP_BUF_OFFSET
     ));                                                                         // pass the boundary jmp_buf to setjmp
-    emitter.bl_c("setjmp");                                                     // snapshot the bridge stack before entering native constructors
+    emitter.bl_setjmp();                                                     // snapshot the bridge stack before entering native constructors
     emitter.instruction(&format!("cbnz x0, {}", escape_label));                 // non-zero setjmp result means a constructor Throwable escaped
 }
 
@@ -532,7 +533,7 @@ fn emit_x86_64_constructor_exception_boundary_push(emitter: &mut Emitter, escape
         "lea rdi, [rbp - {}]",
         handler_base - TRY_HANDLER_JMP_BUF_OFFSET
     ));                                                                         // pass the boundary jmp_buf to setjmp
-    emitter.bl_c("setjmp");                                                      // snapshot the bridge stack before entering native constructors
+    emitter.bl_setjmp();                                                      // snapshot the bridge stack before entering native constructors
     emitter.instruction("test eax, eax");                                       // did control arrive through longjmp?
     emitter.instruction(&format!("jne {}", escape_label));                      // non-zero setjmp result means a constructor Throwable escaped
 }
@@ -581,13 +582,17 @@ fn emit_aarch64_builtin_throwable_constructor_dispatch(
     success_label: &str,
     callable_support: &EvalCallableDescriptorSupport,
 ) {
-    for class_id in class_ids {
-        let next_label = format!("__elephc_eval_builtin_throwable_next_{}", class_id);
-        emitter.instruction("ldr x9, [sp, #16]");                               // reload the unboxed object pointer before this builtin class test
-        emitter.instruction("ldr x9, [x9]");                                    // load the receiver class id for builtin constructor dispatch
-        abi::emit_load_int_immediate(emitter, "x10", *class_id as i64);
-        emitter.instruction("cmp x9, x10");                                     // compare receiver class id against this builtin Throwable class
-        emitter.instruction(&format!("b.ne {}", next_label));                   // try the next builtin Throwable class when ids differ
+    let ids = sorted_class_ids(class_ids);
+    let load_id = |emitter: &mut Emitter, reg: &str| {
+        emitter.instruction(&format!("ldr {}, [sp, #16]", reg));                // reload the unboxed object pointer before this builtin class test
+        emitter.instruction(&format!("ldr {0}, [{0}]", reg));                   // load the receiver class id for builtin constructor dispatch
+    };
+    let switch = ClassIdSwitch {
+        load_id: &load_id,
+        stem: "__elephc_eval_builtin_throwable",
+        suffix: "",
+    };
+    emit_class_id_switch(emitter, &switch, &ids, &mut |emitter, _| {
         emit_aarch64_builtin_throwable_constructor_body(
             module,
             emitter,
@@ -596,8 +601,7 @@ fn emit_aarch64_builtin_throwable_constructor_dispatch(
             success_label,
             callable_support,
         );
-        emitter.label(&next_label);
-    }
+    });
 }
 
 /// Emits x86_64 dispatch for compact builtin Throwable constructors.
@@ -610,13 +614,17 @@ fn emit_x86_64_builtin_throwable_constructor_dispatch(
     success_label: &str,
     callable_support: &EvalCallableDescriptorSupport,
 ) {
-    for class_id in class_ids {
-        let next_label = format!("__elephc_eval_builtin_throwable_next_{}_x", class_id);
-        emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                   // reload the unboxed object pointer before this builtin class test
-        emitter.instruction("mov r11, QWORD PTR [r11]");                        // load the receiver class id for builtin constructor dispatch
-        abi::emit_load_int_immediate(emitter, "r10", *class_id as i64);
-        emitter.instruction("cmp r11, r10");                                    // compare receiver class id against this builtin Throwable class
-        emitter.instruction(&format!("jne {}", next_label));                    // try the next builtin Throwable class when ids differ
+    let ids = sorted_class_ids(class_ids);
+    let load_id = |emitter: &mut Emitter, reg: &str| {
+        emitter.instruction(&format!("mov {}, QWORD PTR [rbp - 24]", reg));     // reload the unboxed object pointer before this builtin class test
+        emitter.instruction(&format!("mov {0}, QWORD PTR [{0}]", reg));         // load the receiver class id for builtin constructor dispatch
+    };
+    let switch = ClassIdSwitch {
+        load_id: &load_id,
+        stem: "__elephc_eval_builtin_throwable",
+        suffix: "_x",
+    };
+    emit_class_id_switch(emitter, &switch, &ids, &mut |emitter, _| {
         emit_x86_64_builtin_throwable_constructor_body(
             module,
             emitter,
@@ -625,8 +633,15 @@ fn emit_x86_64_builtin_throwable_constructor_dispatch(
             success_label,
             callable_support,
         );
-        emitter.label(&next_label);
-    }
+    });
+}
+
+/// The builtin Throwable class ids in ascending order, as the class-id switch needs them.
+pub(super) fn sorted_class_ids(class_ids: &[u64]) -> Vec<u64> {
+    let mut ids = class_ids.to_vec();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
 }
 
 /// Initializes the compact Throwable payload for eval-created ARM64 builtin exceptions.
@@ -860,13 +875,14 @@ fn emit_aarch64_constructor_dispatch(
     success_label: &str,
     callable_support: &EvalCallableDescriptorSupport,
 ) {
-    for (class_id, class_slots) in grouped_slots(slots) {
-        let next_label = format!("__elephc_eval_constructor_next_{}", class_id);
-        emitter.instruction("ldr x9, [sp, #72]");                               // reload the selected constructor dispatch class id
-        abi::emit_load_int_immediate(emitter, "x10", class_id as i64);
-        emitter.instruction("cmp x9, x10");                                     // compare receiver class id against this constructor class
-        emitter.instruction(&format!("b.ne {}", next_label));                   // try the next constructor class when ids differ
-        for slot in class_slots {
+    let groups = grouped_slots(slots).into_iter().collect::<Vec<_>>();
+    let ids = groups.iter().map(|(class_id, _)| *class_id).collect::<Vec<_>>();
+    let load_id = |emitter: &mut Emitter, reg: &str| {
+        emitter.instruction(&format!("ldr {}, [sp, #72]", reg));                // reload the selected constructor dispatch class id
+    };
+    let switch = ClassIdSwitch { load_id: &load_id, stem: "__elephc_eval_constructor", suffix: "" };
+    emit_class_id_switch(emitter, &switch, &ids, &mut |emitter, index| {
+        for slot in &groups[index].1 {
             emit_aarch64_constructor_body(
                 module,
                 emitter,
@@ -877,8 +893,7 @@ fn emit_aarch64_constructor_dispatch(
                 callable_support,
             );
         }
-        emitter.label(&next_label);
-    }
+    });
 }
 
 /// Emits x86_64 class-id dispatch for supported constructor bodies.
@@ -891,13 +906,14 @@ fn emit_x86_64_constructor_dispatch(
     success_label: &str,
     callable_support: &EvalCallableDescriptorSupport,
 ) {
-    for (class_id, class_slots) in grouped_slots(slots) {
-        let next_label = format!("__elephc_eval_constructor_next_{}_x", class_id);
-        emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                   // reload the selected constructor dispatch class id
-        abi::emit_load_int_immediate(emitter, "r10", class_id as i64);
-        emitter.instruction("cmp r11, r10");                                    // compare receiver class id against this constructor class
-        emitter.instruction(&format!("jne {}", next_label));                    // try the next constructor class when ids differ
-        for slot in class_slots {
+    let groups = grouped_slots(slots).into_iter().collect::<Vec<_>>();
+    let ids = groups.iter().map(|(class_id, _)| *class_id).collect::<Vec<_>>();
+    let load_id = |emitter: &mut Emitter, reg: &str| {
+        emitter.instruction(&format!("mov {}, QWORD PTR [rbp - 40]", reg));     // reload the selected constructor dispatch class id
+    };
+    let switch = ClassIdSwitch { load_id: &load_id, stem: "__elephc_eval_constructor", suffix: "_x" };
+    emit_class_id_switch(emitter, &switch, &ids, &mut |emitter, index| {
+        for slot in &groups[index].1 {
             emit_x86_64_constructor_body(
                 module,
                 emitter,
@@ -908,8 +924,7 @@ fn emit_x86_64_constructor_dispatch(
                 callable_support,
             );
         }
-        emitter.label(&next_label);
-    }
+    });
 }
 
 /// Emits one ARM64 constructor body or failure branch for an unsupported constructor.

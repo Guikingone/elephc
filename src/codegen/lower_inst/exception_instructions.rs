@@ -145,7 +145,7 @@ pub(super) fn lower_try_push_handler(ctx: &mut FunctionContext<'_>, inst: &Instr
         abi::int_arg_reg_name(ctx.emitter.target, 0),
         handler_offset - TRY_HANDLER_JMP_BUF_OFFSET,
     );
-    ctx.emitter.bl_c("setjmp");
+    ctx.emitter.bl_setjmp();
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &handler_label);
     Ok(())
 }

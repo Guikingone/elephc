@@ -15,7 +15,9 @@ pub(crate) fn lower_define(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     let name_value = expect_operand(inst, 0)?;
     let value = expect_operand(inst, 1)?;
     let constant_name = const_string_operand(ctx, name_value)?;
-    let flag_symbol = ctx.data.add_comm(define_seen_symbol(&constant_name), 8);
+    let flag_symbol = ctx
+        .data
+        .add_comm(define_seen_symbol(constant_name.trim_start_matches('\\')), 8);
     let global_symbol = ir_global_symbol(&constant_name);
     let value_ty = ctx.value_php_type(value)?;
     ctx.data
@@ -508,6 +510,17 @@ pub(crate) fn lower_defined(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     ensure_arg_count(inst, "defined", 1)?;
     let value = expect_operand(inst, 0)?;
     if let Some(constant_name) = maybe_const_string_operand(ctx, value)? {
+        let bare = constant_name.trim_start_matches('\\');
+        if ctx.module.runtime_define_names.contains(bare) {
+            // A `define()` that is not an unconditional top-level declaration -- lowering folds
+            // those -- so its own flag is the only record of whether it ran (in this request,
+            // under `--web`). The constant registry is no answer here: it also lists what an
+            // AOT-compiled eval fragment defines, before that fragment has run.
+            let flag_symbol = ctx.data.add_comm(define_seen_symbol(bare), 8);
+            let result_reg = abi::int_result_reg(ctx.emitter);
+            abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, &flag_symbol, 0);
+            return store_if_result(ctx, inst);
+        }
         emit_static_bool(
             ctx,
             ctx.has_global_name(&constant_name) || const_registry_contains(ctx, &constant_name),

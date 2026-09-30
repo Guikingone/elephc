@@ -9,7 +9,9 @@
 //! - Stack regions must be unmapped when Fiber objects are freed, and guard-page sizing must match supported targets.
 
 use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::abi;
 use crate::codegen_support::platform::{Arch, Platform};
+use super::FIBER_STACK_CACHE_SLOTS;
 
 /// Size of the unmapped (PROT_NONE) guard region at the bottom of every fiber
 /// stack. Set to 16 KB so the guard fully covers a single page on every
@@ -44,6 +46,7 @@ pub fn emit_fiber_alloc_stack(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fiber_alloc_stack (mmap + guard page) ---");
     emitter.label_global("__rt_fiber_alloc_stack");
+    emit_stack_cache_pop_aarch64(emitter);
 
     // -- prologue: save x19/x20/x21 (callee-saved) since we use them as scratch --
     emitter.instruction("sub sp, sp, #48");                                     // reserve frame plus three saved-callee slots
@@ -115,6 +118,7 @@ pub fn emit_fiber_free_stack(emitter: &mut Emitter) {
 
     emitter.instruction("cbz x0, __rt_fiber_free_stack_done");                  // skip NULL bases (alloc failure or already freed)
     emitter.instruction("cbz x1, __rt_fiber_free_stack_done");                  // skip zero-length mappings as a defensive guard against double-free
+    emit_stack_cache_push_aarch64(emitter);
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // save the caller's frame pointer and return address before invoking libc
     emitter.bl_c("munmap");                                                     // ignore the return value: the stack is gone either way
     emitter.instruction("ldp x29, x30, [sp], #16");                             // restore the caller's frame pointer and return address
@@ -133,6 +137,7 @@ fn emit_alloc_stack_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fiber_alloc_stack (mmap + guard page) ---");
     emitter.label_global("__rt_fiber_alloc_stack");
+    emit_stack_cache_pop_x86_64(emitter);
 
     // -- prologue: save callee-saved registers used across libc calls --
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer for the allocator helper
@@ -205,10 +210,93 @@ fn emit_free_stack_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_fiber_free_stack_done");                       // no mapping base means there is nothing to unmap
     emitter.instruction("test rsi, rsi");                                       // skip zero-length mappings as a defensive guard
     emitter.instruction("jz __rt_fiber_free_stack_done");                       // no mapped length means there is nothing to unmap
+    emit_stack_cache_push_x86_64(emitter);
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before invoking libc
     emitter.instruction("mov rbp, rsp");                                        // keep the SysV stack aligned for the munmap call
     emitter.bl_c("munmap");                                                     // ignore the return value: the stack is gone either way
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after munmap
     emitter.label("__rt_fiber_free_stack_done");
     emitter.instruction("ret");                                                 // hand control back to the caller
+}
+
+// `_fiber_stack_cache` layout: [count:8] then FIBER_STACK_CACHE_SLOTS entries of
+// [base:8][mapped length:8], used as a LIFO stack. A cached stack keeps its PROT_NONE guard
+// page, so reusing one needs no syscall at all. The cache belongs to the process, not to a
+// request: a stack carries no PHP state once its fiber is freed.
+
+/// Pops the most recently freed stack when it has the requested size, returning it exactly as
+/// the `mmap` path would; falls through to `__rt_fiber_alloc_stack_cache_miss` otherwise.
+/// Input `x0` = requested usable size, preserved on the miss path.
+fn emit_stack_cache_pop_aarch64(emitter: &mut Emitter) {
+    abi::emit_symbol_address(emitter, "x9", "_fiber_stack_cache");
+    emitter.instruction("ldr x10, [x9]");                                       // x10 = number of cached stacks
+    emitter.instruction("cbz x10, __rt_fiber_alloc_stack_cache_miss");          // nothing cached: map a fresh stack
+    emitter.instruction(&format!("add x11, x0, #{}", FIBER_GUARD_PAGE_SIZE));   // x11 = mapped length a stack of this size has
+    emitter.instruction("sub x12, x10, #1");                                    // x12 = index of the most recently freed stack
+    emitter.instruction("add x13, x9, x12, lsl #4");                            // x13 = cache base + 16 * index (entry sits at +8)
+    emitter.instruction("ldr x14, [x13, #16]");                                 // x14 = that stack's mapped length
+    emitter.instruction("cmp x14, x11");                                        // was it mapped for the same usable size?
+    emitter.instruction("b.ne __rt_fiber_alloc_stack_cache_miss");              // a different size cannot be reused as-is
+    emitter.instruction("ldr x0, [x13, #8]");                                   // x0 = cached mapping base, guard page still installed
+    emitter.instruction("str x12, [x9]");                                       // pop it off the cache
+    emitter.instruction("add x1, x0, x14");                                     // x1 = end of the mapped region
+    emitter.instruction("and x1, x1, #-16");                                    // stack_top rounded down to 16 bytes, as the mmap path does
+    emitter.instruction("mov x2, x14");                                         // x2 = mapped length for the eventual free
+    emitter.instruction("ret");                                                 // hand the reused (base, top, length) triple back
+    emitter.label("__rt_fiber_alloc_stack_cache_miss");
+}
+
+/// Parks a freed stack in the cache while it has room; falls through to
+/// `__rt_fiber_free_stack_unmap` when it is full. Input `x0` = base, `x1` = mapped length.
+fn emit_stack_cache_push_aarch64(emitter: &mut Emitter) {
+    abi::emit_symbol_address(emitter, "x9", "_fiber_stack_cache");
+    emitter.instruction("ldr x10, [x9]");                                       // x10 = number of cached stacks
+    emitter.instruction(&format!("cmp x10, #{}", FIBER_STACK_CACHE_SLOTS));     // is the cache full?
+    emitter.instruction("b.hs __rt_fiber_free_stack_unmap");                    // yes: give this one back to the kernel
+    emitter.instruction("add x11, x9, x10, lsl #4");                            // x11 = cache base + 16 * count (entry sits at +8)
+    emitter.instruction("stp x0, x1, [x11, #8]");                               // record the base and mapped length
+    emitter.instruction("add x10, x10, #1");                                    // one more cached stack
+    emitter.instruction("str x10, [x9]");                                       // publish the new count
+    emitter.instruction("ret");                                                 // the stack stays mapped for the next fiber
+    emitter.label("__rt_fiber_free_stack_unmap");
+}
+
+/// x86_64 twin of [`emit_stack_cache_pop_aarch64`]. Input `rdi` = requested usable size;
+/// output `rax`/`rdx`/`rcx` = base/top/length as the `mmap` path returns them.
+fn emit_stack_cache_pop_x86_64(emitter: &mut Emitter) {
+    abi::emit_symbol_address(emitter, "r9", "_fiber_stack_cache");
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // r10 = number of cached stacks
+    emitter.instruction("test r10, r10");                                       // is anything cached?
+    emitter.instruction("jz __rt_fiber_alloc_stack_cache_miss");                // nothing cached: map a fresh stack
+    emitter.instruction(&format!("lea r11, [rdi + {}]", FIBER_GUARD_PAGE_SIZE)); // r11 = mapped length a stack of this size has
+    emitter.instruction("lea r8, [r10 - 1]");                                   // r8 = index of the most recently freed stack
+    emitter.instruction("shl r8, 4");                                           // r8 = 16 * index
+    emitter.instruction("add r8, r9");                                          // r8 = cache base + 16 * index (entry sits at +8)
+    emitter.instruction("cmp QWORD PTR [r8 + 16], r11");                        // was it mapped for the same usable size?
+    emitter.instruction("jne __rt_fiber_alloc_stack_cache_miss");               // a different size cannot be reused as-is
+    emitter.instruction("mov rax, QWORD PTR [r8 + 8]");                         // rax = cached mapping base, guard page still installed
+    emitter.instruction("sub r10, 1");                                          // pop it off the cache
+    emitter.instruction("mov QWORD PTR [r9], r10");                             // publish the new count
+    emitter.instruction("mov rcx, r11");                                        // rcx = mapped length for the eventual free
+    emitter.instruction("lea rdx, [rax + r11]");                                // rdx = end of the mapped region
+    emitter.instruction("and rdx, -16");                                        // stack_top rounded down to 16 bytes, as the mmap path does
+    emitter.instruction("ret");                                                 // hand the reused (base, top, length) triple back
+    emitter.label("__rt_fiber_alloc_stack_cache_miss");
+}
+
+/// x86_64 twin of [`emit_stack_cache_push_aarch64`]. Input `rdi` = base, `rsi` = mapped length.
+fn emit_stack_cache_push_x86_64(emitter: &mut Emitter) {
+    abi::emit_symbol_address(emitter, "r9", "_fiber_stack_cache");
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // r10 = number of cached stacks
+    emitter.instruction(&format!("cmp r10, {}", FIBER_STACK_CACHE_SLOTS));      // is the cache full?
+    emitter.instruction("jae __rt_fiber_free_stack_unmap");                     // yes: give this one back to the kernel
+    emitter.instruction("mov r11, r10");                                        // r11 = count
+    emitter.instruction("shl r11, 4");                                          // r11 = 16 * count
+    emitter.instruction("add r11, r9");                                         // r11 = cache base + 16 * count (entry sits at +8)
+    emitter.instruction("mov QWORD PTR [r11 + 8], rdi");                        // record the mapping base
+    emitter.instruction("mov QWORD PTR [r11 + 16], rsi");                       // record the mapped length
+    emitter.instruction("add r10, 1");                                          // one more cached stack
+    emitter.instruction("mov QWORD PTR [r9], r10");                             // publish the new count
+    emitter.instruction("ret");                                                 // the stack stays mapped for the next fiber
+    emitter.label("__rt_fiber_free_stack_unmap");
 }

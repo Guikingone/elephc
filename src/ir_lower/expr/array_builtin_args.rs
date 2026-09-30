@@ -60,14 +60,17 @@ pub(super) fn lower_static_array_push(
     // PHP answers the array's new element count. Reload first: an append that grew the container
     // reallocated it, and the write-back above is what published the pointer that is now live.
     let grown = ctx.load_local(array_name, Some(args[0].span));
-    Some(ctx.emit_value(
+    let length = ctx.emit_value(
         Op::ArrayLen,
         vec![grown.value],
         None,
         PhpType::Int,
         Op::ArrayLen.default_effects(),
         Some(expr.span),
-    ))
+    );
+    // A local stored boxed lends that load its own reference; `count($a)` releases the same way.
+    crate::ir_lower::ownership::release_if_owned(ctx, grown, Some(expr.span));
+    Some(length)
 }
 
 /// Promotes an indexed-array local to hash storage before a sort that KEEPS its keys.

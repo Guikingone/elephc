@@ -181,6 +181,21 @@ pub struct ElephcEvalContext {
     pub(super) evaluating_class_constants: HashSet<(String, String)>,
 }
 
+/// Clones this thread's one empty value of an `Arc`-shared registry instead of allocating one.
+///
+/// WHY. A Symfony request creates some eighty contexts, and each allocated sixteen empty shared
+/// registries only for `sync_global_eval_aot_metadata` to free them and install the global ones.
+/// Sharing one empty value is safe because every writer goes through `Arc::make_mut`, which
+/// copies a shared value before its first write, and every other replacement is wholesale.
+macro_rules! shared_empty {
+    ($ty:ty) => {{
+        thread_local! {
+            static EMPTY: Arc<$ty> = Arc::new(<$ty>::default());
+        }
+        EMPTY.with(Arc::clone)
+    }};
+}
+
 impl ElephcEvalContext {
     /// Creates a context using the current eval bridge ABI version.
     pub fn new() -> Self {
@@ -191,13 +206,13 @@ impl ElephcEvalContext {
             global_eval_sync: GlobalEvalSyncMark::default(),
             class_source_files: HashMap::new(),
             class_aliases: HashMap::new(),
-            declared_class_names: Arc::default(),
+            declared_class_names: shared_empty!(Vec<String>),
             own_declared_class_names: Vec::new(),
             interfaces: HashMap::new(),
-            declared_interface_names: Arc::default(),
+            declared_interface_names: shared_empty!(Vec<String>),
             own_declared_interface_names: Vec::new(),
             traits: HashMap::new(),
-            declared_trait_names: Arc::default(),
+            declared_trait_names: shared_empty!(Vec<String>),
             own_declared_trait_names: Vec::new(),
             enums: HashMap::new(),
             declared_enum_names: Vec::new(),
@@ -214,19 +229,19 @@ impl ElephcEvalContext {
             live_autoload_contexts: AtomicUsize::new(0),
             retained_context_free_requested: AtomicBool::new(false),
             next_closure_id: 0,
-            native_functions: Arc::default(),
-            native_methods: Arc::default(),
-            native_static_methods: Arc::default(),
-            native_constructors: Arc::default(),
-            native_class_parents: Arc::default(),
-            native_class_attributes: Arc::default(),
-            native_method_attributes: Arc::default(),
-            native_constant_attributes: Arc::default(),
-            native_interface_properties: Arc::default(),
-            native_abstract_properties: Arc::default(),
-            native_property_types: Arc::default(),
-            native_property_defaults: Arc::default(),
-            native_property_attributes: Arc::default(),
+            native_functions: shared_empty!(HashMap<String, NativeFunction>),
+            native_methods: shared_empty!(HashMap<(String, String), NativeCallableSignature>),
+            native_static_methods: shared_empty!(HashMap<(String, String), NativeCallableSignature>),
+            native_constructors: shared_empty!(HashMap<String, NativeCallableSignature>),
+            native_class_parents: shared_empty!(HashMap<String, String>),
+            native_class_attributes: shared_empty!(HashMap<String, Vec<EvalAttribute>>),
+            native_method_attributes: shared_empty!(HashMap<(String, String), Vec<EvalAttribute>>),
+            native_constant_attributes: shared_empty!(HashMap<(String, String), Vec<EvalAttribute>>),
+            native_interface_properties: shared_empty!(HashMap<String, Vec<(String, EvalInterfaceProperty)>>),
+            native_abstract_properties: shared_empty!(HashMap<String, Vec<(String, EvalInterfaceProperty)>>),
+            native_property_types: shared_empty!(HashMap<(String, String), EvalParameterType>),
+            native_property_defaults: shared_empty!(HashMap<(String, String), NativeCallableDefault>),
+            native_property_attributes: shared_empty!(HashMap<(String, String), Vec<EvalAttribute>>),
             static_slot_keys: Vec::new(),
             class_constants: HashMap::new(),
             include_state: super::request_includes::current_include_state(),

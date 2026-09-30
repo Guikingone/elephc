@@ -113,11 +113,12 @@ impl ElephcRuntimeOps {
     }
 }
 
-/// Installs the eval dynamic object destructor callback into runtime data.
+/// Installs the eval dynamic object destructor callback, and the owner filter generated code
+/// reads before calling into the registry, into runtime data.
 #[cfg(not(test))]
-pub(crate) unsafe fn install_dynamic_object_destructor_hook(callback: usize) {
+pub(crate) unsafe fn install_dynamic_object_destructor_hook(callback: usize, owner_filter: usize) {
     unsafe {
-        __elephc_eval_install_dynamic_object_destructor_hook(callback);
+        __elephc_eval_install_dynamic_object_destructor_hook(callback, owner_filter);
     }
 }
 

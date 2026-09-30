@@ -386,6 +386,18 @@ pub(super) fn lower_property_array_assign(
     if let Some(property_ty) =
         generic_object_array_property_type(ctx, object.value, property).filter(is_assoc_array_type)
     {
+        if property_array_write_mutates_in_place(ctx, object.value, property, generic_receiver) {
+            lower_in_place_property_hash_set(
+                ctx,
+                object.value,
+                property,
+                &property_ty,
+                index,
+                value,
+                span,
+            );
+            return;
+        }
         let data = ctx.intern_string(property);
         // The CONTAINER of an indexed write or unset is fetched quietly, the same as the
         // container of an `isset`/`empty` operand. PHP does not raise for an uninitialized
@@ -609,6 +621,86 @@ fn lower_generic_object_mixed_property_array_write(
         property_value,
         span,
     );
+}
+
+/// Whether `$object->property[$k] = $v` may write into the property's container in place.
+///
+/// The retaining shape -- read, retain, write, store back -- gives the write two owners, so the
+/// runtime copies the whole table on every element written: a loop filling a property became
+/// quadratic, and Symfony's `ErrorHandler::setLoggers` spent 5% of a request copying a
+/// fifteen-entry array fifteen times. Writing through the property's own reference needs a
+/// receiver whose slot codegen can name: a class the closed world declares, the property
+/// declared in a plain slot (not by reference, not hooked, not readonly -- each of those keeps
+/// the path that already implements its rule), and no receiver the generic path owns.
+fn property_array_write_mutates_in_place(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+    generic_receiver: bool,
+) -> bool {
+    if generic_receiver {
+        return false;
+    }
+    let PhpType::Object(class_name) = ctx.builder.value_php_type(object) else {
+        return false;
+    };
+    let Some(info) = ctx.classes.get(class_name.trim_start_matches('\\')) else {
+        return false;
+    };
+    info.property_offsets.contains_key(property)
+        && info.declared_properties.contains(property)
+        && !info.reference_properties.contains(property)
+        && !info.backed_hooked_properties.contains(property)
+        && !info.readonly_properties.contains(property)
+}
+
+/// Lowers `$object->property[$k] = $v` for an associative property as one in-place `HashSet`.
+///
+/// The key and value are evaluated BEFORE the container is read, which is PHP's order -- the
+/// dim fetch for write is a delayed opline emitted after the right-hand side -- and what makes
+/// the borrowed read safe: `$this->services[$id] = $this->create($id)` may itself write
+/// `$this->services`, relocating the table, and a container read first would be left dangling.
+/// The `HashSet` carries `Immediate::Bool(true)`: its receiver is the property, the property's
+/// own reference is the one the write consumes, and codegen publishes the result into the slot
+/// (`hashes::lower_hash_set`). No `PropSet` follows.
+fn lower_in_place_property_hash_set(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+    property_ty: &PhpType,
+    index: &Expr,
+    value: &Expr,
+    span: Span,
+) {
+    let (index, value) =
+        crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
+    let data = ctx.intern_string(property);
+    // Quiet for the same reason as the retaining path: over an eval-owned receiver the read
+    // leaves compiled code, and PHP does not raise for the container of an indexed write.
+    crate::ir_lower::expr::emit_quiet_property_fetch(ctx, true, span);
+    let property_value = ctx.emit_value(
+        Op::PropGet,
+        vec![object],
+        Some(Immediate::Data(data)),
+        property_ty.clone(),
+        Op::PropGet.default_effects(),
+        Some(span),
+    );
+    crate::ir_lower::expr::emit_quiet_property_fetch(ctx, false, span);
+    ctx.emit_void(
+        Op::HashSet,
+        vec![property_value.value, index.value, value.value],
+        Some(Immediate::Bool(true)),
+        Op::HashSet.default_effects(),
+        Some(span),
+    );
+    release_property_array_insert_value_after_retain(ctx, property_ty, value, span);
+    let helper_released_value = indexed_property_array_element_type(property_ty)
+        .is_some_and(|element| !matches!(element.codegen_repr(), PhpType::Mixed | PhpType::Callable));
+    release_persisted_string_operand(ctx, index, span);
+    if !helper_released_value {
+        release_persisted_string_operand(ctx, value, span);
+    }
 }
 
 /// Autovivifies an uninitialized declared array property before mutating one of its elements.

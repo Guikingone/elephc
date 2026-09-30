@@ -480,7 +480,7 @@ pub(super) fn emit_dynamic_new_mixed_candidate(
     let object_base_reg = abi::secondary_scratch_reg(ctx.emitter);
     for default in &candidate.property_defaults {
         abi::emit_load_temporary_stack_slot(ctx.emitter, object_base_reg, 0);
-        emit_property_default(ctx, object_base_reg, default)?;
+        emit_property_default_into_slot_or_cell(ctx, object_base_reg, default)?;
     }
     if super::super::is_throwable_like_class(ctx, &candidate.class_name) {
         abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
@@ -543,7 +543,7 @@ pub(super) fn emit_dynamic_new_without_constructor_mixed_candidate(
     let object_base_reg = abi::secondary_scratch_reg(ctx.emitter);
     for default in &candidate.property_defaults {
         abi::emit_load_temporary_stack_slot(ctx.emitter, object_base_reg, 0);
-        emit_property_default(ctx, object_base_reg, default)?;
+        emit_property_default_into_slot_or_cell(ctx, object_base_reg, default)?;
     }
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
     abi::emit_release_temporary_stack(ctx.emitter, 16);

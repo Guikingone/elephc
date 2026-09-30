@@ -63,6 +63,13 @@ pub fn aot_member_names_uncached<V: RuntimeValueOps>(
 
 /// Runtime value hooks required by the EvalIR interpreter.
 pub trait RuntimeValueOps {
+    /// Reports that a filesystem path may have been created, removed or renamed.
+    ///
+    /// The generated runtime caches realpath() answers the way php does, and forgets them when
+    /// its own path-changing helpers run; interpreted `unlink`/`rename`/`mkdir`/... change paths
+    /// without them, so they report here. Nothing to forget without a generated runtime.
+    fn filesystem_paths_changed(&mut self) {}
+
     /// Calls a typed boxed-cell runtime builtin when this implementation supports it.
     ///
     /// Test and embedding implementations inherit this adapter over the existing

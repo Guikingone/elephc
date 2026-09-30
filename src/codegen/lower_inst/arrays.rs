@@ -939,22 +939,64 @@ fn lower_array_set_mixed_key_x86_64(
 pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let array = expect_operand(inst, 0)?;
     let value = expect_operand(inst, 1)?;
+    release_array_push_source_owner(ctx, array)?;
     lower_array_push_value(ctx, inst, array, value)
 }
 
-/// Appends ONE named value to an indexed array, for callers that do not hold it in operand 1.
+/// Drops the boxed frame slot's own reference before the appends of one call.
 ///
-/// `array_push($a, $x, $y)` is N appends against the same array, so the variadic builtin arm walks
-/// its operand tail through here. `inst` is still carried for the diagnostics the storage
-/// predicates attach to it, not to read operands from.
+/// A boxed slot lends the append an unboxed array holding its own reference, and the storeback
+/// boxes the result anew: the old box goes first, as `lower_array_set` does. Without it every
+/// `$a[] = $x` on such a local split a copy of the whole array and leaked the old box with it --
+/// quadratic memory for a filling loop. Once per call, before the first append: the one
+/// storeback after the last append installs the only new box.
+pub(super) fn release_array_push_source_owner(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+) -> Result<()> {
+    if let Some(slot) = source_load_local_slot(ctx, array)? {
+        ctx.release_mutated_source_local_owner(slot, array)?;
+    }
+    Ok(())
+}
+
+/// Appends ONE value and publishes the array back to the local or global it was read from.
 pub(super) fn lower_array_push_value(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     array: ValueId,
     value: ValueId,
 ) -> Result<()> {
+    append_array_push_value(ctx, inst, array, value)?;
+    publish_array_push_result(ctx, array)
+}
+
+/// Writes the appended array back to the local or global storage it was loaded from.
+///
+/// `array_push($a, $x, $y)` publishes once, after its last append. Publishing between appends
+/// re-boxed a boxed local each time: the next append then saw the array shared with that box and
+/// split a copy, and the box it replaced leaked.
+pub(super) fn publish_array_push_result(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
+    if let Some(slot) = source_load_local_slot(ctx, array)? {
+        ctx.store_value_to_local(slot, array)?;
+    }
+    ctx.writeback_global_array_source(array)
+}
+
+/// Appends ONE named value to an indexed array without publishing it, for callers that do not
+/// hold it in operand 1.
+///
+/// `array_push($a, $x, $y)` is N appends against the same array, so the variadic builtin arm walks
+/// its operand tail through here and publishes once. `inst` is still carried for the diagnostics
+/// the storage predicates attach to it, not to read operands from. The possibly relocated array
+/// is stored back into `array`'s own value slot, so the next append sees it.
+pub(super) fn append_array_push_value(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    value: ValueId,
+) -> Result<()> {
     let array_ty = ctx.value_php_type(array)?;
-    let source_local = source_load_local_slot(ctx, array)?;
     // A HASH receiver is ordinary php: `array_push()` appends under the next free integer key
     // whatever storage the array has. `lower_runtime_promotable_array_push` already dispatches on
     // the runtime heap kind, so a statically associative receiver reaches the same hash append the
@@ -965,12 +1007,7 @@ pub(super) fn lower_array_push_value(
         PhpType::AssocArray { ref value, .. } if value.codegen_repr() == PhpType::Mixed
     ) {
         lower_runtime_promotable_array_push(ctx, array, value)?;
-        ctx.store_result_value(array)?;
-        if let Some(slot) = source_local {
-            ctx.store_value_to_local(slot, array)?;
-        }
-        ctx.writeback_global_array_source(array)?;
-        return Ok(());
+        return ctx.store_result_value(array);
     }
     require_indexed_array(array_ty.clone(), inst)?;
     let elem_ty = indexed_array_element_type(&array_ty, inst)?;
@@ -982,12 +1019,7 @@ pub(super) fn lower_array_push_value(
             Arch::X86_64 => lower_array_push_x86_64(ctx, array, value, &elem_ty)?,
         }
     }
-    ctx.store_result_value(array)?;
-    if let Some(slot) = source_local {
-        ctx.store_value_to_local(slot, array)?;
-    }
-    ctx.writeback_global_array_source(array)?;
-    Ok(())
+    ctx.store_result_value(array)
 }
 
 /// Appends to an `array<mixed>` whose raw storage may have promoted to a hash at runtime.

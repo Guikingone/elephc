@@ -269,6 +269,35 @@ pub(crate) fn set_ref_param_escaping_callees(
     RefParamEscapingCalleesGuard { previous }
 }
 
+thread_local! {
+    /// `CheckResult::runtime_define_names` for the program being lowered.
+    static RUNTIME_DEFINE_NAMES: std::cell::RefCell<HashSet<String>> =
+        std::cell::RefCell::new(HashSet::new());
+}
+
+/// Restores the enclosing lowering invocation's define-name set on drop.
+pub(crate) struct RuntimeDefineNamesGuard {
+    previous: HashSet<String>,
+}
+
+impl Drop for RuntimeDefineNamesGuard {
+    fn drop(&mut self) {
+        let previous = std::mem::take(&mut self.previous);
+        RUNTIME_DEFINE_NAMES.with(|set| *set.borrow_mut() = previous);
+    }
+}
+
+/// Publishes, for one program-lowering invocation, the names some checked `define()` creates.
+pub(crate) fn set_runtime_define_names(names: HashSet<String>) -> RuntimeDefineNamesGuard {
+    let previous = RUNTIME_DEFINE_NAMES.with(|set| std::mem::replace(&mut *set.borrow_mut(), names));
+    RuntimeDefineNamesGuard { previous }
+}
+
+/// Whether a checked `define()` creates `name` (given without a leading `\`).
+pub(crate) fn is_runtime_define_name(name: &str) -> bool {
+    RUNTIME_DEFINE_NAMES.with(|set| set.borrow().contains(name))
+}
+
 /// Whether a closure may keep a by-reference parameter of the function or method named `callee`
 /// past the call (matched on the bare lowercase name, like the backend's lifetime choice).
 pub(crate) fn ref_param_may_escape(callee: &str) -> bool {

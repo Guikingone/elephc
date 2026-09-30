@@ -93,6 +93,9 @@ pub struct Module {
     /// (`RefArgCellLifetime::MayOutliveCall`). Matched by name alone: over-matching only costs a
     /// heap cell where a stack one would have done.
     pub(crate) ref_param_escaping_callees: std::collections::HashSet<String>,
+    /// Names some `define()` call creates: `defined()` reads their `_define_seen` flag, and
+    /// `__rt_web_reset` clears it so each request starts with them undefined, as php does.
+    pub(crate) runtime_define_names: std::collections::BTreeSet<String>,
     /// `--probe` build key, embedded as `_elephc_probe_key` so the probe endpoint
     /// can prove the binary's identity through the HMAC handshake. `None` unless
     /// `--probe` is set.
@@ -157,6 +160,7 @@ impl Module {
             deferred_class_loads: Default::default(),
             runtime_bound_functions: Default::default(),
             ref_param_escaping_callees: Default::default(),
+            runtime_define_names: Default::default(),
             target,
             source_path: None,
             probe_key: None,

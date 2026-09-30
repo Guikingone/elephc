@@ -26,13 +26,63 @@ use crate::runtime_hooks::{self, ElephcRuntimeOps};
 #[cfg(not(test))]
 use crate::value::RuntimeCell;
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-static DYNAMIC_DESTRUCTOR_CONTEXTS: OnceLock<Mutex<HashMap<u64, usize>>> = OnceLock::new();
+/// Hashes an object address for the owner registry.
+///
+/// The runtime asks this registry about EVERY object it frees once the bridge is linked, and
+/// SipHash on those lookups was 4% of a Symfony request. Addresses are not adversarial input,
+/// only aligned: the low four bits carry nothing, and the bucket is taken from the low bits, so
+/// they are dropped before a multiplicative mix whose high half is folded back down.
+#[derive(Default)]
+struct ObjectAddressHasher(u64);
+
+impl Hasher for ObjectAddressHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 = (self.0.rotate_left(8) ^ u64::from(*byte)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        }
+    }
+
+    fn write_u64(&mut self, address: u64) {
+        let mixed = (address >> 4).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        self.0 = mixed ^ (mixed >> 32);
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+type ObjectOwnerMap = HashMap<u64, usize, BuildHasherDefault<ObjectAddressHasher>>;
+
+static DYNAMIC_DESTRUCTOR_CONTEXTS: OnceLock<Mutex<ObjectOwnerMap>> = OnceLock::new();
+
+/// Buckets in the owner filter. Must match `EVAL_OWNER_FILTER_MASK` in the generated runtime,
+/// which picks a bucket as `(identity >> 4) & (OWNER_FILTER_BUCKETS - 1)`.
+pub(crate) const OWNER_FILTER_BUCKETS: usize = 4096;
+
+/// How many registered identities fall in each bucket, read by generated code without a call.
+///
+/// WHY. Once the bridge is linked, every non-final method call and declared-property read on a
+/// typed receiver asks this registry whether the receiver is eval-owned, and every object free
+/// asks it for an eval destructor: some 900 calls and a mutex per Symfony request, for a map
+/// that holds a handful of objects. A zero bucket answers "no owner" for all of them. The counts
+/// change only under the registry mutex and always equal the map's membership per bucket, so a
+/// zero is exact; a non-zero bucket only means "ask".
+static OWNER_FILTER: [AtomicU32; OWNER_FILTER_BUCKETS] =
+    [const { AtomicU32::new(0) }; OWNER_FILTER_BUCKETS];
+
+/// Returns the filter bucket of one object identity, as the generated probe computes it.
+fn owner_filter_bucket(identity: u64) -> &'static AtomicU32 {
+    &OWNER_FILTER[(identity >> 4) as usize & (OWNER_FILTER_BUCKETS - 1)]
+}
 
 /// Returns the process-local dynamic object to eval context registry.
-fn dynamic_destructor_contexts() -> &'static Mutex<HashMap<u64, usize>> {
-    DYNAMIC_DESTRUCTOR_CONTEXTS.get_or_init(|| Mutex::new(HashMap::new()))
+fn dynamic_destructor_contexts() -> &'static Mutex<ObjectOwnerMap> {
+    DYNAMIC_DESTRUCTOR_CONTEXTS.get_or_init(|| Mutex::new(ObjectOwnerMap::default()))
 }
 
 /// Installs the eval dynamic object destructor callback into the generated runtime.
@@ -41,6 +91,7 @@ pub(crate) fn install_dynamic_object_destructor_hook() {
     unsafe {
         runtime_hooks::install_dynamic_object_destructor_hook(
             __elephc_eval_dynamic_object_destruct as *const () as usize,
+            OWNER_FILTER.as_ptr() as usize,
         );
     }
 }
@@ -51,7 +102,9 @@ pub(crate) fn register_dynamic_object_context(identity: u64, context: *mut Eleph
         return;
     }
     if let Ok(mut contexts) = dynamic_destructor_contexts().lock() {
-        contexts.insert(identity, context as usize);
+        if contexts.insert(identity, context as usize).is_none() {
+            owner_filter_bucket(identity).fetch_add(1, Ordering::Relaxed);
+        }
     }
 }
 
@@ -61,7 +114,9 @@ pub(crate) fn unregister_dynamic_object(identity: u64) {
         return;
     }
     if let Ok(mut contexts) = dynamic_destructor_contexts().lock() {
-        contexts.remove(&identity);
+        if contexts.remove(&identity).is_some() {
+            owner_filter_bucket(identity).fetch_sub(1, Ordering::Relaxed);
+        }
     }
 }
 
@@ -72,7 +127,13 @@ pub(crate) fn unregister_dynamic_objects_for_context(context: *mut ElephcEvalCon
     }
     let context = context as usize;
     if let Ok(mut contexts) = dynamic_destructor_contexts().lock() {
-        contexts.retain(|_, owner| *owner != context);
+        contexts.retain(|identity, owner| {
+            let keep = *owner != context;
+            if !keep {
+                owner_filter_bucket(*identity).fetch_sub(1, Ordering::Relaxed);
+            }
+            keep
+        });
     }
 }
 
@@ -88,6 +149,9 @@ pub(crate) fn unregister_dynamic_objects_for_context(context: *mut ElephcEvalCon
 pub(crate) fn reset_dynamic_object_contexts() {
     if let Ok(mut contexts) = dynamic_destructor_contexts().lock() {
         contexts.clear();
+        for bucket in &OWNER_FILTER {
+            bucket.store(0, Ordering::Relaxed);
+        }
     }
 }
 

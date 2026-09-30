@@ -314,17 +314,70 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     let storage_value_ty = assoc_value_type(&hash_ty, inst)?;
     let value_ty = require_supported_hash_value(ctx.value_php_type(value)?, &storage_value_ty, inst)?;
     let receiver = ReceiverPlace::resolve(ctx, hash)?;
+    let in_place = in_place_property_write(ctx, inst, &receiver)?;
     if let Some(slot) = receiver.slot() {
         ctx.release_mutated_source_local_owner(slot, hash)?;
+    }
+    if in_place == Some(InPlaceProperty::RoundTrip) {
+        ctx.load_value_to_reg(hash, abi::int_result_reg(ctx.emitter))?;
+        abi::emit_incref_if_refcounted(ctx.emitter, &hash_ty.codegen_repr());
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_hash_set_aarch64(ctx, hash, key, value, &value_ty, &storage_value_ty)?,
         Arch::X86_64 => lower_hash_set_x86_64(ctx, hash, key, value, &value_ty, &storage_value_ty)?,
     }
     ctx.store_result_value(hash)?;
-    receiver.store_back_value(ctx, hash)?;
+    match (in_place, &receiver) {
+        (Some(InPlaceProperty::Direct), ReceiverPlace::Property { object, slot }) => {
+            super::objects::store_in_place_container_property_owner(ctx, *object, slot, hash)?;
+        }
+        (Some(InPlaceProperty::RoundTrip), _) => {
+            receiver.store_back_value(ctx, hash)?;
+            ctx.load_value_to_reg(hash, abi::int_result_reg(ctx.emitter))?;
+            abi::emit_decref_if_refcounted(ctx.emitter, &hash_ty.codegen_repr());
+        }
+        _ => receiver.store_back_value(ctx, hash)?,
+    }
     ctx.writeback_global_array_source(hash)?;
     Ok(())
+}
+
+/// How a `HashSet` marked in-place (`Immediate::Bool(true)`) publishes into its property.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InPlaceProperty {
+    /// The receiver IS the slot's container: mutate it and store the result pointer as-is.
+    Direct,
+    /// The read may not have been the slot's own pointer -- an eval context can route it through
+    /// the overlay, and a reference slot holds its container behind a cell -- so the write keeps
+    /// the retaining shape the lowering used to emit: own a reference across the mutation,
+    /// publish through the retaining store, drop the reference.
+    RoundTrip,
+}
+
+/// Classifies an in-place property write, or `None` for an ordinary `HashSet`.
+///
+/// `$this->p[$k] = $v` used to retain the property's container before writing into it, so the
+/// write always saw two owners and copied the whole table -- once per element written, which
+/// made a loop filling a property quadratic. The lowering now hands over the borrowed read and
+/// marks the instruction, and the property's own reference is the one the mutation consumes,
+/// exactly as for a local variable.
+fn in_place_property_write(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+    receiver: &ReceiverPlace,
+) -> Result<Option<InPlaceProperty>> {
+    if !matches!(inst.immediate, Some(Immediate::Bool(true))) {
+        return Ok(None);
+    }
+    let ReceiverPlace::Property { slot, .. } = receiver else {
+        return Err(CodegenIrError::unsupported(
+            "in-place property hash_set whose receiver is not a declared property".to_string(),
+        ));
+    };
+    if !slot.holds_container_directly() || super::builtins::has_eval_context(ctx) {
+        return Ok(Some(InPlaceProperty::RoundTrip));
+    }
+    Ok(Some(InPlaceProperty::Direct))
 }
 
 /// Promotes one associative-array element to a managed reference cell.

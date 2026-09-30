@@ -144,6 +144,7 @@ fn dummy_check_result() -> CheckResult {
         string_incdec_locals: Default::default(),
         by_ref_local_storage_types: HashMap::new(),
         ref_param_escaping_callees: Default::default(),
+        runtime_define_names: Default::default(),
         dynamic_ref_local_types: HashMap::new(),
         local_bind_kill_sites: Default::default(),
         local_retype_sites: Default::default(),

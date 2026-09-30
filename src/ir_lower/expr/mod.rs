@@ -1032,47 +1032,41 @@ fn lower_new_dynamic_planned_dispatch(
     let merge = ctx
         .builder
         .create_named_block("new.dynamic.planned.merge", Vec::new());
+    let fallback_block = ctx
+        .builder
+        .create_named_block("new.dynamic.planned.fallback", Vec::new());
+    let branches = PlannedNewBranches {
+        name_var: &name_var,
+        args,
+        expr,
+        result_temp: &result_temp,
+        result_type: &result_type,
+        merge,
+        fallback: fallback_block,
+    };
 
-    for class_name in &candidates {
-        let match_block = ctx
-            .builder
-            .create_named_block("new.dynamic.planned.match", Vec::new());
-        let next_block = ctx
-            .builder
-            .create_named_block("new.dynamic.planned.next", Vec::new());
-        let condition = dynamic_new_class_name_match_expr(
-            &name_var,
-            class_name,
+    if candidates.len() >= PLANNED_NEW_HASH_DISPATCH_MIN {
+        emit_planned_new_hashed_dispatch(
+            ctx,
+            &branches,
+            &candidates,
             name_type == PhpType::Str,
             name_expr.span,
         );
-        let condition = lower_expr(ctx, &condition);
-        let condition = coerce_to_int_at_span(ctx, condition, Some(expr.span));
-        ctx.builder.terminate(Terminator::CondBr {
-            cond: condition.value,
-            then_target: match_block,
-            then_args: Vec::new(),
-            else_target: next_block,
-            else_args: Vec::new(),
-        });
-
-        ctx.builder.position_at_end(match_block);
-        let class = Name::unqualified(class_name.clone());
-        // A descendant that narrows the constructor binds only its own parameters; PHP evaluates
-        // the surplus and discards it, and `static_new_droppable_surplus_args` already refused
-        // any surplus whose evaluation could be observed.
-        let branch_args = ctx
-            .classes
-            .get(class_name.as_str())
-            .and_then(|class_info| class_info.methods.get(&php_symbol_key("__construct")))
-            .and_then(|sig| static_new_droppable_surplus_args(sig, args))
-            .map_or(args, |keep| &args[..keep]);
-        let object = lower_new_object(ctx, &class, branch_args, expr);
-        store_value_into_temp(ctx, &result_temp, result_type.clone(), object, expr.span);
-        branch_to(ctx, merge);
-
-        ctx.builder.position_at_end(next_block);
+    } else {
+        for class_name in &candidates {
+            emit_planned_new_candidate_test(
+                ctx,
+                &branches,
+                class_name,
+                name_type == PhpType::Str,
+                name_expr.span,
+            );
+        }
+        branch_to(ctx, fallback_block);
     }
+
+    ctx.builder.position_at_end(fallback_block);
 
     let positional_only = !args.iter().any(variadic_args::is_spread_arg)
         && !crate::types::call_args::has_named_args(args);
@@ -1129,6 +1123,201 @@ fn lower_new_dynamic_planned_dispatch(
         ctx.unset_local(&name_temp, null, Some(expr.span));
     }
     Some(take_owned_temp(ctx, &result_temp, expr.span))
+}
+
+/// Candidate count from which `new $class(...)` dispatches through a hash tree instead of
+/// testing every candidate in turn.
+///
+/// Below it the linear chain is cheaper than lower-casing and hashing the name once. Above it
+/// the chain is the cost: a whole-program build has one candidate per class whose constructor
+/// the call can plan, and a Symfony build gives `ReflectionAttribute::newInstance()`'s spread
+/// fallback 1,376 of them -- a `strcasecmp` and two async-signal polls each, on every call.
+const PLANNED_NEW_HASH_DISPATCH_MIN: usize = 16;
+
+/// What every candidate branch of a planned dynamic `new` shares.
+struct PlannedNewBranches<'a> {
+    name_var: &'a Expr,
+    args: &'a [Expr],
+    expr: &'a Expr,
+    result_temp: &'a str,
+    result_type: &'a PhpType,
+    merge: BlockId,
+    /// Reached when no candidate matched: the generic opcode, the eval bridge, or the fatal.
+    fallback: BlockId,
+}
+
+/// Emits one candidate test at the current position: a match constructs that class and
+/// branches to `merge`; a miss leaves the builder positioned for the next test.
+fn emit_planned_new_candidate_test(
+    ctx: &mut LoweringContext<'_, '_>,
+    branches: &PlannedNewBranches<'_>,
+    class_name: &str,
+    name_is_string: bool,
+    name_span: Span,
+) {
+    let match_block = ctx
+        .builder
+        .create_named_block("new.dynamic.planned.match", Vec::new());
+    let next_block = ctx
+        .builder
+        .create_named_block("new.dynamic.planned.next", Vec::new());
+    let condition =
+        dynamic_new_class_name_match_expr(branches.name_var, class_name, name_is_string, name_span);
+    let condition = lower_expr(ctx, &condition);
+    let condition = coerce_to_int_at_span(ctx, condition, Some(branches.expr.span));
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: condition.value,
+        then_target: match_block,
+        then_args: Vec::new(),
+        else_target: next_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(match_block);
+    let class = Name::unqualified(class_name.to_string());
+    let args = branches.args;
+    // A descendant that narrows the constructor binds only its own parameters; PHP evaluates
+    // the surplus and discards it, and `static_new_droppable_surplus_args` already refused
+    // any surplus whose evaluation could be observed.
+    let branch_args = ctx
+        .classes
+        .get(class_name)
+        .and_then(|class_info| class_info.methods.get(&php_symbol_key("__construct")))
+        .and_then(|sig| static_new_droppable_surplus_args(sig, args))
+        .map_or(args, |keep| &args[..keep]);
+    let object = lower_new_object(ctx, &class, branch_args, branches.expr);
+    store_value_into_temp(
+        ctx,
+        branches.result_temp,
+        branches.result_type.clone(),
+        object,
+        branches.expr.span,
+    );
+    branch_to(ctx, branches.merge);
+
+    ctx.builder.position_at_end(next_block);
+}
+
+/// Dispatches a planned dynamic `new` through `crc32(strtolower($class))` and a balanced tree
+/// of integer compares, so a call tests O(log n) hashes and one name instead of every candidate.
+///
+/// The leaf still confirms with the same `strcasecmp` the linear chain uses, so the hash only
+/// narrows the search and a collision costs one more compare, never a wrong class. The two
+/// agree on every match: PHP's `strcasecmp` and `strtolower` both fold ASCII only, so two
+/// names `strcasecmp` calls equal lower-case to the same bytes and hash alike. A name that is
+/// not a string skips the hash and goes to the fallback, as the chain's `is_string` guard did.
+fn emit_planned_new_hashed_dispatch(
+    ctx: &mut LoweringContext<'_, '_>,
+    branches: &PlannedNewBranches<'_>,
+    candidates: &[String],
+    name_is_string: bool,
+    name_span: Span,
+) {
+    let span = name_span;
+    if !name_is_string {
+        let hash_block = ctx
+            .builder
+            .create_named_block("new.dynamic.planned.hash", Vec::new());
+        let is_string = Expr::new(
+            ExprKind::FunctionCall {
+                name: Name::unqualified("is_string"),
+                args: vec![branches.name_var.clone()],
+            },
+            span,
+        );
+        let is_string = lower_expr(ctx, &is_string);
+        let is_string = coerce_to_int_at_span(ctx, is_string, Some(branches.expr.span));
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: is_string.value,
+            then_target: hash_block,
+            then_args: Vec::new(),
+            else_target: branches.fallback,
+            else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(hash_block);
+    }
+
+    let lowered_name = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("strtolower"),
+            args: vec![branches.name_var.clone()],
+        },
+        span,
+    );
+    let hash = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("crc32"),
+            args: vec![lowered_name],
+        },
+        span,
+    );
+    let hash = lower_expr(ctx, &hash);
+    let hash_temp = ctx.declare_hidden_temp(PhpType::Int);
+    store_value_into_temp(ctx, &hash_temp, PhpType::Int, hash, branches.expr.span);
+    let hash_var = Expr::new(ExprKind::Variable(hash_temp), span);
+
+    let mut buckets: std::collections::BTreeMap<i64, Vec<&str>> = std::collections::BTreeMap::new();
+    for class_name in candidates {
+        buckets
+            .entry(php_class_name_crc32(class_name))
+            .or_default()
+            .push(class_name.as_str());
+    }
+    let buckets = buckets.into_iter().collect::<Vec<_>>();
+    emit_planned_new_hash_tree(ctx, branches, &hash_var, &buckets, span);
+}
+
+/// Emits the compare tree over `buckets`, sorted by hash; each leaf tests its bucket's names.
+fn emit_planned_new_hash_tree(
+    ctx: &mut LoweringContext<'_, '_>,
+    branches: &PlannedNewBranches<'_>,
+    hash_var: &Expr,
+    buckets: &[(i64, Vec<&str>)],
+    span: Span,
+) {
+    if let [(_, class_names)] = buckets {
+        for class_name in class_names {
+            // The hash block already proved the name is a string.
+            emit_planned_new_candidate_test(ctx, branches, class_name, true, span);
+        }
+        branch_to(ctx, branches.fallback);
+        return;
+    }
+    let mid = buckets.len() / 2;
+    let lower_half = ctx
+        .builder
+        .create_named_block("new.dynamic.planned.hash_lt", Vec::new());
+    let upper_half = ctx
+        .builder
+        .create_named_block("new.dynamic.planned.hash_ge", Vec::new());
+    let condition = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(hash_var.clone()),
+            op: BinOp::Lt,
+            right: Box::new(Expr::new(ExprKind::IntLiteral(buckets[mid].0), span)),
+        },
+        span,
+    );
+    let condition = lower_expr(ctx, &condition);
+    let condition = coerce_to_int_at_span(ctx, condition, Some(branches.expr.span));
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: condition.value,
+        then_target: lower_half,
+        then_args: Vec::new(),
+        else_target: upper_half,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(lower_half);
+    emit_planned_new_hash_tree(ctx, branches, hash_var, &buckets[..mid], span);
+    ctx.builder.position_at_end(upper_half);
+    emit_planned_new_hash_tree(ctx, branches, hash_var, &buckets[mid..], span);
+}
+
+/// PHP's `crc32(strtolower($name))` for a class name, as the dispatch computes it at runtime.
+fn php_class_name_crc32(class_name: &str) -> i64 {
+    let mut crc = flate2::Crc::new();
+    crc.update(class_name.to_ascii_lowercase().as_bytes());
+    i64::from(crc.sum())
 }
 
 /// Builds the case-insensitive class-name test for one dispatch-chain branch.

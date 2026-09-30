@@ -86,6 +86,7 @@ pub(super) fn emit_aarch64_values_classes(emitter: &mut Emitter) {
 
     emit_aarch64_object_from_raw_wrapper(emitter);
     emit_aarch64_install_dynamic_object_destructor_hook(emitter);
+    emit_aarch64_eval_object_has_owner(emitter);
     emit_aarch64_install_generator_protocol_hook(emitter);
     emit_aarch64_eval_generator_drive(emitter);
     emit_aarch64_install_class_autoload_hook(emitter);

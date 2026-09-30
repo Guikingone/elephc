@@ -137,8 +137,10 @@ macro_rules! impl_reflection_ops {
         &mut self,
         class_name: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
-        Self::handle(unsafe {
-            __elephc_eval_reflection_method_names(class_name.as_ptr(), class_name.len() as u64)
+        aot_memo::memoized_name_array(self, "#method", class_name, || {
+            Self::handle(unsafe {
+                __elephc_eval_reflection_method_names(class_name.as_ptr(), class_name.len() as u64)
+            })
         })
     }
 
@@ -277,7 +279,7 @@ macro_rules! impl_reflection_ops {
         class_name: &str,
         property_name: &str,
     ) -> Result<Option<u64>, EvalStatus> {
-        aot_memo::memoized(
+        aot_memo::memoized_property(
             &aot_memo::PROPERTY_FLAGS,
             class_name,
             property_name,
@@ -301,7 +303,7 @@ macro_rules! impl_reflection_ops {
         class_name: &str,
         property_name: &str,
     ) -> Result<Option<String>, EvalStatus> {
-        aot_memo::memoized(
+        aot_memo::memoized_property(
             &aot_memo::PROPERTY_DECLARING_CLASS,
             class_name,
             property_name,
@@ -332,8 +334,10 @@ macro_rules! impl_reflection_ops {
         &mut self,
         class_name: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
-        Self::handle(unsafe {
-            __elephc_eval_reflection_property_names(class_name.as_ptr(), class_name.len() as u64)
+        aot_memo::memoized_name_array(self, "#property", class_name, || {
+            Self::handle(unsafe {
+                __elephc_eval_reflection_property_names(class_name.as_ptr(), class_name.len() as u64)
+            })
         })
     }
 
@@ -415,11 +419,13 @@ macro_rules! impl_reflection_ops {
         &mut self,
         class_name: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
-        Self::handle(unsafe {
-            __elephc_eval_reflection_class_interface_names(
-                class_name.as_ptr(),
-                class_name.len() as u64,
-            )
+        aot_memo::memoized_name_array(self, "#interface", class_name, || {
+            Self::handle(unsafe {
+                __elephc_eval_reflection_class_interface_names(
+                    class_name.as_ptr(),
+                    class_name.len() as u64,
+                )
+            })
         })
     }
 
@@ -428,11 +434,13 @@ macro_rules! impl_reflection_ops {
         &mut self,
         class_name: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
-        Self::handle(unsafe {
-            __elephc_eval_reflection_class_trait_names(
-                class_name.as_ptr(),
-                class_name.len() as u64,
-            )
+        aot_memo::memoized_name_array(self, "#trait", class_name, || {
+            Self::handle(unsafe {
+                __elephc_eval_reflection_class_trait_names(
+                    class_name.as_ptr(),
+                    class_name.len() as u64,
+                )
+            })
         })
     }
 

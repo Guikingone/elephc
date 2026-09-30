@@ -648,6 +648,32 @@ var_dump(defined('PHP_SESSION_NONE'));
     assert_eq!(out, "012|bool(true)\n");
 }
 
+/// `defined()` on a name only a `define()` creates answers whether that define has RUN: a guard
+/// inside a function called twice defines once and never warns, and a define in a branch that
+/// was not taken leaves the name undefined. Both used to fold at compile time -- to `false`
+/// before the define in source order and `true` after it, whatever actually executed.
+#[test]
+fn defined_reads_whether_a_define_ran() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function guard(): string {
+    $before = defined('GUARDED_TWICE') ? 'y' : 'n';
+    if (!defined('GUARDED_TWICE')) {
+        define('GUARDED_TWICE', 1);
+    }
+    return $before;
+}
+echo guard(), guard(), GUARDED_TWICE, "|";
+if ($argc > 50) {
+    define('NEVER_TAKEN', 1);
+}
+echo defined('NEVER_TAKEN') ? 'y' : 'n';
+"#,
+    );
+    assert_eq!(out.stdout, "ny1|n");
+    assert!(!out.stderr.contains("already defined"), "{}", out.stderr);
+}
+
 /// A2 regression: `SID` is a predefined string constant (deprecated in PHP 8.4+).
 /// elephc's session support is cookie-only, matching PHP's own cookie-mode `SID`,
 /// so it always resolves to the empty string. Wired via the same ad-hoc

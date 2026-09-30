@@ -73,6 +73,14 @@ pub(super) struct PropertySlot {
     is_reference: bool,
 }
 
+impl PropertySlot {
+    /// Whether the slot holds its container pointer directly, so an in-place mutation can
+    /// publish into it with a plain store: declared, not packed, not behind a reference cell.
+    pub(super) fn holds_container_directly(&self) -> bool {
+        self.is_declared && !self.is_packed && !self.is_reference
+    }
+}
+
 /// Declared-property candidate reachable from a `Mixed` object receiver.
 struct MixedPropertyCandidate {
     class_id: u64,
@@ -243,6 +251,16 @@ pub(super) fn store_mutated_container_property_owner(
     value: ValueId,
 ) -> Result<()> {
     store_mutated_container_property(ctx, object, slot, value)
+}
+
+/// Publishes a container mutated in place through a borrowed property read.
+pub(super) fn store_in_place_container_property_owner(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    slot: &PropertySlot,
+    value: ValueId,
+) -> Result<()> {
+    store_in_place_container_property(ctx, object, slot, value)
 }
 
 /// Stamps a declared property slot with the uninitialized-typed-property marker.

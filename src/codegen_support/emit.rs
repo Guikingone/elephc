@@ -476,6 +476,29 @@ impl Emitter {
         }
     }
 
+    /// Calls the `setjmp` every compiled exception frame, fiber entry and bridge boundary uses.
+    ///
+    /// On macOS plain `setjmp` also saves the signal mask and the alternate-signal-stack state
+    /// -- a `sigprocmask` and a `sigaltstack` syscall on EVERY frame. No elephc frame is resumed
+    /// from inside a signal handler (pcntl handlers run at safe points), so that state is never
+    /// needed, and restoring it is not what PHP does anyway: a mask changed inside a `try` stays
+    /// changed after the `catch`. The two syscalls were 59% of a generator-heavy loop. glibc's
+    /// `setjmp` already saves no mask, so Linux keeps its name. Always pair with [`Self::bl_longjmp`].
+    pub fn bl_setjmp(&mut self) {
+        match self.platform {
+            Platform::MacOS => self.bl_c("_setjmp"),
+            _ => self.bl_c("setjmp"),
+        }
+    }
+
+    /// Calls the `longjmp` that matches [`Self::bl_setjmp`].
+    pub fn bl_longjmp(&mut self) {
+        match self.platform {
+            Platform::MacOS => self.bl_c("_longjmp"),
+            _ => self.bl_c("longjmp"),
+        }
+    }
+
     // ── Platform-aware entry point ───────────────────────────────────
 
     /// Returns the program entry point symbol: `_main` (macOS) or `main` (Linux).

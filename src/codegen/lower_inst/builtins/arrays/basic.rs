@@ -72,13 +72,19 @@ pub(crate) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
         ctx.value_php_type(array)?.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
     );
+    if !boxed_receiver && inst.operands.len() > 1 {
+        super::super::super::arrays::release_array_push_source_owner(ctx, array)?;
+    }
     for index in 1..inst.operands.len() {
         let value = expect_operand(inst, index)?;
         if boxed_receiver {
             super::super::super::arrays::lower_mixed_array_append_value(ctx, array, value)?;
         } else {
-            super::super::super::arrays::lower_array_push_value(ctx, inst, array, value)?;
+            super::super::super::arrays::append_array_push_value(ctx, inst, array, value)?;
         }
+    }
+    if !boxed_receiver && inst.operands.len() > 1 {
+        super::super::super::arrays::publish_array_push_result(ctx, array)?;
     }
     // PHP answers the array's NEW length. Read after the appends on purpose: growth can move the
     // container, and the by-ref write-back has already published the current pointer, so reloading

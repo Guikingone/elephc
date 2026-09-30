@@ -1464,6 +1464,14 @@ impl<'a> FunctionContext<'a> {
             let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
                 return Ok(false);
             };
+            // The unboxed load holds its own reference, which a box may absorb only when no EIR
+            // release will drop it again -- `array_push()` releases its receiver after the call,
+            // and absorbing there freed the array the local's new box still pointed at.
+            if self.function.instructions.iter().any(|inst| {
+                inst.op == Op::Release && inst.operands.first().copied() == Some(value)
+            }) {
+                return Ok(false);
+            }
             let storage_ty = self.local_php_type(slot)?;
             return Ok(matches!(storage_ty, PhpType::Mixed | PhpType::Union(_))
                 && matches!(

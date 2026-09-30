@@ -279,9 +279,9 @@ echo $shared, ":", $eager->value;
 "#,
     );
     assert_eq!(
-        out, "42:42:42:1",
-        "the promoted property must read the caller's value through a cell that outlived the \
-         constructor call; the third field is the pre-existing write-direction gap (PHP: 7)"
+        out, "42:42:7:1",
+        "the promoted property must read AND write the caller's value through a cell that \
+         outlived the constructor call, as php does"
     );
 }
 

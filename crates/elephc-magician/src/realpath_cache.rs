@@ -24,7 +24,18 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+/// Whole seconds from the wall clock, which is all a 120-second TTL needs.
+///
+/// `Instant::elapsed` goes through `clock_gettime`, which asks the kernel for its timebase on
+/// every call on macOS: ~1% of a Symfony request, one lookup per include. `time()` reads the
+/// commpage instead.
+fn coarse_now_secs() -> u64 {
+    // SAFETY: `time` accepts a null output pointer and only returns the current time.
+    let now = unsafe { libc::time(std::ptr::null_mut()) };
+    u64::try_from(now).unwrap_or(0)
+}
 
 /// Maximum number of distinct paths retained, mirroring `realpath_cache_size`'s intent.
 const REALPATH_CACHE_CAPACITY: usize = 4096;
@@ -70,7 +81,7 @@ fn lock_realpath_cache() -> MutexGuard<'static, RealpathCache> {
 struct RealpathCache {
     capacity: usize,
     ttl: Duration,
-    entries: HashMap<PathBuf, (PathBuf, Instant)>,
+    entries: HashMap<PathBuf, (PathBuf, u64)>,
     order: VecDeque<PathBuf>,
 }
 
@@ -88,7 +99,8 @@ impl RealpathCache {
     /// Returns the stored canonical path while it is still within its lifetime.
     fn lookup(&self, path: &Path) -> Option<PathBuf> {
         let (canonical, stored_at) = self.entries.get(path)?;
-        (stored_at.elapsed() < self.ttl).then(|| canonical.clone())
+        let age = coarse_now_secs().saturating_sub(*stored_at);
+        (age < self.ttl.as_secs()).then(|| canonical.clone())
     }
 
     /// Stores one canonical path, evicting the oldest distinct path when full.
@@ -101,7 +113,7 @@ impl RealpathCache {
             return;
         }
         if self.entries.contains_key(&path) {
-            self.entries.insert(path, (canonical, Instant::now()));
+            self.entries.insert(path, (canonical, coarse_now_secs()));
             return;
         }
         while self.entries.len() >= self.capacity {
@@ -111,7 +123,7 @@ impl RealpathCache {
             self.entries.remove(&oldest);
         }
         self.order.push_back(path.clone());
-        self.entries.insert(path, (canonical, Instant::now()));
+        self.entries.insert(path, (canonical, coarse_now_secs()));
     }
 }
 

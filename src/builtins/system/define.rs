@@ -38,6 +38,9 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         }
     };
     let ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
+    cx.checker
+        .runtime_define_names
+        .insert(name_str.trim_start_matches('\\').to_string());
     cx.checker.constants.entry(name_str).or_insert(ty);
     Ok(PhpType::Bool)
 }

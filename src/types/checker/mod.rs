@@ -370,6 +370,12 @@ pub(crate) struct Checker {
     /// closure binds by reference (directly or through forwarding), so the cell may outlive the
     /// call. See `Checker::scan_widened_ref_params`.
     pub ref_param_escaping_callees: HashSet<String>,
+    /// Names some `define()` call creates, as the call spells them without a leading `\`.
+    ///
+    /// Whether such a constant exists is a RUNTIME fact -- the call may sit in a branch, a
+    /// function, or a file a request never reaches -- so `defined()` on one of these names reads
+    /// the define's own flag instead of folding, and a `--web` request clears the flags.
+    pub runtime_define_names: HashSet<String>,
     /// DECLARED by-reference parameters whose own body stores a value the declaration cannot
     /// represent, as `(body scope key, parameter name)`.
     ///
@@ -1189,6 +1195,7 @@ pub fn check_types_with_options(
         string_incdec_locals: checker.string_incdec_locals,
         by_ref_local_storage_types: checker.by_ref_local_storage_types,
         ref_param_escaping_callees: checker.ref_param_escaping_callees,
+        runtime_define_names: checker.runtime_define_names,
         dynamic_ref_local_types: checker.dynamic_ref_local_types,
         local_bind_kill_sites: checker.local_bind_kill_sites,
         local_retype_sites: checker.local_retype_sites,

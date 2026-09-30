@@ -445,7 +445,7 @@ fn emit_invoker_exception_boundary_push(
                 "sub x0, x29, #{}",
                 handler_base - TRY_HANDLER_JMP_BUF_OFFSET
             ));                                                                 // pass the boundary jmp_buf to setjmp
-            emitter.bl_c("setjmp"); // snapshot the bridge stack before entering the callable
+            emitter.bl_setjmp(); // snapshot the bridge stack before entering the callable
             emitter.instruction(&format!("cbnz x0, {}", escape_label));         // non-zero setjmp result means a callable Throwable escaped
         }
         Arch::X86_64 => {
@@ -468,7 +468,7 @@ fn emit_invoker_exception_boundary_push(
                 "lea rdi, [rbp - {}]",
                 handler_base - TRY_HANDLER_JMP_BUF_OFFSET
             ));                                                                 // pass the boundary jmp_buf to setjmp
-            emitter.bl_c("setjmp"); // snapshot the bridge stack before entering the callable
+            emitter.bl_setjmp(); // snapshot the bridge stack before entering the callable
             emitter.instruction("test eax, eax");                               // did control arrive through longjmp?
             emitter.instruction(&format!("jne {}", escape_label));              // non-zero setjmp result means a callable Throwable escaped
         }

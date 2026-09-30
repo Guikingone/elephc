@@ -85,6 +85,7 @@ use x86_64_compare::*;
 use x86_64_output::*;
 #[allow(unused_imports)]
 use raw_object_helpers::*;
+pub(crate) use raw_object_helpers::EVAL_OWNER_FILTER_MASK;
 #[allow(unused_imports)]
 use aarch64_reflection_names::*;
 #[allow(unused_imports)]

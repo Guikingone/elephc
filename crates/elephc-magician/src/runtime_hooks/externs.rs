@@ -17,6 +17,8 @@ use crate::value::{RuntimeCell, RuntimeCellHandle};
 
 #[cfg(not(test))]
 unsafe extern "C" {
+    /// Moves the realpath cache epoch after an interpreted builtin changed a path.
+    pub(super) fn __rt_realpath_cache_invalidate();
     /// Calls one typed generated-runtime builtin over borrowed boxed arguments.
     pub(super) fn __elephc_runtime_builtin_call_v1(
         runtime_builtin_id: u32,
@@ -482,8 +484,11 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_memory_get_peak_usage(real_usage: i64) -> i64;
     /// Retains the original boxed handler value installed by compiled AOT code.
     pub(super) fn __elephc_eval_pcntl_aot_signal_handler(signal: i64) -> *mut RuntimeCell;
-    /// Installs the optional eval dynamic object destructor callback.
-    pub(super) fn __elephc_eval_install_dynamic_object_destructor_hook(callback: usize);
+    /// Installs the optional eval dynamic object destructor callback and the owner filter.
+    pub(super) fn __elephc_eval_install_dynamic_object_destructor_hook(
+        callback: usize,
+        owner_filter: usize,
+    );
     /// Installs the optional eval `Generator` protocol callback.
     pub(super) fn __elephc_eval_install_generator_protocol_hook(callback: usize);
     /// Installs the optional eval class-autoload callback.

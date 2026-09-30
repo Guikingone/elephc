@@ -323,8 +323,43 @@ pub(super) fn eval_reflection_class_target_name(
     eval_reflection_string_arg(target, values)
 }
 
+thread_local! {
+    /// Flags of generated classes already found to exist, keyed by the case-folded name.
+    static AOT_CLASS_FLAGS: std::cell::RefCell<
+        std::collections::HashMap<
+            String,
+            (u64, u64),
+            std::hash::BuildHasherDefault<rustc_hash::FxHasher>,
+        >,
+    > = std::cell::RefCell::new(std::collections::HashMap::default());
+}
+
 /// Returns generated/AOT class flags for synthetic ReflectionClass fallback objects.
+///
+/// Only a class that EXISTS is remembered: a class never stops existing, and everything the
+/// flags describe (kind, final/abstract/readonly, whether the constructor and `__clone` are
+/// public) is fixed when it is declared. A miss is not remembered, because a conditionally
+/// declared class can start existing later in the request. Each answer costs four existence
+/// probes and two lifecycle lookups, and a Symfony request asks for the same classes over and
+/// over.
 pub(super) fn eval_reflection_aot_class_flags(
+    class_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(u64, u64)>, EvalStatus> {
+    let key = class_name.trim_start_matches('\\').to_ascii_lowercase();
+    if let Some(flags) = AOT_CLASS_FLAGS.with(|cache| cache.borrow().get(&key).copied()) {
+        return Ok(Some(flags));
+    }
+    let answer = eval_reflection_aot_class_flags_uncached(class_name, values)?;
+    if let Some(flags) = answer {
+        AOT_CLASS_FLAGS.with(|cache| {
+            cache.borrow_mut().insert(key, flags);
+        });
+    }
+    Ok(answer)
+}
+
+fn eval_reflection_aot_class_flags_uncached(
     class_name: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<(u64, u64)>, EvalStatus> {

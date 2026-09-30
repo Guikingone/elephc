@@ -34,6 +34,11 @@ use reflection::impl_reflection_ops;
 
 #[cfg(not(test))]
 impl RuntimeValueOps for ElephcRuntimeOps {
+    /// Moves the generated runtime's realpath cache epoch.
+    fn filesystem_paths_changed(&mut self) {
+        unsafe { super::externs::__rt_realpath_cache_invalidate() };
+    }
+
     /// Dispatches a shareable builtin through the versioned generated-runtime C ABI.
     fn runtime_builtin_call(
         &mut self,

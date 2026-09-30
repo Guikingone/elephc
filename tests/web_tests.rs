@@ -2032,6 +2032,57 @@ fn web_late_header_and_status_emit_headers_already_sent_warnings() {
     );
 }
 
+/// Verifies each request starts with its `define()` constants undefined, as php does: a guarded
+/// define inside a function and an unconditional top-level define run again on every request
+/// without "Constant already defined", and `defined()` answers from this request alone.
+#[test]
+fn web_define_constants_do_not_survive_the_request() {
+    let dir = make_test_dir("web_define_per_request");
+    let bin = compile_web(
+        &dir,
+        r#"<?php
+define('WEB_TOP_LEVEL', 'top');
+function guard(): string {
+    $before = defined('WEB_GUARDED') ? 'y' : 'n';
+    if (!defined('WEB_GUARDED')) {
+        define('WEB_GUARDED', 7);
+    }
+    return $before . (defined('WEB_GUARDED') ? 'y' : 'n');
+}
+echo guard(), guard(), ' ', WEB_TOP_LEVEL, ' ', WEB_GUARDED;
+"#,
+        "app",
+    );
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let stderr_path = dir.join("server.stderr");
+    let stderr = fs::File::create(&stderr_path).expect("create define stderr capture");
+    let mut child = Command::new(&bin)
+        .args(["--listen", &addr, "--workers", "1"])
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .expect("spawn define server");
+    wait_until_ready(&addr);
+
+    let bodies = (0..3)
+        .map(|_| raw_response_body(&http_get(&addr, "/")).to_string())
+        .collect::<Vec<_>>();
+    let pid = child.id();
+    let _ = Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status();
+    let _ = child.wait();
+    let diagnostics = fs::read_to_string(&stderr_path).expect("read define diagnostics");
+
+    for body in &bodies {
+        assert_eq!(body, "nyyy top 7", "every request must see fresh constants: {bodies:?}");
+    }
+    assert!(
+        !diagnostics.contains("already defined"),
+        "a later request re-ran define() against the previous request's flag: {diagnostics:?}"
+    );
+}
+
 /// Verifies header("Location: ...") implies a 302 redirect, matching PHP.
 #[test]
 fn web_header_location_implies_302() {

@@ -628,19 +628,20 @@ pub(super) fn eval_classes_are_related(left: &str, right: &str, context: &Elephc
 
 /// Returns true when generated AOT parent metadata proves one class extends another.
 pub(super) fn native_class_is_a(class_name: &str, target: &str, context: &ElephcEvalContext) -> bool {
-    let mut current = class_name.trim_start_matches('\\').to_string();
+    // A class cannot be its own ancestor, so the parent walk ends; the step bound only keeps a
+    // corrupt parent table from looping. It replaces a per-call seen-set that allocated and
+    // SipHashed a lowercased copy of every class on the way -- ~1% of a Symfony request.
+    const MAX_ANCESTORS: usize = 1024;
+    let mut current = class_name.trim_start_matches('\\');
     let target = target.trim_start_matches('\\');
-    let mut seen = std::collections::HashSet::new();
-    loop {
-        if !seen.insert(current.to_ascii_lowercase()) {
-            return false;
-        }
-        if same_eval_class_name(&current, target) {
+    for _ in 0..MAX_ANCESTORS {
+        if same_eval_class_name(current, target) {
             return true;
         }
-        let Some(parent) = context.native_class_parent(&current) else {
+        let Some(parent) = context.native_class_parent(current) else {
             return false;
         };
-        current = parent.to_string();
+        current = parent;
     }
+    false
 }

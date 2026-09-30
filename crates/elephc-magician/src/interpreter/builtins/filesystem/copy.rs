@@ -84,5 +84,8 @@ pub(in crate::interpreter) fn eval_binary_path_bool_result(
         "symlink" => std::os::unix::fs::symlink(from, to).is_ok(),
         _ => return Err(EvalStatus::RuntimeFatal),
     };
+    if name != "copy" {
+        values.filesystem_paths_changed();
+    }
     values.bool_value(ok)
 }

@@ -90,6 +90,9 @@ pub(crate) fn lower(
         runtime_bindings::collect_runtime_bound_functions(program),
     );
     module.ref_param_escaping_callees = check_result.ref_param_escaping_callees.clone();
+    module.runtime_define_names = check_result.runtime_define_names.iter().cloned().collect();
+    let _runtime_define_names =
+        super::context::set_runtime_define_names(check_result.runtime_define_names.clone());
     let _ref_param_escaping_callees = super::context::set_ref_param_escaping_callees(
         check_result.ref_param_escaping_callees.clone(),
     );

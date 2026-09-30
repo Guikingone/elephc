@@ -184,6 +184,30 @@ pub(super) fn store_mutated_container_property(
     Ok(())
 }
 
+/// Publishes a container mutated IN PLACE through a borrowed property read.
+///
+/// The mutation consumed the property's own reference: an in-place write kept it, a
+/// copy-on-write split or a growth released the old container and returned one reference to
+/// the new one. Either way the slot's reference now IS the returned pointer, so it is stored
+/// as-is -- retaining it or releasing the previous occupant would count that reference twice.
+/// Only a non-reference declared slot comes here; see `lower_hash_set`.
+pub(super) fn store_in_place_container_property(
+    ctx: &mut FunctionContext<'_>,
+    object: crate::ir::ValueId,
+    slot: &PropertySlot,
+    value: crate::ir::ValueId,
+) -> Result<()> {
+    let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let value_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, base_reg)?;
+    abi::emit_push_reg(ctx.emitter, base_reg);
+    ctx.load_value_to_reg(value, value_reg)?;
+    abi::emit_pop_reg(ctx.emitter, base_reg);
+    abi::emit_store_to_address(ctx.emitter, value_reg, base_reg, slot.offset);
+    abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset + 8);
+    Ok(())
+}
+
 /// Emits a promoted constructor-property bind by storing the parameter ref-cell address.
 pub(super) fn emit_reference_property_bind(
     ctx: &mut FunctionContext<'_>,

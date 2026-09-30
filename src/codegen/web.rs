@@ -276,6 +276,7 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     super::enum_singletons::emit_enum_slot_resets(emitter, module);
 
     emit_request_scoped_flag_resets(emitter);
+    emit_define_flag_resets(emitter, module, data);
 
     emit_concat_offset_reset(emitter);
 
@@ -351,6 +352,21 @@ fn emit_native_include_resets(emitter: &mut Emitter, module: &Module, data: &Dat
     // The guards just went down, so the next prime has real work again.
     if data.has_comm(super::source_units::PRIMED) {
         abi::emit_store_zero_to_symbol(emitter, super::source_units::PRIMED, 0);
+    }
+}
+
+/// Clears the flag of every `define()` so each request starts with those constants undefined.
+///
+/// php forgets a request's constants when it ends. With the flag left raised, request 2 read
+/// `defined('X')` as true only where it was not folded, and every unguarded or folded
+/// `define('X', ...)` warned "Constant already defined" -- dozens of warnings per Symfony
+/// request from its polyfill bootstraps.
+fn emit_define_flag_resets(emitter: &mut Emitter, module: &Module, data: &DataSection) {
+    for name in &module.runtime_define_names {
+        let label = crate::names::define_seen_symbol(name);
+        if data.has_comm(&label) {
+            abi::emit_store_zero_to_symbol(emitter, &label, 0);
+        }
     }
 }
 

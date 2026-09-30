@@ -62,6 +62,19 @@ pub(super) fn lower_static_defined_call(
             Some(expr.span),
         ));
     }
+    let base = ctx.constants.base();
+    let bare = constant_name.trim_start_matches('\\');
+    if !base.contains_key(constant_name.as_str())
+        && !base.contains_key(bare)
+        && crate::ir_lower::context::is_runtime_define_name(bare)
+    {
+        // Only a builtin or an unconditional top-level declaration exists before its code runs.
+        // Anything else is a `define()` somewhere -- in a branch, a function, an included file
+        // -- and whether it has run is a runtime fact: folding it answered `false` on the second
+        // pass through `if (!defined('X')) define('X', ...)`, which then warned and redefined.
+        // The runtime `defined()` reads the define's own flag (`lower_defined`).
+        return None;
+    }
     Some(emit_typed_constant(
         ctx,
         Op::ConstBool,

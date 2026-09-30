@@ -34,6 +34,17 @@ pub(super) fn expr_is_quiet_fetch_chain(expr: &Expr) -> bool {
     }
 }
 
+/// Reports whether a quiet-fetch chain reads an instance or static property anywhere in it.
+fn expr_chain_fetches_a_property(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::ArrayAccess { array, index } => {
+            expr_chain_fetches_a_property(array) || expr_chain_fetches_a_property(index)
+        }
+        _ => false,
+    }
+}
+
 /// Emits one side of the compiled quiet-fetch scope.
 pub(in crate::ir_lower) fn emit_quiet_property_fetch(ctx: &mut LoweringContext<'_, '_>, enter: bool, span: Span) {
     ctx.emit_void(
@@ -66,7 +77,10 @@ pub(super) fn lower_operand_in_quiet_property_fetch<F>(
 where
     F: FnOnce(&mut LoweringContext<'_, '_>) -> LoweredValue,
 {
-    if !expr_is_quiet_fetch_chain(operand) {
+    // The mode only changes what a PROPERTY fetch does; a chain of variables and dims
+    // (`isset($x)`, `$a['k'] ?? null`) reads nothing the bridge could refuse, and wrapping it
+    // cost two bridge crossings per evaluation -- about 2,000 per Symfony request.
+    if !expr_is_quiet_fetch_chain(operand) || !expr_chain_fetches_a_property(operand) {
         return lower_operand(ctx);
     }
     emit_quiet_property_fetch(ctx, true, operand.span);

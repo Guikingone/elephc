@@ -63,11 +63,14 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                     features.class_introspection = true;
                 }
                 Op::RuntimeCall => {
+                    // A quiet property fetch does NOT link the bridge: its mode only matters to a
+                    // receiver an eval context owns, and without the bridge there is none, so the
+                    // backend drops the scope. Letting it link the bridge put the interpreter into
+                    // every program with a `$this->arr[$k] = ...`, and two bridge calls around it.
                     features.eval_bridge |= matches!(
                         inst.immediate,
                         Some(Immediate::RuntimeCall(
                             crate::ir::RuntimeCallTarget::DynamicInclude { .. }
-                                | crate::ir::RuntimeCallTarget::EvalQuietPropertyFetch { .. }
                         ))
                     );
                     if let Some(target) = typed_builtin_target(inst) {

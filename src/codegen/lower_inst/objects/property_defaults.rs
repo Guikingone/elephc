@@ -62,21 +62,32 @@ pub(super) fn emit_property_defaults(
     for default in defaults {
         let object_reg = abi::secondary_scratch_reg(ctx.emitter);
         ctx.load_value_to_reg(object, object_reg)?;
-        if default.is_reference {
-            // Write the default THROUGH the property's ref-cell: load the cell pointer
-            // from the slot, then write the value at the cell's value/tag words (offset 0).
-            abi::emit_load_from_address(ctx.emitter, object_reg, object_reg, default.offset);
-            let cell_default = PropertyDefault {
-                offset: 0,
-                value: default.value.clone(),
-                is_reference: false,
-            };
-            emit_property_default(ctx, object_reg, &cell_default)?;
-        } else {
-            emit_property_default(ctx, object_reg, default)?;
-        }
+        emit_property_default_into_slot_or_cell(ctx, object_reg, default)?;
     }
     Ok(())
+}
+
+/// Writes one property default into a freshly allocated object whose address is in `object_reg`.
+///
+/// An object-owned reference property's slot holds its cell pointer, so the default goes
+/// THROUGH the cell: load the pointer, then write at the cell's value/tag words (offset 0).
+/// Writing it into the slot replaces the pointer with the value, and the first read of the
+/// property dereferences that. Clobbers `object_reg` for a reference default.
+pub(super) fn emit_property_default_into_slot_or_cell(
+    ctx: &mut FunctionContext<'_>,
+    object_reg: &str,
+    default: &PropertyDefault,
+) -> Result<()> {
+    if !default.is_reference {
+        return emit_property_default(ctx, object_reg, default);
+    }
+    abi::emit_load_from_address(ctx.emitter, object_reg, object_reg, default.offset);
+    let cell_default = PropertyDefault {
+        offset: 0,
+        value: default.value.clone(),
+        is_reference: false,
+    };
+    emit_property_default(ctx, object_reg, &cell_default)
 }
 
 /// Writes one literal property default into its object slot.

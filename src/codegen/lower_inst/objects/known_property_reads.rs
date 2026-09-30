@@ -122,9 +122,11 @@ fn private_declared_property_slot(
     let Ok(slot) = resolve_property_slot(ctx, object, property, inst) else {
         return Ok(false);
     };
-    if !slot.is_declared {
-        return Ok(false);
-    }
+    // `is_declared` means "has a declared TYPE". A private slot belongs to its declaring class
+    // whether or not it is typed, and only a declared property has a visibility entry below,
+    // so a dynamic property still falls through. Requiring the type sent every untyped
+    // `private $x` read in a method through the eval bridge -- which creates an eval context on
+    // each call: Twig's `Environment::addExtension` did that for `$this->extensionSet`.
     Ok(ctx
         .module
         .class_infos

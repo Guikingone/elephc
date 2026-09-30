@@ -23,6 +23,7 @@ use crate::codegen::platform::Arch;
 use crate::codegen::runtime_value_tag;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::codegen::{abi, emit_box_current_value_as_mixed};
+use super::class_id_dispatch::{emit_class_id_switch, ClassIdSwitch};
 use crate::ir::Module;
 use crate::names::join_php_symbol;
 use crate::parser::ast::Visibility;
@@ -751,21 +752,24 @@ fn emit_aarch64_property_dispatch(
     mode: &str,
     fail_label: &str,
 ) {
-    for (class_id, class_slots) in grouped_slots(slots) {
-        let class_label = format!("__elephc_eval_property_{}_class_{}", mode, class_id);
-        let next_label = format!("__elephc_eval_property_{}_next_{}", mode, class_id);
-        abi::emit_load_int_immediate(emitter, "x10", class_id as i64);
-        emitter.instruction("cmp x9, x10");                                     // compare receiver class id against this eval bridge class
-        emitter.instruction(&format!("b.ne {}", next_label));                   // try the next class when ids differ
+    let groups = grouped_slots(slots).into_iter().collect::<Vec<_>>();
+    let ids = groups.iter().map(|(class_id, _)| *class_id).collect::<Vec<_>>();
+    let load_id = |emitter: &mut Emitter, reg: &str| {
+        emitter.instruction(&format!("ldr {}, [sp, #16]", reg));                // reload the unboxed object pointer before this class test
+        emitter.instruction(&format!("ldr {0}, [{0}]", reg));                   // load the object's runtime class id
+    };
+    let stem = format!("__elephc_eval_property_{}", mode);
+    let switch = ClassIdSwitch { load_id: &load_id, stem: &stem, suffix: "" };
+    emit_class_id_switch(emitter, &switch, &ids, &mut |emitter, index| {
+        let (class_id, class_slots) = &groups[index];
         for slot in class_slots {
             emit_aarch64_property_name_compare(
                 module, emitter, data, slot, scope_sets, mode, fail_label,
             );
         }
-        emitter.label(&class_label);
-        emitter.instruction(&format!("b {}", next_label));                      // fall through to the next class after a name miss
-        emitter.label(&next_label);
-    }
+        // A name miss falls through to the next case test, which cannot match this id again.
+        emitter.label(&format!("__elephc_eval_property_{}_class_{}", mode, class_id));
+    });
 }
 
 /// Emits x86_64 class-id and property-name dispatch for helper slot bodies.
@@ -778,21 +782,24 @@ fn emit_x86_64_property_dispatch(
     mode: &str,
     fail_label: &str,
 ) {
-    for (class_id, class_slots) in grouped_slots(slots) {
-        let class_label = format!("__elephc_eval_property_{}_class_{}_x", mode, class_id);
-        let next_label = format!("__elephc_eval_property_{}_next_{}_x", mode, class_id);
-        abi::emit_load_int_immediate(emitter, "r10", class_id as i64);
-        emitter.instruction("cmp r11, r10");                                    // compare receiver class id against this eval bridge class
-        emitter.instruction(&format!("jne {}", next_label));                    // try the next class when ids differ
+    let groups = grouped_slots(slots).into_iter().collect::<Vec<_>>();
+    let ids = groups.iter().map(|(class_id, _)| *class_id).collect::<Vec<_>>();
+    let load_id = |emitter: &mut Emitter, reg: &str| {
+        emitter.instruction(&format!("mov {}, QWORD PTR [rbp - 24]", reg));     // reload the unboxed object pointer before this class test
+        emitter.instruction(&format!("mov {0}, QWORD PTR [{0}]", reg));         // load the object's runtime class id
+    };
+    let stem = format!("__elephc_eval_property_{}", mode);
+    let switch = ClassIdSwitch { load_id: &load_id, stem: &stem, suffix: "_x" };
+    emit_class_id_switch(emitter, &switch, &ids, &mut |emitter, index| {
+        let (class_id, class_slots) = &groups[index];
         for slot in class_slots {
             emit_x86_64_property_name_compare(
                 module, emitter, data, slot, scope_sets, mode, fail_label,
             );
         }
-        emitter.label(&class_label);
-        emitter.instruction(&format!("jmp {}", next_label));                    // fall through to the next class after a name miss
-        emitter.label(&next_label);
-    }
+        // A name miss falls through to the next case test, which cannot match this id again.
+        emitter.label(&format!("__elephc_eval_property_{}_class_{}_x", mode, class_id));
+    });
 }
 
 /// Emits one ARM64 property-name comparison and branch to the matching body.

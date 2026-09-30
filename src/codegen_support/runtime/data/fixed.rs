@@ -290,6 +290,23 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_fiber_main_saved_sp", 8, target));
     out.push_str(&comm_directive("_fiber_main_saved_exc", 8, target));
     out.push_str(&comm_directive("_fiber_main_saved_call_frame", 8, target));
+    // Freed fiber stacks kept for reuse: a count word, then FIBER_STACK_CACHE_SLOTS
+    // (base, mapped length) pairs. Process-lifetime, not request state -- see fibers::alloc.
+    out.push_str(&comm_directive(
+        "_fiber_stack_cache",
+        8 + 16 * crate::codegen_support::runtime::fibers::FIBER_STACK_CACHE_SLOTS,
+        target,
+    ));
+    // realpath() cache, php's realpath cache: REALPATH_CACHE_SLOTS entries of
+    // REALPATH_CACHE_ENTRY_BYTES, and the epoch every path-changing helper bumps. Entries point at
+    // malloc'd copies, so they outlive the --web heap reset -- see io::realpath.
+    out.push_str(&comm_directive(
+        "_realpath_cache",
+        crate::codegen_support::runtime::io::REALPATH_CACHE_SLOTS
+            * crate::codegen_support::runtime::io::REALPATH_CACHE_ENTRY_BYTES,
+        target,
+    ));
+    out.push_str(&comm_directive("_realpath_cache_epoch", 8, target));
     // Call-stack overflow guard state. _stack_limit is the low-water stack address of the
     // execution context that is running right now: every compiled function prologue does an
     // unsigned compare of the stack pointer against it and branches to __rt_stack_overflow
@@ -300,6 +317,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_stack_limit", 8, target));
     out.push_str(&comm_directive("_stack_limit_main", 8, target));
     out.push_str(&comm_directive("_elephc_eval_dynamic_object_destruct_fn", 8, target));
+    // _elephc_eval_owner_filter: the interpreter's per-bucket count of eval-owned object
+    // identities, published with the destructor callback. Zero (no interpreter) means no object
+    // can be eval-owned; see `__rt_eval_object_has_owner`.
+    out.push_str(&comm_directive("_elephc_eval_owner_filter", 8, target));
     // _elephc_eval_generator_protocol_fn: filled by the interpreter at context creation.
     // The `__rt_gen_*` helpers read it before touching a receiver's fiber fields, because a
     // generator the INTERPRETER created is a `Generator` object with no fiber state at all.

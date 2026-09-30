@@ -98,22 +98,30 @@ macro_rules! impl_construction_raw_ops {
 
     /// Returns whether the generated AOT class-name table contains the requested class.
     fn class_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
-        Ok(unsafe { __elephc_eval_class_exists(name.as_ptr(), name.len() as u64) != 0 })
+        aot_memo::memoized(&aot_memo::KIND_EXISTS, name, "#class", || {
+            Ok(unsafe { __elephc_eval_class_exists(name.as_ptr(), name.len() as u64) != 0 })
+        })
     }
 
     /// Returns whether the generated AOT interface-name table contains the requested interface.
     fn interface_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
-        Ok(unsafe { __elephc_eval_interface_exists(name.as_ptr(), name.len() as u64) != 0 })
+        aot_memo::memoized(&aot_memo::KIND_EXISTS, name, "#interface", || {
+            Ok(unsafe { __elephc_eval_interface_exists(name.as_ptr(), name.len() as u64) != 0 })
+        })
     }
 
     /// Returns whether the generated AOT trait-name table contains the requested trait.
     fn trait_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
-        Ok(unsafe { __elephc_eval_trait_exists(name.as_ptr(), name.len() as u64) != 0 })
+        aot_memo::memoized(&aot_memo::KIND_EXISTS, name, "#trait", || {
+            Ok(unsafe { __elephc_eval_trait_exists(name.as_ptr(), name.len() as u64) != 0 })
+        })
     }
 
     /// Returns whether the generated AOT enum-name table contains the requested enum.
     fn enum_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
-        Ok(unsafe { __elephc_eval_enum_exists(name.as_ptr(), name.len() as u64) != 0 })
+        aot_memo::memoized(&aot_memo::KIND_EXISTS, name, "#enum", || {
+            Ok(unsafe { __elephc_eval_enum_exists(name.as_ptr(), name.len() as u64) != 0 })
+        })
     }
 
     /// Tests a boxed Mixed object against generated class/interface metadata.

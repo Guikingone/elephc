@@ -47,6 +47,15 @@ pub(crate) use api::{
 pub(crate) use entry::emit_fiber_entry;
 pub(crate) use switch::emit_fiber_switch;
 
+/// How many freed fiber stacks `_fiber_stack_cache` keeps for reuse.
+///
+/// Every generator runs on a fiber, and a fresh stack is an `mmap` plus an `mprotect` for its
+/// guard page, returned with a `munmap`: three syscalls per generator. A Symfony page renders
+/// each Twig template and block as a generator, and those syscalls reached 5% of a request.
+/// A stack freed with its guard page still installed can be handed out again as-is, so the
+/// cache holds a few; nesting deeper than this only falls back to the kernel.
+pub(crate) const FIBER_STACK_CACHE_SLOTS: usize = 16;
+
 // ── Fiber object field offsets ───────────────────────────────────────
 /// Byte offset of the `state` field (0=NotStarted 1=Running 2=Suspended 3=Terminated).
 pub(crate) const FIBER_STATE_OFFSET: i32 = 8;

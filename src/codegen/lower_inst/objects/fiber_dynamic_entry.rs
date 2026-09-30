@@ -157,6 +157,63 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new(
     Ok(())
 }
 
+/// The builtin compact-payload exception classes a generic `new $class(...)` can build directly.
+///
+/// Only when the site's arguments fit the constructor statically: at most message, code and
+/// previous, the code an `int` and the previous an object -- the message is converted like any
+/// string argument. Classes already matched as declared-slot candidates are left to them.
+fn builtin_throwable_mixed_cases(
+    ctx: &FunctionContext<'_>,
+    constructor_args: &[ValueId],
+    matched: &[String],
+) -> Result<Vec<(String, u64)>> {
+    if constructor_args.len() > 3 {
+        return Ok(Vec::new());
+    }
+    if let Some(message) = constructor_args.first() {
+        // What `load_value_as_string_to_regs` converts; an array or object message is another
+        // class's constructor argument at this site, not a Throwable message.
+        let message_ty = ctx.value_php_type(*message)?;
+        let convertible = matches!(message_ty, PhpType::Resource(_))
+            || matches!(
+                message_ty.codegen_repr(),
+                PhpType::Str
+                    | PhpType::Int
+                    | PhpType::Float
+                    | PhpType::Bool
+                    | PhpType::Void
+                    | PhpType::TaggedScalar
+                    | PhpType::Mixed
+                    | PhpType::Union(_)
+            );
+        if !convertible {
+            return Ok(Vec::new());
+        }
+    }
+    if let Some(code) = constructor_args.get(1) {
+        if ctx.value_php_type(*code)?.codegen_repr() != PhpType::Int {
+            return Ok(Vec::new());
+        }
+    }
+    if let Some(previous) = constructor_args.get(2) {
+        if !matches!(ctx.value_php_type(*previous)?.codegen_repr(), PhpType::Object(_)) {
+            return Ok(Vec::new());
+        }
+    }
+    let mut cases = ctx
+        .module
+        .class_infos
+        .iter()
+        .filter(|(class_name, _)| {
+            is_builtin_throwable_payload_class(class_name)
+                && !matched.iter().any(|name| name == *class_name)
+        })
+        .map(|(class_name, class_info)| (class_name.clone(), class_info.class_id))
+        .collect::<Vec<_>>();
+    cases.sort_by_key(|(_, class_id)| *class_id);
+    Ok(cases)
+}
+
 /// Lowers generic PHP `new $class(...)` into AOT candidates plus the runtime registry fallback.
 pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed(
     ctx: &mut FunctionContext<'_>,
@@ -224,10 +281,28 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed(
     // NOT UNDER EVAL. The eval bridge resolves the class itself and raises its own diagnostic, and
     // these arms sit before the fallback that reaches it, so they would preempt a path measured
     // to work. NOT UNDER A RUNTIME ARG CONTAINER either, where the site's arity is not a constant.
-    let matched = candidates
+    let mut matched = candidates
         .iter()
         .map(|candidate| candidate.class_name.clone())
         .collect::<Vec<_>>();
+    // Builtin exceptions are no declared-slot candidate: they use the compact Throwable payload,
+    // and the registry fallback allocates one without running the constructor -- no message, no
+    // file or line. They get the direct `new`'s own construction instead, when the site's
+    // arguments fit it statically; any other shape keeps the paths below.
+    let throwable_cases = if uses_runtime_arg_container || eval_bridge_available {
+        Vec::new()
+    } else {
+        builtin_throwable_mixed_cases(ctx, constructor_args, &matched)?
+    };
+    let throwable_labels = throwable_cases
+        .iter()
+        .map(|(class_name, _)| {
+            let label = ctx.next_label("dynamic_new_mixed_throwable");
+            emit_branch_if_dynamic_new_mixed_class_name_matches(ctx, class_name, &label);
+            label
+        })
+        .collect::<Vec<_>>();
+    matched.extend(throwable_cases.iter().map(|(class_name, _)| class_name.clone()));
     let refusals = if uses_runtime_arg_container || builtins::has_eval_context(ctx) {
         Vec::new()
     } else {
@@ -260,6 +335,20 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed(
             result,
             inst.span.map_or(0, |span| span.line),
         )?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    for ((class_name, class_id), label) in throwable_cases.iter().zip(throwable_labels.iter()) {
+        ctx.emitter.label(label);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        emit_throwable_allocation(ctx, *class_id, inst.span.map_or(0, |span| span.line));
+        preserve_throwable_for_init(ctx);
+        emit_throwable_message_fields(ctx, constructor_args.first().copied())?;
+        emit_throwable_code_field(ctx, constructor_args.get(1).copied())?;
+        emit_throwable_previous_field(ctx, constructor_args.get(2).copied())?;
+        restore_throwable_after_init(ctx);
+        emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Object(class_name.clone()));
+        ctx.store_result_value(result)?;
         abi::emit_jump(ctx.emitter, &done_label);
     }
 
