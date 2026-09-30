@@ -14,6 +14,27 @@
 
 use super::*;
 
+/// Interface methods retain declaration order across static methods, parents, and redeclarations.
+#[test]
+fn test_reflection_interface_methods_follow_declaration_order() {
+    let out = compile_and_run(r#"<?php
+interface ParentOne { public function inheritedOne(); public static function inheritedTwo(); }
+interface ParentTwo { public function other(); }
+interface Ordered extends ParentOne, ParentTwo {
+    public function zebra();
+    public static function alpha();
+    public function middle();
+    public function inheritedOne();
+    public static function beta();
+    public function last();
+}
+foreach ((new ReflectionClass(Ordered::class))->getMethods() as $method) {
+    echo $method->getName(), ",";
+}
+"#);
+    assert_eq!(out, "zebra,alpha,middle,inheritedOne,beta,last,inheritedTwo,other,");
+}
+
 /// Packed-or-hash storage reflects as one PHP type, with composite type methods called after narrowing.
 #[test]
 fn test_reflection_function_array_storage_has_one_php_type() {

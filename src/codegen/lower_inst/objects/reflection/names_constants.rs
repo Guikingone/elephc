@@ -73,7 +73,7 @@ pub(super) fn reflection_member_flags(
     }
 }
 
-/// Returns PHP case-insensitive method names declared by an interface and its parents.
+/// Returns interface method keys in PHP declaration order, followed by inherited methods.
 pub(super) fn reflection_interface_method_names(
     ctx: &FunctionContext<'_>,
     interface_name: &str,
@@ -86,8 +86,17 @@ pub(super) fn reflection_interface_method_names(
     };
     let mut names = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    push_unique_method_names(info.methods.keys(), &mut names, &mut seen);
-    push_unique_method_names(info.static_methods.keys(), &mut names, &mut seen);
+    push_unique_method_names(info.method_decls.iter().map(|method| &method.name), &mut names, &mut seen);
+    for parent in &info.parents {
+        let inherited = reflection_interface_method_names(ctx, parent);
+        push_unique_method_names(inherited.iter(), &mut names, &mut seen);
+    }
+    // Injected interfaces can carry signatures without source declarations.
+    push_unique_method_names(info.method_order.iter(), &mut names, &mut seen);
+    push_unique_method_names(info.static_method_order.iter(), &mut names, &mut seen);
+    let mut remaining = info.methods.keys().chain(info.static_methods.keys()).collect::<Vec<_>>();
+    remaining.sort_unstable();
+    push_unique_method_names(remaining.into_iter(), &mut names, &mut seen);
     names
 }
 
@@ -521,4 +530,3 @@ pub(super) fn reflection_enum_case_backing_value(case: &EnumCaseInfo) -> Option<
         EnumCaseValue::Str(value) => Some(ReflectionConstantValue::Str(value.clone())),
     }
 }
-
