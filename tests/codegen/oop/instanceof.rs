@@ -635,3 +635,31 @@ var_dump(g($argc));
     );
     assert_eq!(out, "string(10) \" has-error\"\nstring(0) \"\"\nint(2)\n");
 }
+
+/// `instanceof Closure` recognizes a compiled closure inside a function that owns an eval-bridge
+/// context (here through `new ReflectionClass()` over a runtime class name), where the bridge
+/// alone sees no object and used to answer false.
+#[test]
+fn test_instanceof_closure_in_function_with_eval_context() {
+    let out = compile_and_run(
+        r#"<?php
+function build($concrete) {
+    if ($concrete instanceof Closure) {
+        try {
+            return $concrete();
+        } finally {
+            echo "F";
+        }
+    }
+    try {
+        $reflector = new ReflectionClass($concrete);
+    } catch (ReflectionException $e) {
+        return 'missing';
+    }
+    return $reflector->getName();
+}
+echo build(fn () => 'closure'), "|", build('stdClass'), "|", build('NoSuchClassHere'), "\n";
+"#,
+    );
+    assert_eq!(out, "Fclosure|stdClass|missing\n");
+}
