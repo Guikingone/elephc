@@ -284,6 +284,75 @@ fn test_psr4_transitive_autoload() {
     assert_eq!(out, "hi Ada");
 }
 
+/// Verifies a class a just-autoloaded file declared through `class_alias()` is not autoloaded
+/// again from its own PSR-4 file in the same walker pass.
+///
+/// This is `nikic/php-parser`'s deprecation shape: `Int_.php` ends with
+/// `class_alias(Int_::class, LNumber::class)`, and `LNumber.php` exists only for classmap tools —
+/// it `require`s `Int_.php` (plainly, not `_once`) and declares `LNumber` under `if (false)`.
+/// php never loads `LNumber.php` once `Int_` is loaded, because the alias already answers.
+/// The walker compared each reference against the set of classes declared BEFORE the pass, so it
+/// loaded `LNumber.php` too, its `require` spliced `Int_.php` a second time, and the build failed
+/// with "Duplicate class declaration: P\Item" — which is what refused Laravel's closed world.
+///
+/// Reference value captured from php 8.5.10.
+#[test]
+fn test_psr4_alias_declared_by_an_autoloaded_file_is_not_autoloaded_again() {
+    let out = compile_and_run_files(
+        &[
+            ("composer.json", r#"{"autoload":{"psr-4":{"P\\":"src/"}}}"#),
+            (
+                "src/Item.php",
+                "<?php\nnamespace P;\nclass Item {\n    public function hi(): string { return \"item\"; }\n}\nclass_alias(Item::class, Old::class);\n",
+            ),
+            (
+                "src/Old.php",
+                "<?php\nnamespace P;\nrequire __DIR__ . '/Item.php';\nif (false) {\n    class Old extends Item {}\n}\n",
+            ),
+            (
+                "main.php",
+                "<?php\n$item = new \\P\\Item();\necho $item->hi(), \"|\";\necho class_exists(\\P\\Old::class) ? \"alias\" : \"missing\";\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "item|alias");
+}
+
+/// Verifies a class file that `require`s the file declaring its own dependency does not load
+/// that file a second time as a dependency of its bundle.
+///
+/// The same `nikic/php-parser` shape reached the other way round: here the ALIAS is referenced
+/// first, so `Sub/Old.php` loads, its `require __DIR__.'/../Item.php'` splices `Item` in, and its
+/// `if (false) { class Old extends Item {} }` names `Item` as a dependency. The bundle walked that
+/// dependency against the classes declared before the file, loaded `Item.php` again, and the build
+/// failed "Duplicate class declaration: P\Item" (`Stmt/UseUse.php` and `UseItem.php` in Laravel's
+/// closed world).
+///
+/// Reference value captured from php 8.5.10.
+#[test]
+fn test_psr4_dependency_a_file_requires_itself_is_not_autoloaded_again() {
+    let out = compile_and_run_files(
+        &[
+            ("composer.json", r#"{"autoload":{"psr-4":{"P\\":"src/"}}}"#),
+            (
+                "src/Item.php",
+                "<?php\nnamespace P;\nclass Base {}\nclass Item extends Base {\n    public function hi(): string { return \"item\"; }\n}\nclass_alias(Item::class, Sub\\Old::class);\n",
+            ),
+            (
+                "src/Sub/Old.php",
+                "<?php\nnamespace P\\Sub;\nuse P\\Item;\nrequire __DIR__ . '/../Item.php';\nif (false) {\n    class Old extends Item {}\n}\n",
+            ),
+            (
+                "main.php",
+                "<?php\necho class_exists(\\P\\Sub\\Old::class) ? \"alias\" : \"missing\", \"|\";\n$item = new \\P\\Item();\necho $item->hi();\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "alias|item");
+}
+
 /// Verifies an autoloaded trait retains its own class imports when composed into a class.
 #[test]
 fn test_psr4_autoloaded_trait_method_resolves_imported_constructor() {

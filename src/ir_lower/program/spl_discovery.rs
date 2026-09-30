@@ -91,7 +91,12 @@ fn push_eval_bridge_builtin_spl_methods(methods: &mut Vec<(String, String)>, mod
     }
     let construct_key = php_method_key("__construct");
     for class_name in module.class_infos.keys() {
-        if !is_dynamic_new_mixed_metadata_candidate(class_name) {
+        // Every registered class the interpreter can allocate by name, not only the ones generic
+        // `new $c` in compiled code may build: the bridge's `new_object` answers for any class in
+        // the name table. `EmptyIterator` is "known" to dynamic `new` but not a candidate there,
+        // so an interpreted `new EmptyIterator()` handed compiled code an object whose `valid()`
+        // slot was null, and the first `foreach` over it jumped to address 0.
+        if class_name.starts_with("__Elephc") {
             continue;
         }
         push_supported_builtin_spl_method_for_receiver(methods, module, class_name, &construct_key);

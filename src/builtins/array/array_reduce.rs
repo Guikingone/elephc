@@ -7,7 +7,9 @@
 //! Key details:
 //! - The PHP signature accepts two or three arguments, with a `null` initial carry by default.
 //! - `check` validates the callback with the inferred initial and array-element types.
-//!   The return type is `PhpType::Int`, matching the legacy arm.
+//!   The return type is `mixed`: php returns whatever the last callback returned (or the initial
+//!   carry), and EIR routes every non-`int` carry to the boxed-carry prelude helper while the
+//!   native integer reducer boxes its result for a `mixed` call site.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -21,10 +23,14 @@ builtin! {
     ),
 }
 
-/// Validates the callback for an `array_reduce` call and returns `PhpType::Int`.
+/// Validates the callback for an `array_reduce` call and returns `mixed`.
 ///
 /// Uses the initial-value and array-element types as the two callback parameter contexts. A
 /// missing initial value contributes PHP `null` (`Void`) to the callback carry contract.
+///
+/// The result used to be a fixed `int`, which is the native reducer's register, not php's type:
+/// a closure carry (`array_reduce($pipes, $this->carry(), $destination)` then `$pipeline($x)`)
+/// was refused as "not a callable (got Int)".
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     let initial_ty = match cx.args.get(2) {
@@ -43,5 +49,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         cx.env,
         "array_reduce() callback",
     )?;
-    Ok(PhpType::Int)
+    Ok(PhpType::Mixed)
 }

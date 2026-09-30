@@ -14317,6 +14317,12 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
                 default: Some(DefaultSpec::Str("UTF-8")),
                 by_ref: false,
             },
+            ParamSpec {
+                name: "double_encode",
+                ty: TypeSpec::Bool,
+                default: Some(DefaultSpec::Bool(true)),
+                by_ref: false,
+            },
         ],
         variadic: None,
         min_args: None,

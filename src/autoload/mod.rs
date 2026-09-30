@@ -44,6 +44,11 @@ pub struct DeclarationSourceFiles {
     pub unbound_conditional_declaration_sources: HashMap<PathBuf, Vec<String>>,
     /// Names bound through the function-variant mechanism; subtracted from the dropped names.
     pub bound_conditional_declaration_names: HashSet<String>,
+    /// Every function an eager Composer `files` entry declares, at any depth and in any
+    /// namespace (`php_symbol_key` of the qualified name), mapped to that file. A body the
+    /// backend cannot lower hands its file back to the runtime through this map, the way a class
+    /// body hands back its class file (`autoload::deferral::BackendDeferral`).
+    pub eager_function_files: HashMap<String, PathBuf>,
 }
 
 impl DeclarationSourceFiles {
@@ -54,6 +59,7 @@ impl DeclarationSourceFiles {
         }
         self.class_likes.extend(other.class_likes);
         self.functions.extend(other.functions);
+        self.eager_function_files.extend(other.eager_function_files);
         self.unbound_conditional_declaration_sources
             .extend(other.unbound_conditional_declaration_sources);
         self.bound_conditional_declaration_names
@@ -144,8 +150,17 @@ pub fn run_collecting_included_with_defines_and_sources(
     // `symfony\component\varexporter\deepclone_to_array()`, a function declared by a declined
     // eager file that the RUNTIME goes on to declare perfectly well.
     let mut eager_globals: HashSet<String> = HashSet::new();
+    // An eager file an earlier round of this build handed back — the backend could not lower one
+    // of its functions — is declined whole here, exactly as a half-taken one is below.
+    let handed_back: HashSet<PathBuf> = deferral::inherited_deferred_files()
+        .into_iter()
+        .map(|path| path.canonicalize().unwrap_or(path))
+        .collect();
     for path in registry.always_included_files() {
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        if handed_back.contains(&canonical) {
+            continue;
+        }
         if included.insert(canonical.clone()) {
             // An eager file the compiler cannot parse is handed to the runtime whole, exactly as
             // a half-taken one is below: php requires it at startup and so will the program.
@@ -251,6 +266,11 @@ pub fn run_collecting_included_with_defines_and_sources(
                 included.remove(&canonical);
                 continue;
             }
+            for key in eager_function_keys(&loaded) {
+                declaration_sources
+                    .eager_function_files
+                    .insert(key, canonical.clone());
+            }
             nested_includes.extend(loaded_includes);
             declaration_sources.extend(loaded_sources)?;
             prefix.extend(loaded);
@@ -295,7 +315,7 @@ pub fn run_collecting_included_with_defines_and_sources(
                         base_dir,
                         defines,
                         registry,
-                        &declared,
+                        &mut declared,
                         &mut included,
                         &mut nested_includes,
                         &mut declaration_sources,
@@ -303,6 +323,14 @@ pub fn run_collecting_included_with_defines_and_sources(
                         0,
                     )?;
                     if !bundle.is_empty() {
+                        // What this bundle declares is declared from here on, not from the next
+                        // pass: php's autoloader is never asked for a class a file it already
+                        // loaded declared. MEASURED with `nikic/php-parser`: `Int_.php` ends with
+                        // `class_alias(Int_::class, LNumber::class)`, so a later `LNumber`
+                        // reference in the same pass must not load `LNumber.php` — whose plain
+                        // `require __DIR__.'/Int_.php'` spliced `Int_` a second time and failed
+                        // the build with "Duplicate class declaration".
+                        declared.extend(collect_declared_fqns(&bundle));
                         insertions.push((stmt_idx, bundle));
                     }
                 }
@@ -369,6 +397,26 @@ fn eager_global_function_keys(stmts: &[Stmt]) -> HashSet<String> {
         }
     }
     let mut out = HashSet::new();
+    walk(stmts, &mut out);
+    out
+}
+
+/// Collects EVERY function an eager file declares, at any depth and in any namespace, keyed like
+/// the symbol tables (`php_symbol_key`, no leading `\`). Unlike [`eager_global_function_keys`]
+/// this keeps namespaced names: it answers "which file declared this body", not "which names the
+/// global fallback may reach".
+fn eager_function_keys(stmts: &[Stmt]) -> Vec<String> {
+    fn walk(stmts: &[Stmt], out: &mut Vec<String>) {
+        for stmt in stmts {
+            if let StmtKind::FunctionDecl { name, .. } = &stmt.kind {
+                out.push(crate::names::php_symbol_key(name.trim_start_matches('\\')));
+            }
+            for nested in eager_nested_bodies(stmt) {
+                walk(nested, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
     walk(stmts, &mut out);
     out
 }
@@ -787,13 +835,14 @@ fn load_autoloaded_bundle(
     base_dir: &Path,
     defines: &HashSet<String>,
     registry: &Registry,
-    declared: &HashSet<String>,
+    declared: &mut HashSet<String>,
     included: &mut HashSet<PathBuf>,
     nested_includes: &mut HashSet<PathBuf>,
     declaration_sources: &mut DeclarationSourceFiles,
     deferred: &mut Vec<PathBuf>,
     depth: usize,
 ) -> Result<Program, CompileError> {
+    trace_autoload_load(fqn, canonical, depth);
     let (loaded, loaded_includes, loaded_sources) =
         match load_autoloaded_file(canonical, base_dir, defines) {
             Ok(loaded) => loaded,
@@ -813,6 +862,12 @@ fn load_autoloaded_bundle(
         return Ok(Vec::new());
     }
 
+    // What this file declares ITSELF — directly, or through a `require` the resolver already
+    // spliced into it — satisfies its own dependencies. MEASURED with `nikic/php-parser`:
+    // `Stmt/UseUse.php` requires `../UseItem.php` and then declares
+    // `if (false) { class UseUse extends UseItem {} }`, and walking that dependency loaded
+    // `UseItem.php` a second time: "Duplicate class declaration: PhpParser\Node\UseItem".
+    declared.extend(collect_declared_fqns(&loaded));
     let mut bundle: Program = Vec::new();
     if depth < AUTOLOAD_BUNDLE_MAX_DEPTH {
         let mut seen: HashSet<String> = HashSet::new();
@@ -829,7 +884,7 @@ fn load_autoloaded_bundle(
             if !included.insert(dependency_path.clone()) {
                 continue;
             }
-            bundle.extend(load_autoloaded_bundle(
+            let dependency_bundle = load_autoloaded_bundle(
                 &dependency,
                 &dependency_path,
                 base_dir,
@@ -841,7 +896,11 @@ fn load_autoloaded_bundle(
                 declaration_sources,
                 deferred,
                 depth + 1,
-            )?);
+            )?;
+            // Same rule as the caller's loop: a later dependency the one just loaded already
+            // declared (a `class_alias()` at its end, say) must not load its own file.
+            declared.extend(collect_declared_fqns(&dependency_bundle));
+            bundle.extend(dependency_bundle);
         }
     }
 
@@ -849,6 +908,20 @@ fn load_autoloaded_bundle(
     declaration_sources.extend(loaded_sources)?;
     bundle.extend(loaded);
     Ok(bundle)
+}
+
+/// Reports one class file the walker is about to load and the class that asked for it, when
+/// `ELEPHC_AUTOLOAD_TRACE` is set.
+///
+/// The walker's decisions are otherwise invisible: a file loaded twice, or loaded for a class
+/// something already declared, shows up only as a "Duplicate class declaration" with no file, and
+/// the trace is what names the reference that caused it. `depth` is 0 for a reference in the
+/// program and grows along a bundle's dependency chain.
+fn trace_autoload_load(fqn: &str, canonical: &Path, depth: usize) {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ENABLED.get_or_init(|| std::env::var_os("ELEPHC_AUTOLOAD_TRACE").is_some()) {
+        eprintln!("[elephc-autoload] depth={depth} class={fqn} file={}", canonical.display());
+    }
 }
 
 /// Why one autoloaded file could not be taken into the compiled program.

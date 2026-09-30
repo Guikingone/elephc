@@ -65,6 +65,12 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     if lhs_pos != lhs_expr_tokens.len() {
         return Err(CompileError::new(span, "Invalid assignment target"));
     }
+    // `f()[] = $v;` and `$obj->get()['k'] = $v;` write to the call's RESULT. The expression
+    // parser binds that result to a hidden local first (php's "evaluate once, write to the
+    // value"), so the statement is left to it instead of being refused here.
+    if dimension_write_roots_in_call(&lhs_expr, is_append) {
+        return Ok(None);
+    }
 
     *pos = assign_pos + 1;
     if op == AssignmentOperator::Assign
@@ -162,6 +168,26 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     };
 
     Ok(Some(hoisted.finish_if_used(stmt, span)))
+}
+
+/// Returns true when a dimension write's innermost base is a call result: `f()[k]`,
+/// `$o->m()[k][j]`, or — for the append form, whose target is the base itself — `f()`.
+fn dimension_write_roots_in_call(target: &Expr, is_append: bool) -> bool {
+    if !is_append && !matches!(target.kind, ExprKind::ArrayAccess { .. }) {
+        return false;
+    }
+    let mut base = target;
+    while let ExprKind::ArrayAccess { array, .. } = &base.kind {
+        base = array;
+    }
+    matches!(
+        base.kind,
+        ExprKind::FunctionCall { .. }
+            | ExprKind::MethodCall { .. }
+            | ExprKind::StaticMethodCall { .. }
+            | ExprKind::ClosureCall { .. }
+            | ExprKind::ExprCall { .. }
+    )
 }
 
 /// True when `target` writes an element at a plain-VARIABLE index and `rhs` can reassign

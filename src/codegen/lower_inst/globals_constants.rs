@@ -494,6 +494,15 @@ pub(super) fn emit_marker_source_tag(
     source_ty: &PhpType,
     source_tag_reg: &str,
 ) -> Result<()> {
+    // An `int|float`-style tagged scalar has no static tag: its runtime tag is word 1 of the
+    // local's storage, beside the payload (the layout every tagged load and store uses). Asking
+    // `runtime_value_tag` for it panicked the compiler on a by-reference descriptor argument.
+    if matches!(source_ty, PhpType::TaggedScalar) {
+        let pointer = abi::int_result_reg(ctx.emitter);
+        ctx.materialize_local_storage_address(slot, pointer)?;
+        abi::emit_load_from_address(ctx.emitter, source_tag_reg, pointer, 8);
+        return Ok(());
+    }
     if !matches!(source_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
         abi::emit_load_int_immediate(
             ctx.emitter,

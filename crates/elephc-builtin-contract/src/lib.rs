@@ -34,6 +34,8 @@ mod php_version;
 mod registry;
 mod requirements;
 mod runtime_id;
+/// Named character references and the keep rule for `htmlspecialchars(…, double_encode: false)`.
+pub mod html_entities;
 mod spec;
 mod support;
 mod symbol_registry;

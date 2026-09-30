@@ -554,17 +554,50 @@ pub(super) fn lower_backend_gap_builtin_shape(
             expr,
         ));
     }
+    // The native reducer carries an 8-byte INTEGER accumulator, so only an `int` initial carry
+    // may take it. Any other carry — a closure, a string, an array, an object — goes to the
+    // boxed-carry helper, which is php's own definition of `array_reduce()`. Laravel's middleware
+    // `Pipeline::then()` reduces with a CLOSURE carry, and that value came back boxed as an int.
+    // The same holds for the SOURCE: the native reducer walks a packed array of 8-byte or string
+    // slots, so a hash, a gradual value or `mixed` elements take the helper too.
+    let native_reduce_source = |ctx: &LoweringContext<'_, '_>| {
+        matches!(
+            materialized_expr_type_for_merge(ctx, &args[0]).codegen_repr(),
+            PhpType::Array(element)
+                if !matches!(element.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        )
+    };
     if builtin == "array_reduce"
         && args.len() == 3
-        && matches!(
-            materialized_expr_type_for_merge(ctx, &args[0]).codegen_repr(),
-            PhpType::Mixed | PhpType::Union(_)
-        )
+        && (!native_reduce_source(&*ctx)
+            || !matches!(
+                materialized_expr_type_for_merge(ctx, &args[2]).codegen_repr(),
+                PhpType::Int
+            ))
     {
         return Some(lower_function_call(
             ctx,
             &crate::names::Name::unqualified(
                 crate::array_reduce_prelude::ARRAY_REDUCE_DEFAULT_NAME,
+            ),
+            args,
+            expr,
+        ));
+    }
+    // `htmlspecialchars()`'s fourth argument, `$double_encode`: the native helper always
+    // double-encodes, which is php's answer for `true`, so only a flag that may be false goes to
+    // the prelude loop that keeps valid character references. Laravel's `e()` passes it on every
+    // Blade `{{ }}`, and the four-operand call stopped EIR lowering.
+    if builtin == "htmlspecialchars"
+        && args.len() == 4
+        && !crate::types::call_args::has_named_args(args)
+        && !args.iter().any(is_spread_arg)
+        && !matches!(args[3].kind, ExprKind::BoolLiteral(true))
+    {
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(
+                crate::htmlspecialchars_prelude::HTMLSPECIALCHARS_DOUBLE_ENCODE_NAME,
             ),
             args,
             expr,

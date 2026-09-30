@@ -50,14 +50,52 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
         release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, span);
         return;
     }
-    ctx.emit_void(
-        op,
-        vec![array_value.value, value.value],
-        None,
-        op.default_effects(),
-        Some(span),
-    );
+    let operands = if op == Op::RuntimeCall && push_goes_through_offset_set(ctx, &ctx.local_type(array)) {
+        // php runs `$obj[] = $v` as `$obj->offsetSet(null, $v)`. The two-operand form is the
+        // SPL containers' native `append()`, which a user `ArrayAccess` class does not have:
+        // the backend refused the push with "method call to unknown method Bag::append".
+        let null_key = ctx
+            .builder
+            .emit_with_effects(
+                Op::ConstNull,
+                Vec::new(),
+                None,
+                IrType::I64,
+                PhpType::Void,
+                Ownership::NonHeap,
+                Op::ConstNull.default_effects(),
+                Some(span),
+            )
+            .expect("const_null produces a value");
+        vec![array_value.value, null_key, value.value]
+    } else {
+        vec![array_value.value, value.value]
+    };
+    ctx.emit_void(op, operands, None, op.default_effects(), Some(span));
     release_persisted_string_operand(ctx, value, span);
+}
+
+/// Returns whether `$value[] = $v` on a value of this static type is `offsetSet(null, $v)`: an
+/// `ArrayAccess` object other than the SPL containers the runtime backs directly, whose push
+/// lowers to their native `append()`. Anything else keeps its existing lowering — an array or a
+/// hash is written in place, and an object that is NOT `ArrayAccess` must still raise php's
+/// "Cannot use object of type … as array".
+fn push_goes_through_offset_set(ctx: &LoweringContext<'_, '_>, ty: &PhpType) -> bool {
+    let PhpType::Object(class_name) = ty.codegen_repr() else {
+        return false;
+    };
+    if !type_satisfies_array_access_for_ir(ctx, &ty.codegen_repr()) {
+        return false;
+    }
+    !matches!(
+        crate::names::php_symbol_key(class_name.trim_start_matches('\\')).as_str(),
+        "arrayobject"
+            | "arrayiterator"
+            | "recursivearrayiterator"
+            | "spldoublylinkedlist"
+            | "splqueue"
+            | "splstack"
+    )
 }
 
 /// Prepares an indexed-array local for an offset assignment.

@@ -328,6 +328,7 @@ mod scope_reload;
 mod native_scope;
 use native_scope::*;
 mod status;
+mod interface_miss;
 
 #[allow(unused_imports)]
 use calls::*;
@@ -386,6 +387,9 @@ pub(super) use dynamic_calls::{
 };
 pub(in crate::codegen::lower_inst) use dynamic_calls::{
     lower_eval_owned_method_call, lower_eval_owned_property_get,
+};
+pub(in crate::codegen::lower_inst) use interface_miss::{
+    emit_branch_if_eval_saved_object_is_a, emit_eval_interface_method_on_miss,
 };
 pub(super) use native_object_construction::{
     lower_eval_native_object_new, lower_eval_native_object_new_fallback,

@@ -222,6 +222,15 @@ fn parse_stmt_dispatch(
                 keyword, span,
             ))
         }
+        // PHP's empty statement: a stray `;` (`$x = 1;;`, `if ($a) ;`) is a statement that does
+        // nothing. nikic/php-parser's generated parsers are full of `;;`.
+        Token::Semicolon => {
+            *pos += 1;
+            Ok(Stmt::new(StmtKind::Synthetic(Vec::new()), span))
+        }
+        // A bare `{ ... }` block. PHP gives it no scope of its own, so its statements simply run
+        // in place.
+        Token::LBrace => Ok(Stmt::new(StmtKind::Synthetic(blocks::parse_block(tokens, pos)?), span)),
         Token::Goto => crate::parser::terminal_goto::parse_goto(tokens, pos, span),
         Token::Identifier(_) if crate::parser::terminal_goto::starts_label(tokens, *pos) => {
             crate::parser::terminal_goto::parse_label(tokens, pos, span)

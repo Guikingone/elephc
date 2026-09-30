@@ -680,6 +680,47 @@ fn test_htmlspecialchars_ent_flags() {
     );
 }
 
+/// Verifies `htmlspecialchars()`'s fourth parameter, `$double_encode`, on both backends.
+///
+/// `true` re-encodes every `&`; `false` keeps each character reference the doctype considers
+/// valid: HTML 4.01 names (case-sensitive, no `&apos;`), `&#…;`/`&#x…;` up to U+10FFFF, and under
+/// `ENT_XML1` only the five XML names. Laravel's `e()` passes the flag positionally on every Blade
+/// `{{ }}`, and the four-argument call stopped EIR lowering (and fataled inside `eval()`).
+///
+/// Reference value captured from php 8.5.10.
+#[test]
+fn test_htmlspecialchars_double_encode_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function e($value, $doubleEncode = true) {
+    return htmlspecialchars($value ?? '', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8', $doubleEncode);
+}
+$s = "&apos; &nbsp; &foo; &#39; &#x27; &#xZZ; &#1114111; &#1114112; &# &#; &amp &AMP; &Eacute; <b>\"q\"</b> 'x' &";
+echo e($s), "\n";
+echo e($s, false), "\n";
+echo htmlspecialchars("&apos; &amp; &nbsp;", ENT_QUOTES | ENT_XML1, 'UTF-8', false), "\n";
+echo htmlspecialchars("&apos; &nbsp;", ENT_QUOTES | ENT_XHTML, 'UTF-8', false), "\n";
+echo eval('return htmlspecialchars("&nbsp; &foo; <i>", ENT_QUOTES, "UTF-8", false);'), "\n";
+echo eval('return htmlspecialchars("&nbsp; <i>", ENT_QUOTES, "UTF-8", true);'), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "&amp;apos; &amp;nbsp; &amp;foo; &amp;#39; &amp;#x27; &amp;#xZZ; &amp;#1114111; ",
+            "&amp;#1114112; &amp;# &amp;#; &amp;amp &amp;AMP; &amp;Eacute; ",
+            "&lt;b&gt;&quot;q&quot;&lt;/b&gt; &#039;x&#039; &amp;\n",
+            "&amp;apos; &nbsp; &amp;foo; &#39; &#x27; &amp;#xZZ; &#1114111; &amp;#1114112; ",
+            "&amp;# &amp;#; &amp;amp &amp;AMP; &Eacute; &lt;b&gt;&quot;q&quot;&lt;/b&gt; ",
+            "&#039;x&#039; &amp;\n",
+            "&apos; &amp; &amp;nbsp;\n",
+            "&apos; &nbsp;\n",
+            "&nbsp; &amp;foo; &lt;i&gt;\n",
+            "&amp;nbsp; &lt;i&gt;\n",
+        )
+    );
+}
+
 /// Regression: the shared `lower_html_escape` emitter must name the builtin that was actually
 /// called in its argument-coercion diagnostic. `htmlentities()` with an uncoercible (array)
 /// subject previously reported "htmlspecialchars string coercion ..." instead of htmlentities.

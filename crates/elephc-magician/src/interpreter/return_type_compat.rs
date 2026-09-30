@@ -12,7 +12,7 @@
 //! - Pending class declarations are checked before they are registered in the eval context.
 
 use super::*;
-use crate::context::eval_array_iterator_class_is_a;
+use crate::context::{eval_array_iterator_class_is_a, eval_builtin_class_is_a};
 
 /// Returns whether an implementation can accept every required declared parameter type.
 pub(super) fn method_parameter_type_signature_accepts(
@@ -552,6 +552,12 @@ fn eval_return_class_type_is_a(
     // class before any object exists.
     if actual_resolved.eq_ignore_ascii_case("ArrayIterator") {
         return eval_array_iterator_class_is_a(&expected_resolved);
+    }
+    // Every other PHP builtin iterator or container class is in the same position -- native, no
+    // eval declaration -- and `getIterator(): \EmptyIterator` (phpoption's `None`) was refused at
+    // declaration for it. PHP's own hierarchy for those classes answers the question.
+    if let Some(is_a) = eval_builtin_class_is_a(&actual_resolved, &expected_resolved) {
+        return is_a;
     }
     if context
         .class_parent_names(&actual_resolved)

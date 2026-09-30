@@ -1614,6 +1614,12 @@ fn emit_branch_if_saved_receiver_implements(
             ctx.emitter.instruction(&format!("jne {}", target_label));          // branch to the matching iterator_count object path
         }
     }
+    // An eval-created object carries the generic `stdClass` header, so the native matcher cannot
+    // see the interfaces its declaring class implements; the bridge can. Without this probe
+    // `iterator_to_array()` over such an object fataled with "unsupported kind".
+    if ctx.module.required_runtime_features.eval_bridge {
+        super::eval::emit_branch_if_eval_saved_object_is_a(ctx, interface_name, target_label);
+    }
     Ok(())
 }
 

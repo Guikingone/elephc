@@ -333,6 +333,12 @@ fn try_compile_source_to_asm_with_defines_repr(
     // before the optimizer, so the checker and the backend only ever see ordinary PHP.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
     let resolved = elephc::optimize::fold_constants_for_target(resolved, target());
+    // Mirrors `pipeline::compile`'s `conditional-functions` phase: a function declared inside
+    // `if (!function_exists(...))` binds when the statement runs, through a variant group.
+    // Without it the harness compiled such a declaration as absent, and a program the CLI
+    // runs failed here with "Call to undefined function".
+    let resolved =
+        elephc::conditional_functions::bind_conditional_declarations(resolved, target());
     let mut check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     set_fixture_linked_extensions(&check_result.required_libraries);

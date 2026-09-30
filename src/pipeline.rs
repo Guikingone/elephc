@@ -570,6 +570,9 @@ pub(crate) fn compile(config: CliConfig) {
         };
     timings.record_since("autoload-run", phase_started);
     decl_trace("after autoload-run", &ast);
+    // Which eager Composer `files` entry declared each function, for handing one back to the
+    // runtime when the backend cannot lower a body it declares (`BackendDeferral`).
+    let eager_function_files = declaration_source_files.eager_function_files.clone();
 
     // Inject compatibility functions only after autoload expansion has exposed the complete
     // closed-world program. Their EIR routing is type-directed, so the declarations must be
@@ -1127,6 +1130,10 @@ pub(crate) fn compile(config: CliConfig) {
             process::exit(1);
         }
     };
+    // With class files the runtime could load instead, a body that fails EIR validation is handed
+    // back like a body the backend refuses: its class file goes to the runtime autoloader and the
+    // build runs again. Without them, validation stays fail-fast.
+    ir_lower::collect_invalid_bodies(!deferrable_class_files.is_empty());
     let mut ir_module = match ir_lower::lower_program_with_source_catalog(
         &ast,
         &check_result,
@@ -1136,6 +1143,22 @@ pub(crate) fn compile(config: CliConfig) {
         source_catalog,
     ) {
         Ok(module) => module,
+        Err(ir_lower::LoweringError::InvalidBodies { first, failures, module }) => {
+            crate::progress::clear();
+            crate::autoload::deferral::BackendDeferral::for_module(
+                &module,
+                &deferral_class_files,
+                &deferrable_class_files,
+                &deferred_class_files,
+                &eager_function_files,
+            )
+            .rerun_without_refused_bodies(&failures);
+            for (body, error) in &failures {
+                eprintln!("EIR validation failure in {body}: {error}");
+            }
+            eprintln!("EIR lowering error: EIR validation failed: {first:?}");
+            process::exit(1);
+        }
         Err(err) => {
             crate::progress::clear();
             eprintln!("EIR lowering error: {}", err);
@@ -1229,6 +1252,7 @@ pub(crate) fn compile(config: CliConfig) {
             &deferral_class_files,
             &deferrable_class_files,
             &deferred_class_files,
+            &eager_function_files,
         ))
     };
     backend::emit_and_link(backend::BackendInputs {

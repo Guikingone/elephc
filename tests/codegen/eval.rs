@@ -33245,6 +33245,111 @@ echo (closureSrcFree())();');
     );
 }
 
+/// Returns into eval'd code from a compiled method that ran `iterator_to_array()` over an object.
+///
+/// The object path of `iterator_to_array` keeps the iterator in x19/r12, the callee-saved
+/// nested-call register, across its `valid`/`current`/`next` calls. The frame only reserved a
+/// save slot for that register when the function contained one of a few listed opcodes, and a
+/// builtin call was not one of them, so the method returned with its caller's x19/r12 replaced
+/// by the iterator. A compiled caller survived it; the eval bridge's Rust caller did not, and the
+/// interpreter crashed unboxing a value through the clobbered register. Laravel's Dotenv
+/// `RepositoryBuilder::createWithDefaultAdapters()` is this shape, and it failed every request.
+#[test]
+fn test_compiled_iterator_to_array_returns_into_eval_intact() {
+    let out = compile_and_run(
+        r#"<?php
+final class Collector
+{
+    private static function items()
+    {
+        foreach (['a', 'b'] as $item) {
+            yield $item;
+        }
+    }
+
+    public static function fromGenerator()
+    {
+        $items = \iterator_to_array(self::items());
+        return count($items) . ':' . implode(',', $items);
+    }
+
+    public static function fromAggregate()
+    {
+        return count(\iterator_to_array(new \ArrayObject([1, 2, 3])));
+    }
+}
+
+eval('$first = Collector::fromGenerator();
+$second = Collector::fromAggregate();
+echo $first, "|", $second, "|", Collector::fromGenerator();');
+"#,
+    );
+    assert_eq!(out, "2:a,b|3|2:a,b");
+}
+
+/// Iterates eval-declared `Iterator` and `IteratorAggregate` objects from COMPILED code.
+///
+/// An object the interpreter built carries the generic `stdClass` header whatever class declared
+/// it, so the native interface-table scan found no `Iterator` entry: a compiled `foreach` over
+/// such an object iterated nothing, and `iterator_to_array()` / `iterator_count()` fataled with
+/// "foreach over iterable with unsupported kind". Laravel's Dotenv hands a runtime-loaded
+/// `PhpOption\Some` (an `IteratorAggregate`) to `iterator_to_array()` on every request.
+#[test]
+fn test_compiled_iteration_over_eval_declared_iterables() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalBox implements IteratorAggregate {
+    private $v;
+    public function __construct($v) { $this->v = $v; }
+    public function getIterator(): Traversable { return new ArrayIterator(["k" => $this->v]); }
+}
+class EvalWalker implements Iterator {
+    private $i = 0;
+    public function current(): mixed { return $this->i * 10; }
+    public function key(): mixed { return $this->i; }
+    public function next(): void { $this->i++; }
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 3; }
+}');
+
+function collect($o) { return iterator_to_array($o); }
+function collectList($o) { return iterator_to_array($o, false); }
+function counted(\Traversable $o) { return iterator_count($o); }
+function walk($o) { foreach ($o as $k => $v) { echo $k, '=', $v, ','; } echo '|'; }
+
+$box = 'EvalBox';
+$walker = 'EvalWalker';
+echo json_encode(collect(new $box(5))), json_encode(collectList(new $box(6))), json_encode(collect(new $walker())), '|';
+echo counted(new $box(7)), counted(new $walker()), '|';
+walk(new $box(8));
+walk(new $walker());
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"{"k":5}[6][0,10,20]|13|k=8,|0=0,1=10,2=20,|"#
+    );
+}
+
+/// Hands an `ArrayIterator` built by interpreted code to a compiled `foreach`.
+///
+/// The interpreter keeps its own `ArrayIterator` state on the eval context, and allocated the
+/// program's COMPILED class without running its constructor, so compiled iteration read an
+/// uninitialized typed property and died on "must not be accessed before initialization".
+#[test]
+fn test_eval_built_array_iterator_iterates_in_compiled_code() {
+    let out = compile_and_run(
+        r#"<?php
+function make() { return eval('return new ArrayIterator(["k" => 1, "j" => 2]);'); }
+$it = make();
+echo get_class($it), '|';
+foreach ($it as $k => $v) { echo $k, '=', $v, ','; }
+echo '|', json_encode(iterator_to_array(make())), '|', count(make());
+"#,
+    );
+    assert_eq!(out, r#"ArrayIterator|k=1,j=2,|{"k":1,"j":2}|2"#);
+}
+
 /// Answers `instanceof` from COMPILED code about a class declared at runtime.
 ///
 /// The closed-world fold that erases an `instanceof` whose target has no compiled metadata was

@@ -119,7 +119,11 @@ fn collect_declared_in_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
         | StmtKind::PackedClassDecl { name, .. } => {
             out.insert(name.trim_start_matches('\\').to_string());
         }
-        StmtKind::NamespaceBlock { body, .. } => {
+        // A spliced include's body runs unconditionally where it stands, so what it declares is
+        // declared: `UseUse.php`'s `require __DIR__.'/../UseItem.php'` declares `UseItem`.
+        StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. }
+        | StmtKind::Synthetic(body) => {
             for inner in body {
                 collect_declared_in_stmt(inner, out);
             }

@@ -814,6 +814,103 @@ pub struct EvalArrayIteratorState {
     pub(super) position: usize,
 }
 
+/// Returns PHP's own parent and interfaces for one builtin iterator or container class.
+///
+/// The interfaces are listed TRANSITIVELY (`Iterator` brings `Traversable`) but the parent's are
+/// not: `eval_builtin_class_is_a` walks the parent chain. These are fixed facts of PHP 8, not
+/// of any program, and they matter to a declaration: `getIterator(): \EmptyIterator` is php's
+/// covariant narrowing of `IteratorAggregate::getIterator(): Traversable`, and a class the
+/// interpreter could not relate to `Traversable` was refused at declaration.
+fn eval_builtin_class_hierarchy(class_name: &str) -> Option<(Option<&'static str>, &'static [&'static str])> {
+    const ITERATOR: &[&str] = &["Iterator", "Traversable"];
+    const OUTER: &[&str] = &["OuterIterator", "Iterator", "Traversable"];
+    const RECURSIVE_OUTER: &[&str] = &["RecursiveIterator", "OuterIterator", "Iterator", "Traversable"];
+    const AGGREGATE: &[&str] = &["IteratorAggregate", "Traversable"];
+    let entry: (Option<&'static str>, &'static [&'static str]) =
+        match class_name.trim_start_matches('\\').to_ascii_lowercase().as_str() {
+            "arrayiterator" => (
+                None,
+                &["SeekableIterator", "Iterator", "Traversable", "ArrayAccess", "Serializable", "Countable"],
+            ),
+            "recursivearrayiterator" => (Some("ArrayIterator"), &["RecursiveIterator"]),
+            "arrayobject" => (
+                None,
+                &["IteratorAggregate", "Traversable", "ArrayAccess", "Serializable", "Countable"],
+            ),
+            "emptyiterator" | "generator" | "multipleiterator" => (None, ITERATOR),
+            "iteratoriterator" | "recursiveiteratoriterator" => (None, OUTER),
+            "filteriterator" | "limititerator" | "norewinditerator" | "infiniteiterator"
+            | "appenditerator" => (Some("IteratorIterator"), &[]),
+            "cachingiterator" => (
+                Some("IteratorIterator"),
+                &["ArrayAccess", "Countable", "Stringable"],
+            ),
+            "recursivecachingiterator" => (Some("CachingIterator"), RECURSIVE_OUTER),
+            "callbackfilteriterator" | "regexiterator" => (Some("FilterIterator"), &[]),
+            "recursivecallbackfilteriterator" => (Some("CallbackFilterIterator"), RECURSIVE_OUTER),
+            "recursivefilteriterator" => (Some("FilterIterator"), RECURSIVE_OUTER),
+            "parentiterator" => (Some("RecursiveFilterIterator"), &[]),
+            "recursiveregexiterator" => (Some("RegexIterator"), RECURSIVE_OUTER),
+            "recursivetreeiterator" => (Some("RecursiveIteratorIterator"), &[]),
+            "spldoublylinkedlist" => (
+                None,
+                &["Iterator", "Traversable", "Countable", "ArrayAccess", "Serializable"],
+            ),
+            "splqueue" | "splstack" => (Some("SplDoublyLinkedList"), &[]),
+            "splobjectstorage" => (
+                None,
+                &["Countable", "Iterator", "Traversable", "Serializable", "ArrayAccess"],
+            ),
+            "splfixedarray" => (
+                None,
+                &["IteratorAggregate", "Traversable", "ArrayAccess", "Countable", "JsonSerializable"],
+            ),
+            "splheap" | "splpriorityqueue" => (None, &["Iterator", "Traversable", "Countable"]),
+            "splminheap" | "splmaxheap" => (Some("SplHeap"), &[]),
+            "splfileinfo" => (None, &["Stringable"]),
+            "directoryiterator" => (
+                Some("SplFileInfo"),
+                &["SeekableIterator", "Iterator", "Traversable"],
+            ),
+            "filesystemiterator" => (Some("DirectoryIterator"), &[]),
+            "recursivedirectoryiterator" => (Some("FilesystemIterator"), &["RecursiveIterator"]),
+            "globiterator" => (Some("FilesystemIterator"), &["Countable"]),
+            "splfileobject" => (
+                Some("SplFileInfo"),
+                &["RecursiveIterator", "SeekableIterator", "Iterator", "Traversable"],
+            ),
+            "spltempfileobject" => (Some("SplFileObject"), &[]),
+            "dateperiod" => (None, AGGREGATE),
+            "weakmap" => (None, &["ArrayAccess", "Countable", "IteratorAggregate", "Traversable"]),
+            _ => return None,
+        };
+    Some(entry)
+}
+
+/// Answers whether one PHP builtin class is, or descends from, a class-like name.
+///
+/// `None` means the class is not in the builtin table, so the caller keeps its own answer.
+pub fn eval_builtin_class_is_a(class_name: &str, target_class: &str) -> Option<bool> {
+    let target = target_class.trim_start_matches('\\');
+    let mut current = class_name.trim_start_matches('\\').to_string();
+    eval_builtin_class_hierarchy(&current)?;
+    loop {
+        if current.eq_ignore_ascii_case(target) {
+            return Some(true);
+        }
+        let Some((parent, interfaces)) = eval_builtin_class_hierarchy(&current) else {
+            return Some(false);
+        };
+        if interfaces.iter().any(|name| name.eq_ignore_ascii_case(target)) {
+            return Some(true);
+        }
+        let Some(parent) = parent else {
+            return Some(false);
+        };
+        current = parent.to_string();
+    }
+}
+
 /// Returns whether `ArrayIterator` is, or descends from, one class-like name.
 ///
 /// Kept beside the state table rather than in the interpreter, because both the `instanceof`

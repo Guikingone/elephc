@@ -214,6 +214,26 @@ fn canonical(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
+/// Returns the `eager_function_files` key of one EIR function name: the public qualified name,
+/// with a conditional-declaration variant's `__elephc_conditional_fn_<hash>_` prefix removed.
+fn eager_function_key(name: &str) -> String {
+    const VARIANT: &str = "__elephc_conditional_fn_";
+    let (namespace, local) = match name.rsplit_once('\\') {
+        Some((namespace, local)) => (Some(namespace), local),
+        None => (None, name),
+    };
+    let local = local
+        .strip_prefix(VARIANT)
+        .and_then(|rest| rest.split_once('_'))
+        .map(|(_hash, public)| public)
+        .unwrap_or(local);
+    let public = match namespace {
+        Some(namespace) => format!("{namespace}\\{local}"),
+        None => local.to_string(),
+    };
+    crate::names::php_symbol_key(public.trim_start_matches('\\'))
+}
+
 /// Environment variable carrying, into a re-run of the compiler, the class files an earlier
 /// round of the same build already handed to the runtime (newline-separated paths).
 const DEFERRED_FILES_ENV: &str = "ELEPHC_DEFERRED_CLASS_FILES";
@@ -263,6 +283,7 @@ impl BackendDeferral {
         class_files: &HashMap<String, String>,
         deferrable: &HashSet<PathBuf>,
         already_deferred: &HashSet<PathBuf>,
+        eager_function_files: &HashMap<String, PathBuf>,
     ) -> Self {
         let class_by_id: HashMap<u64, &str> = module
             .class_infos
@@ -287,6 +308,13 @@ impl BackendDeferral {
                 function.lexical_class.clone()
             };
             let Some(owner) = owner else {
+                // A function an eager Composer `files` entry declares has no class, but it has a
+                // file the runtime requires at startup anyway: hand THAT file back. A conditional
+                // declaration (`if (!function_exists('f'))`) reaches here under its variant name
+                // `Ns\__elephc_conditional_fn_<hash>_f`, whose public name is `Ns\f`.
+                if let Some(path) = eager_function_files.get(&eager_function_key(&function.name)) {
+                    body_files.insert(function.name.clone(), path.clone());
+                }
                 continue;
             };
             let Some(path) = class_file(class_files, &owner) else {
@@ -451,5 +479,21 @@ mod tests {
             .collect();
         assert_eq!(names, vec!["Kept"]);
         assert_eq!(kept.len(), 2, "the echo statement stays");
+    }
+
+    /// A refused body is traced back to the eager file declaring its PUBLIC function name, both
+    /// for a conditional-declaration variant and for a plain function, namespaced or global.
+    #[test]
+    fn eager_function_key_recovers_the_public_name() {
+        assert_eq!(
+            eager_function_key("Psy\\__elephc_conditional_fn_c10072783125ac47_info"),
+            "psy\\info"
+        );
+        assert_eq!(
+            eager_function_key("__elephc_conditional_fn_0123456789abcdef_str_contains"),
+            "str_contains"
+        );
+        assert_eq!(eager_function_key("Laravel\\Prompts\\text"), "laravel\\prompts\\text");
+        assert_eq!(eager_function_key("helper"), "helper");
     }
 }

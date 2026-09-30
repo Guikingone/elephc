@@ -450,13 +450,12 @@ fn matching_callable_sig(return_sigs: &[FunctionSig]) -> Option<FunctionSig> {
 }
 
 /// Computes the callable signature metadata for callable return codegen.
-fn callable_return_codegen_sig(mut sig: FunctionSig) -> FunctionSig {
-    for (idx, (_, ty)) in sig.params.iter_mut().enumerate() {
-        if !sig.declared_params.get(idx).copied().unwrap_or(false)
-            && matches!(ty, PhpType::Mixed)
-        {
-            *ty = PhpType::Int;
-        }
-    }
+///
+/// An undeclared parameter of the returned closure stays `mixed`, which is what the closure is
+/// compiled with (`__eir_closure_*(x: Heap(Mixed))`) and what a call through the descriptor boxes
+/// every argument to. It used to be rewritten to `int`, a contract the closure never had:
+/// `$f = make(); $f("str")` was refused "callable $f parameter $x expects Int, got Str", and so was
+/// Laravel's `array_reduce($pipes, $this->carry(), $destination)` with its closure carry.
+fn callable_return_codegen_sig(sig: FunctionSig) -> FunctionSig {
     sig
 }

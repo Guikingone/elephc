@@ -256,6 +256,53 @@ echo implode(',', iterator_to_array($wrap(['a', 'b']))), "\n";
     assert_eq!(out, "2,4\na,b\n");
 }
 
+/// A CONDITIONALLY declared function nothing calls must not export a fabricated `int` either.
+///
+/// The fix above covered a plain declaration. `if (!function_exists('f')) { function f($x) {…} }`
+/// takes two other routes, and both still fabricated the type:
+///
+/// - `function_exists('f')` with a literal name force-resolved `f` by checking a call that passed
+///   `0` for every parameter, so the guard itself typed `$x` as `int`;
+/// - the declaration is a function-variant group, and the end-of-pass resolution of an uncalled
+///   group kept the `int` seed the plain-function path widens to `mixed`.
+///
+/// This is Laravel's `Illuminate/Reflection/helpers.php`: `lazy($class, …)` is guarded, called by
+/// nothing, and hands `$class` to an anonymous class whose trait method is declared
+/// `Closure $closure` — "parameter $closure expects Callable, got Int" refused the build. The
+/// called polyfill beside it shows a guarded function still binds and runs with a string.
+///
+/// Oracle: php 8.5.10 prints the asserted lines.
+#[test]
+fn test_an_uncalled_conditional_function_does_not_freeze_its_callees_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+trait ReflectsClosures {
+    protected function firstParameterType(Closure $closure): string {
+        $params = (new ReflectionFunction($closure))->getParameters();
+        return $params === [] ? 'none' : (string) $params[0]->getType();
+    }
+}
+if (!function_exists('lazy_type')) {
+    function lazy_type($class, $callback = 0) {
+        static $reflector;
+        $reflector ??= new class {
+            use ReflectsClosures;
+            public function typeOf($callback) { return $this->firstParameterType($callback); }
+        };
+        [$class, $callback] = is_string($class) ? [$class, $callback] : [$reflector->typeOf($class), $class];
+        return $class;
+    }
+}
+if (!function_exists('shout')) {
+    function shout($s) { return strtoupper($s) . '!'; }
+}
+echo function_exists('lazy_type') ? "declared\n" : "missing\n";
+echo shout('hi'), "\n";
+"#,
+    );
+    assert_eq!(out, "declared\nHI!\n");
+}
+
 
 /// A call may OMIT a by-reference parameter that has a default.
 ///

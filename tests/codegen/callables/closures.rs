@@ -1173,6 +1173,119 @@ echo $sum;
     assert_eq!(out, "10");
 }
 
+/// Verifies `array_reduce()` with a non-`int` carry and a callback returned from a method, which
+/// is Laravel's middleware `Pipeline::then()`, plus string, array and default-`null` carries.
+///
+/// Three defects stood in the way, all general:
+/// - the checker typed `array_reduce()` as a fixed `int` (the native reducer's register), so
+///   `$pipeline('x')` was refused "not a callable (got Int)";
+/// - a closure RETURNED from a function or method reported its untyped parameters as `int`, so
+///   `array_reduce(…, $this->carry(), $destination)` was refused "callback parameter $stack
+///   expects Int, got Callable", and `$f = mk(); $f("str", 2)` "expects Int, got Str";
+/// - a typed array with a non-`int` carry still took the native integer reducer.
+///
+/// Reference value captured from php 8.5.10.
+#[test]
+fn test_array_reduce_closure_carry_and_returned_closure_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+function mk() { return function ($x, $y) { return "got:" . $x . "/" . $y; }; }
+$f = mk();
+echo $f("str", 2), "\n";
+
+class Pipeline {
+    protected function carry() {
+        return function ($stack, $pipe) {
+            return function ($passable) use ($stack, $pipe) { return $pipe($passable, $stack); };
+        };
+    }
+    public function then(Closure $destination, array $pipes) {
+        $pipeline = array_reduce(array_reverse($pipes), $this->carry(), function ($passable) use ($destination) {
+            return $destination($passable);
+        });
+        return $pipeline('x');
+    }
+}
+$pipes = [fn ($v, $next) => "a(" . $next($v) . ")", fn ($v, $next) => "b(" . $next($v) . ")"];
+echo (new Pipeline())->then(fn ($v) => "dest($v)", $pipes), "\n";
+echo array_reduce(['a', 'b', 'c'], fn ($carry, $v) => $carry . $v, '>'), "|";
+echo json_encode(array_reduce([1, 2, 3], fn ($carry, $v) => [...$carry, $v * 2], [])), "|";
+echo array_reduce([1, 2, 3], fn ($carry, $v) => $carry + $v, 10), "|";
+var_dump(array_reduce([], fn ($carry, $v) => $carry));
+"#,
+    );
+    assert_eq!(out, "got:str/2\na(b(dest(x)))\n>abc|[2,4,6]|16|NULL\n");
+}
+
+/// Verifies closures stored in an array stay callable when the array is read through a `mixed`
+/// parameter.
+///
+/// An array literal of closures was never stamped with the callable element tag (10), so every
+/// `mixed` reader boxed each closure as an int and invoking it fataled "mixed value is not
+/// callable". The boxed-carry `array_reduce()` helper iterates exactly such a parameter.
+///
+/// Reference value captured from php 8.5.10.
+#[test]
+fn test_closures_in_an_array_stay_callable_through_a_mixed_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function red(mixed $array, callable $cb, mixed $init) {
+    $c = $init;
+    foreach ($array as $v) { $c = $cb($c, $v); }
+    return $c;
+}
+$pipes = [fn ($v) => "a($v)", fn ($v) => "b($v)"];
+echo red($pipes, function ($carry, $pipe) { return $pipe($carry); }, 'x'), "\n";
+function first(mixed $array) { foreach ($array as $v) { return $v; } }
+$f = first($pipes);
+echo $f('y'), "\n";
+echo is_callable(first($pipes)) ? "callable\n" : "not callable\n";
+"#,
+    );
+    assert_eq!(out, "b(a(x))\na(y)\ncallable\n");
+}
+
+/// Verifies a call through a property-held closure is not bound to an unrelated closure literal
+/// lowered earlier in the same function.
+///
+/// Lowering a closure literal parks its static binding for the next consumer, and an arrow
+/// function passed as a method ARGUMENT is never consumed. The `finally` block's
+/// `($this->fin)($this->passable)` then took that stale binding: a direct call to the arrow
+/// function with the other ternary arm's captures, refused only because those captures did not
+/// dominate the call ("UseNotDominated"). This is Laravel's `Pipeline::then()`.
+///
+/// Reference value captured from php 8.5.10.
+#[test]
+fn test_property_closure_call_does_not_take_a_stale_closure_binding() {
+    let out = compile_and_run(
+        r#"<?php
+class Db { public function transaction(Closure $f) { return "tx(" . $f() . ")"; } }
+class Pipe {
+    public $fin = null;
+    public $tx = 0;
+    public $passable = 'p';
+    public function then(Closure $pipeline) {
+        try {
+            return $this->tx !== 0
+                ? (new Db())->transaction(fn () => $pipeline($this->passable))
+                : $pipeline($this->passable);
+        } finally {
+            if ($this->fin) {
+                ($this->fin)($this->passable);
+            }
+        }
+    }
+}
+$p = new Pipe();
+echo $p->then(fn ($v) => "d($v)"), "\n";
+$p->fin = function ($v) { echo "finally($v)\n"; };
+$p->tx = 1;
+echo $p->then(fn ($v) => "d($v)"), "\n";
+"#,
+    );
+    assert_eq!(out, "d(p)\nfinally(p)\ntx(d(p))\n");
+}
+
 // --- IIFE (Immediately Invoked Function Expression) ---
 
 /// Verifies immediately-invoked anonymous function expression (IIFE) returning a constant.

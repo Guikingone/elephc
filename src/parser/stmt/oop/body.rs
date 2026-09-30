@@ -648,6 +648,13 @@ fn parse_class_like_method(
     let return_type = if *pos < tokens.len() && tokens[*pos].0 == Token::Colon {
         *pos += 1;
         Some(parse_type_expr(tokens, pos, span)?)
+    } else if method_name.eq_ignore_ascii_case("__toString") {
+        // php 8 declares `: string` on every `__toString()` that omits it — Reflection reports
+        // the return type, and a returned `5` is coerced to "5". Without it, an undeclared
+        // `__toString()` was refused as incompatible with `Stringable::__toString(): string` or
+        // with a parent's declared one, which is how Laravel writes `HtmlString`, `MessageBag`,
+        // `ViewErrorBag` and `Stringable`.
+        Some(TypeExpr::Str)
     } else {
         None
     };

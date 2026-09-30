@@ -42,6 +42,17 @@ docs/superpowers/
 /examples/symfony-app/probe_*
 /examples/symfony-app/*.lock.tmp
 
+# The Laravel fixture follows the same rules: per-tag binaries beside the stock entry point, and
+# the multi-gigabyte `.s`/`.o` slices a --web build of the whole framework leaves behind.
+/examples/laravel-app/public/index
+/examples/laravel-app/public/index.s
+/examples/laravel-app/public/index.o
+/examples/laravel-app/public/index.map
+/examples/laravel-app/public/index_*
+/examples/laravel-app/**/*.s
+/examples/laravel-app/**/*.o
+/examples/laravel-app/database/database.sqlite
+
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 graft/
 

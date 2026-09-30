@@ -1345,3 +1345,42 @@ echo get_class($e), ":", $e->tag;
     );
     assert_eq!(out, "Matcher:m|Dumper:d|Matcher:p|Dumper:n");
 }
+
+/// Verifies `new` accepts a static property as its class name: `new static::$builder(...)`,
+/// `new self::$map['key'](...)` and `new Named::$map['key'](...)`.
+///
+/// PHP's `new_variable` production includes `class_name '::' simple_variable`, so the class a
+/// `new` instantiates may be the value of a static property, dereferenced further like any other
+/// `new_variable`. Laravel's `Application::configure()` is
+/// `new static::$applicationBuilder(new static($basePath))`; the parser read `new static`, met
+/// `::`, and refused the whole of `Illuminate\Foundation\Application` with "Parentheses are
+/// required before accessing a parenthesis-free new expression", which left the framework's core
+/// class to the interpreter. `static::` must follow late static binding, as `SubApp` shows.
+///
+/// Reference value captured from php 8.5.10.
+#[test]
+fn test_new_reads_class_name_from_static_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Builder { public function __construct(public object $app) {} public function name() { return static::class . '(' . get_class($this->app) . ')'; } }
+class OtherBuilder extends Builder {}
+class App {
+    protected static string $builder = Builder::class;
+    public static array $map = ['x' => OtherBuilder::class];
+    public static function configure() { return (new static::$builder(new static()))->name(); }
+    public static function viaSelf() { return (new self::$map['x'](new self()))->name(); }
+}
+class SubApp extends App { protected static string $builder = OtherBuilder::class; }
+echo App::configure(), "|";
+echo SubApp::configure(), "|";
+echo App::viaSelf(), "|";
+echo get_class(new App::$map['x'](new SubApp())), "|";
+$n = new App::$map['x'](new App());
+echo $n->name();
+"#,
+    );
+    assert_eq!(
+        out,
+        "Builder(App)|OtherBuilder(SubApp)|OtherBuilder(App)|OtherBuilder|OtherBuilder(App)"
+    );
+}

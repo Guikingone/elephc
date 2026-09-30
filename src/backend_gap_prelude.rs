@@ -1109,8 +1109,12 @@ pub fn inject_if_used(
     let needs_parse_str = usage.references("parse_str");
     // And so is `addcslashes()`, which has no backend implementation either.
     let needs_addcslashes = usage.references("addcslashes");
+    // And so is `htmlspecialchars()`'s fourth parameter: the backend helper always
+    // double-encodes, so `$double_encode = false` is answered by a prelude loop.
+    let needs_htmlspecialchars = usage.references("htmlspecialchars");
     if sources.is_empty()
         && !needs_addcslashes
+        && !needs_htmlspecialchars
         && !inject_randomizer
         && !needs_natural_order
         && !needs_tokenizer
@@ -1124,6 +1128,11 @@ pub fn inject_if_used(
         return program;
     }
     let mut combined = Vec::new();
+    if needs_htmlspecialchars {
+        let declarations = crate::htmlspecialchars_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
     if needs_addcslashes {
         let declarations = crate::addcslashes_prelude::declarations();
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);

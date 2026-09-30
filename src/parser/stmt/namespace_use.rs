@@ -58,6 +58,11 @@ pub(super) fn parse_namespace_stmt(
     )?;
     let mut body = Vec::new();
     let mut errors = Vec::new();
+    // Anonymous classes are hoisted out of expression position and appended to the program. One
+    // written inside this block must land INSIDE it, or it loses the block's namespace and `use`
+    // imports: `namespace { use Lib\T; … new class { use T; } }` failed with "unknown or invalid
+    // trait 'T'". Classes hoisted before the block belong to the enclosing scope and are put back.
+    let outer_anonymous_classes = crate::parser::take_anonymous_classes();
     while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
         match parse_stmt(tokens, pos) {
             Ok(stmt) => body.push(stmt),
@@ -67,6 +72,8 @@ pub(super) fn parse_namespace_stmt(
             }
         }
     }
+    body.append(&mut crate::parser::take_anonymous_classes());
+    crate::parser::restore_anonymous_classes(outer_anonymous_classes);
     expect_token(
         tokens,
         pos,

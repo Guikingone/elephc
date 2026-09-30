@@ -995,3 +995,37 @@ echo describe(new Square(3));
     );
     assert_eq!(out, "square 3/9");
 }
+
+/// Verifies an undeclared `__toString()` return type is php's implicit `string`: it satisfies
+/// `Stringable`, a user interface declaring `: string`, and a parent's declared override, and a
+/// returned int is coerced like any `: string` function.
+///
+/// The checker refused all three shapes ("without declaring a compatible return type"), which
+/// is how Laravel's `HtmlString`, `MessageBag`, `ViewErrorBag` and `Stringable` are written, and
+/// each refusal left the class to the interpreter.
+///
+/// Reference value captured from php 8.5.10.
+#[test]
+fn test_undeclared_tostring_return_type_is_implicitly_string() {
+    let out = compile_and_run(
+        r#"<?php
+interface Htmlable { public function toHtml(); }
+interface Renderable { public function __toString(): string; }
+class HtmlString implements Htmlable, Stringable {
+    public function __construct(protected $html = '') {}
+    public function toHtml() { return $this->html; }
+    public function __toString() { return $this->toHtml(); }
+}
+class Bag implements Renderable {
+    public function __toString() { return 'bag'; }
+}
+class Base { public function __toString(): string { return 'base'; } }
+class Child extends Base { public function __toString() { return 'child'; } }
+class Number { public function __toString() { return 5; } }
+echo new HtmlString('<b>x</b>'), "|", new Bag(), "|", new Child(), "|", new Number(), "\n";
+echo (new HtmlString('s')) instanceof Stringable ? "stringable" : "plain", "|";
+echo (new ReflectionMethod('Number', '__toString'))->getReturnType(), "\n";
+"#,
+    );
+    assert_eq!(out, "<b>x</b>|bag|child|5\nstringable|string\n");
+}

@@ -48,7 +48,39 @@ pub(in crate::interpreter) fn eval_array_iterator_new(
     if let Some(replaced) = context.set_array_iterator(identity, storage) {
         eval_release_value(context, values, replaced)?;
     }
+    eval_array_iterator_mirror_into_compiled_class(object, storage, context, values)?;
     Ok(object)
+}
+
+/// Gives a compiled `ArrayIterator` class the same initial array this instance was built with.
+///
+/// `new_object` allocates the program's COMPILED `ArrayIterator` when it has one, but its
+/// constructor never ran, so its storage properties were uninitialized. The state above lives
+/// on this context, where compiled code cannot see it: an instance an interpreted
+/// `getIterator()` returned to a compiled `foreach` or `iterator_to_array()` read the compiled
+/// `$values` and died on "must not be accessed before initialization". Running the compiled
+/// constructor with the same array keeps the interpreter's own implementation -- which serves
+/// every method, including ones the program never compiled -- while the compiled one sees the
+/// array it was built from. A mutation made through the interpreter after construction is not
+/// mirrored; returning a freshly built iterator is the shape this serves.
+fn eval_array_iterator_mirror_into_compiled_class(
+    object: RuntimeCellHandle,
+    storage: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if eval_aot_method_dispatch_metadata_in_hierarchy("ArrayIterator", "__construct", context, values)?
+        .is_none()
+    {
+        return Ok(());
+    }
+    eval_native_constructor_with_evaluated_args(
+        "ArrayIterator",
+        object,
+        positional_args(vec![storage]),
+        context,
+        values,
+    )
 }
 
 /// Returns whether one identity is a live `ArrayIterator`.

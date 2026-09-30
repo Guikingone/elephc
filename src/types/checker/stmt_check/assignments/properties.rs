@@ -669,6 +669,15 @@ pub(super) fn refined_untyped_property_assignment_type(
             }
         }
         PhpType::Int if current != val_ty => Some(val_ty.clone()),
+        // An untyped slot holds whatever is written to it; a scalar default (`= false`, `= ''`,
+        // `= 1.5`) is only its FIRST value. Keeping the default's type made every other write a
+        // silent coercion: Laravel-style `protected $withinTransaction = false;` assigned `'db'`
+        // by a method read back as `true`. Only the same scalar kind stays in place.
+        PhpType::Bool | PhpType::False | PhpType::Float | PhpType::Str
+            if !untyped_scalar_slot_holds(current, val_ty) =>
+        {
+            Some(PhpType::Mixed)
+        }
         _ => {
             if is_empty_array_placeholder(current)
                 && matches!(val_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
@@ -688,6 +697,18 @@ pub(super) fn refined_untyped_property_assignment_type(
             }
             merge_untyped_property_array_storage(current, val_ty)
         }
+    }
+}
+
+/// Returns whether an untyped property slot of scalar storage `slot` represents every value of
+/// `value` without conversion: the same scalar kind, or `false` into a `bool` slot.
+fn untyped_scalar_slot_holds(slot: &PhpType, value: &PhpType) -> bool {
+    match (slot, value) {
+        (PhpType::Bool, PhpType::Bool | PhpType::False) => true,
+        (PhpType::False, PhpType::False) => true,
+        (PhpType::Float, PhpType::Float) => true,
+        (PhpType::Str, PhpType::Str) => true,
+        _ => false,
     }
 }
 

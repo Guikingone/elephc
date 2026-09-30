@@ -884,14 +884,10 @@ fn matching_callable_sig(return_sigs: &[FunctionSig]) -> Option<FunctionSig> {
     }
 }
 
-/// Normalizes untyped mixed parameters in callable-return metadata for codegen.
-fn callable_return_codegen_sig(mut sig: FunctionSig) -> FunctionSig {
-    for (idx, (_, ty)) in sig.params.iter_mut().enumerate() {
-        if !sig.declared_params.get(idx).copied().unwrap_or(false)
-            && matches!(ty, PhpType::Mixed)
-        {
-            *ty = PhpType::Int;
-        }
-    }
+/// Returns the callable-return metadata for one method's returned closure, unchanged.
+///
+/// An undeclared parameter stays `mixed`, the type the closure is compiled with; see the twin
+/// in `functions::resolution::signature`, which used to rewrite it to a fabricated `int`.
+fn callable_return_codegen_sig(sig: FunctionSig) -> FunctionSig {
     sig
 }

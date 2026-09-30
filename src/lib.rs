@@ -34,6 +34,8 @@ pub use cli_entry::run as run_cli;
 pub mod autoload;
 /// Gradual and associative `array_merge()` compatibility prelude.
 mod addcslashes_prelude;
+/// `htmlspecialchars()`'s `$double_encode` parameter as AST-built prelude declarations.
+mod htmlspecialchars_prelude;
 pub mod array_merge_prelude;
 /// Default-initial-value `array_reduce()` compatibility prelude.
 pub mod array_reduce_prelude;
