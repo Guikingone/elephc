@@ -322,14 +322,7 @@ echo probe(1, $argc);"#,
 /// The same for the retype form, whose abandon is the same operation.
 #[test]
 fn test_retype_of_a_by_value_parameter_does_not_over_release_the_argument() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-function probe($a, int $n): string {
-    $a = "grown" . $n;
-    return $a;
-}
-echo probe([1, 2], $argc);"#,
-    );
+    let out = compile_and_run_with_heap_debug(fixtures::RETYPE_BY_VALUE_PARAMETER);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "grown1");
     assert!(
@@ -369,21 +362,21 @@ echo probe($argc);"#,
 /// Implicit retype: int local re-binds to a fresh string slot.
 #[test]
 fn test_implicit_retype_int_to_string() {
-    let out = compile_and_run("<?php $a = $argc; $a = \"ciao\"; echo $a;");
+    let out = compile_and_run(fixtures::RETYPE_INT_TO_STRING);
     assert_eq!(out, "ciao");
 }
 
 /// Implicit retype: heap string local re-binds to a fresh int slot (old value released).
 #[test]
 fn test_implicit_retype_string_to_int() {
-    let out = compile_and_run("<?php $a = \"ciao\" . $argc; $a = 7; echo $a;");
+    let out = compile_and_run(fixtures::RETYPE_STRING_TO_INT);
     assert_eq!(out, "7");
 }
 
 /// The RHS of a retype assignment reads the OLD binding.
 #[test]
 fn test_retype_rhs_reads_old_value() {
-    let out = compile_and_run("<?php $a = $argc; $a = \"n=\" . $a; echo $a;");
+    let out = compile_and_run(fixtures::RETYPE_RHS_READS_OLD_VALUE);
     assert_eq!(out, "n=1");
 }
 
@@ -401,25 +394,21 @@ fn test_retype_rhs_reads_old_value() {
 /// what flagged this fixture, and it holds the same source string.
 #[test]
 fn test_retype_after_loop() {
-    let out = compile_and_run(
-        "<?php $a = \"x\"; for ($i = 0; $i < $argc; $i++) { $a .= \"y\"; } $a = 7; echo $a;",
-    );
+    let out = compile_and_run(fixtures::RETYPE_AFTER_LOOP);
     assert_eq!(out, "7");
 }
 
 /// A by-value closure capture keeps the old value across a later retype.
 #[test]
 fn test_closure_capture_before_retype() {
-    let out = compile_and_run(
-        "<?php $a = $argc; $f = function() use ($a) { return $a; }; $a = \"x\"; echo $f() . $a;",
-    );
+    let out = compile_and_run(fixtures::RETYPE_CAPTURE_BEFORE_RETYPE);
     assert_eq!(out, "1x");
 }
 
 /// Fully-constant retype (AST folding may pre-resolve it — output must match either way).
 #[test]
 fn test_constant_retype() {
-    let out = compile_and_run("<?php $a = 3; $a = \"ciao\"; echo $a;");
+    let out = compile_and_run(fixtures::RETYPE_CONSTANT_RETYPE);
     assert_eq!(out, "ciao");
 }
 
@@ -428,7 +417,7 @@ fn test_constant_retype() {
 /// null-tolerant — the unset path may have nulled the old slot already).
 #[test]
 fn test_retype_after_conditional_unset_of_heap_local() {
-    let out = compile_and_run("<?php $a = \"s\" . $argc; if ($argc > 1) { unset($a); } $a = 7; echo $a;");
+    let out = compile_and_run(fixtures::RETYPE_AFTER_CONDITIONAL_UNSET);
     assert_eq!(out, "7");
 }
 
@@ -440,7 +429,7 @@ fn test_retype_after_conditional_unset_of_heap_local() {
 /// the old binding.
 #[test]
 fn test_compound_assign_retype_reads_the_old_binding() {
-    let out = compile_and_run("<?php $x = $argc; $x .= \"a\"; echo $x;");
+    let out = compile_and_run(fixtures::RETYPE_COMPOUND_ASSIGN_RETYPE);
     assert_eq!(out, "1a");
 }
 
@@ -448,7 +437,7 @@ fn test_compound_assign_retype_reads_the_old_binding() {
 /// fresh string slot, and the abandoned int slot holds nothing to free.
 #[test]
 fn test_compound_assign_retype_leaves_a_clean_heap() {
-    let out = compile_and_run_with_heap_debug("<?php $x = $argc; $x .= \"a\"; echo $x;");
+    let out = compile_and_run_with_heap_debug(fixtures::RETYPE_COMPOUND_ASSIGN_RETYPE);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "1a");
     assert!(
@@ -489,7 +478,7 @@ fn test_string_incdec_local_retyped_to_int_leaves_a_clean_heap() {
 /// The retyped-away heap string is released at the retype, not leaked past the int rebind.
 #[test]
 fn test_implicit_retype_string_to_int_leaves_a_clean_heap() {
-    let out = compile_and_run_with_heap_debug("<?php $a = \"ciao\" . $argc; $a = 7; echo $a;");
+    let out = compile_and_run_with_heap_debug(fixtures::RETYPE_STRING_TO_INT);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "7");
     assert!(
@@ -502,9 +491,7 @@ fn test_implicit_retype_string_to_int_leaves_a_clean_heap() {
 /// The heap string the retyped binding allocates is owned by the FRESH slot alone.
 #[test]
 fn test_implicit_retype_int_to_string_leaves_a_clean_heap() {
-    let out = compile_and_run_with_heap_debug(
-        "<?php $a = $argc; $a = \"ciao\" . $argc; echo strlen($a), \"|\", $a;",
-    );
+    let out = compile_and_run_with_heap_debug(fixtures::RETYPE_INT_TO_HEAP_STRING);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "5|ciao1");
     assert!(
@@ -517,8 +504,7 @@ fn test_implicit_retype_int_to_string_leaves_a_clean_heap() {
 /// A retyped ARRAY binding releases its table before the string rebind.
 #[test]
 fn test_implicit_retype_array_to_string_leaves_a_clean_heap() {
-    let out =
-        compile_and_run_with_heap_debug("<?php $a = [1, $argc]; $a = \"str\" . $argc; echo $a;");
+    let out = compile_and_run_with_heap_debug(fixtures::RETYPE_ARRAY_TO_STRING);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "str1");
     assert!(
@@ -534,7 +520,7 @@ fn test_implicit_retype_array_to_string_leaves_a_clean_heap() {
 /// leak described on `test_string_read_above_a_kill_still_answers_correctly`.
 #[test]
 fn test_retype_rhs_reads_the_old_heap_value() {
-    let out = compile_and_run("<?php $a = \"n\" . $argc; $a = strlen($a); echo $a;");
+    let out = compile_and_run(fixtures::RETYPE_RHS_READS_OLD_HEAP_VALUE);
     assert_eq!(out, "2");
 }
 
@@ -547,7 +533,7 @@ fn test_retype_rhs_reads_the_old_heap_value() {
 /// cause as above), so only the ANSWER is asserted.
 #[test]
 fn test_retype_whose_new_value_contains_the_old_one() {
-    let out = compile_and_run("<?php $a = \"s\" . $argc; $a = [$a]; echo $a[0];");
+    let out = compile_and_run(fixtures::RETYPE_NEW_VALUE_CONTAINS_OLD);
     assert_eq!(out, "s1");
 }
 
@@ -555,18 +541,7 @@ fn test_retype_whose_new_value_contains_the_old_one() {
 /// stranding it in the abandoned slot.
 #[test]
 fn test_implicit_retype_object_to_string_leaves_a_clean_heap() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-class Box {
-    public int $v;
-    public function __construct(int $v) { $this->v = $v; }
-    public function __destruct() { echo "bye|"; }
-}
-$o = new Box($argc);
-echo $o->v, "|";
-$o = "gone" . $argc;
-echo $o;"#,
-    );
+    let out = compile_and_run_with_heap_debug(fixtures::RETYPE_OBJECT_TO_STRING);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "1|bye|gone1");
     assert!(
@@ -579,15 +554,7 @@ echo $o;"#,
 /// The same retype inside a function body, where the frame is torn down on return.
 #[test]
 fn test_implicit_retype_in_function_body_leaves_a_clean_heap() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-function probe(int $n): string {
-    $a = $n;
-    $a = "ciao" . $n;
-    return $a;
-}
-echo probe($argc);"#,
-    );
+    let out = compile_and_run_with_heap_debug(fixtures::RETYPE_IN_FUNCTION_BODY);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "ciao1");
     assert!(
@@ -605,23 +572,7 @@ echo probe($argc);"#,
 /// release exactly once: the destructor prints, and it prints BEFORE the new value is echoed.
 #[test]
 fn test_retyped_object_and_array_slots_survive_the_frame_epilogue() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-class Box {
-    public int $v;
-    public function __construct(int $v) { $this->v = $v; }
-    public function __destruct() { echo "bye|"; }
-}
-function probe(int $n): string {
-    $o = new Box($n);
-    $arr = [1, $n];
-    echo $o->v, "|", $arr[1], "|";
-    $o = "s" . $n;
-    $arr = "t" . $n;
-    return $o . $arr;
-}
-echo probe($argc);"#,
-    );
+    let out = compile_and_run_with_heap_debug(fixtures::RETYPE_OBJECT_AND_ARRAY_EPILOGUE);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "1|1|bye|s1t1");
     assert!(
@@ -720,16 +671,7 @@ fn test_null_involved_retype_is_a_widening_merge_not_a_retype() {
 /// object). Warns like any other incompatible retype and is `--strict-locals`-rejected.
 #[test]
 fn test_scalar_to_object_retype_allocates_a_fresh_instance() {
-    const SOURCE: &str = r#"<?php
-class Box {
-    public int $v;
-    public function __construct(int $v) { $this->v = $v; }
-    public function __destruct() { echo "bye|"; }
-}
-$x = $argc;
-echo $x, "|";
-$x = new Box($argc);
-echo $x->v;"#;
+    const SOURCE: &str = fixtures::RETYPE_SCALAR_TO_OBJECT;
 
     let warnings = check_files_diagnostics(&[("main.php", SOURCE)], "main.php", false)
         .expect("the scalar-to-object fixture must type-check");
@@ -819,7 +761,7 @@ fn test_unset_then_retype_int_to_string_with_ir_opt_off() {
 #[test]
 fn test_implicit_retype_int_to_string_with_ir_opt_off() {
     let out = compile_cli_file_and_run_with_flags(
-        "<?php $a = $argc; $a = \"ciao\"; echo $a;",
+        fixtures::RETYPE_INT_TO_STRING,
         &["--ir-opt=off"],
     );
     assert_eq!(out, "ciao");
@@ -850,9 +792,7 @@ fn test_marked_local_across_branches_with_ir_opt_off() {
 /// which is ABOVE the retype in source — against that fresh slot.
 #[test]
 fn test_retype_below_an_if_survives_tail_sinking() {
-    let out = compile_and_run(
-        "<?php $q = \"a\" . $argc; if ($argc > 5) { echo \"x\"; } echo $q; $q = 1; echo \"|\", $q;",
-    );
+    let out = compile_and_run(fixtures::RETYPE_IF_TAIL_SINKING);
     assert_eq!(out, "a1|1");
 }
 
@@ -862,9 +802,7 @@ fn test_retype_below_an_if_survives_tail_sinking() {
 /// no copy had written yet, so the old binding's value vanished silently.
 #[test]
 fn test_two_retypes_below_an_if_survive_tail_sinking() {
-    let out = compile_and_run(
-        "<?php $q = \"a\" . $argc; if ($argc > 5) { echo \"x\"; } echo $q; $q = 1; $q = \"s\"; echo \"|\", $q;",
-    );
+    let out = compile_and_run(fixtures::RETYPE_TWO_RETYPE_TAIL_SINKING);
     assert_eq!(out, "a1|s");
 }
 
@@ -880,27 +818,21 @@ fn test_unset_kill_below_an_if_survives_tail_sinking() {
 /// An `if`/`else` sinks the tail into both written arms.
 #[test]
 fn test_retype_below_an_if_else_survives_tail_sinking() {
-    let out = compile_and_run(
-        "<?php $q = \"a\" . $argc; if ($argc > 5) { echo \"x\"; } else { echo \"y\"; } echo $q; $q = 1; echo \"|\", $q;",
-    );
+    let out = compile_and_run(fixtures::RETYPE_IF_ELSE_TAIL_SINKING);
     assert_eq!(out, "ya1|1");
 }
 
 /// `switch` is tail-sunk too, into every case body.
 #[test]
 fn test_retype_below_a_switch_survives_tail_sinking() {
-    let out = compile_and_run(
-        "<?php $q = \"a\" . $argc; switch ($argc) { case 9: echo \"x\"; break; default: echo \"y\"; } echo $q; $q = 1; echo \"|\", $q;",
-    );
+    let out = compile_and_run(fixtures::RETYPE_SWITCH_TAIL_SINKING);
     assert_eq!(out, "ya1|1");
 }
 
 /// `try` is in the same tail-sinking set.
 #[test]
 fn test_retype_below_a_try_survives_tail_sinking() {
-    let out = compile_and_run(
-        "<?php $q = \"a\" . $argc; try { echo \"t\"; } catch (Exception $e) { echo \"c\"; } echo $q; $q = 1; echo \"|\", $q;",
-    );
+    let out = compile_and_run(fixtures::RETYPE_TRY_TAIL_SINKING);
     assert_eq!(out, "ta1|1");
 }
 
@@ -976,9 +908,7 @@ fn test_retype_whose_throwing_rhs_unwinds_out_of_the_callee_frame() {
 /// leak, which would mask what this fixture is for.
 #[test]
 fn test_retype_below_an_if_leaves_a_clean_heap() {
-    let out = compile_and_run_with_heap_debug(
-        "<?php $n = $argc; if ($argc > 5) { echo \"x\"; } echo $n; $n = \"s\" . $argc; echo \"|\", $n;",
-    );
+    let out = compile_and_run_with_heap_debug(fixtures::RETYPE_SCALAR_TAIL_SINKING);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "1|s1");
     assert!(
@@ -1007,9 +937,7 @@ fn test_unset_kill_below_an_if_leaves_a_clean_heap() {
 /// the abandoned string is released exactly once whatever the optimizer duplicated.
 #[test]
 fn test_retype_of_a_heap_local_below_an_if_leaves_a_clean_heap() {
-    let out = compile_and_run_with_heap_debug(
-        "<?php $q = \"a\" . $argc; if ($argc > 5) { echo \"x\"; } $q = 1; echo \"|\", $q;",
-    );
+    let out = compile_and_run_with_heap_debug(fixtures::RETYPE_WITHOUT_PRIOR_READ);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "|1");
     assert!(
@@ -1023,17 +951,7 @@ fn test_retype_of_a_heap_local_below_an_if_leaves_a_clean_heap() {
 /// a COPY of the string outlives the retype.
 #[test]
 fn test_retype_below_an_if_in_a_function_answers_correctly() {
-    let out = compile_and_run(
-        r#"<?php
-function probe(int $n): string {
-    $q = "a" . $n;
-    if ($n > 5) { echo "x"; }
-    $r = $q;
-    $q = 1;
-    return $r . "|" . $q;
-}
-echo probe($argc);"#,
-    );
+    let out = compile_and_run(fixtures::RETYPE_COPY_ACROSS_TAIL_SINKING);
     assert_eq!(out, "a1|1");
 }
 
@@ -1263,9 +1181,7 @@ fn test_unset_of_a_program_wide_global_name_keeps_the_binding() {
 /// were lowered — which is why the veto covers the kill alone.
 #[test]
 fn test_retype_of_a_program_wide_global_name_still_runs() {
-    let out = compile_and_run(
-        "<?php function w() { global $a; $a = 5; } $a = \"x\"; $a = 2; w(); echo $a;",
-    );
+    let out = compile_and_run(fixtures::RETYPE_GLOBAL_AFTER_RETYPE);
     assert_eq!(out, "5");
 }
 
@@ -1478,14 +1394,7 @@ fn test_two_marked_names_at_one_shared_position_both_compile() {
 /// storage — which at region entry is a plain `int`.
 #[test]
 fn test_retype_inside_a_conversion_hiding_region() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-$a = [1, $argc];
-$b = $argc;
-$b = $argc > 0 ? "yes" : "no";
-$a[0] = "s";
-echo $b, "|", $a[0], "|", $a[1];"#,
-    );
+    let out = compile_and_run_with_heap_debug(fixtures::RETYPE_RETYPE_AND_ARRAY_ELEMENT);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "yes|s|1");
     assert!(
@@ -1894,12 +1803,7 @@ fn test_concat_marked_local_reassigned_to_a_literal_reaches_a_checked_builtin() 
 #[test]
 fn test_marked_local_in_a_closure_over_an_unmarked_mixed_capture() {
     let runs = compile_and_run_with_heap_debug_per_argv(
-        r#"<?php
-$m = $argc > 1 ? 1 : "z";
-$f = function (int $n) use ($m) { if ($n > 1) { $m = 0; } else { $m = "s"; } return $m; };
-var_dump($f($argc));
-$g = function () use ($m) { return $m; };
-var_dump($g());"#,
+        fixtures::SILENT_MIXED_CAPTURE,
         &[&[], &["x"]],
     );
     let expected = [
@@ -2605,9 +2509,7 @@ fn test_marked_local_piped_into_a_known_by_value_target() {
 /// re-bind releases the array the loop left behind rather than leaking it.
 #[test]
 fn test_by_value_foreach_value_var_retypes_after_the_loop() {
-    let out = compile_and_run_with_heap_debug(
-        "<?php $v = $argc; $arr = [1, 2, 3]; foreach ($arr as $v) { } $v = \"ciao\" . $argc; echo $v;",
-    );
+    let out = compile_and_run_with_heap_debug(fixtures::RETYPE_FOREACH_TARGET_RETYPE);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "ciao1");
     assert!(
