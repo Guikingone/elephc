@@ -1228,6 +1228,29 @@ echo $f(), $bound(), $f();
     assert_eq!(out, "7997");
 }
 
+/// Both bind spellings retain the new receiver after its source variable is unset.
+#[test]
+fn test_closure_bind_retains_receiver_after_unset_with_clean_heap() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class BoundOwner {
+    public int $v;
+    public function __construct(int $v) { $this->v = $v; }
+    public function getter() { return function() { return $this->v; }; }
+}
+$original = new BoundOwner(7);
+$getter = $original->getter();
+$receiver = new BoundOwner(99);
+$first = $getter->bindTo($receiver);
+$second = Closure::bind($getter, $receiver);
+unset($receiver);
+echo $first(), "|", $second(), "|", $getter();
+unset($first, $second, $getter, $original);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "99|99|7");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies the static `Closure::bind($closure, $newThis)` form rebinds `$this`.
 #[test]
 fn test_closure_bind_static_form() {
