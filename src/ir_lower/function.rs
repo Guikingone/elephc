@@ -1818,14 +1818,15 @@ fn add_closures(module: &mut Module, closures: Vec<Function>) {
     }
 }
 
-/// Marks a function as a generator using its checked classification and remaining yield tokens.
+/// Marks a function as a generator using its signature classification and remaining yield tokens.
 fn mark_generator_if_needed(
     function: &mut Function,
     body: &[Stmt],
     is_generator: bool,
 ) {
-    // `is_generator` is the bit the CHECKER recorded from the source body, before any pass ran.
-    // It is the only sound answer here, for two separate reasons:
+    // Named functions and methods pass the checker's source-body bit as `is_generator`.
+    // Closures pass the optimized-body scan from `closure_signature_from_ast` instead.
+    // Retaining a true classification matters for two separate reasons:
     //
     // - Scanning `body` alone answers `false` once a pass has pruned the last `yield`, which is
     //   what made a folded generator compile to a plain function returning null and hang its
@@ -1849,8 +1850,9 @@ fn mark_generator_if_needed(
 /// read by `Generator::getReturn()`, so the body return type is `Mixed`. For every other
 /// function it is the declared signature return type.
 ///
-/// `is_generator` is the bit the checker recorded from the SOURCE body; the body scan beside it
-/// can only add generator-ness, never withhold it. A declared `: Generator` return is
+/// `is_generator` comes from the source-body checker bit for named functions/methods and from
+/// the optimized-body signature scan for closures. The additional body scan can only add
+/// generator-ness, never withhold it. A declared `: Generator` return is
 /// deliberately NOT consulted, because a factory declares one without being one.
 fn generator_body_return_type(
     body: &[Stmt],

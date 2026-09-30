@@ -9,7 +9,8 @@
 //!
 //! Key details:
 //! - PHP decides whether a declaration is a GENERATOR syntactically, before any folding. The
-//!   checker records that on `FunctionSig::is_generator` and lowering reads the bit. A declared
+//!   checker records that on `FunctionSig::is_generator`. Named functions and methods retain
+//!   that bit; EIR closure signatures re-scan the optimized body for yield tokens. A declared
 //!   `: Generator` return is not that bit: a factory declares one without containing `yield`
 //!   (issue #1086).
 //! - Pre-check target folding runs before the checker records the bit, so a fold that deletes
@@ -24,7 +25,7 @@
 //!   `function g() { if (false) { yield 1; } return; }` and `function g() { return; yield; }`.
 //! - Keeping the un-rewritten body is the conservative answer. The retained `yield` is
 //!   unreachable by construction, so the cost is one unexecuted statement in a body that is now
-//!   lowered as the coroutine it is — and it is paid only by a body whose every `yield` is dead.
+//!   lowered as the coroutine it is, and it is paid only by a body whose every `yield` is dead.
 
 use crate::parser::ast::Stmt;
 
