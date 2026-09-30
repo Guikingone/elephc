@@ -115,5 +115,6 @@ pub(crate) use serialize::emit_serialize;
 pub(crate) use shell_exec::emit_shell_exec;
 pub(crate) use strtotime::emit_strtotime;
 pub(crate) use strtotime::emit_strtotime_data;
+pub(crate) use strtotime::STRTOTIME_ISO_PAD_BUF_LEN;
 pub(crate) use time::emit_time;
 pub(crate) use unserialize::emit_unserialize;

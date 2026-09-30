@@ -448,7 +448,8 @@ Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are
 - `json_encode()` of an instance of a declared class (not `stdClass`) encodes its declared public properties only: dynamic properties added to an `#[\AllowDynamicProperties]` class, or created by a deprecated runtime-named write, are not included. `var_dump()`, `print_r()` and `var_export()` do list them, after the declared properties and in insertion order, exactly like PHP.
 - `func_num_args()`, `func_get_args()` and `func_get_arg()` are compiled away rather than dispatched as builtin calls, so `function_exists()` reports `false` for the three names where PHP reports `true`. Their supported scopes are also narrower than PHP's: they are rejected in a function with an optional (defaulted) parameter, in a function that already declares its own variadic, and in a method that overrides a parent method or implements an interface method. Everywhere else — functions, methods, static methods, closures, arrow functions, generators — they match PHP, including reporting the current values of the declared parameters. See [Functions](./functions.md#argument-introspection).
 - Surplus *positional* arguments (PHP allows any user function to be called with more arguments than it declares, discarding the extras) are only accepted by functions that use one of the three argument-introspection constructs above. Every other user function keeps elephc's compile-time arity check, so `function f($a) {} f(1, 2);` is a compile error where PHP runs it.
-- `serialize()`/`unserialize()` cover scalars, arrays, and objects (including the `__serialize`/`__unserialize`/`__sleep`/`__wakeup` magic methods and `r:`/`R:` object back-references) byte-for-byte compatibly with PHP. Objects are registered before property hydration, so self-references resolve correctly; unknown class names materialize as `__PHP_Incomplete_Class` and preserve their original wire name. Remaining gaps: the deprecated `Serializable` interface (`C:` wire form) is unsupported, writing a property of an unserialized object held in a `Mixed` does not persist (a separate `Mixed` property-write limitation), and `unserialize()` does not emit PHP's `E_WARNING` / `E_NOTICE` on malformed input — it just returns `false`.
+- `serialize()`/`unserialize()` cover scalars, arrays, and objects (including the `__serialize`/`__unserialize`/`__sleep`/`__wakeup` magic methods and `r:`/`R:` object back-references) byte-for-byte compatibly with PHP. Objects are registered before property hydration, so self-references resolve correctly; unknown class names materialize as `__PHP_Incomplete_Class` and preserve their original wire name. Remaining gaps: the deprecated `Serializable` interface (`C:` wire form) is unsupported, writing a property of an unserialized object held in a `Mixed` does not persist (a separate `Mixed` property-write limitation), and `unserialize()` does not emit PHP's `E_WARNING` / `E_NOTICE` on malformed input — it just returns `false`. A value that does not match a typed property's declaration is not rejected with PHP's `TypeError` (`Cannot assign string to property C::$n of type ?int`); a `?int` property then holds `null` rather than the mismatched value.
+- An uninitialized typed property (declared without a default and never assigned) is omitted by `print_r()`, `var_export()`, `get_object_vars()` and `(array)`, like PHP, but `json_encode()` and `serialize()` still emit it (as `0`, `""` or `null` for its type) where PHP leaves it out, and `var_dump()` names a nullable or union type `uninitialized(mixed)` where PHP prints the declared type (`uninitialized(?string)`).
 - Reading a variable after a straight-line `unset()` of it is a compile error (`Undefined variable: $a`), in both modes, where PHP warns and evaluates the read as `null`. See [Local retyping](#local-retyping) above for the full unset/retype/mixed-storage mechanism and the `isset()`/`empty()`/`??` probes that stay legal on the unbound name.
 - `defined('Class::CONST')` follows PHP visibility for public, protected, and private members, including lexical `self::`/`parent::`, runtime-called-class `static::`, and constants imported into classes through traits; invalid relative scopes raise a catchable `Error`. The trait name itself is not a valid constant receiver. Eval-mode class-constant names remain unresolved, and dynamic and first-class-callable `defined()` names are still rejected at compile time.
 - `is_a()` and `is_subclass_of()` take a class NAME as well as an object, including an interface
@@ -466,12 +467,31 @@ Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are
   `class_implements()` lists only the directly declared interfaces; it omits their transitive
   parents and the implicit `UnitEnum`/`BackedEnum` interfaces. An enum declared inside `eval()`
   already reports both, like PHP.
+- `strtotime()` answers `false` for some strings PHP parses. After an `@<timestamp>` it accepts
+  only the one timezone token PHP ignores (`"@123 UTC"`, `"@123abc"`); a relative offset, time,
+  zone identifier, UTC offset, or strtotime keyword after the epoch (`"@123 +1 day"`,
+  `"@123 12:30"`, `"@123 Europe/Rome"`, `"@123 noon"`) is not evaluated. An ISO date needs a
+  four-digit year and two-digit time fields (`"99-01-01"` and `"2020-01-05 9:30"` are `false`),
+  and a military zone letter after a time (`"2024-06-15 12:30x"`, which PHP reads as UTC-11) is
+  not recognized. Inside `eval()`, `strtotime()` supports only `now` and zero-padded ISO dates,
+  and answers `-1` rather than `false` for anything else. See [System & I/O](./system-and-io.md)
+  for the forms that are supported.
 - `empty($box['k'])` on a **nullable static property** holding an `ArrayAccess` object
   (`public static ?Box $box`) calls `offsetGet()` without asking `offsetExists()` first, where
   PHP asks `offsetExists()` and skips `offsetGet()` for a missing offset. That property reads as
   a plain `mixed` value, so its class is not known when `empty()` is lowered. Variables, `$this`,
   instance properties (nullable or not), non-nullable static properties and call results all go
   through `offsetExists()` first.
+- `PDOException::getCode()` returns PDO's SQLSTATE string (`"HY000"`) only when the receiver is
+  statically a `PDOException`: a `catch (PDOException $e)` block, or a parameter or property
+  declared `PDOException`. Through a `Throwable`, `Exception`, or `RuntimeException` receiver
+  (`catch (Exception $e)`, a `getPrevious()` result, a `Throwable` parameter) elephc types
+  `getCode()` as `int` and reads the driver's integer code (`errorInfo[1]`), where PHP returns the
+  SQLSTATE string; an `instanceof PDOException` check on such a variable does not change that,
+  and `$e->errorInfo` does not compile on it (the property is declared on `PDOException` only).
+  Catch `PDOException`, or after the `instanceof` check pass the exception to a parameter
+  declared `PDOException`: through that receiver both `getCode()` and `$e->errorInfo[0]` give the
+  SQLSTATE. See [PDO](./pdo.md#pdoexception-shape).
 
 ### Filesystem functions not implemented
 

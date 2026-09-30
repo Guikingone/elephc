@@ -240,7 +240,7 @@ fn read_x86_64_entry(emitter: &mut Emitter) {
     emitter.instruction("js __rt_array_map_boxed_cleanup");                     // no more live source buckets remain
     emitter.instruction("mov r11, QWORD PTR [r11 + 40]");                       // locate the separately allocated hash entries
     emitter.instruction("shl r10, 6");                                          // each hash bucket occupies sixty-four bytes
-    emitter.instruction("add r11, r10");                                       // locate the selected entry in the separate storage
+    emitter.instruction("add r11, r10");                                        // locate the selected entry in the separate storage
     emitter.instruction("mov r9, QWORD PTR [r11 + 56]");                        // follow the next live insertion-order link
     abi::store_at_offset(emitter, "r9", CURSOR);
     emitter.instruction("mov r9, QWORD PTR [r11 + 8]");                         // preserve the key's low word

@@ -293,6 +293,13 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_unser_count", 8, target));
     out.push_str(&comm_directive("_unser_values", 524288, target));
     out.push_str(&comm_directive("_strtotime_clock", 8, target));
+    // Scratch copy a one-digit-month/day ISO date (`2020-1-5`) is zero-padded into before the
+    // fixed-offset ISO parser reads it (see `system::strtotime::iso_date`).
+    out.push_str(&comm_directive(
+        "_strtotime_iso_buf",
+        system::STRTOTIME_ISO_PAD_BUF_LEN,
+        target,
+    ));
     // Default-timezone state: the "TZ=<id>" env buffer (kept alive for putenv), the stored
     // identifier length (0 = none set → date_default_timezone_get returns "UTC"), and the
     // "UTC" literal returned in that default case.

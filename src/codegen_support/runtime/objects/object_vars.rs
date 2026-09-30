@@ -19,6 +19,7 @@ use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::sentinels::emit_resolve_tagged_scalar_property_tag;
 
 /// Emits `__rt_object_to_hash(object, cast_mode, scope_class_id)` for the active target.
 ///
@@ -173,6 +174,7 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x2, x10");                                         // evaluate `cmp x2, x10` before selecting the projection branch
     emitter.instruction("b.eq __rt_object_to_hash_next");                       // skip or advance the current property via `__rt_object_to_hash_next`
     emitter.instruction("mov x0, x16");                                         // prepare the projection argument or result with `mov x0, x16`
+    emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
     emitter.instruction("bl __rt_mixed_from_value");                            // call `__rt_mixed_from_value` with the prepared projection arguments
     emitter.instruction("mov x3, x0");                                          // prepare the projection argument or result with `mov x3, x0`
     emitter.instruction("ldr x0, [sp, #16]");                                   // load the result-hash slot for `ldr x0, [sp, #16]`
@@ -378,6 +380,7 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rsi, r11");                                        // evaluate `cmp rsi, r11` before selecting the projection branch
     emitter.instruction("je __rt_object_to_hash_next_x");                       // skip or advance the current property via `__rt_object_to_hash_next_x`
     emitter.instruction("mov rax, r15");                                        // prepare the projection argument or result with `mov rax, r15`
+    emit_resolve_tagged_scalar_property_tag(emitter, "rax", "rsi");
     emitter.instruction("call __rt_mixed_from_value");                          // call `__rt_mixed_from_value` with the prepared projection arguments
     emitter.instruction("mov rcx, rax");                                        // prepare the projection argument or result with `mov rcx, rax`
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // load the result-hash slot for `mov rdi, QWORD PTR [rbp - 24]`

@@ -382,10 +382,10 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_object_free_deep");                          // deep-free the remaining unreachable object node and its properties
     emitter.instruction("jmp __rt_gc_collect_cycles_free_next");                // continue scanning from the saved next header after freeing the object node
     emitter.label("__rt_gc_collect_cycles_free_array");
-    emitter.instruction("call __rt_array_free_deep");                            // deep-free the unreachable array node and its nested payloads
+    emitter.instruction("call __rt_array_free_deep");                           // deep-free the unreachable array node and its nested payloads
     emitter.instruction("jmp __rt_gc_collect_cycles_free_next");                // continue scanning from the saved next header after freeing the array node
     emitter.label("__rt_gc_collect_cycles_free_hash");
-    emitter.instruction("call __rt_hash_free_deep");                             // deep-free the unreachable hash node and its owned entries
+    emitter.instruction("call __rt_hash_free_deep");                            // deep-free the unreachable hash node and its owned entries
     emitter.instruction("jmp __rt_gc_collect_cycles_free_next");                // continue scanning from the saved next header after freeing the hash node
     emitter.label("__rt_gc_collect_cycles_free_mixed");
     emitter.instruction("call __rt_mixed_free_deep");                           // deep-free the unreachable mixed box and its boxed child

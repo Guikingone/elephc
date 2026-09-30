@@ -448,6 +448,8 @@ Because codegen passes the stack address, a declared by-reference parameter is c
 | does not accept null (`int`, `float`, `bool`, `string`) | holds `null` (`PhpType::Void`) | rejected — nothing coerces the slot on the way in |
 | anything else | matching representation | accepted |
 
+Boxed object references are a narrow exception. When a by-reference call can change an object variable to another type, elephc promotes the variable and its aliases to one shared `Mixed` cell. A later `ClassName &$value` call reuses that cell and emits a runtime entry guard, which throws a catchable `TypeError` unless the current payload is an instance of the declared class. Interface dispatch can likewise widen `ClassName &$value` to an implementing `mixed &$value` parameter without copying the cell, so writes remain visible through every alias.
+
 The second row is the one that is easy to get backwards, and it was: `types_compatible` deliberately accepts `Void` for `Int`, `Float` and `Bool`, which is **correct by value** (PHP coerces `null` to `0`/`0.0`/`false` for an internal function's by-value parameter) and wrong by reference. That acceptance short-circuited every later by-reference check, so the argument was admitted with the caller's local still typed `Void` while the callee wrote an int through the reference; the first thing the caller then did with the local reached EIR lowering as an operation on a null and produced a positionless `unsupported EIR backend feature: icmp for PHP type Void` (issue #892, reported through `curl_multi_exec()`'s `$still_running`).
 
 php-src draws the same line for a **userland** function — `function out(int &$s) {} $x = null; out($x);` is a `TypeError` there too. It is laxer only for its own **internal** functions, which is why a `curl_*` wrapper written in elephc-PHP rejects a `null` seed that php.net's examples use; `docs/php/curl.md` says so where the multi loop is documented.
@@ -465,6 +467,8 @@ Parameters without a type hint start from an `Int` fallback and are specialized 
 The same accumulation applies to instance-method and static-method parameters. Closure parameters specialize to the first observed argument type but do not widen to a union, so a closure invoked with incompatible argument types is rejected rather than coerced.
 
 Source instance interface methods have no body or concrete call-site type to infer from. Their untyped parameters and untyped returns use `Mixed` at the interface ABI. Untyped parameters in the corresponding implementing methods also keep `Mixed` storage instead of being specialized by direct calls. A declared implementation parameter cannot narrow an untyped interface parameter. This gives interface dispatch one stable argument layout while concrete return values are boxed by the interface wrapper when needed.
+
+After a method body stabilizes, its inferred return type and callable-return metadata are propagated to every inheriting class view that dispatches to that implementation. Calls through a child type therefore use the same return ABI as the inherited method body.
 
 Because that specialization is final, a `null` argument is excluded from it (`specialize_callable_var_sig_from_args`). `Void` is the one type no later call could satisfy, so adopting it would close the parameter to null alone — `$f(null); $f(5);` was rejected with *"parameter $v expects Void, got Int"* where PHP prints `nx` (issue #567). Skipping it also makes the two spellings of the same call agree: for `function ($v = null)`, `$f()` and `$f(null)` pass the same value, and only the second one used to close the parameter.
 
@@ -835,6 +839,35 @@ pub struct ClassInfo {
 ```
 
 `vtable_methods` / `vtable_slots` drive ordinary inherited instance dispatch, while `static_vtable_methods` / `static_vtable_slots` carry the parallel metadata used by `static::method()` late static binding. `allow_dynamic_properties` records the PHP 8.2 `#[\AllowDynamicProperties]` attribute so codegen can route undeclared property storage through a per-object side table. The `*_attribute_names` / `*_attribute_args` fields carry PHP 8 attribute metadata for the class, its methods, its properties, and its constants so the Reflection codegen path can materialize `ReflectionAttribute` objects. `abstract_property_hooks` records PHP 8.4 property hook contracts that concrete subclasses must satisfy, and `property_set_visibilities` records PHP 8.4 asymmetric write visibility (e.g. `public private(set)`) for properties whose write visibility differs from their read visibility. The per-slot vectors (`property_declared_slots`, `property_reference_slots`) follow the physical `properties` layout by index so hidden private parent slots keep their metadata when a child declares a same-named property.
+
+### Declaring and implementing classes
+
+Two maps answer "whose method is this?", and they answer different questions:
+
+- `method_declaring_classes` (and `static_method_declaring_classes`) names the class PHP
+  REPORTS as declaring the method: `ReflectionMethod::getDeclaringClass()` and the class in
+  `Cannot override final method X::m`. An inherited method keeps its ancestor, and a trait
+  method names the class that uses the trait.
+- `method_impl_classes` (and `static_method_impl_classes`) names the class whose BODY a call
+  runs, which is the method symbol dispatch tables and runtime hook tables point at. Codegen
+  trims it to the bodies it actually emitted, so a missing entry does not mean the method is
+  abstract (see `abstract_methods`).
+
+The two agree almost everywhere. They differ where a compiler-injected body keeps an inherited
+final method's declarer: the PDO prelude gives `PDOException` its own `getCode()` body, which
+returns the SQLSTATE string, while PHP reports that method as the final `Exception::getCode()`.
+`injected_exception_final_override` (`schema/classes/methods.rs`) accepts that one dummy-span
+override and records `PDOException` as the implementing class but `Exception` as the declaring
+class; a source class, even one named `PDOException`, never takes that path.
+
+Each consumer reads the map that matches its question:
+
+| Consumer | Map | Why |
+|---|---|---|
+| `schema::classes::interfaces::validate_interface_method` | declaring, implementing, and the class itself | the SQLSTATE `getCode(): string\|int` contract is accepted wherever the inherited body comes from, so a subclass of `PDOException` is not re-validated against `Throwable::getCode(): int` |
+| AOT reflection (`reflection_method_declaring_class_name`) | declaring | what PHP prints |
+| eval reflection rows (`eval_reflection_instance_method_declaring_class`, `eval_reflection_static_method_declaring_class`) and eval attribute registration (`eval_native_method_declaring_class`) | declaring first, implementing as a fallback | eval must report the same owner as AOT, and attributes are keyed by that owner |
+| dispatch tables, `_class_*_ptrs` hook tables | implementing | the body that runs |
 
 ### Constructor ownership
 
