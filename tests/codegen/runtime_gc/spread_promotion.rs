@@ -16,6 +16,54 @@
 
 use crate::support::*;
 
+/// Repeated promotion borrows a static property's array without consuming its owner.
+#[test]
+fn test_static_property_spread_promotion_preserves_source_and_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class SpreadSource { public static array $values = [3, 4]; }
+SpreadSource::$values = [3, $argc + 3];
+$assoc = ["x" => 1];
+$total = 0;
+for ($i = 0; $i < 25; $i++) {
+    $keyed = [...SpreadSource::$values, "k" => 1];
+    $spread = [...SpreadSource::$values, ...$assoc];
+    $keyed[0] = 99;
+    $total += count($keyed) + count($spread);
+}
+echo $total, ",", count(SpreadSource::$values), ",", SpreadSource::$values[0], ",", SpreadSource::$values[1];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "150,2,3,4");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Both ternary arms move a fresh array into a hidden merge local before spread promotion.
+#[test]
+fn test_ternary_temporary_spread_promotion_releases_moved_merge_values() {
+    let runs = compile_and_run_with_heap_debug_per_argv(
+        r#"<?php
+function make(int $value): array { return [3, $value]; }
+$assoc = ["x" => 1];
+$total = 0;
+for ($i = 0; $i < 25; $i++) {
+    $keyed = [...($argc > 1 ? [7, $i] : make($i)), "k" => 1];
+    $spread = [...($argc > 1 ? make($i) : [7, $i]), ...$assoc];
+    $total += count($keyed) + count($spread) + $keyed[0] + $spread[0];
+}
+echo $total;
+"#,
+        &[&[], &["x"]],
+    );
+    assert_eq!(runs.len(), 2);
+    for out in runs {
+        assert!(out.success, "program failed: {}", out.stderr);
+        assert_eq!(out.stdout, "400");
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    }
+}
+
 /// Verifies spreading an indexed array leaves the SOURCE untouched.
 ///
 /// `Op::ArrayToHash` consumes its operand: its promote path abandons the source indexed array
