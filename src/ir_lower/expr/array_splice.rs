@@ -343,4 +343,3 @@ fn array_splice_replacement_fits_receiver(elem_ty: &PhpType, replacement_ty: &Ph
     }
     replacement_ty == elem_ty
 }
-
