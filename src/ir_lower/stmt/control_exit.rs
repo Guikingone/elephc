@@ -205,6 +205,22 @@ pub(super) fn acquire_borrowed_return_value(
         };
         source = operand;
     }
+    // A by-reference parameter's value belongs to the caller's variable; the caller releases
+    // the result like a fresh one (`types::return_alias` never summarizes it as an alias), so
+    // the return takes its own reference.
+    if let Some(inst) = ctx.builder.value_defining_instruction(source) {
+        if inst.op == Op::LoadRefCell {
+            if let Some(Immediate::LocalSlot(slot)) = inst.immediate {
+                if ctx.builder.local_is_by_ref_parameter(slot) {
+                    return crate::ir_lower::ownership::acquire_if_refcounted(
+                        ctx,
+                        value,
+                        Some(span),
+                    );
+                }
+            }
+        }
+    }
     if !matches!(
         ctx.builder.value_defining_op(source),
         Some(

@@ -179,6 +179,14 @@ impl<'f> Builder<'f> {
         self.func.params.get(slot.as_raw() as usize).is_some()
     }
 
+    /// Returns whether a local slot holds one of the function's by-reference parameters.
+    pub fn local_is_by_ref_parameter(&self, slot: LocalSlotId) -> bool {
+        self.func
+            .params
+            .get(slot.as_raw() as usize)
+            .is_some_and(|param| param.by_ref)
+    }
+
     /// Neutralizes deferred `release_local_slot` ops whose slot never widened to
     /// lifetime-tracked storage.
     ///

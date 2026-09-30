@@ -139,7 +139,7 @@ fn collect_declaration_summaries(statements: &[Stmt], summaries: &mut ReturnAlia
                 summaries.functions.insert(
                     name.clone(),
                     summarize_callable(
-                        params.iter().map(|(name, _, _, _)| name.as_str()),
+                        params.iter().map(|(name, _, _, by_ref)| (name.as_str(), *by_ref)),
                         variadic.as_deref(),
                         *by_ref_return,
                         body,
@@ -169,7 +169,7 @@ fn collect_method_summaries(
     for method in methods {
         let summary = if method.has_body {
             summarize_callable(
-                method.params.iter().map(|(name, _, _, _)| name.as_str()),
+                method.params.iter().map(|(name, _, _, by_ref)| (name.as_str(), *by_ref)),
                 method.variadic.as_deref(),
                 method.by_ref_return,
                 &method.body,
@@ -187,9 +187,18 @@ fn collect_method_summaries(
     }
 }
 
-/// Summarizes one function-like body from its parameter names and statements.
+/// Summarizes one function-like body from its parameter names (with their by-reference flags)
+/// and statements.
+///
+/// A BY-REFERENCE parameter is never a pass-through alias. Its value lives in the caller's own
+/// variable, not in an argument the caller lent for the call, and a callee that mutates it
+/// (`sort($t); return $t;`) may hand back storage the caller never saw as an argument at all.
+/// `return $t` therefore retains the value (`ir_lower::stmt::control_exit`), and the caller
+/// releases the result like any fresh one. Summarizing it as an alias made the caller skip that
+/// release on some paths and, once a call invalidated it to `Unknown`, release storage the
+/// callee had not retained: `function f(array &$t) { sort($t); return $t; } f($a);` freed `$a`.
 fn summarize_callable<'a>(
-    params: impl Iterator<Item = &'a str>,
+    params: impl Iterator<Item = (&'a str, bool)>,
     variadic: Option<&str>,
     by_ref_return: bool,
     body: &[Stmt],
@@ -198,8 +207,13 @@ fn summarize_callable<'a>(
         return ReturnArgAlias::Unknown;
     }
     let mut state = HashMap::new();
-    for (index, name) in params.enumerate() {
-        state.insert(name.to_string(), ReturnArgAlias::parameter(index));
+    for (index, (name, by_ref)) in params.enumerate() {
+        let provenance = if by_ref {
+            ReturnArgAlias::None
+        } else {
+            ReturnArgAlias::parameter(index)
+        };
+        state.insert(name.to_string(), provenance);
     }
     if let Some(name) = variadic {
         let index = state.len();

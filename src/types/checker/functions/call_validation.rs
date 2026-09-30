@@ -122,6 +122,9 @@ fn is_writable_call_place(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Variable(_) | ExprKind::StaticPropertyAccess { .. } => true,
         ExprKind::PropertyAccess { object, .. } => is_stable_place_receiver(object),
+        // `f($obj->{$name})`: the lowering reads the property into a temporary, passes that, and
+        // writes it back under the same (once-evaluated) name, as for a declared property.
+        ExprKind::DynamicPropertyAccess { object, .. } => is_stable_place_receiver(object),
         ExprKind::ArrayAccess { array, .. } => is_stable_place_receiver(array),
         ExprKind::NamedArg { value, .. } => is_writable_call_place(value),
         _ => false,

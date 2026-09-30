@@ -289,6 +289,11 @@ pub(super) fn check_static_property_array_assign(
             // the same mixed-array runtime helper used for instance properties.
             PhpType::Union(members)
         }
+        // An untyped slot left `null` by its default and written with values of several kinds is
+        // a boxed `mixed`; php auto-vivifies the array on the first keyed write
+        // (`static::$resolvedInstance[$name] = $instance`), and the lowering does the same through
+        // the mixed-array writer, publishing the box back to the slot.
+        PhpType::Mixed => PhpType::Mixed,
         other => {
             return Err(CompileError::new(
                 span,

@@ -282,7 +282,11 @@ pub(super) fn lower_static_property_array_assign(
     // the same source line.
     let (index, value) =
         crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
-    if static_property_may_be_eval_dynamic(ctx, receiver) {
+    // A boxed slot is written through the mixed-array writer, which may vivify or relocate what
+    // the box holds, so the box goes back to the slot like an eval-owned one.
+    let boxed_slot = static_property_type(ctx, receiver, property)
+        .is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Mixed));
+    if boxed_slot || static_property_may_be_eval_dynamic(ctx, receiver) {
         ctx.emit_void(
             Op::RuntimeCall,
             vec![property_value.value, index.value, value.value],
