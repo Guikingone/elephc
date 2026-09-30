@@ -64,6 +64,12 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
                 values,
             )
         }
+        EvaluatedCallable::NativeDescriptor { descriptor } => eval_native_descriptor_call(
+            *descriptor,
+            positional_args(evaluated_args),
+            context,
+            values,
+        ),
         EvaluatedCallable::ObjectMethod {
             object,
             method,
@@ -296,6 +302,12 @@ pub(super) fn eval_evaluated_callable_with_call_user_func_values(
                 values,
             )
         }
+        EvaluatedCallable::NativeDescriptor { descriptor } => eval_native_descriptor_call(
+            *descriptor,
+            positional_args(evaluated_args),
+            context,
+            values,
+        ),
         EvaluatedCallable::ObjectMethod {
             object,
             method,
@@ -432,6 +444,9 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_by_value_call_args(
                 values,
             )
         }
+        EvaluatedCallable::NativeDescriptor { descriptor } => {
+            eval_native_descriptor_call(*descriptor, evaluated_args, context, values)
+        }
         EvaluatedCallable::ObjectMethod {
             object,
             method,
@@ -519,4 +534,22 @@ pub(super) fn eval_clear_evaluated_arg_ref_targets(
             owned: arg.owned,
         })
         .collect()
+}
+
+/// Calls a compiled callable through its descriptor's own invoker, binding the arguments the way
+/// a direct `$f(...)` on the same value does (surplus positional arguments dropped, defaults
+/// filled, named arguments bound by name).
+fn eval_native_descriptor_call(
+    descriptor: usize,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(decoded) =
+        (unsafe { decode_callable_descriptor(descriptor as *mut std::ffi::c_void) })
+    else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let bound = bind_evaluated_native_function_args(&decoded.function, evaluated_args, context, values)?;
+    eval_native_function_with_values(decoded.function, bound, context, values)
 }

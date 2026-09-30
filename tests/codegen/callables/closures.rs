@@ -2131,3 +2131,29 @@ echo (new Child())->viaFcc('a'), '|', (new Base())->viaFcc('b');
     );
     assert_eq!(out, "child(base:a)|base:b");
 }
+
+/// A single-expression closure returning a local its own expression assigns keeps the value's
+/// type. Lowering typed that local syntactically as `int` and converted the string on the way
+/// out: Laravel's `is_dir($directory = $this->basePath('.laravel')) ? $directory : ...` bootstrap
+/// path closure returned "0".
+#[test]
+fn test_closure_returning_a_local_assigned_in_its_own_expression() {
+    let out = compile_and_run(
+        r#"<?php
+function g($p) { return "/tmp/x/" . $p; }
+$c = function () { return is_dir($d = g(".laravel")) ? $d : g("bootstrap"); };
+var_dump($c());
+$arrow = fn () => ($x = g("y")) ? $x : 0;
+var_dump($arrow());
+class A {
+    function g($p) { return "/tmp/x/" . $p; }
+    function c() { $c = function () { return is_dir($d = $this->g(".laravel")) ? $d : $this->g("bootstrap"); }; return $c(); }
+}
+var_dump((new A)->c());
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(16) \"/tmp/x/bootstrap\"\nstring(8) \"/tmp/x/y\"\nstring(16) \"/tmp/x/bootstrap\"\n"
+    );
+}

@@ -237,11 +237,11 @@ pub(super) fn lower_backend_gap_builtin_shape(
     // `array_any()` / `array_all()` go to the PHP helpers wholesale: php hands the predicate the
     // value AND the key, over any array, and the native runtime walks a dense list passing only the
     // value. `src/array_find_prelude.rs` has the helpers.
-    if (builtin == "array_any" || builtin == "array_all") && args.len() == 2 {
-        let helper = if builtin == "array_any" {
-            crate::array_find_prelude::ARRAY_ANY_NAME
-        } else {
-            crate::array_find_prelude::ARRAY_ALL_NAME
+    if matches!(builtin.as_str(), "array_any" | "array_all" | "array_find") && args.len() == 2 {
+        let helper = match builtin.as_str() {
+            "array_any" => crate::array_find_prelude::ARRAY_ANY_NAME,
+            "array_all" => crate::array_find_prelude::ARRAY_ALL_NAME,
+            _ => crate::array_find_prelude::ARRAY_FIND_NAME,
         };
         return Some(lower_function_call(
             ctx,

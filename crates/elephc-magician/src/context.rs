@@ -61,6 +61,7 @@ pub use generators::*;
 pub use core::*;
 pub(crate) use global_registry::*;
 pub use native_defaults::*;
+pub use native_metadata::NativeClassConstantDefault;
 pub use native_function::*;
 use normalization::*;
 pub use reference_metadata::*;

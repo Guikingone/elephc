@@ -342,6 +342,51 @@ pub(in crate::interpreter) fn eval_static_property_unset_result(
     )
 }
 
+/// Reads an array-valued compiled class constant, which the generated scalar helper cannot box.
+///
+/// The value is rebuilt on every read from the registered description, which is what a
+/// constant array is to php: a value, never a shared reference. Visibility is checked against
+/// the declaring class the way the scalar helper checks it.
+fn eval_native_class_constant_default_result(
+    class_name: &str,
+    constant_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let mut current = Some(class_name.trim_start_matches('\\').to_string());
+    let mut seen = 0usize;
+    let constant = loop {
+        let Some(name) = current else {
+            return Ok(None);
+        };
+        if let Some(constant) = context.native_class_constant_default(&name, constant_name) {
+            break constant;
+        }
+        // An interpreted subclass inherits its compiled ancestor's constants.
+        seen += 1;
+        if seen > 64 {
+            return Ok(None);
+        }
+        current = context
+            .class(&name)
+            .and_then(|class| class.parent().map(str::to_string))
+            .or_else(|| context.native_class_parent(&name).map(str::to_string));
+    };
+    if validate_eval_member_access(&constant.declaring_class, constant.visibility, context).is_err()
+    {
+        // php names the class the constant was read through, not the one declaring it.
+        return eval_throw_constant_access_error(
+            class_name.trim_start_matches('\\'),
+            constant_name,
+            constant.visibility,
+            context,
+            values,
+        )
+        .map(Some);
+    }
+    materialize_native_callable_default(&constant.default, context, values).map(Some)
+}
+
 /// Reads one eval-declared class constant after resolving the class-like receiver.
 pub(in crate::interpreter) fn eval_class_constant_fetch_result(
     class_name: &str,
@@ -400,9 +445,19 @@ pub(in crate::interpreter) fn eval_class_constant_fetch_result(
                 return Ok(value);
             }
         }
+        if let Some(value) =
+            eval_native_class_constant_default_result(&class_name, constant_name, context, values)?
+        {
+            return Ok(value);
+        }
         return Err(EvalStatus::RuntimeFatal);
     }
     if let Some(value) = values.class_constant_get(&class_name, constant_name)? {
+        return Ok(value);
+    }
+    if let Some(value) =
+        eval_native_class_constant_default_result(&class_name, constant_name, context, values)?
+    {
         return Ok(value);
     }
     // A class-like nobody declared yet is loaded first, as php does for `Foo::BAR`: the

@@ -137,6 +137,15 @@ pub(in crate::interpreter) fn eval_callable_with_optional_scope(
             owner,
         });
     }
+    if values.type_tag(callback)? == EVAL_TAG_CALLABLE {
+        // A compiled closure reached interpreted code as its descriptor. Its string form names
+        // no function this context can find, so `array_map($compiledClosure, ...)` and every
+        // other callback builtin refused it; the descriptor is what `$f()` already calls.
+        let descriptor = values.raw_value_word(callback)? as usize;
+        if unsafe { decode_callable_descriptor(descriptor as *mut std::ffi::c_void) }.is_some() {
+            return Ok(EvaluatedCallable::NativeDescriptor { descriptor });
+        }
+    }
     if values.type_tag(callback)? == EVAL_TAG_OBJECT {
         if let Some(owner) = eval_foreign_closure_owner(callback, context, values)? {
             let Some(owner_context) = (unsafe { owner.context_ptr().as_ref() }) else {

@@ -309,6 +309,7 @@ impl Checker {
                 bodies_secs += mark.elapsed().as_secs_f64();
                 mark = std::time::Instant::now();
             }
+            self.unify_override_family_return_types();
             self.sync_inherited_method_return_types();
             let stabilized = self.classes == classes_before_pass;
             if trace && !stabilized {
@@ -394,6 +395,101 @@ impl Checker {
             method_passes_remaining -= 1;
         }
         Ok(())
+    }
+
+    /// Widens the returns of untyped override-family members that disagree on their storage.
+    ///
+    /// A call through `$this->m()` or `static::m()` is typed by the class the CALL sits in, and
+    /// the vtable then runs whichever override the receiver has. Every body therefore has to hand
+    /// its value back in the storage the caller reads. Nothing made two untyped bodies agree:
+    /// Laravel's `Facade::getFacadeAccessor()` only throws (so it was typed `void`) while every
+    /// facade returns a string, and `static::getFacadeAccessor()` read the string as nothing --
+    /// every facade resolved the empty accessor. A base returning a string with an override
+    /// returning an int read garbage and crashed.
+    ///
+    /// Each untyped method is compared with the nearest ancestor that declares the same method;
+    /// when their storage differs both become `mixed`, which every return boxes into. Recorded in
+    /// `family_return_widenings` so the next pass's `update_method_return_type` keeps it, and
+    /// repeated until stable by the enclosing fixpoint: a sibling or a grandparent that still
+    /// disagrees with a newly widened member is widened on a later pass.
+    fn unify_override_family_return_types(&mut self) {
+        let mut widenings: Vec<(String, String, bool, PhpType)> = Vec::new();
+        for (class_name, info) in &self.classes {
+            for is_static in [false, true] {
+                let (declaring, methods) = if is_static {
+                    (&info.static_method_declaring_classes, &info.static_methods)
+                } else {
+                    (&info.method_declaring_classes, &info.methods)
+                };
+                for (method_key, owner) in declaring {
+                    if owner != class_name || method_key == "__construct" {
+                        continue;
+                    }
+                    let Some(own) = methods.get(method_key) else { continue };
+                    if own.declared_return {
+                        continue;
+                    }
+                    let Some((ancestor, ancestor_sig)) =
+                        self.nearest_ancestor_declaring(class_name, method_key, is_static)
+                    else {
+                        continue;
+                    };
+                    if ancestor_sig.declared_return
+                        || own.return_type.codegen_repr() == ancestor_sig.return_type.codegen_repr()
+                    {
+                        continue;
+                    }
+                    widenings.push((class_name.clone(), method_key.clone(), is_static, PhpType::Mixed));
+                    widenings.push((ancestor, method_key.clone(), is_static, PhpType::Mixed));
+                }
+            }
+        }
+        for (class_name, method_key, is_static, widened) in widenings {
+            if let Some(info) = self.classes.get_mut(&class_name) {
+                let methods = if is_static { &mut info.static_methods } else { &mut info.methods };
+                if let Some(sig) = methods.get_mut(&method_key) {
+                    sig.return_type = widened.clone();
+                }
+            }
+            self.family_return_widenings
+                .insert((class_name, method_key, is_static), widened);
+        }
+    }
+
+    /// Returns the nearest ancestor that declares `method_key` itself, with its signature, unless
+    /// that declaration is private (a private method is not overridden).
+    fn nearest_ancestor_declaring(
+        &self,
+        class_name: &str,
+        method_key: &str,
+        is_static: bool,
+    ) -> Option<(String, FunctionSig)> {
+        let mut current = self.classes.get(class_name)?.parent.clone();
+        let mut depth = 0;
+        while let Some(parent) = current {
+            depth += 1;
+            if depth > 256 {
+                return None;
+            }
+            let info = self.classes.get(&parent)?;
+            let (declaring, methods, visibilities) = if is_static {
+                (
+                    &info.static_method_declaring_classes,
+                    &info.static_methods,
+                    &info.static_method_visibilities,
+                )
+            } else {
+                (&info.method_declaring_classes, &info.methods, &info.method_visibilities)
+            };
+            if declaring.get(method_key).is_some_and(|owner| owner == &parent) {
+                if visibilities.get(method_key) == Some(&crate::parser::ast::Visibility::Private) {
+                    return None;
+                }
+                return methods.get(method_key).map(|sig| (parent.clone(), sig.clone()));
+            }
+            current = info.parent.clone();
+        }
+        None
     }
 
     /// Copies each inherited method's return type from the class whose body implements it.
@@ -701,7 +797,12 @@ impl Checker {
                 }
             }
         } else {
-            inferred_return
+            // An untyped member of an override family keeps the storage the family agreed on
+            // (`unify_override_family_return_types`), or this pass would narrow it straight back.
+            self.family_return_widenings
+                .get(&(class.name.clone(), php_symbol_key(&method.name), method.is_static))
+                .cloned()
+                .unwrap_or(inferred_return)
         };
         if !method.is_static {
             let effective_return = self.ancestor_return_storage(

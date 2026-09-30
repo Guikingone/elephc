@@ -12,13 +12,14 @@ use super::*;
 /// Validates declared or inherited class members that already cover eval interface contracts.
 pub(super) fn validate_declared_class_interface_members(
     class: &EvalClass,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     for interface in pending_class_contract_interface_names(class, context) {
         if !context.has_interface(&interface) {
             continue;
         }
-        validate_declared_class_interface_methods(class, &interface, context)?;
+        validate_declared_class_interface_methods(class, &interface, context, values)?;
         validate_declared_class_interface_properties(class, &interface, context)?;
     }
     Ok(())
@@ -27,7 +28,8 @@ pub(super) fn validate_declared_class_interface_members(
 /// Validates declared class methods against PHP builtin runtime interface contracts.
 pub(super) fn validate_declared_class_builtin_interface_members(
     class: &EvalClass,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     for (requirement_owner, requirement) in
         pending_class_builtin_interface_method_requirements(class, context)
@@ -37,9 +39,8 @@ pub(super) fn validate_declared_class_builtin_interface_members(
         else {
             continue;
         };
-        if method.visibility() != EvalVisibility::Public
-            || method.is_static() != requirement.is_static()
-            || !class_method_satisfies_builtin_interface_signature(
+        let accepts = |context: &ElephcEvalContext| {
+            class_method_satisfies_builtin_interface_signature(
                 &method,
                 &declaring_class,
                 &requirement,
@@ -47,6 +48,17 @@ pub(super) fn validate_declared_class_builtin_interface_members(
                 Some(class),
                 context,
             )
+        };
+        if method.visibility() != EvalVisibility::Public
+            || method.is_static() != requirement.is_static()
+            || (!accepts(context)
+                && (!autoload_override_signature_classes(
+                    &method,
+                    requirement.parameter_types(),
+                    class,
+                    context,
+                    values,
+                )? || !accepts(context)))
         {
             return Err(EvalStatus::RuntimeFatal);
         }
@@ -57,7 +69,7 @@ pub(super) fn validate_declared_class_builtin_interface_members(
 /// Validates declared class methods against generated/AOT interface contracts.
 pub(super) fn validate_declared_class_aot_interface_members(
     class: &EvalClass,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     for requirement in pending_class_aot_interface_method_requirements(class, context, values)? {
@@ -65,14 +77,30 @@ pub(super) fn validate_declared_class_aot_interface_members(
         else {
             continue;
         };
-        if !class_method_satisfies_aot_interface_requirement(
-            &method,
-            &declaring_class,
-            &requirement,
-            Some(class),
-            context,
-            false,
-        ) {
+        let accepts = |context: &ElephcEvalContext| {
+            class_method_satisfies_aot_interface_requirement(
+                &method,
+                &declaring_class,
+                &requirement,
+                Some(class),
+                context,
+                false,
+            )
+        };
+        let required_parameter_types = requirement
+            .signature
+            .as_ref()
+            .map(|signature| signature.parameter_types().to_vec())
+            .unwrap_or_default();
+        if !accepts(context)
+            && (!autoload_override_signature_classes(
+                &method,
+                &required_parameter_types,
+                class,
+                context,
+                values,
+            )? || !accepts(context))
+        {
             if crate::eval_trace::enabled() {
                 eprintln!(
                     "[elephc-eval-trace] phase=aot_interface_method_mismatch class={:?} owner={:?} method={:?} declaring_class={declaring_class:?} actual_visibility={:?} required_static={} actual_static={} has_signature={}",
@@ -126,7 +154,8 @@ pub(super) fn validate_declared_class_aot_interface_members(
 pub(super) fn validate_declared_class_interface_methods(
     class: &EvalClass,
     interface_name: &str,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     for (requirement_owner, requirement) in
         context.interface_method_requirements_with_owners(interface_name)
@@ -136,9 +165,8 @@ pub(super) fn validate_declared_class_interface_methods(
         else {
             continue;
         };
-        if method.visibility() != EvalVisibility::Public
-            || method.is_static() != requirement.is_static()
-            || !class_method_satisfies_interface_signature(
+        let accepts = |context: &ElephcEvalContext| {
+            class_method_satisfies_interface_signature(
                 &method,
                 &declaring_class,
                 &requirement,
@@ -146,6 +174,17 @@ pub(super) fn validate_declared_class_interface_methods(
                 Some(class),
                 context,
             )
+        };
+        if method.visibility() != EvalVisibility::Public
+            || method.is_static() != requirement.is_static()
+            || (!accepts(context)
+                && (!autoload_override_signature_classes(
+                    &method,
+                    requirement.parameter_types(),
+                    class,
+                    context,
+                    values,
+                )? || !accepts(context)))
         {
             trace_declared_eval_interface_method_mismatch(
                 class,
@@ -229,7 +268,8 @@ pub(super) fn pending_class_method(
 pub(super) fn validate_method_parent_override(
     class: &EvalClass,
     method: &EvalClassMethod,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let Some(parent) = class.parent() else {
         return Ok(());
@@ -278,24 +318,98 @@ pub(super) fn validate_method_parent_override(
     {
         return Err(EvalStatus::RuntimeFatal);
     }
-    if !class_method_signature_accepts(
-        method,
-        class.name(),
-        prototype_method,
-        prototype_owner,
-        Some(class),
-        context,
-    ) {
+    let accepts = |context: &ElephcEvalContext| {
+        class_method_signature_accepts(
+            method,
+            class.name(),
+            prototype_method,
+            prototype_owner,
+            Some(class),
+            context,
+        )
+    };
+    if !accepts(context)
+        && (!autoload_override_signature_classes(
+            method,
+            prototype_method.parameter_types(),
+            class,
+            context,
+            values,
+        )? || !accepts(context))
+    {
         return Err(EvalStatus::RuntimeFatal);
     }
     Ok(())
+}
+
+/// Autoloads the classes an override's signature names that no world has declared yet.
+///
+/// PHP decides variance with every class it compares loaded: `diff(): CarbonInterval` over
+/// `DateTime::diff(): DateInterval` makes php autoload `CarbonInterval` to learn that it extends
+/// `DateInterval`. The eval check read "no such class" as "no subtype" and refused a declaration
+/// php accepts. The atoms that matter are the override's own return and parameter types (a return
+/// class is walked UP to the required one) and the required parameter types (walked up to the
+/// override's wider ones).
+///
+/// Called only after a check has FAILED, so a declaration php accepts without loading anything
+/// loads nothing here either. Answers whether any autoload ran, so the caller re-checks only then.
+fn autoload_override_signature_classes(
+    method: &EvalClassMethod,
+    required_parameter_types: &[Option<EvalParameterType>],
+    class: &EvalClass,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let mut names = Vec::new();
+    for ty in method
+        .return_type()
+        .into_iter()
+        .chain(method.parameter_types().iter().flatten())
+        .chain(required_parameter_types.iter().flatten())
+    {
+        for variant in ty.variants() {
+            let EvalParameterTypeVariant::Class(name) = variant else {
+                continue;
+            };
+            let name = name.trim_start_matches('\\');
+            if matches!(
+                name.to_ascii_lowercase().as_str(),
+                "self" | "static" | "parent"
+            ) || name.eq_ignore_ascii_case(class.name().trim_start_matches('\\'))
+            {
+                continue;
+            }
+            let resolved = context
+                .resolve_class_like_name(name)
+                .unwrap_or_else(|| name.to_string());
+            if context.has_class(&resolved)
+                || context.has_interface(&resolved)
+                || context.has_enum(&resolved)
+                || names
+                    .iter()
+                    .any(|seen: &String| seen.eq_ignore_ascii_case(&resolved))
+            {
+                continue;
+            }
+            names.push(resolved);
+        }
+    }
+    let mut loaded = false;
+    for name in names {
+        loaded |= eval_spl_autoload_class(&name, context, values)?;
+    }
+    #[cfg(not(test))]
+    if loaded {
+        context.sync_global_eval_classes();
+    }
+    Ok(loaded)
 }
 
 /// Validates one method declaration against inherited generated/AOT method metadata.
 pub(super) fn validate_method_aot_parent_override(
     class: &EvalClass,
     method: &EvalClassMethod,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let Some(parent) = pending_class_native_parent_name(class, context) else {
@@ -347,14 +461,61 @@ pub(super) fn validate_method_aot_parent_override(
     } else {
         required
     };
-    if !class_method_satisfies_interface_signature(
-        method,
-        class.name(),
-        &required,
-        &eval_aot_method_declaring_class(&parent, method.name(), values)?,
-        Some(class),
-        context,
-    ) {
+    let declaring_class = eval_aot_method_declaring_class(&parent, method.name(), values)?;
+    let accepts = |context: &ElephcEvalContext| {
+        class_method_satisfies_interface_signature(
+            method,
+            class.name(),
+            &required,
+            &declaring_class,
+            Some(class),
+            context,
+        )
+    };
+    // An INTERNAL class's return types are tentative to php: an override whose return type
+    // differs gets a deprecation, not a fatal (a missing or different `#[\ReturnTypeWillChange]`
+    // only decides whether the deprecation is shown). The compiled builtins also carry methods
+    // php's class does not have -- elephc's `DatePeriod` is itself an `Iterator` -- so Carbon's
+    // `CarbonPeriod::key(): ?int` met a `key(): int` php never declares.
+    let tentative_return = elephc_builtin_contract::lookup_class(&declaring_class).is_some();
+    let accepts_with_tentative_return = |context: &ElephcEvalContext| {
+        tentative_return
+            && class_method_satisfies_interface_signature(
+                method,
+                class.name(),
+                &required.clone().with_return_type(None),
+                &declaring_class,
+                Some(class),
+                context,
+            )
+    };
+    if !accepts(context)
+        && (!autoload_override_signature_classes(
+            method,
+            required.parameter_types(),
+            class,
+            context,
+            values,
+        )? || !accepts(context))
+        && !accepts_with_tentative_return(context)
+    {
+        if crate::eval_trace::enabled()
+            && std::env::var_os("ELEPHC_EVAL_TRACE_SIGNATURES").is_some()
+        {
+            eprintln!(
+                "[elephc-eval-trace] phase=aot_parent_override_mismatch class={:?} method={:?} declaring_class={declaring_class:?}\n[elephc-eval-trace] required_params={:?} types={:?} defaults={:?} return={:?}\n[elephc-eval-trace] actual_params={:?} types={:?} defaults={:?} return={:?}",
+                class.name(),
+                method.name(),
+                required.params(),
+                required.parameter_types(),
+                required.parameter_defaults(),
+                required.return_type(),
+                method.params(),
+                method.parameter_types(),
+                method.parameter_defaults(),
+                method.return_type(),
+            );
+        }
         return Err(EvalStatus::RuntimeFatal);
     }
     Ok(())

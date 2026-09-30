@@ -1112,9 +1112,11 @@ pub fn inject_if_used(
     // And so is `htmlspecialchars()`'s fourth parameter: the backend helper always
     // double-encodes, so `$double_encode = false` is answered by a prelude loop.
     let needs_htmlspecialchars = usage.references("htmlspecialchars");
-    // And so are `array_any()` / `array_all()`, whose native runtime walks only a dense list and
-    // passes the predicate no key.
-    let needs_array_find = usage.references("array_any") || usage.references("array_all");
+    // And so are `array_any()` / `array_all()` / `array_find()`, whose native runtime walks only a
+    // dense list and passes the predicate no key.
+    let needs_array_find = usage.references("array_any")
+        || usage.references("array_all")
+        || usage.references("array_find");
     if sources.is_empty()
         && !needs_array_find
         && !needs_addcslashes

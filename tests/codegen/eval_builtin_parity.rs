@@ -198,6 +198,54 @@ echo preg_match("/(?<=foo)bar/", "foobar");');
     assert_eq!(out, "1:1");
 }
 
+/// Verifies eval's sort family takes php's `$flags` argument. Laravel's `LoadConfiguration` sorts
+/// its config file map with `ksort($files, SORT_NATURAL)`, which eval refused outright.
+#[test]
+fn test_eval_sort_family_honours_sort_flags() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$files = ["view10" => 1, "app" => 2, "view2" => 3, "App" => 4];
+ksort($files, SORT_NATURAL);
+echo implode(",", array_keys($files)), "\n";
+krsort($files, SORT_STRING);
+echo implode(",", array_keys($files)), "\n";
+$v = ["10", "9", "2", "1"];
+sort($v, SORT_STRING);
+echo implode(",", $v), "\n";
+rsort($v, SORT_NUMERIC);
+echo implode(",", $v), "\n";
+$a = ["x" => "b10", "y" => "B2", "z" => "a1"];
+asort($a, SORT_NATURAL | SORT_FLAG_CASE);
+echo json_encode($a), "\n";
+arsort($a, SORT_STRING);
+echo json_encode($a), "\n";');
+"#,
+    );
+    assert_eq!(
+        out,
+        "App,app,view2,view10\nview2,view10,app,App\n1,10,2,9\n10,9,2,1\n{\"z\":\"a1\",\"y\":\"B2\",\"x\":\"b10\"}\n{\"x\":\"b10\",\"z\":\"a1\",\"y\":\"B2\"}\n"
+    );
+}
+
+/// Verifies eval hands a delimited pattern's body to PCRE2 verbatim, as php and compiled code do.
+///
+/// The interpreter used to strip the backslash from every escaped delimiter, which changes what an
+/// escaped METACHARACTER means: `\(` inside a `(...)`-delimited pattern opened a group (the
+/// phpdotenv lexer pattern stopped compiling) and `\+` inside `+...+` became a quantifier.
+#[test]
+fn test_eval_preg_keeps_escaped_delimiters_in_the_pattern() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+$regex = '(([^(\s)]|\(|\)){1,10})A';
+$plus = '+a\+b+';
+echo preg_match($regex, 'f(x) y', $m), $m[0], ":", preg_match($plus, 'xa+b'), preg_match($plus, 'aab'), "\n";
+eval('echo preg_match($regex, "f(x) y", $m), $m[0], ":", preg_match($plus, "xa+b"), preg_match($plus, "aab"), "\n";');
+"#,
+    );
+
+    assert_eq!(out, "1f(x):10\n1f(x):10\n");
+}
+
 /// Verifies eval named builtin calls can skip optional parameters with defaults.
 #[test]
 fn test_eval_named_builtin_arguments_fill_default_gaps() {

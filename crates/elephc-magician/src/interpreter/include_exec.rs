@@ -160,6 +160,14 @@ thread_local! {
     /// anyway.
     static REINCLUDE_COMPILER_INCLUDED_SOURCES: std::cell::Cell<bool> =
         const { std::cell::Cell::new(false) };
+    /// How many includes this thread skipped on the compiler's mark, so a caller can tell whether
+    /// a skip happened while it ran.
+    static COMPILER_INCLUDE_SKIPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Returns how many includes this thread has skipped on the compiler's inclusion mark.
+pub(crate) fn compiler_include_skip_count() -> u64 {
+    COMPILER_INCLUDE_SKIPS.with(std::cell::Cell::get)
 }
 
 /// Runs `body` with the compiler's inclusion marks ignored, then restores the previous mode.
@@ -178,7 +186,7 @@ pub(crate) fn with_compiler_included_sources_reincluded<T>(body: impl FnOnce() -
 }
 
 /// Whether includes currently ignore the compiler's inclusion marks.
-fn reincluding_compiler_included_sources() -> bool {
+pub(crate) fn reincluding_compiler_included_sources() -> bool {
     REINCLUDE_COMPILER_INCLUDED_SOURCES.with(|flag| flag.get())
 }
 
@@ -203,6 +211,7 @@ fn eval_resolved_include(
         && context.compiler_included_file(&include_key)
     {
         trace_compiler_included_skip(resolved_path, context);
+        COMPILER_INCLUDE_SKIPS.with(|skips| skips.set(skips.get().wrapping_add(1)));
         // Skipping the body is right -- the program already ran it -- but the inclusion is also
         // the moment php DECLARES the file's symbols, and the compiled program only activates
         // them where it first names one. An autoloader reaching the file earlier than that must

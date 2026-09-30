@@ -1,5 +1,6 @@
 //! Purpose:
-//! Declares PHP 8.5's `array_first()` and `array_last()` as AST-built functions.
+//! Declares PHP 8.5's `array_first()` and `array_last()`, and PHP 8.4's `array_find_key()`, as
+//! AST-built functions.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` in the compat-prelude phase, after autoload expansion, so a
@@ -8,26 +9,29 @@
 //! Key details:
 //! - Both answer `null` for an empty array and otherwise the value at the first/last position
 //!   in iteration order, never touching the array's internal pointer — php 8.5's contract.
+//! - `array_find_key()` answers the key of the first element its predicate accepts, calling the
+//!   predicate with the value and the key as php does, or `null`.
 //! - They matter beyond direct callers: `symfony/polyfill-php85`'s bootstrap returns early on
 //!   an 8.5 profile, so code generated against php 8.5 (a Symfony container dumping
-//!   `\array_first(...)`) has no other definition.
+//!   `\array_first(...)`) has no other definition; `symfony/polyfill-php84` does the same for
+//!   `array_find_key()`, which Laravel's `Arr::first()` calls.
 //! - Pay-for-use: injected only when the program names one of the functions, and never over a
 //!   declaration of the same name the program makes itself.
 //! - The interpreter has its own implementations
-//!   (`elephc_magician::interpreter::builtins::array::array_first` / `array_last`), because a
+//!   (`elephc_magician::interpreter::builtins::array::array_first` / `array_find`), because a
 //!   compiler prelude is never reachable from interpreted code.
 
 use crate::parser::ast::{BinOp, Program, Stmt, StmtKind};
 use crate::synthetic_class::{
-    e_array, e_binop, e_call, e_index, e_null, e_var, function, internal_declarations, s_foreach,
-    s_if, s_return, t_array, t_mixed,
+    e_array, e_binop, e_call, e_closure_call, e_index, e_null, e_var, function,
+    internal_declarations, s_foreach, s_if, s_return, t_array, t_mixed,
 };
 
 /// Prelude inventory group holding the declarations.
 pub(crate) const GROUP: &str = "array_edge";
 
 /// The PHP functions this prelude declares.
-pub(crate) const FUNCTIONS: &[&str] = &["array_first", "array_last"];
+pub(crate) const FUNCTIONS: &[&str] = &["array_first", "array_last", "array_find_key"];
 
 /// Builds the two functions.
 fn function_declarations() -> Vec<Stmt> {
@@ -65,7 +69,33 @@ fn function_declarations() -> Vec<Stmt> {
         ])
         .build();
 
-    vec![first, last]
+    // function array_find_key(array $array, $callback): mixed {
+    //     foreach ($array as $key => $value) {
+    //         if ($callback($value, $key)) { return $key; }
+    //     }
+    //     return null;
+    // }
+    let find_key = function("array_find_key")
+        .param("array", t_array())
+        .param_untyped("callback")
+        .returns(t_mixed())
+        .body(vec![
+            s_foreach(
+                e_var("array"),
+                Some("key"),
+                "value",
+                vec![s_if(
+                    e_closure_call("callback", vec![e_var("value"), e_var("key")]),
+                    vec![s_return(e_var("key"))],
+                    Vec::new(),
+                    None,
+                )],
+            ),
+            s_return(e_null()),
+        ])
+        .build();
+
+    vec![first, last, find_key]
 }
 
 /// Returns the declarations to inject.
@@ -113,9 +143,9 @@ pub fn inject_if_used(
 mod tests {
     use super::*;
 
-    /// The surface is exactly the two functions.
+    /// The surface is exactly the declared functions.
     #[test]
-    fn declares_array_first_and_array_last() {
+    fn declares_array_first_array_last_and_array_find_key() {
         let functions: Vec<String> = declarations()
             .into_iter()
             .filter_map(|stmt| match stmt.kind {

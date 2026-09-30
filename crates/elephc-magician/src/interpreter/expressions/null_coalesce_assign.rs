@@ -69,6 +69,18 @@ impl EvaluatedLocation {
             }
         )
     }
+
+    /// Returns whether the observed value is a cell some storage still holds, so this
+    /// evaluation must not release it.
+    ///
+    /// A static property fetch hands out the slot's own cell, like a scope variable read (see
+    /// `eval_expr_result_aliases_storage`). Releasing it as a temporary freed the slot's null
+    /// cell before `self::$instance ??= new self()` stored into it, and the next read of the
+    /// property found whatever reused that cell -- Carbon's `FactoryImmutable::getDefaultInstance()`
+    /// returned an int, then an `InputBag`.
+    const fn current_is_held_by_storage(&self) -> bool {
+        self.current_is_borrowed() || matches!(self, Self::StaticProperty { .. })
+    }
 }
 
 /// Evaluates `target ??= default`, preserving PHP's lazy RHS and single target evaluation.
@@ -94,7 +106,7 @@ pub(super) fn eval_null_coalesce_assign(
             Ok(current)
         };
     }
-    if !location.current_is_borrowed() {
+    if !location.current_is_held_by_storage() {
         eval_release_value(context, values, current)?;
         if let EvaluatedLocation::GlobalVariable { current, .. } = &mut location {
             *current = None;

@@ -110,7 +110,27 @@ pub(crate) fn eval_spl_autoload_class(
         if !context.begin_autoload_class(class_name) {
             return Ok(false);
         }
+        let skips_before = crate::interpreter::include_exec::compiler_include_skip_count();
         let result = eval_spl_autoload_queue(class_name, context, values);
+        // The autoloader found the class's file, the compiler's mark skipped it, and the class is
+        // still missing: the file's top-level code is what declares it (Carbon's `Translator.php`
+        // `require`s the file that conditionally declares its parent, then declares the class),
+        // and a compiled program only activates the file's classes. Run the file once more with
+        // the mark ignored, the way the interface and trait paths already retry.
+        let result = match result {
+            Ok(false)
+                if crate::interpreter::include_exec::compiler_include_skip_count() != skips_before
+                    && !crate::interpreter::include_exec::reincluding_compiler_included_sources() =>
+            {
+                let retried =
+                    crate::interpreter::include_exec::with_compiler_included_sources_reincluded(|| {
+                        eval_spl_autoload_queue(class_name, context, values)
+                    });
+                context.sync_global_eval_classes();
+                retried
+            }
+            other => other,
+        };
         context.end_autoload_class(class_name);
         result
     }
@@ -235,6 +255,7 @@ fn eval_autoload_callback_trace_kind(callback: &EvaluatedCallable) -> String {
         EvaluatedCallable::Named { name, .. } => format!("named:{name}"),
         EvaluatedCallable::BoundClosure { name, .. } => format!("closure:{name}"),
         EvaluatedCallable::InvokableObject { .. } => "invokable-object".to_string(),
+        EvaluatedCallable::NativeDescriptor { .. } => "native-descriptor".to_string(),
         EvaluatedCallable::ObjectMethod {
             method,
             native_class,

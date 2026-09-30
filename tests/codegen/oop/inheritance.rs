@@ -1029,3 +1029,36 @@ echo (new ReflectionMethod('Number', '__toString'))->getReturnType(), "\n";
     );
     assert_eq!(out, "<b>x</b>|bag|child|5\nstringable|string\n");
 }
+
+/// Untyped members of an override family return in one storage, so a call typed by the base
+/// reads what the override actually returned. A base that only throws was typed `void` while the
+/// override returned a string (Laravel's `Facade::getFacadeAccessor()`), and a base returning a
+/// string with an override returning an int read garbage.
+#[test]
+fn test_untyped_override_family_returns_share_one_storage() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class Base {
+    protected static function accessor() { throw new RuntimeException('no accessor'); }
+    protected function name() { throw new RuntimeException('no name'); }
+    protected function v() { return "base"; }
+    protected static function s() { return "base"; }
+    public static function viaStatic() { return 'static:' . static::accessor() . ':' . var_export(static::s(), true); }
+    public function viaThis() { return 'this:' . $this->name() . ':' . var_export($this->v(), true); }
+}
+class Impl extends Base {
+    protected static function accessor() { return 'log'; }
+    protected function name() { return 'impl'; }
+    protected function v() { return 5; }
+    protected static function s() { return 6; }
+}
+class Plain extends Base {
+    protected static function accessor() { return 'plain'; }
+    protected function name() { return 'p'; }
+}
+echo Impl::viaStatic(), " ", (new Impl)->viaThis(), "\n";
+echo Plain::viaStatic(), " ", (new Plain)->viaThis(), "\n";
+"#,
+    );
+    assert_eq!(out, "static:log:6 this:impl:5\nstatic:plain:'base' this:p:'base'\n");
+}

@@ -62,6 +62,12 @@ pub(crate) fn emit_box_runtime_payload_as_mixed(
 
 /// Boxes the current expression result in the ABI result registers into a runtime Mixed cell.
 pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpType) {
+    // A nullable-int union (`?int`) is TaggedScalar's two words in registers, not a boxed value:
+    // the `Union` arm below would hand the raw payload on as a box pointer. A `?int` local passed
+    // to an untyped parameter did exactly that (symfony/polyfill-mbstring's `mb_substr()`).
+    if matches!(ty, PhpType::Union(_)) && ty.codegen_repr() == PhpType::TaggedScalar {
+        return emit_box_current_value_as_mixed(emitter, &PhpType::TaggedScalar);
+    }
     match ty {
         PhpType::Mixed | PhpType::Union(_) => {}
         PhpType::Iterable => emit_box_iterable_as_mixed(emitter),

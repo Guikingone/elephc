@@ -1433,6 +1433,32 @@ var_dump(array_any([], fn () => true), array_all([], fn () => false));
     );
 }
 
+/// Verifies php 8.4's array_find() / array_find_key() over keyed arrays, compiled and inside
+/// eval(), and array_any() / array_all() inside eval(): the predicate sees the value and the key.
+/// Laravel's interpreted `Arr::first()` calls array_find_key(), which eval did not know at all.
+#[test]
+fn test_array_find_and_find_key_compiled_and_interpreted() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ['x' => 1, 'y' => 20, 'z' => 30];
+var_dump(array_find_key($a, fn ($v) => $v > 10));
+var_dump(array_find($a, fn ($v, $k) => $k === 'z'));
+var_dump(array_find_key([1, 2], fn ($v) => $v > 5));
+var_dump(array_find([3, 4], fn ($v) => $v % 2 === 0));
+eval('var_dump(array_find_key(["a" => 1, "b" => 2], fn ($v, $k) => $v === 2));
+var_dump(array_find(["a" => 1, "b" => 2], fn ($v) => $v > 5));
+var_dump(array_find(["a" => 1, "b" => 2], fn ($v, $k) => $k === "b"));
+var_dump(array_any(["a" => 1, "b" => 2], fn ($v, $k) => $k === "b"));
+var_dump(array_all([2, 4], fn ($v) => $v % 2 === 0), array_all([], fn () => false));
+var_dump(array_any([], fn () => true));');
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(1) \"y\"\nint(30)\nNULL\nint(4)\nstring(1) \"b\"\nNULL\nint(2)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\n"
+    );
+}
+
 /// Verifies array_find / array_any / array_all are callable case-insensitively.
 /// Fixture: mixed-case spellings over a small numeric array.
 #[test]

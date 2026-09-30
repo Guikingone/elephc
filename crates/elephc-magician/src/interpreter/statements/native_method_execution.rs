@@ -63,6 +63,21 @@ pub(super) fn eval_native_method_with_evaluated_args_bridge_scope(
     }
     let metadata =
         eval_aot_method_dispatch_metadata_in_hierarchy(class_name, method_name, context, values)?;
+    if let Some((declaring_class, _, true, false)) = metadata.as_ref() {
+        // php calls a STATIC method through an instance as a static call on the object's class:
+        // `$request->enableHttpMethodParameterOverride()`. The instance bridge has no entry for
+        // a static method, so the call fatally missed. `static::` inside it is the object's
+        // class, which is what the called-class scope carries.
+        return eval_native_static_method_with_evaluated_args_bridge_scope(
+            class_name,
+            method_name,
+            evaluated_args,
+            Some(bridge_scope.unwrap_or(declaring_class)),
+            Some(called_class_scope.unwrap_or(class_name)),
+            context,
+            values,
+        );
+    }
     if let Some((declaring_class, visibility, _, is_abstract)) = metadata {
         if resolved_bridge_scope.is_none() {
             resolved_bridge_scope = Some(declaring_class.clone());
@@ -377,8 +392,9 @@ pub(super) fn eval_native_static_method_with_evaluated_args_bridge_scope(
             .is_err()
         {
             if eval_native_static_magic_method_available(class_name, context, values)? {
-                return eval_native_magic_static_method_call(
+                return eval_native_magic_static_method_call_as(
                     class_name,
+                    called_class_scope,
                     method_name,
                     evaluated_args,
                     context,
@@ -394,8 +410,9 @@ pub(super) fn eval_native_static_method_with_evaluated_args_bridge_scope(
             );
         }
     } else if eval_native_static_magic_method_available(class_name, context, values)? {
-        return eval_native_magic_static_method_call(
+        return eval_native_magic_static_method_call_as(
             class_name,
+            called_class_scope,
             method_name,
             evaluated_args,
             context,
@@ -627,11 +644,51 @@ pub(in crate::interpreter) fn eval_native_magic_static_method_call(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_native_magic_static_method_call_as(
+        class_name,
+        None,
+        method_name,
+        evaluated_args,
+        context,
+        values,
+    )
+}
+
+/// Dispatches through a generated/AOT `__callStatic()` with an explicit late-static-binding class.
+///
+/// `View::replaceNamespace(...)` on an interpreted facade whose compiled base `Facade` answers
+/// through `__callStatic()` has to run that body with `static` = `View`: the body asks
+/// `static::getFacadeAccessor()`, and without the called class it asked `Facade`'s, which throws
+/// "Facade does not implement getFacadeAccessor method".
+pub(in crate::interpreter) fn eval_native_magic_static_method_call_as(
+    class_name: &str,
+    called_class_scope: Option<&str>,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let magic_args = eval_magic_call_args(method_name, evaluated_args, values)?;
-    eval_native_static_method_with_evaluated_args_unchecked(
+    // An INTERPRETED called class only reaches the compiled body through a bridge scope (the
+    // declaring class the magic method is looked up on). A compiled called class is already the
+    // class the generated call names, and carries its own late-static-binding id.
+    let bridge_scope = match called_class_scope {
+        Some(called) if context.has_class(called) => eval_aot_method_dispatch_metadata_in_hierarchy(
+            class_name,
+            "__callStatic",
+            context,
+            values,
+        )?
+        .map(|(declaring_class, _, _, _)| declaring_class),
+        _ => None,
+    };
+    let called_class_scope = bridge_scope.as_ref().and(called_class_scope);
+    eval_native_static_method_with_evaluated_args_unchecked_bridge_scope(
         class_name,
         "__callStatic",
         magic_args,
+        bridge_scope.as_deref(),
+        called_class_scope,
         context,
         values,
     )

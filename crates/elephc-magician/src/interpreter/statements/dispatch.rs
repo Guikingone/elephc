@@ -472,6 +472,9 @@ fn expr_returns_shared_member_cell(expr: &EvalExpr) -> bool {
         EvalExpr::Unary { op: EvalUnaryOp::ErrorSuppress, expr } => {
             expr_returns_shared_member_cell(expr)
         }
+        // `return self::$instance ??= new self();` answers with the cell the static slot holds:
+        // the existing one, or the new value the slot just took over.
+        EvalExpr::NullCoalesceAssign { target, .. } => expr_returns_shared_member_cell(target),
         EvalExpr::Ternary {
             condition,
             then_branch,

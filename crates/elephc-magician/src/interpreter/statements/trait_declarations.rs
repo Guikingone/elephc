@@ -886,7 +886,7 @@ fn eval_class_or_native_parent_is_throwable(
 /// Validates abstract/final modifiers on an eval-declared class and its methods.
 pub(super) fn validate_eval_class_modifiers(
     class: &EvalClass,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let mut stage = "class_flags";
@@ -933,7 +933,7 @@ pub(super) fn validate_eval_class_modifiers(
                 return Err(EvalStatus::RuntimeFatal);
             }
             stage = "eval_parent_override";
-            validate_method_parent_override(class, method, context)?;
+            validate_method_parent_override(class, method, context, values)?;
             stage = "aot_parent_override";
             validate_method_aot_parent_override(class, method, context, values)?;
             stage = "override_attribute";

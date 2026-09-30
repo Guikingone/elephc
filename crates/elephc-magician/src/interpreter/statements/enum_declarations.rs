@@ -127,7 +127,7 @@ pub(super) fn insert_eval_enum_synthetic_method_names(
 /// Validates enum metadata before it is inserted into the dynamic context.
 pub(super) fn validate_eval_enum_decl(
     enum_decl: &EvalEnum,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     validate_eval_enum_attribute_targets(enum_decl)?;
@@ -137,7 +137,7 @@ pub(super) fn validate_eval_enum_decl(
     let enum_class = enum_decl.as_class_metadata();
     validate_eval_class_modifiers(&enum_class, context, values)?;
     validate_eval_enum_interfaces(enum_decl, &enum_class, context, values)?;
-    validate_declared_class_builtin_interface_members(&enum_class, context)?;
+    validate_declared_class_builtin_interface_members(&enum_class, context, values)?;
     validate_declared_class_aot_interface_members(&enum_class, context, values)?;
     validate_concrete_class_builtin_interface_requirements(&enum_class, context)?;
     validate_concrete_class_aot_interface_requirements(&enum_class, context, values)?;

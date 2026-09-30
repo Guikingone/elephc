@@ -260,6 +260,19 @@ struct EvalNativePropertyDefaultRegistration {
     default: EvalNativeCallableDefault,
 }
 
+/// An array-valued class constant registered with the eval context.
+///
+/// The generated scalar constant helper (`eval_class_constant_helpers`) boxes scalars and enum
+/// cases only; an array constant is handed over as a native default description instead, under
+/// every class that can read it.
+struct EvalNativeClassConstantDefaultRegistration {
+    class_name: String,
+    constant_name: String,
+    declaring_class: String,
+    visibility: Visibility,
+    default: EvalNativeCallableDefault,
+}
+
 /// A module-local member attribute that can be registered with the eval context.
 struct EvalNativeMemberAttributeRegistration {
     owner_kind: u8,

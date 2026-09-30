@@ -188,6 +188,7 @@ pub(super) struct GlobalEvalAotMetadata {
     native_property_types: Arc<HashMap<(String, String), EvalParameterType>>,
     native_property_defaults: Arc<HashMap<(String, String), NativeCallableDefault>>,
     native_property_attributes: Arc<HashMap<(String, String), Vec<EvalAttribute>>>,
+    native_class_constant_defaults: Arc<HashMap<(String, String), NativeClassConstantDefault>>,
 }
 
 /// Returns the process-local snapshot of generated AOT metadata.
@@ -222,6 +223,7 @@ pub(crate) fn publish_global_eval_aot_metadata(context: &ElephcEvalContext) {
             native_property_types: Arc::clone(&context.native_property_types),
             native_property_defaults: Arc::clone(&context.native_property_defaults),
             native_property_attributes: Arc::clone(&context.native_property_attributes),
+            native_class_constant_defaults: Arc::clone(&context.native_class_constant_defaults),
     }));
 }
 
@@ -259,6 +261,7 @@ pub(crate) fn sync_global_eval_aot_metadata(context: &mut ElephcEvalContext) -> 
     context.native_property_types = Arc::clone(&metadata.native_property_types);
     context.native_property_defaults = Arc::clone(&metadata.native_property_defaults);
     context.native_property_attributes = Arc::clone(&metadata.native_property_attributes);
+    context.native_class_constant_defaults = Arc::clone(&metadata.native_class_constant_defaults);
     true
 }
 

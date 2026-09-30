@@ -91,6 +91,16 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
         EvaluatedCallable::InvokableObject { object } => {
             eval_invokable_object_with_call_user_func_args(*object, evaluated_args, context, values)
         }
+        EvaluatedCallable::NativeDescriptor { descriptor } => {
+            let Some(decoded) =
+                (unsafe { decode_callable_descriptor(*descriptor as *mut std::ffi::c_void) })
+            else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            let bound =
+                bind_evaluated_native_function_args(&decoded.function, evaluated_args, context, values)?;
+            eval_native_function_with_values(decoded.function, bound, context, values)
+        }
         EvaluatedCallable::ObjectMethod {
             object,
             method,

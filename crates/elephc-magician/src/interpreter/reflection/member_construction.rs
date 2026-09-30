@@ -220,6 +220,10 @@ pub(super) fn eval_reflection_method_object_result_or_throw(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    // php's Reflection constructors autoload the class they are handed, as `ReflectionClass`
+    // already does here: Carbon's `Translator.php` opens with
+    // `new ReflectionMethod(Translation\Translator::class, 'trans')` on a class nothing loaded.
+    eval_reflection_autoload_member_owner(class_name, context, values)?;
     if let Some(result) = eval_reflection_method_object_result_if_exists(
         class_name,
         requested_method_name,
@@ -246,6 +250,18 @@ pub(super) fn eval_reflection_method_object_result_or_throw(
         context,
         values,
     )
+}
+
+/// Autoloads the class a member Reflection constructor names when no world declares it yet.
+fn eval_reflection_autoload_member_owner(
+    class_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if !eval_reflection_class_like_or_runtime_exists(class_name, context, values)? {
+        let _ = crate::interpreter::eval_spl_autoload_class(class_name, context, values)?;
+    }
+    Ok(())
 }
 
 /// Builds an eval-backed `ReflectionMethod` object when the reflected method exists in eval.
@@ -391,6 +407,7 @@ pub(super) fn eval_reflection_property_object_result_or_throw(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    eval_reflection_autoload_member_owner(class_name, context, values)?;
     if let Some(result) = eval_reflection_property_object_result_if_exists(
         class_name,
         property_name,

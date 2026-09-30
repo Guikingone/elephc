@@ -2105,6 +2105,46 @@ fn direct_closure_return_expr_type(
         if let Some((_, php_type)) = params.iter().find(|(param_name, _)| param_name == name) {
             return php_type.clone();
         }
+        // Neither a capture nor a parameter: a local the return expression assigns itself
+        // (`is_dir($d = path()) ? $d : ...`), which this signature cannot type. The syntactic
+        // default answers `int`, and the body then converted the string it returned to `0` --
+        // Laravel's bootstrap path became "0".
+        return PhpType::Mixed;
+    }
+    // A conditional's arms are typed the way a whole return is, so a local assigned in the
+    // condition reaches the arm as the `Mixed` above rather than as the syntactic `int`.
+    let arms = match &expr.kind {
+        ExprKind::Ternary {
+            then_expr,
+            else_expr,
+            ..
+        } => Some((then_expr, else_expr)),
+        ExprKind::ShortTernary { value, default } => Some((value, default)),
+        _ => None,
+    };
+    if let Some((first, second)) = arms {
+        let first = direct_closure_return_expr_type(
+            first,
+            captures,
+            params,
+            classes,
+            builtin_call_types,
+            loop_storage_scope,
+        );
+        let second = direct_closure_return_expr_type(
+            second,
+            captures,
+            params,
+            classes,
+            builtin_call_types,
+            loop_storage_scope,
+        );
+        if first == second {
+            return first;
+        }
+        if first == PhpType::Mixed || second == PhpType::Mixed {
+            return PhpType::Mixed;
+        }
     }
     if let ExprKind::PropertyAccess { object, property } = &expr.kind {
         let receiver_name = match &object.kind {

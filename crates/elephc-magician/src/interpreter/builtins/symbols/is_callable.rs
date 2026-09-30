@@ -313,6 +313,7 @@ pub(in crate::interpreter) fn eval_callable_probe_exists(
         EvaluatedCallable::InvokableObject { object } => {
             eval_object_method_callable_probe(*object, "__invoke", context, values)
         }
+        EvaluatedCallable::NativeDescriptor { .. } => Ok(true),
         EvaluatedCallable::ObjectMethod {
             object,
             method,

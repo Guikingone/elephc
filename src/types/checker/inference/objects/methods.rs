@@ -1169,6 +1169,13 @@ impl Checker {
             let arg_ty = self.infer_type(arg, env)?;
             elem_ty = Self::merge_magic_call_arg_type(elem_ty, arg_ty);
         }
+        // Interpreted code reaches the same magic method with whatever arguments it has, packed
+        // as boxed values: the compiled call sites alone do not describe `$args`. Typed from them,
+        // Laravel's `Facade::__callStatic($method, $args)` read an interpreted
+        // `Log::debug("b")`'s argument array as raw strings and crashed in `implode()`.
+        if self.program_has_interpreted_callers {
+            elem_ty = PhpType::Mixed;
+        }
         let args_array_ty = PhpType::Array(Box::new(elem_ty.clone()));
         let impl_class_name = self
             .classes
@@ -1214,6 +1221,40 @@ impl Checker {
                     PhpType::Int => args_array_ty,
                     _ => sig.params[1].1.clone(),
                 };
+            }
+        }
+        // A class that inherits the magic method carries its own copy of the signature, and the
+        // generated dispatch for `Sub::missing()` binds its arguments with THAT copy: a stale
+        // `$args` element type there handed the implementation an array in the wrong shape.
+        let implemented = self.classes.get(&impl_class_name).and_then(|class_info| {
+            if is_static {
+                class_info.static_methods.get(method_key).cloned()
+            } else {
+                class_info.methods.get(method_key).cloned()
+            }
+        });
+        if let Some(implemented) = implemented {
+            for (inheriting_name, class_info) in self.classes.iter_mut() {
+                if inheriting_name == &impl_class_name {
+                    continue;
+                }
+                let inherits = if is_static {
+                    class_info.static_method_impl_classes.get(method_key)
+                } else {
+                    class_info.method_impl_classes.get(method_key)
+                }
+                .is_some_and(|owner| owner == &impl_class_name);
+                if !inherits {
+                    continue;
+                }
+                let copy = if is_static {
+                    class_info.static_methods.get_mut(method_key)
+                } else {
+                    class_info.methods.get_mut(method_key)
+                };
+                if let Some(copy) = copy {
+                    copy.params = implemented.params.clone();
+                }
             }
         }
         Ok(())

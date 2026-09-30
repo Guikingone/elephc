@@ -73,7 +73,10 @@ pub(in crate::interpreter) fn eval_preg_pattern_parts(
     let closing = eval_preg_closing_delimiter(delimiter);
     let close_index = eval_preg_find_closing_delimiter(pattern, delimiter, closing)
         .ok_or(PregPatternRejection::NoEnd(closing))?;
-    let body = eval_preg_unescape_delimiter(&pattern[1..close_index], delimiter, closing);
+    // The body goes to PCRE2 verbatim, as php hands it over: `\/` is already a literal `/` to
+    // PCRE2, and removing the backslash changed what an escaped METACHARACTER delimiter means --
+    // `\(` inside `(...)` became a group opener, and phpdotenv's lexer pattern stopped compiling.
+    let body = pattern[1..close_index].to_vec();
     let modifiers = eval_preg_modifiers(&pattern[close_index + 1..])?;
     Ok((body, modifiers))
 }
@@ -117,29 +120,6 @@ pub(in crate::interpreter) fn eval_preg_find_closing_delimiter(
         }
     }
     None
-}
-
-/// Removes escapes that only protect the PHP regex delimiter from pattern stripping.
-pub(in crate::interpreter) fn eval_preg_unescape_delimiter(
-    body: &[u8],
-    delimiter: u8,
-    closing: u8,
-) -> Vec<u8> {
-    let mut result = Vec::with_capacity(body.len());
-    let mut index = 0;
-    while index < body.len() {
-        if body[index] == b'\\'
-            && index + 1 < body.len()
-            && matches!(body[index + 1], byte if byte == delimiter || byte == closing)
-        {
-            result.push(body[index + 1]);
-            index += 2;
-        } else {
-            result.push(body[index]);
-            index += 1;
-        }
-    }
-    result
 }
 
 /// Parses eval-supported PHP regex modifiers.

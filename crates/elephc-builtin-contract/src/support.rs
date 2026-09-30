@@ -193,6 +193,7 @@ const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] = &[
     "addcslashes",
     "array_diff_uassoc",
     "array_diff_ukey",
+    "array_find_key",
     "array_first",
     "array_intersect_uassoc",
     "array_intersect_ukey",
@@ -385,12 +386,7 @@ fn is_eval_only_reflection(id: BuiltinId) -> bool {
 /// that list too and is now bound, because it is php's documented alias of `implode` and the
 /// implementation already existed.
 const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
-    "array_all",
-    "array_any",
-    "array_find",
-    "array_merge_recursive",
     "array_multisort",
-    "array_replace_recursive",
     "header_remove",
     "zval_free",
     "zval_pack",
@@ -503,7 +499,7 @@ mod tests {
             BackendSupport::Implemented(BackendImplementation::Registry)
         );
         assert_eq!(
-            eval_support(lookup("array_all").expect("array_all contract")),
+            eval_support(lookup("array_multisort").expect("array_multisort contract")),
             BackendSupport::Unsupported(UnsupportedReason::EvalImplementationPending)
         );
     }

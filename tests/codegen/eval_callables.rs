@@ -2821,6 +2821,47 @@ eval('try { ($GLOBALS["f"])("x"); echo "no throw"; } catch (NotFound $e) { echo 
 /// name once its declaration ran, and one whose guard stayed false does not exist for eval, which
 /// may then declare the name itself.
 #[test]
+fn test_eval_callback_builtins_take_compiled_closures() {
+    // A compiled closure reaches interpreted code as its callable descriptor. Only `$f()` knew
+    // that shape; every callback builtin normalized it by its string form, found no function of
+    // that name, and refused it -- Laravel's interpreted `Arr::map()` is `array_map($callback,
+    // $array, $keys)` over a compiled closure.
+    let out = compile_and_run(
+        r#"<?php
+$inc = fn ($v) => $v + 1;
+$cmp = function ($a, $b) { return $a <=> $b; };
+$pair = fn ($v, $k) => "$k=$v";
+$named = fn (int $a, int $b = 10) => $a * $b;
+eval('echo implode(",", array_map($inc, [1, 2])), "\n";
+$list = [3, 1, 2];
+usort($list, $cmp);
+echo implode(",", $list), "\n";
+echo implode(",", array_map($pair, ["x" => 1, "y" => 2], ["x", "y"])), "\n";
+echo call_user_func($inc, 4), " ", call_user_func_array($named, [2]), " ", call_user_func_array($named, ["b" => 3, "a" => 2]), "\n";
+var_dump(is_callable($inc));');
+"#,
+    );
+    assert_eq!(out, "2,3\n1,2,3\nx=1,y=2\n5 20 6\nbool(true)\n");
+}
+
+#[test]
+fn test_eval_passes_surplus_arguments_to_compiled_closures_and_functions() {
+    // php hands a user function or closure surplus positional arguments without complaint;
+    // Laravel's `Arr::mapWithKeys()` calls every callback as `$callback($value, $key)`, and a
+    // compiled one-parameter closure was refused outright when interpreted code called it.
+    let out = compile_and_run(
+        r#"<?php
+class M { public $p = "x"; function run() { $f = function ($package) { return [$this->p . $package => 1]; }; return eval('return $f("a", "b");'); } }
+var_dump((new M)->run());
+function one($a) { return "one:$a"; }
+$g = fn ($v) => "g:$v";
+eval('echo $g(1, 2), " ", one(3, 4), "\n";');
+"#,
+    );
+    assert_eq!(out, "array(1) {\n  [\"xa\"]=>\n  int(1)\n}\ng:1 one:3\n");
+}
+
+#[test]
 fn test_eval_calls_conditionally_declared_compiled_function() {
     let out = compile_and_run(
         r#"<?php

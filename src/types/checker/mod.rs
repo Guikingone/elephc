@@ -266,6 +266,11 @@ pub(crate) struct Checker {
     /// which `interpreter::expressions::evaluation::eval_new_object_result` raises after the
     /// autoload chain comes back empty.
     pub program_defers_unknown_classes: bool,
+    /// Whether interpreted code can call into this program: it runs `eval()`, includes a file
+    /// chosen at run time, or registers an autoloader. Code the compiler never sees may then call
+    /// any public method with any argument, so facts drawn from the compiled call sites alone do
+    /// not describe every caller.
+    pub program_has_interpreted_callers: bool,
     /// Types recorded for `return <expr>;` statements at the moment each one was checked,
     /// keyed by the statement node's address in the AST plus its span.
     ///
@@ -276,6 +281,10 @@ pub(crate) struct Checker {
     /// return. The address key is exact because both passes borrow the same immutable AST; the
     /// span is carried alongside so a recycled address can never be mistaken for a hit.
     pub flow_typed_returns: HashMap<(String, usize), (Span, PhpType)>,
+    /// Return types widened so every untyped member of an override family returns in one
+    /// storage, keyed by (class, method key, is static). See
+    /// `Checker::unify_override_family_return_types`.
+    pub(crate) family_return_widenings: HashMap<(String, String, bool), PhpType>,
     /// Checker-proven result types for property reads whose receiver was flow-narrowed.
     ///
     /// EIR lowering cannot reconstruct synthetic property facts from statement-local checker

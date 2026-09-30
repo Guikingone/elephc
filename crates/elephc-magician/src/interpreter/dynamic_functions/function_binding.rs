@@ -81,6 +81,7 @@ fn bind_evaluated_native_function_args_with_mode(
             values,
         );
     }
+    let evaluated_args = drop_surplus_native_positional_args(function, evaluated_args, context, values)?;
     let mut bound_args = vec![None; function.param_count()];
     let has_param_names = function.param_names().len() == function.param_count();
     let mut next_positional = 0;
@@ -140,6 +141,40 @@ fn bind_evaluated_native_function_args_with_mode(
         .ok_or(EvalStatus::RuntimeFatal)?;
     apply_native_function_arg_types(function, None, &mut bound_args, context, values)?;
     stage_native_function_invoker_args(function, None, bound_args, by_ref_mode, values)
+}
+
+/// Drops the positional arguments a compiled user function has no parameter for.
+///
+/// php hands a USER function or closure surplus positional arguments without complaint -- only
+/// `func_get_args()` sees them, and a function that calls it is compiled with a variadic tail and
+/// never reaches here. Laravel's `Arr::mapWithKeys()` calls every callback as
+/// `$callback($value, $key)`, and a compiled one-parameter closure refused the call outright. An
+/// owned surplus value is released, as the call would have done after returning.
+fn drop_surplus_native_positional_args(
+    function: &NativeFunction,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
+    let positional = evaluated_args.iter().filter(|arg| arg.name.is_none()).count();
+    if positional <= function.param_count() {
+        return Ok(evaluated_args);
+    }
+    let mut kept = Vec::with_capacity(function.param_count());
+    let mut seen = 0usize;
+    for arg in evaluated_args {
+        if arg.name.is_none() {
+            seen += 1;
+            if seen > function.param_count() {
+                if arg.owned {
+                    eval_release_value(context, values, arg.value)?;
+                }
+                continue;
+            }
+        }
+        kept.push(arg);
+    }
+    Ok(kept)
 }
 
 /// Binds a native AOT variadic function while keeping the raw invoker argument layout.
