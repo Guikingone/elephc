@@ -29,6 +29,7 @@ use externs::{
     __elephc_eval_install_dynamic_object_destructor_hook,
     __elephc_eval_install_class_autoload_hook,
     __elephc_eval_install_generator_protocol_hook,
+    __elephc_eval_install_array_access_hook, __elephc_eval_install_object_clone_hook,
     __elephc_eval_install_object_relation_hook, __elephc_eval_install_serialize_object_hook,
     __elephc_eval_install_unserialize_object_hook,
     __elephc_eval_value_array_new,
@@ -160,6 +161,31 @@ pub(crate) unsafe fn install_unserialize_object_hook(callback: usize) {
     }
 }
 
+/// Installs the eval `ArrayAccess` read callback into the generated runtime.
+///
+/// # Safety
+/// `callback` must be the address of an
+/// `extern "C" fn(*mut c_void, u64, u64, *mut *mut RuntimeCell) -> u64` following the
+/// array-access ABI; `__rt_mixed_array_get` calls through it for an object it cannot index.
+#[cfg(not(test))]
+pub(crate) unsafe fn install_array_access_hook(callback: usize) {
+    unsafe {
+        __elephc_eval_install_array_access_hook(callback);
+    }
+}
+
+/// Installs the compiled-clone adoption callback into the generated runtime.
+///
+/// # Safety
+/// `callback` must be the address of an `extern "C" fn(*mut c_void, *mut c_void)`; generated
+/// code calls it after a compiled `clone` with the source and the clone.
+#[cfg(not(test))]
+pub(crate) unsafe fn install_object_clone_hook(callback: usize) {
+    unsafe {
+        __elephc_eval_install_object_clone_hook(callback);
+    }
+}
+
 /// Installs the eval object class-relation callback into the generated runtime.
 ///
 /// # Safety
@@ -267,6 +293,46 @@ pub(crate) fn diag_suppression(enter: bool) {
 
 #[cfg(test)]
 pub(crate) fn diag_suppression(_enter: bool) {}
+
+/// Returns the class a COMPILED `stream_wrapper_register()` bound to `scheme`, if any.
+///
+/// Compiled code registers wrappers in the generated runtime's own table, which the interpreter's
+/// registry never sees; an interpreted `include 'scheme://...'` has to look there too, or a
+/// wrapper the compiled program installed is "No such file or directory" to it.
+#[cfg(not(test))]
+pub(crate) fn compiled_stream_wrapper_class(scheme: &str) -> Option<String> {
+    const REGISTRATIONS: usize = 64;
+    let table = unsafe { externs::__elephc_eval_user_wrapper_table() };
+    if table.is_null() {
+        return None;
+    }
+    for slot in 0..REGISTRATIONS {
+        let entry = unsafe { std::slice::from_raw_parts(table.add(slot * 4), 4) };
+        let (protocol_ptr, protocol_len, class_ptr, class_len) =
+            (entry[0], entry[1], entry[2], entry[3]);
+        if protocol_ptr == 0 || class_ptr == 0 {
+            continue;
+        }
+        let protocol = unsafe {
+            std::slice::from_raw_parts(protocol_ptr as *const u8, protocol_len as usize)
+        };
+        if !protocol.eq_ignore_ascii_case(scheme.as_bytes()) {
+            continue;
+        }
+        let class = unsafe { std::slice::from_raw_parts(class_ptr as *const u8, class_len as usize) };
+        return Some(
+            String::from_utf8_lossy(class)
+                .trim_start_matches('\\')
+                .to_string(),
+        );
+    }
+    None
+}
+
+#[cfg(test)]
+pub(crate) fn compiled_stream_wrapper_class(_scheme: &str) -> Option<String> {
+    None
+}
 
 /// Test builds link no generated table, so every compiled class counts as loaded.
 #[cfg(test)]

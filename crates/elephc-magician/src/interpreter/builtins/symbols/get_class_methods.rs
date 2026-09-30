@@ -65,6 +65,11 @@ pub(in crate::interpreter) fn eval_get_class_methods_result(
     let [target] = evaluated_args else {
         return Err(EvalStatus::RuntimeFatal);
     };
+    // A class another context declared (an autoloaded file) is known to this one only after a
+    // sync. Laravel's pipeline closure asked `method_exists($pipe, 'handle')` of a middleware its
+    // container had just autoloaded elsewhere, got false, and called the object as a closure.
+    #[cfg(not(test))]
+    context.sync_global_eval_classes();
     let (class_name, target_is_object) =
         eval_class_metadata_target_name(*target, context, values)?;
     if !target_is_object && !eval_class_relation_name_exists(&class_name, context, values)? {

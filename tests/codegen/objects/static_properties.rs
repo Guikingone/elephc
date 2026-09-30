@@ -884,3 +884,28 @@ echo json_encode(Reg::$names), "\n", json_encode(Reg::$typed), "\n", json_encode
         "first=a,0=b,1=c\n{\"a\":\"one\",\"0\":\"two\",\"5\":\"three\",\"6\":\"four\"}\n{\"xone\":3,\"0\":\"one!\",\"xtwo\":3,\"1\":\"two!\",\"xthree\":5,\"2\":\"three!\",\"xfour\":4,\"3\":\"four!\"}\n[1,2]\n"
     );
 }
+
+/// An untyped static array property defaulted to a non-empty list and later reset to `[]` keeps
+/// storage its default fits in.
+///
+/// The `[]` write carries no element evidence, yet it specialized the slot to `array<never>`, and
+/// the `[1, 2]` default could then not be stored: the build failed with "static property
+/// initializer ... with PHP type Void". A cache flushed by `static::$cache = []` is the shape.
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_static_array_reset_to_empty_keeps_its_default() {
+    let out = compile_and_run(
+        r#"<?php
+class Cache {
+    protected static $entries = [1, 2];
+    public static function flush() { static::$entries = []; }
+    public static function dump() { return json_encode(static::$entries); }
+}
+echo Cache::dump(), "\n";
+Cache::flush();
+echo Cache::dump(), "\n";
+"#,
+    );
+    assert_eq!(out, "[1,2]\n[]\n");
+}

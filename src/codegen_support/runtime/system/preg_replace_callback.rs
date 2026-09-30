@@ -128,8 +128,10 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // pass compiled opaque handle
     emitter.instruction(&format!("ldr x2, [sp, #{}]", nmatch_off));             // request one regmatch slot for every compiled capture group
     emitter.instruction(&format!("ldr x3, [sp, #{}]", regmatches_ptr_off));     // pass dynamic fixed offset-pair buffer
-    emitter.instruction("mov x4, #0");                                          // use default execution flags
-    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize every requested offset pair
+    emitter.instruction("mov x4, x1");                                          // the search cursor inside the whole subject
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_cstr_off)); // pass the WHOLE subject so lookbehind and anchors see what precedes the cursor
+    emitter.instruction(&format!("ldr x5, [sp, #{}]", subject_len_off)); // pass the whole subject length as the search end
+    emitter.instruction("bl __rt_pcre2_exec_at");                               // match from the cursor; pairs come back relative to it
     emitter.instruction("cbnz x0, __rt_preg_replace_callback_tail");            // copy the remaining subject when there are no more matches
 
     // -- remember unmatched prefix length before this match --
@@ -490,8 +492,10 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // pass compiled opaque handle
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", nmatch_off)); // request one regmatch slot for every compiled capture group
     emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // pass dynamic fixed offset-pair buffer
-    emitter.instruction("xor r8d, r8d");                                        // use default execution flags
-    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize every requested offset pair
+    emitter.instruction("mov r8, rsi");                                         // the search cursor inside the whole subject
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_cstr_off)); // pass the WHOLE subject so lookbehind and anchors see what precedes the cursor
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", subject_len_off)); // pass the whole subject length as the search end
+    emitter.instruction("call __rt_pcre2_exec_at");                             // match from the cursor; pairs come back relative to it
     emitter.instruction("test eax, eax");                                       // did regexec find another match?
     emitter.instruction("jnz __rt_preg_replace_callback_tail_linux_x86_64");    // copy the remaining subject once no more matches exist
 

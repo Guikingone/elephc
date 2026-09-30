@@ -162,6 +162,9 @@ pub(super) fn lower_native_isset_offset_probe_from_value(
                     expr,
                 );
             }
+            if matches!(receiver_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+                return lower_mixed_isset_dim_probe(ctx, array_value, index, expr);
+            }
             let read_value = lower_array_access_from_value(ctx, array_value, index, expr, false);
             emit_builtin_call_value(
                 ctx,
@@ -173,6 +176,74 @@ pub(super) fn lower_native_isset_offset_probe_from_value(
             )
         }
     }
+}
+
+/// Lowers `isset($mixed[$k])` for a receiver whose kind is known only at run time.
+///
+/// php answers `isset()` on an `ArrayAccess` object with `offsetExists()` alone. The quiet read
+/// this used to take calls `offsetGet()` instead, and a container's `offsetGet` RESOLVES the
+/// key: Laravel's `isset(static::$app[$name])` answered true for a binding that does not exist,
+/// so `Date` skipped installing its default factory and the next read failed with "Target class
+/// [date] does not exist". Every other receiver keeps the quiet read.
+fn lower_mixed_isset_dim_probe(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_value: LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    let data = ctx.intern_class_name("ArrayAccess");
+    let is_array_access = ctx.emit_value(
+        Op::InstanceOf,
+        vec![array_value.value],
+        Some(Immediate::Data(data)),
+        PhpType::Bool,
+        Op::InstanceOf.default_effects(),
+        Some(expr.span),
+    );
+    let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
+    let access_block = ctx
+        .builder
+        .create_named_block("isset.array_access", Vec::new());
+    let read_block = ctx.builder.create_named_block("isset.mixed_read", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("isset.array_access.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_array_access.value,
+        then_target: access_block,
+        then_args: Vec::new(),
+        else_target: read_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(access_block);
+    let exists = lower_method_call_with_receiver(
+        ctx,
+        array_value,
+        "offsetExists",
+        &[index.clone()],
+        Op::MethodCall,
+        expr,
+    );
+    let exists = ctx.truthy_consuming(exists, Some(expr.span));
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, exists, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(read_block);
+    let read_value = lower_array_access_from_value(ctx, array_value, index, expr, false);
+    let isset = emit_builtin_call_value(
+        ctx,
+        "isset",
+        vec![read_value.value],
+        PhpType::Int,
+        expr.span,
+        None,
+    );
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, isset, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    take_owned_temp(ctx, &temp_name, expr.span)
 }
 
 /// Lowers `isset($object->property)` without performing a normal property read first.

@@ -135,6 +135,18 @@ pub(in crate::codegen::lower_inst) fn lower_eval_owned_property_get(
     eval::lower_eval_owned_property_get(ctx, inst, object, property, miss_label, done_label)
 }
 
+/// Reads a `Mixed` receiver's property through its owning eval context when one owns it, from a
+/// frame without an eval context; other receivers branch to `miss_label`.
+pub(in crate::codegen::lower_inst) fn lower_eval_owner_mixed_property_get(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    property: &str,
+    miss_label: &str,
+    done_label: &str,
+) -> Result<()> {
+    eval::lower_eval_owner_mixed_property_get(ctx, object, property, miss_label, done_label)
+}
+
 /// Probes a typed receiver for an eval-owned dynamic override before native dispatch.
 pub(in crate::codegen::lower_inst) fn lower_eval_owned_method_call(
     ctx: &mut FunctionContext<'_>,

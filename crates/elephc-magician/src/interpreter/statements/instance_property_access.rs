@@ -274,9 +274,10 @@ pub(in crate::interpreter) fn eval_property_get_result(
                 values.property_get(object, storage_property_name)
             });
         }
-        if let Some((declaring_class, visibility, _, is_static)) =
-            eval_reflection_aot_property_access_metadata(&class_name, property_name, values)?
-        {
+        let aot_metadata =
+            eval_reflection_aot_property_access_metadata(&class_name, property_name, values)?;
+        let aot_declared = aot_metadata.is_some();
+        if let Some((declaring_class, visibility, _, is_static)) = aot_metadata {
             if !is_static {
                 if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
                     return eval_throw_property_access_error(
@@ -314,11 +315,29 @@ pub(in crate::interpreter) fn eval_property_get_result(
         }
         // A purely AOT class has no eval record at all, so this is where the Symfony stop landed:
         // `CheckCircularReferencesPass::$checkedLazyNodes`, declared `private array` and never
-        // assigned, read through the bridge by compiled `empty()`/indexed-write/`unset`.
-        if let Some(null) =
-            eval_quiet_uninitialized_property_null(object, property_name, context, values)?
+        // assigned, read through the bridge by compiled `empty()`/indexed-write/`unset`. Only a
+        // DECLARED slot can be uninitialized: a name the class never declared is not a quiet
+        // null but a miss `__isset()`/`__get()` answer, which `isset($app->config['view'])` on
+        // Laravel's container needs.
+        if aot_declared {
+            if let Some(null) =
+                eval_quiet_uninitialized_property_null(object, property_name, context, values)?
+            {
+                return Ok(null);
+            }
+        }
+        // A name the compiled class neither declares nor holds as a dynamic property is what
+        // `__get()` answers, before the bridge reads it as an undeclared null.
+        if !aot_declared
+            && eval_aot_method_dispatch_metadata_in_hierarchy(&class_name, "__get", context, values)?
+                .is_some()
+            && !eval_object_public_property_exists(object, property_name, values)?
         {
-            return Ok(null);
+            if let Some(value) =
+                eval_aot_magic_property_get(object, &class_name, property_name, context, values)?
+            {
+                return Ok(value);
+            }
         }
         // The bridge only knows the slots the class DECLARED. A name it refuses is an undeclared
         // property, which PHP reads as null; failing here turned
@@ -327,7 +346,16 @@ pub(in crate::interpreter) fn eval_property_get_result(
         // route 404ed while the error page stayed byte-perfect.
         return match values.property_get(object, property_name) {
             Ok(value) => Ok(value),
-            Err(_) => values.null(),
+            Err(_) => match eval_aot_magic_property_get(
+                object,
+                &class_name,
+                property_name,
+                context,
+                values,
+            )? {
+                Some(value) => Ok(value),
+                None => values.null(),
+            },
         };
     };
     let object_class_name = class.name().to_string();
@@ -1260,6 +1288,47 @@ pub(super) fn eval_magic_property_get(
         values,
     )
     .map(Some)
+}
+
+/// Dispatches a read of a name a COMPILED object does not declare through its class's `__get()`.
+///
+/// php calls `__get()` for any property it cannot find, and that holds for a compiled object read
+/// from interpreted code as much as for an interpreted one. The bridge only knows the slots a
+/// compiled class declares, so every other name read as null here: Laravel's
+/// `$this->app->config['view']` (the container answers `config` through `__get()`) found nothing
+/// once the reading closure carried an eval context. Returns `None` when no `__get()` exists.
+fn eval_aot_magic_property_get(
+    object: RuntimeCellHandle,
+    class_name: &str,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if eval_aot_method_dispatch_metadata_in_hierarchy(class_name, "__get", context, values)?
+        .is_none()
+    {
+        return Ok(None);
+    }
+    // Inside `isset()`/`empty()`/`??` php asks `__isset()` first, when the class has one, and a
+    // false answer is a miss without ever calling `__get()`.
+    if context.quiet_property_fetch()
+        && eval_aot_method_dispatch_metadata_in_hierarchy(class_name, "__isset", context, values)?
+            .is_some()
+    {
+        let name = values.string(property_name)?;
+        let answer = eval_method_call_result(object, "__isset", vec![name], context, values);
+        values.release(name)?;
+        let answer = answer?;
+        let set = values.truthy(answer)?;
+        values.release(answer)?;
+        if !set {
+            return values.null().map(Some);
+        }
+    }
+    let name = values.string(property_name)?;
+    let result = eval_method_call_result(object, "__get", vec![name], context, values);
+    values.release(name)?;
+    result.map(Some)
 }
 
 /// Dispatches an undefined or inaccessible eval property write through `__set()`.

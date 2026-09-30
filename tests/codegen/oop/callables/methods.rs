@@ -1261,3 +1261,51 @@ echo invokeResolver(new PrefixValueResolver());
     );
     assert_eq!(out, "resolved:ok");
 }
+
+/// Verifies a literal `[Class::class, 'method']` callback reaches a private or protected static
+/// method visible from the calling class, in every invoke-only callback builtin.
+///
+/// php resolves a callable array against the calling scope. The array form went to the runtime
+/// callable table, which lists public methods only, so `preg_replace_callback(...,
+/// [__CLASS__, 'helper'], ...)` failed with "callable array did not resolve to an invokable
+/// target" (the shape `symfony/polyfill-mbstring` uses for title case), and the sort builtins
+/// refused a callable array at compile time even for a public method. `title()` takes an
+/// untyped subject, which routes through the gradual `preg_replace_callback` helper.
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_class_string_callable_arrays_reach_scoped_static_methods() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+final class Words {
+    public static function run(string $s): void {
+        $a = [3, 1, 2];
+        usort($a, [__CLASS__, 'cmp']);
+        echo implode(",", $a), "|";
+        echo implode(",", array_map([self::class, 'dbl'], $a)), "|";
+        echo implode(",", array_filter($a, [Words::class, 'odd'])), "|";
+        echo preg_replace_callback('/\b\w/', [__CLASS__, 'up'], $s), "\n";
+    }
+    public static function title($s) {
+        return preg_replace_callback('/\b\w/', [__CLASS__, 'up'], $s);
+    }
+    private static function cmp($x, $y) { return $x <=> $y; }
+    private static function dbl($x) { return $x * 2; }
+    private static function odd($x) { return $x % 2 === 1; }
+    private static function up($m) { return strtoupper($m[0]); }
+}
+class Base {
+    protected static function twice($x) { return $x * 2; }
+}
+class Child extends Base {
+    public static function run(): void {
+        echo implode(",", array_map([parent::class, 'twice'], [1, 2])), "\n";
+    }
+}
+Words::run("hello world");
+echo Words::title("foo bar"), "\n";
+Child::run();
+"#,
+    );
+    assert_eq!(out, "1,2,3|2,4,6|1,3|Hello World\nFoo Bar\n2,4\n");
+}

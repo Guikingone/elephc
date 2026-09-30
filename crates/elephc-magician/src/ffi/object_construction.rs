@@ -754,20 +754,51 @@ unsafe fn eval_property_get_inner(
     if object.is_null() {
         return EvalStatus::RuntimeFatal.code();
     }
-    let Some(context) = ctx.as_mut() else {
+    let Ok(property) = abi_name_to_string(property_ptr, property_len) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    let object = RuntimeCellHandle::from_raw(object);
+    // An object of an eval-declared class is known only to the context that declared it. A
+    // compiled function reading it may hold a DIFFERENT context (every frame that needs the
+    // bridge makes its own), which found no class for the object and read even a declared
+    // property as an undeclared one: `$provider->singletons` on an eval subclass of a compiled
+    // class came back null. Read through the owner, as a method call does, with the caller's
+    // class scope forwarded so visibility is still judged from where the read is written. A
+    // compiled frame with no context of its own passes null and publishes its lexical class
+    // instead.
+    let dynamic_owner = {
+        let mut probe = ElephcRuntimeOps::with_context(std::ptr::null());
+        probe
+            .object_identity(object)
+            .ok()
+            .and_then(crate::ffi::dynamic_destructors::dynamic_object_owner_context)
+    };
+    let context_ptr = dynamic_owner.unwrap_or(ctx);
+    let Some(context) = context_ptr.as_mut() else {
         return EvalStatus::RuntimeFatal.code();
     };
     if context.abi_version() != ABI_VERSION {
         return EvalStatus::AbiMismatch.code();
     }
-    let Ok(property) = abi_name_to_string(property_ptr, property_len) else {
-        return EvalStatus::RuntimeFatal.code();
+    let forwarded_class_scope = if ctx.is_null() {
+        crate::context::current_native_caller_class().filter(|class_name| !class_name.is_empty())
+    } else if std::ptr::eq(context_ptr, ctx) {
+        None
+    } else {
+        ctx.as_ref()
+            .and_then(|caller| caller.current_class_scope().map(str::to_string))
     };
+    if let Some(class_scope) = &forwarded_class_scope {
+        context.push_class_scope(class_scope.clone());
+    }
     clear_result(out);
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-    let object = RuntimeCellHandle::from_raw(object);
-    match interpreter::execute_context_property_get_outcome(context, object, &property, &mut values)
-    {
+    let outcome =
+        interpreter::execute_context_property_get_outcome(context, object, &property, &mut values);
+    if forwarded_class_scope.is_some() {
+        context.pop_class_scope();
+    }
+    match outcome {
         Ok(outcome) => write_outcome(outcome, out).code(),
         Err(status) => {
             // A refusal that reaches the user as six words is a defect of its own. Name the class

@@ -19,6 +19,10 @@ use crate::ffi::dynamic_destructors::install_dynamic_object_destructor_hook;
 #[cfg(not(test))]
 use crate::ffi::class_autoload::install_class_autoload_hook;
 #[cfg(not(test))]
+use crate::ffi::array_access::install_array_access_hook;
+#[cfg(not(test))]
+use crate::ffi::object_clone_adopt::install_object_clone_hook;
+#[cfg(not(test))]
 use crate::ffi::object_relation::install_object_relation_hook;
 #[cfg(not(test))]
 use crate::ffi::serialize_objects::install_serialize_object_hook;
@@ -227,6 +231,10 @@ pub extern "C" fn __elephc_eval_context_new() -> *mut ElephcEvalContext {
     install_unserialize_object_hook();
     #[cfg(not(test))]
     install_object_relation_hook();
+    #[cfg(not(test))]
+    install_array_access_hook();
+    #[cfg(not(test))]
+    install_object_clone_hook();
     #[cfg(not(test))]
     install_serialize_object_hook();
     let context = Box::into_raw(Box::new(ElephcEvalContext::new()));

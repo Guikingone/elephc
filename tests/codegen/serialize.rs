@@ -1399,3 +1399,35 @@ echo count($parameters), ":", $parameters["a"], ":", $parameters["b"], "|",
     );
     assert_eq!(out, "EvalHydrated|2:1:2|kept");
 }
+
+/// Verifies an interpreted `unserialize()` restores a COMPILED class through its
+/// `__unserialize()` hook, handing it the payload -- here an interpreted object.
+///
+/// The interpreter wrote the payload keys as properties from outside the class instead, which
+/// lands nowhere for a protected property: Laravel's `UnsignedSerializableClosure` came back
+/// with a null `$serializable`, and every cached closure route died with "Call to a member
+/// function getClosure() on null".
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_eval_unserialize_calls_a_compiled_unserialize_hook() {
+    let out = compile_and_run(
+        r#"<?php
+class Wrapper {
+    protected $serializable;
+    public function __construct($s) { $this->serializable = $s; }
+    public function get() { return $this->serializable->get(); }
+    public function __serialize() { return ['serializable' => $this->serializable]; }
+    public function __unserialize($data) { $this->serializable = $data['serializable']; }
+}
+$code = 'class Inner { public $code; public function get() { return $this->code; }
+    public function __serialize() { return ["code" => $this->code]; }
+    public function __unserialize($data) { $this->code = $data["code"] . "?"; } }';
+eval($code);
+$payload = 'O:7:"Wrapper":1:{s:12:"serializable";O:5:"Inner":1:{s:4:"code";s:1:"x";}}';
+$read = 'return unserialize($payload)->get();';
+echo eval($read), "\n";
+"#,
+    );
+    assert_eq!(out, "x?\n");
+}

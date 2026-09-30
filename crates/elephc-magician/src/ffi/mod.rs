@@ -19,6 +19,10 @@ pub(crate) mod class_autoload;
 #[cfg(not(test))]
 pub(crate) mod generator_protocol;
 #[cfg(not(test))]
+pub(crate) mod array_access;
+#[cfg(not(test))]
+pub(crate) mod object_clone_adopt;
+#[cfg(not(test))]
 pub(crate) mod object_relation;
 #[cfg(not(test))]
 pub(crate) mod serialize_objects;

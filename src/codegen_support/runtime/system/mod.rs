@@ -55,6 +55,7 @@ mod json_throw_error;
 mod match_unhandled;
 mod mktime;
 mod mb_ereg_match;
+mod pcre2_exec_at;
 mod pcre_to_posix;
 mod preg_compile_warning;
 mod pcntl;
@@ -132,6 +133,7 @@ pub(crate) use microtime::emit_microtime_mixed;
 pub(crate) use mktime::emit_mktime;
 pub(crate) use php_uname::emit_php_uname;
 pub(crate) use mb_ereg_match::emit_mb_ereg_match;
+pub(crate) use pcre2_exec_at::emit_pcre2_exec_at;
 pub(crate) use pcre_to_posix::emit_pcre_to_posix;
 pub(crate) use preg_compile_warning::emit_preg_compile_warning;
 pub(crate) use pcntl::{

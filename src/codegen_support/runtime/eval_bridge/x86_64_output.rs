@@ -307,6 +307,10 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     emitter.label("__elephc_eval_diag_suppression_leave_x86");
     emitter.instruction("jmp __rt_diag_pop_suppression");                       // restore the enclosing suppression depth
 
+    label_c_global(emitter, "__elephc_eval_user_wrapper_table");
+    abi::emit_symbol_address(emitter, "rax", "_user_wrappers");
+    emitter.instruction("ret");                                                 // hand the compiled stream-wrapper table to the interpreter
+
     label_c_global(emitter, "__elephc_eval_request_invoker_boundary");
     abi::emit_symbol_address(emitter, "r9", "__rt_eval_invoker_bounded");
     emitter.instruction("mov QWORD PTR [r9], 1");                               // ask the next descriptor invoker for its exception boundary

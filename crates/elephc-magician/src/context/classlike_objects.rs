@@ -417,6 +417,21 @@ impl ElephcEvalContext {
         storage_property_name: &str,
         value: RuntimeCellHandle,
     ) -> Option<RuntimeCellHandle> {
+        // An object another context built keeps its state in THAT context. Writing it here made
+        // a shadow only this context could see: Laravel's routes file, included from a closure
+        // with its own context, set the router's compiled routes through `setCompiledRoutes()`,
+        // and the router itself kept reading the empty collection it was built with -- every
+        // request 404ed. A slot this context already shadows keeps being written here, so its
+        // own later reads stay consistent.
+        #[cfg(not(test))]
+        if !self
+            .dynamic_property_values
+            .contains_key(&(identity, storage_property_name.to_string()))
+        {
+            if let Some(owner) = dynamic_object_foreign_owner_mut(self, identity) {
+                return owner.set_dynamic_property_value(identity, storage_property_name, value);
+            }
+        }
         let previous = self
             .dynamic_property_values
             .insert((identity, storage_property_name.to_string()), value);
@@ -437,6 +452,15 @@ impl ElephcEvalContext {
         identity: u64,
         storage_property_name: &str,
     ) -> Option<RuntimeCellHandle> {
+        #[cfg(not(test))]
+        if !self
+            .dynamic_property_values
+            .contains_key(&(identity, storage_property_name.to_string()))
+        {
+            if let Some(owner) = dynamic_object_foreign_owner_mut(self, identity) {
+                return owner.remove_dynamic_property_value(identity, storage_property_name);
+            }
+        }
         let removed = self
             .dynamic_property_values
             .remove(&(identity, storage_property_name.to_string()));
@@ -721,6 +745,11 @@ impl ElephcEvalContext {
         identity: u64,
         storage_property_name: &str,
     ) {
+        #[cfg(not(test))]
+        if let Some(owner) = dynamic_object_foreign_owner_mut(self, identity) {
+            owner.mark_dynamic_property_initialized(identity, storage_property_name);
+            return;
+        }
         self.dynamic_initialized_properties
             .insert((identity, storage_property_name.to_string()));
     }
@@ -731,6 +760,10 @@ impl ElephcEvalContext {
         identity: u64,
         storage_property_name: &str,
     ) {
+        #[cfg(not(test))]
+        if let Some(owner) = dynamic_object_foreign_owner_mut(self, identity) {
+            owner.mark_dynamic_property_uninitialized(identity, storage_property_name);
+        }
         self.dynamic_initialized_properties
             .remove(&(identity, storage_property_name.to_string()));
     }
@@ -773,13 +806,23 @@ impl ElephcEvalContext {
         for (property, target) in aliases {
             self.bind_dynamic_property_alias(clone_identity, &property, target);
         }
-        let initialized = self
+        let mut initialized = self
             .dynamic_initialized_properties
             .iter()
             .filter_map(|(identity, property)| {
                 (*identity == source_identity).then(|| property.clone())
             })
             .collect::<Vec<_>>();
+        // A source another context built keeps its initialization marks THERE, as its property
+        // values are: cloning it from here copied the values and no marks, so every typed property
+        // of the clone read as uninitialized. Carbon's `instance()` clones like that, and the clone
+        // failed on its own `?WrapperClock $clock = null`.
+        #[cfg(not(test))]
+        if let Some(owner) = dynamic_object_foreign_owner(self, source_identity) {
+            initialized.extend(owner.dynamic_initialized_properties.iter().filter_map(
+                |(identity, property)| (*identity == source_identity).then(|| property.clone()),
+            ));
+        }
         for property in initialized {
             self.mark_dynamic_property_initialized(clone_identity, &property);
         }
@@ -951,5 +994,22 @@ pub(super) fn dynamic_object_foreign_owner<'asking>(
         return None;
     }
     let owner = unsafe { owner.as_ref()? };
+    (owner.abi_version() == ABI_VERSION).then_some(owner)
+}
+
+/// Returns the owning context of an object another context built, for writing its state.
+///
+/// The owner is a DIFFERENT context than `asking` (the same one answers `None`), so the returned
+/// reference never aliases the caller's own `&mut self`.
+#[cfg(not(test))]
+pub(super) fn dynamic_object_foreign_owner_mut<'owner>(
+    asking: &ElephcEvalContext,
+    identity: u64,
+) -> Option<&'owner mut ElephcEvalContext> {
+    let owner = crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)?;
+    if std::ptr::eq(owner.cast_const(), std::ptr::from_ref(asking)) {
+        return None;
+    }
+    let owner = unsafe { owner.as_mut()? };
     (owner.abi_version() == ABI_VERSION).then_some(owner)
 }

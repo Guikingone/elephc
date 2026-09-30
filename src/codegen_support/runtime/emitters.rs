@@ -211,6 +211,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     if features.regex {
         system::emit_preg_strip(emitter);
         system::emit_pcre_to_posix(emitter);
+        system::emit_pcre2_exec_at(emitter);
         system::emit_preg_compile_warning(emitter);
         system::emit_mb_ereg_match(emitter);
         system::emit_preg_match(emitter);

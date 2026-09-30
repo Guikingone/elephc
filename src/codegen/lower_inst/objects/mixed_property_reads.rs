@@ -297,6 +297,22 @@ pub(super) fn lower_declared_mixed_prop_get(
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&miss_label);
+    if eval_owner_fallback_available(ctx) {
+        // A class no compiled candidate matched may be an eval-declared subclass whose own
+        // properties live in its owning eval context.
+        let native_miss_label = ctx.next_label("mixed_prop_native_miss");
+        builtins::lower_eval_owner_mixed_property_get(
+            ctx,
+            object,
+            property,
+            &native_miss_label,
+            &done_label,
+        )?;
+        ctx.emitter.label(&native_miss_label);
+        ctx.load_value_to_result(object)?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        emit_mixed_object_payload_or_null(ctx, &null_label);
+    }
     emit_undefined_property_warning_for_loaded_object(ctx, property);
     emit_boxed_null(ctx);
     abi::emit_jump(ctx.emitter, &done_label);
@@ -307,6 +323,12 @@ pub(super) fn lower_declared_mixed_prop_get(
     ctx.emitter.label(&done_label);
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
     store_if_result(ctx, inst)
+}
+
+/// Returns whether a frame without its own eval context can still ask the eval bridge for an
+/// eval-owned object's property: the bridge is linked, and the frame has no context to ask with.
+fn eval_owner_fallback_available(ctx: &FunctionContext<'_>) -> bool {
+    ctx.module.required_runtime_features.eval_bridge && !builtins::has_eval_context(ctx)
 }
 
 /// Probes a declared typed slot through a receiver whose class is only known at run time.
@@ -386,6 +408,18 @@ pub(super) fn lower_runtime_mixed_prop_get(
     object: ValueId,
     property: &str,
 ) -> Result<()> {
+    let done_label = ctx.next_label("mixed_prop_runtime_done");
+    if eval_owner_fallback_available(ctx) {
+        let runtime_label = ctx.next_label("mixed_prop_runtime");
+        builtins::lower_eval_owner_mixed_property_get(
+            ctx,
+            object,
+            property,
+            &runtime_label,
+            &done_label,
+        )?;
+        ctx.emitter.label(&runtime_label);
+    }
     let (label, len) = ctx.data.add_string(property.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -400,6 +434,7 @@ pub(super) fn lower_runtime_mixed_prop_get(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_mixed_property_get");
+    ctx.emitter.label(&done_label);
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
     store_if_result(ctx, inst)
 }

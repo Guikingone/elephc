@@ -351,11 +351,24 @@ pub(in crate::interpreter) fn eval_closure_with_evaluated_args_and_bound_scope_r
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let Some(class_scope) = bound_scope else {
+        // No explicit rebinding: the closure keeps the `$this` and class scope it was declared
+        // with, exactly as a direct `$closure(...)` call does. Passing no binding at all lost
+        // them, so `call_user_func($default, ...)` on Laravel's
+        // `fn () => ImplicitRouteBinding::resolveForRoute($this->container, $route)` warned
+        // "Undefined variable $this" and resolved against a null container.
+        let binding = closure.declaring_class_scope().map(|class_scope| EvalClosureBinding {
+            this_object: closure.declaring_this(),
+            class_scope: class_scope.to_string(),
+            called_class: closure
+                .declaring_called_class_scope()
+                .unwrap_or(class_scope)
+                .to_string(),
+        });
         return eval_closure_with_optional_binding(
             closure,
             parameter_is_by_ref,
             EvalByRefBindingMode::RequireTarget,
-            None,
+            binding,
             evaluated_args,
             context,
             values,

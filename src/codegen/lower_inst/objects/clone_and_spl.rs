@@ -14,6 +14,59 @@ pub(in crate::codegen::lower_inst) fn lower_object_clone_shallow(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
+    lower_object_clone_shallow_layout(ctx, inst)?;
+    emit_eval_clone_adoption(ctx, inst)
+}
+
+/// Hands a finished compiled clone to the eval bridge, when it is linked, so a clone of an
+/// eval-declared object becomes an object of that same class.
+///
+/// The compiled clone copies the native layout, which for an eval-declared class is its compiled
+/// ancestor's, so the copy was that ancestor: Symfony's `Request::duplicate()` does
+/// `clone $this`, and Laravel's `Request::duplicate(): static` then failed its own return type.
+/// The bridge leaves a source no eval context owns alone.
+fn emit_eval_clone_adoption(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if !ctx.module.required_runtime_features.eval_bridge {
+        return Ok(());
+    }
+    let source = expect_operand(inst, 0)?;
+    let Some(result) = inst.result else {
+        return Ok(());
+    };
+    if !matches!(ctx.value_php_type(source)?, PhpType::Object(_))
+        || !matches!(ctx.value_php_type(result)?, PhpType::Object(_))
+    {
+        return Ok(());
+    }
+    let done_label = ctx.next_label("clone_adopt_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x12", "_elephc_eval_object_clone_fn", 0);
+            ctx.emitter.instruction(&format!("cbz x12, {}", done_label)); // no bridge hook: the clone is already complete
+            ctx.load_value_to_reg(source, "x0")?;
+            ctx.load_value_to_reg(result, "x1")?;
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x12", "_elephc_eval_object_clone_fn", 0);
+            ctx.emitter.instruction("blr x12"); // register the clone with the source's eval class
+        }
+        Arch::X86_64 => {
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r11", "_elephc_eval_object_clone_fn", 0);
+            ctx.emitter.instruction("test r11, r11"); // is the bridge hook installed?
+            ctx.emitter.instruction(&format!("jz {}", done_label)); // no bridge hook: the clone is already complete
+            ctx.load_value_to_reg(source, "rdi")?;
+            ctx.load_value_to_reg(result, "rsi")?;
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r11", "_elephc_eval_object_clone_fn", 0);
+            ctx.emitter.instruction("call r11"); // register the clone with the source's eval class
+        }
+    }
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Lowers the layout copy of a compiled `clone`.
+fn lower_object_clone_shallow_layout(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
     let source = expect_operand(inst, 0)?;
     let class_name = class_name_immediate(ctx, inst)?.to_string();
     if !ctx.module.class_infos.contains_key(&class_name) {

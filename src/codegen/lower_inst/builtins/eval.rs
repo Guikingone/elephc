@@ -403,6 +403,7 @@ pub(super) use dynamic_calls::{
 };
 pub(in crate::codegen::lower_inst) use dynamic_calls::{
     lower_eval_owned_method_call, lower_eval_owned_property_get,
+    lower_eval_owner_mixed_property_get,
 };
 pub(in crate::codegen::lower_inst) use interface_miss::{
     emit_branch_if_eval_saved_object_is_a, emit_eval_interface_method_on_miss,

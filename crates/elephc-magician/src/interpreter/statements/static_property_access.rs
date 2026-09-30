@@ -450,6 +450,18 @@ pub(in crate::interpreter) fn eval_class_constant_fetch_result(
         {
             return Ok(value);
         }
+        // A constant of a COMPILED interface the eval class implements -- directly, through an
+        // eval parent, or through an interface's own parents. Nothing above consulted them:
+        // Carbon's `static::YEARS_PER_MILLENNIUM` (declared by the compiled `CarbonInterface`)
+        // failed as an unsupported constant fetch inside `addUnit()`.
+        for interface in context.class_interface_names(&class_name) {
+            if context.has_interface(&interface) {
+                continue;
+            }
+            if let Some(value) = values.class_constant_get(&interface, constant_name)? {
+                return Ok(value);
+            }
+        }
         return Err(EvalStatus::RuntimeFatal);
     }
     if let Some(value) = values.class_constant_get(&class_name, constant_name)? {

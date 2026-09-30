@@ -34122,3 +34122,53 @@ eval('echo $s->twice(21), " ", $s->make("b"), "\n";');
     );
     assert_eq!(out, "Child Child\nbool(false)\nbool(true)\nmade a\n42 made b\n");
 }
+
+/// An interpreted `return static::$x = [...];` hands its caller a value of the caller's own: a
+/// `foreach` over the result leaves the static intact.
+///
+/// The static-property setter takes the reference it is given, and the assignment handed the
+/// same reference back as its value, so the caller's release after the loop freed the array
+/// the static still held. A `return static::$x ?? static::$x = [...];` returned the static's own
+/// cell unretained on every later call, which freed it the same way. Laravel's
+/// `Route::getValidators()` is that shape; the third route matched read freed validators
+/// ("unsupported Foreach statement").
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_eval_static_assignment_value_is_independent_of_the_static() {
+    let out = compile_and_run(
+        r#"<?php
+$code = <<<'PHP'
+class Validators {
+    public static $all;
+    public $mine;
+    public static function get() {
+        if (isset(static::$all)) {
+            return static::$all;
+        }
+        return static::$all = ['uri', 'method'];
+    }
+    public function own() { return $this->mine = [7, 8]; }
+    public static $lazy;
+    public static function lazy() { return static::$lazy ?? static::$lazy = ['a', 'b']; }
+}
+for ($i = 0; $i < 2; $i++) {
+    foreach (Validators::get() as $v) { echo $v, " "; }
+    echo "| ", json_encode(Validators::$all), "\n";
+}
+for ($i = 0; $i < 3; $i++) {
+    foreach (Validators::lazy() as $v) { echo $v; }
+}
+echo " | ", json_encode(Validators::$lazy), "\n";
+$o = new Validators();
+foreach ($o->own() as $v) { echo $v, " "; }
+echo "| ", json_encode($o->mine), "\n";
+PHP;
+eval($code);
+"#,
+    );
+    assert_eq!(
+        out,
+        "uri method | [\"uri\",\"method\"]\nuri method | [\"uri\",\"method\"]\nababab | [\"a\",\"b\"]\n7 8 | [7,8]\n"
+    );
+}

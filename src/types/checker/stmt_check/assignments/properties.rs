@@ -688,6 +688,13 @@ pub(super) fn refined_untyped_property_assignment_type(
                 // the element type stays `Never` and codegen mis-emits later reads.
                 return Some(val_ty.clone());
             }
+            if is_empty_array_placeholder(val_ty) && Checker::is_generic_array_hint(current) {
+                // The converse: an `[]` written into an `array<mixed>` slot carries no element
+                // evidence. Specializing toward it turned a `[1, 2]`-defaulted `static $cache`
+                // into `array<never>`, and its default could no longer be stored. (Any other
+                // element type still reaches the merge below, which widens it to mixed.)
+                return None;
+            }
             if let Some(widened) = untyped_array_storage_after_gradual_assignment(current, val_ty) {
                 return Some(widened);
             }

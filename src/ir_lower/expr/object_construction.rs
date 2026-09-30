@@ -53,42 +53,53 @@ pub(super) fn lower_new_object(
     }
     let sig = constructor_signature(ctx, class_name).cloned();
     let operands = lower_user_args_with_signature(ctx, sig.as_ref(), args);
-    append_optional_constructor_argc_marker(ctx, sig.as_ref(), args, &operands, expr);
     let php_type = PhpType::Object(class_name.as_str().to_string());
     emit_fixed_object_new(ctx, class_name.as_str(), operands, php_type, expr.span)
 }
 
 
-/// Appends the source argument count to an introspection-aware optional constructor tail.
+/// Appends the source argument count to the hidden tail of an introspecting scope with
+/// optional parameters.
 ///
-/// Default materialization erases whether an optional regular parameter was supplied. The
-/// hidden variadic array is private compiler ABI, so its final element carries that count while
-/// preserving any genuine surplus arguments that precede it.
-pub(super) fn append_optional_constructor_argc_marker(
+/// Default materialization erases whether an optional regular parameter was supplied, so
+/// `func_num_args()` in `function response($content = null, ...)` counted every declared
+/// parameter and Laravel's `response()` returned a `Response` where php hands back the factory.
+/// The hidden variadic array is private compiler ABI, so its final element carries the count
+/// (`crate::func_args::argc_marker`) after any genuine surplus arguments. A call whose count is
+/// not known here -- a spread, named arguments -- adds nothing, and the callee falls back to its
+/// conservative count.
+pub(super) fn append_argc_marker(
     ctx: &mut LoweringContext<'_, '_>,
     sig: Option<&FunctionSig>,
     args: &[Expr],
     operands: &[ValueId],
-    expr: &Expr,
+    span: Span,
 ) {
     let Some(sig) = sig else {
         return;
     };
+    // Only a call that leaves optional parameters out needs it: with every regular parameter
+    // passed, the callee's own count (declared + surplus) is already exact, and keeping marked
+    // tails free of surplus is what lets the callee rebuild `func_get_args()` as a prefix.
     if !crate::func_args::sig_collects_surplus_args(sig)
         || !sig.defaults.iter().any(Option::is_some)
+        || args.len() >= crate::types::call_args::regular_param_count(sig)
+        || crate::types::call_args::has_named_args(args)
+        || args.iter().any(is_spread_arg)
     {
         return;
     }
     let Some(variadic_tail) = operands.last().copied() else {
         return;
     };
-    let marker = lower_int_literal(ctx, args.len() as i64, expr);
+    let marker = crate::func_args::argc_marker(args.len());
+    let marker = lower_string_literal(ctx, &marker, &Expr::new(ExprKind::Null, span));
     ctx.emit_void(
         Op::ArrayPush,
         vec![variadic_tail, marker.value],
         None,
         Op::ArrayPush.default_effects(),
-        Some(expr.span),
+        Some(span),
     );
 }
 

@@ -43,6 +43,22 @@ use crate::types::FunctionSig;
 /// source declaration has been parsed.
 pub(crate) const HIDDEN_ARGS_PARAM: &str = "__elephc_func_args";
 
+/// Prefix of the caller-supplied argument-count marker a call appends to the hidden variadic
+/// tail of a scope with optional parameters.
+///
+/// Default materialization erases whether an optional parameter was passed, so the caller
+/// records the count it really passed as the tail's LAST entry: `"\0elephc-argc:" . <count>`.
+/// A string no PHP program passes is what lets a call that cannot add the marker -- a spread,
+/// named arguments, a callable invoker -- still be told apart from one that did. The eval
+/// bridge appends the same marker (`elephc-magician`'s native function binding) and must agree
+/// on the spelling.
+pub(crate) const ARGC_MARKER_PREFIX: &str = "\0elephc-argc:";
+
+/// Returns the argc marker for `count` actually passed arguments.
+pub(crate) fn argc_marker(count: usize) -> String {
+    format!("{ARGC_MARKER_PREFIX}{count}")
+}
+
 /// Name of the hidden local that holds the evaluated `func_get_arg()` position when the
 /// position expression is not already side-effect free, so it is evaluated exactly once
 /// across the range checks and the indexed read.

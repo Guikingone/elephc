@@ -177,6 +177,14 @@ fn drop_surplus_native_positional_args(
     Ok(kept)
 }
 
+/// The hidden variadic parameter the compiler gives a function that introspects its arguments
+/// (the compiler's `func_args::HIDDEN_ARGS_PARAM`).
+const HIDDEN_FUNC_ARGS_PARAM: &str = "__elephc_func_args";
+
+/// The caller argument-count marker's prefix (the compiler's `func_args::ARGC_MARKER_PREFIX`);
+/// both sides must spell it identically.
+const ARGC_MARKER_PREFIX: &str = "\0elephc-argc:";
+
 /// Binds a native AOT variadic function while keeping the raw invoker argument layout.
 fn bind_evaluated_native_variadic_function_args(
     function: &NativeFunction,
@@ -190,8 +198,15 @@ fn bind_evaluated_native_variadic_function_args(
     let mut regular_args = vec![None; variadic_index];
     let mut variadic_args = Vec::new();
     let mut next_positional = 0;
+    let mut passed_positional = 0usize;
+    let mut passed_named = false;
 
     for arg in evaluated_args {
+        if arg.name.is_some() {
+            passed_named = true;
+        } else {
+            passed_positional += 1;
+        }
         if let Some(name) = arg.name {
             if !has_param_names {
                 return Err(EvalStatus::RuntimeFatal);
@@ -258,6 +273,26 @@ fn bind_evaluated_native_variadic_function_args(
         });
     }
 
+    // A compiled function that introspects its arguments and has optional parameters reads the
+    // count its caller really passed from the end of its hidden tail, because default
+    // materialization hides it: Laravel's `response()` answers `func_num_args() === 0` with the
+    // factory, and a controller calling it from here got a `Response` instead.
+    if !passed_named
+        && passed_positional < variadic_index
+        && function.required_param_count() < variadic_index
+        && function
+            .param_names()
+            .get(variadic_index)
+            .is_some_and(|name| name == HIDDEN_FUNC_ARGS_PARAM)
+    {
+        let marker = format!("{ARGC_MARKER_PREFIX}{passed_positional}");
+        variadic_args.push(BoundMethodArg {
+            value: values.string_bytes_value(marker.as_bytes())?,
+            ref_target: None,
+            variadic_ref_targets: Vec::new(),
+            owned: true,
+        });
+    }
     let mut bound_args = regular_args
         .into_iter()
         .collect::<Option<Vec<_>>>()

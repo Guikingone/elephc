@@ -135,6 +135,9 @@ fn eval_target_dependent_constant(name: &str) -> Option<EvalPredefinedConstant> 
         "PHP_EXTRA_VERSION" => EvalPredefinedConstant::String(EVAL_PHP_EXTRA_VERSION),
         "PHP_SAPI" => EvalPredefinedConstant::String(crate::eval_php_profile::eval_php_sapi()),
         "DIRECTORY_SEPARATOR" => EvalPredefinedConstant::String("/"),
+        // The platform's `MAXPATHLEN`, as the compiled prescan answers it (1024 on macOS, 4096 on
+        // Linux). It had no arm, so Laravel's `FileViewFinder::findInPaths()` fataled on it.
+        "PHP_MAXPATHLEN" => EvalPredefinedConstant::Int(if is_macos { 1024 } else { 4096 }),
         // Platform `fnmatch(3)` flag values; the fnmatch/glob builtins interpret the same bits.
         "FNM_NOESCAPE" => EvalPredefinedConstant::Int(EVAL_FNM_NOESCAPE),
         "FNM_PATHNAME" => EvalPredefinedConstant::Int(EVAL_FNM_PATHNAME),

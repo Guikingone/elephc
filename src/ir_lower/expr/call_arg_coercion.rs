@@ -737,7 +737,12 @@ pub(super) fn lower_user_args_with_signature(
     sig: Option<&FunctionSig>,
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
-    lower_args_with_signature_options(ctx, sig, args, false, true)
+    let operands = lower_args_with_signature_options(ctx, sig, args, false, true);
+    let span = args
+        .first()
+        .map_or_else(crate::span::Span::dummy, |arg| arg.span);
+    super::object_construction::append_argc_marker(ctx, sig, args, &operands, span);
+    operands
 }
 
 /// Lowers arguments while preserving omission of trailing default-only parameter slots.

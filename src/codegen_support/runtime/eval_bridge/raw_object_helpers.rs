@@ -98,6 +98,22 @@ pub(super) fn emit_aarch64_install_object_relation_hook(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return after installing the optional eval hook
 }
 
+/// Emits the ARM64 wrapper that installs the compiled-clone adoption callback.
+pub(super) fn emit_aarch64_install_object_clone_hook(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_install_object_clone_hook");
+    abi::emit_symbol_address(emitter, "x9", "_elephc_eval_object_clone_fn");
+    emitter.instruction("str x0, [x9]");                                        // store the Rust callback pointer for compiled clone adoption
+    emitter.instruction("ret");                                                 // return after installing the optional eval hook
+}
+
+/// Emits the ARM64 wrapper that installs the eval `ArrayAccess` read callback.
+pub(super) fn emit_aarch64_install_array_access_hook(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_install_array_access_hook");
+    abi::emit_symbol_address(emitter, "x9", "_elephc_eval_array_access_fn");
+    emitter.instruction("str x0, [x9]");                                        // store the Rust callback pointer for eval ArrayAccess reads
+    emitter.instruction("ret");                                                 // return after installing the optional eval hook
+}
+
 /// Emits the ARM64 wrapper that installs the eval serialize-object callback.
 pub(super) fn emit_aarch64_install_serialize_object_hook(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_install_serialize_object_hook");
@@ -158,6 +174,22 @@ pub(super) fn emit_x86_64_install_object_relation_hook(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_install_object_relation_hook");
     abi::emit_symbol_address(emitter, "r10", "_elephc_eval_object_relation_fn");
     emitter.instruction("mov QWORD PTR [r10], rdi");                            // store the Rust callback pointer for eval class relations
+    emitter.instruction("ret");                                                 // return after installing the optional eval hook
+}
+
+/// Emits the x86_64 wrapper that installs the compiled-clone adoption callback.
+pub(super) fn emit_x86_64_install_object_clone_hook(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_install_object_clone_hook");
+    abi::emit_symbol_address(emitter, "r10", "_elephc_eval_object_clone_fn");
+    emitter.instruction("mov QWORD PTR [r10], rdi");                            // store the Rust callback pointer for compiled clone adoption
+    emitter.instruction("ret");                                                 // return after installing the optional eval hook
+}
+
+/// Emits the x86_64 wrapper that installs the eval `ArrayAccess` read callback.
+pub(super) fn emit_x86_64_install_array_access_hook(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_install_array_access_hook");
+    abi::emit_symbol_address(emitter, "r10", "_elephc_eval_array_access_fn");
+    emitter.instruction("mov QWORD PTR [r10], rdi");                            // store the Rust callback pointer for eval ArrayAccess reads
     emitter.instruction("ret");                                                 // return after installing the optional eval hook
 }
 

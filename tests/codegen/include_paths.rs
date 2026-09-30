@@ -751,3 +751,99 @@ echo C::get("a"), C::get("b"), "\n";
     );
     assert_eq!(out, "xy\n");
 }
+
+/// An `include` of a URL whose scheme a userspace stream wrapper registered reads the source
+/// through the wrapper object -- `stream_open()`, `stream_read()` until `stream_eof()` -- and runs
+/// it, from compiled code and from interpreted code alike.
+///
+/// Serialized-closure libraries restore a closure exactly this way: their wrapper's
+/// `stream_open()` turns `scheme://function (...) {...}` into `<?php return function ...;` and the
+/// include hands the closure back. The runtime include read only the disk, so the wrapper URL was
+/// "No such file or directory", `include` answered false, and the following `->bindTo()` failed.
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_include_reads_a_url_through_a_registered_userspace_wrapper() {
+    let out = compile_and_run(
+        r#"<?php
+class MemStream
+{
+    const PROTO = 'mem';
+    protected static $registered = false;
+    public $context;
+    protected $content;
+    protected $length;
+    protected $pointer = 0;
+    public function stream_open($path, $mode, $options, &$opened_path)
+    {
+        $this->content = "<?php\nreturn " . substr($path, strlen(static::PROTO . '://')) . ';';
+        $this->length = strlen($this->content);
+        return true;
+    }
+    public function stream_read($count)
+    {
+        $value = substr($this->content, $this->pointer, $count);
+        $this->pointer += $count;
+        return $value;
+    }
+    public function stream_eof() { return $this->pointer >= $this->length; }
+    public function stream_set_option($option, $arg1, $arg2) { return false; }
+    public function stream_stat() { return []; }
+    public static function register()
+    {
+        if (! static::$registered) {
+            static::$registered = stream_wrapper_register(static::PROTO, __CLASS__);
+        }
+    }
+}
+class Holder
+{
+    public $closure;
+    public function restore($code, $arg)
+    {
+        MemStream::register();
+        $this->closure = include MemStream::PROTO . '://' . $code;
+        $this->closure = $this->closure->bindTo(null, null);
+        return ($this->closure)($arg);
+    }
+}
+$h = new Holder();
+echo $h->restore('function ($x) { return $x * 2; }', 21), "\n";
+eval('class EvalHolder { public function restore($code, $arg) {
+    MemStream::register();
+    $closure = include MemStream::PROTO . "://" . $code;
+    $closure = $closure->bindTo(null, null);
+    return $closure($arg);
+} }');
+$e = new EvalHolder();
+echo $e->restore('function ($x) { return $x . "!"; }', "hi"), "\n";
+"#,
+    );
+    assert_eq!(out, "42\nhi!\n");
+}
+
+/// A literal `eval()` whose code holds an include in VALUE position compiles and runs.
+///
+/// The literal fragment is parsed and planned for AOT long after the resolver expanded the
+/// program's includes, so its `return include $p;` reached the optimizer unexpanded, and the
+/// optimizer treats that node as unreachable: the compiler panicked with "ExprKind::IncludeValue
+/// must be expanded by the resolver". Such a fragment now runs through the bridge.
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_value_include_inside_a_literal_eval_body_compiles() {
+    let out = compile_and_run_files(
+        &[
+            ("seven.php", "<?php\nreturn 7;\n"),
+            (
+                "main.php",
+                r#"<?php
+eval('function load_value($p) { return include $p; }');
+echo load_value(__DIR__ . '/seven.php'), "\n";
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "7\n");
+}

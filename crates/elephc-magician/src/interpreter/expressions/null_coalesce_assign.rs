@@ -833,7 +833,14 @@ fn write_location(
             class_name,
             property,
             ..
-        } => eval_static_property_set_result(&class_name, &property, value, context, values),
+        } => {
+            // The setter takes the reference it is handed. An assignment whose VALUE is used
+            // (`return static::$validators = [...];`) also hands `value` back to its caller, so
+            // without a reference of its own the static and the caller shared one: the caller's
+            // release after a `foreach` freed the array the static still held.
+            let stored = if preserve_value_for_result { values.retain(value)? } else { value };
+            eval_static_property_set_result(&class_name, &property, stored, context, values)
+        }
         EvaluatedLocation::ArrayElement { parent, index, .. } => {
             let container = if values.is_null(parent.current())? {
                 values.array_new(1)?

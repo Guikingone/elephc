@@ -393,3 +393,56 @@ f(true);
     );
     assert_eq!(out, "int(2)\nint(2)\n2\nint(1)\nint(1)\n1\n");
 }
+
+/// Verifies a ternary or short ternary whose arm reads a property the receiver's static type
+/// cannot type keeps the property's value.
+///
+/// An untyped receiver (`$o->items`), a nullsafe or dynamic read, and a property only a subclass
+/// declares all reached the merge-temp typing's syntactic fallback, which answers `int` for an
+/// expression it cannot type. The merged temp was then an int, and the array (or string) was
+/// stored as its pointer's integer cast: `gettype($ok ? $o->items : 0)` said "integer".
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_ternary_over_an_untypeable_property_keeps_its_value() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class Base {}
+class Holder extends Base {
+    public $items = ["x"];
+    public $name = "s";
+}
+function untyped($o, bool $ok): string {
+    $prop = "name";
+    return gettype($ok ? $o->items : 0) . "," . gettype($ok ? $o->name : 0) . ","
+        . gettype($o->items ?: 0) . "," . gettype($ok ? $o?->items : 0) . ","
+        . gettype($ok ? $o->$prop : 0);
+}
+function subclass_only(Base $b, bool $ok): string {
+    return gettype($ok ? $b->items : 0) . "," . gettype($ok ? $b->items : null);
+}
+echo untyped(new Holder(), $argc > 0), "\n";
+echo subclass_only(new Holder(), $argc > 0), "\n";
+"#,
+    );
+    assert_eq!(out, "array,string,array,array,string\narray,array\n");
+}
+
+/// Verifies a ternary whose arm is an array literal with a spread keeps its elements.
+///
+/// The merge temp for a spread literal fell back to the syntactic `array<int>`, while the
+/// literal itself is built with boxed elements, so `$c ? [] : [$m, ...$rest]` read every boxed
+/// element back as its pointer: `json_encode()` printed `[4362301248]` for `["s"]`.
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_ternary_over_a_spread_array_literal_keeps_its_elements() {
+    let out = compile_and_run(
+        r#"<?php
+function f($m, $c, ...$rest) { return json_encode($c ? [] : [$m, ...$rest]); }
+function g($m, $c) { return json_encode($c ? [] : [$m]); }
+echo f("s", false, 2), f(7, false), f(1.5, true), g("t", false), g(3, false), "\n";
+"#,
+    );
+    assert_eq!(out, "[\"s\",2][7][][\"t\"][3]\n");
+}

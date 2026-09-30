@@ -498,7 +498,7 @@ pub(super) fn lower_new_scoped_object(ctx: &mut LoweringContext<'_, '_>, receive
     let name = static_receiver_class_name(ctx, receiver).unwrap_or_else(|| receiver_name(receiver));
     let sig = constructor_signature(ctx, &Name::from(name.clone())).cloned();
     let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
-    append_optional_constructor_argc_marker(ctx, sig.as_ref(), args, &operands, expr);
+    append_argc_marker(ctx, sig.as_ref(), args, &operands, expr.span);
     emit_fixed_object_new(
         ctx,
         &name,

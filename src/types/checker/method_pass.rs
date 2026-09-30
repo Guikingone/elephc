@@ -802,7 +802,17 @@ impl Checker {
             self.family_return_widenings
                 .get(&(class.name.clone(), php_symbol_key(&method.name), method.is_static))
                 .cloned()
-                .unwrap_or(inferred_return)
+                .unwrap_or_else(|| {
+                    if self.diverging_placeholder_may_be_overridden_elsewhere(
+                        class,
+                        method,
+                        raw_inferred.is_some(),
+                    ) {
+                        PhpType::Mixed
+                    } else {
+                        inferred_return
+                    }
+                })
         };
         if !method.is_static {
             let effective_return = self.ancestor_return_storage(
@@ -827,6 +837,33 @@ impl Checker {
             &callable_return_sigs,
             &callable_array_return_sigs,
         );
+    }
+
+    /// Returns whether an untyped method that never returns normally -- a placeholder that
+    /// throws, like Laravel's `Facade::getFacadeAccessor()` -- must keep a value-carrying return
+    /// storage because code the compiler cannot see may override it.
+    ///
+    /// Its body alone infers `void`, so every compiled call through it (`static::accessor()`)
+    /// was typed `void` and discarded what an interpreted subclass's override returned: every
+    /// runtime-loaded facade resolved the empty accessor name, and `Date::now()` failed with
+    /// "Target class [date] does not exist". A compiled override is already covered by
+    /// `unify_override_family_return_types`; this is for the ones only eval can declare.
+    fn diverging_placeholder_may_be_overridden_elsewhere(
+        &self,
+        class: &FlattenedClass,
+        method: &ClassMethod,
+        returns_a_value: bool,
+    ) -> bool {
+        self.program_has_interpreted_callers
+            && !returns_a_value
+            && method.visibility != crate::parser::ast::Visibility::Private
+            && !method.is_final
+            && !class.is_final
+            && !method.name.eq_ignore_ascii_case("__construct")
+            && crate::termination::block_guarantees_function_exit_with_divergence(
+                &method.body,
+                &|_| false,
+            )
     }
 
     /// Returns whether a descendant class declares its own body for this method.

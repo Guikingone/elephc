@@ -161,9 +161,20 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         }
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
             .unwrap_or_else(|| fallback_expr_type(expr)),
+        // A property the receiver's static class cannot type -- an untyped receiver, or a name
+        // only a subclass, a dynamic property or `__get()` supplies -- is read as a boxed Mixed
+        // value. The syntactic fallback answered `int` for it, so `$ok ? $o->items : 0` and
+        // `$o->items ?: 0` materialized an int temp and read an array as its pointer's integer
+        // cast: `gettype()` said "integer" where php says "array".
         ExprKind::PropertyAccess { object, property } => {
-            property_access_expr_type_for_ir(ctx, object, property)
-                .unwrap_or_else(|| fallback_expr_type(expr))
+            property_access_expr_type_for_ir(ctx, object, property).unwrap_or(PhpType::Mixed)
+        }
+        ExprKind::NullsafePropertyAccess { object, property } => {
+            super::nullsafe_property_access_expr_type_for_ir(ctx, object, property)
+                .unwrap_or(PhpType::Mixed)
+        }
+        ExprKind::DynamicPropertyAccess { .. } | ExprKind::NullsafeDynamicPropertyAccess { .. } => {
+            PhpType::Mixed
         }
         ExprKind::StaticPropertyAccess { receiver, property } => {
             static_property_result_type(ctx, receiver, property, expr)
@@ -200,6 +211,10 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         ExprKind::ArrayLiteral(items) if !items.iter().any(|item| matches!(item.kind, ExprKind::Spread(_))) => {
             super::array_literal_type_for_ir(ctx, items, expr).codegen_repr()
         }
+        // A literal with a spread is built with boxed elements whatever it unpacks; the syntactic
+        // fallback answered `array<int>`, so `$c ? [] : [$m, ...$rest]` read every boxed element
+        // back as its pointer: `json_encode()` printed `[4362301248]` for `["s"]`.
+        ExprKind::ArrayLiteral(_) => PhpType::Array(Box::new(PhpType::Mixed)),
         ExprKind::ArrayLiteralAssoc(pairs) => {
             super::assoc_array_literal_type_for_ir(ctx, pairs, expr).codegen_repr()
         }

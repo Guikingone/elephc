@@ -428,7 +428,7 @@ fn eval_user_wrapper_seek_bool(
 }
 
 /// Builds the four PHP arguments passed to a wrapper `stream_open()` method.
-fn eval_user_wrapper_stream_open_args(
+pub(in crate::interpreter) fn eval_user_wrapper_stream_open_args(
     filename: &str,
     mode: &str,
     values: &mut impl RuntimeValueOps,

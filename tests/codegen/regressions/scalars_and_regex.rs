@@ -560,3 +560,59 @@ echo local_dest("abc"), "\n", param_dest("xyz"), "\n";
     );
     assert_eq!(out, "a,b,c\nx,y,z\n");
 }
+
+/// Verifies a global search (`preg_match_all`, `preg_replace`, `preg_replace_callback`) keeps
+/// the WHOLE subject visible when it continues after a match.
+///
+/// Every continuation used to hand PCRE2 the remaining suffix as a fresh subject, so `\b`,
+/// lookbehind and `^` under `m` treated the cursor as the start of the string:
+/// `preg_match_all('/\b\w/', 'hello world')` counted all ten letters and `preg_replace('/^./m')`
+/// rewrote every character. The runtime now searches the whole subject from a start offset, as
+/// php does.
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_global_preg_search_sees_the_bytes_before_its_cursor() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+$s = "hello world";
+echo preg_match_all('/\b\w/', $s), "|";
+echo preg_match_all('/\b\w/', $s, $m), ":", implode(",", $m[0]), "|";
+echo preg_match_all('/\b\w/', $s, $m, 0, 3), ":", implode(",", $m[0]), "\n";
+echo preg_replace('/\b\w/', 'X', $s), "|";
+echo preg_replace_callback('/\b\w/', fn($m) => strtoupper($m[0]), $s), "|";
+echo preg_replace('/(?<=a)./', 'X', "aaa"), ":", preg_match_all('/(?<=a)./', "aaa"), "\n";
+$c = "a1\nb2\nc3";
+echo preg_replace('/^./m', '<$0>', $c), "|", preg_match_all('/^./m', $c), "|";
+echo preg_replace_callback('/^\w/m', fn($m) => "[" . $m[0] . "]", $c), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "2|2:h,w|1:w\nXello Xorld|Hello World|aXX:2\n<a>1\n<b>2\n<c>3|3|[a]1\n[b]2\n[c]3\n"
+    );
+}
+
+/// Verifies `preg_replace_callback()` with a function NAME calls that function whatever its
+/// parameter and return shape.
+///
+/// A literal name was called straight at the function's entry with the bare match array, which
+/// only fits a function taking `array<string>` and returning `string`. An untyped
+/// `function up($m)` keeps a boxed `mixed` parameter, so it read the array pointer as a box and
+/// crashed; such a function now goes through the callable wrapper that boxes the argument.
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_preg_replace_callback_calls_a_named_function_of_any_shape() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+function up($m) { return strtoupper($m[0]); }
+function bracket(array $m): string { return "[" . $m[0] . "]"; }
+function count_of($m) { return strlen($m[0]); }
+echo preg_replace_callback('/l+/', 'up', "hello world"), "|";
+echo preg_replace_callback('/o/', 'bracket', "foo"), "|";
+echo preg_replace_callback('/l+/', 'count_of', "hello world"), "\n";
+"#,
+    );
+    assert_eq!(out, "heLLo worLd|f[o][o]|he2o wor1d\n");
+}

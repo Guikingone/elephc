@@ -305,10 +305,13 @@ pub(super) fn lower_lazy_empty(
             property_isset_action(ctx, object, property),
             Some(IssetPropertyAction::Initialized)
         ) {
-            let object = lower_expr(ctx, object);
-            return Some(lower_initialized_property_empty(
-                ctx, object, property, name, &args[0],
-            ));
+            // `empty()` is a quiet fetch in php: an uninitialized typed property is empty, never
+            // an error. A receiver owned by an eval context is read through the bridge, which
+            // only stays quiet inside the mode.
+            return Some(lower_operand_in_quiet_property_fetch(ctx, &args[0], |ctx| {
+                let object = lower_expr(ctx, object);
+                lower_initialized_property_empty(ctx, object, property, name, &args[0])
+            }));
         }
     }
     let (exists_call, get_call) = lazy_empty_magic_property_calls(ctx, &args[0])?;

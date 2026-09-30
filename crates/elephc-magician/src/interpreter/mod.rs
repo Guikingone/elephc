@@ -578,6 +578,40 @@ pub fn execute_context_method_call_outcome(
     }
 }
 
+/// Makes a clone COMPILED code made of an eval-declared object an object of the same class.
+///
+/// Compiled `clone` copies the object's native layout, which for an eval-declared class is its
+/// compiled ancestor's: the copy came back as that ancestor, with none of the properties the
+/// eval class keeps in its context. Symfony's `Request::duplicate()` does `clone $this`, so the
+/// Laravel subclass's `duplicate(): static` failed its own return type. Returns whether the source
+/// belonged to this context's class table.
+pub fn adopt_compiled_object_clone(
+    source_identity: u64,
+    clone: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let Some(class_name) = context
+        .dynamic_object_class(source_identity)
+        .map(|class| class.name().to_string())
+    else {
+        return Ok(false);
+    };
+    let clone_identity = values.object_identity(clone)?;
+    context.register_dynamic_object(clone_identity, &class_name);
+    for (property, value) in context.dynamic_property_values_for_clone(source_identity) {
+        statements::eval_store_dynamic_property_value(
+            clone_identity,
+            &property,
+            value,
+            context,
+            values,
+        )?;
+    }
+    context.clone_dynamic_property_aliases(source_identity, clone_identity);
+    Ok(true)
+}
+
 /// Reads an instance property through the active eval context.
 pub fn execute_context_property_get_outcome(
     context: &mut ElephcEvalContext,

@@ -884,3 +884,28 @@ ValueError: mb_strtoupper(): Argument #2 ($encoding) must be a valid encoding, \
 visible"
     );
 }
+
+/// Verifies interpreted `preg_*` accepts NUL bytes in the pattern and in the subject.
+///
+/// php hands PCRE2 both with their lengths. The interpreter built C strings from them, so a
+/// pattern holding `"\0"` -- Laravel's `Str::trim()` puts one in its whitespace class -- failed as
+/// an interpreter error, and a subject holding one silently never matched.
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_eval_preg_takes_nul_bytes_in_pattern_and_subject() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+$code = 'return json_encode([
+    preg_replace("~[\\s\0]+~u", "", " x\0y "),
+    preg_match("~a\0b~", "a\0b"),
+    preg_match("~a\\\\\0b~", "a\0b"),
+    preg_split("~\0~", "a\0b\0c"),
+    preg_match("~c~", "a\0b\0c"),
+]);';
+echo eval($code), "\n";
+echo preg_match("/x/", "x"), "\n";
+"#,
+    );
+    assert_eq!(out, "[\"xy\",1,1,[\"a\",\"b\",\"c\"],1]\n1\n");
+}

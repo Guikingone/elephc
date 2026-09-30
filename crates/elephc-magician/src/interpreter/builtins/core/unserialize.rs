@@ -616,10 +616,54 @@ fn eval_unserialize_hydrate_object(
     // one. Known limitation: a native class with real private state would mis-bind here exactly
     // as an undeclared eval property would -- out of scope, no such class is on the 404 path.
     let object = values.new_object(class_name)?;
+    // A compiled class that restores itself through `__unserialize()` gets the payload handed to
+    // that hook, as php does, instead of having its keys written as properties from outside its
+    // scope: those writes land nowhere for a protected property, and Laravel's
+    // `UnsignedSerializableClosure` came back with a null `$serializable` -- every cached closure
+    // route then died with "Call to a member function getClosure() on null".
+    if eval_unserialize_native_class_has_hook(class_name, context, values)? {
+        let mut payload_array = values.assoc_new(payload.len())?;
+        for (name, value) in payload {
+            let key = values.string(&name)?;
+            payload_array = values.array_set(payload_array, key, value)?;
+        }
+        let result = crate::interpreter::eval_method_call_result(
+            object,
+            "__unserialize",
+            vec![payload_array],
+            context,
+            values,
+        );
+        values.release(payload_array)?;
+        values.release(result?)?;
+        return Ok(object);
+    }
     for (name, value) in payload {
         let _ = values.property_set(object, &name, value);
     }
     Ok(object)
+}
+
+/// Whether a class the interpreter did not declare has an `__unserialize()` hook.
+fn eval_unserialize_native_class_has_hook(
+    class_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let class_cell = values.string(class_name)?;
+    let method_cell = values.string("__unserialize")?;
+    let exists = crate::interpreter::eval_member_exists_result(
+        "method_exists",
+        &[class_cell, method_cell],
+        context,
+        values,
+    );
+    values.release(class_cell)?;
+    values.release(method_cell)?;
+    let exists = exists?;
+    let answer = values.truthy(exists)?;
+    values.release(exists)?;
+    Ok(answer)
 }
 
 /// Returns the DECLARED property name a serialized payload key stands for.

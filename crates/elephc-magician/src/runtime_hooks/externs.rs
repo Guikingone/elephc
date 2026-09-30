@@ -350,6 +350,9 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_request_invoker_boundary();
     /// Enters (non-zero) or leaves (zero) one runtime `@` diagnostic-suppression scope.
     pub(super) fn __elephc_eval_diag_suppression(enter: u64);
+    /// Returns the compiled runtime's userspace stream-wrapper table: 64 entries of
+    /// `(protocol_ptr, protocol_len, class_ptr, class_len)`, free when `protocol_ptr` is null.
+    pub(super) fn __elephc_eval_user_wrapper_table() -> *const u64;
     pub(super) fn __elephc_eval_value_null() -> *mut RuntimeCell;
     /// Boxes the running `Fiber` object, or null on the main thread.
     pub(super) fn __elephc_eval_value_fiber_current() -> *mut RuntimeCell;
@@ -492,6 +495,10 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_install_class_autoload_hook(callback: usize);
     /// Installs the optional eval unserialize-object callback.
     pub(super) fn __elephc_eval_install_unserialize_object_hook(callback: usize);
+    /// Installs the optional compiled-clone adoption callback.
+    pub(super) fn __elephc_eval_install_object_clone_hook(callback: usize);
+    /// Installs the optional eval `ArrayAccess` read callback.
+    pub(super) fn __elephc_eval_install_array_access_hook(callback: usize);
     /// Installs the optional eval object class-relation callback.
     pub(super) fn __elephc_eval_install_object_relation_hook(callback: usize);
     /// Installs the optional eval serialize-object callback.
