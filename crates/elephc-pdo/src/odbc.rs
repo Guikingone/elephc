@@ -9,10 +9,11 @@
 //! - Materializes scalar result rows as text/null and preserves driver-specific LOB/type metadata.
 //! - Keeps statement handles alive across `SQLMoreResults`, cursor-name, and scroll operations.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 use odbc_sys::{
     AttrOdbcVersion, CDataType, CompletionType, ConnectionAttribute, Desc, DriverConnectOption,
@@ -217,25 +218,21 @@ impl Default for ErrorState {
     }
 }
 
-/// Holds the diagnostic produced before a CLI connection handle enters the bridge table.
-fn open_error_cell() -> &'static Mutex<ErrorState> {
-    static ERROR: OnceLock<Mutex<ErrorState>> = OnceLock::new();
-    ERROR.get_or_init(|| Mutex::new(ErrorState::default()))
+thread_local! {
+    static OPEN_ERROR: RefCell<ErrorState> = RefCell::new(ErrorState::default());
 }
 
 /// Records one constructor failure for PDO's connection-level `errorInfo` fields.
 fn remember_open_error(error: &ErrorState) {
-    *open_error_cell()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = error.clone();
+    OPEN_ERROR.with(|slot| *slot.borrow_mut() = error.clone());
 }
 
-/// Returns the SQLSTATE and native code captured by the latest failed CLI open.
+/// Returns the SQLSTATE and native code captured by this thread's latest failed CLI open.
 pub(crate) fn open_diagnostic() -> (String, i64) {
-    let error = open_error_cell()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    (error.sqlstate.clone(), error.native_code)
+    OPEN_ERROR.with(|slot| {
+        let error = slot.borrow();
+        (error.sqlstate.clone(), error.native_code)
+    })
 }
 
 /// Reports whether an ODBC return code completed successfully.
@@ -3586,6 +3583,35 @@ impl OdbcStmt {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Concurrent constructors retain both their SQLSTATE and native error code.
+    #[test]
+    fn open_diagnostic_is_thread_local() {
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        remember_open_error(&ErrorState {
+            sqlstate: "42000".into(),
+            native_code: 111,
+            message: "parent failure".into(),
+        });
+        let child_barrier = barrier.clone();
+        let child = std::thread::spawn(move || {
+            let initial = open_diagnostic();
+            remember_open_error(&ErrorState {
+                sqlstate: "HY001".into(),
+                native_code: 222,
+                message: "child failure".into(),
+            });
+            child_barrier.wait();
+            (initial, open_diagnostic())
+        });
+        barrier.wait();
+        let parent = open_diagnostic();
+        let (child_initial, child_final) = child.join().unwrap();
+
+        assert_eq!(parent, ("42000".into(), 111));
+        assert_eq!(child_initial, ("00000".into(), 0));
+        assert_eq!(child_final, ("HY001".into(), 222));
+    }
 
     /// Appends one driver-format length-prefixed UTF-16 classification field.
     #[cfg(feature = "sqlsrv")]
