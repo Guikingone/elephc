@@ -99,6 +99,22 @@ fn converters_for_one_charset_pair_keep_their_own_suffixes() {
     assert_eq!(discard.convert_all_ignoring(subject, true).unwrap(), b"hllo");
 }
 
+/// Apple's discard mode must reach libc even after a plain descriptor resets the charset pair.
+#[cfg(target_vendor = "apple")]
+#[test]
+fn apple_ignore_restores_descriptor_discard_mode_without_userspace_skipping() {
+    let subject = "h\u{e9}llo".as_bytes();
+    let mut discard = Converter::open(b"UTF-8", b"ASCII//IGNORE").unwrap();
+    let mut plain = Converter::open(b"UTF-8", b"ASCII").unwrap();
+
+    for _ in 0..3 {
+        assert_eq!(plain.convert_all(subject), Err(IconvError::IllegalSequence));
+        // convert_all has no illegal-sequence skip loop: libc must discard the character.
+        assert_eq!(discard.convert_all(subject).unwrap(), b"hllo");
+    }
+    assert_eq!(plain.convert_all(subject), Err(IconvError::IllegalSequence));
+}
+
 /// Verifies opening a converter changes only `LC_CTYPE`, leaving `LC_NUMERIC` in `C`.
 ///
 /// The bridge installs a UTF-8 character-classification locale for `//TRANSLIT`, but
