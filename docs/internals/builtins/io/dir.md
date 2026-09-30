@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/dir_prelude.rs`:71](https://github.com/illegalstudio/elephc/blob/main/src/dir_prelude.rs#L71) (`dir`)
+- **Lowering**: [`src/dir_prelude.rs`:85](https://github.com/illegalstudio/elephc/blob/main/src/dir_prelude.rs#L85) (`dir`)
 - **Function symbol**: `dir()`
 
 

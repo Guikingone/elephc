@@ -40221,7 +40221,7 @@
       "checker_line": null,
       "codegen_file": "src/dir_prelude.rs",
       "codegen_function": "dir",
-      "codegen_line": 71,
+      "codegen_line": 85,
       "notes": [
         "Implemented by the compiler-injected dir prelude."
       ],
@@ -114653,7 +114653,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
