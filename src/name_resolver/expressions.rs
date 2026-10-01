@@ -709,8 +709,11 @@ fn rewrite_date_procedural_alias(
                 args: full,
             })
         }
-        "date_create" if args.len() <= 2 => Some(new_object("DateTime")),
-        "date_create_immutable" if args.len() <= 2 => Some(new_object("DateTimeImmutable")),
+        // `date_create()` answers `false` for a string it cannot parse, where `new DateTime` throws.
+        "date_create" if args.len() <= 2 => Some(static_call("DateTime", "__elephc_date_create")),
+        "date_create_immutable" if args.len() <= 2 => {
+            Some(static_call("DateTimeImmutable", "__elephc_date_create"))
+        }
         "date_create_from_format" if args.len() == 2 || args.len() == 3 => {
             Some(static_call("DateTime", "createFromFormat"))
         }
