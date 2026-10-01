@@ -24,6 +24,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Same release as RUST_VERSION in .github/docker/ci.Dockerfile. Not `stable`:
+  # a newer rustc must not fail the no-warnings gate unannounced.
+  RUST_TOOLCHAIN: "1.98"
   ELEPHC_PDO_LIVE_REQUIRED: '1'
 
 jobs:
@@ -77,6 +80,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Cache Rust build state
         uses: actions/cache@v6
@@ -356,6 +361,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Cache Rust build state
         uses: actions/cache@v6

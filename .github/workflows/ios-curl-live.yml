@@ -33,6 +33,11 @@ concurrency:
   group: ios-curl-live
   cancel-in-progress: false
 
+env:
+  # Same release as RUST_VERSION in .github/docker/ci.Dockerfile. Not `stable`:
+  # a newer rustc must not fail the no-warnings gate unannounced.
+  RUST_TOOLCHAIN: "1.98"
+
 jobs:
   curl-ios-live-transfer:
     name: Curl iOS Live HTTPS (ios-sim-arm64)
@@ -44,6 +49,7 @@ jobs:
       - name: Install Rust with the iOS Simulator standard library
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: aarch64-apple-ios-sim
 
       - name: Cache Rust build state

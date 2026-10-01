@@ -642,10 +642,11 @@ materializes the bridge `libelephc_*.a` staticlibs that `linker.rs` links into
 compiled programs. Standard build/test/run commands are documented above and in
 `CONTRIBUTING.md`; the notes below are only the non-obvious cloud caveats.
 
-- **Rust toolchain is version-pinned.** CI pins the toolchain in
-  `.github/docker/ci.Dockerfile` (currently `1.95.0`) and the "no warnings" gate
-  greps build output, so use that exact toolchain rather than a floating
-  `stable`. The cloud VM has it installed and set as the rustup default.
+- **Rust toolchain is version-pinned.** CI pins Rust `1.98` in
+  `.github/docker/ci.Dockerfile` (`RUST_VERSION`) and workflow `RUST_TOOLCHAIN`.
+  The "no warnings" gate greps build output, so use that pin rather than a
+  floating `stable`. The cloud VM's rustup default may lag that pin until the
+  environment image is rebuilt.
 - **The compiler shells out to the host `as` + `gcc`/`ld`.** These are present.
   On Linux, compiling a program prints benign linker warnings
   (`gethostbyname` in statically linked apps, missing `.note.GNU-stack`,
