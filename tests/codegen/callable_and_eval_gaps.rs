@@ -294,3 +294,50 @@ eval($code);
         "bool(true)\nint(42)\nstring(4) \"ab21\"\nfloat(5.25)\nbool(true)\nstring(4) \"ab21\"\nbool(false)\n"
     );
 }
+
+/// A static call on a name an SPL autoloader only makes known as a `class_alias()` dispatches under
+/// the REAL class: `static::class` is the target's name and `static::$prop` reads the target's
+/// slot. The interpreter resolved the receiver before the autoloader ran, so the late-static class
+/// of the call stayed the alias spelling the compiled side cannot map to a class, and Laravel's
+/// facade root (`static::getFacadeRoot()`, read through that class) came back as garbage on the
+/// first `Route::has()` of a Blade view. Output is php 8.5's.
+#[test]
+fn test_static_call_through_an_autoloaded_class_alias_uses_the_real_class() {
+    let out = compile_and_run(r#"<?php
+class Router { public function has($name) { return $name === "login"; } }
+abstract class Facade {
+    protected static $app;
+    protected static $resolvedInstance;
+    protected static function getFacadeAccessor() { throw new RuntimeException('no accessor'); }
+    public static function setApp($app) { static::$app = $app; }
+    public static function getFacadeRoot() { return static::resolveFacadeInstance(static::getFacadeAccessor()); }
+    protected static function resolveFacadeInstance($name) {
+        if (isset(static::$resolvedInstance[$name])) { return static::$resolvedInstance[$name]; }
+        if (static::$app) { return static::$resolvedInstance[$name] = static::$app[$name]; }
+    }
+    public static function __callStatic($method, $args)
+    {
+        $instance = static::getFacadeRoot();
+        echo static::class, ' ', get_debug_type($instance), "\n";
+        return $instance->$method(...$args);
+    }
+}
+class RouteFacade extends Facade { protected static function getFacadeAccessor() { return 'router'; } }
+$loaderCode = 'class Loader {
+    protected $aliases = ["Route" => "RouteFacade"];
+    public function load($alias) {
+        if (isset($this->aliases[$alias])) { return class_alias($this->aliases[$alias], $alias); }
+    }
+    public function register() { spl_autoload_register([$this, "load"], true, true); }
+}';
+eval($loaderCode);
+(new Loader)->register();
+Facade::setApp(['router' => new Router()]);
+$code = 'var_dump(Route::has("login")); var_dump(Route::has("other"));';
+eval($code);
+"#);
+    assert_eq!(
+        out,
+        "RouteFacade Router\nbool(true)\nRouteFacade Router\nbool(false)\n"
+    );
+}

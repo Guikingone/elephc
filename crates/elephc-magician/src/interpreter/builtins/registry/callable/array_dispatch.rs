@@ -275,5 +275,6 @@ pub(in crate::interpreter) fn eval_callable_with_call_array_args(
         )?;
         return eval_native_function_with_values(function, evaluated_args, context, values);
     }
+    note_eval_runtime_failure(format!("callable {name}() is not defined"), context);
     Err(EvalStatus::UnsupportedConstruct)
 }

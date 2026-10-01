@@ -385,7 +385,15 @@ pub(in crate::interpreter) fn eval_array_callable(
                 bridge_scope,
             })
         }
-        _ => Err(EvalStatus::UnsupportedConstruct),
+        other => {
+            note_eval_runtime_failure(
+                format!(
+                    "callable array receiver is neither an object nor a class name (runtime tag {other})"
+                ),
+                context,
+            );
+            Err(EvalStatus::UnsupportedConstruct)
+        }
     }
 }
 

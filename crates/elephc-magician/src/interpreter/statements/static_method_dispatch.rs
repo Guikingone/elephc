@@ -269,8 +269,21 @@ pub(super) fn eval_static_method_call_result_resolved(
     if !values.class_exists(&class_name)?
         && eval_spl_autoload_class(&class_name, context, values)?
     {
+        // The autoloader may have made the name known as an ALIAS (`class_alias($real, $alias)`,
+        // which is exactly what a framework's facade loader does). The names above were resolved
+        // BEFORE that alias existed, so they still spell the alias; resolve them again, or the
+        // late-static class of the call stays the alias spelling the compiled side cannot map to
+        // a class (`static::class` read "Route" and `static::$prop` read another class's slot).
+        let resolved_class_name = context
+            .resolve_class_name(&class_name)
+            .unwrap_or_else(|| class_name.clone());
+        let called_class_name = if called_class_name.eq_ignore_ascii_case(&class_name) {
+            resolved_class_name.clone()
+        } else {
+            called_class_name
+        };
         return eval_static_method_call_result_resolved(
-            class_name,
+            resolved_class_name,
             called_class_name,
             method_name,
             evaluated_args,
