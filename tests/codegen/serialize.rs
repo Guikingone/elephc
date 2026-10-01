@@ -1431,3 +1431,47 @@ echo eval($read), "\n";
     );
     assert_eq!(out, "x?\n");
 }
+
+/// `__unserialize($data)` declared WITHOUT a parameter type receives the parsed array: nested
+/// objects arrive as objects and `$data['key']` reads work. The runtime hands the user hook the bare
+/// hash it parsed, but an undeclared first parameter was boxed as `mixed` by the callee prologue,
+/// so the body read the hash header as a Mixed cell -- `gettype($data)` answered "string" and the
+/// nested `Inner` object reached `Wrapper::__unserialize` as null ("Cannot assign null to
+/// property of type Inner"). Laravel's `SerializableClosure` wrappers hit exactly this. Output is
+/// php 8.5's.
+#[test]
+fn test_unserialize_hook_without_a_parameter_type_gets_the_parsed_array() {
+    let out = compile_and_run(r#"<?php
+class Wrapper {
+    protected $serializable;
+    public function __construct($s) { $this->serializable = $s; }
+    public function get() { return $this->serializable->get(); }
+    public function __serialize() { return ['serializable' => $this->serializable]; }
+    public function __unserialize($data) { $this->serializable = $data['serializable']; }
+}
+class Inner {
+    public $code;
+    public function get() { return $this->code; }
+    public function __serialize() { return ['code' => $this->code]; }
+    public function __unserialize($data) { $this->code = $data['code'] . '!'; }
+}
+class Plain {
+    public $a = 1;
+    public $b = [1, 2];
+    public function __unserialize(array $data): void { $this->a = $data['a'] + 10; $this->b = $data['b']; }
+    public function __serialize(): array { return ['a' => $this->a, 'b' => $this->b]; }
+}
+$i = new Inner();
+$i->code = 'x';
+$s = serialize(new Wrapper($i));
+echo $s, "\n";
+echo unserialize($s)->get(), "\n";
+echo gettype(unserialize(serialize(new Inner()))->code), "\n";
+$p = unserialize(serialize(new Plain()));
+echo $p->a, json_encode($p->b), "\n";
+"#);
+    assert_eq!(
+        out,
+        "O:7:\"Wrapper\":1:{s:12:\"serializable\";O:5:\"Inner\":1:{s:4:\"code\";s:1:\"x\";}}\nx!\nstring\n11[1,2]\n"
+    );
+}
