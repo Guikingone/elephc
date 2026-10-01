@@ -1,6 +1,7 @@
 //! Purpose:
 //! PHP sources of the `codegen::locals_retype` end-to-end fixtures that claim the boxed
 //! mixed-storage path, shared with the checker-side marking meta-test (issue #787).
+//! Straight-line retypes and the silent capture fixture share their sources here as well.
 //!
 //! Called from:
 //! - `tests/codegen/locals_retype.rs`, which compiles and runs each source.
@@ -149,3 +150,122 @@ pub const MIXED_STORAGE_FIXTURES: &[&str] = &[
     REASSIGNED_TO_A_LITERAL_INSIDE_A_FUNCTION_BODY,
     STORED_IN_A_FALLTHROUGH_SWITCH_DEFAULT,
 ];
+
+/// Shared source for the int to string retype regression.
+pub const RETYPE_INT_TO_STRING: &str = "<?php $a = $argc; $a = \"ciao\"; echo $a;";
+
+/// Shared source for the string to int retype regression.
+pub const RETYPE_STRING_TO_INT: &str = "<?php $a = \"ciao\" . $argc; $a = 7; echo $a;";
+
+/// Shared source for the rhs reads old value retype regression.
+pub const RETYPE_RHS_READS_OLD_VALUE: &str = "<?php $a = $argc; $a = \"n=\" . $a; echo $a;";
+
+/// Shared source for the after loop retype regression.
+pub const RETYPE_AFTER_LOOP: &str = "<?php $a = \"x\"; for ($i = 0; $i < $argc; $i++) { $a .= \"y\"; } $a = 7; echo $a;";
+
+/// Shared source for the capture before retype retype regression.
+pub const RETYPE_CAPTURE_BEFORE_RETYPE: &str = "<?php $a = $argc; $f = function() use ($a) { return $a; }; $a = \"x\"; echo $f() . $a;";
+
+/// Shared source for the constant retype retype regression.
+pub const RETYPE_CONSTANT_RETYPE: &str = "<?php $a = 3; $a = \"ciao\"; echo $a;";
+
+/// Shared source for the after conditional unset retype regression.
+pub const RETYPE_AFTER_CONDITIONAL_UNSET: &str = "<?php $a = \"s\" . $argc; if ($argc > 1) { unset($a); } $a = 7; echo $a;";
+
+/// Shared source for the compound assign retype retype regression.
+pub const RETYPE_COMPOUND_ASSIGN_RETYPE: &str = "<?php $x = $argc; $x .= \"a\"; echo $x;";
+
+/// Shared source for the array to string retype regression.
+pub const RETYPE_ARRAY_TO_STRING: &str = "<?php $a = [1, $argc]; $a = \"str\" . $argc; echo $a;";
+
+/// Shared source for the object to string retype regression.
+pub const RETYPE_OBJECT_TO_STRING: &str = "<?php\nclass Box {\n    public int $v;\n    public function __construct(int $v) { $this->v = $v; }\n    public function __destruct() { echo \"bye|\"; }\n}\n$o = new Box($argc);\necho $o->v, \"|\";\n$o = \"gone\" . $argc;\necho $o;";
+
+/// Shared source for the scalar to object retype regression.
+pub const RETYPE_SCALAR_TO_OBJECT: &str = "<?php\nclass Box {\n    public int $v;\n    public function __construct(int $v) { $this->v = $v; }\n    public function __destruct() { echo \"bye|\"; }\n}\n$x = $argc;\necho $x, \"|\";\n$x = new Box($argc);\necho $x->v;";
+
+/// Shared source for the in function body retype regression.
+pub const RETYPE_IN_FUNCTION_BODY: &str = "<?php\nfunction probe(int $n): string {\n    $a = $n;\n    $a = \"ciao\" . $n;\n    return $a;\n}\necho probe($argc);";
+
+/// Shared source for the object and array epilogue retype regression.
+pub const RETYPE_OBJECT_AND_ARRAY_EPILOGUE: &str = "<?php\nclass Box {\n    public int $v;\n    public function __construct(int $v) { $this->v = $v; }\n    public function __destruct() { echo \"bye|\"; }\n}\nfunction probe(int $n): string {\n    $o = new Box($n);\n    $arr = [1, $n];\n    echo $o->v, \"|\", $arr[1], \"|\";\n    $o = \"s\" . $n;\n    $arr = \"t\" . $n;\n    return $o . $arr;\n}\necho probe($argc);";
+
+/// Shared source for the by value parameter retype regression.
+pub const RETYPE_BY_VALUE_PARAMETER: &str = "<?php\nfunction probe($a, int $n): string {\n    $a = \"grown\" . $n;\n    return $a;\n}\necho probe([1, 2], $argc);";
+
+/// Shared source for the two retype tail sinking retype regression.
+pub const RETYPE_TWO_RETYPE_TAIL_SINKING: &str = "<?php $q = \"a\" . $argc; if ($argc > 5) { echo \"x\"; } echo $q; $q = 1; $q = \"s\"; echo \"|\", $q;";
+
+/// Shared source for the if tail sinking retype regression.
+pub const RETYPE_IF_TAIL_SINKING: &str = "<?php $q = \"a\" . $argc; if ($argc > 5) { echo \"x\"; } echo $q; $q = 1; echo \"|\", $q;";
+
+/// Shared source for the global after retype retype regression.
+pub const RETYPE_GLOBAL_AFTER_RETYPE: &str = "<?php function w() { global $a; $a = 5; } $a = \"x\"; $a = 2; w(); echo $a;";
+
+/// Shared source for the retype and array element retype regression.
+pub const RETYPE_RETYPE_AND_ARRAY_ELEMENT: &str = "<?php\n$a = [1, $argc];\n$b = $argc;\n$b = $argc > 0 ? \"yes\" : \"no\";\n$a[0] = \"s\";\necho $b, \"|\", $a[0], \"|\", $a[1];";
+
+/// Shared source for the copy across tail sinking retype regression.
+pub const RETYPE_COPY_ACROSS_TAIL_SINKING: &str = "<?php\nfunction probe(int $n): string {\n    $q = \"a\" . $n;\n    if ($n > 5) { echo \"x\"; }\n    $r = $q;\n    $q = 1;\n    return $r . \"|\" . $q;\n}\necho probe($argc);";
+
+/// Shared source for the int to heap string retype regression.
+pub const RETYPE_INT_TO_HEAP_STRING: &str = "<?php $a = $argc; $a = \"ciao\" . $argc; echo strlen($a), \"|\", $a;";
+
+/// Shared source for the rhs reads old heap value retype regression.
+pub const RETYPE_RHS_READS_OLD_HEAP_VALUE: &str = "<?php $a = \"n\" . $argc; $a = strlen($a); echo $a;";
+
+/// Shared source for the new value contains old retype regression.
+pub const RETYPE_NEW_VALUE_CONTAINS_OLD: &str = "<?php $a = \"s\" . $argc; $a = [$a]; echo $a[0];";
+
+/// Shared source for the if else tail sinking retype regression.
+pub const RETYPE_IF_ELSE_TAIL_SINKING: &str = "<?php $q = \"a\" . $argc; if ($argc > 5) { echo \"x\"; } else { echo \"y\"; } echo $q; $q = 1; echo \"|\", $q;";
+
+/// Shared source for the switch tail sinking retype regression.
+pub const RETYPE_SWITCH_TAIL_SINKING: &str = "<?php $q = \"a\" . $argc; switch ($argc) { case 9: echo \"x\"; break; default: echo \"y\"; } echo $q; $q = 1; echo \"|\", $q;";
+
+/// Shared source for the try tail sinking retype regression.
+pub const RETYPE_TRY_TAIL_SINKING: &str = "<?php $q = \"a\" . $argc; try { echo \"t\"; } catch (Exception $e) { echo \"c\"; } echo $q; $q = 1; echo \"|\", $q;";
+
+/// Shared source for the scalar tail sinking retype regression.
+pub const RETYPE_SCALAR_TAIL_SINKING: &str = "<?php $n = $argc; if ($argc > 5) { echo \"x\"; } echo $n; $n = \"s\" . $argc; echo \"|\", $n;";
+
+/// Shared source for the without prior read retype regression.
+pub const RETYPE_WITHOUT_PRIOR_READ: &str = "<?php $q = \"a\" . $argc; if ($argc > 5) { echo \"x\"; } $q = 1; echo \"|\", $q;";
+
+/// Shared source for the foreach target retype retype regression.
+pub const RETYPE_FOREACH_TARGET_RETYPE: &str = "<?php $v = $argc; $arr = [1, 2, 3]; foreach ($arr as $v) { } $v = \"ciao\" . $argc; echo $v;";
+
+/// Straight-line retypes checked for explicit retype sites and warnings before lowering.
+pub const RETYPE_FIXTURES: &[&str] = &[
+    RETYPE_INT_TO_STRING,
+    RETYPE_STRING_TO_INT,
+    RETYPE_RHS_READS_OLD_VALUE,
+    RETYPE_AFTER_LOOP,
+    RETYPE_CAPTURE_BEFORE_RETYPE,
+    RETYPE_CONSTANT_RETYPE,
+    RETYPE_AFTER_CONDITIONAL_UNSET,
+    RETYPE_COMPOUND_ASSIGN_RETYPE,
+    RETYPE_ARRAY_TO_STRING,
+    RETYPE_OBJECT_TO_STRING,
+    RETYPE_SCALAR_TO_OBJECT,
+    RETYPE_IN_FUNCTION_BODY,
+    RETYPE_OBJECT_AND_ARRAY_EPILOGUE,
+    RETYPE_BY_VALUE_PARAMETER,
+    RETYPE_TWO_RETYPE_TAIL_SINKING,
+    RETYPE_IF_TAIL_SINKING,
+    RETYPE_GLOBAL_AFTER_RETYPE,
+    RETYPE_RETYPE_AND_ARRAY_ELEMENT,
+    RETYPE_COPY_ACROSS_TAIL_SINKING,
+    RETYPE_INT_TO_HEAP_STRING,
+    RETYPE_RHS_READS_OLD_HEAP_VALUE,
+    RETYPE_NEW_VALUE_CONTAINS_OLD,
+    RETYPE_IF_ELSE_TAIL_SINKING,
+    RETYPE_SWITCH_TAIL_SINKING,
+    RETYPE_TRY_TAIL_SINKING,
+    RETYPE_SCALAR_TAIL_SINKING,
+    RETYPE_WITHOUT_PRIOR_READ,
+    RETYPE_FOREACH_TARGET_RETYPE,
+];
+
+/// A closure silently boxes its captured local without marking the outer ternary binding.
+pub const SILENT_MIXED_CAPTURE: &str = "<?php\n$m = $argc > 1 ? 1 : \"z\";\n$f = function (int $n) use ($m) { if ($n > 1) { $m = 0; } else { $m = \"s\"; } return $m; };\nvar_dump($f($argc));\n$g = function () use ($m) { return $m; };\nvar_dump($g());";
