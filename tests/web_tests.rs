@@ -3477,3 +3477,26 @@ fn web_superglobals_nest_bracketed_keys_like_php() {
         resp
     );
 }
+
+/// Verifies a top-level `define()` is request state in a `--web` worker: every request defines its
+/// own value, the compiled program reads that value, and interpreted code sees it too. The
+/// "already defined" guard of `define()` was a BSS flag nothing cleared, so request two kept
+/// request one's value and never published it to the eval bridge (Laravel's `defined('LARAVEL_START')`
+/// timing line vanished from every response after the first).
+#[test]
+fn web_define_is_per_request_and_visible_to_eval() {
+    let dir = make_test_dir("web_define_per_request");
+    let src = "<?php define('REQ_STAMP', $_GET['n']); $code = 'echo REQ_STAMP, defined(\"REQ_STAMP\") ? \"y\" : \"n\";'; eval($code); echo '|', REQ_STAMP;";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_request(&addr, "GET", "/?n=a", &[], "");
+    let second = http_request(&addr, "GET", "/?n=b", &[], "");
+    let third = http_request(&addr, "GET", "/?n=c", &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(first.ends_with("ay|a"), "first: {:?}", first);
+    assert!(second.ends_with("by|b"), "second: {:?}", second);
+    assert!(third.ends_with("cy|c"), "third: {:?}", third);
+}

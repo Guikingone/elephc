@@ -244,6 +244,16 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
             }
         }
     }
+    // Every `define()` guards its constant with a BSS "seen" flag. Constants are request state, so
+    // the flag has to be clear again when request N+1 runs its own `define()`: with it left set,
+    // the second request answered "Constant already defined", kept the first request's value in
+    // the program global (Laravel's `LARAVEL_START` timing was one request stale) and never
+    // published the constant to the eval bridge.
+    for flag in data.comm_labels_with_prefix("_define_seen") {
+        let zero = abi::int_result_reg(emitter);
+        abi::emit_load_int_immediate(emitter, zero, 0);
+        abi::emit_store_reg_to_symbol(emitter, zero, &flag, 0);
+    }
     // Request superglobals ($_SERVER/$_GET/$_POST) live in `_eir_global_*` symbol
     // storage and are reassigned by the web prelude every request. Reset them here
     // so stale request arrays are gone before the next prelude builds replacements.
