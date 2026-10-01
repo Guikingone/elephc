@@ -136,6 +136,33 @@ fn constant_folding_survives_the_nesting_limit_on_a_small_embedder_stack() {
     assert_eq!(report, "2 statements");
 }
 
+/// Target-aware folding keeps both recursive folds inside the phase's stack budget.
+#[test]
+fn target_constant_folding_survives_the_nesting_limit_on_a_small_embedder_stack() {
+    let report = on_a_small_embedder_stack(|| {
+        let target = elephc::codegen_support::platform::Target::parse("linux-x86_64").unwrap();
+        summarize(elephc::optimize::fold_constants_for_target(parse_deeply_nested(), target))
+    });
+    assert_eq!(report, "2 statements");
+}
+
+/// A nonempty autoload registry must budget its recursive reference scan on small threads.
+#[test]
+fn autoload_reference_scan_survives_the_nesting_limit_on_a_small_embedder_stack() {
+    let report = on_a_small_embedder_stack(|| {
+        let tokens = elephc::lexer::tokenize("<?php spl_autoload_register(function($name) { require $name . '.php'; });").unwrap();
+        let registration = elephc::parser::parse(&tokens).unwrap();
+        let (registry, _) = elephc::autoload::Registry::build(std::path::Path::new("."), registration);
+        assert!(!registry.is_empty());
+        let (program, included) = elephc::autoload::run_collecting_included_with_defines(
+            parse_deeply_nested(), std::path::Path::new("."), &registry, &HashSet::new(),
+        ).unwrap();
+        assert!(included.is_empty());
+        summarize(program)
+    });
+    assert_eq!(report, "2 statements");
+}
+
 /// Verifies the type checker survives the same depth called on its own.
 #[test]
 fn type_checking_survives_the_nesting_limit_on_a_small_embedder_stack() {
