@@ -16,6 +16,35 @@ use crate::parser::ast::{AttributeGroup, ClassProperty, Stmt, StmtKind, TypeExpr
 use crate::types::{ClassInfo, InterfaceInfo, PhpType};
 use std::collections::{HashMap, HashSet};
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// AST-only consumers know the standard SPL parent tree without checker injection.
+    #[test]
+    fn ast_only_hierarchy_contains_spl_throwables() {
+        let hierarchy = ExceptionHierarchy::from_program(&[], HashSet::new());
+        for name in ["LogicException", "BadFunctionCallException", "BadMethodCallException", "DomainException", "InvalidArgumentException", "LengthException", "OutOfRangeException", "RuntimeException", "OutOfBoundsException", "OverflowException", "RangeException", "UnderflowException", "UnexpectedValueException"] {
+            assert!(hierarchy.is_subtype(name, "Exception"), "{name}");
+            assert!(hierarchy.is_subtype(name, "Throwable"), "{name}");
+            assert!(!hierarchy.is_subtype(name, "Error"), "{name}");
+        }
+        assert!(hierarchy.is_subtype("bAdMeThOdCaLlExCePtIoN", "LogicException"));
+        assert!(hierarchy.is_subtype("RangeException", "RuntimeException"));
+        assert!(!hierarchy.is_subtype("DomainException", "RuntimeException"));
+    }
+
+    /// An explicitly supplied RuntimeException declaration keeps its authoritative parent.
+    #[test]
+    fn ast_only_hierarchy_preserves_declared_runtime_exception_parent() {
+        let tokens = crate::lexer::tokenize("<?php class RuntimeException extends Error {}").unwrap();
+        let program = crate::parser::parse(&tokens).unwrap();
+        let hierarchy = ExceptionHierarchy::from_program(&program, HashSet::new());
+        assert!(hierarchy.is_subtype("RuntimeException", "Error"));
+        assert!(!hierarchy.is_subtype("RuntimeException", "Exception"));
+    }
+}
+
 /// Canonical class/interface relations used to compare thrown and caught types.
 #[derive(Clone, Debug, Default)]
 pub(super) struct ExceptionHierarchy {
@@ -87,6 +116,13 @@ impl ExceptionHierarchy {
 
     /// Adds the PHP root throwable relations needed even when no checker metadata is supplied.
     fn add_throwable_roots(&mut self) {
+        for &(name, parent) in crate::types::checker::SPL_EXCEPTION_HIERARCHY {
+            let key = php_symbol_key(name);
+            // Existing checker or explicit source metadata remains authoritative.
+            if self.class_names.insert(key.clone()) {
+                self.parents.insert(key, parent.to_string());
+            }
+        }
         self.interface_names.insert(php_symbol_key("Throwable"));
         for root in ["Exception", "Error"] {
             let key = php_symbol_key(root);
