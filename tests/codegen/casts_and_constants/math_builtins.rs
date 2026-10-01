@@ -15,8 +15,8 @@ fn test_mt_rand_and_rand_accept_mixed_and_union_bounds() {
     let out = compile_and_run_with_heap_debug(r#"<?php
 function mtSpan(mixed $min, mixed $max): int { return mt_rand($min, $max); }
 function randSpan(mixed $min, mixed $max): int { return rand($min, $max); }
-function mtUnion(int|string $max): int { return mt_rand(0, $max); }
-function randUnion(int|string $max): int { return rand(0, $max); }
+function mtUnion(int|string $bound): int { return mt_rand($bound, $bound); }
+function randUnion(int|string $bound): int { return rand($bound, $bound); }
 $ok = true;
 for ($i = 0; $i < 100; $i++) {
     $a = mtSpan("3", 4.0);
@@ -24,12 +24,13 @@ for ($i = 0; $i < 100; $i++) {
     $c = mtUnion($i % 2 ? 5 : "5");
     $d = randUnion($i % 2 ? 5 : "5");
     $ok = $ok && $a >= 3 && $a <= 4 && $b >= 3 && $b <= 4;
-    $ok = $ok && $c >= 0 && $c <= 5 && $d >= 0 && $d <= 5;
+    $ok = $ok && $c === 5 && $d === 5;
 }
 echo $ok ? "ok" : "bad", "|", mtSpan(7, "7"), "|", randSpan("7", 7.0);
+echo "|", mtUnion(5), "|", mtUnion("5"), "|", randUnion(5), "|", randUnion("5");
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "ok|7|7");
+    assert_eq!(out.stdout, "ok|7|7|5|5|5|5");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
