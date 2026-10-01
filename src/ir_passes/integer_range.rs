@@ -1034,6 +1034,8 @@ fn collect_safe_candidates(
                 && range_for_value(function, &state, inst.operands[0])
                     .zip(range_for_value(function, &state, inst.operands[1]))
                     .and_then(|(lhs, rhs)| checked_binop_range(inst.op, lhs, rhs))
+                    .filter(|range| inst.result_type == IrType::I64
+                        || super::boxed_narrowing::integer_range_can_narrow(range.lo, range.hi))
                     .is_some()
             {
                 candidates.push(inst_id);

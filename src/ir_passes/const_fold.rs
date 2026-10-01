@@ -36,6 +36,7 @@ use crate::ir::{
     CmpPredicate, DataPool, Function, Immediate, InstId, Instruction, IrType, Op, Ownership,
     ValueId,
 };
+use crate::types::PhpType;
 
 use super::driver::IrPass;
 
@@ -120,7 +121,7 @@ impl IrPass for ConstFold {
                 consts.insert(result, value);
                 continue;
             }
-            if let Some((folded, narrowing)) = try_fold(inst, &consts) {
+            if let Some((folded, narrowing)) = try_fold(function, inst, &consts) {
                 consts.insert(result, folded);
                 folds.push((InstId::from_raw(index as u32), folded, narrowing));
             }
@@ -134,7 +135,13 @@ impl IrPass for ConstFold {
         if folds.iter().any(|(_, _, narrowing)| *narrowing != TypeNarrowing::None) {
             let int_blocked = super::boxed_narrowing::blocked_results(function, IrType::I64);
             let float_blocked = super::boxed_narrowing::blocked_results(function, IrType::F64);
-            folds.retain(|(inst_id, _, narrowing)| {
+            folds.retain(|(inst_id, value, narrowing)| {
+                if *narrowing == TypeNarrowing::ToInt {
+                    let Const::Int(payload) = value else { return false; };
+                    if !super::boxed_narrowing::integer_range_can_narrow(*payload, *payload) {
+                        return false;
+                    }
+                }
                 let blocked = match narrowing {
                     TypeNarrowing::None => return true,
                     TypeNarrowing::ToInt => &int_blocked,
@@ -189,6 +196,7 @@ fn const_of_const_op(inst: &Instruction) -> Option<Const> {
 /// intentionally not folded (division, modulo, float division, out-of-range
 /// shifts, non-signed compare predicates).
 fn try_fold(
+    function: &Function,
     inst: &Instruction,
     consts: &HashMap<ValueId, Const>,
 ) -> Option<(Const, TypeNarrowing)> {
@@ -244,13 +252,30 @@ fn try_fold(
             Some((Const::Bool(fold_icmp(predicate, lhs, rhs)?), TypeNarrowing::None))
         }
         // -- scalar predicates over a constant --
-        Op::IsNull => Some((Const::Bool(matches!(operand(0)?, Const::Null)), TypeNarrowing::None)),
+        Op::IsNull if null_predicate_can_fold(function, inst, operand(0)?) => {
+            Some((Const::Bool(matches!(operand(0)?, Const::Null)), TypeNarrowing::None))
+        }
         // A constant NAN is deliberately NOT folded: it is truthy, but PHP 8.5 also reports
         // the coercion, and the warning lives on the runtime truthiness path this fold would
         // delete. See `crate::optimize::fold::casts::try_fold_cast`.
         Op::IsTruthy if matches!(operand(0)?, Const::Float(f) if f.is_nan()) => None,
         Op::IsTruthy => Some((Const::Bool(operand(0)?.truthiness()), TypeNarrowing::None)),
         _ => None,
+    }
+}
+
+/// Retains null checks when scalar storage interprets the constant's bits as an in-band null.
+fn null_predicate_can_fold(function: &Function, inst: &Instruction, constant: Const) -> bool {
+    let Some(source) = inst.operands.first().and_then(|value| function.value(*value)) else {
+        return false;
+    };
+    let sentinel = crate::codegen_support::sentinels::NULL_SENTINEL;
+    match (source.php_type.codegen_repr(), constant) {
+        (PhpType::Int | PhpType::Callable, Const::Int(value)) => {
+            super::boxed_narrowing::integer_range_can_narrow(value, value)
+        }
+        (PhpType::Float, Const::Float(value)) => value.to_bits() != sentinel as u64,
+        _ => true,
     }
 }
 

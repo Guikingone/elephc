@@ -11,6 +11,9 @@
 
 use super::*;
 
+#[path = "integer_range/configuration.rs"]
+mod configuration;
+
 /// Emits only the main function's textual EIR for one PHP program.
 fn main_ir(source: &str, optimized: bool) -> String {
     let dir = make_cli_test_dir("elephc_integer_range_ir");
@@ -39,10 +42,16 @@ fn main_ir(source: &str, optimized: bool) -> String {
 
 /// Compiles and executes a fixture with the selected optimizer mode.
 fn run_variant(source: &str, optimized: bool) -> (String, String) {
+    run_variant_with_options(source, optimized, &[])
+}
+
+/// Compiles and executes a fixture with explicit configuration options.
+fn run_variant_with_options(source: &str, optimized: bool, options: &[&str]) -> (String, String) {
     let dir = make_cli_test_dir("elephc_integer_range_run");
     let php_path = dir.join("main.php");
     fs::write(&php_path, source).expect("write integer range runtime fixture");
     let mut command = elephc_cli_command(&dir);
+    command.args(options);
     if !optimized {
         command.arg("--no-ir-opt");
     }
@@ -66,10 +75,16 @@ fn run_variant(source: &str, optimized: bool) -> (String, String) {
 
 /// Emits target-specific assembly with the selected optimizer mode.
 fn target_assembly(source: &str, target: &str, optimized: bool) -> String {
+    target_assembly_with_options(source, target, optimized, &[])
+}
+
+/// Emits target assembly while applying configuration-specific representation options.
+fn target_assembly_with_options(source: &str, target: &str, optimized: bool, options: &[&str]) -> String {
     let dir = make_cli_test_dir("elephc_integer_range_target");
     let php_path = dir.join("main.php");
     fs::write(&php_path, source).expect("write integer range target fixture");
     let mut command = elephc_cli_command(&dir);
+    command.args(options);
     command.arg("--emit-asm").arg("--target").arg(target);
     if target.starts_with("ios-") {
         command.arg("--emit").arg("staticlib");

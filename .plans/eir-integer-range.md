@@ -88,3 +88,23 @@ Focused validation passed: 203 EIR unit tests, 17 range codegen tests, 15 loose
 comparison codegen tests, all five target emitters in both modes, a warning-free
 build, and assembly-comment alignment. The changes remain local because the PR
 is ready for review and the contribution policy prohibits further pushes.
+
+## Fourth deep audit
+
+- [x] Recheck simultaneous narrowing, nullable storage, and ownership contracts.
+- [x] Reproduce legacy null-sentinel collisions in boxed narrowing and scalar null folding.
+- [x] Preserve boxed collision payloads and ambiguous scalar null predicates.
+- [x] Add representation-specific unit, runtime, heap-debug, and all-target coverage.
+- [x] Complete focused validation and record the local-only commit.
+
+The audit reproduced optimizer-on/off divergence under `--null-repr=sentinel`:
+range and constant specialization could reinterpret an ordinary boxed integer
+payload as null, and scalar null-predicate folding could discard the legacy
+storage interpretation. Boxed interval proofs and exact integer folds now share
+a payload-compatibility check. Null predicates over ambiguous raw integer or float
+sentinel bits remain runtime operations. Neighboring integer values and tagged
+mode still specialize, as do existing scalar checked integer sinks.
+Validation passed: 206 EIR unit tests, 21 range codegen tests, all five target
+emitters with both null representations and optimizer modes, reference/array
+ownership with heap debugging, a warning-free build, and `git diff --check`.
+The commit remains local under the ready-for-review contribution policy.

@@ -841,6 +841,12 @@ Spaceship narrowing is restricted to numeric or runtime-tagged counterparts,
 preserving boxed boolean/null truthiness comparisons. Loose equality compares
 integer-tagged boxed payloads with scalar integers exactly, without rounding
 through double precision before or after specialization.
+With `--null-repr=sentinel`, boxed integer results also stay boxed when their
+proven interval can contain `PHP_INT_MAX - 1`: narrowing that payload would make
+scalar consumers reinterpret an ordinary integer as null. Constant folding applies
+the same payload restriction and retains null predicates over ambiguous scalar
+sentinel bits. Tagged mode keeps the full integer range available for narrowing;
+already-scalar checked integer sinks preserve their existing representation.
 Constant folding uses the same consumer policy for both integer and floating-point
 results, so a later constant fold cannot bypass a range pass's representation guard.
 Block arguments and other terminator uses keep their declared representation;

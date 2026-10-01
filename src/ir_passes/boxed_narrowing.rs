@@ -7,11 +7,19 @@
 //! Key details:
 //! - A numerical proof alone does not prove storage or conversion compatibility.
 //! - Unknown consumers and module-dependent stores retain their boxed inputs.
+//! - Legacy scalar null sentinels must not alias an ordinary boxed integer payload.
 
 use std::collections::HashSet;
 
 use crate::ir::{Function, Immediate, Instruction, IrType, Op, Terminator, ValueId};
 use crate::types::PhpType;
+
+/// Checks that every boxed integer payload keeps its meaning in the active scalar representation.
+pub(super) fn integer_range_can_narrow(lo: i64, hi: i64) -> bool {
+    let sentinel = crate::codegen_support::sentinels::NULL_SENTINEL;
+    crate::codegen_support::sentinels::null_repr_is_tagged()
+        || hi < sentinel || lo > sentinel
+}
 
 /// Collects values with any use that cannot consume the requested scalar representation.
 pub(super) fn blocked_results(function: &Function, scalar: IrType) -> HashSet<ValueId> {
