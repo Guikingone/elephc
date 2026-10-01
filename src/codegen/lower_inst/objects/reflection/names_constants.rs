@@ -9,6 +9,10 @@
 
 use super::*;
 
+#[cfg(test)]
+#[path = "interface_method_names_tests.rs"]
+mod interface_method_names_tests;
+
 /// Returns the `__construct` member object metadata when the reflected class-like symbol has one.
 pub(super) fn reflection_constructor_member(
     method_members: &[ReflectionListedMember],
@@ -81,23 +85,39 @@ pub(super) fn reflection_interface_method_names(
     let Some(interface_name) = resolve_reflection_interface(ctx, interface_name) else {
         return Vec::new();
     };
-    let Some(info) = ctx.module.interface_infos.get(interface_name) else {
-        return Vec::new();
-    };
     let mut names = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    push_unique_method_names(info.method_decls.iter().map(|method| &method.name), &mut names, &mut seen);
+    let mut visited = std::collections::HashSet::new();
+    collect_reflection_interface_method_names(
+        &ctx.module.interface_infos, interface_name, &mut names, &mut seen, &mut visited,
+    );
+    names
+}
+
+/// Visits each interface once, preserving depth-first declaration order across shared ancestors.
+fn collect_reflection_interface_method_names(
+    interfaces: &std::collections::HashMap<String, InterfaceInfo>,
+    interface_name: &str,
+    names: &mut Vec<String>,
+    seen: &mut std::collections::HashSet<String>,
+    visited: &mut std::collections::HashSet<String>,
+) {
+    if !visited.insert(php_symbol_key(interface_name.trim_start_matches('\\'))) {
+        return;
+    }
+    let Some(info) = interfaces.get(interface_name) else {
+        return;
+    };
+    push_unique_method_names(info.method_decls.iter().map(|method| &method.name), names, seen);
     for parent in &info.parents {
-        let inherited = reflection_interface_method_names(ctx, parent);
-        push_unique_method_names(inherited.iter(), &mut names, &mut seen);
+        collect_reflection_interface_method_names(interfaces, parent, names, seen, visited);
     }
     // Injected interfaces can carry signatures without source declarations.
-    push_unique_method_names(info.method_order.iter(), &mut names, &mut seen);
-    push_unique_method_names(info.static_method_order.iter(), &mut names, &mut seen);
+    push_unique_method_names(info.method_order.iter(), names, seen);
+    push_unique_method_names(info.static_method_order.iter(), names, seen);
     let mut remaining = info.methods.keys().chain(info.static_methods.keys()).collect::<Vec<_>>();
     remaining.sort_unstable();
-    push_unique_method_names(remaining.into_iter(), &mut names, &mut seen);
-    names
+    push_unique_method_names(remaining.into_iter(), names, seen);
 }
 
 /// Returns PHP case-sensitive property names declared by an interface and its parents.

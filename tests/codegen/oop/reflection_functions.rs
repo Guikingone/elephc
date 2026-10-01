@@ -14,6 +14,26 @@
 
 use super::*;
 
+/// Layered diamond inheritance preserves method declaration order without duplicate names.
+#[test]
+fn test_reflection_interface_methods_layered_diamond() {
+    let mut source = String::from("<?php\ninterface Root { public function base(); }\n");
+    let mut parents = String::from("Root");
+    for layer in 0..3 {
+        source.push_str(&format!(
+            "interface Left{layer} extends {parents} {{}}\ninterface Right{layer} extends {parents} {{}}\n"
+        ));
+        parents = format!("Left{layer}, Right{layer}");
+    }
+    source.push_str(&format!(
+        "interface Leaf extends {parents} {{ public static function first(); public function last(); }}\n"
+    ));
+    source.push_str(
+        "foreach ((new ReflectionClass(Leaf::class))->getMethods() as $method) { echo $method->getName(), \",\"; }"
+    );
+    assert_eq!(compile_and_run(&source), "first,last,base,");
+}
+
 /// Interface methods retain declaration order across static methods, parents, and redeclarations.
 #[test]
 fn test_reflection_interface_methods_follow_declaration_order() {
