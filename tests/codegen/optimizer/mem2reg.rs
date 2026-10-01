@@ -10,8 +10,28 @@
 
 use super::*;
 
+const DYNAMIC_EVAL_SCALAR_SOURCE: &str = r#"<?php
+function repeat_eval(string $code): void {
+    for ($i = 0; $i < 3; $i++) {
+        if ($i > 0) { eval($code); }
+        $n = 7;
+        if (strlen($code) > 1000) { $n = 9; }
+        if (strlen($code) > 0) {
+            $m = $n + 1;
+            echo "m=", $m, "\n";
+        }
+    }
+}
+repeat_eval('echo "n=$n\\n";');
+"#;
+
 /// Emits only the main function's textual EIR for one PHP program.
 fn main_ir(source: &str, optimized: bool) -> String {
+    function_ir(source, optimized, "main")
+}
+
+/// Emits one named function's textual EIR without including other function bodies.
+fn function_ir(source: &str, optimized: bool, name: &str) -> String {
     let dir = make_cli_test_dir("elephc_mem2reg_ir");
     let php_path = dir.join("main.php");
     fs::write(&php_path, source).expect("write PHP fixture");
@@ -23,9 +43,11 @@ fn main_ir(source: &str, optimized: bool) -> String {
     let output = command.arg(&php_path).output().expect("emit EIR");
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let text = String::from_utf8(output.stdout).expect("EIR is UTF-8");
-    let main = text.split("  function main()").nth(1).expect("main function").to_string();
+    let header = format!("  function {name}(");
+    let body = text.split_once(&header).expect("named function").1;
+    let function = body.split("\n  function ").next().expect("function body").to_string();
     fs::remove_dir_all(dir).expect("remove fixture directory");
-    main
+    function
 }
 
 /// Compiles and executes one PHP program with the requested EIR optimization mode.
@@ -113,23 +135,33 @@ fn test_mem2reg_preserves_by_reference_local() {
     assert_eq!(run_variant(source, true), "7");
 }
 
-/// Dynamic eval sees a scalar written after its call site on later loop iterations.
+/// Dynamic eval sees a later scalar that would otherwise qualify for SSA promotion.
 #[test]
 fn test_mem2reg_keeps_dynamic_eval_visible_local_in_memory() {
-    let source = r#"<?php
-function repeat_eval(string $code): void {
-    for ($i = 0; $i < 3; $i++) {
-        if ($i > 0) { eval($code); }
-        $n = 7;
-        if (strlen($code) > 1000) { $n = 9; }
-        echo "step\n";
-    }
+    let expected = "m=8\nn=7\nm=8\nn=7\nm=8\n";
+    assert_eq!(run_variant(DYNAMIC_EVAL_SCALAR_SOURCE, false), expected);
+    assert_eq!(run_variant(DYNAMIC_EVAL_SCALAR_SOURCE, true), expected);
 }
-repeat_eval('echo "n=$n\\n";');
-"#;
-    let expected = "step\nn=7\nstep\nn=7\nstep\n";
-    assert_eq!(run_variant(source, false), expected);
-    assert_eq!(run_variant(source, true), expected);
+
+/// Both optimizer modes retain two stores and a real AOT load for the eval-visible scalar.
+#[test]
+fn test_mem2reg_keeps_dynamic_eval_slot_traffic() {
+    let plain = function_ir(DYNAMIC_EVAL_SCALAR_SOURCE, false, "repeat_eval");
+    let optimized = function_ir(DYNAMIC_EVAL_SCALAR_SOURCE, true, "repeat_eval");
+    let value = plain.lines()
+        .find_map(|line| line.split_once(" = const_i64 7").map(|(definition, _)| definition))
+        .expect("the eval-visible scalar is initialized to seven")
+        .split(':').next().expect("constant result").trim();
+    let store = format!("store_local {value} ");
+    let slot = plain.lines()
+        .find_map(|line| line.trim().strip_prefix(&store))
+        .expect("the scalar is written to a local slot")
+        .split_whitespace().next().expect("local slot");
+    for ir in [&plain, &optimized] {
+        assert!(ir.contains(&format!("load_local {slot}")), "AOT reads the eval-visible scalar: {ir}");
+        assert_eq!(ir.lines().filter(|line| line.contains("store_local") && line.contains(slot)).count(),
+            2, "both eval-visible assignments stay in memory: {ir}");
+    }
 }
 
 /// Dead-store and immutable-load passes also retain a single later eval-visible store.
