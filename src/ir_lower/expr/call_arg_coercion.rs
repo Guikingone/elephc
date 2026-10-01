@@ -133,6 +133,18 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
         value
     };
     let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
+    // An UNDECLARED parameter whose inferred type is a container is still a boxed `mixed` cell in
+    // the callee's EIR contract (`eir_signature_with_php_param_contracts`), so a boxed argument is
+    // already in the shape the callee reads. Narrowing it to the inferred container type would
+    // demand an array of something php lets the function receive as anything: the recursive
+    // `dumpv($item)` of a walker over `preg_match_all()`'s matches threw "Value must be of type
+    // array, string given" for the first string element.
+    if !sig.declared_params.get(index).copied().unwrap_or(false)
+        && matches!(param_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+        && matches!(source_ty, PhpType::Mixed | PhpType::Union(_))
+    {
+        return value;
+    }
     let value = crate::ir_lower::expr::coerce_container_to_mixed_payload(
         ctx,
         value,
@@ -606,6 +618,18 @@ pub(super) fn coerce_operands_to_params(
             ir_type: ctx.builder.value_type(operands[index]),
         };
         let source_ty = ctx.builder.value_php_type(lowered.value).codegen_repr();
+        // An UNDECLARED parameter whose inferred type is a container is still a boxed `mixed`
+        // cell in the callee's EIR contract (`eir_signature_with_php_param_contracts`), so a
+        // boxed argument is already in the shape the callee reads. Narrowing it to the inferred
+        // container type would demand an array of something php lets the function receive as
+        // anything: the recursive `dumpv($item)` of a walker over `preg_match_all()`'s matches
+        // threw "Value must be of type array, string given" for the first string element.
+        if !sig.declared_params.get(index).copied().unwrap_or(false)
+            && matches!(param_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+            && matches!(source_ty, PhpType::Mixed | PhpType::Union(_))
+        {
+            continue;
+        }
         let lowered = crate::ir_lower::expr::coerce_container_to_mixed_payload(
             ctx,
             lowered,

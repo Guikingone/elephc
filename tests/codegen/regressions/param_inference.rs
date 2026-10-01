@@ -479,3 +479,33 @@ string(5) "A##LE"
 "#, "stderr: {}", out.stderr);
     assert!(!out.stderr.contains("Warning:"), "stderr: {}", out.stderr);
 }
+
+/// A recursive untyped function called first with an array and then, from its own body, with the
+/// array's elements (strings, ints, nested arrays) must receive those elements as they are. The
+/// inferred parameter type was a container, and the recursive call narrowed its `mixed` argument
+/// to that container at the call site, so the first string element threw "Value must be of type
+/// array, string given" (a `var_dump`-style walker over `preg_match_all()`'s matches). Oracle: php.
+#[test]
+fn test_recursive_untyped_walker_receives_mixed_elements_unnarrowed() {
+    let out = compile_and_run(
+        r#"<?php
+function walk($v) {
+    if (is_array($v)) {
+        $parts = [];
+        foreach ($v as $k => $item) {
+            $parts[] = $k . '=' . walk($item);
+        }
+        return '[' . implode(',', $parts) . ']';
+    }
+    return (string)$v;
+}
+echo walk(['a' => [1, 'x', [2.5, 'deep']], 'b' => 's', 3 => true]), "\n";
+$n = preg_match_all('/([0-9]+)([a-z])/', 'a1b22c333d', $m);
+echo $n, ':', walk($m), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "[a=[0=1,1=x,2=[0=2.5,1=deep]],b=s,3=1]\n3:[0=[0=1b,1=22c,2=333d],1=[0=1,1=22,2=333],2=[0=b,1=c,2=d]]\n"
+    );
+}

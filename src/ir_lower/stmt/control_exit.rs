@@ -235,6 +235,10 @@ pub(super) fn acquire_borrowed_return_value(
                 | Op::LoadStaticProperty
                 | Op::LoadDynamicStaticProperty
                 | Op::LoadReflectionStaticProperty
+                // `return eval($code);` hands back the fragment's value cell, which the eval
+                // scope still owns and tears down on the way out; `$r = eval($code)` retains it
+                // in the store, a bare return has to do the same.
+                | Op::LanguageConstructCall
         )
     ) {
         return value;

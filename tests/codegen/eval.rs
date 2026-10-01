@@ -34172,3 +34172,33 @@ eval($code);
         "uri method | [\"uri\",\"method\"]\nuri method | [\"uri\",\"method\"]\nababab | [\"a\",\"b\"]\n7 8 | [7,8]\n"
     );
 }
+
+/// Verifies `return eval($code);` hands the caller the fragment's value, not a cell the eval scope
+/// has already torn down. `$r = eval($code); return $r;` retained the fragment's cell in the
+/// store, but a bare `return eval(...)` returned it unretained, so a fragment that returned one
+/// of its own locals gave back null or garbage (php returns the value). Oracle: php 8.5.
+#[test]
+fn test_return_eval_of_a_fragment_local_yields_the_value() {
+    let out = compile_and_run(
+        r##"<?php
+function viaArrayLocal($x) {
+    $code = '$v = [1,2]; $w = $v; return $w;';
+    return eval($code);
+}
+function viaArray($x) {
+    $code = '$v = [1,2]; return $v;';
+    return eval($code);
+}
+function viaString($x) {
+    $code = '$v = "abc" . $x; return $v;';
+    return eval($code);
+}
+class Runner {
+    public function run($code) { return eval($code); }
+}
+echo json_encode(viaArrayLocal('p')), json_encode(viaArray('p')), json_encode(viaString('p')), "\n";
+echo json_encode((new Runner)->run('$n = ["k" => 5]; return $n;')), "\n";
+"##,
+    );
+    assert_eq!(out, "[1,2][1,2]\"abcp\"\n{\"k\":5}\n");
+}
