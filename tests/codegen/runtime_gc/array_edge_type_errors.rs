@@ -42,3 +42,17 @@ for ($i = 0; $i < 192; $i++) {
     assert_eq!(output.stdout, expected.repeat(192));
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
+
+/// Successful key calls detach their exception pins and retire temporary source arrays once.
+#[test]
+fn test_array_edge_key_success_releases_temporary_boxed_sources() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+function temporary_edge_rows(): mixed { return ["first" => 1, "last" => 2]; }
+for ($i = 0; $i < 24; $i++) {
+    echo array_key_first(temporary_edge_rows()), ":", array_key_last(temporary_edge_rows()), "|";
+}
+"#);
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "first:last|".repeat(24));
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
