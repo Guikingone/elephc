@@ -219,6 +219,19 @@ pub(super) fn acquire_borrowed_return_value(
         };
         source = operand;
     }
+    // The relabelled value may itself be an owning load -- a frame local whose reference the
+    // return moves out (the epilogue then skips that slot, `return_cleanup_skip_slot`).
+    // Acquiring it as well left one reference nobody drops: `$r = []; foreach (...) { if (...)
+    // {...} $r[$k] = 1; } return $r;` under `: array` leaked the whole hash on every call.
+    if source != value.value {
+        let source_type = ctx.builder.value_php_type(source);
+        if ctx.value_is_owning_temporary(LoweredValue {
+            value: source,
+            ir_type: crate::ir_lower::context::value_ir_type(&source_type),
+        }) {
+            return value;
+        }
+    }
     if !matches!(
         ctx.builder.value_defining_op(source),
         Some(

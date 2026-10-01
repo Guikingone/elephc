@@ -1,7 +1,8 @@
 //! Purpose:
-//! Regression tests for the native `get_class_vars()` and for three ownership defects found while
-//! building it: a null first store into an empty hash, owned string temporaries viewed by the
-//! trim family and `substr`, and a branch-promoted hash local returned under `: array`.
+//! Regression tests for the native `get_class_vars()` and `compact()`, and for the ownership
+//! defects found while building them: a null first store into an empty hash, owned string
+//! temporaries viewed by the trim family and `substr`, a branch-promoted hash local returned under
+//! `: array`, and fresh results presumed to alias their arguments.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -89,6 +90,48 @@ echo function_exists('get_class_vars') ? "yes" : "no", "\n";
     assert_eq!(out, "{\"a\":1,\"s\":3}\n[{\"a\":1,\"s\":3}]\n{\"a\":1,\"s\":3}\nyes\n");
 }
 
+/// `compact()` with literal names (nested arrays, duplicates, a null value, `\compact`, inside a
+/// namespace and a method) builds php's array from the caller's variables.
+#[test]
+fn test_compact_with_literal_names() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App\Http;
+
+function f() { $a = "x"; $b = [1]; $c = compact("a", "b"); return count($c) . json_encode($c); }
+echo f(), "\n";
+function g() { $a = "x"; $b = [1]; $n = null; return json_encode(compact(["a", ["b"]], "n", "a")); }
+echo g(), "\n";
+class Ctl { public function show(int $id) { $title = "T" . $id; $items = [1, 2]; return \compact('title', 'items', 'id'); } }
+echo json_encode((new Ctl())->show(7)), "\n";
+$top = "t";
+echo json_encode(compact('top')), "\n";
+"#,
+    );
+    assert_eq!(out, "2{\"a\":\"x\",\"b\":[1]}\n{\"a\":\"x\",\"b\":[1],\"n\":null}\n{\"title\":\"T7\",\"items\":[1,2],\"id\":7}\n{\"top\":\"t\"}\n");
+}
+
+/// `$a[1][] = 7` on `[[1, 2], [3]]` vivifies in one arm of a lowering-time branch; the
+/// container's conversion to `array<mixed>` happened only there, so the other arm read raw
+/// inner-array pointers as boxed cells and `$a[0]` printed `float(2.0E-323)`.
+#[test]
+fn test_nested_append_into_an_int_list_keeps_its_siblings() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [[1, 2], [3]];
+$a[1][] = 7;
+var_dump($a);
+function f() { $b = [[1, 2], [3]]; $b[1][] = 7; $b[0][] = 8; return json_encode($b); }
+echo f(), "\n";
+$c = [["x"], []];
+$c[1][] = "y";
+$c[0][1] = "z";
+echo json_encode($c), "\n";
+"#,
+    );
+    assert_eq!(out, "array(2) {\n  [0]=>\n  array(2) {\n    [0]=>\n    int(1)\n    [1]=>\n    int(2)\n  }\n  [1]=>\n  array(2) {\n    [0]=>\n    int(3)\n    [1]=>\n    int(7)\n  }\n}\n[[1,2,8],[3,7]]\n[[\"x\",\"z\"],[\"y\"]]\n");
+}
+
 /// `$v = []; $v['k'] = null;` types the hash's values as null, which the backend refused to
 /// store (`hash_set value PHP type Void`).
 #[test]
@@ -110,8 +153,9 @@ var_dump(g());
 }
 
 /// Owned string temporaries viewed by `ltrim`/`trim`/`rtrim`/`substr` are released once the view
-/// is copied, a returned acquired copy is not persisted twice, and a local promoted to a hash in
-/// one branch and returned under `: array` releases its boxed slot.
+/// is copied, a returned acquired copy is not persisted twice, a local promoted to a hash in
+/// one branch and returned under `: array` releases its boxed slot, and the owned arguments of
+/// `str_pad`/`str_repeat`/`date`, whose results never alias them, are released.
 #[test]
 fn test_owned_string_views_and_branch_promoted_hash_returns_are_leak_free() {
     let out = compile_and_run_with_heap_debug(
@@ -120,12 +164,13 @@ function f(bool $b): array { $v = []; if ($b) { $v["a"] = 1; } return $v; }
 function g(mixed $c): string { return ltrim($c, "x"); }
 function h(mixed $c): string { return substr($c, 1); }
 function k($c) { return trim($c) . rtrim($c, "x"); }
+function p($c) { return str_pad($c, 6, "-") . str_repeat($c, 2) . date("Y", 86400 * 400); }
 function run(): void {
     $n = 0;
     $s = "";
     for ($i = 0; $i < 5; $i++) {
         $n += count(f($i % 2 == 0));
-        $s = g("xxP") . h("ab") . k(" xPx ");
+        $s = g("xxP") . h("ab") . k(" xPx ") . p("ab");
     }
     echo $n, "|", $s, "\n";
 }
@@ -133,7 +178,44 @@ run();
 "#,
     );
     assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "3|PbxPx xPx \n");
+    assert_eq!(out.stdout, "3|PbxPx xPx ab----abab1971\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// `__toString` results inside a concatenation, a loop that rewrites its foreach key in a branch
+/// before keying a hash returned under `: array` (`array_combine`'s prelude shape), and the
+/// owned arguments of `ucwords`/`wordwrap` are all released.
+#[test]
+fn test_tostring_concat_branchy_loop_hash_and_word_helpers_are_leak_free() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class T { public function __construct(private string $s) {} public function __toString(): string { return "<" . $this->s . ">"; } }
+function keyed(array $keys): array {
+    $result = [];
+    foreach ($keys as $key) {
+        if (!is_int($key) && !is_string($key)) { $key = (string) $key; }
+        $result[$key] = strlen($key);
+    }
+    return $result;
+}
+function words($s) { return ucwords($s) . "|" . wordwrap($s, 3, "\n", true); }
+function run(): void {
+    $out = "";
+    for ($i = 0; $i < 5; $i++) {
+        $t = new T("v" . $i);
+        $out = "x" . $t . "|" . count(array_combine(["a", "b"], ["x", "y"])) . "|" . json_encode(keyed(["k", "kk"])) . "|" . words("ab cd");
+    }
+    echo $out, "\n";
+}
+run();
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "x<v4>|2|{\"k\":1,\"kk\":2}|Ab Cd|ab\ncd\n");
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected a clean heap, got: {}",

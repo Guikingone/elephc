@@ -3926,9 +3926,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let Some(source) = inst.operands.first().copied() else {
             return false;
         };
+        // An object source converts through `__toString()`, whose result is the caller's own
+        // string like any user call's: `"x" . $obj` dropped it unreleased after the concat.
         matches!(
             self.builder.value_php_type(source).codegen_repr(),
-            PhpType::Mixed | PhpType::Union(_)
+            PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_)
         )
     }
 

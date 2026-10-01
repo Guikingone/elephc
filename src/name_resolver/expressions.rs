@@ -131,6 +131,8 @@ pub(super) fn resolve_expr(
                 rewrite_date_procedural_alias(&function_name, &resolved_args)
             {
                 rewritten
+            } else if let Some(rewritten) = rewrite_compact(name, &resolved_args, symbols) {
+                rewritten
             } else {
                 ExprKind::FunctionCall {
                     name: function_name,
@@ -609,6 +611,59 @@ fn rewrite_var_export_return_flag(
 /// correspond to a known alias. This maps PHP's procedural date API onto elephc's OOP classes
 /// before type checking, so `date_create($s)` becomes `new DateTime($s)`, `date_diff($a, $b)`
 /// becomes `$a->diff($b)`, and so on.
+/// Desugars `compact('a', ['b', 'c'])` with literal names to `['a' => $a ?? null, ...]`.
+///
+/// `compact()` reads the CALLER's variables by name, which compiled code has no table for, so a
+/// call reached nothing (`Call to undefined function compact()`), and Laravel controllers build
+/// every view's data with it. Spelled out as reads, the variables stay visible to the checker,
+/// the optimizer and lowering, so a store only `compact` reads is not dead. The one difference
+/// from php: an UNDEFINED name yields a `null` entry, where php warns and leaves the key out.
+/// Duplicate names collapse to one key as in php. A name that is not a literal (`compact($n)`)
+/// keeps the call.
+fn rewrite_compact(name: &crate::names::Name, args: &[Expr], symbols: &Symbols) -> Option<ExprKind> {
+    if !(name.is_unqualified() || name.is_fully_qualified())
+        || !name
+            .last_segment()
+            .is_some_and(|segment| segment.eq_ignore_ascii_case("compact"))
+        || symbols.declares_function("compact")
+        || args.is_empty()
+    {
+        return None;
+    }
+    fn collect(expr: &Expr, names: &mut Vec<String>) -> bool {
+        match &expr.kind {
+            ExprKind::StringLiteral(value) => {
+                if !names.contains(value) {
+                    names.push(value.clone());
+                }
+                true
+            }
+            ExprKind::ArrayLiteral(items) => items.iter().all(|item| collect(item, names)),
+            _ => false,
+        }
+    }
+    let mut names = Vec::new();
+    if !args.iter().all(|arg| collect(arg, &mut names)) {
+        return None;
+    }
+    let span = args[0].span;
+    Some(ExprKind::ArrayLiteralAssoc(
+        names
+            .into_iter()
+            .map(|variable| {
+                let read = Expr::new(
+                    ExprKind::NullCoalesce {
+                        value: Box::new(Expr::new(ExprKind::Variable(variable.clone()), span)),
+                        default: Box::new(Expr::new(ExprKind::Null, span)),
+                    },
+                    span,
+                );
+                (Expr::new(ExprKind::StringLiteral(variable), span), read)
+            })
+            .collect(),
+    ))
+}
+
 fn rewrite_date_procedural_alias(
     name: &str,
     args: &[Expr],

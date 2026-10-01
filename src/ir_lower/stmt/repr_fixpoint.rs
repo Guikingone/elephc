@@ -295,6 +295,17 @@ fn canonicalize_array_locals(
 /// A local reached only through an ALIAS (`$r = &$m`) is not covered, and does not need to be:
 /// `local_slot_is_convertible_here` excludes ref-bound and global-storage locals from the candidates
 /// in the first place.
+/// Whether a synthetic body is the parser's nested-append desugar (`$a[$k][] = $v`): its
+/// read / push / write-back triple starts by assigning a `NESTED_APPEND_TEMP_PREFIX` temporary.
+fn is_nested_append_group(body: &[Stmt]) -> bool {
+    body.len() >= 3
+        && matches!(
+            &body[body.len() - 3].kind,
+            StmtKind::Assign { name, .. }
+                if name.starts_with(crate::parser::ast::NESTED_APPEND_TEMP_PREFIX)
+        )
+}
+
 fn may_convert_array_local(stmt: &Stmt, candidates: &[String]) -> bool {
     let mut scan = ConversionScan::new(candidates);
     scan.stmt(stmt);
@@ -499,10 +510,18 @@ impl<'a> ConversionScan<'a> {
                 self.mutation();
                 self.block(body);
             }
-            // A synthetic block (e.g. the nested-append desugaring) is straight-line in itself; any
-            // branching it contains is discovered by walking its body.
+            // A synthetic block is straight-line in itself, and any branching it contains is
+            // discovered by walking its body -- EXCEPT the nested-append group, whose LOWERING
+            // (`nested_append`) splits on whether the bucket exists and vivifies it in one arm
+            // only. That arm can convert the container (`$a = [[1], [2]]; $a[1][] = 7;` widened
+            // `$a` to `array<mixed>` there), and the other arm then read the unconverted array as
+            // boxed cells: `$a[0]` came back as `float(2.0E-323)`. Marking it hiding makes the
+            // region hoist that conversion ahead of the split.
             StmtKind::Synthetic(body) => {
                 self.mutation();
+                if is_nested_append_group(body) {
+                    self.hiding();
+                }
                 self.block(body);
             }
             StmtKind::Echo(expr) | StmtKind::Throw(expr) | StmtKind::ExprStmt(expr) => {

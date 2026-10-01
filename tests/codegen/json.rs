@@ -56,3 +56,5 @@ mod decode_bigint;
 mod case_insensitive;
 #[path = "json/evaluation_order.rs"]
 mod evaluation_order;
+#[path = "json/decode_ownership.rs"]
+mod decode_ownership;

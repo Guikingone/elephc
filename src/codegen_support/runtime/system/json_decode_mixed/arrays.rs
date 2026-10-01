@@ -177,8 +177,12 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x9, x1");                                          // copy for arg-order swap
     emitter.instruction("mov x1, x0");                                          // child = Mixed*
     emitter.instruction("mov x0, x9");                                          // x0 = array ptr
+    emitter.instruction("str x1, [sp, #-16]!");                                 // keep the element box: the push retains its own reference
     emitter.instruction("bl __rt_array_push_refcounted");                       // returns x0 = updated array
+    emitter.instruction("ldr x1, [sp], #16");                                   // reload the element box
     emitter.instruction("str x0, [sp, #24]");                                   // store updated JSON decoder state
+    emitter.instruction("mov x0, x1");                                          // the decoder's own reference to the element
+    emitter.instruction("bl __rt_decref_mixed");                                // drop it; the array owns the element now
 
     // Look at the separator.
     emitter.instruction("ldr x1, [sp, #0]");                                    // slice_ptr
@@ -212,7 +216,7 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #24]");                                   // array ptr
     emitter.instruction("mov x0, #4");                                          // tag = indexed array
     emitter.instruction("mov x2, #0");                                          // load or prepare JSON decoder state
-    emitter.instruction("bl __rt_mixed_from_value");                            // call the mixed from value helper
+    emitter.instruction("bl __rt_json_box_owned");                              // box the decoded array, transferring its only reference
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // load or prepare JSON decoder state
     emitter.instruction("add sp, sp, #64");                                     // update the JSON decoder cursor or counter
     emitter.instruction("ret");                                                 // return from the JSON decoder helper
@@ -381,8 +385,13 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     // Push the Mixed pointer into the destination array.
     emitter.instruction("mov rsi, rax");                                        // child = Mixed*
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // array ptr
+    emitter.instruction("sub rsp, 16");                                         // aligned slot for the element box across the push
+    emitter.instruction("mov QWORD PTR [rsp], rsi");                            // keep the element box: the push retains its own reference
     emitter.instruction("call __rt_array_push_refcounted");                     // rax = updated array
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // load or prepare JSON decoder state
+    emitter.instruction("mov rax, QWORD PTR [rsp]");                            // the decoder's own reference to the element
+    emitter.instruction("add rsp, 16");                                         // release the element slot
+    emitter.instruction("call __rt_decref_mixed");                              // drop it; the array owns the element now
 
     // Look at the separator.
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // load or prepare JSON decoder state
@@ -415,7 +424,7 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // array ptr
     emitter.instruction("mov rax, 4");                                          // tag = indexed array
     emitter.instruction("xor rsi, rsi");                                        // update the JSON decoder cursor or counter
-    emitter.instruction("call __rt_mixed_from_value");                          // call the mixed from value helper
+    emitter.instruction("call __rt_json_box_owned");                            // box the decoded array, transferring its only reference
     emitter.instruction("mov rsp, rbp");                                        // load or prepare JSON decoder state
     emitter.instruction("pop rbp");                                             // preserve or restore JSON decoder scratch state
     emitter.instruction("ret");                                                 // return from the JSON decoder helper

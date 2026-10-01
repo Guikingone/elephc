@@ -413,11 +413,11 @@ echo lex(getenv('X') ?: 'dev');
         .iter()
         .find(|function| function.name == "lex")
         .expect("expected the lex EIR function");
+    // A string `Acquire` lowers to `__rt_str_persist` too, and the return now relies on it rather
+    // than persisting the acquired copy a second time (which leaked the first copy per call).
     assert!(
-        function
-            .instructions
-            .iter()
-            .any(|inst| inst.op == Op::StrPersist),
+        function.instructions.iter().any(|inst| inst.op == Op::StrPersist
+            || (inst.op == Op::Acquire && inst.result_php_type.codegen_repr() == crate::types::PhpType::Str)),
         "returning a scratch-backed local must persist it, otherwise the caller reads bytes the \
          next string operation overwrites"
     );

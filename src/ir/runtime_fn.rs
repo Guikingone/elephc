@@ -1880,6 +1880,23 @@ impl RuntimeFnId {
         if matches!(self, RuntimeFnId::PregReplace | RuntimeFnId::PregReplaceCallback) {
             return BuiltinResultOwnership::Independent;
         }
+        // `str_repeat()` and `str_pad()` always write a new string (concat scratch or heap; the
+        // no-padding case copies via `__rt_strcopy`, a zero count returns the empty string), so
+        // an owned subject -- a `mixed` cast -- is released after the call instead of being kept
+        // alive by a presumed alias: one leaked block per call before.
+        // `wordwrap()` likewise reserves and writes its whole result, and `ucwords()` edits a
+        // `__rt_strcopy` of its subject.
+        if matches!(
+            self,
+            RuntimeFnId::StrRepeat | RuntimeFnId::StrPad | RuntimeFnId::Wordwrap | RuntimeFnId::Ucwords
+        ) {
+            return BuiltinResultOwnership::Independent;
+        }
+        // `date()`/`gmdate()` format into the concat buffer; the persisted format copy the
+        // argument lowering makes was kept alive by a presumed alias.
+        if matches!(self, RuntimeFnId::Date | RuntimeFnId::Gmdate) {
+            return BuiltinResultOwnership::Independent;
+        }
         // `get_class_methods()` builds a fresh array of static names; nothing in it is the argument.
         if matches!(self, RuntimeFnId::GetClassMethods) {
             return BuiltinResultOwnership::Independent;
