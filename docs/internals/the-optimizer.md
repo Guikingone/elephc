@@ -831,6 +831,15 @@ and switch edges. Boxed result narrowing is validated as one conservative batch
 instead of cloning and validating the whole function for each operation.
 Direct static-local assignments remain boxed because their emitter does not
 rebox scalar values for `Mixed` storage, unlike static-local initialization.
+The shared `boxed_narrowing` policy also checks the cast target and storage type:
+array casts still require a boxed cell, typed reference stores must retain their
+numeric coercions, and static-property, global, and extern stores remain boxed
+when the function-local pass cannot establish their complete storage contract.
+Scalar casts and representation-polymorphic observations can still narrow.
+Constant folding uses the same consumer policy for both integer and floating-point
+results, so a later constant fold cannot bypass a range pass's representation guard.
+Block arguments and other terminator uses keep their declared representation;
+direct returns can narrow only to the function's exact PHP scalar return type.
 
 Checked add, subtract, and multiply instructions become ordinary scalar EIR only
 when the complete operand interval proves that every possible result remains in

@@ -22,6 +22,8 @@
 //!   later use already reads that value). This mirrors `identity_arith`'s
 //!   convert-to-constant rewrite and stays validator-clean (`Const*` ops take no
 //!   operands and carry a matching immediate).
+//! - Boxed checked arithmetic may narrow to a scalar constant only when the shared
+//!   `boxed_narrowing` consumer policy preserves every conversion and storage contract.
 //! - Only folds that exactly reproduce the runtime lowering are performed, so the
 //!   compiled result is unchanged: integer ops use 64-bit wrapping (matching the
 //!   native `add`/`sub`/`mul`/`neg` lowering), shifts fold only for in-range
@@ -127,25 +129,19 @@ impl IrPass for ConstFold {
             return false;
         }
 
-        // Values returned by a heap-typed function must keep their boxed
-        // representation: narrowing a directly-returned Heap(Mixed) result to
-        // a raw scalar constant would break the return ABI (e.g. the fixed
-        // Heap(Mixed) contract of internal eval AOT functions).
-        if matches!(function.return_type, IrType::Heap(_)) {
-            let returned: std::collections::HashSet<ValueId> = function
-                .blocks
-                .iter()
-                .filter_map(|block| match &block.terminator {
-                    Some(crate::ir::Terminator::Return { value }) => *value,
-                    _ => None,
-                })
-                .collect();
+        // A known numeric payload does not make its consumers representation-polymorphic.
+        // Share the range pass's safety boundary so a later fold cannot undo its refusal.
+        if folds.iter().any(|(_, _, narrowing)| *narrowing != TypeNarrowing::None) {
+            let int_blocked = super::boxed_narrowing::blocked_results(function, IrType::I64);
+            let float_blocked = super::boxed_narrowing::blocked_results(function, IrType::F64);
             folds.retain(|(inst_id, _, narrowing)| {
-                *narrowing == TypeNarrowing::None
-                    || function
-                        .instruction(*inst_id)
-                        .and_then(|inst| inst.result)
-                        .is_none_or(|result| !returned.contains(&result))
+                let blocked = match narrowing {
+                    TypeNarrowing::None => return true,
+                    TypeNarrowing::ToInt => &int_blocked,
+                    TypeNarrowing::ToFloat => &float_blocked,
+                };
+                function.instruction(*inst_id).and_then(|inst| inst.result)
+                    .is_some_and(|result| !blocked.contains(&result))
             });
             if folds.is_empty() {
                 return false;

@@ -139,6 +139,39 @@ fn test_integer_range_narrows_boxed_checked_output() {
     assert_eq!(run_variant(source, false), run_variant(source, true));
 }
 
+/// Typed static stores retain the conversion performed on the original Mixed input.
+#[test]
+fn test_integer_range_preserves_typed_static_store_conversions() {
+    let source = r#"<?php
+class RangeStore {
+    public static float $number = 0.0;
+    public static bool $flag = false;
+    public static string $text = "";
+}
+RangeStore::$number = ($argc & 255) + 2;
+RangeStore::$flag = ($argc & 255) + 2;
+RangeStore::$text = ($argc & 255) + 2;
+var_dump(RangeStore::$number, RangeStore::$flag, RangeStore::$text);
+$property = new ReflectionProperty(RangeStore::class, "number");
+$property->setValue(null, ($argc & 255) + 3);
+var_dump(RangeStore::$number);
+"#;
+    let plain = run_variant(source, false);
+    assert_eq!(plain.0, "float(3)\nbool(true)\nstring(1) \"3\"\nfloat(4)\n");
+    assert_eq!(plain, run_variant(source, true));
+}
+
+/// A PHP array cast requires a Mixed cell even when its integer payload is proven bounded.
+#[test]
+fn test_integer_range_preserves_array_cast_box() {
+    for mask in [255, 0] {
+        let source = format!("<?php var_dump((array)(($argc & {mask}) + 2));");
+        let plain = run_variant(&source, false);
+        assert_eq!(plain.0, format!("array(1) {{\n  [0]=>\n  int({})\n}}\n", if mask == 0 { 2 } else { 3 }));
+        assert_eq!(plain, run_variant(&source, true));
+    }
+}
+
 /// Boolean normalization must precede proofs about arithmetic using the cast result.
 #[test]
 fn test_integer_range_boolean_cast_preserves_overflow() {
@@ -151,6 +184,26 @@ for ($i = 1; $i < 3; $i++) {
     let optimized = run_variant(source, true);
     assert_eq!(plain.0, "bool(true)\nbool(true)\n");
     assert_eq!(plain, optimized);
+}
+
+/// Composed numeric expressions exercise overflow, casts, masks and shifts under loop bounds.
+#[test]
+fn test_integer_range_generated_expression_matrix() {
+    let inputs = ["($argc & 255)", "($argc << 62)", "(int)(bool)($argc << 4)"];
+    let operands = ["$i", "($i << 60)", "PHP_INT_MAX", "PHP_INT_MIN"];
+    let mut source = String::from("<?php for ($i = -2; $i < 3; $i++) {\n");
+    for input in inputs {
+        for operand in operands {
+            for op in ["+", "-", "*"] {
+                source.push_str(&format!("var_dump({input} {op} {operand});\n"));
+            }
+        }
+    }
+    source.push_str("}\n");
+    let plain = run_variant(&source, false);
+    assert_eq!(plain.0.lines().count(), 180);
+    assert!(plain.1.is_empty(), "{}", plain.1);
+    assert_eq!(plain, run_variant(&source, true));
 }
 
 /// The pass before IntegerRange must preserve truthiness and boolean result metadata too.
@@ -258,6 +311,36 @@ function range_overflow_probe(int $input): bool {
         for optimized in [false, true] {
             let assembly = target_assembly(source, target, optimized);
             assert!(assembly.contains("op=ichecked_mul"), "{target}, optimized={optimized}");
+        }
+    }
+}
+
+/// Boxed array casts and typed property conversions compile unchanged on all targets.
+#[test]
+fn test_integer_range_all_supported_targets_preserve_boxed_consumers() {
+    let source = r#"<?php
+class RangeTargetStore {
+    public static float $number = 0.0;
+    public static bool $flag = false;
+    public static string $text = "";
+}
+#[Export]
+function boxed_consumer_probe(int $input): void {
+    var_dump((array)(($input & 255) + 2));
+    var_dump((array)(($input & 0) + 2));
+    RangeTargetStore::$number = ($input & 255) + 2;
+    RangeTargetStore::$flag = ($input & 255) + 2;
+    RangeTargetStore::$text = ($input & 255) + 2;
+}
+"#;
+    for target in [
+        "macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64",
+    ] {
+        for optimized in [false, true] {
+            let assembly = target_assembly(source, target, optimized);
+            assert!(assembly.contains("op=ichecked_add"), "{target}, optimized={optimized}");
+            assert!(assembly.contains("op=cast"), "{target}, optimized={optimized}");
+            assert!(assembly.contains("op=store_static_property"), "{target}, optimized={optimized}");
         }
     }
 }

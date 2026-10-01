@@ -47,3 +47,22 @@ missing memoization of unknown static expressions. Focused validation passed:
 codegen tests, all five target emitters in both modes, and a warning-free build.
 Sampled domain checks cover arithmetic, bitwise operations, shifts, comparison
 refinements, and induction summaries, including signed 64-bit boundary values.
+
+## Second deep audit
+
+- [x] Check every boxed consumer against actual backend conversion and storage contracts.
+- [x] Reproduce and correct consumer-sensitive narrowing regressions.
+- [x] Exercise generated cyclic CFGs and composed numeric expressions differentially.
+- [x] Validate focused tests, all targets, and document the revised safety boundary.
+
+The second audit reproduced a native crash when narrowing arithmetic consumed by
+an array cast and a compile failure when assigning it to typed static properties.
+Unit regressions also cover typed reference-cell conversions and folded floating
+overflow stored into an integer slot. IntegerRange and ConstFold now share a
+consumer contract, so constant folding cannot bypass the representation guard.
+Validation passed: 202 EIR unit tests, 13 range codegen tests, 11 adjacent checked
+arithmetic tests, 6 constant-propagation tests, and a warning-free build. Generated
+checks cover 972 cyclic CFGs and 180 composed-expression results; target emission
+checks cover all five targets with optimization enabled and disabled.
+The previous head's CI still reports unrelated fixture timeouts. A preexisting
+by-reference float-parameter discrepancy was recorded separately for follow-up.

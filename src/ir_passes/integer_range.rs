@@ -1064,75 +1064,12 @@ fn unchecked_op(op: Op) -> Option<Op> {
     }
 }
 
-/// Collects values whose direct users cannot consume a narrowed scalar result.
-fn blocked_boxed_results(function: &Function) -> HashSet<ValueId> {
-    let mut blocked = HashSet::new();
-    for block in &function.blocks {
-        if let Some(term) = &block.terminator {
-            blocked.extend(super::liveness::terminator_uses(term));
-        }
-    }
-    for user in &function.instructions {
-        // StoreStaticLocal does not box scalar assignments to Mixed slots. Unlike
-        // InitStaticLocal, it cannot consume a narrowed result without changing storage.
-        if !matches!(
-            user.op,
-            Op::Acquire
-                | Op::Release
-                | Op::StoreLocal
-                | Op::StoreGlobal
-                | Op::InitStaticLocal
-                | Op::StoreStaticProperty
-                | Op::StoreReflectionStaticProperty
-                | Op::ExternGlobalStore
-                | Op::StoreRefCell
-                | Op::EchoValue
-                | Op::PrintValue
-                | Op::WriteStdout
-                | Op::VarDump
-                | Op::PrintR
-                | Op::Cast
-                | Op::MixedBox
-                | Op::IAdd
-                | Op::ISub
-                | Op::IMul
-                | Op::ICheckedAdd
-                | Op::ICheckedSub
-                | Op::ICheckedMul
-                | Op::ICheckedAddToInt
-                | Op::ICheckedSubToInt
-                | Op::ICheckedMulToInt
-                | Op::IBitAnd
-                | Op::IBitOr
-                | Op::IBitXor
-                | Op::IShl
-                | Op::IShrA
-                | Op::ICmp
-                | Op::IToF
-                | Op::IToStr
-                | Op::StrictEq
-                | Op::StrictNotEq
-                | Op::LooseEq
-                | Op::LooseNotEq
-                | Op::PhpRelCmp
-                | Op::Spaceship
-                | Op::IsNull
-                | Op::IsTruthy
-                | Op::TypePredicate
-                | Op::IsEmpty
-        ) {
-            blocked.extend(user.operands.iter().copied());
-        }
-    }
-    blocked
-}
-
 /// Applies scalar proofs directly and validates boxed narrowing as one fail-closed batch.
 fn rewrite_candidates(function: &mut Function, candidates: &[InstId]) -> bool {
     if candidates.is_empty() {
         return false;
     }
-    let blocked = blocked_boxed_results(function);
+    let blocked = super::boxed_narrowing::blocked_results(function, IrType::I64);
     let mut boxed = Vec::new();
     let mut changed = false;
     for &candidate in candidates {

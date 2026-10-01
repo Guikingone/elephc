@@ -11,6 +11,17 @@
 use super::*;
 use crate::ir::Builder;
 
+/// Emits a scalar operation for generated concrete-trace fixtures.
+fn emit_scalar_binop(builder: &mut Builder<'_>, op: Op, lhs: ValueId, rhs: ValueId) -> ValueId {
+    builder.emit(op, vec![lhs, rhs], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap()
+}
+
+/// Emits a signed comparison for generated concrete-trace fixtures.
+fn emit_icmp(builder: &mut Builder<'_>, lhs: ValueId, rhs: ValueId, predicate: CmpPredicate) -> ValueId {
+    builder.emit(Op::ICmp, vec![lhs, rhs], Some(Immediate::CmpPredicate(predicate)),
+        IrType::I64, PhpType::Bool, Ownership::NonHeap).unwrap()
+}
+
 /// Builds a shared unsupported expression graph and requires unknown results to be memoized.
 #[test]
 fn shared_unknown_expression_is_memoized() {
@@ -188,5 +199,104 @@ fn sampled_comparison_refinements_are_sound() {
                 }
             }
         }
+    }
+}
+
+/// Checks generated cyclic CFGs against concrete traces, including simultaneous parameter swaps.
+#[test]
+fn generated_loop_proofs_match_concrete_traces() {
+    let seeds = [i64::MIN, i64::MIN + 1, -257, -1, 0, 1, 255, i64::MAX - 1, i64::MAX];
+    for split_latches in [false, true] {
+        for descending in [false, true] {
+            for mask in [7, 255, i64::MAX] {
+                for x in seeds {
+                    for y in seeds {
+                        check_loop_trace(x, y, mask, descending, split_latches);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Builds a counter loop carrying two evolving integers and compares each rewrite to i128 math.
+fn check_loop_trace(mut x: i64, mut y: i64, mask: i64, descending: bool, split_latches: bool) {
+    let mut function = Function::new("trace_loop".to_string(), IrType::Void, PhpType::Void);
+    let (product, sum, update);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        let header = builder.create_named_block("header", vec![(IrType::I64, PhpType::Int); 3]);
+        let body = builder.create_named_block("body", vec![]);
+        let exit = builder.create_named_block("exit", vec![]);
+        let then_block = split_latches.then(|| builder.create_named_block("then", vec![]));
+        let else_block = split_latches.then(|| builder.create_named_block("else", vec![]));
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let first = builder.emit_const_i64(if descending { 8 } else { 0 });
+        let last = builder.emit_const_i64(if descending { 0 } else { 8 });
+        let step = builder.emit_const_i64(if descending { -1 } else { 1 });
+        let zero = builder.emit_const_i64(0);
+        let one = builder.emit_const_i64(1);
+        let three = builder.emit_const_i64(3);
+        let mask_value = builder.emit_const_i64(mask);
+        let start_x = builder.emit_const_i64(x);
+        let start_y = builder.emit_const_i64(y);
+        builder.terminate(Terminator::Br { target: header, args: vec![first, start_x, start_y] });
+        builder.position_at_end(header);
+        let count = builder.block_param(header, 0);
+        let current_x = builder.block_param(header, 1);
+        let current_y = builder.block_param(header, 2);
+        let condition = emit_icmp(&mut builder, count, last,
+            if descending { CmpPredicate::Sgt } else { CmpPredicate::Slt });
+        builder.terminate(Terminator::CondBr { cond: condition, then_target: body,
+            then_args: vec![], else_target: exit, else_args: vec![] });
+        builder.position_at_end(body);
+        product = emit_scalar_binop(&mut builder, Op::ICheckedMulToInt, current_x, three);
+        let shifted = emit_scalar_binop(&mut builder, Op::IShl, current_y, one);
+        sum = emit_scalar_binop(&mut builder, Op::ICheckedAddToInt, shifted, current_x);
+        let masked = emit_scalar_binop(&mut builder, Op::IBitAnd, current_x, mask_value);
+        update = emit_scalar_binop(&mut builder, Op::ICheckedAddToInt, count, step);
+        let parity = emit_scalar_binop(&mut builder, Op::IBitAnd, count, one);
+        let even = emit_icmp(&mut builder, parity, zero, CmpPredicate::Eq);
+        let then_args = vec![update, current_y, masked];
+        let else_args = vec![update, shifted, current_x];
+        if let (Some(then_block), Some(else_block)) = (then_block, else_block) {
+            builder.terminate(Terminator::CondBr { cond: even, then_target: then_block,
+                then_args: vec![], else_target: else_block, else_args: vec![] });
+            builder.position_at_end(then_block);
+            builder.terminate(Terminator::Br { target: header, args: then_args });
+            builder.position_at_end(else_block);
+            builder.terminate(Terminator::Br { target: header, args: else_args });
+        } else {
+            builder.terminate(Terminator::CondBr { cond: even, then_target: header,
+                then_args, else_target: header, else_args });
+        }
+        builder.position_at_end(exit);
+        builder.terminate(Terminator::Return { value: None });
+    }
+    assert!(validate_function(&function).is_ok());
+    IntegerRange.run(&mut function, &mut DataPool::default());
+    assert!(validate_function(&function).is_ok());
+    let op = |value| {
+        let ValueDef::Instruction { inst, .. } = function.value(value).unwrap().def else {
+            unreachable!();
+        };
+        function.instruction(inst).unwrap().op
+    };
+    assert_eq!(op(update), Op::IAdd, "bounded counter should specialize");
+    for iteration in 0..8 {
+        let count = if descending { 8 - iteration } else { iteration };
+        let shifted = y.wrapping_shl(1);
+        for (value, actual, scalar) in [
+            (product, x as i128 * 3, Op::IMul),
+            (sum, shifted as i128 + x as i128, Op::IAdd),
+        ] {
+            if op(value) == scalar {
+                assert!(i64::try_from(actual).is_ok(),
+                    "false proof: x={x}, y={y}, mask={mask}, count={count}, split={split_latches}");
+            }
+        }
+        (x, y) = if count & 1 == 0 { (y, x & mask) } else { (shifted, x) };
     }
 }
