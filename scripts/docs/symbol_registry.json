@@ -23631,6 +23631,9 @@
       "name": "PHP_WINDOWS_VERSION_BUILD",
       "route": "predefined",
       "since": null,
+      "target_support": [
+        "windows-x86_64"
+      ],
       "value": 0
     },
     {
@@ -23649,6 +23652,9 @@
       "name": "PHP_WINDOWS_VERSION_MAJOR",
       "route": "predefined",
       "since": null,
+      "target_support": [
+        "windows-x86_64"
+      ],
       "value": 0
     },
     {
@@ -23667,6 +23673,9 @@
       "name": "PHP_WINDOWS_VERSION_MINOR",
       "route": "predefined",
       "since": null,
+      "target_support": [
+        "windows-x86_64"
+      ],
       "value": 0
     },
     {

@@ -35,14 +35,30 @@ pub(super) fn lower_reflection_class_new_instance(
         constructor_sig.as_ref(),
         &args,
     ));
-    ctx.emit_value(
+    let instance = ctx.emit_value(
         Op::DynamicObjectNewMixed,
         operands,
         None,
         PhpType::Mixed,
         Op::DynamicObjectNewMixed.default_effects(),
         Some(expr.span),
-    )
+    );
+    release_reflected_class_name(ctx, class_name, expr);
+    instance
+}
+
+/// Releases the class name a `newInstance*()` lowering read from the reflector.
+///
+/// The read keeps its own reference so the receiver can be released first; nothing consumes it,
+/// so `$rc->newInstance()` leaked one string per call.
+fn release_reflected_class_name(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: LoweredValue,
+    expr: &Expr,
+) {
+    if ctx.value_is_owning_temporary(class_name) {
+        crate::ir_lower::ownership::release_if_owned(ctx, class_name, Some(expr.span));
+    }
 }
 
 /// Returns whether `newInstance()` source arguments can be forwarded to the constructor at
@@ -101,14 +117,16 @@ pub(super) fn lower_reflection_class_new_instance_without_constructor(
         return lower_reflection_class_new_instance_without_constructor_unsupported(ctx, expr);
     }
     let class_name = lower_property_get_from_value(ctx, object, "__name", Op::PropGet, expr);
-    ctx.emit_value(
+    let instance = ctx.emit_value(
         Op::DynamicObjectNewWithoutConstructorMixed,
         vec![class_name.value],
         None,
         PhpType::Mixed,
         Op::DynamicObjectNewWithoutConstructorMixed.default_effects(),
         Some(expr.span),
-    )
+    );
+    release_reflected_class_name(ctx, class_name, expr);
+    instance
 }
 
 /// Lowers live static-property value access for statically-known `ReflectionClass` calls.

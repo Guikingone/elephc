@@ -33,6 +33,8 @@ pub mod __elephc_mktime_raw;
 pub mod __elephc_new_without_constructor;
 pub mod __elephc_pdo_called_class_status;
 pub mod __elephc_pdo_statement_class_status;
+pub mod __elephc_reflection_fill_members;
+pub mod __elephc_reflection_materialize;
 pub mod __elephc_strtotime_raw;
 pub mod attr_support;
 pub mod checkdate;

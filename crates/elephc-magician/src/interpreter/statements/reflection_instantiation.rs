@@ -627,7 +627,11 @@ pub(super) fn eval_classes_are_related(left: &str, right: &str, context: &Elephc
 }
 
 /// Returns true when generated AOT parent metadata proves one class extends another.
-pub(super) fn native_class_is_a(class_name: &str, target: &str, context: &ElephcEvalContext) -> bool {
+pub(in crate::interpreter) fn native_class_is_a(
+    class_name: &str,
+    target: &str,
+    context: &ElephcEvalContext,
+) -> bool {
     // A class cannot be its own ancestor, so the parent walk ends; the step bound only keeps a
     // corrupt parent table from looping. It replaces a per-call seen-set that allocated and
     // SipHashed a lowercased copy of every class on the way -- ~1% of a Symfony request.

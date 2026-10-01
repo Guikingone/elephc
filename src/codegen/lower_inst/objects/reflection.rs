@@ -88,6 +88,9 @@ use flags_offsets::*;
 pub(super) use owner_dispatch::{
     is_reflection_owner_class, lower_reflection_owner_new, reflection_class_matches_object_type,
 };
+pub(in crate::codegen::lower_inst) use materializer::{
+    lower_reflection_fill_members, lower_reflection_materialize,
+};
 
 /// Compile-time metadata used to populate one Reflection owner object.
 #[derive(Debug, PartialEq)]

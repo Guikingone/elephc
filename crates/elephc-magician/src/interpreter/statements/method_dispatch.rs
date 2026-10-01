@@ -1232,9 +1232,12 @@ fn eval_rebound_reflection_class_name(
 
 /// Reads one reflected member's declaring class name and own name from the reflector's slots.
 ///
-/// `__declaring_class` holds the member's `ReflectionClass`, which carries the class name in its
-/// own `__name` slot; a member whose declaring class was never materialized stores `false` there
-/// and cannot be re-bound, so it is left to the handlers that decline on a missing binding.
+/// A method or property reflector names its declaring class in the `__class` string slot; a
+/// compiled one builds its `ReflectionClass` only when `getDeclaringClass()` asks, so its
+/// `__declaring_class` slot is `false`. Other members, and a reflector whose `__class` is empty,
+/// fall back to `__declaring_class`, whose `ReflectionClass` carries the name in its own `__name`
+/// slot; a member whose declaring class was never materialized stores `false` there and cannot
+/// be re-bound, so it is left to the handlers that decline on a missing binding.
 fn eval_reflection_member_slot_target(
     object: RuntimeCellHandle,
     owner_class: &str,
@@ -1245,6 +1248,13 @@ fn eval_reflection_member_slot_target(
     else {
         return Ok(None);
     };
+    if matches!(owner_class, "ReflectionMethod" | "ReflectionProperty") {
+        if let Some(declaring_class) =
+            eval_reflection_slot_string(object, owner_class, "__class", context, values)?
+        {
+            return Ok(Some((declaring_class, name)));
+        }
+    }
     let declaring = eval_with_native_bridge_scope(owner_class, context, || {
         values.property_get(object, "__declaring_class")
     })?;

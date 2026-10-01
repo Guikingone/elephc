@@ -41,7 +41,12 @@ pub(in crate::codegen::lower_inst::objects) fn lower_reflection_owner_new(
         && lower_reflection_object_by_runtime_class(ctx, inst)?
     {
         // Runtime-class dispatch leaves the fresh ReflectionObject in the result register.
-    } else if crate::codegen::lower_inst::builtins::has_eval_context(ctx)
+    } else if class_name == "ReflectionProperty"
+        && lower_reflection_property_by_runtime_name(ctx, inst)?
+    {
+        return Ok(());
+    } else if (crate::codegen::lower_inst::builtins::has_eval_context(ctx)
+        && !reflection_member_literals_name_a_compiled_member(ctx, class_name, inst)?)
         || reflection_class_literal_requires_runtime_metadata(ctx, class_name, inst)?
         || reflection_owner_requires_runtime_metadata(ctx, inst)?
     {
@@ -54,6 +59,149 @@ pub(in crate::codegen::lower_inst::objects) fn lower_reflection_owner_new(
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("reflection object_new missing result"))?;
     ctx.store_result_value(result)
+}
+
+/// Returns whether a Reflection construction names, in literals, a class-like the program compiled
+/// (`ReflectionClass`, `ReflectionEnum`) or a member of one (`ReflectionProperty`,
+/// `ReflectionMethod`), so compile-time metadata is the whole answer.
+///
+/// Lowering reserves an eval context for every Reflection construction, because a literal class
+/// name may name a class only a runtime include declares; that reserved slot then sent every
+/// construction to the interpreter. A class the closed world compiled is never such a class -- a
+/// file handed to the runtime autoloader leaves `class_infos` -- so its reflector is built from
+/// that metadata. `Response::setHeaders()`' `new \ReflectionProperty(self::class, 'headers')`
+/// created an eval context, synced its metadata and materialized the object on every request.
+/// A member the class does not declare stays on the interpreter, which raises the
+/// `ReflectionException`. The class-like owners followed the same slot to the interpreter:
+/// `new ReflectionEnum(Suit::class)` in a program without eval then died on the bridge's
+/// missing interpreter, and every literal `new ReflectionClass(Foo::class)` was interpreted.
+fn reflection_member_literals_name_a_compiled_member(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    inst: &Instruction,
+) -> Result<bool> {
+    if matches!(class_name, "ReflectionClass" | "ReflectionEnum") {
+        return reflection_class_literal_names_a_compiled_class_like(ctx, class_name, inst);
+    }
+    if !matches!(class_name, "ReflectionProperty" | "ReflectionMethod")
+        || inst.operands.len() != 2
+        || reflection_owner_requires_runtime_metadata(ctx, inst)?
+    {
+        return Ok(false);
+    }
+    let reflected_class = const_string_or_class_operand(ctx, inst.operands[0], class_name)?;
+    let member = const_required_string_operand(ctx, inst.operands[1], class_name)?;
+    let Some((_, info)) = resolve_reflection_class(ctx, &reflected_class) else {
+        return Ok(false);
+    };
+    if class_name == "ReflectionProperty" {
+        return Ok(reflection_property_has_compiled_answer(info, &member));
+    }
+    Ok(reflection_method_member_for_class_like(ctx, &reflected_class, &php_symbol_key(&member))?
+        .is_some())
+}
+
+/// Returns whether a `ReflectionClass`/`ReflectionEnum` literal names a class-like the program
+/// compiled: a class, an enum, an interface or a trait for `ReflectionClass`, an enum for
+/// `ReflectionEnum`. Any other name stays on the interpreter, which raises php's
+/// `ReflectionException`.
+fn reflection_class_literal_names_a_compiled_class_like(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    inst: &Instruction,
+) -> Result<bool> {
+    if inst.operands.len() != 1 || reflection_owner_requires_runtime_metadata(ctx, inst)? {
+        return Ok(false);
+    }
+    let reflected = const_string_or_class_operand(ctx, inst.operands[0], class_name)?;
+    if class_name == "ReflectionEnum" {
+        return Ok(is_reflection_enum(ctx, &reflected));
+    }
+    Ok(resolve_reflection_class(ctx, &reflected).is_some()
+        || resolve_reflection_interface(ctx, &reflected).is_some()
+        || resolve_reflection_trait(ctx, &reflected).is_some())
+}
+
+/// Returns whether `new ReflectionProperty($class, $property)` is answered by compile-time metadata:
+/// the property is one php's reflection sees on the class. An ancestor's private property is not,
+/// and stays with the interpreter, which raises the `ReflectionException` php raises.
+fn reflection_property_has_compiled_answer(info: &crate::types::ClassInfo, property: &str) -> bool {
+    info.reflection_properties.iter().any(|name| name == property)
+        && reflection_property_member_flags(info, property).is_some()
+}
+
+/// Most declared properties a runtime-name `ReflectionProperty` dispatch compares against; a wider
+/// class stays on the interpreter rather than growing one construction site without bound.
+const RUNTIME_NAME_PROPERTY_CANDIDATE_LIMIT: usize = 64;
+
+/// Lowers `new ReflectionProperty(<compiled class>, $name)` by matching the runtime name against
+/// the properties the class declares, and reports whether it did.
+///
+/// Each match builds the reflector from compile-time metadata through the shared materializer the
+/// literal spelling uses; a name that matches none goes to the interpreter, which raises php's
+/// `ReflectionException`. Every path stores the instruction's result. `Request::setProperty()`
+/// reaches this with its seven bag names on every Symfony request, and paid an eval context, a
+/// metadata sync and an interpreted construction for each.
+fn lower_reflection_property_by_runtime_name(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<bool> {
+    let [class_operand, name_operand] = inst.operands[..] else {
+        return Ok(false);
+    };
+    if ctx.value_php_type(name_operand)?.codegen_repr() != PhpType::Str
+        || reflection_literal_operand(ctx, name_operand)?.is_some()
+    {
+        return Ok(false);
+    }
+    let Some(class_key) = reflection_literal_operand(ctx, class_operand)? else {
+        return Ok(false);
+    };
+    let reflected_class =
+        const_string_or_class_operand(ctx, class_operand, "ReflectionProperty")?;
+    let Some((_, info)) = resolve_reflection_class(ctx, &reflected_class) else {
+        return Ok(false);
+    };
+    let candidates: Vec<String> = info
+        .reflection_properties
+        .iter()
+        .filter(|name| reflection_property_has_compiled_answer(info, name))
+        .cloned()
+        .collect();
+    if candidates.is_empty() || candidates.len() > RUNTIME_NAME_PROPERTY_CANDIDATE_LIMIT {
+        return Ok(false);
+    }
+    let result = inst
+        .result
+        .ok_or_else(|| CodegenIrError::invalid_module("reflection object_new missing result"))?;
+    let matched_labels = candidates
+        .iter()
+        .map(|name| ctx.next_label(&format!("reflection_property_{}", label_fragment(name))))
+        .collect::<Vec<_>>();
+    let miss_label = ctx.next_label("reflection_property_runtime_name_miss");
+    let done_label = ctx.next_label("reflection_property_runtime_name_done");
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(name_operand, ptr_reg, len_reg)?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    for (name, label) in candidates.iter().zip(&matched_labels) {
+        super::super::dynamic_property_read_resolution::emit_branch_if_dynamic_name_matches(
+            ctx, name, label,
+        );
+    }
+    abi::emit_jump(ctx.emitter, &miss_label);
+    for (name, label) in candidates.iter().zip(&matched_labels) {
+        ctx.emitter.label(label);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        let metadata = reflection_property_metadata_for_property(ctx, &reflected_class, name)?;
+        emit_direct_reflection_property_object(ctx, class_key.clone(), name, &metadata)?;
+        ctx.store_result_value(result)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+    ctx.emitter.label(&miss_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    crate::codegen::lower_inst::builtins::lower_eval_native_object_new(ctx, inst)?;
+    ctx.emitter.label(&done_label);
+    Ok(true)
 }
 
 /// Returns whether a literal `ReflectionClass` target needs runtime declaration metadata.
@@ -90,8 +238,12 @@ fn reflection_class_literal_requires_runtime_metadata(
         return Ok(false);
     }
     let reflected_class = const_string_or_class_operand(ctx, operand, "ReflectionClass")?;
-    if let Some((_, class_info)) = resolve_reflection_class(ctx, &reflected_class) {
-        return Ok(class_info.doc_comment.is_none());
+    // A class the program compiled is never one a runtime include supplies (a file handed to the
+    // runtime autoloader leaves `class_infos`), so its metadata -- a missing doc comment included
+    // -- is the answer. Sending every undocumented class to the interpreter also cost the enum
+    // facts: `(new ReflectionClass(Suit::class))->isEnum()` answered false there.
+    if resolve_reflection_class(ctx, &reflected_class).is_some() {
+        return Ok(false);
     }
     Ok(resolve_reflection_interface(ctx, &reflected_class).is_none()
         && resolve_reflection_trait(ctx, &reflected_class).is_none()

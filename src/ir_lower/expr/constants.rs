@@ -90,9 +90,8 @@ pub(super) fn lower_static_defined_call(
 /// so no namespace/`use` resolution applies and a leading `\` is stripped. Reusing
 /// [`lower_const_ref`] means the call inherits the constant's real type and value — including
 /// the prescanned `define()` metadata recorded earlier in source order — instead of an opaque
-/// `mixed`. The checker (`crate::builtins::system::constant`) has already refused a dynamic
-/// name, a `Foo::BAR` class constant, and an unknown constant, so this hook only ever sees a
-/// resolvable global name.
+/// `mixed`. A `Foo::BAR` name keeps the runtime call, which reads the class-constant table; a
+/// name nothing defines takes `lower_const_ref`'s throwing runtime lookup.
 pub(super) fn lower_static_constant_call(
     ctx: &mut LoweringContext<'_, '_>,
     name: &Name,
@@ -103,6 +102,10 @@ pub(super) fn lower_static_constant_call(
         return None;
     }
     let constant_name = static_constant_name_arg(&args[0])?;
+    if constant_name.contains("::") {
+        // A class constant or enum case: the runtime lookup reads the class-constant table.
+        return None;
+    }
     let referenced = Name::unqualified(constant_name.trim_start_matches('\\'));
     Some(lower_const_ref(ctx, &referenced, expr))
 }
@@ -132,6 +135,19 @@ pub(super) fn lower_const_ref(
     if let Some((value, php_type)) = ctx.constant_value(name.as_str()) {
         return lower_constant_value(ctx, value, php_type, expr);
     }
+    if let Some(php_type) = crate::types::predefined_constants::target_restricted_type(name.as_str())
+    {
+        return lower_target_undefined_constant(ctx, name, php_type, expr);
+    }
+    if !ctx.has_eval_barrier()
+        && !ctx.eval_executed()
+        && crate::types::predefined_constants::is_undefined_constant_read(name.as_str())
+        && !crate::ir_lower::context::is_runtime_define_name(name.as_str().trim_start_matches('\\'))
+    {
+        // Nothing defines the name: php's read throws `Error: Undefined constant "NAME"`, which
+        // the runtime lookup reproduces (and answers, should a dynamic `define()` add it).
+        return lower_target_undefined_constant(ctx, name, PhpType::Mixed, expr);
+    }
     if ctx.has_eval_barrier() || ctx.eval_executed() {
         // Barrier-free AOT evals can still define constants dynamically; the
         // fetch needs the eval context, so make sure its slot exists.
@@ -155,6 +171,45 @@ pub(super) fn lower_const_ref(
         Op::LoadGlobal.default_effects(),
         Some(expr.span),
     )
+}
+
+/// Lowers a read of a constant php does not define: a catalogued one restricted to other targets
+/// (`PHP_WINDOWS_VERSION_BUILD` off Windows), which prescan gave no value, or a name nothing
+/// defines (typed `mixed`). The read goes to the runtime `constant()` lookup, which misses and
+/// throws php's `Error: Undefined constant "NAME"`.
+///
+/// The checker still types the name from the catalog, so a guarded platform branch compiles;
+/// the result is coerced to that type for the code that follows, which the throw never reaches.
+fn lower_target_undefined_constant(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &Name,
+    php_type: PhpType,
+    expr: &Expr,
+) -> LoweredValue {
+    let bare = name.as_str().trim_start_matches('\\');
+    let data = ctx.intern_string(bare);
+    let name_value = emit_typed_constant(
+        ctx,
+        Op::ConstStr,
+        Some(Immediate::Data(data)),
+        PhpType::Str,
+        expr,
+    );
+    let lookup = crate::ir::RuntimeFnId::Constant;
+    let value = ctx.emit_value(
+        Op::RuntimeCall,
+        vec![name_value.value],
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(lookup))),
+        PhpType::Mixed,
+        lookup.effects(),
+        Some(expr.span),
+    );
+    match php_type {
+        PhpType::Int => super::coerce_to_int(ctx, value, expr),
+        PhpType::Float => super::coerce_to_float(ctx, value, expr),
+        PhpType::Str => super::coerce_to_string(ctx, value, expr),
+        _ => value,
+    }
 }
 
 /// Lowers a prescanned constant value using its checker-visible PHP type.

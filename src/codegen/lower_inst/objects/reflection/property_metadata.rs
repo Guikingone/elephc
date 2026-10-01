@@ -31,6 +31,16 @@ pub(super) fn reflection_property_metadata_for_name(
     property_operand: ValueId,
 ) -> Result<ReflectionOwnerMetadata> {
     let property_name = const_required_string_operand(ctx, property_operand, "ReflectionProperty")?;
+    reflection_property_metadata_for_property(ctx, reflected_class, &property_name)
+}
+
+/// Resolves ReflectionProperty metadata for a property name already known to the caller.
+pub(super) fn reflection_property_metadata_for_property(
+    ctx: &FunctionContext<'_>,
+    reflected_class: &str,
+    property_name: &str,
+) -> Result<ReflectionOwnerMetadata> {
+    let property_name = property_name.to_string();
     Ok(resolve_reflection_class(ctx, reflected_class)
         .and_then(|(_, info)| {
             let declaring_class_name =

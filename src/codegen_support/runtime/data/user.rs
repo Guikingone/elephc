@@ -420,6 +420,23 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    // Per-class flag: does an instance slot belong to a private ancestor property that a
+    // same-named descendant declaration hides? A scoped `__rt_object_to_hash` projection
+    // then keeps the FIRST row it sees under one bare name, because php resolves that
+    // name to the scope's own private property, which the layout always places first.
+    out.push_str(".globl _class_hidden_private_slot_flags\n_class_hidden_private_slot_flags:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let flag = class_info_by_id.get(&class_id).map_or(0, |class_info| {
+                u8::from(
+                    (0..class_info.properties.len())
+                        .any(|index| class_info.property_slot_is_hidden(index)),
+                )
+            });
+            out.push_str(&format!("    .quad {}\n", flag));
+        }
+    }
+
     out.push_str(".globl _class_gc_desc_count\n_class_gc_desc_count:\n");
     out.push_str(&format!(
         "    .quad {}\n",
@@ -577,10 +594,33 @@ pub(crate) fn emit_runtime_data_user(
     if let Some(max_class_id) = max_class_id {
         for class_id in 0..=max_class_id {
             match class_info_by_id.get(&class_id) {
-                Some(class_info) if class_info.defaults.iter().any(|d| d.is_some()) => {
+                Some(class_info) if class_info.has_property_init_thunk() => {
                     out.push_str(&format!("    .quad _class_propinit_{}\n", class_id));
                 }
                 _ => out.push_str("    .quad 0\n"),
+            }
+        }
+    }
+
+    // _class_propinit_private_ptrs: the same, for the thunk holding only a class's OWN private
+    // defaults. `__rt_new_by_name` runs it for every ancestor of a class flagged in
+    // `_class_hidden_private_slot_flags`: that class's own thunk writes `$this-><name>` in its
+    // scope and cannot reach a private ancestor slot a same-named declaration hides.
+    // The predicate MUST match `ir_lower`'s choice of which private thunks to lower.
+    let private_thunk_classes = crate::types::private_property_init_thunk_classes(
+        sorted_classes.iter().map(|(name, class_info)| (*name, *class_info)),
+    );
+    out.push_str(".globl _class_propinit_private_ptrs\n_class_propinit_private_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let needs_thunk = class_name_by_id.get(&class_id).is_some_and(|class_name| {
+                private_thunk_classes
+                    .contains(&class_name.trim_start_matches('\\').to_ascii_lowercase())
+            });
+            if needs_thunk {
+                out.push_str(&format!("    .quad _class_propinit_private_{}\n", class_id));
+            } else {
+                out.push_str("    .quad 0\n");
             }
         }
     }
@@ -1093,8 +1133,8 @@ pub(crate) fn emit_runtime_data_user(
         // declaration order with the PHP-mangled serialize key bytes, the
         // property's byte offset within the object, and its runtime value tag.
         // __rt_serialize_object / __rt_unserialize_object walk this by class id.
-        for (prop_index, (prop_name, _)) in class_info.properties.iter().enumerate() {
-            let mangled = mangled_property_name(class_info, class_name, prop_name);
+        for prop_index in 0..class_info.properties.len() {
+            let mangled = mangled_property_slot_name(class_info, class_name, prop_index);
             out.push_str(&format!(
                 ".globl _class_serpname_{}_{}\n_class_serpname_{}_{}:\n",
                 class_info.class_id, prop_index, class_info.class_id, prop_index,
@@ -1114,14 +1154,11 @@ pub(crate) fn emit_runtime_data_user(
             class_info.class_id, class_info.class_id,
         ));
         out.push_str(&format!("    .quad {}\n", class_info.properties.len()));
-        for (prop_index, (prop_name, prop_ty)) in class_info.properties.iter().enumerate() {
-            let mangled_len = mangled_property_name(class_info, class_name, prop_name).len();
-            let offset = class_info
-                .property_offsets
-                .get(prop_name)
-                .copied()
-                .unwrap_or(8 + prop_index * 16);
-            let tag = prop_value_tag(class_info, prop_name, prop_ty);
+        for prop_index in 0..class_info.properties.len() {
+            let mangled_len =
+                mangled_property_slot_name(class_info, class_name, prop_index).len();
+            let offset = class_info.property_slot_offset(prop_index);
+            let tag = prop_slot_value_tag(class_info, prop_index);
             out.push_str(&format!(
                 "    .quad _class_serpname_{}_{}\n",
                 class_info.class_id, prop_index
@@ -1135,12 +1172,8 @@ pub(crate) fn emit_runtime_data_user(
             ".globl _class_serprop_declaring_{}\n_class_serprop_declaring_{}:\n",
             class_info.class_id, class_info.class_id,
         ));
-        for (prop_name, _) in &class_info.properties {
-            let declaring_class = class_info
-                .property_declaring_classes
-                .get(prop_name)
-                .map(String::as_str)
-                .unwrap_or(class_name);
+        for prop_index in 0..class_info.properties.len() {
+            let (_, declaring_class) = class_info.property_slot_owner(prop_index, class_name);
             let declaring_class_id = all_class_id_by_name
                 .get(declaring_class)
                 .copied()
@@ -1528,6 +1561,15 @@ fn declared_method_name<'a>(
     candidates
         .iter()
         .find_map(|info| declared_name_in(&info.method_decls, method_key, is_static))
+        .or_else(|| {
+            // A method with no declaration (an enum's `tryFrom`) keeps php's spelling here.
+            candidates.iter().find_map(|info| {
+                info.reflection_methods
+                    .iter()
+                    .find(|name| php_symbol_key(name) == method_key)
+                    .map(String::as_str)
+            })
+        })
         .unwrap_or(method_key)
 }
 
@@ -1672,8 +1714,22 @@ fn php_reflection_method_order<'a>(
             .map_or((u32::MAX, u32::MAX), |method| (method.span.line, method.span.col));
         members.push((method_name, is_static, rank, line, col));
     }
-    members.sort_by(|left, right| {
-        (left.2, left.3, left.4, left.0).cmp(&(right.2, right.3, right.4, right.0))
+    // `reflection_methods` is php's order; the declaring-class rank and source position only
+    // order what it does not list.
+    let listed: HashMap<String, usize> = class_info
+        .reflection_methods
+        .iter()
+        .enumerate()
+        .map(|(position, name)| (crate::names::php_symbol_key(name), position))
+        .collect();
+    members.sort_by_cached_key(|member| {
+        (
+            listed.get(member.0.as_str()).copied().unwrap_or(usize::MAX),
+            member.2,
+            member.3,
+            member.4,
+            member.0.clone(),
+        )
     });
     members
         .into_iter()
@@ -1805,51 +1861,43 @@ fn emit_eval_reflection_property_lookup_data(
     let mut entries = Vec::new();
     let mut index = 0usize;
     for (class_name, class_info) in sorted_classes {
-        for (slot, (property_name, _)) in class_info.properties.iter().enumerate() {
-            let flags = eval_reflection_instance_property_flags(class_info, slot, property_name);
+        // One row per property php's reflection sees on the class, in its order: an ancestor's
+        // private property is not one, so `new ReflectionProperty(Child::class, 'parentPrivate')`
+        // finds no row and raises, and `getProperties()` lists the class's own first. An instance
+        // name can own two slots when the class shadows an ancestor's private property; the
+        // visible one is the class's own, the last.
+        for property_name in &class_info.reflection_properties {
+            let instance_slot = class_info
+                .properties
+                .iter()
+                .rposition(|(name, _)| name == property_name);
+            let (flags, declaring_class) = if let Some(slot) = instance_slot {
+                (
+                    eval_reflection_instance_property_flags(class_info, slot, property_name),
+                    eval_reflection_instance_property_declaring_class(
+                        class_name,
+                        class_info,
+                        property_name,
+                    ),
+                )
+            } else if let Some(slot) = class_info
+                .static_properties
+                .iter()
+                .position(|(name, _)| name == property_name)
+            {
+                (
+                    eval_reflection_static_property_flags(class_info, slot, property_name),
+                    eval_reflection_static_property_declaring_class(
+                        class_name,
+                        class_info,
+                        property_name,
+                    ),
+                )
+            } else {
+                continue;
+            };
             let class_label = format!("_eval_reflection_property_class_{}", index);
             let property_label = format!("_eval_reflection_property_name_{}", index);
-            let declaring_class = eval_reflection_instance_property_declaring_class(
-                class_name,
-                class_info,
-                property_name,
-            );
-            let declaring_label = format!("_eval_reflection_property_declaring_class_{}", index);
-            out.push_str(&format!(
-                "{0}:\n    .ascii \"{1}\"\n",
-                class_label,
-                escaped_ascii(class_name)
-            ));
-            out.push_str(&format!(
-                "{0}:\n    .ascii \"{1}\"\n",
-                property_label,
-                escaped_ascii(property_name)
-            ));
-            out.push_str(&format!(
-                "{0}:\n    .ascii \"{1}\"\n",
-                declaring_label,
-                escaped_ascii(declaring_class)
-            ));
-            entries.push((
-                class_label,
-                class_name.len(),
-                property_label,
-                property_name.len(),
-                flags,
-                declaring_label,
-                declaring_class.len(),
-            ));
-            index += 1;
-        }
-        for (slot, (property_name, _)) in class_info.static_properties.iter().enumerate() {
-            let flags = eval_reflection_static_property_flags(class_info, slot, property_name);
-            let class_label = format!("_eval_reflection_property_class_{}", index);
-            let property_label = format!("_eval_reflection_property_name_{}", index);
-            let declaring_class = eval_reflection_static_property_declaring_class(
-                class_name,
-                class_info,
-                property_name,
-            );
             let declaring_label = format!("_eval_reflection_property_declaring_class_{}", index);
             out.push_str(&format!(
                 "{0}:\n    .ascii \"{1}\"\n",
@@ -2789,8 +2837,7 @@ fn class_owned_reference_property_offsets(class_info: &ClassInfo) -> Vec<usize> 
         .iter()
         .enumerate()
         .filter_map(|(index, (property, _))| {
-            let is_owned_reference = class_info.owned_reference_properties.contains(property)
-                && class_info.property_slot_is_reference(index, property);
+            let is_owned_reference = class_info.property_slot_is_owned_reference(index);
             is_owned_reference.then_some(8 + index * 16)
         })
         .collect()
@@ -2805,8 +2852,7 @@ fn class_uninitialized_property_marker_offsets(class_info: &ClassInfo) -> Vec<us
         .iter()
         .enumerate()
         .filter_map(|(index, (property, _))| {
-            let is_owned_reference = class_info.owned_reference_properties.contains(property)
-                && class_info.property_slot_is_reference(index, property);
+            let is_owned_reference = class_info.property_slot_is_owned_reference(index);
             let starts_uninitialized = class_info
                 .defaults
                 .get(index)
@@ -3202,29 +3248,26 @@ fn interface_method_needs_return_wrapper(
         && !matches!(actual_sig.return_type.codegen_repr(), PhpType::Mixed)
 }
 
-/// Returns a property's PHP-mangled `serialize()` key bytes: `name` for a public
-/// property, `\0*\0name` for protected, and `\0DeclaringClass\0name` for private
-/// (matching the keys the PHP interpreter emits inside `O:...{...}`).
-fn mangled_property_name(class_info: &ClassInfo, class_name: &str, prop_name: &str) -> Vec<u8> {
-    match class_info.property_visibilities.get(prop_name) {
-        Some(Visibility::Protected) => {
+/// Returns one property slot's PHP-mangled `serialize()` key bytes: `name` for a
+/// public property, `\0*\0name` for protected, and `\0DeclaringClass\0name` for
+/// private (matching the keys the PHP interpreter emits inside `O:...{...}`). A
+/// private ancestor slot hidden by a same-named child property keeps its own key.
+fn mangled_property_slot_name(class_info: &ClassInfo, class_name: &str, index: usize) -> Vec<u8> {
+    let prop_name = class_info.properties[index].0.as_str();
+    match class_info.property_slot_owner(index, class_name) {
+        (Visibility::Protected, _) => {
             let mut out = vec![0u8, b'*', 0u8];
             out.extend_from_slice(prop_name.as_bytes());
             out
         }
-        Some(Visibility::Private) => {
-            let declaring = class_info
-                .property_declaring_classes
-                .get(prop_name)
-                .map(String::as_str)
-                .unwrap_or(class_name);
+        (Visibility::Private, declaring) => {
             let mut out = vec![0u8];
             out.extend_from_slice(declaring.as_bytes());
             out.push(0u8);
             out.extend_from_slice(prop_name.as_bytes());
             out
         }
-        _ => prop_name.as_bytes().to_vec(),
+        (Visibility::Public, _) => prop_name.as_bytes().to_vec(),
     }
 }
 
@@ -3234,7 +3277,7 @@ fn mangled_property_name(class_info: &ClassInfo, class_name: &str, prop_name: &s
 /// PHP annotates the key with the property's visibility: `"p"` for public,
 /// `"p":protected`, and `"p":"C":private` where `C` is the DECLARING class (a
 /// private property inherited into a subclass keeps the parent's name). The
-/// declaring class comes from `property_declaring_classes`, the same source
+/// declaring class comes from `ClassInfo::property_slot_owner`, the same source
 /// serialize's NUL-mangling uses, so the two renderings can never disagree.
 /// One rendered row of a `_class_vd_desc_*` table: everything
 /// `__rt_var_dump_object` needs to print a single `["key"]=> value` pair.
@@ -3268,11 +3311,7 @@ fn var_dump_descriptor_rows(class_info: &ClassInfo, class_name: &str) -> Vec<Var
         return projection
             .into_iter()
             .filter_map(|(key, prop_name)| {
-                let (layout_index, (_, prop_ty)) = class_info
-                    .properties
-                    .iter()
-                    .enumerate()
-                    .find(|(_, (name, _))| *name == prop_name)?;
+                let (layout_index, (_, prop_ty)) = class_info.visible_property(&prop_name)?;
                 Some(VarDumpRow {
                     key: format!("\"{}\"", key),
                     // A `__debugInfo()` projection key is a plain array key, so PHP
@@ -3296,15 +3335,11 @@ fn var_dump_descriptor_rows(class_info: &ClassInfo, class_name: &str) -> Vec<Var
         .iter()
         .enumerate()
         .map(|(layout_index, (prop_name, prop_ty))| VarDumpRow {
-            key: var_dump_property_key(class_info, class_name, prop_name),
-            print_r_key: print_r_property_key(class_info, class_name, prop_name),
+            key: var_dump_property_slot_key(class_info, class_name, layout_index),
+            print_r_key: print_r_property_slot_key(class_info, class_name, layout_index),
             plain_key: prop_name.clone(),
-            offset: class_info
-                .property_offsets
-                .get(prop_name)
-                .copied()
-                .unwrap_or(8 + layout_index * 16),
-            tag: prop_value_tag(class_info, prop_name, prop_ty),
+            offset: class_info.property_slot_offset(layout_index),
+            tag: prop_slot_value_tag(class_info, layout_index),
             type_name: var_dump_property_type_name(prop_ty),
         })
         .collect()
@@ -3400,18 +3435,14 @@ fn var_dump_debug_info_projection(class_info: &ClassInfo) -> Option<Vec<(String,
 
 /// Renders the text PHP prints between the `[` and `]` of a declared property's
 /// `var_dump` key line, including its visibility suffix.
-fn var_dump_property_key(class_info: &ClassInfo, class_name: &str, prop_name: &str) -> String {
-    match class_info.property_visibilities.get(prop_name) {
-        Some(Visibility::Protected) => format!("\"{}\":protected", prop_name),
-        Some(Visibility::Private) => {
-            let declaring = class_info
-                .property_declaring_classes
-                .get(prop_name)
-                .map(String::as_str)
-                .unwrap_or(class_name);
+fn var_dump_property_slot_key(class_info: &ClassInfo, class_name: &str, index: usize) -> String {
+    let prop_name = class_info.properties[index].0.as_str();
+    match class_info.property_slot_owner(index, class_name) {
+        (Visibility::Protected, _) => format!("\"{}\":protected", prop_name),
+        (Visibility::Private, declaring) => {
             format!("\"{}\":\"{}\":private", prop_name, declaring)
         }
-        _ => format!("\"{}\"", prop_name),
+        (Visibility::Public, _) => format!("\"{}\"", prop_name),
     }
 }
 
@@ -3460,20 +3491,14 @@ fn enum_case_name_property_offset(class_info: &ClassInfo) -> i64 {
 /// `print_r` annotates visibility like `var_dump` does but WITHOUT quoting either
 /// the property name or the declaring class: `x`, `y:protected`, `z:C:private`
 /// (verified against PHP 8.4). The declaring class comes from the same
-/// `property_declaring_classes` map `var_dump_property_key` reads, so the two
+/// `ClassInfo::property_slot_owner` `var_dump_property_slot_key` reads, so the two
 /// renderings can never name a different class for one property.
-fn print_r_property_key(class_info: &ClassInfo, class_name: &str, prop_name: &str) -> String {
-    match class_info.property_visibilities.get(prop_name) {
-        Some(Visibility::Protected) => format!("{}:protected", prop_name),
-        Some(Visibility::Private) => {
-            let declaring = class_info
-                .property_declaring_classes
-                .get(prop_name)
-                .map(String::as_str)
-                .unwrap_or(class_name);
-            format!("{}:{}:private", prop_name, declaring)
-        }
-        _ => prop_name.to_string(),
+fn print_r_property_slot_key(class_info: &ClassInfo, class_name: &str, index: usize) -> String {
+    let prop_name = class_info.properties[index].0.as_str();
+    match class_info.property_slot_owner(index, class_name) {
+        (Visibility::Protected, _) => format!("{}:protected", prop_name),
+        (Visibility::Private, declaring) => format!("{}:{}:private", prop_name, declaring),
+        (Visibility::Public, _) => prop_name.to_string(),
     }
 }
 
@@ -3524,6 +3549,26 @@ fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) ->
     if class_info.reference_properties.contains(prop_name) {
         return 7;
     }
+    prop_type_value_tag(prop_ty)
+}
+
+/// Returns the runtime value tag of one physical property slot.
+///
+/// A hidden private ancestor slot shares its name with the visible slot, so its
+/// by-reference flag comes from the slot itself rather than the name-keyed set.
+fn prop_slot_value_tag(class_info: &ClassInfo, index: usize) -> u64 {
+    let (prop_name, prop_ty) = &class_info.properties[index];
+    if !class_info.property_slot_is_hidden(index) {
+        return prop_value_tag(class_info, prop_name, prop_ty);
+    }
+    if class_info.property_slot_is_reference(index, prop_name) {
+        return 7;
+    }
+    prop_type_value_tag(prop_ty)
+}
+
+/// Returns the runtime value tag a non-reference property of this type stores.
+fn prop_type_value_tag(prop_ty: &PhpType) -> u64 {
     if prop_ty.codegen_repr() == PhpType::TaggedScalar {
         return PROP_DESC_TAG_TAGGED_SCALAR as u64;
     }
@@ -3744,8 +3789,12 @@ mod tests {
             owned_reference_properties: HashSet::new(),
             promoted_properties: HashSet::new(),
             property_reference_slots: Vec::new(),
+            property_slot_declaring_classes: Vec::new(),
+            property_owned_reference_slots: Vec::new(),
             abstract_properties: HashSet::new(),
             abstract_property_hooks: HashMap::new(),
+            reflection_properties: Vec::new(),
+            reflection_methods: Vec::new(),
             static_properties: Vec::new(),
             static_defaults: Vec::new(),
             static_property_declaring_classes: HashMap::new(),

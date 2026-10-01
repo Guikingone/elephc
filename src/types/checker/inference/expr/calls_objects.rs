@@ -161,13 +161,13 @@ impl Checker {
                 {
                     self.require_builtin_library("elephc_pcntl");
                 }
-                self.constants
-                    .get(name.as_str())
-                    .cloned()
-                    .or_else(|| self.eval_barrier_active.then_some(PhpType::Mixed))
-                    .ok_or_else(|| {
-                        CompileError::new(expr.span, &format!("Undefined constant: {}", name))
-                    })
+                if let Some(ty) = self.constants.get(name.as_str()) {
+                    return Ok(ty.clone());
+                }
+                if !self.eval_barrier_active {
+                    self.record_undefined_constant_read(constant_name, expr.span);
+                }
+                Ok(PhpType::Mixed)
             }
             ExprKind::FirstClassCallable(target) => {
                 self.infer_first_class_callable_target(target, expr.span, env)?;
@@ -440,6 +440,20 @@ impl Checker {
                 unreachable!("MagicConstant must be lowered before type inference")
             }
             _ => unreachable!("basic expression routed to call/object inference"),
+        }
+    }
+
+    /// Records a read of a constant nothing defines (`name` without a leading `\`).
+    ///
+    /// php compiles the read and throws `Error: Undefined constant "NAME"` when it runs, which a
+    /// `defined('NAME') && NAME` guard never reaches; lowering emits that runtime lookup. The
+    /// warning (once per name) keeps a misspelt constant visible at build time.
+    pub(crate) fn record_undefined_constant_read(&mut self, name: &str, span: crate::span::Span) {
+        if self.undefined_constant_reads.insert(name.to_string()) {
+            self.warnings.push(crate::errors::CompileWarning::new(
+                span,
+                &format!("Undefined constant: {} (reading it throws Error at runtime)", name),
+            ));
         }
     }
 

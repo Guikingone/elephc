@@ -165,6 +165,7 @@ pub enum RuntimeFnId {
     ClassParents,
     ClassUses,
     EnumExists,
+    GetClassMethods,
     FunctionExists,
     GetClass,
     GetDebugType,
@@ -1879,6 +1880,10 @@ impl RuntimeFnId {
         if matches!(self, RuntimeFnId::PregReplace | RuntimeFnId::PregReplaceCallback) {
             return BuiltinResultOwnership::Independent;
         }
+        // `get_class_methods()` builds a fresh array of static names; nothing in it is the argument.
+        if matches!(self, RuntimeFnId::GetClassMethods) {
+            return BuiltinResultOwnership::Independent;
+        }
         if matches!(
             self,
             RuntimeFnId::IntvalBase
@@ -2301,6 +2306,7 @@ impl RuntimeFnId {
             RuntimeFnId::ClassParents => "class_parents",
             RuntimeFnId::ClassUses => "class_uses",
             RuntimeFnId::EnumExists => "enum_exists",
+            RuntimeFnId::GetClassMethods => "get_class_methods",
             RuntimeFnId::FunctionExists => "function_exists",
             RuntimeFnId::GetClass => "get_class",
             RuntimeFnId::GetDebugType => "get_debug_type",

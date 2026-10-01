@@ -458,3 +458,120 @@ echo $out, "\n";
         false,
     );
 }
+
+/// Keyed writes into a local promoted to a hash, whose frame slot is therefore a boxed `mixed`.
+/// The load lends the write an unboxed hash holding its own reference; the write dropped the old
+/// box and then boxed the result by RETAINING, so that reference was never given back. Every
+/// later write saw the hash shared, copied the whole table and leaked the copy it replaced -- set,
+/// unset and append alike. Measured before: 9 blocks per call.
+#[test]
+fn test_hash_writes_into_a_boxed_local_do_not_copy_the_table() {
+    assert_no_leak_slope(
+        r#"<?php
+function build(mixed $k) {
+    $h = [];
+    $h['a'] = 1;
+    $h[$k] = 2;
+    $h['c'] = 3;
+    unset($h['a']);
+    $h[] = 4;
+    $h['d'] = 5;
+    return count($h);
+}
+$total = 0;
+for ($i = 0; $i < __N__; $i++) {
+    $total += build('b' . $i);
+}
+echo $total, "\n";
+"#,
+        r#"4
+"#,
+        r#"160
+"#,
+        false,
+    );
+}
+
+/// `isset($h[$k])` read a boxed local's hash with its own reference and never released it, so
+/// the write the `isset` guards copied the table and leaked the original. Measured before: 6
+/// blocks per call.
+#[test]
+fn test_isset_before_a_write_does_not_keep_the_hash_shared() {
+    assert_no_leak_slope(
+        r#"<?php
+function build(mixed $k) {
+    $h = [];
+    $h['a'] = 1;
+    if (!isset($h[$k])) { $h[$k] = 2; }
+    if (!isset($h['c'])) { $h['c'] = 3; }
+    if (!isset($h['a'])) { $h['a'] = 4; }
+    return count($h) * 10 + $h['a'];
+}
+$total = 0;
+for ($i = 0; $i < __N__; $i++) {
+    $total += build('b' . $i);
+}
+echo $total, "\n";
+"#,
+        r#"31
+"#,
+        r#"1240
+"#,
+        false,
+    );
+}
+
+/// A method cache filled in a `foreach`, Twig's `getAttribute()` shape. The loop-entry storage
+/// contract loaded the cache before learning it had nothing to convert; that unused load held a
+/// reference, so the loop's first write copied the table. Together with the write-back above,
+/// this was one table copy per element. Measured before: 26 blocks per call.
+#[test]
+fn test_method_cache_loop_does_not_copy_the_table_per_element() {
+    assert_no_leak_slope(
+        r#"<?php
+function names(): mixed { return ['getName', 'alpha', 'isValid', 'Zeta', 'getId']; }
+function build(mixed $methods): array {
+    $cache = [];
+    foreach ($methods as $i => $method) {
+        $cache[$method] = $method;
+        if ($method[0] === 'g') { continue; }
+        $cache[strtolower($method)] = $method;
+    }
+    return $cache;
+}
+$total = 0;
+for ($i = 0; $i < __N__; $i++) {
+    $total += count(build(names()));
+}
+echo $total, "\n";
+"#,
+        r#"7
+"#,
+        r#"280
+"#,
+        false,
+    );
+}
+
+/// `substr()` answers a view into its subject. Over a `mixed` argument the subject is the copy
+/// the string cast made, which the view kept from being released, and releasing the view could
+/// not free it past its first byte. Measured before: 1 block per call.
+#[test]
+fn test_substr_of_a_mixed_argument_does_not_leak_the_cast() {
+    assert_no_leak_slope(
+        r#"<?php
+function tail(mixed $m) { $n = substr($m, 1); return strlen($n); }
+function head(mixed $m) { return strlen(substr(strtoupper($m), 0, 2)); }
+$total = 0;
+for ($i = 0; $i < __N__; $i++) {
+    $total += tail('getName' . $i) + head('isValid');
+}
+echo $total, "\n";
+"#,
+        r#"9
+"#,
+        r#"390
+"#,
+        false,
+    );
+}

@@ -2652,6 +2652,38 @@ echo 'acc=' . $acc;
     );
 }
 
+/// Straight-line counterpart of issue #534: `$n` stays an int until its SECOND `+=` widens
+/// the slot to a boxed Mixed, and the backend lays out every store by that final type, so the
+/// first `+=` boxed its sum over the box `$n = 0` had become and never released it. One block
+/// leaked per call, with no loop anywhere in the function.
+#[test]
+fn test_straight_line_widening_store_releases_the_boxed_occupant() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function total(string $a, string $b): int {
+    $n = 0;
+    $n += strlen($a);
+    $n += strlen($b);
+    return $n;
+}
+$a = str_repeat('a', $argc + 1);
+$b = str_repeat('b', $argc + 2);
+$sum = 0;
+for ($i = 0; $i < 50; $i++) {
+    $sum = $sum + total($a, $b);
+}
+echo 'sum=' . $sum;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "sum=250");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap (one leaked box per call), got: {}",
+        out.stderr
+    );
+}
+
 /// Regression test for issue #525 (multiple reads): each chained read on the
 /// same `?array` receiver creates its own nullable-access hidden temp, and every
 /// temp's reference must be released independently — using the receiver twice

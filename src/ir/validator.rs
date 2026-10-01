@@ -684,11 +684,13 @@ fn validate_opcode_rules(
         }
         CallablePtr
         | NormalizeCallable
+        | ReflectionMaterialize
         | PdoAdapterAddr
         | DynamicClassHasConstructor
         | DynamicPdoStatementClassStatus
         | DynamicPdoCalledClassStatus => check_count(inst_id, inst, 1, "1"),
         DynamicPdoStatementConstructorCall => check_count(inst_id, inst, 3, "3"),
+        ReflectionFillMembers => check_count(inst_id, inst, 2, "2"),
         DynamicPdoStatementInitialize => check_count(inst_id, inst, 5, "5"),
         RuntimeCall => validate_typed_runtime_call(function, inst_id, inst),
         _ => Ok(()),

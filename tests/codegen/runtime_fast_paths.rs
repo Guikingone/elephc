@@ -385,3 +385,229 @@ echo "lib body ran\n";
          true:5\nfalse:5\n"
     );
 }
+
+/// `sort()`/`rsort()` of a `mixed` receiver hands an all-scalar list to the native sort, which
+/// orders it with php's comparison (numeric strings numerically, case-sensitive strings), and
+/// keeps the quadratic prelude loop only for a list holding an array or an object.
+#[test]
+fn gradual_sort_of_scalars_takes_the_native_sort() {
+    let out = compile_and_run(
+        r#"<?php
+function gradual(int $which): mixed {
+    return match ($which) {
+        0 => ['getName', 'alpha', 'Zeta', 'isValid', '_private', 'beta'],
+        1 => ['10', '9', '1e1', '010', 'x', '2'],
+        default => [[2, 1], 'b', 'a', 3],
+    };
+}
+foreach ([0, 1] as $which) {
+    $values = gradual($which);
+    sort($values);
+    echo implode(',', $values), "\n";
+    $values = gradual($which);
+    rsort($values);
+    echo implode(',', $values), "\n";
+}
+$nested = gradual(2);
+sort($nested);
+echo json_encode($nested), "\n";
+$floats = $argc > 5 ? 'none' : [1.5, -2, '3', 0, true];
+sort($floats);
+var_export($floats);
+echo "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "Zeta,_private,alpha,beta,getName,isValid\nisValid,getName,beta,alpha,_private,Zeta\n\
+         2,9,10,1e1,010,x\nx,10,1e1,010,9,2\n[3,\"a\",\"b\",[2,1]]\n\
+         array (\n  0 => -2,\n  1 => 0,\n  2 => 1.5,\n  3 => '3',\n  4 => true,\n)\n"
+    );
+}
+
+const INTEGER_SWITCH_SOURCE: &str = r#"<?php
+function dense(int $v): string {
+    switch ($v) {
+        case -3: return 'm3';
+        case -2: return 'm2';
+        case 0: return 'z';
+        case 1: return 'one';
+        case 2:
+        case 3: return 'two-three';
+        case 4: $x = 'four'; // falls through
+        case 5: return ($x ?? '') . 'five';
+        case 7: return 'seven';
+        case 1: return 'dup-one';
+        case 9: return 'nine';
+        case 10: return 'ten';
+        default: return 'default';
+    }
+}
+function sparse(int $v): string {
+    switch ($v) {
+        case 1: return 'a';
+        case 1000: return 'b';
+        case 1000000: return 'c';
+        case -5: return 'd';
+        case 42: return 'e';
+        case 7: return 'f';
+        case 99: return 'g';
+        case 123456789: return 'h';
+        default: return 'x';
+    }
+}
+function wide(int $v): int {
+    switch ($v) {
+        case PHP_INT_MIN: return 1;
+        case 0: return 2;
+        case PHP_INT_MAX: return 3;
+        default: return 0;
+    }
+}
+$out = [];
+foreach ([-4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, PHP_INT_MIN, PHP_INT_MAX] as $v) {
+    $out[] = dense($v);
+}
+echo implode(',', $out), "\n";
+$out = [];
+foreach ([1, 1000, 1000000, -5, 42, 7, 99, 123456789, 0, 2] as $v) {
+    $out[] = sparse($v);
+}
+echo implode(',', $out), "\n";
+echo wide(PHP_INT_MIN), wide(0), wide(PHP_INT_MAX), wide(5), "\n";
+
+#[Attribute]
+class Tag { public function __construct(public string $name, public int $weight = 1) {} }
+#[Tag('alpha')] class A1 {}
+#[Tag('beta', weight: 2)] class A2 {}
+#[Tag('gamma', 3)] class A3 {}
+#[Tag('delta')] class A4 {}
+#[Tag('eps', 5)] class A5 {}
+#[Tag('zeta')] class A6 {}
+#[Tag('eta', weight: 7)] class A7 {}
+#[Tag('theta')] class A8 {}
+#[Tag('iota', 9)] class A9 {}
+foreach (['A9', 'A1', 'A5', 'A2', 'A7', 'A3', 'A8', 'A4', 'A6'] as $class) {
+    $attr = (new ReflectionClass($class))->getAttributes()[0];
+    $tag = $attr->newInstance();
+    echo $class, ':', $tag->name, '/', $tag->weight, '/', json_encode($attr->getArguments()), "\n";
+}
+"#;
+
+/// A dense integer `switch` dispatches through one jump table instead of a compare per case: both
+/// ends of the range and the gaps take the default, a repeated value keeps its first case, and a
+/// fall-through still falls through. A sparse or two-ended switch keeps the compare chain.
+/// `ReflectionAttribute::newInstance()`/`getArguments()` switch over every attribute factory the
+/// program declares, which the chain walked one compare at a time.
+#[test]
+fn dense_integer_switch_dispatches_through_a_jump_table() {
+    assert_eq!(
+        compile_and_run(INTEGER_SWITCH_SOURCE),
+        "default,m3,m2,default,z,one,two-three,two-three,fourfive,five,default,seven,default,nine,\
+         ten,default,default,default\na,b,c,d,e,f,g,h,x,x\n1230\n\
+         A9:iota/9/[\"iota\",9]\nA1:alpha/1/[\"alpha\"]\nA5:eps/5/[\"eps\",5]\n\
+         A2:beta/2/{\"0\":\"beta\",\"weight\":2}\nA7:eta/7/{\"0\":\"eta\",\"weight\":7}\n\
+         A3:gamma/3/[\"gamma\",3]\nA8:theta/1/[\"theta\"]\nA4:delta/1/[\"delta\"]\n\
+         A6:zeta/1/[\"zeta\"]\n"
+    );
+    let dir = make_cli_test_dir("elephc_integer_switch_table");
+    let (user_asm, _runtime_asm, _libraries) =
+        compile_source_to_asm_with_options(INTEGER_SWITCH_SOURCE, &dir, 8_388_608, false, false);
+    let _ = fs::remove_dir_all(&dir);
+    let tables = |name: &str| {
+        user_asm
+            .split(&format!("@fn name={name} "))
+            .nth(1)
+            .unwrap_or_else(|| panic!("{name} must be emitted"))
+            .split("@endfn")
+            .next()
+            .unwrap_or_else(|| panic!("{name} must be terminated"))
+            .lines()
+            .filter(|line| line.contains("_switch_table_") && line.trim_end().ends_with(':'))
+            .count()
+    };
+    assert_eq!(tables("dense"), 1);
+    assert_eq!(tables("sparse"), 0);
+    assert_eq!(tables("wide"), 0);
+    assert_eq!(tables("ReflectionAttribute::newInstance"), 1);
+}
+
+const REFLECTION_PROPERTY_SOURCE: &str = r#"<?php
+class Base {
+    protected int $shared = 1;
+}
+class Resp extends Base {
+    public array $headers = ['a' => 1];
+    private string $name = 'x';
+    protected ?int $code = null;
+    public static int $count = 3;
+
+    public function literal(): string {
+        static $r;
+        $r ??= new \ReflectionProperty(self::class, 'headers');
+        return $r->getName();
+    }
+
+    public static function byName(self $o, string $name, mixed $value): void {
+        static $cache;
+        $r = $cache[$name] ??= new \ReflectionProperty(self::class, $name);
+        $r->setValue($o, $value);
+    }
+
+    public static function describe(string $name): string {
+        try {
+            $r = new \ReflectionProperty(self::class, $name);
+            return $r->getName() . ':' . $r->class . ':' . ($r->isStatic() ? 's' : 'i')
+                . ($r->isPrivate() ? 'P' : '') . ($r->isProtected() ? 'R' : '');
+        } catch (\ReflectionException $e) {
+            return 'E:' . $e->getMessage();
+        }
+    }
+}
+$o = new Resp();
+echo $o->literal(), "\n";
+Resp::byName($o, 'headers', ['b' => 2]);
+Resp::byName($o, 'code', 7);
+Resp::byName($o, 'name', 'y');
+Resp::byName($o, 'code', 8);
+echo json_encode($o->headers), "\n";
+echo (new ReflectionProperty(Resp::class, 'code'))->getValue($o), "\n";
+echo (new ReflectionProperty(Resp::class, 'name'))->getValue($o), "\n";
+foreach (['headers', 'name', 'code', 'count', 'shared', 'missing', 'Headers'] as $p) {
+    echo Resp::describe($p), "\n";
+}
+"#;
+
+/// A `ReflectionProperty` naming a compiled class is built from compile-time metadata: a literal
+/// property directly, a runtime name by matching it against the declared properties. Only a name
+/// the class does not declare reaches the interpreter, which raises php's exception. Every
+/// Reflection construction used to go through the interpreter once the lowering had reserved an
+/// eval context for it -- `Response::setHeaders()` and `Request::setProperty()` on each request.
+#[test]
+fn reflection_property_of_a_compiled_class_is_built_natively() {
+    assert_eq!(
+        compile_and_run(REFLECTION_PROPERTY_SOURCE),
+        "headers\n{\"b\":2}\n8\ny\nheaders:Resp:i\nname:Resp:iP\ncode:Resp:iR\ncount:Resp:s\n\
+         shared:Base:iR\nE:Property Resp::$missing does not exist\n\
+         E:Property Resp::$Headers does not exist\n"
+    );
+    let dir = make_cli_test_dir("elephc_reflection_property_native");
+    let (user_asm, _runtime_asm, _libraries) =
+        compile_source_to_asm_with_options(REFLECTION_PROPERTY_SOURCE, &dir, 8_388_608, false, false);
+    let _ = fs::remove_dir_all(&dir);
+    let body = |name: &str| {
+        user_asm
+            .split(&format!("@fn name={name} "))
+            .nth(1)
+            .unwrap_or_else(|| panic!("{name} must be emitted"))
+            .split("@endfn")
+            .next()
+            .unwrap_or_else(|| panic!("{name} must be terminated"))
+            .to_string()
+    };
+    let interpreted = |body: &str| body.matches("eval_reflection_new_object").count();
+    assert_eq!(interpreted(&body("Resp::literal")), 0, "a literal member is metadata");
+    let by_name = body("Resp::byName");
+    assert_eq!(interpreted(&by_name), 1, "only the unmatched name may reach the interpreter");
+    assert!(by_name.contains("__rt_str_eq"), "the runtime name is matched natively");
+}

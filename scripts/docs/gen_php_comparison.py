@@ -60,6 +60,7 @@ KNOWN_VALUE_DIVERGENCES = {
     "E_ALL": "PHP 8.4 value (32767); PHP 8.5 dropped E_STRICT from the mask",
     "EXIF_USE_MBSTRING": "PHP reports 1 only when built with mbstring; elephc's Exif reader never routes through mbstring",
     "IMAGETYPE_COUNT": "elephc's image-type table stops at PHP 8.4's 20 entries (no HEIC/HEIF)",
+    "PCRE_VERSION_MINOR": "reports the PCRE2 10.47 elephc bundles, not the baseline build's library",
 }
 
 # php-src PHP-8.5/ext/pcntl/pcntl.stub.php guards these even on Linux builds.

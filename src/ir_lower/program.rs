@@ -93,6 +93,9 @@ pub(crate) fn lower(
     module.runtime_define_names = check_result.runtime_define_names.iter().cloned().collect();
     let _runtime_define_names =
         super::context::set_runtime_define_names(check_result.runtime_define_names.clone());
+    let _undefined_constant_reads = crate::types::predefined_constants::set_undefined_constant_reads(
+        check_result.undefined_constant_reads.clone(),
+    );
     let _ref_param_escaping_callees = super::context::set_ref_param_escaping_callees(
         check_result.ref_param_escaping_callees.clone(),
     );

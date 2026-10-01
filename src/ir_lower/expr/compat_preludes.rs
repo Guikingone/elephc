@@ -97,7 +97,15 @@ pub(super) fn lower_backend_gap_builtin_shape(
         }),
         _ => None,
     };
+    // The helper the redirect targets hands an all-scalar list to the native sort, from inside
+    // `SORT_SCALAR_VALUES_NAME`; redirecting that call too would recurse forever.
+    let inside_scalar_sort = ctx
+        .builder
+        .function()
+        .name
+        .eq_ignore_ascii_case(crate::backend_gap_prelude::SORT_SCALAR_VALUES_NAME);
     if matches!(builtin.as_str(), "sort" | "rsort")
+        && !inside_scalar_sort
         && single_value_arg.is_some_and(|arg| {
             match materialized_expr_type_for_merge(ctx, arg).codegen_repr() {
                 PhpType::Array(element) => element.codegen_repr() == PhpType::Mixed,

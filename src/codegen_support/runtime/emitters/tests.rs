@@ -21,6 +21,8 @@ fn test_aarch64_runtime_emits_fiber_routines() {
     for sym in [
         "__rt_fiber_alloc_stack",
         "__rt_fiber_free_stack",
+        "__rt_fiber_free_stack_untracked",
+        "__rt_fiber_release_request_stacks",
         "__rt_fiber_switch",
         "__rt_fiber_entry",
         "__rt_fiber_construct",

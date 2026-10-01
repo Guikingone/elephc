@@ -185,6 +185,33 @@ pub fn emit_new_by_name(emitter: &mut Emitter) {
     emitter.instruction("blr x10");                                             // _class_propinit_<id>(this = object in x0)
     emitter.instruction("ldr x0, [sp, #40]");                                   // restore the object pointer (the thunk may clobber x0)
     emitter.label("__rt_nbn_no_propinit");
+    // -- a private ancestor slot hidden by a same-named declaration keeps its own default --
+    // The thunk above assigns `$this-><name>` in the allocated class's scope, which reaches only
+    // the slot visible by name. Each ancestor that declares a hidden slot has a thunk of its own
+    // private defaults; run every ancestor's, nearest first (their slots never overlap).
+    emitter.instruction("ldr x12, [sp, #32]");                                  // reload the matched class_id
+    abi::emit_symbol_address(emitter, "x10", "_class_hidden_private_slot_flags");
+    emitter.instruction("ldr x10, [x10, x12, lsl #3]");                         // does this layout hide a private ancestor slot?
+    emitter.instruction("cbz x10, __rt_nbn_return_allocated");                  // ordinary layouts are fully initialized already
+    emitter.instruction("str x0, [sp, #40]");                                   // save the object across the ancestor thunks
+    abi::emit_symbol_address(emitter, "x10", "_class_parent_ids");
+    emitter.instruction("ldr x12, [x10, x12, lsl #3]");                         // start at the parent class id
+    emitter.label("__rt_nbn_private_init_loop");
+    emitter.instruction("cmp x12, #0");                                         // walked past the root class?
+    emitter.instruction("b.lt __rt_nbn_private_init_done");                     // every ancestor has had its turn
+    emitter.instruction("str x12, [sp, #48]");                                  // save the ancestor id across its thunk
+    abi::emit_symbol_address(emitter, "x10", "_class_propinit_private_ptrs");
+    emitter.instruction("ldr x10, [x10, x12, lsl #3]");                         // _class_propinit_private_ptrs[ancestor] (0 = none)
+    emitter.instruction("cbz x10, __rt_nbn_private_init_next");                 // this ancestor declares no hidden private slot
+    emitter.instruction("ldr x0, [sp, #40]");                                   // this = the allocated object
+    emitter.instruction("blr x10");                                             // _class_propinit_private_<ancestor>(this)
+    emitter.label("__rt_nbn_private_init_next");
+    emitter.instruction("ldr x12, [sp, #48]");                                  // reload the ancestor id
+    abi::emit_symbol_address(emitter, "x10", "_class_parent_ids");
+    emitter.instruction("ldr x12, [x10, x12, lsl #3]");                         // advance to that ancestor's parent
+    emitter.instruction("b __rt_nbn_private_init_loop");                        // continue up the chain
+    emitter.label("__rt_nbn_private_init_done");
+    emitter.instruction("ldr x0, [sp, #40]");                                   // restore the object pointer
     emitter.label("__rt_nbn_return_allocated");
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the frame
@@ -343,6 +370,34 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call r10");                                            // _class_propinit_<id>(this)
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // restore the object pointer (the thunk may clobber rax)
     emitter.label("__rt_nbn_no_propinit_x86");
+    // -- a private ancestor slot hidden by a same-named declaration keeps its own default --
+    // The thunk above assigns `$this-><name>` in the allocated class's scope, which reaches only
+    // the slot visible by name. Each ancestor that declares a hidden slot has a thunk of its own
+    // private defaults; run every ancestor's, nearest first (their slots never overlap).
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the matched class_id
+    abi::emit_symbol_address(emitter, "r10", "_class_hidden_private_slot_flags");
+    emitter.instruction("cmp QWORD PTR [r10 + rcx*8], 0");                      // does this layout hide a private ancestor slot?
+    emitter.instruction("je __rt_nbn_return_allocated_x86");                    // ordinary layouts are fully initialized already
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the object across the ancestor thunks
+    abi::emit_symbol_address(emitter, "r10", "_class_parent_ids");
+    emitter.instruction("mov rcx, QWORD PTR [r10 + rcx*8]");                    // start at the parent class id
+    emitter.label("__rt_nbn_private_init_loop_x86");
+    emitter.instruction("test rcx, rcx");                                       // walked past the root class?
+    emitter.instruction("js __rt_nbn_private_init_done_x86");                   // every ancestor has had its turn
+    emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // save the ancestor id across its thunk
+    abi::emit_symbol_address(emitter, "r10", "_class_propinit_private_ptrs");
+    emitter.instruction("mov r10, QWORD PTR [r10 + rcx*8]");                    // _class_propinit_private_ptrs[ancestor] (0 = none)
+    emitter.instruction("test r10, r10");                                       // does this ancestor declare a hidden private slot?
+    emitter.instruction("jz __rt_nbn_private_init_next_x86");                   // no thunk to run for it
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // this = the allocated object (first SysV argument)
+    emitter.instruction("call r10");                                            // _class_propinit_private_<ancestor>(this)
+    emitter.label("__rt_nbn_private_init_next_x86");
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the ancestor id
+    abi::emit_symbol_address(emitter, "r10", "_class_parent_ids");
+    emitter.instruction("mov rcx, QWORD PTR [r10 + rcx*8]");                    // advance to that ancestor's parent
+    emitter.instruction("jmp __rt_nbn_private_init_loop_x86");                  // continue up the chain
+    emitter.label("__rt_nbn_private_init_done_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // restore the object pointer
     emitter.label("__rt_nbn_return_allocated_x86");
     emitter.instruction("add rsp, 48");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

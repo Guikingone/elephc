@@ -108,6 +108,13 @@ pub(super) fn emit_reflection_member_object(
         emit_reflection_method_prototype_property(ctx, member.prototype_member.as_deref())?;
     }
     if member_class_name == "ReflectionProperty" {
+        // `$property->class` reads this slot; a listed property reflector left it empty.
+        emit_reflection_owner_string_property_by_name(
+            ctx,
+            member_class_name,
+            "__class",
+            member.declaring_class_name.as_deref().unwrap_or(""),
+        )?;
         emit_reflection_owner_int_property(
             ctx,
             member_class_name,

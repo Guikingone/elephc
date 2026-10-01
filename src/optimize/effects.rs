@@ -258,6 +258,17 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::IncludeValue { .. } => unreachable!(
             "ExprKind::IncludeValue must be expanded by the resolver"
         ),
+        // A read may throw `Undefined constant` unless the catalog defines the name here: a name
+        // restricted to other platforms (`PHP_WINDOWS_VERSION_*`) or one nothing defines throws,
+        // so a `try` around it keeps its catch and a bare `FOO;` statement stays. A user constant
+        // with a literal value was folded away before this pass, so little else is left here.
+        ExprKind::ConstRef(name)
+            if crate::types::predefined_constants::target_restricted_type(name.as_str())
+                .is_some()
+                || !crate::types::predefined_constants::is_registered_constant(name.as_str()) =>
+        {
+            Effect::PURE.with_may_throw()
+        }
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)

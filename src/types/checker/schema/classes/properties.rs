@@ -9,7 +9,7 @@
 //! - Class metadata is shared globally after construction, so validation must reject inconsistent inheritance early.
 
 use crate::errors::CompileError;
-use crate::parser::ast::{ClassProperty, Expr, ExprKind, Visibility};
+use crate::parser::ast::{ClassProperty, Expr, ExprKind, StaticReceiver, Visibility};
 use crate::span::Span;
 use crate::types::traits::FlattenedClass;
 use crate::types::PhpType;
@@ -106,7 +106,7 @@ fn apply_static_property(
         refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
     } else if let Some(default) = &prop.default {
         state.declared_static_properties.remove(&prop.name);
-        infer_untyped_property_default_type(default)
+        infer_untyped_property_default_type(checker, class, default)
     } else {
         state.declared_static_properties.remove(&prop.name);
         PhpType::Mixed
@@ -261,7 +261,7 @@ fn apply_instance_property(
         is_declared_slot = true;
         refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
     } else if let Some(default) = &prop.default {
-        infer_untyped_property_default_type(default)
+        infer_untyped_property_default_type(checker, class, default)
     } else {
         PhpType::Mixed
     };
@@ -276,6 +276,7 @@ fn apply_instance_property(
         .insert(prop.name.clone(), class.name.clone());
     state.property_declared_slots.push(is_declared_slot);
     state.property_reference_slots.push(prop.by_ref);
+    state.property_slot_declaring_classes.push(class.name.clone());
     state
         .property_attribute_names
         .insert(prop.name.clone(), collect_attribute_names(&prop.attributes));
@@ -375,7 +376,7 @@ fn apply_instance_property_redeclaration(
         state.declared_properties.insert(prop.name.clone());
         refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
     } else if let Some(default) = &prop.default {
-        infer_untyped_property_default_type(default)
+        infer_untyped_property_default_type(checker, class, default)
     } else {
         PhpType::Mixed
     };
@@ -388,6 +389,9 @@ fn apply_instance_property_redeclaration(
     }
     if let Some(slot_reference) = state.property_reference_slots.get_mut(slot) {
         *slot_reference = prop.by_ref;
+    }
+    if let Some(slot_declaring) = state.property_slot_declaring_classes.get_mut(slot) {
+        *slot_declaring = class.name.clone();
     }
     state
         .property_declaring_classes
@@ -460,7 +464,7 @@ fn apply_private_parent_property_shadowing(
         refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
     } else if let Some(default) = &prop.default {
         state.declared_properties.remove(&prop.name);
-        infer_expr_type_syntactic(default)
+        infer_untyped_property_default_type(checker, class, default)
     } else {
         state.declared_properties.remove(&prop.name);
         PhpType::Mixed
@@ -474,6 +478,7 @@ fn apply_private_parent_property_shadowing(
     state.defaults.push(untyped_property_schema_default(prop));
     state.property_declared_slots.push(is_declared_slot);
     state.property_reference_slots.push(prop.by_ref);
+    state.property_slot_declaring_classes.push(class.name.clone());
     state
         .property_declaring_classes
         .insert(prop.name.clone(), class.name.clone());
@@ -829,8 +834,162 @@ fn refine_declared_array_type_from_default(declared_ty: PhpType, default: Option
 /// Infers storage for an untyped property default while widening the literal `false` subtype.
 /// Mutable untyped properties initialized with `false` must continue accepting later boolean
 /// writes; explicit `false` property declarations retain their narrower contract.
-fn infer_untyped_property_default_type(default: &Expr) -> PhpType {
-    widen_false_literal_storage_type(infer_expr_type_syntactic(default))
+///
+/// A constant in the default (`self::K`, `GREETING`) is first replaced by its value: the
+/// syntactic guess types a class constant `string` and a global one `int` whatever they hold, and
+/// propinit then stored `9` into a `string` slot -- `public $c = self::K;` failed the build. A
+/// constant resolved nowhere here (an enum case, a runtime `define()`) types the slot `mixed`.
+fn infer_untyped_property_default_type(
+    checker: &Checker,
+    class: &FlattenedClass,
+    default: &Expr,
+) -> PhpType {
+    let ty = match resolve_default_constants(checker, ConstantScope::Declaring(class), default, 0) {
+        Some(resolved) => infer_expr_type_syntactic(&resolved),
+        None => PhpType::Mixed,
+    };
+    widen_false_literal_storage_type(ty)
+}
+
+/// How deep constant-to-constant references are followed before the slot falls back to `mixed`.
+const MAX_DEFAULT_CONSTANT_DEPTH: usize = 8;
+
+/// The class a `self::` / `parent::` reference in a constant expression names.
+#[derive(Clone, Copy)]
+enum ConstantScope<'a> {
+    /// The class whose schema is being built: its own constants are not in `checker.classes` yet.
+    Declaring(&'a FlattenedClass),
+    /// An already built class, by name.
+    Built(&'a str),
+}
+
+/// Returns `expr` with each constant reference replaced by its value, or by a literal of the
+/// constant's type, so the syntactic guess sees what the slot will hold; `None` when a constant
+/// cannot be resolved from the schema built so far.
+///
+/// Only the constant-expression forms a property default may use are rebuilt; any other node is
+/// returned as it is.
+fn resolve_default_constants(
+    checker: &Checker,
+    scope: ConstantScope<'_>,
+    expr: &Expr,
+    depth: usize,
+) -> Option<Expr> {
+    if depth > MAX_DEFAULT_CONSTANT_DEPTH {
+        return None;
+    }
+    let resolve = |inner: &Expr| resolve_default_constants(checker, scope, inner, depth);
+    let boxed = |inner: &Expr| resolve(inner).map(Box::new);
+    let kind = match &expr.kind {
+        ExprKind::ConstRef(name) => {
+            let ty = checker
+                .constants
+                .get(name.as_str())
+                .or_else(|| checker.constants.get(name.as_str().trim_start_matches('\\')))?;
+            return type_placeholder(ty, expr.span);
+        }
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            let (value, value_scope) = class_constant_value(checker, scope, receiver, name)?;
+            return resolve_default_constants(checker, value_scope, &value, depth + 1);
+        }
+        ExprKind::ArrayLiteral(elements) => ExprKind::ArrayLiteral(
+            elements.iter().map(resolve).collect::<Option<Vec<_>>>()?,
+        ),
+        ExprKind::ArrayLiteralAssoc(entries) => ExprKind::ArrayLiteralAssoc(
+            entries
+                .iter()
+                .map(|(key, value)| Some((resolve(key)?, resolve(value)?)))
+                .collect::<Option<Vec<_>>>()?,
+        ),
+        ExprKind::Negate(inner) => ExprKind::Negate(boxed(inner)?),
+        ExprKind::Not(inner) => ExprKind::Not(boxed(inner)?),
+        ExprKind::BitNot(inner) => ExprKind::BitNot(boxed(inner)?),
+        ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
+            left: boxed(left)?,
+            op: op.clone(),
+            right: boxed(right)?,
+        },
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => ExprKind::Ternary {
+            condition: boxed(condition)?,
+            then_expr: boxed(then_expr)?,
+            else_expr: boxed(else_expr)?,
+        },
+        ExprKind::ShortTernary { value, default } => ExprKind::ShortTernary {
+            value: boxed(value)?,
+            default: boxed(default)?,
+        },
+        ExprKind::NullCoalesce { value, default } => ExprKind::NullCoalesce {
+            value: boxed(value)?,
+            default: boxed(default)?,
+        },
+        ExprKind::Cast { target, expr: inner } => ExprKind::Cast {
+            target: target.clone(),
+            expr: boxed(inner)?,
+        },
+        _ => return Some(expr.clone()),
+    };
+    Some(Expr::new(kind, expr.span))
+}
+
+/// Returns a class constant's value expression and the scope its own `self::` names, or `None`
+/// for an enum case, an unknown class, or a constant not declared where the schema can see it.
+fn class_constant_value<'a>(
+    checker: &'a Checker,
+    scope: ConstantScope<'a>,
+    receiver: &'a StaticReceiver,
+    name: &str,
+) -> Option<(Expr, ConstantScope<'a>)> {
+    let owner: ConstantScope<'a> = match receiver {
+        // `static::` is refused in a constant expression; reading it as `self::` is harmless.
+        StaticReceiver::Self_ | StaticReceiver::Static => scope,
+        StaticReceiver::Parent => ConstantScope::Built(match scope {
+            ConstantScope::Declaring(class) => class.extends.as_deref()?,
+            ConstantScope::Built(class_name) => checker.classes.get(class_name)?.parent.as_deref()?,
+        }),
+        StaticReceiver::Named(class_name) => ConstantScope::Built(class_name.as_str()),
+    };
+    match owner {
+        ConstantScope::Declaring(class) => {
+            if let Some(constant) = class.constants.iter().find(|constant| constant.name == name) {
+                return Some((constant.value.clone(), owner));
+            }
+            let parent = class.extends.as_deref()?;
+            class_constant_value(checker, ConstantScope::Built(parent), &StaticReceiver::Self_, name)
+        }
+        ConstantScope::Built(class_name) => {
+            let class_name = class_name.trim_start_matches('\\');
+            if checker.enums.contains_key(class_name) {
+                return None;
+            }
+            if let Some(info) = checker.classes.get(class_name) {
+                return info.constants.get(name).map(|value| (value.clone(), owner));
+            }
+            checker
+                .interfaces
+                .get(class_name)?
+                .constants
+                .get(name)
+                .map(|value| (value.clone(), owner))
+        }
+    }
+}
+
+/// A literal of `ty` for the syntactic guess, or `None` when no literal carries the type.
+fn type_placeholder(ty: &PhpType, span: Span) -> Option<Expr> {
+    let kind = match ty {
+        PhpType::Int => ExprKind::IntLiteral(0),
+        PhpType::Float => ExprKind::FloatLiteral(0.0),
+        PhpType::Str => ExprKind::StringLiteral(String::new()),
+        PhpType::Bool => ExprKind::BoolLiteral(true),
+        PhpType::False => ExprKind::BoolLiteral(false),
+        PhpType::Void => ExprKind::Null,
+        _ => return None,
+    };
+    Some(Expr::new(kind, span))
 }
 
 /// PHP treats a plain untyped property with no explicit default as `= null`: the slot

@@ -96,7 +96,8 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
     if !matches!(
         elephc_builtin_contract::eval_constant_support(constant),
         elephc_builtin_contract::BackendSupport::Implemented(_)
-    ) {
+    ) || !eval_constant_defined_on_host(constant)
+    {
         return None;
     }
     match constant.value {
@@ -110,6 +111,27 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
         // which `every_catalogued_constant_has_its_declared_eval_route` reports.
         ConstValue::TargetDependent(_) => None,
     }
+}
+
+/// Returns whether php defines `constant` on the platform this interpreter was built for.
+///
+/// The catalog restricts a few names to the platforms whose php has them and spells each target
+/// `<os>-<arch>` (`PHP_WINDOWS_VERSION_*` is `windows-x86_64` only). The interpreter is linked
+/// into the program it serves, so its own `target_os` is the program's OS; elsewhere the name is
+/// undefined, as the compiled side answers.
+fn eval_constant_defined_on_host(constant: &elephc_builtin_contract::ConstantContract) -> bool {
+    let os = if cfg!(target_os = "windows") {
+        "windows-"
+    } else if cfg!(target_os = "linux") {
+        "linux-"
+    } else if cfg!(target_os = "ios") {
+        "ios-"
+    } else {
+        "macos-"
+    };
+    constant
+        .target_support
+        .is_none_or(|targets| targets.iter().any(|target| target.starts_with(os)))
 }
 
 /// Values the catalog marks `TargetDependent`: Magician computes them for the target it is
@@ -231,12 +253,17 @@ mod curl_constant_fallback_tests {
     }
 
     /// Verifies Magician resolves exactly the constants whose catalog eval route says it
-    /// does: every `Implemented` one has a value, every `Unsupported` one has none.
+    /// does: every `Implemented` one has a value, every `Unsupported` one has none, and a name
+    /// the catalog restricts to other platforms has none here.
     #[test]
     fn every_catalogued_constant_has_its_declared_eval_route() {
         use elephc_builtin_contract::{constants, eval_constant_support, BackendSupport};
         for constant in constants() {
             let resolved = eval_predefined_constant_value(constant.name).is_some();
+            if !eval_constant_defined_on_host(constant) {
+                assert!(!resolved, "{} resolves off its catalogued targets", constant.name);
+                continue;
+            }
             match eval_constant_support(constant) {
                 BackendSupport::Implemented(_) => assert!(
                     resolved,

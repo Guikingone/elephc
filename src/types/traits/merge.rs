@@ -78,6 +78,35 @@ pub(super) fn merge_constant_into(
     Ok(())
 }
 
+/// Merges a class's own properties with the ones its traits import, in php's order: the class's
+/// own declarations first, then each imported property it does not declare itself.
+///
+/// php compiles the class body before binding its traits, so a trait's properties take the slots
+/// after the class's own -- `var_dump()`, `json_encode()`, an `(array)` cast and
+/// `ReflectionClass::getProperties()` all list them last. Conflicts are validated exactly as
+/// `merge_properties` does; only the order differs.
+pub(super) fn merge_class_properties(
+    imported: &[ClassProperty],
+    local: &[ClassProperty],
+    span: Span,
+    owner_label: &str,
+) -> Result<Vec<ClassProperty>, CompileError> {
+    let mut merged = merge_properties(imported, local, span, owner_label, true)?;
+    let local_names: HashSet<&str> = local.iter().map(|property| property.name.as_str()).collect();
+    let mut ordered = Vec::with_capacity(merged.len());
+    for property in local {
+        if let Some(index) = merged.iter().position(|existing| existing.name == property.name) {
+            ordered.push(merged.remove(index));
+        }
+    }
+    ordered.extend(
+        merged
+            .into_iter()
+            .filter(|property| !local_names.contains(property.name.as_str())),
+    );
+    Ok(ordered)
+}
+
 /// Merges `imported` trait properties with `local` class/trait properties.
 /// Conflicts (same name, incompatible modifiers) are reported as errors.
 /// If `replace_compatible_existing` is true, a compatible imported property
@@ -185,6 +214,25 @@ pub(super) fn merge_methods(
     }
 
     merged.extend(local.iter().cloned());
+    Ok(merged)
+}
+
+/// Merges a class's (or enum's) trait methods with its own, in the order php's method table
+/// holds them: the class's own declarations first, then what its traits bring in.
+///
+/// `getMethods()` and `get_class_methods()` both read that order, and so does anything a
+/// framework derives from them (Symfony's attribute route loader meets controller methods in
+/// exactly this sequence). Nested trait flattening keeps `merge_methods`' order.
+pub(super) fn merge_class_methods(
+    imported: Vec<ClassMethod>,
+    local: &[ClassMethod],
+    span: Span,
+    owner_label: &str,
+) -> Result<Vec<ClassMethod>, CompileError> {
+    let mut merged = merge_methods(imported, local, span, owner_label)?;
+    let imported_count = merged.len() - local.len();
+    let imported: Vec<ClassMethod> = merged.drain(..imported_count).collect();
+    merged.extend(imported);
     Ok(merged)
 }
 

@@ -9,7 +9,7 @@
 //! - System helpers must preserve PHP-visible behavior while crossing libc, syscall, JSON, regex, and date formatter boundaries.
 
 mod build_argv;
-mod rt_array_from_name_list;
+mod rt_class_method_names;
 mod rt_class_exists;
 mod rt_class_relation_lookup;
 mod rt_class_relation_probe;
@@ -77,7 +77,7 @@ mod microtime;
 mod php_uname;
 
 pub(crate) use build_argv::emit_build_argv;
-pub(crate) use rt_array_from_name_list::emit_rt_array_from_name_list;
+pub(crate) use rt_class_method_names::emit_rt_class_method_names;
 pub(crate) use rt_class_exists::emit_rt_class_exists;
 pub(crate) use rt_class_relation_lookup::emit_rt_class_relation_lookup;
 pub(crate) use rt_class_relation_probe::emit_rt_class_relation_probe;

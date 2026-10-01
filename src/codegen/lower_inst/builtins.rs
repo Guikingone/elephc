@@ -38,6 +38,7 @@ pub(crate) mod arrays;
 pub(crate) mod bcmath;
 pub(crate) mod buffers;
 pub(crate) mod class_relations;
+pub(crate) mod get_class_methods;
 pub(crate) mod ctype;
 pub(crate) mod curl;
 pub(crate) mod debug;

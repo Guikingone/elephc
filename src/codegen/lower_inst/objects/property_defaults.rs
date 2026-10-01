@@ -47,7 +47,7 @@ pub(super) fn collect_property_defaults(
                 &resolved,
                 inst.op.name(),
             )?,
-            is_reference: class_info.owned_reference_properties.contains(property),
+            is_reference: class_info.property_slot_is_owned_reference(index),
         });
     }
     Ok(defaults)

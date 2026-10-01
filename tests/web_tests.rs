@@ -760,6 +760,51 @@ fn web_reset_clears_globals_between_runs() {
     );
 }
 
+/// Returns a process's virtual size in KiB, as `ps` reports it on macOS and Linux alike.
+fn process_virtual_kib(pid: u32) -> u64 {
+    let output = Command::new("ps")
+        .args(["-o", "vsz=", "-p", &pid.to_string()])
+        .output()
+        .expect("failed to read the worker's virtual size");
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .unwrap_or_else(|_| panic!("unreadable ps vsz output: {output:?}"))
+}
+
+/// A generator no root releases -- here one caught in a reference cycle -- is dropped with the
+/// heap arena at the request boundary. Its 2 MB fiber stack used to go with it: mapped, never
+/// unmapped, one more per request, until the worker hit the kernel's mapping limit. Symfony's
+/// Twig pages left eight per request. The boundary now hands every such stack back.
+#[test]
+fn web_request_boundary_returns_unreleased_generator_stacks() {
+    let dir = make_test_dir("web_generator_stacks");
+    let src = r#"<?php
+class Holder { public $gen; }
+function cycle(Holder $h) { yield $h; yield 2; }
+$h = new Holder();
+$gen = cycle($h);
+$gen->current();
+$h->gen = $gen;
+unset($h, $gen);
+echo "ok";
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let addr = format!("127.0.0.1:{}", free_port());
+    let server = spawn_server(&bin, &addr, "1");
+    let worker = wait_for_direct_child_count(server.id(), 1)[0];
+    for _ in 0..5 {
+        assert!(raw_response_body(&http_get(&addr, "/")).contains("ok"));
+    }
+    let before = process_virtual_kib(worker);
+    for _ in 0..100 {
+        assert!(raw_response_body(&http_get(&addr, "/")).contains("ok"));
+    }
+    let grown = process_virtual_kib(worker).saturating_sub(before);
+    // One leaked stack per request is 100 * 2 MiB here; allow a tenth of that for noise.
+    assert!(grown < 20 * 1024, "the worker's virtual size grew by {grown} KiB over 100 requests");
+}
+
 /// Verifies per-request reset of an ordinary global used through `global $g`.
 #[test]
 fn web_reset_clears_ordinary_global_alias_between_requests() {

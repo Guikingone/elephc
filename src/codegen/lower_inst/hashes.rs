@@ -24,6 +24,7 @@ use crate::ir::{Immediate, Instruction, ValueId};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
+use super::call_cleanup::callee_terminator_uses_value;
 use super::receiver_place::ReceiverPlace;
 use super::{
     emit_mixed_string_for_persistent_store, expect_operand, load_value_to_first_int_arg,
@@ -336,10 +337,41 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
             ctx.load_value_to_reg(hash, abi::int_result_reg(ctx.emitter))?;
             abi::emit_decref_if_refcounted(ctx.emitter, &hash_ty.codegen_repr());
         }
-        _ => receiver.store_back_value(ctx, hash)?,
+        _ => publish_mutated_hash(ctx, &receiver, hash)?,
     }
     ctx.writeback_global_array_source(hash)?;
     Ok(())
+}
+
+/// Publishes a hash one of the hash ops mutated back into the place it was read from.
+///
+/// A boxed (`mixed`) local lends the op an unboxed hash holding the load's own reference, and
+/// `release_mutated_source_local_owner` dropped the slot's old box first. When that load feeds
+/// nothing else, the new box takes the load's reference over, as `lower_array_set`'s store does.
+/// The retaining store kept it as well and nothing released it: the hash stayed shared, so the
+/// NEXT write copied the whole table and leaked the copy it replaced -- one clone per element
+/// for a loop filling a cache (Twig's `getAttribute()` method cache). A load another instruction
+/// still reads keeps the retaining store, because a second mutation releases the box again.
+fn publish_mutated_hash(
+    ctx: &mut FunctionContext<'_>,
+    receiver: &ReceiverPlace,
+    hash: ValueId,
+) -> Result<()> {
+    if let ReceiverPlace::Local(slot) = receiver {
+        let single_use = ctx
+            .function
+            .instructions
+            .iter()
+            .filter(|inst| inst.operands.contains(&hash))
+            .take(2)
+            .count()
+            == 1
+            && !callee_terminator_uses_value(ctx.function, hash);
+        if single_use && ctx.local_load_can_move_into_box(*slot, hash)? {
+            return ctx.store_value_to_local(*slot, hash);
+        }
+    }
+    receiver.store_back_value(ctx, hash)
 }
 
 /// How a `HashSet` marked in-place (`Immediate::Bool(true)`) publishes into its property.
@@ -597,7 +629,7 @@ pub(super) fn lower_hash_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction
         }
     }
     ctx.store_result_value(hash)?;
-    receiver.store_back_value(ctx, hash)?;
+    publish_mutated_hash(ctx, &receiver, hash)?;
     Ok(())
 }
 
@@ -618,7 +650,7 @@ pub(super) fn lower_hash_append(ctx: &mut FunctionContext<'_>, inst: &Instructio
         Arch::X86_64 => lower_hash_append_x86_64(ctx, hash, value, &value_ty, &storage_value_ty)?,
     }
     ctx.store_result_value(hash)?;
-    receiver.store_back_value(ctx, hash)?;
+    publish_mutated_hash(ctx, &receiver, hash)?;
     ctx.writeback_global_array_source(hash)?;
     Ok(())
 }
@@ -703,7 +735,7 @@ pub(super) fn lower_hash_spread(ctx: &mut FunctionContext<'_>, inst: &Instructio
     }
     abi::emit_call_label(ctx.emitter, "__rt_hash_spread");
     ctx.store_result_value(dest)?;
-    receiver.store_back_value(ctx, dest)?;
+    publish_mutated_hash(ctx, &receiver, dest)?;
     ctx.writeback_global_array_source(dest)?;
     Ok(())
 }

@@ -103,6 +103,11 @@ pub(crate) fn emit_const_registry_data(
     out.push_str(&format!("    .ascii \"{}\"\n", escaped_ascii("Undefined constant \"")));
     out.push_str(".globl _constant_undefined_msg_suffix\n_constant_undefined_msg_suffix:\n");
     out.push_str(&format!("    .ascii \"{}\"\n", escaped_ascii("\"")));
+    // `constant('C::X')` naming no class: `Class "C" not found`.
+    out.push_str(".globl _constant_class_msg_prefix\n_constant_class_msg_prefix:\n");
+    out.push_str(&format!("    .ascii \"{}\"\n", escaped_ascii("Class \"")));
+    out.push_str(".globl _constant_class_msg_suffix\n_constant_class_msg_suffix:\n");
+    out.push_str(&format!("    .ascii \"{}\"\n", escaped_ascii("\" not found")));
 
     out
 }

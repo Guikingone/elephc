@@ -568,8 +568,14 @@ fn eval_reflection_runtime_class_scalar_result(
         "isuserdefined" => EVAL_REFLECTION_CLASS_FLAG_USER_DEFINED,
         _ => return Ok(None),
     };
-    let Some(flags) = values.reflection_class_flags(&canonical)? else {
-        return Ok(None);
+    // The AOT answer the reflector was built from, not the raw published word: that word has no
+    // enum bit and marks an enum instantiable and cloneable like any final class.
+    let flags = match eval_reflection_aot_class_flags(&canonical, values)? {
+        Some((flags, _)) => flags,
+        None => match values.reflection_class_flags(&canonical)? {
+            Some(flags) => flags,
+            None => return Ok(None),
+        },
     };
     if flag == EVAL_REFLECTION_CLASS_FLAG_USER_DEFINED {
         // The generated program publishes flags only for the classes it compiled FROM SOURCE, so
@@ -980,13 +986,26 @@ pub(in crate::interpreter) fn eval_reflection_class_get_default_properties_resul
         return Ok(None);
     };
     let property_names = eval_reflection_default_property_names(&reflected_name, context, values)?;
-    let mut result = values.assoc_new(property_names.len())?;
+    // php lists the static defaults first, then the instance ones, each in reflection order.
+    let mut statics = Vec::new();
+    let mut instance = Vec::new();
     for name in property_names {
         let Some(member) =
             eval_reflection_default_property_metadata(&reflected_name, &name, context, values)?
         else {
             continue;
         };
+        if member.default_value.is_none() {
+            continue;
+        }
+        if member.is_static {
+            statics.push((name, member));
+        } else {
+            instance.push((name, member));
+        }
+    }
+    let mut result = values.assoc_new(statics.len() + instance.len())?;
+    for (name, member) in statics.into_iter().chain(instance) {
         let Some(default) = member.default_value.as_ref() else {
             continue;
         };

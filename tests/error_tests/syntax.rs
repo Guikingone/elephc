@@ -64,12 +64,12 @@ fn test_error_empty_variable() {
     expect_error("<?php $;", "Expected variable name");
 }
 
-/// Verifies the error diagnostic for bare identifier.
+/// Verifies a bare identifier naming no constant compiles with a warning.
 #[test]
-fn test_error_bare_identifier() {
-    // An unquoted identifier with no matching constant definition produces
-    // "Undefined constant: foo". The lexer treats `foo` as a name token, not a variable.
-    expect_error("<?php foo;", "Undefined constant: foo");
+fn test_warning_bare_identifier() {
+    // The lexer treats `foo` as a name token, not a variable: a constant read php compiles and
+    // throws `Undefined constant "foo"` for at runtime.
+    expect_warning("<?php foo;", "Undefined constant: foo");
 }
 
 /// Verifies the error diagnostic for unexpected character.

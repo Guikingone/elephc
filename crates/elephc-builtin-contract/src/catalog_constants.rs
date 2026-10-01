@@ -19,7 +19,8 @@ use crate::{
 macro_rules! constant {
     (
         $name:literal, $module:ident, $value:expr
-        $(, since: $since:ident)? $(, route: $route:ident)? $(, extension: $extension:literal)? $(,)?
+        $(, since: $since:ident)? $(, route: $route:ident)? $(, extension: $extension:literal)?
+        $(, targets: $targets:expr)? $(,)?
     ) => {
         ConstantContract {
             id: BuiltinId::from_canonical_name($name),
@@ -30,6 +31,7 @@ macro_rules! constant {
             route: constant!(@route $($route)?),
             extension: constant!(@flag $($extension)?),
             internal: false,
+            target_support: constant!(@targets $($targets)?),
         }
     };
     (@since $since:ident) => { Some(PhpVersion::$since) };
@@ -38,7 +40,14 @@ macro_rules! constant {
     (@route) => { ConstantRoute::Predefined };
     (@flag $value:literal) => { $value };
     (@flag) => { false };
+    (@targets $targets:expr) => { Some($targets) };
+    (@targets) => { None };
 }
+
+/// `PHP_WINDOWS_VERSION_*` exist on Windows builds of php only. elephc does not emit Windows yet,
+/// so no target it compiles for defines them; they stay catalogued so the Windows branch of a
+/// library (Symfony's `CliDumper::hasColorSupport()` reads all three) still type-checks.
+const WINDOWS_ONLY: &[&str] = &["windows-x86_64"];
 
 pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("APC_ITER_ALL", Apcu, ConstValue::Int(0xFFFF_FFFF)),
@@ -480,9 +489,9 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("PHP_URL_USER", Standard, ConstValue::Int(3)),
     constant!("PHP_VERSION", Core, ConstValue::TargetDependent(ConstType::Str)),
     constant!("PHP_VERSION_ID", Core, ConstValue::TargetDependent(ConstType::Int)),
-    constant!("PHP_WINDOWS_VERSION_BUILD", Core, ConstValue::Int(0)),
-    constant!("PHP_WINDOWS_VERSION_MAJOR", Core, ConstValue::Int(0)),
-    constant!("PHP_WINDOWS_VERSION_MINOR", Core, ConstValue::Int(0)),
+    constant!("PHP_WINDOWS_VERSION_BUILD", Core, ConstValue::Int(0), targets: WINDOWS_ONLY),
+    constant!("PHP_WINDOWS_VERSION_MAJOR", Core, ConstValue::Int(0), targets: WINDOWS_ONLY),
+    constant!("PHP_WINDOWS_VERSION_MINOR", Core, ConstValue::Int(0), targets: WINDOWS_ONLY),
     constant!("PREG_BACKTRACK_LIMIT_ERROR", Pcre, ConstValue::Int(2)),
     constant!("PREG_BAD_UTF8_ERROR", Pcre, ConstValue::Int(4)),
     constant!("PREG_BAD_UTF8_OFFSET_ERROR", Pcre, ConstValue::Int(5)),

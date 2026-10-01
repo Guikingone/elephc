@@ -386,10 +386,13 @@ fn eval_reflection_aot_class_flags_uncached(
     if is_enum {
         class_flags &= !EVAL_REFLECTION_CLASS_FLAG_READONLY;
     }
+    // The compiled word also knows which compiled classes are iterable (a Traversable class
+    // that is not abstract); the builtin list below only covers the runtime's own classes.
     flags |= class_flags
         & (EVAL_REFLECTION_CLASS_FLAG_FINAL
             | EVAL_REFLECTION_CLASS_FLAG_ABSTRACT
-            | EVAL_REFLECTION_CLASS_FLAG_READONLY);
+            | EVAL_REFLECTION_CLASS_FLAG_READONLY
+            | EVAL_REFLECTION_CLASS_FLAG_ITERABLE);
     if is_interface {
         flags |= EVAL_REFLECTION_CLASS_FLAG_INTERFACE;
     }

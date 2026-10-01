@@ -176,12 +176,11 @@ pub fn flatten_classes(
                             continue;
                         }
                     };
-                let merged_props = match merge::merge_properties(
+                let merged_props = match merge::merge_class_properties(
                     &imported_props,
                     properties,
                     stmt.span,
                     &format!("class {}", name),
-                    true,
                 ) {
                     Ok(props) => props,
                     Err(error) => {
@@ -189,7 +188,7 @@ pub fn flatten_classes(
                         continue;
                     }
                 };
-                let merged_methods = match merge::merge_methods(
+                let merged_methods = match merge::merge_class_methods(
                     imported_methods,
                     methods,
                     stmt.span,
@@ -273,7 +272,7 @@ pub fn flatten_classes(
                     ));
                     continue;
                 }
-                let merged_methods = match merge::merge_methods(
+                let merged_methods = match merge::merge_class_methods(
                     imported_methods,
                     methods,
                     stmt.span,

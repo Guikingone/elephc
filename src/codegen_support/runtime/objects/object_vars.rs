@@ -152,6 +152,23 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x14, [sp, #64]");                                  // save the property-key length slot across nested runtime calls
     emitter.instruction("str x15, [sp, #72]");                                  // save the property-storage offset slot across nested runtime calls
     emitter.instruction("str x16, [sp, #80]");                                  // save the property runtime-tag slot across nested runtime calls
+    // A scoped projection keeps the FIRST row under one bare name: a private ancestor slot
+    // a descendant hides comes first in the layout, and php resolves the name to it.
+    emitter.instruction("ldr x9, [sp, #8]");                                    // reload cast mode before the duplicate-name check
+    emitter.instruction("cbnz x9, __rt_object_to_hash_row_unique");             // casts keep every mangled key, which never collide
+    emitter.instruction("ldr x11, [sp, #0]");                                   // reload the object pointer
+    emitter.instruction("ldr x11, [x11]");                                      // load the object's dense class id
+    abi::emit_symbol_address(emitter, "x10", "_class_hidden_private_slot_flags");
+    emitter.instruction("ldr x10, [x10, x11, lsl #3]");                         // does this class hide a private ancestor slot?
+    emitter.instruction("cbz x10, __rt_object_to_hash_row_unique");             // no hidden slot, so no bare name can repeat
+    emitter.instruction("ldr x0, [sp, #16]");                                   // pass the result hash
+    emitter.instruction("ldr x1, [sp, #56]");                                   // pass the bare property-key pointer
+    emitter.instruction("ldr x2, [sp, #64]");                                   // pass the bare property-key length
+    emitter.instruction("bl __rt_hash_get");                                    // x0 = 1 when an earlier row already claimed the name
+    emitter.instruction("cbnz x0, __rt_object_to_hash_next");                   // the scope's own private property keeps the name
+    emitter.instruction("ldr x15, [sp, #72]");                                  // restore the property-storage offset after the lookup
+    emitter.instruction("ldr x16, [sp, #80]");                                  // restore the property runtime tag after the lookup
+    emitter.label("__rt_object_to_hash_row_unique");
     emitter.instruction("ldr x17, [sp, #0]");                                   // load the object pointer slot for `ldr x17, [sp, #0]`
     emitter.instruction("add x17, x17, x15");                                   // derive the current descriptor/property offset with `add x17, x17, x15`
     emitter.instruction("ldr x1, [x17]");                                       // load the current object/descriptor operand for `ldr x1, [x17]`
@@ -351,6 +368,24 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 72], r13");                       // save the property-key length slot across nested runtime calls
     emitter.instruction("mov QWORD PTR [rbp - 80], r14");                       // save the property-storage offset slot across nested runtime calls
     emitter.instruction("mov QWORD PTR [rbp - 88], r15");                       // save the property runtime-tag slot across nested runtime calls
+    // A scoped projection keeps the FIRST row under one bare name: a private ancestor slot
+    // a descendant hides comes first in the layout, and php resolves the name to it.
+    emitter.instruction("cmp QWORD PTR [rbp - 16], 0");                         // casts keep every mangled key, which never collide
+    emitter.instruction("jne __rt_object_to_hash_row_unique_x");                // skip the duplicate-name check for casts
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the object pointer
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the object's dense class id
+    emitter.instruction("lea r11, [rip + _class_hidden_private_slot_flags]");   // materialize the hidden-private-slot flag table
+    emitter.instruction("cmp QWORD PTR [r11 + r10 * 8], 0");                    // does this class hide a private ancestor slot?
+    emitter.instruction("je __rt_object_to_hash_row_unique_x");                 // no hidden slot, so no bare name can repeat
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the result hash
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // pass the bare property-key pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 72]");                       // pass the bare property-key length
+    emitter.instruction("call __rt_hash_get");                                  // rax = 1 when an earlier row already claimed the name
+    emitter.instruction("test rax, rax");                                       // did the name resolve to an earlier row?
+    emitter.instruction("jnz __rt_object_to_hash_next_x");                      // the scope's own private property keeps the name
+    emitter.instruction("mov r14, QWORD PTR [rbp - 80]");                       // restore the property-storage offset after the lookup
+    emitter.instruction("mov r15, QWORD PTR [rbp - 88]");                       // restore the property runtime tag after the lookup
+    emitter.label("__rt_object_to_hash_row_unique_x");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // load the object pointer slot for `mov r10, QWORD PTR [rbp - 8]`
     emitter.instruction("add r10, r14");                                        // derive the current descriptor/property offset with `add r10, r14`
     emitter.instruction("mov rdi, QWORD PTR [r10]");                            // load the current object/descriptor operand for `mov rdi, QWORD PTR [r10]`

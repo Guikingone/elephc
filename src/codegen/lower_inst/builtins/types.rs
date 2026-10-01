@@ -537,6 +537,21 @@ pub(crate) fn lower_get_object_vars(
     store_if_result(ctx, inst)
 }
 
+/// Lowers an in-scope `foreach ($this ...)` source to the properties its scope can see.
+///
+/// The iterated object may be a subclass instance: its own private properties stay
+/// invisible, and a private property of this scope that the subclass shadows keeps its
+/// name. That is exactly the `get_object_vars()` projection from the same scope.
+pub(crate) fn lower_object_foreach_projection(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    let scope_class_id = lexical_object_vars_scope_class_id(ctx);
+    emit_object_hash_projection(ctx, value, false, scope_class_id)?;
+    store_if_result(ctx, inst)
+}
+
 /// Lowers an explicit object-to-array cast to a fresh all-property hash projection.
 pub(crate) fn lower_object_array_cast(
     ctx: &mut FunctionContext<'_>,
@@ -603,7 +618,7 @@ fn emit_object_hash_projection(
 }
 
 /// Resolves the EIR function's lexical class id, using `-1` for global scopes.
-fn lexical_object_vars_scope_class_id(ctx: &FunctionContext<'_>) -> i64 {
+pub(in crate::codegen::lower_inst) fn lexical_object_vars_scope_class_id(ctx: &FunctionContext<'_>) -> i64 {
     let Some(class_name) = ctx.function.lexical_class.as_deref() else {
         return -1;
     };

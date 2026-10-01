@@ -1974,14 +1974,18 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// can return storage that aliases the previous occupant (for example,
     /// `$value = trim($value)`). When the slot's storage type already needs lifetime
     /// tracking this emits the eager load+release pair. When it does not, the slot can
-    /// STILL be widened to refcounted storage by a store lowered later that reaches
-    /// this one through a loop back-edge (e.g. an inner `for` counter re-initialized
-    /// by the outer body but widened Int→Mixed by its checked-add update). The storage
-    /// type visible here is stale in that case, so inside loops a deferred
-    /// `release_local_slot` is emitted instead: the backend releases the occupant
-    /// using the final widened storage type, and `prune_untracked_release_local_slot_ops`
-    /// erases the op when the slot never widens (issue #534: without this, the
-    /// previous outer iteration's Mixed box leaked on every re-initialization).
+    /// STILL be widened to refcounted storage by a store lowered later, and the backend lays
+    /// out EVERY access by the final storage type: this store, and the ones before it, then
+    /// box their scalar into the slot. The storage type visible here is stale in that case,
+    /// so a deferred `release_local_slot` is emitted instead: the backend releases the
+    /// occupant using the final widened storage type, and
+    /// `prune_untracked_release_local_slot_ops` erases the op when the slot never widens.
+    ///
+    /// A loop back-edge is one way to reach it (issue #534: an inner `for` counter
+    /// re-initialized by the outer body but widened Int→Mixed by its checked-add update
+    /// leaked the previous outer iteration's box). Straight-line code is the other:
+    /// `$n = 0; $n += strlen($a); $n += strlen($b);` widens `$n` only at the second `+=`, so
+    /// the first `+=` overwrote the box `$n = 0` became and leaked it on every call.
     fn release_stored_local_value_before_overwrite(
         &mut self,
         name: &str,
@@ -2024,11 +2028,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 return;
             }
             self.release_stored_local_value(name, slot, span);
-            return;
-        }
-        if self.loop_stack.is_empty() {
-            // Outside loops no back-edge can execute a later widening store before
-            // this one, so the untracked storage type is final for this path.
             return;
         }
         // Ref-bound locals keep a cell pointer in the frame slot and are released
@@ -3467,6 +3466,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::DynamicObjectNew
                     | Op::DynamicObjectNewMixed
                     | Op::DynamicObjectNewWithoutConstructorMixed
+                    | Op::ReflectionMaterialize
                     | Op::ClosureNew
                     | Op::FirstClassCallableNew
                     | Op::CallableArrayNew

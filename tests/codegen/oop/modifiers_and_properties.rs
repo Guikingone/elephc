@@ -1303,3 +1303,60 @@ fn test_example_asymmetric_visibility_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/asymmetric-visibility/main.php"));
     assert_eq!(out, "balance: 120\ninsufficient funds\nbalance: 120\n");
 }
+
+/// Verifies an untyped property whose default is a constant takes the constant's type: a global
+/// `const`, `self::`, `parent::` and named class constants, an array constant, and constants
+/// inside an array literal. The syntactic guess typed a class constant `string` and a global one
+/// `int`, so `public $k = self::K;` with `K = 9` failed the build (`prop_set` of an int into a
+/// string slot), and `public $l = self::L;` had no literal form at all.
+#[test]
+fn test_constant_valued_untyped_property_defaults_take_the_constant_type() {
+    let out = compile_and_run(
+        r#"<?php
+const GREETING = 'hi';
+class P { const S = 'str'; const F = 1.5; }
+class B extends P {
+    const K = 9;
+    const L = [1, 2];
+    public $g = GREETING;
+    public $s = self::S;
+    public $f = parent::F;
+    public $k = self::K;
+    public $l = self::L;
+    public $arr = [self::K, self::S];
+    public static $sk = self::K;
+    public $named = P::S;
+}
+$b = new B();
+echo json_encode([$b->g, $b->s, $b->f, $b->k, $b->l, $b->arr, B::$sk, $b->named]), "\n";
+$b->k = 'now a string';
+var_dump($b->k);
+"#,
+    );
+    assert_eq!(out, "[\"hi\",\"str\",1.5,9,[1,2],[9,\"str\"],9,\"str\"]\nstring(12) \"now a string\"\n");
+}
+
+/// Verifies an untyped scalar property written a value of another type keeps both: the default
+/// until the write, the written value after, and the default again on a fresh object. The slot
+/// used to be retyped to the written value, so propinit stored the `9` of `public $i = 9;` into a
+/// `string` slot and the program did not build.
+#[test]
+fn test_untyped_scalar_property_written_another_type_holds_both() {
+    let out = compile_and_run(
+        r#"<?php
+class B { public $i = 9; public $f = 1.5; public $s = "a"; public $b = true; public $i2 = 0; public $f2 = 0.0; }
+$b = new B();
+var_dump($b->i, $b->f, $b->s, $b->b, $b->i2, $b->f2);
+$b->i = "str"; $b->f = 3; $b->s = 5; $b->b = "x"; $b->i2 = 2.5; $b->f2 = 7;
+var_dump($b->i, $b->f, $b->s, $b->b, $b->i2, $b->f2);
+$c = new B();
+var_dump($c->i, $c->f, $c->s, $c->b, $c->i2, $c->f2);
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(9)\nfloat(1.5)\nstring(1) \"a\"\nbool(true)\nint(0)\nfloat(0)\n\
+         string(3) \"str\"\nint(3)\nint(5)\nstring(1) \"x\"\nfloat(2.5)\nint(7)\n\
+         int(9)\nfloat(1.5)\nstring(1) \"a\"\nbool(true)\nint(0)\nfloat(0)\n"
+    );
+}

@@ -351,8 +351,35 @@ pub struct ClassInfo {
     /// visible property by name. Runtime GC descriptors need the original slot
     /// flag even when a private parent slot is shadowed by a child property.
     pub property_reference_slots: Vec<bool>,
+    /// Per-layout-slot declaring class for instance properties.
+    ///
+    /// Follows `properties` by index. The name-keyed `property_declaring_classes`
+    /// only knows the property visible by name, so a private parent slot that a
+    /// child shadows would otherwise render, serialize and cast under the child's
+    /// name — and read the child's value.
+    pub property_slot_declaring_classes: Vec<String>,
+    /// Per-layout-slot flags for object-owned reference cells, set by reference-property
+    /// promotion (`$r = &$this->p`). Empty until a promotion touches the class.
+    ///
+    /// The name-keyed `owned_reference_properties` only covers the slot visible by name, so a
+    /// private ancestor slot hidden by a same-named declaration records its cell here or the
+    /// object never allocates one.
+    pub property_owned_reference_slots: Vec<bool>,
     pub abstract_properties: HashSet<String>,
     pub abstract_property_hooks: HashMap<String, PropertyHookContract>,
+    /// The properties php's reflection sees on this class, in its order: the class's own
+    /// declarations as written (static and instance interleaved, trait properties last), then
+    /// each property the parent lists that is not private to the parent and not redeclared here.
+    /// `properties` and `static_properties` are storage layouts: they keep an ancestor's private
+    /// slots and order statics apart, so `ReflectionClass::getProperties()`, `hasProperty()`,
+    /// `getProperty()` and `new ReflectionProperty()` read this list instead.
+    pub reflection_properties: Vec<String>,
+    /// The methods php's `ReflectionClass::getMethods()` lists, in its order and declared case:
+    /// the class's own methods as written (static and instance interleaved, trait methods after
+    /// them), then each method the parent lists that is not private to the parent and not
+    /// redeclared here. `methods` and `static_methods` are hashed signature maps, so any order
+    /// read from them is the hasher's.
+    pub reflection_methods: Vec<String>,
     pub static_properties: Vec<(String, PhpType)>,
     pub static_defaults: Vec<Option<Expr>>,
     pub static_property_declaring_classes: HashMap<String, String>,
@@ -479,6 +506,132 @@ impl ClassInfo {
             .unwrap_or_else(|| self.reference_properties.contains(property))
     }
 
+    /// Returns whether one physical property slot holds a reference cell the object allocates
+    /// at construction and releases on destruction.
+    pub fn property_slot_is_owned_reference(&self, index: usize) -> bool {
+        if self.property_owned_reference_slots.get(index).copied().unwrap_or(false) {
+            return true;
+        }
+        let Some((name, _)) = self.properties.get(index) else {
+            return false;
+        };
+        !self.property_slot_is_hidden(index)
+            && self.owned_reference_properties.contains(name)
+            && self.property_slot_is_reference(index, name)
+    }
+
+    /// Returns whether one physical property slot is a private ancestor slot that
+    /// a same-named descendant declaration hides from name lookups.
+    pub fn property_slot_is_hidden(&self, index: usize) -> bool {
+        self.properties
+            .get(index)
+            .is_some_and(|(name, _)| self.visible_property_index(name) != Some(index))
+    }
+
+    /// Returns the visibility and declaring class of one physical property slot.
+    ///
+    /// A visible slot answers from the name-keyed maps. A hidden slot can only be
+    /// an ancestor's private property, declared by the class its slot records.
+    pub fn property_slot_owner<'a>(
+        &'a self,
+        index: usize,
+        class_name: &'a str,
+    ) -> (Visibility, &'a str) {
+        let Some((name, _)) = self.properties.get(index) else {
+            return (Visibility::Public, class_name);
+        };
+        if self.property_slot_is_hidden(index) {
+            let declaring = self
+                .property_slot_declaring_classes
+                .get(index)
+                .map(String::as_str)
+                .unwrap_or(class_name);
+            return (Visibility::Private, declaring);
+        }
+        let visibility = self
+            .property_visibilities
+            .get(name)
+            .cloned()
+            .unwrap_or(Visibility::Public);
+        let declaring = self
+            .property_declaring_classes
+            .get(name)
+            .map(String::as_str)
+            .unwrap_or(class_name);
+        (visibility, declaring)
+    }
+
+    /// Returns whether one slot's default belongs in the class's `_class_propinit_<id>` thunk.
+    ///
+    /// The thunk assigns `$this-><name>` in the class's own scope, which only reaches the slot
+    /// visible by name. A hidden private ancestor slot is written by its declaring class's
+    /// `_class_propinit_private_<id>` thunk instead.
+    pub fn property_slot_in_init_thunk(&self, index: usize) -> bool {
+        self.defaults.get(index).is_some_and(Option::is_some) && !self.property_slot_is_hidden(index)
+    }
+
+    /// Returns whether a by-name allocation of this class runs a `_class_propinit_<id>` thunk.
+    pub fn has_property_init_thunk(&self) -> bool {
+        (0..self.properties.len()).any(|index| self.property_slot_in_init_thunk(index))
+    }
+
+    /// Returns whether one slot's default belongs in the class's private-property thunk: a
+    /// private property the class declares itself, whose default no descendant can replace.
+    pub fn property_slot_in_private_init_thunk(&self, index: usize, class_name: &str) -> bool {
+        let class_name = class_name.trim_start_matches('\\');
+        self.property_slot_in_init_thunk(index)
+            && matches!(
+                self.property_slot_owner(index, class_name),
+                (Visibility::Private, owner) if owner.eq_ignore_ascii_case(class_name)
+            )
+    }
+
+    /// Returns the byte offset of one physical property slot.
+    pub fn property_slot_offset(&self, index: usize) -> usize {
+        match self.properties.get(index) {
+            Some((name, _)) if !self.property_slot_is_hidden(index) => self
+                .property_offsets
+                .get(name)
+                .copied()
+                .unwrap_or(8 + index * 16),
+            _ => 8 + index * 16,
+        }
+    }
+}
+
+/// Returns the classes that need a `_class_propinit_private_<id>` thunk, keyed by lowercase name.
+///
+/// A by-name allocation runs one thunk in the allocated class's scope, and that scope cannot
+/// name a private ancestor slot a same-named declaration hides. Each class that declares such
+/// a hidden slot therefore gets a thunk of its own private defaults, which the allocator runs
+/// for the ancestors of any class flagged in `_class_hidden_private_slot_flags`.
+pub fn private_property_init_thunk_classes<'a>(
+    classes: impl IntoIterator<Item = (&'a String, &'a ClassInfo)> + Clone,
+) -> HashSet<String> {
+    let owners = classes
+        .clone()
+        .into_iter()
+        .flat_map(|(class_name, info)| {
+            (0..info.properties.len())
+                .filter(|index| info.property_slot_is_hidden(*index))
+                .map(|index| {
+                    info.property_slot_owner(index, class_name)
+                        .1
+                        .trim_start_matches('\\')
+                        .to_ascii_lowercase()
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<HashSet<_>>();
+    classes
+        .into_iter()
+        .filter(|(class_name, info)| {
+            owners.contains(&class_name.trim_start_matches('\\').to_ascii_lowercase())
+                && (0..info.properties.len())
+                    .any(|index| info.property_slot_in_private_init_thunk(index, class_name))
+        })
+        .map(|(class_name, _)| class_name.trim_start_matches('\\').to_ascii_lowercase())
+        .collect()
 }
 
 /// Converts a property offset into a `properties` vector index when it points

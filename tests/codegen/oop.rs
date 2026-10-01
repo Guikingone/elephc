@@ -47,6 +47,12 @@ mod datetime;
 mod dom;
 #[path = "oop/reflection_properties.rs"]
 mod reflection_properties;
+#[path = "oop/reflection_member_order.rs"]
+mod reflection_member_order;
+#[path = "oop/get_class_methods.rs"]
+mod get_class_methods;
+#[path = "oop/reflection_declaring_class.rs"]
+mod reflection_declaring_class;
 #[path = "oop/reflection_functions.rs"]
 mod reflection_functions;
 #[path = "oop/reflection_methods.rs"]

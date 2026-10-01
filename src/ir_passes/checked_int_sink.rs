@@ -391,6 +391,11 @@ fn plan_slot_specialization(
             Op::LoadLocal => {
                 accept_slot_reader(function, inst, inst_id, uses, terminator_uses, &mut plan)?
             }
+            // The deferred release before a scalar store: the backend resolves it against the
+            // final slot type, so once the slot is retyped to `I64` it releases nothing.
+            Op::ReleaseLocalSlot => {
+                plan.neutralize.insert(inst_id);
+            }
             // `unset`, ref-cell promotion, by-ref exposure, and every future slot-naming
             // opcode can observe the boxed representation, so the slot keeps it.
             _ => return None,

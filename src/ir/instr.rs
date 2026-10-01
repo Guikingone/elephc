@@ -510,6 +510,12 @@ pub enum Op {
     DynamicObjectNew,
     DynamicObjectNewMixed,
     DynamicObjectNewWithoutConstructorMixed,
+    /// Builds a fresh `ReflectionClass` by calling the compiled materializer whose address a
+    /// member reflector recorded (operand 0, a raw code address).
+    ReflectionMaterialize,
+    /// Runs the compiled member filler whose address a class reflector recorded (operand 0, a
+    /// raw code address) on that reflector (operand 1), filling its member-reflector slots.
+    ReflectionFillMembers,
     /// Reinterprets one runtime callable descriptor as an opaque bridge pointer.
     CallablePtr,
     /// Normalizes any supported PHP callable form into an owned descriptor.
@@ -925,6 +931,8 @@ impl Op {
             | InstanceOfDynamic | MixedNumericBinop | LooseEq | LooseNotEq | PhpRelCmp => {
                 E::READS_HEAP | E::MAY_DEOPT
             }
+            ReflectionMaterialize => E::READS_HEAP | E::ALLOC_HEAP,
+            ReflectionFillMembers => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP,
             // `++`/`--` on a string reads the operand's payload, may write the shared
             // concat scratch while building the carried result, and always allocates the
             // boxed Mixed cell the new value is returned in.
@@ -1202,6 +1210,8 @@ impl Op {
             DynamicObjectNewWithoutConstructorMixed => {
                 "dynamic_object_new_without_constructor_mixed"
             }
+            ReflectionMaterialize => "reflection_materialize",
+            ReflectionFillMembers => "reflection_fill_members",
             CallablePtr => "callable_ptr",
             NormalizeCallable => "normalize_callable",
             PdoAdapterAddr => "pdo_adapter_addr",

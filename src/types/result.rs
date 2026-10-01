@@ -111,6 +111,8 @@ pub struct CheckResult {
     pub ref_param_escaping_callees: HashSet<String>,
     /// Names some `define()` call creates; see `Checker::runtime_define_names`.
     pub runtime_define_names: HashSet<String>,
+    /// Constant names read but never defined; see `Checker::undefined_constant_reads`.
+    pub undefined_constant_reads: HashSet<String>,
     /// Checker-proven types for dynamic property reference locals, keyed by scope and local.
     pub dynamic_ref_local_types: HashMap<(String, String), PhpType>,
     /// The `unset()` arguments whose local binding the checker killed, as span -> the SET of local

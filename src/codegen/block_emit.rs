@@ -1915,7 +1915,7 @@ fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
     // EVERY instruction, as this used to, put a million dispatch calls into the Symfony build and
     // spent 3.4% of a request in them.
     if ctx.uses_pcntl_async_signals() {
-        abi::emit_call_label(ctx.emitter, "__rt_pcntl_async_dispatch_preserving");
+        emit_signal_safe_point(ctx);
     }
     for inst_id in &block.instructions {
         emit_instruction_source_marker(ctx, *inst_id)?;
@@ -1929,13 +1929,38 @@ fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
             return Err(CodegenIrError::deferred_body());
         }
         if ctx.uses_pcntl_async_signals() && signal_safe_point_after(ctx, *inst_id) {
-            abi::emit_call_label(ctx.emitter, "__rt_pcntl_async_dispatch_preserving");
+            emit_signal_safe_point(ctx);
         }
     }
     let terminator = block.terminator.as_ref().ok_or_else(|| {
         CodegenIrError::invalid_module(format!("block '{}' has no terminator", block.name))
     })?;
     lower_term::lower_terminator(ctx, terminator)
+}
+
+/// Emits one async-signal safe point: the flag test inline, the preserving dispatch call only
+/// while `pcntl_async_signals(true)` is on.
+///
+/// Every block start and call site of a program that can enable async signals is a safe point --
+/// 21,000 of them per Symfony request -- and calling the helper to find the flag clear cost eight
+/// instructions each. `x16` is the intra-procedure scratch register the branch relaxation already
+/// clobbers, so no value lives in it here, and adrp/add/ldr/cbz leave the flags alone, as the
+/// helper's own fast path does. The x86_64 helper's fast path is already flag-free and as short
+/// as an inline test could be, so that target keeps the call.
+fn emit_signal_safe_point(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            let done = ctx.next_label("signal_safe_point_done");
+            abi::emit_symbol_address(ctx.emitter, "x16", "__rt_pcntl_async_enabled");
+            ctx.emitter.instruction("ldr x16, [x16]");                          // read whether asynchronous dispatch is on
+            ctx.emitter.instruction(&format!("cbz x16, {}", done));             // off: nothing to dispatch, no call
+            abi::emit_call_label(ctx.emitter, "__rt_pcntl_async_dispatch_preserving");
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            abi::emit_call_label(ctx.emitter, "__rt_pcntl_async_dispatch_preserving");
+        }
+    }
 }
 
 /// Returns whether an async signal may be dispatched right after this instruction.

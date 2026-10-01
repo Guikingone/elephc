@@ -353,7 +353,6 @@ const AOT_IMPLEMENTATION_PENDING: &[&str] =
 fn is_eval_only_reflection(id: BuiltinId) -> bool {
     [
         "get_called_class",
-        "get_class_methods",
         "get_class_vars",
     ]
     .into_iter()
@@ -447,8 +446,9 @@ mod tests {
         assert_eq!(eval_registry, 640 + curl_surface);
         // 82 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use. Sodium: `__elephc_sodium_box` and
-        // `__elephc_sodium_status`.
-        assert_eq!(eval_internal, 102);
+        // `__elephc_sodium_status`. Reflection: `__elephc_reflection_materialize` and
+        // `__elephc_reflection_fill_members`.
+        assert_eq!(eval_internal, 104);
         // Registry builtins awaiting eval homes, plus the PHP-visible prelude-provided and
         // name-resolver-rewritten functions eval does not reach (see `eval_support`). `preg_grep`
         // left it when its eval home landed.
@@ -461,7 +461,10 @@ mod tests {
         // Twenty of this branch's 23 added contracts are registry-backed here.
         // Sodium: `__elephc_sodium_box` and `__elephc_sodium_status`. mbstring case mapping:
         // `mb_strtoupper` and `mb_strtolower`. Regex: `preg_last_error` and `preg_last_error_msg`.
-        assert_eq!(aot_registry, 661);
+        // `get_class_methods`, out of the eval-only reflection set. Reflection:
+        // `__elephc_reflection_materialize`, which builds a declaring class on demand, and
+        // `__elephc_reflection_fill_members`, which builds a reflector's members on first use.
+        assert_eq!(aot_registry, 664);
         // Constructs, dedicated syntax and hash surfaces, the prelude-provided and
         // name-resolver-rewritten contracts (54 of them the xml prelude, seven the `--web`
         // handler stack this branch contracted), and the curl prelude when published.
@@ -474,9 +477,10 @@ mod tests {
         // Sodium: the four `sodium_crypto_box_*` prelude declarations. Regex: `preg_filter` and
         // `preg_replace_callback_array`, built by `crate::preg_array_prelude`.
         assert_eq!(aot_external, 424 + curl_surface);
-        // `get_called_class`, `get_class_methods` and `get_class_vars` from main, plus this
-        // branch's `register_tick_function` and `unregister_tick_function`.
-        assert_eq!(aot_unsupported, 5);
+        // `get_called_class` and `get_class_vars` from main, plus this branch's
+        // `register_tick_function` and `unregister_tick_function`. `get_class_methods` is
+        // compiled natively (per-class method rows filtered by the calling scope).
+        assert_eq!(aot_unsupported, 4);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.
@@ -526,8 +530,10 @@ mod tests {
         // Moves in step with `eval_registry` above: every newly bound eval home is an adapter.
         assert_eq!(interpreter_adapter, 618 + curl_surface);
         // Drifted with the counts in `every_contract_has_a_backend_support_record`; sodium's
-        // share is its two internal builtins, which eval never exposes. `preg_grep` left it.
-        assert_eq!(unsupported, 450);
+        // share is its two internal builtins, which eval never exposes. `preg_grep` left it;
+        // the internal `__elephc_reflection_materialize` and `__elephc_reflection_fill_members`
+        // joined it.
+        assert_eq!(unsupported, 452);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

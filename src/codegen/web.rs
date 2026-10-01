@@ -138,6 +138,31 @@ mod tests {
         }
     }
 
+    /// A program that can hold a generator hands its still-tracked fiber stacks back before the
+    /// arena drop; one that cannot never references the helper, so it stays dead-stripped.
+    #[test]
+    fn request_boundary_releases_fiber_stacks_only_with_coroutines() {
+        for generator in [false, true] {
+            let target = Target::new(Platform::MacOS, Arch::AArch64);
+            let catalog = crate::ir::SourceCatalog::from_units([crate::resolver::SourceUnit {
+                canonical_path: "/fixture/entry.php".into(),
+                mode: crate::source::SourceMode::Php,
+                source: "<?php".into(),
+            }])
+            .unwrap();
+            let mut module = Module::with_source_catalog(target, catalog);
+            module.required_runtime_features.generator = generator;
+            let mut emitter = Emitter::new(target);
+            emit_web_reset(&mut emitter, &module, &DataSection::new());
+            let asm = emitter.output();
+            let release = asm.find("__rt_fiber_release_request_stacks");
+            assert_eq!(release.is_some(), generator);
+            if let Some(release) = release {
+                assert!(release < asm.find("_heap_off").unwrap(), "stacks go back before the arena");
+            }
+        }
+    }
+
     #[test]
     fn compiled_interface_activation_cells_reset_before_heap() {
         let target = Target::new(Platform::MacOS, Arch::AArch64);
@@ -222,6 +247,7 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     abi::emit_frame_prologue(emitter, RESET_FRAME_SIZE);
 
     let mut labels = LabelGen::new();
+    emit_discard_frees_start(emitter);
     if super::context::module_uses_pcntl_signal_handlers(module) {
         abi::emit_call_label(emitter, "__rt_pcntl_release_handlers");
     }
@@ -279,6 +305,12 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     emit_define_flag_resets(emitter, module, data);
 
     emit_concat_offset_reset(emitter);
+
+    // A generator still referenced here is dropped with the arena below, never freed, so its
+    // fiber stack would leak a mapping per request; hand every stack still out back first.
+    if module.required_runtime_features.fiber || module.required_runtime_features.generator {
+        abi::emit_call_label(emitter, "__rt_fiber_release_request_stacks");
+    }
 
     // The heap arena reset MUST be the final reset step: the static/global releases
     // above may run destructors or decref shared values, which require the arena to
@@ -459,8 +491,24 @@ fn emit_object_handle_index_reset(emitter: &mut Emitter) {
     emitter.label(skip_label);
 }
 
+/// Lets the releases below skip the allocator's free-list work.
+///
+/// The arena reset that ends this routine reclaims every block at once, so a block the static and
+/// global releases free only needs its handle returned and its header marked; walking it into the
+/// ordered free list was most of a Symfony request's teardown. `--heap-debug` keeps real frees, so
+/// its double-free and live-free checks still see every teardown release.
+fn emit_discard_frees_start(emitter: &mut Emitter) {
+    let keep_label = "__rt_web_reset_keep_real_frees";
+    let reg = abi::int_result_reg(emitter);
+    abi::emit_load_symbol_to_reg(emitter, reg, "_heap_debug_enabled", 0);
+    abi::emit_branch_if_int_result_nonzero(emitter, keep_label);
+    abi::emit_store_imm_to_symbol(emitter, "_heap_discard_frees", 0, 1);
+    emitter.label(keep_label);
+}
+
 fn emit_heap_arena_reset(emitter: &mut Emitter) {
     emitter.comment("reset the PHP heap arena to pure-bump allocation for the next request");
+    abi::emit_store_zero_to_symbol(emitter, "_heap_discard_frees", 0);
     emit_heap_arena_poison(emitter);
     emit_object_handle_index_reset(emitter);
     abi::emit_store_zero_to_symbol(emitter, "_heap_off", 0);

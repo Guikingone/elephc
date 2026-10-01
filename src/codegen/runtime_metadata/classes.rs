@@ -139,7 +139,19 @@ fn module_uses_dynamic_class_name_constant_lookup(module: &Module) -> bool {
             function
                 .instructions
                 .iter()
-                .any(|instruction| instruction.op == Op::ClassNameToId)
+                .any(|instruction| {
+                    instruction.op == Op::ClassNameToId
+                        // `constant($name)` resolves a `Class::NAME` through the same table, to
+                        // tell `Undefined constant C::X` from `Class "C" not found`.
+                        || matches!(
+                            instruction.immediate,
+                            Some(crate::ir::Immediate::RuntimeCall(
+                                crate::ir::RuntimeCallTarget::Function(
+                                    crate::ir::RuntimeFnId::Constant
+                                )
+                            ))
+                        )
+                })
         })
 }
 

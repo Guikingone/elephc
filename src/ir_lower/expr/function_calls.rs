@@ -414,6 +414,45 @@ fn lower_gradual_local_krsort(
     Some(call)
 }
 
+/// Copies `substr()`'s result when it views an owned temporary argument, so that argument can go.
+///
+/// `substr()` is lowered inline as pointer arithmetic: its result is ALWAYS a view into its
+/// subject, never a string of its own. Over a borrowed subject -- a local -- the view costs
+/// nothing. Over an OWNED temporary one -- the copy a `mixed` cast made, another call's result --
+/// the alias kept the argument from being released, and releasing the view cannot free it unless
+/// the view starts at its first byte: `substr($method, 3)` over a `mixed` `$method` leaked the
+/// cast's copy on every call. Persisting the result makes it independent of every argument, so all
+/// of them are released as for a fresh result. Only a builtin whose result is never a fresh
+/// string qualifies: `str_replace()` may return a new one, which the copy would leak.
+fn persist_string_view_of_owned_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    def: &crate::builtins::registry::BuiltinDef,
+    call: LoweredValue,
+    return_alias: ReturnArgAlias,
+    operands: &[crate::ir::ValueId],
+    span: Span,
+) -> (LoweredValue, ReturnArgAlias) {
+    if php_symbol_key(def.name) != "substr"
+        || ctx.builder.value_php_type(call.value).codegen_repr() != PhpType::Str
+    {
+        return (call, return_alias);
+    }
+    let views_owned_string = operands.iter().enumerate().any(|(index, operand)| {
+        let php_type = ctx.builder.value_php_type(*operand);
+        php_type.codegen_repr() == PhpType::Str
+            && return_alias.may_alias_parameter(index)
+            && ctx.value_is_owning_temporary(LoweredValue {
+                value: *operand,
+                ir_type: value_ir_type(&php_type),
+            })
+    });
+    if !views_owned_string {
+        return (call, return_alias);
+    }
+    let call = crate::ir_lower::ownership::acquire_if_refcounted(ctx, call, Some(span));
+    (call, ReturnArgAlias::None)
+}
+
 /// Emits a builtin call and releases owned temporary arguments after the call consumes them.
 pub(super) fn emit_builtin_call_value(
     ctx: &mut LoweringContext<'_, '_>,
@@ -459,6 +498,8 @@ pub(super) fn emit_builtin_call_value(
                     ReturnArgAlias::Unknown
                 }
             };
+            let (call, return_alias) =
+                persist_string_view_of_owned_args(ctx, def, call, return_alias, &operands, span);
             release_owned_call_arg_temporaries(
                 ctx,
                 &operands,

@@ -89,6 +89,12 @@ pub(super) enum ReflectionMaterializerKey {
         declaring_class: Option<String>,
         name: String,
     },
+    /// The member filler of a full class-like reflector: not a materializer, but a helper that
+    /// builds an existing reflector's member reflectors on first use.
+    Members {
+        owner: ReflectionOwnerKind,
+        name: String,
+    },
 }
 
 /// Reflection-specific immutable indexes and generated-code caches shared across a module.

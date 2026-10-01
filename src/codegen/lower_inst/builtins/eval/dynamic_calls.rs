@@ -14,10 +14,24 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_function_call(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    if !has_eval_context(ctx) {
-        return lower_eval_owned_function_call(ctx, inst);
-    }
     let function_name = ctx.function_name_data(expect_data(inst)?)?.to_string();
+    lower_eval_function_call_named(ctx, inst, &function_name)
+}
+
+/// Calls PHP function `function_name` through the eval bridge with `inst`'s operands, storing
+/// the returned Mixed cell as `inst`'s result.
+///
+/// The named form lets a natively lowered builtin hand a case it cannot answer (a class only
+/// the interpreter declared) to the bridge exactly as an `eval_function_call` would.
+pub(in crate::codegen::lower_inst::builtins) fn lower_eval_function_call_named(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    function_name: &str,
+) -> Result<()> {
+    if !has_eval_context(ctx) {
+        return lower_eval_owned_function_call(ctx, inst, function_name);
+    }
+    let function_name = function_name.to_string();
     let args_offset = EVAL_STACK_BYTES;
     let stack_bytes = eval_function_call_stack_bytes(inst.operands.len());
     abi::emit_reserve_temporary_stack(ctx.emitter, stack_bytes);
@@ -63,8 +77,12 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_function_call(
 /// Runtime include declarations are request-global in PHP, while an unrelated compiled method has
 /// no frame-local eval context to consult. Resolve the function's owning context by its canonical
 /// PHP name, then use the existing Magician function-call ABI with the normal staged arguments.
-fn lower_eval_owned_function_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    let function_name = ctx.function_name_data(expect_data(inst)?)?.to_string();
+fn lower_eval_owned_function_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    function_name: &str,
+) -> Result<()> {
+    let function_name = function_name.to_string();
     let args_offset = EVAL_STACK_BYTES;
     let stack_bytes = eval_function_call_stack_bytes(inst.operands.len());
     let missing_label = ctx.next_label("eval_owned_function_missing");

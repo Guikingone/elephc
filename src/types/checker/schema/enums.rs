@@ -119,6 +119,7 @@ pub(crate) fn build_enum_info(
     cases: &[crate::parser::ast::EnumCaseDecl],
     implements: &[crate::names::Name],
     user_methods: &[crate::parser::ast::ClassMethod],
+    own_method_count: usize,
     user_constants: &[crate::parser::ast::ClassConst],
     used_traits: &[String],
     trait_aliases: &[(String, String)],
@@ -247,7 +248,19 @@ pub(crate) fn build_enum_info(
         span,
         checker,
         next_class_id,
-    )
+    )?;
+    // Trait flattening appends the imported methods after the enum's own, and php binds them
+    // after `cases`/`from`/`tryFrom` too: `getMethods()` lists own, built-in, then trait methods.
+    if let (Some(imported), Some(info)) = (
+        user_methods.get(own_method_count..).filter(|imported| !imported.is_empty()),
+        checker.classes.get_mut(name),
+    ) {
+        let imported: Vec<String> = imported.iter().map(|method| method.name.clone()).collect();
+        info.reflection_methods
+            .retain(|method| !imported.contains(method));
+        info.reflection_methods.extend(imported);
+    }
+    Ok(())
 }
 
 /// Inserts validated enum metadata and its parallel final readonly class metadata.
@@ -455,6 +468,20 @@ pub(crate) fn insert_enum_metadata(
     }
 
     let interfaces = enum_interface_names(implements, backing_type.is_some(), checker);
+    // php lists `name` before a backed enum's `value`; the slots keep `value` first (see above).
+    let mut reflection_properties: Vec<String> =
+        properties.iter().map(|(name, _)| name.clone()).collect();
+    reflection_properties.sort_by_key(|property| property != "name");
+    // php registers the enum's own methods, then `cases` (and `from`/`tryFrom` for a backed
+    // enum). A parsed enum's trait methods move after those in `build_enum_info`.
+    let mut reflection_methods: Vec<String> =
+        user_methods.iter().map(|method| method.name.clone()).collect();
+    reflection_methods.push("cases".to_string());
+    if backing_type.is_some() {
+        reflection_methods.push("from".to_string());
+        reflection_methods.push("tryFrom".to_string());
+    }
+    let property_slot_declaring_classes = properties.iter().map(|_| name.to_string()).collect();
 
     checker.classes.insert(
         name.to_string(),
@@ -506,8 +533,12 @@ pub(crate) fn insert_enum_metadata(
             owned_reference_properties: HashSet::new(),
             promoted_properties: HashSet::new(),
             property_reference_slots,
+            property_slot_declaring_classes,
+            property_owned_reference_slots: Vec::new(),
             abstract_properties: HashSet::new(),
             abstract_property_hooks: HashMap::new(),
+            reflection_properties,
+            reflection_methods,
             static_properties: Vec::new(),
             static_defaults: Vec::new(),
             static_property_declaring_classes: HashMap::new(),

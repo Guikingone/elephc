@@ -132,6 +132,10 @@ pub(super) fn lower_method_call(
     {
         return lower_reflection_class_new_instance_without_constructor(ctx, object, args, expr);
     }
+    // Both answers come from compile-time metadata, so the receiver is never read; a temporary
+    // one (`(new ReflectionClass(X::class))->getMethods()`) is still released, or its whole
+    // member graph outlives the call. A static-property access to an undeclared name ends the
+    // block with php's throw, and nothing may follow a terminator.
     if op == Op::MethodCall {
         if let Some(value) = lower_reflection_class_static_property_value_call(
             ctx,
@@ -140,6 +144,9 @@ pub(super) fn lower_method_call(
             args,
             expr,
         ) {
+            if !ctx.builder.insertion_block_is_terminated() {
+                release_owning_receiver_temporary(ctx, object, expr.span);
+            }
             return value;
         }
     }
@@ -147,6 +154,9 @@ pub(super) fn lower_method_call(
         if let Some(value) =
             lower_reflection_class_member_list_call(ctx, Some(object_expr), method, args, expr)
         {
+            if !ctx.builder.insertion_block_is_terminated() {
+                release_owning_receiver_temporary(ctx, object, expr.span);
+            }
             return value;
         }
     }

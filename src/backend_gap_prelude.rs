@@ -43,6 +43,11 @@ pub(crate) const SORT_MIXED_NAME: &str = "__elephc_sort_mixed";
 /// Reserved helper used for one-argument `rsort()` calls on gradual indexed arrays.
 pub(crate) const RSORT_MIXED_NAME: &str = "__elephc_rsort_mixed";
 
+/// Reserved helper the mixed sort hands an all-scalar list to. Its own `sort()`/`rsort()` is the
+/// NATIVE one (`ir_lower::expr::compat_preludes` does not redirect a call made inside it), which
+/// orders scalars with the runtime's PHP comparison.
+pub(crate) const SORT_SCALAR_VALUES_NAME: &str = "__elephc_sort_scalar_values";
+
 /// Reserved helper used for one-argument `array_unique()` calls on gradual associative arrays.
 pub(crate) const ARRAY_UNIQUE_ASSOC_MIXED_NAME: &str = "__elephc_array_unique_assoc_mixed";
 
@@ -332,9 +337,27 @@ final class Randomizer {
 "#;
 
 /// Stable in-place value sort using PHP's ordinary comparison semantics.
+///
+/// Scalar and null elements go to the native `sort()`/`rsort()` of a typed array, which orders
+/// them with the runtime's own PHP comparison (`__rt_php_compare_slots`). Only an element the
+/// native comparator refuses -- an array or an object -- keeps the quadratic loop below: Twig
+/// sorts `get_class_methods()` of every class it reads an attribute from, and the loop made that
+/// 1.4M instructions for 28 names.
 const SORT_MIXED_SRC: &str = r#"<?php
 function __elephc_sort_mixed_direction(mixed &$array, bool $descending): bool {
-    $array = array_values($array);
+    $values = array_values($array);
+    $scalar = true;
+    foreach ($values as $value) {
+        if ($value !== null && !is_scalar($value)) {
+            $scalar = false;
+            break;
+        }
+    }
+    if ($scalar) {
+        $array = __elephc_sort_scalar_values($values, $descending);
+        return true;
+    }
+    $array = $values;
     $count = count($array);
     $outer = $count;
     while ($outer > 1) {
@@ -357,6 +380,14 @@ function __elephc_sort_mixed_direction(mixed &$array, bool $descending): bool {
         $outer--;
     }
     return true;
+}
+function __elephc_sort_scalar_values(array $values, bool $descending): array {
+    if ($descending) {
+        rsort($values);
+    } else {
+        sort($values);
+    }
+    return $values;
 }
 function __elephc_sort_mixed(mixed &$array): bool {
     return __elephc_sort_mixed_direction($array, false);

@@ -41,6 +41,7 @@ pub(super) struct ClassBuildState {
     pub(super) reference_properties: HashSet<String>,
     pub(super) promoted_properties: HashSet<String>,
     pub(super) property_reference_slots: Vec<bool>,
+    pub(super) property_slot_declaring_classes: Vec<String>,
     pub(super) abstract_properties: HashSet<String>,
     pub(super) abstract_property_hooks: HashMap<String, PropertyHookContract>,
     pub(super) static_prop_types: Vec<(String, PhpType)>,
@@ -74,6 +75,10 @@ pub(super) struct ClassBuildState {
     pub(super) property_attribute_names: HashMap<String, Vec<String>>,
     pub(super) property_attribute_args:
         HashMap<String, Vec<Option<Vec<crate::types::AttrArgEntry>>>>,
+    /// The parent's reflection-visible properties this class inherits: all but its privates.
+    pub(super) inherited_reflection_properties: Vec<String>,
+    /// The parent's reflection-visible methods this class inherits: all but its privates.
+    pub(super) inherited_reflection_methods: Vec<String>,
 }
 
 impl ClassBuildState {
@@ -91,8 +96,59 @@ impl ClassBuildState {
             state.inherit_static_methods(parent);
             state.interfaces = parent.interfaces.clone();
             state.allow_dynamic_properties = parent.allow_dynamic_properties;
+            state.inherited_reflection_properties = parent
+                .reflection_properties
+                .iter()
+                .filter(|name| {
+                    let visibility = parent
+                        .property_visibilities
+                        .get(name.as_str())
+                        .or_else(|| parent.static_property_visibilities.get(name.as_str()));
+                    visibility != Some(&Visibility::Private)
+                })
+                .cloned()
+                .collect();
+            state.inherited_reflection_methods = parent
+                .reflection_methods
+                .iter()
+                .filter(|name| {
+                    let key = crate::names::php_symbol_key(name);
+                    let visibility = parent
+                        .method_visibilities
+                        .get(&key)
+                        .or_else(|| parent.static_method_visibilities.get(&key));
+                    visibility != Some(&Visibility::Private)
+                })
+                .cloned()
+                .collect();
         }
         state
+    }
+
+    /// The class's own methods in declaration order, then what it inherits and does not redeclare.
+    fn reflection_methods(&self, class: &FlattenedClass) -> Vec<String> {
+        let mut seen = HashSet::new();
+        class
+            .methods
+            .iter()
+            .map(|method| &method.name)
+            .chain(self.inherited_reflection_methods.iter())
+            .filter(|name| seen.insert(crate::names::php_symbol_key(name)))
+            .cloned()
+            .collect()
+    }
+
+    /// The class's own declarations in source order, then what it inherits and does not redeclare.
+    fn reflection_properties(&self, class: &FlattenedClass) -> Vec<String> {
+        let mut seen = HashSet::new();
+        class
+            .properties
+            .iter()
+            .map(|property| &property.name)
+            .chain(self.inherited_reflection_properties.iter())
+            .filter(|name| seen.insert(name.as_str()))
+            .cloned()
+            .collect()
     }
 
     /// Consumes `self` and assembles an immutable `ClassInfo` struct.
@@ -128,6 +184,8 @@ impl ClassBuildState {
                 )
             })
             .collect();
+        let reflection_properties = self.reflection_properties(class);
+        let reflection_methods = self.reflection_methods(class);
         Ok(ClassInfo {
             class_id,
             declaration_span: class.span,
@@ -209,8 +267,12 @@ impl ClassBuildState {
             owned_reference_properties: HashSet::new(),
             promoted_properties: self.promoted_properties,
             property_reference_slots: self.property_reference_slots,
+            property_slot_declaring_classes: self.property_slot_declaring_classes,
+            property_owned_reference_slots: Vec::new(),
             abstract_properties: self.abstract_properties,
             abstract_property_hooks: self.abstract_property_hooks,
+            reflection_properties,
+            reflection_methods,
             static_properties: self.static_prop_types,
             static_defaults: self.static_defaults,
             static_property_declaring_classes: self.static_property_declaring_classes,
@@ -434,6 +496,14 @@ impl ClassBuildState {
                     .get(index)
                     .copied()
                     .unwrap_or_else(|| parent.reference_properties.contains(name)),
+            );
+            self.property_slot_declaring_classes.push(
+                parent
+                    .property_slot_declaring_classes
+                    .get(index)
+                    .or_else(|| parent.property_declaring_classes.get(name))
+                    .cloned()
+                    .unwrap_or_default(),
             );
             if let Some(visibility) = parent.property_visibilities.get(name) {
                 self.property_visibilities

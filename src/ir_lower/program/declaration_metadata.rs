@@ -18,7 +18,21 @@ pub(super) fn lower_property_init_thunks(
 ) {
     let mut classes = check_result.classes.iter().collect::<Vec<_>>();
     classes.sort_by_key(|(_, class_info)| class_info.class_id);
+    let private_thunk_classes =
+        crate::types::private_property_init_thunk_classes(check_result.classes.iter());
     for (class_name, class_info) in classes {
+        // Lowered for every owner, reflection classes included: the data table only points at
+        // one when the owner's own thunk survives, so an unused private thunk is never read.
+        if private_thunk_classes.contains(&class_name.trim_start_matches('\\').to_ascii_lowercase()) {
+            function::lower_private_property_init_thunk(
+                class_name,
+                class_info,
+                module,
+                check_result,
+                constants,
+                fiber_return_sigs,
+            );
+        }
         if crate::ir_lower::reflection::canonical_builtin_reflection_class_name(class_name).is_some() {
             continue;
         }

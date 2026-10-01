@@ -762,6 +762,10 @@ pub(super) fn emit_ref_arg_writebacks(
                     emit_mixed_ref_writeback_to_gradual_local(ctx, writeback)?;
                     continue;
                 }
+                if matches!(writeback.source_ty.codegen_repr(), PhpType::AssocArray { .. }) {
+                    emit_hash_ref_writeback_from_mixed_cell(ctx, writeback)?;
+                    continue;
+                }
                 abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
                 abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
                 move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
@@ -806,6 +810,35 @@ pub(super) fn emit_ref_arg_writebacks(
     }
     let block_cells = call_args.ref_writebacks.len() + call_args.ref_temp_cells.len();
     abi::emit_release_temporary_stack(ctx.emitter, block_cells * 16);
+    Ok(())
+}
+
+/// Publishes a by-reference `mixed` cell back into a caller slot held as a hash.
+///
+/// The callee may leave a packed list in the cell: `sort()` on an array of mixed values runs
+/// the gradual `__elephc_sort_mixed(mixed &$array)`, which assigns `array_values()` order back.
+/// Unboxing that payload stored an indexed array where the caller reads a hash, and the next
+/// hash walk (`rsort()` on the same `$object->items`) faulted. `__rt_mixed_to_owned_hash`
+/// hands back an owned hash for either array shape.
+fn emit_hash_ref_writeback_from_mixed_cell(
+    ctx: &mut FunctionContext<'_>,
+    writeback: &RefArgWriteback,
+) -> Result<()> {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    if arg_reg != result_reg {
+        abi::emit_reg_move(ctx.emitter, arg_reg, result_reg);
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_to_owned_hash");
+    let slot_ty = ctx.local_php_type(writeback.source_slot)?.codegen_repr();
+    let offset = ctx.local_offset(writeback.source_slot)?;
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    super::super::frame::emit_owned_local_cleanup(ctx, writeback.source_slot, offset, &slot_ty);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    ctx.store_current_result_to_local(writeback.source_slot)?;
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
     Ok(())
 }
 

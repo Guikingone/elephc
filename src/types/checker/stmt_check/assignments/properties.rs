@@ -668,7 +668,15 @@ pub(super) fn refined_untyped_property_assignment_type(
                 Some(PhpType::Mixed)
             }
         }
-        PhpType::Int if current != val_ty => Some(val_ty.clone()),
+        // A scalar slot written a value of another representation holds both kinds of value --
+        // the default until the write, the written value after -- so it widens to `Mixed`, the
+        // top of this lattice. Rebinding an `int` slot to the written type made propinit store
+        // the `9` of `public $k = 9;` into a `string` slot, which failed the build.
+        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str
+            if current.codegen_repr() != val_ty.codegen_repr() =>
+        {
+            Some(PhpType::Mixed)
+        }
         _ => {
             if is_empty_array_placeholder(current)
                 && matches!(val_ty, PhpType::Array(_) | PhpType::AssocArray { .. })

@@ -73,7 +73,32 @@ pub(super) fn lower_nullable_native_isset_offset_probe(
 }
 
 /// Lowers native array/hash `isset` once the receiver has already been evaluated.
+///
+/// The probe only reads its receiver, so a receiver it owns is released afterwards, as an array
+/// read does. A boxed (`mixed`) local is loaded with its own reference: kept, that reference left
+/// the container shared, and the next `$cache[$k] = $v` after `isset($cache[$k])` copied the whole
+/// table and leaked the copy it replaced.
 pub(super) fn lower_native_isset_offset_probe_from_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_value: LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    if !matches!(
+        array_value.ir_type,
+        IrType::Heap(IrHeapKind::Array) | IrType::Heap(IrHeapKind::Hash)
+    ) {
+        return lower_non_native_isset_offset_probe(ctx, array_value, index, expr);
+    }
+    let checked = lower_native_container_isset_offset_probe(ctx, array_value, index, expr);
+    if ctx.value_is_owning_temporary(array_value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, array_value, Some(expr.span));
+    }
+    checked
+}
+
+/// Probes an indexed array or hash receiver without releasing it.
+fn lower_native_container_isset_offset_probe(
     ctx: &mut LoweringContext<'_, '_>,
     array_value: LoweredValue,
     index: &Expr,
@@ -134,7 +159,7 @@ pub(super) fn lower_native_isset_offset_probe_from_value(
                 )
             }
         }
-        IrType::Heap(IrHeapKind::Hash) => {
+        _ => {
             let index_value = lower_expr(ctx, index);
             ctx.emit_value(
                 Op::HashIsset,
@@ -145,34 +170,42 @@ pub(super) fn lower_native_isset_offset_probe_from_value(
                 Some(expr.span),
             )
         }
-        _ => {
-            // An `ArrayAccess` receiver whose EXPRESSION could not name its class — a call is
-            // typed `int` before lowering — reaches this arm rather than the syntactic
-            // `offsetExists` path. Decide it here on the value that was actually produced:
-            // `isset($obj[$k])` is `offsetExists` in PHP, never `offsetGet`, and an
-            // implementation is free to make the two observably different.
-            let receiver_ty = ctx.builder.value_php_type(array_value.value);
-            if type_satisfies_array_access_for_ir(ctx, &receiver_ty) {
-                return lower_method_call_with_receiver(
-                    ctx,
-                    array_value,
-                    "offsetExists",
-                    &[index.clone()],
-                    Op::MethodCall,
-                    expr,
-                );
-            }
-            let read_value = lower_array_access_from_value(ctx, array_value, index, expr, false);
-            emit_builtin_call_value(
-                ctx,
-                "isset",
-                vec![read_value.value],
-                PhpType::Int,
-                expr.span,
-                None,
-            )
-        }
     }
+}
+
+/// Probes a receiver that is neither an indexed array nor a hash; the paths it takes release
+/// their own receiver.
+fn lower_non_native_isset_offset_probe(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_value: LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    // An `ArrayAccess` receiver whose EXPRESSION could not name its class — a call is
+    // typed `int` before lowering — reaches this arm rather than the syntactic
+    // `offsetExists` path. Decide it here on the value that was actually produced:
+    // `isset($obj[$k])` is `offsetExists` in PHP, never `offsetGet`, and an
+    // implementation is free to make the two observably different.
+    let receiver_ty = ctx.builder.value_php_type(array_value.value);
+    if type_satisfies_array_access_for_ir(ctx, &receiver_ty) {
+        return lower_method_call_with_receiver(
+            ctx,
+            array_value,
+            "offsetExists",
+            &[index.clone()],
+            Op::MethodCall,
+            expr,
+        );
+    }
+    let read_value = lower_array_access_from_value(ctx, array_value, index, expr, false);
+    emit_builtin_call_value(
+        ctx,
+        "isset",
+        vec![read_value.value],
+        PhpType::Int,
+        expr.span,
+        None,
+    )
 }
 
 /// Lowers `isset($object->property)` without performing a normal property read first.

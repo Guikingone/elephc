@@ -177,8 +177,15 @@ pub(super) fn reflection_method_owner_metadata(
     method_name: &str,
     member: ReflectionListedMember,
 ) -> ReflectionOwnerMetadata {
+    // php reports the name as DECLARED, whatever case the lookup used:
+    // `(new ReflectionMethod(C::class, 'camelcase'))->getName()` is `CamelCase`.
+    let reflected_name = if member.name.is_empty() {
+        method_name.to_string()
+    } else {
+        member.name.clone()
+    };
     ReflectionOwnerMetadata {
-        reflected_name: Some(method_name.to_string()),
+        reflected_name: Some(reflected_name),
         doc_comment: None,
         attr_names: member.attr_names,
         attr_args: member.attr_args,

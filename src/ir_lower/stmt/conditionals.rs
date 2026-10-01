@@ -493,9 +493,13 @@ pub(super) fn apply_loop_storage_contracts(
             ctx.store_local(&name, converted, target_ty, span);
             continue;
         }
-        let source = ctx.load_local(&name, span);
+        // Each converting arm loads the local itself. A load taken before the match was left
+        // unused by the arm that converts nothing, and from a boxed (`mixed`) slot that load holds
+        // its own reference: the hash stayed shared, so the loop's first write copied it and
+        // leaked the original once per call.
         match (&source_ty, &target_repr) {
             (PhpType::Array(_), PhpType::AssocArray { .. }) => {
+                let source = ctx.load_local(&name, span);
                 // The conversion builds a NEW hash, so it has to consume the slot's array: a
                 // plain `ArrayToHash` kept it, and `$s = []; foreach ($keys as $k) { $s[$k] = 1; }`
                 // leaked the empty array and, through the boxed slot, the whole hash per call.
@@ -507,6 +511,7 @@ pub(super) fn apply_loop_storage_contracts(
             (PhpType::Array(_), PhpType::Array(target_element))
                 if target_element.codegen_repr() == PhpType::Mixed =>
             {
+                let source = ctx.load_local(&name, span);
                 let converted = ctx.emit_value(
                     Op::ArrayToMixed,
                     vec![source.value],
@@ -524,6 +529,7 @@ pub(super) fn apply_loop_storage_contracts(
                     ..
                 },
             ) if target_value.codegen_repr() == PhpType::Mixed => {
+                let source = ctx.load_local(&name, span);
                 let converted = ctx.emit_value(
                     Op::HashToMixed,
                     vec![source.value],
@@ -535,6 +541,7 @@ pub(super) fn apply_loop_storage_contracts(
                 ctx.store_mutated_local(&name, converted, target_ty, span);
             }
             (_, PhpType::Mixed) => {
+                let source = ctx.load_local(&name, span);
                 let converted = ctx.box_value_as_mixed(source, target_ty.clone(), span);
                 ctx.store_local(&name, converted, target_ty, span);
                 // This store makes the slot's frame storage boxed for the whole function, so the

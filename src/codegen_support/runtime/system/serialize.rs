@@ -21,6 +21,8 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::runtime::strings::CONCAT_BUF_CAPACITY;
+use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
+use crate::codegen_support::abi::emit_load_int_immediate;
 use crate::codegen_support::sentinels::{emit_branch_if_null_container, emit_resolve_prop_desc_tag};
 
 /// Emits `__rt_serialize_value`, the tag-dispatching serializer, and the
@@ -740,6 +742,26 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x13, [sp, #16]");                                  // save the property-info pointer
     emitter.instruction("ldr x0, [x13]");                                       // load the property count
     emitter.instruction("str x0, [sp, #24]");                                   // save the property count
+    // php omits a typed property that was never assigned, so the count covers only the
+    // rows whose slot does not hold the uninitialized-typed sentinel.
+    emit_load_int_immediate(emitter, "x11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    emitter.instruction("mov x3, #0");                                          // initialized property count
+    emitter.instruction("mov x4, #0");                                          // row cursor
+    emitter.label("__rt_serialize_object_count_loop");
+    emitter.instruction("cmp x4, x0");                                          // counted every row?
+    emitter.instruction("b.ge __rt_serialize_object_count_done");               // the count is complete
+    emitter.instruction("add x14, x13, #8");                                    // skip the count to the first row
+    emitter.instruction("add x14, x14, x4, lsl #5");                            // row = rows + cursor*32
+    emitter.instruction("ldr x9, [x14, #16]");                                  // property byte offset
+    emitter.instruction("ldr x7, [sp, #0]");                                    // reload the object pointer
+    emitter.instruction("add x7, x7, x9");                                      // address of the property slot
+    emitter.instruction("ldr x2, [x7, #8]");                                    // slot high word, which carries the sentinel
+    emitter.instruction("cmp x2, x11");                                         // is this typed property still uninitialized?
+    emitter.instruction("cinc x3, x3, ne");                                     // count it only once it holds a value
+    emitter.instruction("add x4, x4, #1");                                      // advance to the next row
+    emitter.instruction("b __rt_serialize_object_count_loop");                  // continue counting
+    emitter.label("__rt_serialize_object_count_done");
+    emitter.instruction("mov x0, x3");                                          // the count php writes
     emitter.instruction("bl __rt_serialize_uint");                              // append the property count digits
     emit_append_literal_aarch64(emitter, &[b':', b'{'], "the object body open");
     emitter.instruction("str xzr, [sp, #32]");                                  // property cursor = 0
@@ -751,6 +773,13 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x13, [sp, #16]");                                  // reload the property-info pointer
     emitter.instruction("add x14, x13, #8");                                    // skip the count to the first row
     emitter.instruction("add x14, x14, x4, lsl #5");                            // row = rows + cursor*32
+    emitter.instruction("ldr x9, [x14, #16]");                                  // property byte offset
+    emitter.instruction("ldr x7, [sp, #0]");                                    // reload the object pointer
+    emitter.instruction("add x7, x7, x9");                                      // address of the property slot
+    emitter.instruction("ldr x2, [x7, #8]");                                    // slot high word, which carries the sentinel
+    emit_load_int_immediate(emitter, "x11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    emitter.instruction("cmp x2, x11");                                         // is this typed property still uninitialized?
+    emitter.instruction("b.eq __rt_serialize_object_next");                     // php leaves it out of the payload
     emitter.instruction("ldr x0, [x14]");                                       // mangled key pointer
     emitter.instruction("ldr x1, [x14, #8]");                                   // mangled key length
     emitter.instruction("bl __rt_serialize_pstr");                              // append the mangled property key
@@ -767,6 +796,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emit_resolve_prop_desc_tag(emitter, "x10", "x2", "x9");
     emitter.instruction("mov x0, x10");                                         // value tag
     emitter.instruction("bl __rt_serialize_value");                             // append the serialized property value
+    emitter.label("__rt_serialize_object_next");
     emitter.instruction("ldr x4, [sp, #32]");                                   // reload the property cursor
     emitter.instruction("add x4, x4, #1");                                      // advance to the next property
     emitter.instruction("str x4, [sp, #32]");                                   // persist the cursor
@@ -1667,6 +1697,27 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the property-info pointer
     emitter.instruction("mov rax, QWORD PTR [r11]");                            // load the property count
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the property count
+    // php omits a typed property that was never assigned, so the count covers only the
+    // rows whose slot does not hold the uninitialized-typed sentinel.
+    emit_load_int_immediate(emitter, "r10", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    emitter.instruction("xor r9d, r9d");                                        // initialized property count
+    emitter.instruction("xor ecx, ecx");                                        // row cursor
+    emitter.label("__rt_serialize_object_count_loop");
+    emitter.instruction("cmp rcx, QWORD PTR [rbp - 32]");                       // counted every row?
+    emitter.instruction("jae __rt_serialize_object_count_done");                // the count is complete
+    emitter.instruction("mov rdx, rcx");                                        // row cursor
+    emitter.instruction("shl rdx, 5");                                          // cursor * 32 (row stride)
+    emitter.instruction("add rdx, r11");                                        // advance to the row
+    emitter.instruction("mov r8, QWORD PTR [rdx + 24]");                        // property byte offset (row + 8 + 16)
+    emitter.instruction("add r8, QWORD PTR [rbp - 8]");                         // address of the property slot
+    emitter.instruction("cmp QWORD PTR [r8 + 8], r10");                         // is this typed property still uninitialized?
+    emitter.instruction("je __rt_serialize_object_count_skip");                 // leave it out of the count
+    emitter.instruction("add r9, 1");                                           // count it once it holds a value
+    emitter.label("__rt_serialize_object_count_skip");
+    emitter.instruction("add rcx, 1");                                          // advance to the next row
+    emitter.instruction("jmp __rt_serialize_object_count_loop");                // continue counting
+    emitter.label("__rt_serialize_object_count_done");
+    emitter.instruction("mov rax, r9");                                         // the count php writes
     emitter.instruction("call __rt_serialize_uint");                            // append the property count digits
     emit_append_literal_x86_64(emitter, &[b':', b'{'], "the object body open");
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // property cursor = 0
@@ -1679,6 +1730,11 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shl rax, 5");                                          // cursor * 32 (row stride)
     emitter.instruction("add r11, rax");                                        // advance to the row
     emitter.instruction("add r11, 8");                                          // skip the count word to the row fields
+    emitter.instruction("mov r8, QWORD PTR [r11 + 16]");                        // property byte offset
+    emitter.instruction("add r8, QWORD PTR [rbp - 8]");                         // address of the property slot
+    emit_load_int_immediate(emitter, "r10", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    emitter.instruction("cmp QWORD PTR [r8 + 8], r10");                         // is this typed property still uninitialized?
+    emitter.instruction("je __rt_serialize_object_next");                       // php leaves it out of the payload
     emitter.instruction("mov rdi, QWORD PTR [r11]");                            // mangled key pointer
     emitter.instruction("mov rsi, QWORD PTR [r11 + 8]");                        // mangled key length
     emitter.instruction("call __rt_serialize_pstr");                            // append the mangled property key
@@ -1696,6 +1752,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emit_resolve_prop_desc_tag(emitter, "r9", "rdx", "rax");
     emitter.instruction("mov rdi, r9");                                         // value tag
     emitter.instruction("call __rt_serialize_value");                           // append the serialized property value
+    emitter.label("__rt_serialize_object_next");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // reload the property cursor
     emitter.instruction("add rcx, 1");                                          // advance to the next property
     emitter.instruction("mov QWORD PTR [rbp - 40], rcx");                       // persist the cursor

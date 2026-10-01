@@ -107,11 +107,21 @@ pub(super) fn builtin_reflection_owner_class(
             Some(mixed_type()),
             false_bool(),
         ));
-        methods.push(builtin_reflection_class_object_method(
-            "getDeclaringClass",
-            "__declaring_class",
-            "ReflectionClass",
-        ));
+        if reflection_declaring_class_is_lazy(name) {
+            properties.push(builtin_property(
+                "__declaring_class_thunk",
+                Visibility::Private,
+                Some(TypeExpr::Int),
+                int_lit(0),
+            ));
+            methods.push(builtin_reflection_lazy_declaring_class_method());
+        } else {
+            methods.push(builtin_reflection_class_object_method(
+                "getDeclaringClass",
+                "__declaring_class",
+                "ReflectionClass",
+            ));
+        }
     }
     if matches!(
         name,
@@ -386,6 +396,74 @@ pub(super) fn reflection_owner_has_doc_comment_method(class_name: &str) -> bool 
             | "ReflectionClassConstant"
             | "ReflectionEnumUnitCase"
             | "ReflectionEnumBackedCase"
+    )
+}
+
+/// Returns true when this member reflector builds its declaring `ReflectionClass` on demand.
+///
+/// A compiled reflector of these classes records the address of the declaring class's shared
+/// materializer in `__declaring_class_thunk` (see `emit_reflection_declaring_class_property`);
+/// one built by the eval bridge still carries the object in `__declaring_class` and a zero thunk.
+pub(super) fn reflection_declaring_class_is_lazy(class_name: &str) -> bool {
+    matches!(class_name, "ReflectionMethod" | "ReflectionProperty")
+}
+
+/// Builds `getDeclaringClass()` for a reflector whose declaring class is built on demand:
+/// `__elephc_reflection_materialize($this->__declaring_class_thunk)` when the reflector recorded
+/// a materializer, else the object the eval bridge stored. Each call returns a fresh object, as
+/// php's does.
+fn builtin_reflection_lazy_declaring_class_method() -> ClassMethod {
+    let span = crate::span::Span::dummy();
+    let materialized = Stmt::new(
+        StmtKind::If {
+            condition: binary_expr(
+                reflection_this_property("__declaring_class_thunk", span),
+                BinOp::StrictNotEq,
+                Expr::new(ExprKind::IntLiteral(0), span),
+                span,
+            ),
+            then_body: vec![Stmt::new(
+                StmtKind::Return(Some(reflection_materialized_declaring_class(span))),
+                span,
+            )],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        span,
+    );
+    ClassMethod {
+        name: "getDeclaringClass".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("ReflectionClass"))),
+        by_ref_return: false,
+        body: vec![
+            materialized,
+            Stmt::new(
+                StmtKind::Return(Some(reflection_this_property("__declaring_class", span))),
+                span,
+            ),
+        ],
+        span,
+        attributes: Vec::new(),
+    }
+}
+
+/// `__elephc_reflection_materialize($this->__declaring_class_thunk)`: a fresh declaring
+/// `ReflectionClass` built by the materializer the reflector recorded.
+fn reflection_materialized_declaring_class(span: crate::span::Span) -> Expr {
+    function_call(
+        "__elephc_reflection_materialize",
+        vec![reflection_this_property("__declaring_class_thunk", span)],
+        span,
     )
 }
 

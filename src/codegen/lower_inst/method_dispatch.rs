@@ -70,11 +70,36 @@ fn lower_native_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     };
     guard_static_method_receiver(ctx, object, &method_name)?;
     if builtins::has_eval_context(ctx)
-        && (reflection_function_callable_metadata_method(&class_name, &method_name)
-            || reflection_class_runtime_metadata_method(&class_name))
+        && reflection_function_callable_metadata_method(&class_name, &method_name)
     {
         return builtins::lower_eval_method_call(ctx, inst, object, &method_name);
     }
+    if builtins::has_eval_context(ctx) && reflection_class_runtime_metadata_method(&class_name) {
+        if !class_reflector_names_a_class(&class_name) {
+            return builtins::lower_eval_method_call(ctx, inst, object, &method_name);
+        }
+        let native_label = ctx.next_label("reflector_native_dispatch");
+        let done_label = ctx.next_label("reflector_dispatch_done");
+        emit_reflector_is_complete_probe(ctx, object, &class_name, &native_label)?;
+        builtins::lower_eval_method_call(ctx, inst, object, &method_name)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&native_label);
+        lower_typed_native_method_call(ctx, inst, object, class_name, &method_name)?;
+        ctx.emitter.label(&done_label);
+        return Ok(());
+    }
+    lower_typed_native_method_call(ctx, inst, object, class_name, &method_name)
+}
+
+/// Dispatches a statically typed object receiver once the eval bridge has been ruled out.
+fn lower_typed_native_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    class_name: String,
+    method_name: &str,
+) -> Result<()> {
+    let method_name = method_name.to_string();
     if let Some(state) = fiber_state_predicate(&class_name, &method_name) {
         return lower_fiber_state_predicate(ctx, inst, object, state);
     }
@@ -186,6 +211,43 @@ fn reflection_function_callable_metadata_method(class_name: &str, method_name: &
                 | "getclosurecalledclass"
                 | "getclosureusedvariables"
         )
+}
+
+/// Returns whether a reflector class's `__name` slot names a class-like (not an attribute).
+fn class_reflector_names_a_class(class_name: &str) -> bool {
+    matches!(
+        class_name.trim_start_matches('\\'),
+        "ReflectionClass" | "ReflectionObject" | "ReflectionEnum"
+    )
+}
+
+/// Branches to `native_label` when a class reflector was fully materialized by compiled code.
+///
+/// Every call on a `ReflectionClass`/`ReflectionObject`/`ReflectionEnum` receiver in a function
+/// that holds an eval context went to the interpreter, because a reflector the bridge built, or a
+/// shallow one, leaves slots empty that the native bodies read (the bridge fills the name arrays,
+/// never the member objects). A reflector the full materializer built has them all, and says so
+/// in `__complete`. Sending it through the interpreter cost a bridge crossing per call and used
+/// the interpreter's view of the class -- `(new ReflectionClass(Suit::class))->isEnum()` answered
+/// false there.
+fn emit_reflector_is_complete_probe(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    class_name: &str,
+    native_label: &str,
+) -> Result<()> {
+    let flag_offset = ctx
+        .module
+        .class_infos
+        .get(class_name.trim_start_matches('\\'))
+        .and_then(|info| info.property_offsets.get("__complete").copied())
+        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, object_reg)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, flag_offset);
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, native_label);
+    Ok(())
 }
 
 /// Returns true when runtime evaluation must own a reflection metadata method call.

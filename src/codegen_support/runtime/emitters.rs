@@ -246,7 +246,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
         system::emit_rt_hash_from_name_list(emitter);
     }
     if features.class_methods_introspection {
-        system::emit_rt_array_from_name_list(emitter);
+        system::emit_rt_class_method_names(emitter);
         system::emit_rt_member_exists(emitter);
     }
 

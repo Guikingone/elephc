@@ -10687,6 +10687,229 @@
         {
           "by_ref": false,
           "default": null,
+          "name": "filler",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "reflector",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_reflection_fill_members",
+    "description": "Fills a compiled reflector's member reflectors through its compiled filler, on first use.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 676,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_reflection_fill_members.rs",
+      "sig_line": null
+    },
+    "module": "elephc",
+    "name": "__elephc_reflection_fill_members",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "internal compiler primitive"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_heap",
+          "writes_heap",
+          "alloc_heap"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "filler",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "reflector",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "void",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_reflection_fill_members",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "materializer",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_reflection_materialize",
+    "description": "Builds a member reflector's declaring ReflectionClass through its compiled materializer.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 676,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_reflection_materialize.rs",
+      "sig_line": null
+    },
+    "module": "elephc",
+    "name": "__elephc_reflection_materialize",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "internal compiler primitive"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_heap",
+          "alloc_heap"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "materializer",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_reflection_materialize",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
           "name": "op",
           "optional": false,
           "type": "int"
@@ -27867,7 +28090,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 724,
+      "codegen_line": 722,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -27952,7 +28175,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 723,
+      "codegen_line": 721,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -28023,7 +28246,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 727,
+      "codegen_line": 725,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -28108,7 +28331,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 722,
+      "codegen_line": 720,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -36505,7 +36728,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 875,
+      "codegen_line": 873,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -36583,7 +36806,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 702,
+      "codegen_line": 700,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -36668,7 +36891,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 704,
+      "codegen_line": 702,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -36753,7 +36976,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 703,
+      "codegen_line": 701,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -36838,7 +37061,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 707,
+      "codegen_line": 705,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -36937,7 +37160,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 883,
+      "codegen_line": 881,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37279,7 +37502,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 872,
+      "codegen_line": 870,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37364,7 +37587,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 874,
+      "codegen_line": 872,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37427,7 +37650,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 819,
+      "codegen_line": 817,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37483,7 +37706,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 869,
+      "codegen_line": 867,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37554,7 +37777,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 889,
+      "codegen_line": 887,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37646,7 +37869,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 884,
+      "codegen_line": 882,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37738,7 +37961,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 877,
+      "codegen_line": 875,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37809,7 +38032,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 882,
+      "codegen_line": 880,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37873,7 +38096,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 713,
+      "codegen_line": 711,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37944,7 +38167,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 710,
+      "codegen_line": 708,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -38022,7 +38245,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 876,
+      "codegen_line": 874,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -38107,7 +38330,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 714,
+      "codegen_line": 712,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -38222,7 +38445,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 805,
+      "codegen_line": 803,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -38358,7 +38581,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 805,
+      "codegen_line": 803,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -38485,7 +38708,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 886,
+      "codegen_line": 884,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -38577,7 +38800,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 878,
+      "codegen_line": 876,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -38648,7 +38871,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 879,
+      "codegen_line": 877,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -38719,7 +38942,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 880,
+      "codegen_line": 878,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -38790,7 +39013,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 881,
+      "codegen_line": 879,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -40186,7 +40409,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 768,
+      "codegen_line": 766,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -40266,7 +40489,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 768,
+      "codegen_line": 766,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -47336,7 +47559,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 736,
+      "codegen_line": 734,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -49660,7 +49883,7 @@
   },
   {
     "aot": {
-      "kind": "none",
+      "kind": "registry",
       "params": [
         {
           "by_ref": false,
@@ -49672,8 +49895,7 @@
       ],
       "required_param_count": 1,
       "signature_override_reason": null,
-      "supported": false,
-      "unsupported_reason": "eval-only-reflection",
+      "supported": true,
       "variadic": null
     },
     "area": "Class",
@@ -49704,7 +49926,7 @@
       "supported": true,
       "variadic": null
     },
-    "eval_only": true,
+    "eval_only": false,
     "examples": [],
     "in_catalog": true,
     "is_extension": false,
@@ -49712,18 +49934,78 @@
     "lowering": {
       "checker_file": null,
       "checker_line": null,
-      "codegen_file": null,
-      "codegen_function": null,
-      "codegen_line": null,
-      "notes": [],
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 676,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.get_class_methods` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
       "runtime_helpers": [],
       "sig_arm": null,
-      "sig_file": "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+      "sig_file": "src/builtins/callables/get_class_methods.rs",
       "sig_line": null
     },
     "module": "core",
     "name": "get_class_methods",
-    "semantics": null,
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "get_class_methods"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "independent"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [
+        "get_class_methods"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
     "sig": {
       "params": [
         {
@@ -52561,7 +52843,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 816,
+      "codegen_line": 814,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -53327,7 +53609,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 825,
+      "codegen_line": 823,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -53537,7 +53819,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 728,
+      "codegen_line": 726,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -58934,7 +59216,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 645,
+      "codegen_line": 643,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -73226,7 +73508,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 742,
+      "codegen_line": 740,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -73304,7 +73586,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 745,
+      "codegen_line": 743,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -73375,7 +73657,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 737,
+      "codegen_line": 735,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -73439,7 +73721,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 731,
+      "codegen_line": 729,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -73517,7 +73799,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 739,
+      "codegen_line": 737,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -73595,7 +73877,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 735,
+      "codegen_line": 733,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -73659,7 +73941,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 746,
+      "codegen_line": 744,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -73737,7 +74019,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 738,
+      "codegen_line": 736,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -74751,7 +75033,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 734,
+      "codegen_line": 732,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -75798,7 +76080,7 @@
       "checker_line": null,
       "codegen_file": "src/backend_gap_prelude.rs",
       "codegen_function": "levenshtein",
-      "codegen_line": 927,
+      "codegen_line": 958,
       "notes": [
         "Implemented by the compiler-injected backend-gap prelude."
       ],
@@ -119581,7 +119863,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 825,
+      "codegen_line": 823,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -120720,7 +121002,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 717,
+      "codegen_line": 715,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -124197,7 +124479,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 855,
+      "codegen_line": 853,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -124346,7 +124628,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 718,
+      "codegen_line": 716,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -124424,7 +124706,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 890,
+      "codegen_line": 888,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -124495,7 +124777,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 891,
+      "codegen_line": 889,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -124566,7 +124848,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 849,
+      "codegen_line": 847,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -124716,7 +124998,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 864,
+      "codegen_line": 862,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -126196,7 +126478,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 749,
+      "codegen_line": 747,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],

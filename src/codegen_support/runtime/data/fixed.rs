@@ -297,6 +297,13 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         8 + 16 * crate::codegen_support::runtime::fibers::FIBER_STACK_CACHE_SLOTS,
         target,
     ));
+    // Stacks handed out and not yet freed: a count word, then FIBER_LIVE_STACK_SLOTS
+    // (base, mapped length) pairs, drained at the `--web` request boundary.
+    out.push_str(&comm_directive(
+        "_fiber_live_stacks",
+        8 + 16 * crate::codegen_support::runtime::fibers::FIBER_LIVE_STACK_SLOTS,
+        target,
+    ));
     // realpath() cache, php's realpath cache: REALPATH_CACHE_SLOTS entries of
     // REALPATH_CACHE_ENTRY_BYTES, and the epoch every path-changing helper bumps. Entries point at
     // malloc'd copies, so they outlive the --web heap reset -- see io::realpath.
@@ -486,6 +493,8 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     ));
     out.push_str(&comm_directive("_heap_debug_enabled", 8, target));
     out.push_str(&comm_directive("_web_heap_guard_enabled", 8, target));
+    // Raised by `__rt_web_reset` for the request-end teardown, lowered by its arena reset.
+    out.push_str(&comm_directive("_heap_discard_frees", 8, target));
     out.push_str(".globl _error_log_nl\n_error_log_nl:\n    .ascii \"\\n\"\n");
     out.push_str(".globl _array_arg_type_error_msg\n_array_arg_type_error_msg:\n    .ascii \"Fatal error: Uncaught TypeError: array builtin argument must be of type array\\n\"\n");
     // Generation-safe buffer descriptor registry. Public Buffer values are

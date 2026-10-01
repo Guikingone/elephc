@@ -19,6 +19,7 @@ pub(crate) mod support;
 
 // Group A — no check hook
 pub mod get_class;
+pub mod get_class_methods;
 pub mod get_parent_class;
 pub mod is_a;
 pub mod is_subclass_of;

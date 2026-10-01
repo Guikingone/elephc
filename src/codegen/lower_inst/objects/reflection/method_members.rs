@@ -100,12 +100,20 @@ pub(super) fn reflection_class_method_member(
     );
     let prototype_member =
         reflection_class_method_prototype_member(ctx, class_name, info, &method_key, flags)?;
+    // A method with no declaration (an enum's `tryFrom`) still has php's spelling in the
+    // class's reflection list.
     let declared_name = reflection_declared_method_name(
         ctx,
         declaring_class_name.as_deref().unwrap_or(class_name),
         &method_key,
         flags.is_static,
     )
+    .or_else(|| {
+        info.reflection_methods
+            .iter()
+            .find(|name| php_symbol_key(name) == method_key)
+            .cloned()
+    })
     .unwrap_or_else(|| method_key.clone());
     let declaring_function = ReflectionDeclaringFunctionMember::Method {
         name: declared_name.clone(),

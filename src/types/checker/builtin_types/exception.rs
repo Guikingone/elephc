@@ -257,6 +257,29 @@ pub(super) fn builtin_exception_previous_property() -> ClassProperty {
     }
 }
 
+/// Returns a synthetic `ClassMethod` for `Exception::__wakeup()`.
+/// php declares it on Exception and Error with no return type; the body does nothing here.
+pub(super) fn builtin_exception_wakeup_method() -> ClassMethod {
+    ClassMethod {
+        name: "__wakeup".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: None,
+        by_ref_return: false,
+        body: Vec::new(),
+        span: crate::span::Span::dummy(),
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns a synthetic `ClassMethod` for `Exception::getCode()`.
 /// Body returns `$this->code` cast to `int`.
 pub(super) fn builtin_exception_get_code_method() -> ClassMethod {
@@ -365,7 +388,7 @@ pub(super) fn builtin_exception_to_string_method() -> ClassMethod {
 }
 
 /// Returns the list of abstract `ClassMethod` nodes for the Throwable interface methods:
-/// getMessage, getCode, getFile, getLine, getTrace, getTraceAsString, getPrevious, __toString.
+/// getMessage, getCode, getFile, getLine, getTrace, getPrevious, getTraceAsString, __toString.
 pub(super) fn builtin_throwable_methods() -> Vec<ClassMethod> {
     vec![
         abstract_throwable_method("getMessage", TypeExpr::Str),
@@ -373,8 +396,8 @@ pub(super) fn builtin_throwable_methods() -> Vec<ClassMethod> {
         abstract_throwable_method("getFile", TypeExpr::Str),
         abstract_throwable_method("getLine", TypeExpr::Int),
         abstract_throwable_method("getTrace", array_type()),
-        abstract_throwable_method("getTraceAsString", TypeExpr::Str),
         abstract_throwable_method("getPrevious", nullable_throwable_type()),
+        abstract_throwable_method("getTraceAsString", TypeExpr::Str),
         abstract_throwable_method("__toString", TypeExpr::Str),
     ]
 }

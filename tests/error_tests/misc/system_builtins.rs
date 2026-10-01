@@ -246,10 +246,10 @@ fn test_eval_barrier_does_not_hide_prior_undefined_variable() {
     );
 }
 
-/// Verifies that referencing an undefined constant produces the expected "Undefined constant" error.
+/// Verifies a read of an undefined constant compiles with a warning (php throws at runtime).
 #[test]
-fn test_error_undefined_constant() {
-    expect_error("<?php echo UNDEFINED_CONST;", "Undefined constant");
+fn test_warning_undefined_constant() {
+    expect_warning("<?php echo UNDEFINED_CONST;", "Undefined constant: UNDEFINED_CONST");
 }
 
 /// Verifies that `define()` with a single argument (missing value) yields a wrong-args diagnostic.
@@ -756,22 +756,19 @@ fn test_error_unserialize_non_string_data() {
     );
 }
 
-/// Verifies `constant()` rejects an unknown constant at compile time.
-///
-/// Reference PHP raises `Error: Undefined constant "NOPE"` at runtime; an AOT binary has no
-/// constant table to look the name up in, so the diagnostic moves to compile time.
+/// Verifies `constant()` on a literal name nothing defines compiles with a warning; the lookup
+/// throws php's `Error: Undefined constant "NOPE"` at runtime.
 #[test]
-fn test_error_constant_undefined_name() {
-    expect_error("<?php echo constant(\"NOPE\");", "Undefined constant: NOPE");
+fn test_warning_constant_undefined_name() {
+    expect_warning("<?php echo constant(\"NOPE\");", "Undefined constant: NOPE");
 }
 
-/// Verifies `constant()` rejects a class-constant name.
+/// Verifies `constant()` accepts a class-constant name, which `__rt_constant` resolves at run
+/// time (`codegen::misc::test_constant_reads_class_constants_and_enum_cases_by_name`).
 #[test]
-fn test_error_constant_class_constant_name() {
-    expect_error(
-        "<?php class K { const A = 1; } echo constant(\"K::A\");",
-        "constant() class constants are not supported",
-    );
+fn test_constant_class_constant_name_type_checks() {
+    check_source_full("<?php class K { const A = 1; } echo constant(\"K::A\");")
+        .expect("constant('K::A') must type-check");
 }
 
 /// Verifies `constant()` rejects a missing argument.

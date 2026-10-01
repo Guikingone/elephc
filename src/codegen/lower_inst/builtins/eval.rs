@@ -378,8 +378,8 @@ use status::*;
 pub(super) use calls::{lower_dynamic_include, lower_eval};
 pub(super) use extract::lower_extract;
 pub(super) use dynamic_calls::{
-    lower_eval_function_call, lower_eval_function_call_array, lower_eval_method_call,
-    lower_eval_property_get,
+    lower_eval_function_call, lower_eval_function_call_array, lower_eval_function_call_named,
+    lower_eval_method_call, lower_eval_property_get,
     lower_eval_native_frame_static_method_call, lower_eval_native_frame_static_property_get,
     lower_eval_native_frame_static_property_set, lower_eval_object_new,
     lower_eval_object_new_dynamic_fallback, lower_eval_static_method_call,

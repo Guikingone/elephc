@@ -33,6 +33,18 @@ fn ordered_class_constant_names(info: &crate::types::ClassInfo) -> Vec<&String> 
 pub(super) fn reflection_class_method_names(ctx: &FunctionContext<'_>, class_name: &str) -> Vec<String> {
     let mut names = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    // The reflected class's own list comes first and in php's order: `getMethods()` walks these
+    // names. The ancestor walk below only adds names `hasMethod()` also answers for.
+    if let Some((_, info)) = resolve_reflection_class(ctx, class_name) {
+        push_unique_method_names(
+            info.reflection_methods.iter().filter(|name| {
+                let key = php_symbol_key(name);
+                info.methods.contains_key(&key) || info.static_methods.contains_key(&key)
+            }),
+            &mut names,
+            &mut seen,
+        );
+    }
     let mut current = Some(class_name.to_string());
     while let Some(current_name) = current {
         let Some((resolved_name, info)) = resolve_reflection_class(ctx, &current_name) else {
@@ -48,7 +60,8 @@ pub(super) fn reflection_class_method_names(ctx: &FunctionContext<'_>, class_nam
     names
 }
 
-/// Returns PHP case-sensitive property names visible to `ReflectionClass::hasProperty()`.
+/// Returns the PHP case-sensitive property names `ReflectionClass::hasProperty()` accepts and
+/// `getProperties()` lists, in php's order (`ClassInfo::reflection_properties`).
 pub(super) fn reflection_class_property_names(
     ctx: &FunctionContext<'_>,
     class_name: &str,
@@ -59,15 +72,8 @@ pub(super) fn reflection_class_property_names(
     if is_reflection_enum(ctx, class_name) {
         push_unique_property_name("name", &mut names, &mut seen);
     }
-    for (name, _) in &info.properties {
-        if reflection_property_visible_from_class(info, class_name, name, false) {
-            push_unique_property_name(name, &mut names, &mut seen);
-        }
-    }
-    for (name, _) in &info.static_properties {
-        if reflection_property_visible_from_class(info, class_name, name, true) {
-            push_unique_property_name(name, &mut names, &mut seen);
-        }
+    for name in &info.reflection_properties {
+        push_unique_property_name(name, &mut names, &mut seen);
     }
     names
 }
@@ -161,8 +167,16 @@ pub(super) fn reflection_class_default_property_members(
     info: &crate::types::ClassInfo,
     property_names: &[String],
 ) -> Vec<ReflectionDefaultPropertyMember> {
+    // php lists the static defaults first, then the instance ones, each in reflection order.
+    let is_static = |name: &String| {
+        info.static_properties
+            .iter()
+            .any(|(static_name, _)| static_name == name)
+    };
     property_names
         .iter()
+        .filter(|name| is_static(name))
+        .chain(property_names.iter().filter(|name| !is_static(name)))
         .filter_map(|property_name| {
             reflection_property_default_value(info, property_name).map(|value| {
                 ReflectionDefaultPropertyMember {

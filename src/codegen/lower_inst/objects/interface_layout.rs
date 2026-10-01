@@ -126,8 +126,7 @@ pub(super) fn uninitialized_property_marker_offsets(class_info: &ClassInfo) -> V
             // a NON-reference slot, so the fault is in what the reference-slot fatal frees on
             // the way out, not in the marker. Fix that release path first; the marker is one
             // line behind it.
-            let is_owned_reference = class_info.owned_reference_properties.contains(property)
-                && class_info.property_slot_is_reference(index, property);
+            let is_owned_reference = class_info.property_slot_is_owned_reference(index);
             // An UNTYPED promoted property is born null in PHP, like any untyped property; its
             // schema default stays absent only so reflection keeps reporting no default. Marking
             // it made an object built without its constructor (`newInstanceWithoutConstructor()`,
@@ -160,10 +159,8 @@ pub(super) fn owned_reference_property_offsets(class_info: &ClassInfo) -> Vec<us
         .properties
         .iter()
         .enumerate()
-        .filter_map(|(index, (property, _))| {
-            if class_info.owned_reference_properties.contains(property)
-                && class_info.property_slot_is_reference(index, property)
-            {
+        .filter_map(|(index, _)| {
+            if class_info.property_slot_is_owned_reference(index) {
                 Some(8 + index * 16)
             } else {
                 None

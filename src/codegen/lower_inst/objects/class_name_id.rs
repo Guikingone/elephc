@@ -37,6 +37,30 @@ pub(in crate::codegen::lower_inst) fn lower_class_name_to_id(
     store_if_result(ctx, inst)
 }
 
+/// Leaves the runtime class id of an object, class-name string, or boxed Mixed value in the
+/// integer result register, or `-1` when the value names no compiled class.
+pub(in crate::codegen::lower_inst) fn emit_class_id_of_value(
+    ctx: &mut FunctionContext<'_>,
+    value: crate::ir::ValueId,
+) -> Result<()> {
+    match ctx.value_php_type(value)?.codegen_repr() {
+        PhpType::Object(_) => {
+            ctx.load_value_to_result(value)?;
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => ctx.emitter.instruction("ldr x0, [x0]"),         // the object header's first word is its class id
+                Arch::X86_64 => ctx.emitter.instruction("mov rax, QWORD PTR [rax]"), // the object header's first word is its class id
+            }
+            Ok(())
+        }
+        PhpType::Str => lower_string_class_name_to_id(ctx, value),
+        PhpType::Mixed | PhpType::Union(_) => lower_mixed_class_name_to_id(ctx, value),
+        other => Err(CodegenIrError::unsupported(format!(
+            "class id of PHP type {:?}",
+            other
+        ))),
+    }
+}
+
 /// Calls the runtime lookup helper with Elephc's concrete string ABI.
 fn lower_string_class_name_to_id(
     ctx: &mut FunctionContext<'_>,

@@ -76,6 +76,7 @@ pub use checker::CheckOptions;
 pub use result::check_with_target;
 pub use result::{check_with_target_and_options, CheckResult, ThrowAccessInfo, ThrowAccessKind};
 pub use schema::constructor_owner;
+pub use schema::private_property_init_thunk_classes;
 pub use schema::{
     AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo,
     ExternClassInfo, ExternFieldInfo, ExternFunctionSig, InterfaceInfo, PackedClassInfo,

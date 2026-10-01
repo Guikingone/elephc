@@ -1,164 +1,197 @@
 //! Purpose:
-//! Computes and emits the closed-world `_class_methods_table` payload registry backing
-//! `get_class_methods()` when its target is only known at runtime (a non-literal class-name
-//! string, or a `Mixed`/union value).
+//! Emits the class-id-indexed method rows `__rt_class_method_names` walks to answer
+//! `get_class_methods()`.
 //!
 //! Called from:
 //! - `crate::codegen::emit_program()` when the module's `class_methods_introspection`
 //!   runtime feature is set.
 //!
 //! Key details:
-//! - Rows are `{name_ptr, name_len, list_ptr, list_count}` — **32 bytes**, NOT the 64-byte
-//!   layout the three relation tables share. That is deliberate: `__rt_sorted_name_search`
-//!   takes `entry_size` as an argument, so a narrower private table costs nothing at the
-//!   search site while leaving `_class_relation_table` and its fixed-size
-//!   `__rt_class_relation_probe` (entry_size = 64) completely untouched.
-//! - Each row carries the PUBLIC-only method names, in the same PHP declaration order the
-//!   compile-time literal fold produces (`crate::codegen::lower_inst::builtins::
-//!   get_class_methods::get_class_methods_names` with `self_scope = false`), so a runtime
-//!   lookup and a literal call agree on content AND order for the same class. The self-scope
-//!   list is NOT stored: the calling scope is always compile-time known, so the lowering bakes
-//!   that list inline and only consults this table for the non-self case.
-//! - Rows are sorted by lowercased name for `__rt_sorted_name_search`'s binary search, matching
-//!   `_class_table`/`_class_relation_table`.
-//! - Only CLASSES get rows. `get_class_methods()` on an interface name returns its method
-//!   declarations in PHP, but elephc's `module.class_infos` is the only source with per-method
-//!   visibility and declaration order, so an interface/trait name simply misses the table and
-//!   the lowering raises PHP's `TypeError` — the same answer it gives for an undeclared name.
+//! - `_class_method_rows_ptrs[class_id]` points at `{count, rows...}`; each row is 32 bytes:
+//!   `{name_ptr, name_len, visibility, declaring_class_id}` with visibility 0 public,
+//!   1 protected, 2 private. `_class_method_rows_count` bounds the class id.
+//! - Rows follow php's method table: the class's own methods in declaration order (trait
+//!   methods after them), then the parent's rows it does not redeclare, INCLUDING the
+//!   parent's private ones. A private ancestor method is listed from that ancestor's own
+//!   scope, so the runtime filter needs the row even though other scopes never see it.
+//! - The calling scope is only known at run time for the filter, never for the rows, so one
+//!   row list per class serves every call site.
+
+use std::collections::{HashMap, HashSet};
 
 use crate::ir::Module;
 use crate::names::php_symbol_key;
 use crate::parser::ast::Visibility;
-use std::collections::HashSet;
+use crate::types::ClassInfo;
 
 use super::instanceof::escaped_ascii;
 
-/// One class's precomputed public method-name list (PHP declaration order).
-struct MethodsRow {
-    /// Lowercased ASCII sort key used for the binary search over the table.
-    sort_key: String,
-    methods: Vec<String>,
+/// One method as the runtime filter sees it.
+struct MethodRow {
+    name: String,
+    visibility: u64,
+    declaring_class_id: i64,
 }
 
-/// Emits the `_class_methods_table` payload registry computed from `module`.
+/// Emits `_class_method_rows_count`, `_class_method_rows_ptrs` and every class's row list.
 pub(crate) fn emit_class_methods_registry_data(module: &Module) -> String {
-    let rows = class_methods_rows(module);
+    let class_ids: HashMap<String, i64> = module
+        .class_infos
+        .iter()
+        .map(|(name, info)| {
+            (
+                php_symbol_key(name.trim_start_matches('\\')),
+                info.class_id as i64,
+            )
+        })
+        .collect();
+    let mut by_id: Vec<(u64, &String, &ClassInfo)> = module
+        .class_infos
+        .iter()
+        .map(|(name, info)| (info.class_id, name, info))
+        .collect();
+    by_id.sort_by_key(|(class_id, _, _)| *class_id);
+    let slot_count = by_id.last().map_or(0, |(class_id, _, _)| class_id + 1);
+
     let mut out = String::new();
+    let mut name_labels: HashMap<String, String> = HashMap::new();
+    let mut tables: HashMap<u64, Vec<MethodRow>> = HashMap::new();
+    for (class_id, class_name, _) in &by_id {
+        tables.insert(*class_id, method_table(module, &class_ids, class_name));
+    }
     out.push_str(".data\n");
+    for (class_id, _, _) in &by_id {
+        for row in &tables[class_id] {
+            if !name_labels.contains_key(&row.name) {
+                let label = format!("_class_method_name_{}", name_labels.len());
+                out.push_str(&format!(
+                    "{}:\n    .ascii \"{}\"\n",
+                    label,
+                    escaped_ascii(&row.name)
+                ));
+                name_labels.insert(row.name.clone(), label);
+            }
+        }
+    }
     out.push_str(".p2align 3\n");
-    emit_methods_table(&mut out, "_class_methods_table", "_clsmeth", &rows);
+    out.push_str("_class_method_rows_empty:\n    .quad 0\n");
+    for (class_id, _, _) in &by_id {
+        let rows = &tables[class_id];
+        if rows.is_empty() {
+            continue;
+        }
+        out.push_str(&format!("_class_method_rows_{}:\n", class_id));
+        out.push_str(&format!("    .quad {}\n", rows.len()));
+        for row in rows {
+            out.push_str(&format!("    .quad {}\n", name_labels[&row.name]));
+            out.push_str(&format!("    .quad {}\n", row.name.len()));
+            out.push_str(&format!("    .quad {}\n", row.visibility));
+            out.push_str(&format!("    .quad {}\n", row.declaring_class_id));
+        }
+    }
+    out.push_str(".globl _class_method_rows_count\n_class_method_rows_count:\n");
+    out.push_str(&format!("    .quad {}\n", slot_count));
+    out.push_str(".globl _class_method_rows_ptrs\n_class_method_rows_ptrs:\n");
+    let present: HashSet<u64> = by_id
+        .iter()
+        .filter(|(class_id, _, _)| !tables[class_id].is_empty())
+        .map(|(class_id, _, _)| *class_id)
+        .collect();
+    for class_id in 0..slot_count {
+        if present.contains(&class_id) {
+            out.push_str(&format!("    .quad _class_method_rows_{}\n", class_id));
+        } else {
+            out.push_str("    .quad _class_method_rows_empty\n");
+        }
+    }
     out
 }
 
-/// Builds the name-sorted rows, one per non-synthetic class.
-fn class_methods_rows(module: &Module) -> Vec<MethodsRow> {
-    let mut rows: Vec<MethodsRow> = module
-        .class_infos
-        .keys()
-        .filter(|name| !is_internal_synthetic_class_name(name))
-        .map(|name| MethodsRow {
-            sort_key: php_symbol_key(name.trim_start_matches('\\')),
-            methods: public_method_names(module, name),
-        })
-        .collect();
-    rows.sort_by(|a, b| a.sort_key.as_bytes().cmp(b.sort_key.as_bytes()));
+/// Returns `class_name`'s method table in php's order: own methods, then the parent's rows
+/// the class does not redeclare (the parent's private ones included).
+fn method_table(
+    module: &Module,
+    class_ids: &HashMap<String, i64>,
+    class_name: &str,
+) -> Vec<MethodRow> {
+    let mut chain = Vec::new();
+    let mut seen_classes = HashSet::new();
+    let mut current = Some(class_name.to_string());
+    while let Some(name) = current {
+        if !seen_classes.insert(php_symbol_key(&name)) {
+            break;
+        }
+        let Some((resolved, info)) = module.class_infos.get_key_value(name.trim_start_matches('\\'))
+        else {
+            break;
+        };
+        chain.push((resolved.as_str(), info));
+        current = info.parent.clone();
+    }
+    let mut rows = Vec::new();
+    let mut claimed = HashSet::new();
+    for (level_name, info) in chain {
+        for name in own_method_names(level_name, info) {
+            let key = php_symbol_key(&name);
+            if !claimed.insert(key.clone()) {
+                continue;
+            }
+            let visibility = info
+                .method_visibilities
+                .get(&key)
+                .or_else(|| info.static_method_visibilities.get(&key))
+                .unwrap_or(&Visibility::Public);
+            rows.push(MethodRow {
+                name,
+                visibility: match visibility {
+                    Visibility::Public => 0,
+                    Visibility::Protected => 1,
+                    Visibility::Private => 2,
+                },
+                declaring_class_id: class_ids
+                    .get(&php_symbol_key(level_name.trim_start_matches('\\')))
+                    .copied()
+                    .unwrap_or(-1),
+            });
+        }
+    }
     rows
 }
 
-/// Walks `class_name`'s ancestor chain and returns its PUBLIC method names in PHP declaration
-/// order: the class's own declared methods first (source order), then each ancestor's, nearest
-/// first, skipping any name already claimed by a more-derived level.
+/// Returns the methods one class declares itself, in declaration order and declared case.
 ///
-/// This is a deliberate parallel implementation of
-/// `crate::codegen::lower_inst::builtins::get_class_methods::get_class_methods_names`'s
-/// `self_scope = false` branch, over `&Module` instead of a `FunctionContext` — exactly the
-/// arrangement `class_relation_registry` uses for the relation lists, and for the same reason:
-/// it keeps the literal EIR lowering path untouched. The shared `test_dynamic_and_literal_
-/// get_class_methods_agree` codegen test is what holds the two in step.
-fn public_method_names(module: &Module, class_name: &str) -> Vec<String> {
-    let mut claimed: HashSet<String> = HashSet::new();
+/// `reflection_methods` carries php's order; a method only the signature maps know (an
+/// interface contract an abstract class leaves open) follows it, sorted so the table is stable.
+fn own_method_names(class_name: &str, info: &ClassInfo) -> Vec<String> {
+    let declares = |key: &str| {
+        info.method_declaring_classes
+            .get(key)
+            .or_else(|| info.static_method_declaring_classes.get(key))
+            .is_none_or(|declaring| declaring.eq_ignore_ascii_case(class_name.trim_start_matches('\\')))
+    };
+    let mut seen = HashSet::new();
     let mut names = Vec::new();
-    let mut visited: HashSet<String> = HashSet::new();
-    let mut current = Some(class_name.to_string());
-    while let Some(level_name) = current {
-        if !visited.insert(level_name.clone()) {
-            break; // cycle guard against malformed metadata
+    for name in &info.reflection_methods {
+        let key = php_symbol_key(name);
+        let known = info.methods.contains_key(&key) || info.static_methods.contains_key(&key);
+        if known && declares(&key) && seen.insert(key) {
+            names.push(name.clone());
         }
-        let Some(info) = module.class_infos.get(&level_name) else {
-            break;
-        };
-        for decl in &info.method_decls {
-            let key = php_symbol_key(&decl.name);
-            if !claimed.insert(key) {
-                continue; // already claimed by a more-derived level
-            }
-            if decl.visibility == Visibility::Public {
-                names.push(decl.name.clone());
-            }
-        }
-        current = info.parent.clone();
     }
+    let mut remaining: Vec<String> = info
+        .methods
+        .keys()
+        .chain(info.static_methods.keys())
+        .filter(|key| !seen.contains(key.as_str()) && declares(key))
+        .map(|key| {
+            info.method_decls
+                .iter()
+                .find(|method| php_symbol_key(&method.name) == *key)
+                .map_or_else(|| key.clone(), |method| method.name.clone())
+        })
+        .collect();
+    remaining.sort();
+    remaining.dedup();
+    names.extend(remaining);
     names
 }
-
-/// Emits one 32-byte-per-row table plus its `<table>_count` symbol, with each non-empty method
-/// list materialized as a separate flat `{name_ptr, name_len}` array.
-fn emit_methods_table(out: &mut String, table: &str, prefix: &str, rows: &[MethodsRow]) {
-    for (index, row) in rows.iter().enumerate() {
-        emit_name_bytes(out, &format!("{}_name_{}", prefix, index), &row.sort_key);
-        for (slot, name) in row.methods.iter().enumerate() {
-            emit_name_bytes(out, &format!("{}_m_{}_{}", prefix, index, slot), name);
-        }
-        if row.methods.is_empty() {
-            continue;
-        }
-        out.push_str(".p2align 3\n");
-        out.push_str(&format!("{}_list_{}:\n", prefix, index));
-        for (slot, name) in row.methods.iter().enumerate() {
-            out.push_str(&format!(
-                "    .quad {}_m_{}_{}\n    .quad {}\n",
-                prefix,
-                index,
-                slot,
-                name.len()
-            ));
-        }
-    }
-    out.push_str(".p2align 3\n");
-    out.push_str(&format!("{}:\n", table));
-    for (index, row) in rows.iter().enumerate() {
-        out.push_str(&format!(
-            "    .quad {}_name_{}\n    .quad {}\n",
-            prefix,
-            index,
-            row.sort_key.len()
-        ));
-        if row.methods.is_empty() {
-            out.push_str("    .quad 0\n    .quad 0\n");
-        } else {
-            out.push_str(&format!(
-                "    .quad {}_list_{}\n    .quad {}\n",
-                prefix,
-                index,
-                row.methods.len()
-            ));
-        }
-    }
-    out.push_str(".p2align 3\n");
-    out.push_str(&format!("{}_count:\n    .quad {}\n", table, rows.len()));
-}
-
-/// Mirrors `crate::codegen::is_internal_synthetic_class_name` (and
-/// `class_relation_registry`'s private copy of it) so this registry's row set agrees with
-/// `_class_table`'s.
-fn is_internal_synthetic_class_name(name: &str) -> bool {
-    php_symbol_key(name).starts_with("__elephc")
-}
-
-/// Emits a label holding `value`'s raw bytes (no NUL terminator — every consumer reads the
-/// paired explicit length).
-fn emit_name_bytes(out: &mut String, label: &str, value: &str) {
-    out.push_str(&format!("{}:\n", label));
-    out.push_str(&format!("    .ascii \"{}\"\n", escaped_ascii(value)));
-}
-

@@ -8,11 +8,11 @@
 //! Key details:
 //! - Literal names retain the referenced constant's precise type, while runtime names use the
 //!   boxed `mixed` representation returned by the constant registry.
-//! - An unknown name is a COMPILE error here, where reference PHP raises
-//!   `Error: Undefined constant "X"` at runtime. A binary with no constant table cannot look the
-//!   name up, and refusing at compile time is strictly more informative than a runtime fatal.
-//! - Class constants and enum cases (`constant('Foo::BAR')`) are NOT supported: the name is
-//!   resolved through the global constant table only.
+//! - An unknown literal name compiles with a warning and, like a bare read of it, lowers to the
+//!   runtime lookup, which throws php's `Error: Undefined constant "X"`.
+//! - A `Class::NAME` name (`constant(Level::class . '::' . $case)`, Monolog's level lookup) is
+//!   resolved at run time by `__rt_constant` through the compiled class-constant table: public
+//!   class constants and enum cases, with php's `Undefined constant` / `Class "X" not found`.
 //! - Literal lowering happens one level up, in
 //!   `crate::ir_lower::expr::constants::lower_static_constant_call()`, which rewrites the call
 //!   into the same EIR a bare `FOO` reference produces. Other names lower through the typed
@@ -34,8 +34,9 @@ builtin! {
 /// Returns a literal constant's precise type or `mixed` for a runtime name.
 ///
 /// A leading `\` is stripped from literal names the way PHP's global-constant lookup does.
-/// Runtime names are resolved by the emitted constant registry. Returns a `CompileError` for a
-/// literal class-constant name or a literal unknown global constant.
+/// Runtime names are resolved by the emitted constant registry, and so are a literal
+/// `Class::NAME` and a literal name nothing defines (recorded so lowering keeps the throwing
+/// lookup).
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     let literal = match &cx.args[0].kind {
@@ -51,16 +52,13 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     };
     let name = name.trim_start_matches('\\').to_string();
     if name.contains("::") {
-        return Err(CompileError::new(
-            cx.span,
-            "constant() class constants are not supported; reference the constant directly",
-        ));
+        return Ok(PhpType::Mixed);
     }
-    match cx.checker.constants.get(&name) {
-        Some(ty) => Ok(ty.clone()),
-        None => Err(CompileError::new(
-            cx.span,
-            &format!("Undefined constant: {}", name),
-        )),
+    if let Some(ty) = cx.checker.constants.get(&name) {
+        return Ok(ty.clone());
     }
+    if !cx.checker.eval_barrier_active {
+        cx.checker.record_undefined_constant_read(&name, cx.span);
+    }
+    Ok(PhpType::Mixed)
 }

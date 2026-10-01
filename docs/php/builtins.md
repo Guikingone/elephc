@@ -96,7 +96,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`function_exists()`](./builtins/class/function_exists.md) | `(string $function): bool` | `bool` | ✓ | ✓ |
 | [`get_called_class()`](./builtins/class/get_called_class.md) | `(): mixed` | `mixed` | — | ✓ |
 | [`get_class()`](./builtins/class/get_class.md) | `(object $object = null): string` | `string` | ✓ | ✓ |
-| [`get_class_methods()`](./builtins/class/get_class_methods.md) | `(mixed $object_or_class): mixed` | `mixed` | — | ✓ |
+| [`get_class_methods()`](./builtins/class/get_class_methods.md) | `(mixed $object_or_class): mixed` | `mixed` | ✓ | ✓ |
 | [`get_class_vars()`](./builtins/class/get_class_vars.md) | `(mixed $class): mixed` | `mixed` | — | ✓ |
 | [`get_declared_classes()`](./builtins/class/get_declared_classes.md) | `(): array` | `array` | ✓ | ✓ |
 | [`get_declared_interfaces()`](./builtins/class/get_declared_interfaces.md) | `(): array` | `array` | ✓ | ✓ |

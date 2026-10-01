@@ -143,11 +143,11 @@ fn test_error_cannot_redeclare_filesystem_builtin_function() {
     );
 }
 
-/// Verifies that accessing a user-defined constant with incorrect casing produces
-/// an undefined constant error (constants are case-sensitive in PHP).
+/// Verifies that accessing a user-defined constant with incorrect casing is an undefined
+/// constant read (constants are case-sensitive in PHP), which compiles with a warning.
 #[test]
-fn test_error_user_constants_are_case_sensitive() {
-    expect_error(
+fn test_warning_user_constants_are_case_sensitive() {
+    expect_warning(
         "<?php const MyConst = 1; echo myconst;",
         "Undefined constant: myconst",
     );

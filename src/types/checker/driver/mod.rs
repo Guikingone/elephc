@@ -400,6 +400,7 @@ pub(super) fn check_types_impl(
                 cases,
                 implements,
                 enum_methods,
+                methods.len(),
                 constants,
                 enum_used_traits,
                 enum_trait_aliases,

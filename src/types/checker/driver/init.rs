@@ -130,6 +130,7 @@ impl Checker {
             by_ref_local_storage_types: HashMap::new(),
             ref_param_escaping_callees: HashSet::new(),
             runtime_define_names: HashSet::new(),
+            undefined_constant_reads: HashSet::new(),
             widened_ref_params: HashSet::new(),
             widened_ref_param_decls: Vec::new(),
             string_suffix_locals: HashMap::new(),

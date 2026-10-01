@@ -390,7 +390,7 @@ fn print_symbol_catalogs() {
     let constants: Vec<Value> = constants()
         .iter()
         .map(|constant| {
-            json!({
+            let mut entry = json!({
                 "name": constant.name,
                 "module": constant.module.php_name(),
                 "bundled": constant.module.is_bundled(),
@@ -405,7 +405,11 @@ fn print_symbol_catalogs() {
                 "eval": route_json(eval_constant_support(constant)),
                 "extension": constant.extension,
                 "internal": constant.internal,
-            })
+            });
+            if let Some(targets) = constant.target_support {
+                entry["target_support"] = json!(targets);
+            }
+            entry
         })
         .collect();
     let value = json!({ "classes": classes, "constants": constants });

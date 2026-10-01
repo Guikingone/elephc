@@ -56,6 +56,16 @@ pub(crate) use switch::emit_fiber_switch;
 /// cache holds a few; nesting deeper than this only falls back to the kernel.
 pub(crate) const FIBER_STACK_CACHE_SLOTS: usize = 16;
 
+/// How many handed-out fiber stacks `_fiber_live_stacks` tracks.
+///
+/// A generator still referenced when a `--web` request ends is dropped with the heap arena, and
+/// nothing freed its stack: every such generator leaked a 2 MB mapping and made the next request
+/// map a fresh one. Symfony's Twig page left eight per request -- 16 MB of address space, and
+/// eight mappings towards the kernel's limit, each time. The request boundary now hands every
+/// stack still tracked here back to the cache. A stack handed out while the table is full is not
+/// tracked and keeps the old behavior.
+pub(crate) const FIBER_LIVE_STACK_SLOTS: usize = 1024;
+
 // ── Fiber object field offsets ───────────────────────────────────────
 /// Byte offset of the `state` field (0=NotStarted 1=Running 2=Suspended 3=Terminated).
 pub(crate) const FIBER_STATE_OFFSET: i32 = 8;

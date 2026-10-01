@@ -273,6 +273,9 @@ impl Scanner<'_> {
             "function_exists" => self.literal_function_or_hazard(first),
             "is_callable" | "call_user_func" | "call_user_func_array" => self.callable_or_hazard(first),
             "method_exists" => self.method_exists(args),
+            // The result is every method name the scope may call, which programs then call by
+            // name, so declaration reachability cannot drop an uncalled method.
+            "get_class_methods" => self.usage.hazards.dynamic_method = true,
             "class_exists" | "interface_exists" | "enum_exists" | "trait_exists" => self.literal_class_or_hazard(first),
             "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" | "unserialize" => self.usage.hazards.dynamic_class = true,
             "eval" | DYNAMIC_INCLUDE_FUNCTION => {
@@ -333,7 +336,7 @@ impl Scanner<'_> {
     fn scan_declaration_arguments(&mut self, name: &str, args: &[Expr]) {
         match name {
             "class_attribute_args" | "class_attribute_names" | "class_get_attributes"
-            | "ptr_sizeof" | "class_implements" | "class_parents" | "class_uses"
+            | "ptr_sizeof" | "class_implements" | "class_parents" | "class_uses" | "get_class_methods"
             | "get_parent_class" | "property_exists" | "spl_autoload" | "spl_autoload_call" => {
                 self.scan_class_argument(name, args, 0, false);
             }

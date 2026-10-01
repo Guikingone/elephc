@@ -57,6 +57,8 @@ use crate::codegen::{CodegenIrError, Result};
 
 mod reflection;
 
+pub(super) use reflection::{lower_reflection_fill_members, lower_reflection_materialize};
+
 const RUNTIME_NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
 const ITERATOR_ITERATOR_DOWNCAST_MESSAGE: &str =
     "Class to downcast to not found or not base class or does not implement Traversable";
@@ -218,6 +220,7 @@ pub(super) use fixed_new::lower_object_new;
 pub(super) use instanceof_entry::{lower_instanceof, lower_instanceof_dynamic};
 pub(super) use object_class_id::lower_object_class_id;
 pub(super) use class_name_id::lower_class_name_to_id;
+pub(in crate::codegen::lower_inst) use class_name_id::emit_class_id_of_value;
 pub(super) use known_property_reads::{
     lower_load_prop_ref_cell, lower_prop_get, lower_prop_initialized,
 };

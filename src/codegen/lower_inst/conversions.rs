@@ -105,9 +105,7 @@ fn lower_object_to_foreach_array(
             ctx.value_php_type(value)?.codegen_repr()
         )));
     };
-    load_value_to_first_int_arg(ctx, value)?;
-    abi::emit_call_label(ctx.emitter, "__rt_object_to_foreach_array");
-    store_if_result(ctx, inst)
+    super::builtins::types::lower_object_foreach_projection(ctx, inst)
 }
 
 /// Lowers an associative-array cast to a fresh hash-backed stdClass instance.

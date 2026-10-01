@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **883 / 2169** (41%), classes **142 / 329** (43%), constants **1094 / 3180** (34%).
+Overall coverage: functions **930 / 2169** (43%), classes **152 / 329** (46%), constants **1230 / 3180** (39%).
 
 ## Coverage by PHP module
 
@@ -21,33 +21,33 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | [`bcmath`](./bcmath.md#functions) | 14 / 14 · 100% | 0 / 1 · 0% | — |
 | `bz2` | 0 / 10 · 0% | — | — |
 | [`calendar`](./calendar.md#functions) | 18 / 18 · 100% | — | 21 / 21 · 100% |
-| `core` | 29 / 62 · 47% | 21 / 40 · 52% | 34 / 89 · 38% |
+| `core` | 41 / 62 · 66% | 24 / 40 · 60% | 63 / 89 · 71% |
 | `ctype` | 4 / 11 · 36% | — | — |
 | [`curl`](./curl.md#functions) | 34 / 35 · 97% | 6 / 6 · 100% | 689 / 689 · 100% |
-| [`date`](./datetime.md#functions) | 48 / 48 · 100% | 15 / 15 · 100% | 3 / 17 · 18% |
+| [`date`](./datetime.md#functions) | 48 / 48 · 100% | 15 / 15 · 100% | 17 / 17 · 100% |
 | `dba` | 0 / 15 · 0% | 0 / 1 · 0% | — |
 | `dom` | 0 / 2 · 0% | 0 / 50 · 0% | 0 / 61 · 0% |
 | `enchant` | 0 / 25 · 0% | 0 / 2 · 0% | 0 / 3 · 0% |
 | [`exif`](./image.md#functions) | 4 / 4 · 100% | — | 1 / 1 · 100% |
 | `ffi` | — | 0 / 5 · 0% | — |
-| `fileinfo` | 0 / 6 · 0% | 0 / 1 · 0% | 0 / 11 · 0% |
-| `filter` | 0 / 7 · 0% | 0 / 2 · 0% | 0 / 56 · 0% |
+| `fileinfo` | 0 / 6 · 0% | 0 / 1 · 0% | 1 / 11 · 9% |
+| `filter` | 1 / 7 · 14% | 0 / 2 · 0% | 19 / 56 · 34% |
 | `ftp` | 0 / 36 · 0% | 0 / 1 · 0% | 0 / 11 · 0% |
 | [`gd`](./image.md#functions) | 83 / 106 · 78% | 1 / 2 · 50% | 67 / 89 · 75% |
 | `gettext` | 0 / 10 · 0% | — | — |
 | `gmp` | 0 / 51 · 0% | 0 / 1 · 0% | 0 / 9 · 0% |
 | `hash` | 9 / 20 · 45% | 1 / 1 · 100% | 0 / 40 · 0% |
 | [`iconv`](./iconv.md#functions) | 10 / 10 · 100% | — | 4 / 4 · 100% |
-| `intl` | 0 / 187 · 0% | 0 / 22 · 0% | 0 / 170 · 0% |
+| `intl` | 0 / 187 · 0% | 0 / 22 · 0% | 1 / 170 · 1% |
 | `json` | 5 / 5 · 100% | 2 / 2 · 100% | 27 / 29 · 93% |
 | `ldap` | 0 / 55 · 0% | 0 / 3 · 0% | 0 / 92 · 0% |
-| `libxml` | 0 / 8 · 0% | 0 / 1 · 0% | 0 / 28 · 0% |
-| `mbstring` | 2 / 65 · 3% | — | 0 / 9 · 0% |
+| `libxml` | 0 / 8 · 0% | 0 / 1 · 0% | 6 / 28 · 21% |
+| `mbstring` | 4 / 65 · 6% | — | 8 / 9 · 89% |
 | [`mysqli`](./mysqli.md#functions) | 84 / 106 · 79% | 4 / 6 · 67% | 52 / 110 · 47% |
 | `odbc` | 0 / 48 · 0% | 0 / 2 · 0% | 0 / 57 · 0% |
 | `openssl` | 4 / 64 · 6% | 0 / 3 · 0% | 3 / 70 · 4% |
 | [`pcntl`](./pcntl.md#functions) | 28 / 28 · 100% | 1 / 1 · 100% | 0 / 129 · 0% |
-| [`pcre`](./regex.md#functions) | 5 / 11 · 45% | — | 7 / 19 · 37% |
+| [`pcre`](./regex.md#functions) | 11 / 11 · 100% | — | 18 / 19 · 95% |
 | [`pdo`](./pdo.md#functions) | 1 / 1 · 100% | 4 / 4 · 100% | — |
 | [`pdo_dblib`](./pdo.md#functions) | — | 1 / 1 · 100% | — |
 | [`pdo_firebird`](./pdo.md#functions) | — | 1 / 1 · 100% | — |
@@ -60,17 +60,17 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | [`posix`](./pcntl.md#functions) | 2 / 41 · 5% | — | 0 / 43 · 0% |
 | `random` | 3 / 9 · 33% | 0 / 11 · 0% | 0 / 2 · 0% |
 | `readline` | 1 / 13 · 8% | — | 0 / 1 · 0% |
-| `reflection` | — | 16 / 26 · 62% | — |
+| `reflection` | — | 20 / 26 · 77% | — |
 | [`session`](./sessions.md#functions) | 23 / 23 · 100% | 4 / 4 · 100% | 3 / 3 · 100% |
 | `shmop` | 0 / 6 · 0% | 0 / 1 · 0% | — |
 | `simplexml` | 0 / 3 · 0% | 0 / 2 · 0% | — |
 | `snmp` | 0 / 24 · 0% | 0 / 2 · 0% | 0 / 21 · 0% |
 | `soap` | 0 / 2 · 0% | 0 / 8 · 0% | 0 / 81 · 0% |
 | `sockets` | 0 / 37 · 0% | 0 / 2 · 0% | 0 / 243 · 0% |
-| `sodium` | 0 / 104 · 0% | 0 / 1 · 0% | 0 / 94 · 0% |
-| [`spl`](./spl.md#functions) | 15 / 15 · 100% | 54 / 55 · 98% | — |
+| `sodium` | 4 / 104 · 4% | 1 / 1 · 100% | 0 / 94 · 0% |
+| [`spl`](./spl.md#functions) | 15 / 15 · 100% | 55 / 55 · 100% | — |
 | `sqlite3` | — | 0 / 4 · 0% | 0 / 12 · 0% |
-| `standard` | 381 / 545 · 70% | 2 / 6 · 33% | 155 / 400 · 39% |
+| `standard` | 403 / 545 · 74% | 3 / 6 · 50% | 202 / 400 · 50% |
 | `sysvmsg` | 0 / 7 · 0% | 0 / 1 · 0% | 0 / 5 · 0% |
 | `sysvsem` | 0 / 4 · 0% | 0 / 1 · 0% | — |
 | `sysvshm` | 0 / 7 · 0% | 0 / 1 · 0% | — |
@@ -87,8 +87,8 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 
 The counts above are what a compiled program has. Code run through `eval()` sees a different set in these modules (compiled / eval()):
 
-- `core` functions: 29 / 28
-- `core` constants: 34 / 31
+- `core` functions: 41 / 35
+- `core` constants: 63 / 60
 - `exif` functions: 4 / 0
 - `exif` constants: 1 / 0
 - `gd` functions: 83 / 0
@@ -97,11 +97,11 @@ The counts above are what a compiled program has. Code run through `eval()` sees
 - `mysqli` constants: 52 / 0
 - `pdo` functions: 1 / 0
 - `session` functions: 23 / 0
-- `standard` functions: 381 / 341
-- `standard` constants: 155 / 134
+- `standard` functions: 403 / 378
+- `standard` constants: 202 / 181
 - `zend opcache` functions: 8 / 0
 
-3 symbol(s) exist only inside `eval()` and are not counted in the table: `get_called_class()`, `get_class_methods()`, `get_class_vars()`.
+4 symbol(s) exist only inside `eval()` and are not counted in the table: `get_called_class()`, `get_class_vars()`, `register_tick_function()`, `unregister_tick_function()`.
 
 The remaining 2 baseline extensions expose no functions, classes, or constants of their own, so they have no row above: `lexbor`, `mysqlnd`.
 
@@ -111,7 +111,7 @@ elephc also defines 1 constant(s) at runtime that PHP registers only in specific
 
 elephc also implements 1 symbol(s) that PHP added AFTER this baseline release, so they cannot be counted against it: `SortDirection` (PHP 8.6).
 
-The baseline PHP build does not expose these platform-dependent symbols, so they are excluded from its coverage percentages: `pcntl_getcpu()` (PHP build guard HAVE_SCHED_GETCPU), `pcntl_getqos_class()` (target-specific), `pcntl_setns()` (PHP build guard HAVE_PIDFD_OPEN), `pcntl_setqos_class()` (target-specific).
+The baseline PHP build does not expose these platform-dependent symbols, so they are excluded from its coverage percentages: `PHP_WINDOWS_VERSION_BUILD` (target-specific), `PHP_WINDOWS_VERSION_MAJOR` (target-specific), `PHP_WINDOWS_VERSION_MINOR` (target-specific), `pcntl_getcpu()` (PHP build guard HAVE_SCHED_GETCPU), `pcntl_getqos_class()` (target-specific), `pcntl_setns()` (PHP build guard HAVE_PIDFD_OPEN), `pcntl_setqos_class()` (target-specific).
 
 elephc also provides 109 symbols from PECL extensions php-src does not bundle, which the baseline cannot measure: `apcu` (18 constants), `cairo` (48 functions, 26 classes), `gmagick` (6 classes), `imagick` (10 classes), `pdo_ibm` (1 classes).
 

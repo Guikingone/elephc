@@ -9,13 +9,30 @@
 
 use super::*;
 
-/// Allocates and populates one builtin Reflection owner object from metadata.
+/// Allocates and populates one builtin Reflection owner object from metadata, member
+/// reflectors included.
 pub(super) fn emit_reflection_owner_object(
     ctx: &mut FunctionContext<'_>,
     class_name: &str,
     metadata: &ReflectionOwnerMetadata,
 ) -> Result<()> {
-    let is_reflection_class_owner = matches!(class_name, "ReflectionClass" | "ReflectionObject");
+    emit_reflection_owner_object_with_members(ctx, class_name, metadata, None)
+}
+
+/// Allocates and populates one builtin Reflection owner object from metadata.
+///
+/// With `members_filler`, a class-like owner records that helper's address in
+/// `__members_filler` instead of building its member reflectors (see
+/// `emit_reflection_owner_members`): the getters that read them run it on first use.
+pub(super) fn emit_reflection_owner_object_with_members(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    metadata: &ReflectionOwnerMetadata,
+    members_filler: Option<&str>,
+) -> Result<()> {
+    // `ReflectionEnum` extends `ReflectionClass`: it carries the same member slots, filled the same way.
+    let is_reflection_class_owner =
+        matches!(class_name, "ReflectionClass" | "ReflectionObject" | "ReflectionEnum");
     let (class_id, property_count, uninitialized_marker_offsets) = {
         let class_info = ctx
             .module
@@ -56,7 +73,7 @@ pub(super) fn emit_reflection_owner_object(
                 )?;
             }
         }
-        if is_reflection_class_owner || class_name == "ReflectionEnum" {
+        if is_reflection_class_owner {
             emit_reflection_class_name_parts(ctx, class_name, reflected_name)?;
         }
         if is_reflection_class_owner {
@@ -66,22 +83,10 @@ pub(super) fn emit_reflection_owner_object(
                 "__interface_names",
                 &metadata.interface_names,
             )?;
-            emit_reflection_class_array_property_by_name(
-                ctx,
-                class_name,
-                "__interfaces",
-                &metadata.interface_names,
-            )?;
             emit_reflection_owner_string_array_property_by_name(
                 ctx,
                 class_name,
                 "__trait_names",
-                &metadata.trait_names,
-            )?;
-            emit_reflection_class_array_property_by_name(
-                ctx,
-                class_name,
-                "__traits",
                 &metadata.trait_names,
             )?;
             emit_reflection_string_assoc_property_by_name(
@@ -132,37 +137,6 @@ pub(super) fn emit_reflection_owner_object(
                 "__static_properties",
                 &metadata.static_property_members,
             )?;
-            emit_reflection_member_array_property_by_name(
-                ctx,
-                class_name,
-                "__reflection_constants",
-                "ReflectionClassConstant",
-                &metadata.constant_reflection_members,
-            )?;
-            emit_reflection_member_array_property_by_name(
-                ctx,
-                class_name,
-                "__methods",
-                "ReflectionMethod",
-                &metadata.method_members,
-            )?;
-            emit_reflection_constructor_property(
-                ctx,
-                class_name,
-                metadata.constructor_member.as_ref(),
-            )?;
-            emit_reflection_parent_class_property(
-                ctx,
-                class_name,
-                metadata.parent_class_name.as_deref(),
-            )?;
-            emit_reflection_member_array_property_by_name(
-                ctx,
-                class_name,
-                "__properties",
-                "ReflectionProperty",
-                &metadata.property_members,
-            )?;
         } else if class_name == "ReflectionFunction" {
             let (_, short_name) = reflection_name_parts(reflected_name);
             emit_reflection_owner_string_property_by_name(ctx, class_name, "__short_name", short_name)?;
@@ -173,23 +147,11 @@ pub(super) fn emit_reflection_owner_object(
                 .iter()
                 .map(|member| member.name.clone())
                 .collect::<Vec<_>>();
-            let case_class = if metadata.type_metadata.is_some() {
-                "ReflectionEnumBackedCase"
-            } else {
-                "ReflectionEnumUnitCase"
-            };
             emit_reflection_owner_string_array_property_by_name(
                 ctx,
                 class_name,
                 "__case_names",
                 &case_names,
-            )?;
-            emit_reflection_member_array_property_by_name(
-                ctx,
-                "ReflectionEnum",
-                "__cases",
-                case_class,
-                &metadata.enum_case_members,
             )?;
             emit_reflection_owner_bool_property(
                 ctx,
@@ -204,6 +166,17 @@ pub(super) fn emit_reflection_owner_object(
                 metadata.type_metadata.as_ref(),
             )?;
         }
+        if is_reflection_class_owner {
+            match members_filler {
+                Some(label) => emit_reflection_owner_code_address_property(
+                    ctx,
+                    class_name,
+                    "__members_filler",
+                    label,
+                )?,
+                None => emit_reflection_owner_members(ctx, class_name, metadata)?,
+            }
+        }
         if class_name == "ReflectionFunction" {
             emit_reflection_function_name_parts(ctx, reflected_name)?;
         }
@@ -212,7 +185,7 @@ pub(super) fn emit_reflection_owner_object(
         }
     }
     emit_reflection_attrs_property(ctx, class_name, &metadata.attr_names, &metadata.attr_args)?;
-    if is_reflection_class_owner || class_name == "ReflectionEnum" {
+    if is_reflection_class_owner {
         emit_reflection_owner_bool_property(ctx, class_name, "__is_final", metadata.is_final)?;
         emit_reflection_owner_bool_property(ctx, class_name, "__is_abstract", metadata.is_abstract)?;
         emit_reflection_owner_bool_property(ctx, class_name, "__is_interface", metadata.is_interface)?;
@@ -602,4 +575,95 @@ pub(super) fn reflection_name_parts(reflected_name: &str) -> (&str, &str) {
         ),
         None => ("", reflected_name),
     }
+}
+
+/// Builds a class-like owner's member reflectors into their slots: interfaces, traits, class
+/// constants, methods, constructor, parent class, properties and, for an enum, its cases.
+///
+/// The object is in the integer result register on entry and exit, as for every slot emitter.
+/// Eager owners call this while they are built; a lazy one's shared filler calls it on first use.
+pub(super) fn emit_reflection_owner_members(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    metadata: &ReflectionOwnerMetadata,
+) -> Result<()> {
+    emit_reflection_class_array_property_by_name(
+        ctx,
+        class_name,
+        "__interfaces",
+        &metadata.interface_names,
+    )?;
+    emit_reflection_class_array_property_by_name(
+        ctx,
+        class_name,
+        "__traits",
+        &metadata.trait_names,
+    )?;
+    emit_reflection_member_array_property_by_name(
+        ctx,
+        class_name,
+        "__reflection_constants",
+        "ReflectionClassConstant",
+        &metadata.constant_reflection_members,
+    )?;
+    emit_reflection_member_array_property_by_name(
+        ctx,
+        class_name,
+        "__methods",
+        "ReflectionMethod",
+        &metadata.method_members,
+    )?;
+    emit_reflection_constructor_property(ctx, class_name, metadata.constructor_member.as_ref())?;
+    emit_reflection_parent_class_property(
+        ctx,
+        class_name,
+        metadata.parent_class_name.as_deref(),
+    )?;
+    emit_reflection_member_array_property_by_name(
+        ctx,
+        class_name,
+        "__properties",
+        "ReflectionProperty",
+        &metadata.property_members,
+    )?;
+    if class_name == "ReflectionEnum" {
+        let case_class = if metadata.type_metadata.is_some() {
+            "ReflectionEnumBackedCase"
+        } else {
+            "ReflectionEnumUnitCase"
+        };
+        emit_reflection_member_array_property_by_name(
+            ctx,
+            "ReflectionEnum",
+            "__cases",
+            case_class,
+            &metadata.enum_case_members,
+        )?;
+    }
+    Ok(())
+}
+
+/// Stores the address of the code at `label` into one integer slot of the owner object held in
+/// the integer result register, which it leaves there.
+fn emit_reflection_owner_code_address_property(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    property_name: &str,
+    label: &str,
+) -> Result<()> {
+    let class_info = ctx
+        .module
+        .class_infos
+        .get(class_name)
+        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let offset = reflection_property_offset(class_info, property_name)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let address_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_reg_move(ctx.emitter, object_reg, result_reg);
+    abi::emit_symbol_address(ctx.emitter, address_reg, label);
+    abi::emit_store_to_address(ctx.emitter, address_reg, object_reg, offset);
+    abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset + 8);
+    abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
+    Ok(())
 }

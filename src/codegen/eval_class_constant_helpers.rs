@@ -83,6 +83,14 @@ pub(super) fn resolve_class_like_constants_in_literal(
     if let Some(resolved) = resolve_class_like_constant_literal(module, current_class, expr) {
         return resolved;
     }
+    // An array-valued class constant (`public $l = self::L;`) is its array literal, resolved in
+    // the scope of the class that declares it.
+    if let ExprKind::ScopedConstantAccess { receiver, name } = expr {
+        if let Some((owner, value)) = class_constant_array_value(module, current_class, receiver, name)
+        {
+            return resolve_class_like_constants_in_literal(module, &owner, &value.kind);
+        }
+    }
     match expr {
         ExprKind::ArrayLiteral(items) => ExprKind::ArrayLiteral(
             items
@@ -128,17 +136,50 @@ pub(super) fn resolve_class_like_constants_in_literal(
     }
 }
 
+/// Returns the class that declares an array-valued class constant and its array literal, or
+/// `None` when the reference names no such constant (a scalar one, an enum case, an unknown class).
+fn class_constant_array_value(
+    module: &Module,
+    current_class: &str,
+    receiver: &StaticReceiver,
+    name: &str,
+) -> Option<(String, Expr)> {
+    let mut owner = match receiver {
+        StaticReceiver::Self_ | StaticReceiver::Static => current_class.to_string(),
+        StaticReceiver::Parent => module.class_infos.get(current_class)?.parent.clone()?,
+        StaticReceiver::Named(class_name) => {
+            class_name.as_str().trim_start_matches('\\').to_string()
+        }
+    };
+    // The nearest class that has the constant: an override shadows its parent's value.
+    loop {
+        let info = module.class_infos.get(&owner)?;
+        if let Some(value) = info.constants.get(name) {
+            return matches!(value.kind, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_))
+                .then(|| (owner, value.clone()));
+        }
+        owner = info.parent.clone()?;
+    }
+}
+
 /// Emits eval class-constant helpers when any lowered function owns an eval context.
+///
+/// The direct getter is also emitted without the bridge when the runtime carries
+/// `__rt_constant`, which reads `constant('Class::NAME')` through it.
 pub(super) fn emit_eval_class_constant_helpers(
     module: &Module,
     emitter: &mut Emitter,
     data: &mut DataSection,
 ) {
-    if !module.required_runtime_features.eval_bridge {
+    let features = &module.required_runtime_features;
+    if !features.eval_bridge && !features.const_introspection {
         return;
     }
     let slots = collect_eval_class_constant_slots(module);
     emit_class_constant_get_helper(module, emitter, data, &slots);
+    if !features.eval_bridge {
+        return;
+    }
     emit_reflection_constant_value_helper(module, emitter, data, &slots);
     emit_reflection_constant_names_helper(module, emitter, data, &slots);
     emit_reflection_constant_flags_helper(module, emitter, data, &slots);
@@ -1043,6 +1084,9 @@ fn emit_aarch64_constant_value(
             crate::codegen::enum_singletons::emit_lazy_case_load_unguarded(
                 emitter, module, enum_name, case_name,
             );
+            // The slot keeps owning the singleton; the box this helper returns owns another
+            // reference, as every other case read site hands out (see `enum_singletons`).
+            abi::emit_incref_if_refcounted(emitter, &PhpType::Object(enum_name.clone()));
             emit_box_current_value_as_mixed(emitter, &PhpType::Object(enum_name.clone()));
         }
     }
@@ -1090,6 +1134,9 @@ fn emit_x86_64_constant_value(
             crate::codegen::enum_singletons::emit_lazy_case_load_unguarded(
                 emitter, module, enum_name, case_name,
             );
+            // The slot keeps owning the singleton; the box this helper returns owns another
+            // reference, as every other case read site hands out (see `enum_singletons`).
+            abi::emit_incref_if_refcounted(emitter, &PhpType::Object(enum_name.clone()));
             emit_box_current_value_as_mixed(emitter, &PhpType::Object(enum_name.clone()));
         }
     }

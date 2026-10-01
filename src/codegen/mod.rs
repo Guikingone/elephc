@@ -414,12 +414,8 @@ fn finalize_user_asm(
             &mut emitter,
             &mut data,
         );
-        eval_class_constant_helpers::emit_eval_class_constant_helpers(
-            module,
-            &mut emitter,
-            &mut data,
-        );
     }
+    eval_class_constant_helpers::emit_eval_class_constant_helpers(module, &mut emitter, &mut data);
     let eval_callable_support_needed =
         eval_bridge && eval_callable_helpers::module_needs_eval_callable_descriptor_support(module);
     let eval_callable_support = eval_callable_helpers::emit_eval_callable_descriptor_support(

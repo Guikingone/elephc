@@ -64,6 +64,38 @@ echo implode(",", $b->items);
     assert_eq!(out, "1,2,3|3,2,1");
 }
 
+/// A hash handed to a `mixed` by-reference parameter comes back as a packed list when the
+/// callee reassigns it one -- the gradual `sort()` does exactly that -- and the caller's hash
+/// storage must receive a hash. The payload used to be stored as it was, so the next hash walk
+/// read an indexed array as a hash: `rsort()` after `sort()` faulted (SIGBUS) on a string-keyed
+/// local and on an untyped property alike.
+#[test]
+fn test_hash_passed_to_mixed_ref_parameter_is_written_back_as_a_hash() {
+    let out = compile_and_run(
+        r#"<?php
+function relist(mixed &$x): void { $x = array_values($x); }
+$m = ['x' => 3, 'y' => 'b', 'z' => 1.5];
+sort($m);
+echo implode(",", $m), "|";
+rsort($m);
+echo implode(",", $m), "\n";
+class B { public $items = ['b' => 2, 'a' => 1]; }
+$b = new B();
+sort($b->items);
+rsort($b->items);
+echo implode(",", $b->items), "\n";
+$h = ['k' => 1, 'j' => 2];
+relist($h);
+relist($h);
+var_dump($h);
+"#,
+    );
+    assert_eq!(
+        out,
+        "1.5,3,b|b,3,1.5\n2,1\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n"
+    );
+}
+
 /// The whole structural-mutator family on one instance property: push, pop, shift, unshift,
 /// and splice each have to observe and update the same property storage in sequence.
 #[test]

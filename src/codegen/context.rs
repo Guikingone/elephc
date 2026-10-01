@@ -934,6 +934,21 @@ impl<'a> FunctionContext<'a> {
         Ok(())
     }
 
+    /// Returns true when a container loaded from this raw frame slot can hand the reference its
+    /// load took to the slot's new box once a mutation has released the old one.
+    ///
+    /// The ordinary store makes the same choice (`store_value_to_raw_local`); the
+    /// mutated-container store always retains, for the builtins whose call cleanup still
+    /// releases the argument.
+    pub(super) fn local_load_can_move_into_box(
+        &self,
+        slot: LocalSlotId,
+        value: ValueId,
+    ) -> Result<bool> {
+        Ok(self.local_slot_representation(slot) == LocalSlotRepresentation::Raw
+            && self.value_can_own_mixed_box_source(value)?)
+    }
+
     /// Stores an SSA value into a slot known to contain its raw frame representation.
     pub(super) fn store_value_to_raw_local(
         &mut self,

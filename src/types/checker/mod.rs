@@ -376,6 +376,10 @@ pub(crate) struct Checker {
     /// function, or a file a request never reaches -- so `defined()` on one of these names reads
     /// the define's own flag instead of folding, and a `--web` request clears the flags.
     pub runtime_define_names: HashSet<String>,
+    /// Constant names the program reads that nothing declares or `define()`s, without a leading
+    /// `\`. php compiles such a read and throws `Error: Undefined constant "X"` when it runs, so
+    /// the checker types it `mixed`, warns, and lowering emits the runtime lookup that throws.
+    pub undefined_constant_reads: HashSet<String>,
     /// DECLARED by-reference parameters whose own body stores a value the declaration cannot
     /// represent, as `(body scope key, parameter name)`.
     ///
@@ -1196,6 +1200,7 @@ pub fn check_types_with_options(
         by_ref_local_storage_types: checker.by_ref_local_storage_types,
         ref_param_escaping_callees: checker.ref_param_escaping_callees,
         runtime_define_names: checker.runtime_define_names,
+        undefined_constant_reads: checker.undefined_constant_reads,
         dynamic_ref_local_types: checker.dynamic_ref_local_types,
         local_bind_kill_sites: checker.local_bind_kill_sites,
         local_retype_sites: checker.local_retype_sites,
@@ -1280,6 +1285,10 @@ pub(crate) fn single_object_class_name(ty: &PhpType) -> Option<String> {
 /// hierarchy. Constructor-promoted `&$param` properties already are reference properties
 /// (borrowed cell) and are left untouched. Object-owned reference cells are also recorded
 /// in `owned_reference_properties` so the object allocates and frees them.
+///
+/// The promotion follows the SLOT, not the name: a private property keeps its own slot in a
+/// descendant that declares a same-named property, and the declaring class's methods reach
+/// that hidden slot through the cell, so it is promoted per slot there too.
 fn apply_reference_property_promotions(checker: &mut Checker) {
     let promotions = std::mem::take(&mut checker.reference_property_promotions);
     for (access_class, prop) in promotions {
@@ -1288,25 +1297,26 @@ fn apply_reference_property_promotions(checker: &mut Checker) {
             .get(&access_class)
             .and_then(|info| info.property_declaring_classes.get(&prop).cloned())
             .unwrap_or_else(|| access_class.clone());
-        for info in checker.classes.values_mut() {
-            if !info.properties.iter().any(|(name, _)| name == &prop) {
-                continue;
-            }
-            let same_decl = info
-                .property_declaring_classes
-                .get(&prop)
-                .is_some_and(|decl| decl == &declaring);
-            if !same_decl {
-                continue;
-            }
-            if info.reference_properties.contains(&prop) {
-                continue;
-            }
-            info.reference_properties.insert(prop.clone());
-            info.owned_reference_properties.insert(prop.clone());
-            if let Some(slot) = info.visible_property_index(&prop) {
+        for (class_name, info) in checker.classes.iter_mut() {
+            for slot in 0..info.properties.len() {
+                if info.properties[slot].0 != prop {
+                    continue;
+                }
+                if info.property_slot_owner(slot, class_name).1 != declaring {
+                    continue;
+                }
+                if info.property_slot_is_reference(slot, &prop) {
+                    continue;
+                }
                 if let Some(slot_reference) = info.property_reference_slots.get_mut(slot) {
                     *slot_reference = true;
+                }
+                let slot_count = info.properties.len();
+                info.property_owned_reference_slots.resize(slot_count, false);
+                info.property_owned_reference_slots[slot] = true;
+                if !info.property_slot_is_hidden(slot) {
+                    info.reference_properties.insert(prop.clone());
+                    info.owned_reference_properties.insert(prop.clone());
                 }
             }
         }

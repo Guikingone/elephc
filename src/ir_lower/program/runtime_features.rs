@@ -116,6 +116,10 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                             crate::ir::RuntimeFnId::MethodExists
                                 | crate::ir::RuntimeFnId::PropertyExists
                         ) && member_exists_call_requires_runtime_registry(function, inst);
+                        // `get_class_methods()` always answers from the per-class method rows:
+                        // the calling scope decides visibility at run time.
+                        features.class_methods_introspection |=
+                            matches!(target, crate::ir::RuntimeFnId::GetClassMethods);
                         // The resource a builtin boxes is the ONLY way its cleanup kind reaches
                         // `__rt_mixed_free_deep`: eval boxes its own handles as kind 0, and a
                         // callable named by a runtime-unknown string is a fatal, not a dispatch.

@@ -17,7 +17,7 @@ eval_builtin! {
 
 use super::super::super::*;
 use super::super::{
-    eval_class_relation_name_exists, eval_resolved_class_metadata_name,
+    eval_class_relation_name_exists, eval_resolved_class_metadata_name, eval_same_class_metadata_name,
     eval_runtime_property_access_metadata, eval_runtime_string_array_to_vec,
 };
 use std::collections::HashSet;
@@ -152,6 +152,7 @@ fn eval_runtime_class_vars_result(
     values.release(property_names)?;
     let mut result = values.assoc_new(declared_names.len())?;
     let mut emitted_keys = HashSet::new();
+    let listed_names: HashSet<String> = declared_names.iter().cloned().collect();
     for property_name in declared_names {
         if emitted_keys.contains(&property_name) {
             continue;
@@ -173,6 +174,51 @@ fn eval_runtime_class_vars_result(
         )?;
         result = eval_add_class_var_entry(result, &property_name, value, values)?;
         emitted_keys.insert(property_name);
+    }
+    eval_runtime_scope_private_class_vars(class_name, &listed_names, result, context, values)
+}
+
+/// Adds the calling scope's own private properties when that scope is an ancestor of `class_name`.
+///
+/// The compiled class's list is what reflection sees on it, which leaves out an ancestor's
+/// private properties. php still shows them to the ancestor's own scope, except a name the class
+/// redeclares, whose visible property is the class's own.
+fn eval_runtime_scope_private_class_vars(
+    class_name: &str,
+    listed_names: &HashSet<String>,
+    mut result: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(scope) = context.current_class_scope().map(str::to_string) else {
+        return Ok(result);
+    };
+    if eval_same_class_metadata_name(&scope, class_name) || !native_class_is_a(class_name, &scope, context) {
+        return Ok(result);
+    }
+    let scope_handle = values.reflection_property_names(&scope)?;
+    let scope_names = eval_runtime_string_array_to_vec(scope_handle, values)?;
+    values.release(scope_handle)?;
+    for property_name in scope_names {
+        if listed_names.contains(&property_name) {
+            continue;
+        }
+        let Some((declaring_class, visibility, _is_static)) =
+            eval_runtime_property_access_metadata(&scope, &property_name, values)?
+        else {
+            continue;
+        };
+        if visibility != EvalVisibility::Private || !eval_same_class_metadata_name(&declaring_class, &scope) {
+            continue;
+        }
+        let value = eval_runtime_class_var_default_value(
+            &scope,
+            &declaring_class,
+            &property_name,
+            context,
+            values,
+        )?;
+        result = eval_add_class_var_entry(result, &property_name, value, values)?;
     }
     Ok(result)
 }

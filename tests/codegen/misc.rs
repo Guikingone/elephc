@@ -701,6 +701,100 @@ echo defined($missing) ? 'Y' : 'N';
     assert_eq!(out, "YN");
 }
 
+/// Verifies `PHP_WINDOWS_VERSION_*` are undefined off Windows, as php says: `defined()` answers
+/// false for a literal, a runtime name and inside eval, a Windows-only branch that reads them
+/// still compiles, and a read throws `Undefined constant`. They were defined as `0` on every
+/// target, so `\defined('PHP_WINDOWS_VERSION_BUILD')` -- Composer's `Platform::isWindows()` --
+/// answered true on macOS.
+#[test]
+fn test_windows_version_constants_are_undefined_off_windows() {
+    let out = compile_and_run(
+        r#"<?php
+function windowsBuild(): string {
+    if ('\\' === DIRECTORY_SEPARATOR) {
+        return PHP_WINDOWS_VERSION_MAJOR . '.' . PHP_WINDOWS_VERSION_BUILD;
+    }
+    return 'posix';
+}
+var_dump(defined('PHP_WINDOWS_VERSION_BUILD'));
+$name = 'PHP_WINDOWS_VERSION_' . 'MINOR';
+var_dump(defined($name));
+var_dump(eval('return defined("PHP_WINDOWS_VERSION_MAJOR");'));
+echo windowsBuild(), "\n";
+try {
+    echo PHP_WINDOWS_VERSION_BUILD, "\n";
+} catch (\Error $e) {
+    echo get_class($e), ': ', $e->getMessage(), "\n";
+}
+try {
+    echo constant('PHP_WINDOWS_VERSION_MAJOR'), "\n";
+} catch (\Error $e) {
+    echo get_class($e), ': ', $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nbool(false)\nbool(false)\nposix\n\
+         Error: Undefined constant \"PHP_WINDOWS_VERSION_BUILD\"\n\
+         Error: Undefined constant \"PHP_WINDOWS_VERSION_MAJOR\"\n"
+    );
+}
+
+/// Verifies a read of a constant nothing defines compiles and throws php's `Error: Undefined
+/// constant` when it runs: behind a `defined()` guard it is never reached, a bare statement read
+/// is kept for its throw, and an unqualified name in a namespace reports the namespaced spelling.
+/// The read was a compile error, so `\defined('X') && X` -- a common library guard -- refused the
+/// whole program.
+#[test]
+fn test_undefined_constant_read_compiles_and_throws_at_runtime() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+function win(): bool { return \defined('SOME_UNKNOWN_CONST') && SOME_UNKNOWN_CONST >= 10; }
+var_dump(win());
+if (\defined('OTHER_UNKNOWN')) { echo OTHER_UNKNOWN, "\n"; } else { echo "absent\n"; }
+try { echo \constant('THIRD_UNKNOWN'); } catch (\Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+try { BARE_UNKNOWN; } catch (\Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+try { $x = \FOURTH_UNKNOWN; echo "unreached\n"; } catch (\Error $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nabsent\n\
+         Error: Undefined constant \"THIRD_UNKNOWN\"\n\
+         Error: Undefined constant \"App\\BARE_UNKNOWN\"\n\
+         Undefined constant \"FOURTH_UNKNOWN\"\n"
+    );
+}
+
+/// Verifies `constant('Class::NAME')` reads class constants, interface constants and enum cases
+/// at run time, with php's messages for a missing constant and a missing class. Monolog's
+/// `Logger::toMonologLevel()` builds the name as `Level::class . '::' . ucfirst($name)`, which was
+/// a compile error for a literal and `Undefined constant "Level::Debug"` for a runtime name.
+#[test]
+fn test_constant_reads_class_constants_and_enum_cases_by_name() {
+    let out = compile_and_run(
+        r#"<?php
+enum L: int { case A = 1; const P = "p"; }
+class C { const X = 3.5; }
+interface I { const Z = "iz"; }
+foreach (["L::A", "L::P", "L::B", "C::X", "C::Y", "Nope::X", "I::Z"] as $n) {
+    try { var_dump(constant($n)); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+}
+var_dump(constant("L::A") === L::A, constant("C::X"));
+$k = $argc > 5 ? "B" : "A";
+var_dump(constant(L::class . "::" . $k)->value);
+"#,
+    );
+    assert_eq!(
+        out,
+        "enum(L::A)\nstring(1) \"p\"\nError: Undefined constant L::B\nfloat(3.5)\n\
+         Error: Undefined constant C::Y\nError: Class \"Nope\" not found\nstring(2) \"iz\"\n\
+         bool(true)\nfloat(3.5)\nint(1)\n"
+    );
+}
+
 /// Verifies a ternary in a function where both branches return strings produces correct output
 /// for both positive and non-positive inputs.
 #[test]

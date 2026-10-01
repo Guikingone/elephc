@@ -182,6 +182,13 @@ pub(super) fn emit_reflection_parent_class_property(
 }
 
 /// Replaces a member reflector's private declaring-class slot with `ReflectionClass|false`.
+///
+/// A reflector whose class declares `__declaring_class_thunk` (`ReflectionMethod`,
+/// `ReflectionProperty`) records the address of its declaring class's shared shallow
+/// materializer there instead, and `getDeclaringClass()` builds the object when asked. Building
+/// it here made every reflector a graph that a `--web` request then tore down: Symfony's
+/// `Request::setProperty()` keeps seven reflectors in a static and never asks one for its class,
+/// and the eager objects cost 2.15M of its 16.89M instructions per request.
 pub(super) fn emit_reflection_declaring_class_property(
     ctx: &mut FunctionContext<'_>,
     member_class_name: &str,
@@ -199,10 +206,34 @@ pub(super) fn emit_reflection_declaring_class_property(
     else {
         return Ok(());
     };
+    let thunk_offset = class_info
+        .property_offsets
+        .get("__declaring_class_thunk")
+        .copied();
     let high_offset = low_offset + 8;
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let materializer = match (thunk_offset, declaring_class_name) {
+        (Some(thunk_offset), Some(declaring_class_name)) => Some((
+            thunk_offset,
+            shallow_reflection_class_materializer_label(ctx, declaring_class_name)?,
+        )),
+        _ => None,
+    };
     abi::emit_push_reg(ctx.emitter, result_reg);
+    if let Some((thunk_offset, label)) = materializer {
+        abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+        emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+        abi::emit_pop_reg(ctx.emitter, object_reg);
+        abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
+        abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
+        let address_reg = abi::secondary_scratch_reg(ctx.emitter);
+        abi::emit_symbol_address(ctx.emitter, address_reg, &label);
+        abi::emit_store_to_address(ctx.emitter, address_reg, object_reg, thunk_offset);
+        abi::emit_store_zero_to_address(ctx.emitter, object_reg, thunk_offset + 8);
+        abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
+        return Ok(());
+    }
     if let Some(declaring_class_name) = declaring_class_name {
         emit_shallow_reflection_class_object(ctx, declaring_class_name)?;
         emit_box_current_owned_value_as_mixed(

@@ -13,7 +13,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::names::{php_symbol_key, Name};
-use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
+use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
 use crate::types::{AttrArgEntry, AttrArgValue, AttrKey, ClassInfo};
 
 /// Borrowed attribute-name/argument metadata from a reflection-visible source.
@@ -150,7 +150,7 @@ pub(crate) fn build_attribute_new_instance_body_with_extra(
 ) -> Vec<Stmt> {
     let span = crate::span::Span::dummy();
     let factories = collect_attribute_factories_with_extra(classes, extra_attrs);
-    let mut body = Vec::new();
+    let mut cases = Vec::new();
     for factory in factories {
         // Only resolvable attribute classes can be instantiated. Non-class
         // attributes are registered (so `getArguments()` can find them) but
@@ -158,7 +158,6 @@ pub(crate) fn build_attribute_new_instance_body_with_extra(
         if !factory.resolvable {
             continue;
         }
-        let condition = factory_condition(factory.id);
         let then_body = vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
                 ExprKind::NewObject {
@@ -184,16 +183,9 @@ pub(crate) fn build_attribute_new_instance_body_with_extra(
             ))),
             span,
         )];
-        body.push(Stmt::new(
-            StmtKind::If {
-                condition,
-                then_body,
-                elseif_clauses: Vec::new(),
-                else_body: None,
-            },
-            span,
-        ));
+        cases.push((factory.id, then_body));
     }
+    let mut body: Vec<Stmt> = factory_switch(cases).into_iter().collect();
     body.push(runtime_attribute_new_instance_fallback(span));
     body
 }
@@ -231,23 +223,37 @@ fn runtime_attribute_new_instance_fallback(span: crate::span::Span) -> Stmt {
     )
 }
 
-/// Creates `this->__factory === factory_id` for `newInstance()` dispatch routing.
-fn factory_condition(factory_id: i64) -> Expr {
+/// Dispatches on `$this->__factory` with one `switch` over the factory ids, or `None` when there
+/// is no factory to dispatch to.
+///
+/// The ids are the dense `1..=N` the factory table numbers, so the switch lowers to a jump table.
+/// A chain of `if ($this->__factory === id)` re-read the property and compared once per factory
+/// the program declares -- every attribute of every compiled class -- before reaching the one it
+/// wanted: `ReflectionAttribute::newInstance()` alone was 1.2% of a Symfony request.
+fn factory_switch(cases: Vec<(i64, Vec<Stmt>)>) -> Option<Stmt> {
+    if cases.is_empty() {
+        return None;
+    }
     let span = crate::span::Span::dummy();
-    Expr::new(
-        ExprKind::BinaryOp {
-            left: Box::new(Expr::new(
-                ExprKind::PropertyAccess {
-                    object: Box::new(Expr::new(ExprKind::This, span)),
-                    property: "__factory".to_string(),
-                },
-                span,
-            )),
-            op: BinOp::StrictEq,
-            right: Box::new(Expr::new(ExprKind::IntLiteral(factory_id), span)),
+    let subject = Expr::new(
+        ExprKind::PropertyAccess {
+            object: Box::new(Expr::new(ExprKind::This, span)),
+            property: "__factory".to_string(),
         },
         span,
-    )
+    );
+    let cases = cases
+        .into_iter()
+        .map(|(id, body)| (vec![Expr::new(ExprKind::IntLiteral(id), span)], body))
+        .collect();
+    Some(Stmt::new(
+        StmtKind::Switch {
+            subject,
+            cases,
+            default: None,
+        },
+        span,
+    ))
 }
 
 /// Converts one captured attribute argument into a synthetic AST expression.
@@ -339,23 +345,17 @@ pub(crate) fn build_attribute_get_arguments_body_with_extra(
 ) -> Vec<Stmt> {
     let span = crate::span::Span::dummy();
     let factories = collect_attribute_factories_with_extra(classes, extra_attrs);
-    let mut body = Vec::new();
-    for factory in factories {
-        let condition = factory_condition(factory.id);
-        let then_body = vec![Stmt::new(
-            StmtKind::Return(Some(entries_to_array_expr(&factory.args, true))),
-            span,
-        )];
-        body.push(Stmt::new(
-            StmtKind::If {
-                condition,
-                then_body,
-                elseif_clauses: Vec::new(),
-                else_body: None,
-            },
-            span,
-        ));
-    }
+    let cases = factories
+        .iter()
+        .map(|factory| {
+            let then_body = vec![Stmt::new(
+                StmtKind::Return(Some(entries_to_array_expr(&factory.args, true))),
+                span,
+            )];
+            (factory.id, then_body)
+        })
+        .collect();
+    let mut body: Vec<Stmt> = factory_switch(cases).into_iter().collect();
     // Runtime eval materializes `ReflectionAttribute` objects with factory id
     // zero and stores their retained arguments in `__args`, so the fallback
     // must preserve that path instead of returning an empty factory miss.

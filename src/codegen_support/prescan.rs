@@ -16,7 +16,9 @@ use crate::codegen_support::platform::{Platform, Target};
 use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
 use crate::types::iconv_constants::{iconv_impl, ICONV_VERSION};
 use crate::types::pcntl_constants::pcntl_int_constants;
-use crate::types::predefined_constants::{literal_of, php_type_of, registered_constants};
+use crate::types::predefined_constants::{
+    constant_defined_on_target, literal_of, php_type_of, registered_constants,
+};
 use crate::types::token_constants::{token_int_constant_value, TOKEN_INT_CONSTANTS};
 use crate::types::PhpType;
 
@@ -45,6 +47,11 @@ pub(crate) fn collect_constants(
     let target_platform = target.platform;
     let mut constants = HashMap::new();
     for constant in registered_constants() {
+        // A name php does not define on this target gets no value: `defined()` then answers
+        // false, and a read throws `Undefined constant` (see `constant_defined_on_target`).
+        if !constant_defined_on_target(constant, target) {
+            continue;
+        }
         if let Some(literal) = literal_of(constant.value) {
             constants.insert(
                 constant.name.to_string(),
@@ -260,7 +267,16 @@ mod tests {
                 &vec![],
                 Target::new(platform, crate::codegen_support::platform::Arch::AArch64),
             );
+            let target = Target::new(platform, crate::codegen_support::platform::Arch::AArch64);
             for constant in registered_constants() {
+                if !constant_defined_on_target(constant, target) {
+                    assert!(
+                        !constants.contains_key(constant.name),
+                        "{} is not defined on {platform:?} but has a value",
+                        constant.name
+                    );
+                    continue;
+                }
                 let (_, ty) = constants
                     .get(constant.name)
                     .unwrap_or_else(|| panic!("{} has no value on {platform:?}", constant.name));

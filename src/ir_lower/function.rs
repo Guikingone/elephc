@@ -605,12 +605,61 @@ pub(crate) fn lower_property_init_thunk(
     constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
 ) {
-    if !class_info.defaults.iter().any(|default| default.is_some()) {
+    if !class_info.has_property_init_thunk() {
         return;
     }
+    let body = property_init_body(class_info, |index| {
+        class_info.property_slot_in_init_thunk(index)
+    });
+    lower_property_default_thunk(
+        format!("_class_propinit_{}", class_info.class_id),
+        body,
+        class_name,
+        module,
+        check_result,
+        constants,
+        fiber_return_sigs,
+    );
+}
+
+/// Lowers a synthetic `_class_propinit_private_<id>` function: the defaults of the private
+/// properties the class declares itself, assigned in its own scope.
+///
+/// A by-name allocation of a descendant that hides one of those slots behind a same-named
+/// declaration runs this after its own thunk, which cannot name the hidden slot.
+pub(crate) fn lower_private_property_init_thunk(
+    class_name: &str,
+    class_info: &ClassInfo,
+    module: &mut Module,
+    check_result: &CheckResult,
+    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
+) {
+    let body = property_init_body(class_info, |index| {
+        class_info.property_slot_in_private_init_thunk(index, class_name)
+    });
+    lower_property_default_thunk(
+        format!("_class_propinit_private_{}", class_info.class_id),
+        body,
+        class_name,
+        module,
+        check_result,
+        constants,
+        fiber_return_sigs,
+    );
+}
+
+/// Lowers one property-default thunk body into a `$this`-only synthetic function.
+fn lower_property_default_thunk(
+    function_name: String,
+    body: Vec<Stmt>,
+    class_name: &str,
+    module: &mut Module,
+    check_result: &CheckResult,
+    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
+) {
     let web = module.web;
-    let body = property_init_body(class_info);
-    let function_name = format!("_class_propinit_{}", class_info.class_id);
     let this_type = PhpType::Object(class_name.to_string());
     let mut function = Function::new(function_name.clone(), IrType::Void, PhpType::Void);
     function.flags.is_synthetic = true;
@@ -1054,12 +1103,13 @@ pub(crate) fn dynamic_constructor_thunk_name(class_id: u64, provided_args: usize
 /// A null default whose slot type cannot represent null (a scalar slot rebound by
 /// constructor-argument propagation) is skipped: those slots are always overwritten
 /// before an observable read, and the store would be unrepresentable.
-fn property_init_body(class_info: &ClassInfo) -> Vec<Stmt> {
+fn property_init_body(class_info: &ClassInfo, include: impl Fn(usize) -> bool) -> Vec<Stmt> {
     let span = Span::dummy();
     class_info
         .defaults
         .iter()
         .enumerate()
+        .filter(|(index, _)| include(*index))
         .filter_map(|(index, default)| {
             let default = default.as_ref()?;
             let (name, php_type) = class_info.properties.get(index)?;
