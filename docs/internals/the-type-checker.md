@@ -766,6 +766,7 @@ pub struct ClassInfo {
     pub used_traits: Vec<String>,
     pub trait_aliases: Vec<(String, String)>, // (alias, Trait::method)
     pub properties: Vec<(String, PhpType)>,
+    pub property_order: Vec<String>, // this class's own declaration order, independent of storage slots
     pub property_offsets: HashMap<String, usize>,
     pub property_declaring_classes: HashMap<String, String>,
     pub defaults: Vec<Option<Expr>>,
@@ -814,6 +815,36 @@ pub struct ClassInfo {
 ```
 
 `vtable_methods` / `vtable_slots` drive ordinary inherited instance dispatch, while `static_vtable_methods` / `static_vtable_slots` carry the parallel metadata used by `static::method()` late static binding. `allow_dynamic_properties` records the PHP 8.2 `#[\AllowDynamicProperties]` attribute so codegen can route undeclared property storage through a per-object side table. The `*_attribute_names` / `*_attribute_args` fields carry PHP 8 attribute metadata for the class, its methods, its properties, and its constants so the Reflection codegen path can materialize `ReflectionAttribute` objects. `abstract_property_hooks` records PHP 8.4 property hook contracts that concrete subclasses must satisfy, and `property_set_visibilities` records PHP 8.4 asymmetric write visibility (e.g. `public private(set)`) for properties whose write visibility differs from their read visibility. The per-slot vectors (`property_declared_slots`, `property_reference_slots`) follow the physical `properties` layout by index so hidden private parent slots keep their metadata when a child declares a same-named property.
+
+### Property declaration order in reflection
+
+Physical property layout is parent-first, and redeclaring an inherited property
+can update its existing slot in place. Reflection order must not use that slot
+position as the child's declaration position. `ClassInfo::property_order`
+records a separate list in `src/types/checker/schema/classes/state.rs`: the
+checker stably sorts `class.properties` by source line and column, then records
+their names. Promoted constructor properties therefore appear at their source
+position rather than where the parser appended them to the property list.
+
+`reflection_property_rank_table` in
+`src/codegen/lower_inst/objects/reflection/class_members.rs` walks the reflected
+class's parent chain once per listing and records each class's depth and own
+name-to-declaration-position map. The declaring-class metadata selects the
+appropriate map for each property. `getDefaultProperties()` sorts static
+properties before instance properties; within either group, the class's own
+properties precede its ancestors', in declaration order. `getStaticProperties()`
+uses the same depth/declaration-position ranking for its visible static slots,
+excluding an ancestor's private statics. A name absent from its declaring
+class's order sorts after recorded names, with storage position as the stable
+fallback. This changes listing order, not object offsets or static-slot owners.
+
+The EIR static-property map path in
+`src/ir_lower/expr/reflection_static_properties.rs` independently builds the
+same per-class rank table through `reflection_class_property_ranks`, so its
+`getStaticProperties()` entries preserve the same order. For example, when a
+parent declares static `$a`, then `$b`, and the child declares static `$z`, then
+redeclares `$a`, reflection lists `z,a,b`, even though the inherited storage
+slot for `$a` precedes `$z`.
 
 ### Constructor ownership
 
