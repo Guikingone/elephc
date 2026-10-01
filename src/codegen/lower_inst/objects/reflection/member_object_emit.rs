@@ -62,12 +62,12 @@ pub(super) fn emit_reflection_member_object(
             "__class",
             member.declaring_class_name.as_deref().unwrap_or(""),
         )?;
-        emit_reflection_parameter_array_property_by_name(
-            ctx,
-            member_class_name,
-            "__parameters",
-            &member.parameters,
-        )?;
+        let identity = format!(
+            "{}::{}",
+            member.declaring_class_name.as_deref().unwrap_or(""),
+            member.name
+        );
+        emit_reflection_lazy_parameters(ctx, member_class_name, &identity, &member.parameters)?;
         emit_reflection_owner_int_property(
             ctx,
             member_class_name,
@@ -164,6 +164,17 @@ pub(super) fn emit_reflection_member_object(
             member_class_name,
             "__string",
             &property_string,
+        )?;
+    }
+    if matches!(
+        member_class_name,
+        "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase"
+    ) {
+        emit_reflection_owner_string_property_by_name(
+            ctx,
+            member_class_name,
+            "__class",
+            member.declaring_class_name.as_deref().unwrap_or(""),
         )?;
     }
     if member_class_name == "ReflectionClassConstant" {

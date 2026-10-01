@@ -322,6 +322,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         }
         Op::ReflectionMaterialize => objects::lower_reflection_materialize(ctx, inst),
         Op::ReflectionFillMembers => objects::lower_reflection_fill_members(ctx, inst),
+        Op::ObjectHandleReserve | Op::ObjectHandlePend | Op::ObjectHandleUnpend => {
+            objects::lower_object_handle_reservation(ctx, inst)
+        }
         Op::CallablePtr => builtins::pointers::lower_elephc_callable_ptr(ctx, inst),
         Op::NormalizeCallable => builtins::pointers::lower_elephc_normalize_callable(ctx, inst),
         Op::PdoAdapterAddr => builtins::pointers::lower_elephc_pdo_adapter_addr(ctx, inst),

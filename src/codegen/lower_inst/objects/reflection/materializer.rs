@@ -324,20 +324,98 @@ pub(in crate::codegen::lower_inst) fn lower_reflection_fill_members(
     Ok(())
 }
 
-/// Returns the label of the shared member filler for one fully reflected class-like, emitting
-/// the helper first when the module has none yet, without calling it.
+/// Returns the label of the shared filler of one member slot of a fully reflected class-like,
+/// emitting the helper first when the module has none yet, without calling it.
 ///
-/// The filler takes the reflector in the integer result register, clears its
-/// `__members_filler` slot, and builds the member reflectors the eager materializer used to:
-/// methods, properties, constants, constructor, parent, interfaces, traits and enum cases.
-fn reflection_members_filler_label(
+/// The filler takes the reflector in the integer result register, clears its `<slot>_filler`,
+/// and builds that slot's member reflectors, as the eager materializer did for every slot.
+pub(super) fn reflection_member_slot_filler_label(
     ctx: &mut FunctionContext<'_>,
     owner: ReflectionOwnerKind,
     class_name: &str,
     metadata: &ReflectionOwnerMetadata,
+    slot: &'static str,
 ) -> Result<String> {
     let name = metadata.reflected_name.clone().unwrap_or_default();
-    let key = ReflectionMaterializerKey::Members { owner, name };
+    let key = ReflectionMaterializerKey::Members { owner, name, slot };
+    reflection_slot_filler_label(ctx, key, class_name, slot, |helper_ctx| {
+        emit_reflection_owner_member_slot(helper_ctx, class_name, metadata, slot)
+    })
+}
+
+/// Records, in a method or function reflector held in the integer result register, how to build
+/// its parameter reflectors on first use: the shared filler's address in `__parameters_filler`
+/// and their count in `__parameter_count`. A reflector without parameters gets its empty list.
+///
+/// Building them up front cost several objects per parameter (its type, its declaring function
+/// and class), so a `getMethods()` php answers with two objects allocated a dozen.
+pub(super) fn emit_reflection_lazy_parameters(
+    ctx: &mut FunctionContext<'_>,
+    owner_class_name: &str,
+    identity: &str,
+    parameters: &[ReflectionParameterMember],
+) -> Result<()> {
+    let Some(owner) = ReflectionOwnerKind::from_class_name(owner_class_name) else {
+        return emit_reflection_parameter_array_property_by_name(
+            ctx,
+            owner_class_name,
+            "__parameters",
+            parameters,
+        );
+    };
+    if parameters.is_empty() {
+        return emit_reflection_parameter_array_property_by_name(
+            ctx,
+            owner_class_name,
+            "__parameters",
+            parameters,
+        );
+    }
+    // Two closures share a name; the parameter list itself keeps their fillers apart.
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(&format!("{:?}", parameters), &mut hasher);
+    let name = format!(
+        "{}#{:016x}",
+        identity,
+        std::hash::Hasher::finish(&hasher)
+    );
+    let key = ReflectionMaterializerKey::Members {
+        owner,
+        name,
+        slot: "__parameters",
+    };
+    let label = reflection_slot_filler_label(ctx, key, owner_class_name, "__parameters", |helper_ctx| {
+        emit_reflection_parameter_array_property_by_name(
+            helper_ctx,
+            owner_class_name,
+            "__parameters",
+            parameters,
+        )
+    })?;
+    emit_reflection_owner_code_address_property(
+        ctx,
+        owner_class_name,
+        "__parameters_filler",
+        &label,
+    )?;
+    emit_reflection_owner_int_property(
+        ctx,
+        owner_class_name,
+        "__parameter_count",
+        parameters.len() as i64,
+    )
+}
+
+/// Returns the label of one shared slot filler, emitting the helper first when the module has
+/// none yet: it clears `<slot>_filler` in the reflector held in the integer result register, then
+/// runs `body` to build the slot.
+fn reflection_slot_filler_label(
+    ctx: &mut FunctionContext<'_>,
+    key: ReflectionMaterializerKey,
+    class_name: &str,
+    slot: &'static str,
+    body: impl FnOnce(&mut FunctionContext<'_>) -> Result<()>,
+) -> Result<String> {
     if let Some(label) = ctx.shared.reflection.materializer_label(&key) {
         return Ok(label);
     }
@@ -355,10 +433,15 @@ fn reflection_members_filler_label(
         ctx.shared,
         &label,
         class_name,
-        &format!("--- shared {} member filler ---", class_name),
+        &format!("--- shared {} {} filler ---", class_name, slot),
         |helper_ctx| {
-            emit_reflection_owner_int_property(helper_ctx, class_name, "__members_filler", 0)?;
-            emit_reflection_owner_members(helper_ctx, class_name, metadata)
+            emit_reflection_owner_int_property(
+                helper_ctx,
+                class_name,
+                &format!("{}_filler", slot),
+                0,
+            )?;
+            body(helper_ctx)
         },
     );
     if let Err(error) = result {
@@ -389,7 +472,7 @@ fn reflection_materializer_label(
     // A full class-like reflector has every slot its native bodies read, so compiled calls on it
     // skip the eval bridge (`emit_reflector_is_complete_probe`); shallow and source-only ones
     // do not, and neither does one the bridge builds. Its member reflectors are built on first
-    // use by a shared filler (`reflection_members_filler_label`).
+    // use, one slot at a time, by shared fillers (`reflection_member_slot_filler_label`).
     let lazy_members_owner = match &key {
         ReflectionMaterializerKey::FullClass { owner, .. } => Some(owner.clone()),
         ReflectionMaterializerKey::Direct {
@@ -418,13 +501,11 @@ fn reflection_materializer_label(
             let Some(owner) = lazy_members_owner else {
                 return emit_reflection_owner_object(helper_ctx, class_name, metadata);
             };
-            let filler =
-                reflection_members_filler_label(helper_ctx, owner, class_name, metadata)?;
             emit_reflection_owner_object_with_members(
                 helper_ctx,
                 class_name,
                 metadata,
-                Some(&filler),
+                Some(owner),
             )?;
             emit_reflection_owner_bool_property(helper_ctx, class_name, "__complete", true)
         },

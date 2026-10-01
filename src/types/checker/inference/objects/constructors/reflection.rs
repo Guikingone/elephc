@@ -299,13 +299,8 @@ impl Checker {
             .or_else(|| self.reflection_interface_constant_metadata(class_name, constant_name))
             .or_else(|| self.reflection_trait_constant_metadata(class_name, constant_name))
         else {
-            return Err(CompileError::new(
-                expr.span,
-                &format!(
-                    "ReflectionClassConstant::__construct(): undefined class constant '{}::{}'",
-                    class_name, constant_name
-                ),
-            ));
+            // php's `Constant P::X does not exist` is a run-time ReflectionException.
+            return Ok(());
         };
         self.validate_reflection_attribute_metadata(
             &names,
@@ -326,31 +321,18 @@ impl Checker {
         require_backed: bool,
         expr: &Expr,
     ) -> Result<(), CompileError> {
-        let Some(enum_info) = self.enums.get(enum_name) else {
-            return Err(CompileError::new(
-                expr.span,
-                &format!("{} is not an enum", enum_name),
-            ));
-        };
-        if require_backed && enum_info.backing_type.is_none() {
-            return Err(CompileError::new(
-                expr.span,
-                &format!(
-                    "Enum case {}::{} is not a backed case",
-                    enum_name, case_name
-                ),
-            ));
+        // A name that is no enum, a pure enum's case asked for as backed, or a missing case is
+        // php's catchable `ReflectionException` at run time (`Constant P::K is not a case`,
+        // `Enum case E::A is not a backed case`), which the interpreter raises; refusing the
+        // program here rejected a `try`/`catch` php runs.
+        let _ = require_backed;
+        if !self.enums.contains_key(enum_name) {
+            return Ok(());
         }
         let Some((names, args)) =
             self.reflection_enum_case_attribute_metadata(enum_name, case_name)
         else {
-            return Err(CompileError::new(
-                expr.span,
-                &format!(
-                    "ReflectionEnumUnitCase::__construct(): undefined enum case '{}::{}'",
-                    enum_name, case_name
-                ),
-            ));
+            return Ok(());
         };
         self.validate_reflection_attribute_metadata(
             &names,

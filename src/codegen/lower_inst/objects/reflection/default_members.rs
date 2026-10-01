@@ -210,9 +210,15 @@ pub(super) fn reflection_parameter_members_with_declaring_function(
                     .get(index)
                     .and_then(Option::as_ref)
                     .is_some());
+        // A variadic `string ...$tags` is stored as `array<string>`; its declared type is the
+        // element's, which is what php reflects when no type expression was recorded.
+        let declared_ty = match ty {
+            PhpType::Array(element) if is_variadic => element.as_ref(),
+            _ => ty,
+        };
         let type_metadata = reflection_parameter_type_metadata(
             sig.param_type_exprs.get(index).and_then(Option::as_ref),
-            ty,
+            declared_ty,
         )
         .filter(|_| has_type);
         let default_expr = sig.defaults.get(index).and_then(Option::as_ref);

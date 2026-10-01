@@ -89,11 +89,12 @@ pub(super) enum ReflectionMaterializerKey {
         declaring_class: Option<String>,
         name: String,
     },
-    /// The member filler of a full class-like reflector: not a materializer, but a helper that
-    /// builds an existing reflector's member reflectors on first use.
+    /// The filler of one member slot of a full class-like reflector: not a materializer, but a
+    /// helper that builds an existing reflector's member reflectors for that slot on first use.
     Members {
         owner: ReflectionOwnerKind,
         name: String,
+        slot: &'static str,
     },
 }
 

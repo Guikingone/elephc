@@ -1320,13 +1320,57 @@ impl<'a> FunctionContext<'a> {
         // A gradual slot holds a boxed Mixed cell whose identity the mutation preserved, so the
         // concrete container pointer in the result register is NOT what belongs in the symbol.
         // Writing it there would replace the cell with a raw array pointer and every later read
-        // would unbox garbage. The boxed cell already points at the relocated container: the
-        // dynamic mutation paths publish through it.
+        // would unbox garbage. The dynamic mutation paths publish through the cell themselves,
+        // but a typed one (`array_push` on the unboxed array of `static $t = null; $t = [];`)
+        // relocated the container behind the cell's back, and the next call read the old block:
+        // so a cell still holding an array or a hash gets the relocated pointer as its payload.
         if slot_ty == PhpType::Mixed && source_ty != PhpType::Mixed {
+            if matches!(source_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                self.emit_republish_container_in_static_cell(&symbol);
+            }
             return Ok(());
         }
         abi::emit_store_result_to_symbol(self.emitter, &symbol, &slot_ty, false);
         Ok(())
+    }
+
+    /// Writes the container pointer held in the integer result register into the payload word of
+    /// the boxed Mixed cell a static's `symbol` holds, when that cell holds an array (tag 4) or a
+    /// hash (tag 5). Leaves the result register untouched.
+    fn emit_republish_container_in_static_cell(&mut self, symbol: &str) {
+        let done = self.next_label("static_cell_republish_done");
+        let cell = abi::symbol_scratch_reg(self.emitter);
+        let tag = abi::secondary_scratch_reg(self.emitter);
+        let result = abi::int_result_reg(self.emitter);
+        abi::emit_symbol_address(self.emitter, cell, symbol);
+        match self.emitter.target.arch {
+            crate::codegen::platform::Arch::AArch64 => {
+                self.emitter.instruction(&format!("ldr {cell}, [{cell}]"));        // load the static's boxed Mixed cell
+                self.emitter.instruction(&format!("cbz {cell}, {done}"));          // a null slot has no cell to republish into
+                self.emitter.instruction(&format!("ldr {tag}, [{cell}]"));         // load the cell's runtime tag
+                self.emitter.instruction(&format!("cmp {tag}, #4"));               // does the cell hold an indexed array?
+                let store = self.next_label("static_cell_republish_store");
+                self.emitter.instruction(&format!("b.eq {store}"));                // republish the relocated array
+                self.emitter.instruction(&format!("cmp {tag}, #5"));               // does the cell hold a hash?
+                self.emitter.instruction(&format!("b.ne {done}"));                 // any other payload was not this container
+                self.emitter.label(&store);
+                self.emitter.instruction(&format!("str {result}, [{cell}, #8]"));  // the cell now points at the relocated container
+            }
+            crate::codegen::platform::Arch::X86_64 => {
+                self.emitter.instruction(&format!("mov {cell}, QWORD PTR [{cell}]")); // load the static's boxed Mixed cell
+                self.emitter.instruction(&format!("test {cell}, {cell}"));         // is the slot null?
+                self.emitter.instruction(&format!("jz {done}"));                   // a null slot has no cell to republish into
+                self.emitter.instruction(&format!("mov {tag}, QWORD PTR [{cell}]")); // load the cell's runtime tag
+                self.emitter.instruction(&format!("cmp {tag}, 4"));                // does the cell hold an indexed array?
+                let store = self.next_label("static_cell_republish_store");
+                self.emitter.instruction(&format!("je {store}"));                  // republish the relocated array
+                self.emitter.instruction(&format!("cmp {tag}, 5"));                // does the cell hold a hash?
+                self.emitter.instruction(&format!("jne {done}"));                  // any other payload was not this container
+                self.emitter.label(&store);
+                self.emitter.instruction(&format!("mov QWORD PTR [{cell} + 8], {result}")); // the cell now points at the relocated container
+            }
+        }
+        self.emitter.label(&done);
     }
 
     /// Stores an SSA value through a local ref-cell pointer slot.

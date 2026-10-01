@@ -165,7 +165,14 @@ pub(super) fn lower_init_static_local(ctx: &mut FunctionContext<'_>, inst: &Inst
     let store_ty = slot.php_type.codegen_repr();
     abi::emit_store_result_to_symbol(ctx.emitter, &slot.symbol, &store_ty, false);
     clear_static_local_high_word_if_needed(ctx, &slot);
+    let done_label = ctx.next_label("static_local_init_done");
+    abi::emit_jump(ctx.emitter, &done_label);
+    // The initializer is evaluated on every call (EIR evaluates it before this op), and only
+    // the first call keeps it: a later call drops its own copy, or `static $s = [0];` leaked
+    // one array per call.
     ctx.emitter.label(&initialized_label);
+    super::ownership::release_value_if_owned(ctx, value)?;
+    ctx.emitter.label(&done_label);
     Ok(())
 }
 

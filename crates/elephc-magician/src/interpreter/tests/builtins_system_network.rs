@@ -489,7 +489,7 @@ return function_exists("stream_supports_lock");"#,
 fn execute_program_dispatches_spl_classes_builtin() {
     let program = parse_fragment(
         br#"$names = spl_classes();
-echo count($names) . ":" . $names[0] . ":" . $names[53] . ":";
+echo count($names) . ":" . $names[0] . ":" . $names[54] . ":";
 echo (in_array("LogicException", $names) ? "exception" : "bad") . ":";
 echo (in_array("SplDoublyLinkedList", $names) ? "list" : "bad") . ":";
 $call = call_user_func("spl_classes");
@@ -507,7 +507,7 @@ return is_callable("spl_classes");"#,
 
     assert_eq!(
         values.output,
-        "54:AppendIterator:UnexpectedValueException:exception:list:call:spread:1"
+        "55:AppendIterator:UnexpectedValueException:exception:list:call:spread:1"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
@@ -838,7 +838,7 @@ return function_exists("get_loaded_extensions");"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    let count = if curl_present { 12 } else { 11 };
+    let count = if curl_present { 13 } else { 12 };
     let curl_label = if curl_present { "curl-present" } else { "curl-absent" };
     assert_eq!(
         values.output,

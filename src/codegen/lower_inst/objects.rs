@@ -355,3 +355,33 @@ fn emit_tagged_scalar_property_default_store(
         offset + 8,
     );
 }
+
+/// Lowers the object-handle reservation ops around a `new` whose arguments may allocate:
+/// each is one call to a register-preserving runtime helper.
+pub(super) fn lower_object_handle_reservation(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    match inst.op {
+        Op::ObjectHandleReserve => {
+            abi::emit_call_label(ctx.emitter, "__rt_object_handle_reserve");
+            match inst.result {
+                Some(result) => ctx.store_result_value(result),
+                None => Ok(()),
+            }
+        }
+        Op::ObjectHandlePend => {
+            let handle = *inst
+                .operands
+                .first()
+                .ok_or_else(|| CodegenIrError::invalid_module("object_handle_pend needs a handle"))?;
+            ctx.load_value_to_result(handle)?;
+            abi::emit_call_label(ctx.emitter, "__rt_object_handle_pend");
+            Ok(())
+        }
+        _ => {
+            abi::emit_call_label(ctx.emitter, "__rt_object_handle_unpend");
+            Ok(())
+        }
+    }
+}

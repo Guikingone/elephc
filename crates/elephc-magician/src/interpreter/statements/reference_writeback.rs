@@ -79,9 +79,11 @@ pub(in crate::interpreter) fn bind_method_scope_args(
 /// argument the CALLER OWNS -- a literal, a concatenation, any temporary -- that release is the
 /// last one, and the generator later reads a freed cell:
 ///
-///     function gen($a, $b) { yield $a . '|' . $b; }
-///     gen('L1', 'L2');        // yielded '|' -- both literals were gone
-///     $x = 'V1'; gen($x, $b); // fine: the caller's VARIABLE kept it alive
+/// ```php
+/// function gen($a, $b) { yield $a . '|' . $b; }
+/// gen('L1', 'L2');        // yielded '|' -- both literals were gone
+/// $x = 'V1'; gen($x, $b); // fine: the caller's VARIABLE kept it alive
+/// ```
 ///
 /// That asymmetry is why this only ever reproduced with literal arguments. Twig hits it on every
 /// render (`$this->unwrap()->yieldBlock('title', $context, $blocks)` in every compiled template),
@@ -131,8 +133,10 @@ pub(in crate::interpreter) fn retain_generator_scope_args(
 /// cell, adding no reference. An array write then saw a payload nobody else seemed to share and
 /// mutated it IN PLACE, so the caller's array changed under it -- PHP passes arrays by value:
 ///
-///     function f(array $p, int $d) { $p[] = $d; if ($d < 2) f($p, $d + 1); return $p; }
-///     f([], 0);   // php [0]   interpreter [0, 1, 2]
+/// ```php
+/// function f(array $p, int $d) { $p[] = $d; if ($d < 2) f($p, $d + 1); return $p; }
+/// f([], 0);   // php [0]   interpreter [0, 1, 2]
+/// ```
 ///
 /// Symfony's `PhpDumper::collectCircularReferences()` recurses with its `$path` exactly like
 /// that, so every loop it found carried nodes from sibling branches: the dumped container lost

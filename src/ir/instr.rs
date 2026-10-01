@@ -516,6 +516,13 @@ pub enum Op {
     /// Runs the compiled member filler whose address a class reflector recorded (operand 0, a
     /// raw code address) on that reflector (operand 1), filling its member-reflector slots.
     ReflectionFillMembers,
+    /// Reserves the PHP object handle of a `new` before its constructor arguments run, as
+    /// php-src allocates the object first (result: the handle, an int).
+    ObjectHandleReserve,
+    /// Marks a reserved handle (operand 0) for the next object allocation, its `new`'s own.
+    ObjectHandlePend,
+    /// Returns a pending reservation no allocation took to the handle pool.
+    ObjectHandleUnpend,
     /// Reinterprets one runtime callable descriptor as an opaque bridge pointer.
     CallablePtr,
     /// Normalizes any supported PHP callable form into an owned descriptor.
@@ -933,6 +940,9 @@ impl Op {
             }
             ReflectionMaterialize => E::READS_HEAP | E::ALLOC_HEAP,
             ReflectionFillMembers => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP,
+            ObjectHandleReserve | ObjectHandlePend | ObjectHandleUnpend => {
+                E::READS_GLOBAL | E::WRITES_GLOBAL
+            }
             // `++`/`--` on a string reads the operand's payload, may write the shared
             // concat scratch while building the carried result, and always allocates the
             // boxed Mixed cell the new value is returned in.
@@ -1212,6 +1222,9 @@ impl Op {
             }
             ReflectionMaterialize => "reflection_materialize",
             ReflectionFillMembers => "reflection_fill_members",
+            ObjectHandleReserve => "object_handle_reserve",
+            ObjectHandlePend => "object_handle_pend",
+            ObjectHandleUnpend => "object_handle_unpend",
             CallablePtr => "callable_ptr",
             NormalizeCallable => "normalize_callable",
             PdoAdapterAddr => "pdo_adapter_addr",

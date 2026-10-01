@@ -69,6 +69,37 @@ pub(crate) enum LiteralDefaultValue {
         elem_type: PhpType,
         elements: Vec<LiteralArrayElement>,
     },
+    /// An enum case (`public $s = Status::On;`): the case's singleton, read when the default is
+    /// written. The slot takes its own reference; `boxed` wraps it for a `mixed`/union slot.
+    EnumCase {
+        enum_name: String,
+        case_name: String,
+        boxed: bool,
+    },
+}
+
+/// Returns the enum-case default form for a default naming an enum case, when the slot can hold
+/// the case object: the enum's own type, or `mixed`/a union.
+pub(crate) fn enum_case_literal_default(
+    module: &crate::ir::Module,
+    class_name: &str,
+    php_type: &PhpType,
+    expr: &ExprKind,
+) -> Option<LiteralDefaultValue> {
+    let (enum_name, case_name) =
+        crate::codegen::eval_class_constant_helpers::resolve_class_like_enum_case(
+            module, class_name, expr,
+        )?;
+    let boxed = match php_type.codegen_repr() {
+        PhpType::Object(_) => false,
+        PhpType::Mixed | PhpType::Union(_) => true,
+        _ => return None,
+    };
+    Some(LiteralDefaultValue::EnumCase {
+        enum_name,
+        case_name,
+        boxed,
+    })
 }
 
 /// Literal indexed-array element that can be materialized without evaluating code.
@@ -494,6 +525,22 @@ pub(crate) fn emit_empty_assoc_array_literal_to_result(
 }
 
 /// Emits a boxed PHP null default into the canonical result register.
+/// Loads an enum case's singleton into the integer result register with a reference of its own
+/// (boxed for a `mixed` slot), materializing the case on first use.
+pub(crate) fn emit_enum_case_default_to_result(
+    ctx: &mut FunctionContext<'_>,
+    enum_name: &str,
+    case_name: &str,
+    boxed: bool,
+) {
+    crate::codegen::enum_singletons::emit_lazy_case_load(ctx, enum_name, case_name);
+    let case_type = PhpType::Object(enum_name.to_string());
+    abi::emit_incref_if_refcounted(ctx.emitter, &case_type);
+    if boxed {
+        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &case_type);
+    }
+}
+
 pub(crate) fn emit_boxed_null_literal_to_result(ctx: &mut FunctionContext<'_>) {
     abi::emit_load_int_immediate(
         ctx.emitter,

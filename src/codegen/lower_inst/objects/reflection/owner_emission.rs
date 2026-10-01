@@ -8,6 +8,7 @@
 //! - Preserves compile-time metadata, target-aware object layout, and ownership.
 
 use super::*;
+use crate::codegen::shared_reflection::ReflectionOwnerKind;
 
 /// Allocates and populates one builtin Reflection owner object from metadata, member
 /// reflectors included.
@@ -21,14 +22,14 @@ pub(super) fn emit_reflection_owner_object(
 
 /// Allocates and populates one builtin Reflection owner object from metadata.
 ///
-/// With `members_filler`, a class-like owner records that helper's address in
-/// `__members_filler` instead of building its member reflectors (see
-/// `emit_reflection_owner_members`): the getters that read them run it on first use.
+/// With `lazy_members`, a class-like owner builds no member reflector: each member slot that has
+/// members records the address of its shared filler in `<slot>_filler` (see
+/// `REFLECTION_LAZY_MEMBER_SLOTS`), and the getters that read the slot run it on first use.
 pub(super) fn emit_reflection_owner_object_with_members(
     ctx: &mut FunctionContext<'_>,
     class_name: &str,
     metadata: &ReflectionOwnerMetadata,
-    members_filler: Option<&str>,
+    lazy_members: Option<ReflectionOwnerKind>,
 ) -> Result<()> {
     // `ReflectionEnum` extends `ReflectionClass`: it carries the same member slots, filled the same way.
     let is_reflection_class_owner =
@@ -167,13 +168,10 @@ pub(super) fn emit_reflection_owner_object_with_members(
             )?;
         }
         if is_reflection_class_owner {
-            match members_filler {
-                Some(label) => emit_reflection_owner_code_address_property(
-                    ctx,
-                    class_name,
-                    "__members_filler",
-                    label,
-                )?,
+            match lazy_members {
+                Some(owner) => {
+                    emit_reflection_owner_lazy_members(ctx, owner, class_name, metadata)?
+                }
                 None => emit_reflection_owner_members(ctx, class_name, metadata)?,
             }
         }
@@ -222,6 +220,17 @@ pub(super) fn emit_reflection_owner_object_with_members(
             class_name,
             metadata.parent_class_name.as_deref(),
         )?;
+        if matches!(
+            class_name,
+            "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase"
+        ) {
+            emit_reflection_owner_string_property_by_name(
+                ctx,
+                class_name,
+                "__class",
+                metadata.parent_class_name.as_deref().unwrap_or(""),
+            )?;
+        }
         if matches!(class_name, "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase") {
             emit_reflection_enum_property(ctx, class_name, metadata.parent_class_name.as_deref())?;
         }
@@ -235,10 +244,10 @@ pub(super) fn emit_reflection_owner_object_with_members(
             "__is_user_defined",
             metadata.reflected_name.is_some() && !is_internal,
         )?;
-        emit_reflection_parameter_array_property_by_name(
+        emit_reflection_lazy_parameters(
             ctx,
             class_name,
-            "__parameters",
+            metadata.reflected_name.as_deref().unwrap_or(""),
             &metadata.parameter_members,
         )?;
         emit_reflection_owner_int_property(
@@ -577,11 +586,22 @@ pub(super) fn reflection_name_parts(reflected_name: &str) -> (&str, &str) {
     }
 }
 
+/// The member-reflector slots a compiled class-like reflector fills on first use, each through
+/// its own `<slot>_filler` (the checker's `REFLECTION_*_MEMBER_READERS` run them). `__interfaces`
+/// and `__traits` are not here: no getter reads them, so a lazy reflector never builds them.
+pub(super) const REFLECTION_LAZY_MEMBER_SLOTS: &[&str] = &[
+    "__reflection_constants",
+    "__methods",
+    "__constructor",
+    "__parent_class",
+    "__properties",
+    "__cases",
+];
+
 /// Builds a class-like owner's member reflectors into their slots: interfaces, traits, class
 /// constants, methods, constructor, parent class, properties and, for an enum, its cases.
 ///
 /// The object is in the integer result register on entry and exit, as for every slot emitter.
-/// Eager owners call this while they are built; a lazy one's shared filler calls it on first use.
 pub(super) fn emit_reflection_owner_members(
     ctx: &mut FunctionContext<'_>,
     class_name: &str,
@@ -599,53 +619,116 @@ pub(super) fn emit_reflection_owner_members(
         "__traits",
         &metadata.trait_names,
     )?;
-    emit_reflection_member_array_property_by_name(
-        ctx,
-        class_name,
-        "__reflection_constants",
-        "ReflectionClassConstant",
-        &metadata.constant_reflection_members,
-    )?;
-    emit_reflection_member_array_property_by_name(
-        ctx,
-        class_name,
-        "__methods",
-        "ReflectionMethod",
-        &metadata.method_members,
-    )?;
-    emit_reflection_constructor_property(ctx, class_name, metadata.constructor_member.as_ref())?;
-    emit_reflection_parent_class_property(
-        ctx,
-        class_name,
-        metadata.parent_class_name.as_deref(),
-    )?;
-    emit_reflection_member_array_property_by_name(
-        ctx,
-        class_name,
-        "__properties",
-        "ReflectionProperty",
-        &metadata.property_members,
-    )?;
-    if class_name == "ReflectionEnum" {
-        let case_class = if metadata.type_metadata.is_some() {
-            "ReflectionEnumBackedCase"
-        } else {
-            "ReflectionEnumUnitCase"
-        };
-        emit_reflection_member_array_property_by_name(
+    for slot in REFLECTION_LAZY_MEMBER_SLOTS {
+        emit_reflection_owner_member_slot(ctx, class_name, metadata, slot)?;
+    }
+    Ok(())
+}
+
+/// Leaves each member slot that has members to its filler, and fills the empty ones now: an
+/// empty array, a null constructor or a `false` parent costs no reflector object.
+fn emit_reflection_owner_lazy_members(
+    ctx: &mut FunctionContext<'_>,
+    owner: ReflectionOwnerKind,
+    class_name: &str,
+    metadata: &ReflectionOwnerMetadata,
+) -> Result<()> {
+    for slot in REFLECTION_LAZY_MEMBER_SLOTS {
+        if !reflection_owner_member_slot_applies(class_name, slot) {
+            continue;
+        }
+        if reflection_owner_member_slot_is_empty(metadata, slot) {
+            emit_reflection_owner_member_slot(ctx, class_name, metadata, slot)?;
+            continue;
+        }
+        let label =
+            reflection_member_slot_filler_label(ctx, owner.clone(), class_name, metadata, slot)?;
+        emit_reflection_owner_code_address_property(
             ctx,
-            "ReflectionEnum",
-            "__cases",
-            case_class,
-            &metadata.enum_case_members,
+            class_name,
+            &format!("{}_filler", slot),
+            &label,
         )?;
     }
     Ok(())
 }
 
+/// Whether `slot` exists on this owner class: only `ReflectionEnum` has `__cases`.
+fn reflection_owner_member_slot_applies(class_name: &str, slot: &str) -> bool {
+    slot != "__cases" || class_name == "ReflectionEnum"
+}
+
+/// Whether the reflected class-like has nothing for `slot`.
+fn reflection_owner_member_slot_is_empty(metadata: &ReflectionOwnerMetadata, slot: &str) -> bool {
+    match slot {
+        "__reflection_constants" => metadata.constant_reflection_members.is_empty(),
+        "__methods" => metadata.method_members.is_empty(),
+        "__constructor" => metadata.constructor_member.is_none(),
+        "__parent_class" => metadata.parent_class_name.is_none(),
+        "__properties" => metadata.property_members.is_empty(),
+        "__cases" => metadata.enum_case_members.is_empty(),
+        _ => true,
+    }
+}
+
+/// Builds one member slot of a class-like owner held in the integer result register.
+pub(super) fn emit_reflection_owner_member_slot(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    metadata: &ReflectionOwnerMetadata,
+    slot: &str,
+) -> Result<()> {
+    match slot {
+        "__reflection_constants" => emit_reflection_member_array_property_by_name(
+            ctx,
+            class_name,
+            "__reflection_constants",
+            "ReflectionClassConstant",
+            &metadata.constant_reflection_members,
+        ),
+        "__methods" => emit_reflection_member_array_property_by_name(
+            ctx,
+            class_name,
+            "__methods",
+            "ReflectionMethod",
+            &metadata.method_members,
+        ),
+        "__constructor" => {
+            emit_reflection_constructor_property(ctx, class_name, metadata.constructor_member.as_ref())
+        }
+        "__parent_class" => emit_reflection_parent_class_property(
+            ctx,
+            class_name,
+            metadata.parent_class_name.as_deref(),
+        ),
+        "__properties" => emit_reflection_member_array_property_by_name(
+            ctx,
+            class_name,
+            "__properties",
+            "ReflectionProperty",
+            &metadata.property_members,
+        ),
+        "__cases" if class_name == "ReflectionEnum" => {
+            let case_class = if metadata.type_metadata.is_some() {
+                "ReflectionEnumBackedCase"
+            } else {
+                "ReflectionEnumUnitCase"
+            };
+            emit_reflection_member_array_property_by_name(
+                ctx,
+                "ReflectionEnum",
+                "__cases",
+                case_class,
+                &metadata.enum_case_members,
+            )
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Stores the address of the code at `label` into one integer slot of the owner object held in
 /// the integer result register, which it leaves there.
-fn emit_reflection_owner_code_address_property(
+pub(super) fn emit_reflection_owner_code_address_property(
     ctx: &mut FunctionContext<'_>,
     class_name: &str,
     property_name: &str,

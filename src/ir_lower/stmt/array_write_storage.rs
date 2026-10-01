@@ -99,10 +99,26 @@ pub(super) fn coerce_indexed_array_set_value(
                     PhpType::Mixed | PhpType::TaggedScalar | PhpType::Union(_)
                 ) =>
         {
-            coerce_to_int(ctx, value, span)
+            coerce_owned_box_to_int(ctx, value, span)
         }
         _ => value,
     }
+}
+
+/// Coerces a boxed or nullable value to `int` and releases the source when it is a fresh
+/// temporary (`$a[0] + 1` over an `int|null` element boxes its sum): the int is all the write
+/// keeps, and the box leaked one cell per write. A value still owned elsewhere is left alone.
+fn coerce_owned_box_to_int(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<Span>,
+) -> LoweredValue {
+    let is_fresh = ctx.value_is_owning_temporary(value);
+    let coerced = coerce_to_int(ctx, value, span);
+    if is_fresh && coerced.value != value.value {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, span);
+    }
+    coerced
 }
 
 /// Returns true when a refcounted indexed-array assignment should use Mixed slots.
@@ -221,4 +237,26 @@ pub(super) fn is_empty_indexed_array_element(elem_ty: &PhpType) -> bool {
 /// Preserves the first concrete value type written into an empty indexed array.
 pub(super) fn normalize_empty_array_write_element_type(item_type: PhpType) -> PhpType {
     normalize_materialized_element_type(item_type)
+}
+
+/// Coerces a boxed or nullable-int value written into a `static` hash whose elements are `int`
+/// to that element type, so the write keeps the slot's program-wide storage type.
+pub(super) fn coerce_static_hash_set_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    hash_ty: &PhpType,
+    value: LoweredValue,
+    span: Option<Span>,
+) -> LoweredValue {
+    match hash_ty.codegen_repr() {
+        PhpType::AssocArray { value: elem_ty, .. }
+            if elem_ty.codegen_repr() == PhpType::Int
+                && matches!(
+                    ctx.builder.value_php_type(value.value).codegen_repr(),
+                    PhpType::Mixed | PhpType::TaggedScalar | PhpType::Union(_)
+                ) =>
+        {
+            coerce_owned_box_to_int(ctx, value, span)
+        }
+        _ => value,
+    }
 }

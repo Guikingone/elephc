@@ -595,6 +595,9 @@ const REQUEST_SCOPED_RUNTIME_FLAGS: &[&str] = &[
     "_fiber_main_saved_sp",
     "_fiber_main_saved_exc",
     "_fiber_main_saved_call_frame",
+    // A `new`'s reserved object handle; a throw between its arguments and its allocation
+    // can leave it set.
+    "_obj_handle_pending",
     // serialize()/unserialize() back-reference counters and policy fields.
     "_ser_value_counter",
     "_ser_obj_count",

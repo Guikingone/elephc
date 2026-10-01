@@ -30,6 +30,19 @@ pub(super) fn collect_property_defaults(
             continue;
         }
         let offset = 8 + index * 16;
+        if let Some(value) = crate::codegen::literal_defaults::enum_case_literal_default(
+            module,
+            class_name,
+            php_type,
+            &default_expr.kind,
+        ) {
+            defaults.push(PropertyDefault {
+                offset,
+                value,
+                is_reference: class_info.property_slot_is_owned_reference(index),
+            });
+            continue;
+        }
         let resolved = crate::codegen::eval_class_constant_helpers::resolve_class_like_constants_in_literal(
             module,
             class_name,
@@ -152,6 +165,20 @@ pub(super) fn emit_property_default(
         LiteralDefaultValue::TaggedInt(value) => {
             emit_tagged_int_literal_to_result(ctx, *value);
             emit_tagged_scalar_property_default_store(ctx, object_reg, default.offset);
+        }
+        LiteralDefaultValue::EnumCase {
+            enum_name,
+            case_name,
+            boxed,
+        } => {
+            abi::emit_push_reg(ctx.emitter, object_reg);
+            crate::codegen::literal_defaults::emit_enum_case_default_to_result(
+                ctx, enum_name, case_name, *boxed,
+            );
+            abi::emit_pop_reg(ctx.emitter, object_reg);
+            let int_reg = abi::int_result_reg(ctx.emitter);
+            abi::emit_store_to_address(ctx.emitter, int_reg, object_reg, default.offset);
+            abi::emit_store_zero_to_address(ctx.emitter, object_reg, default.offset + 8);
         }
         LiteralDefaultValue::BoxedNull => {
             abi::emit_push_reg(ctx.emitter, object_reg);

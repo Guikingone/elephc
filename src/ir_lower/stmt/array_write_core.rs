@@ -194,6 +194,14 @@ pub(super) fn lower_array_assign(
     }
     if op == Op::HashSet {
         let current_ty = ctx.builder.value_php_type(array_value.value);
+        // A `static` hash keeps one storage type across calls, so this write cannot widen it the
+        // way it widens an ordinary local: `$s['k'] = $s['k'] + 1` produced a boxed sum, the
+        // slot was rewritten as `array<string, mixed>`, and the next call still read `int`
+        // values -- the box's address. Coerce into the slot's int element instead, as the
+        // indexed write does for every local.
+        if matches!(ctx.local_kinds.get(array), Some(LocalKind::StaticLocal)) {
+            value_value = coerce_static_hash_set_value(ctx, &current_ty, value_value, Some(value.span));
+        }
         let value_ty = ctx.builder.value_php_type(value_value.value);
         if let Some(updated_ty) = assoc_array_write_updated_type(current_ty, value_ty) {
             ctx.prepare_mutated_local_owner(array, array_value, updated_ty.clone(), Some(span));

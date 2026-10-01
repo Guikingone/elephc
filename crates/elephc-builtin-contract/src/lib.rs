@@ -44,7 +44,7 @@ pub use aot_profile::{
 pub use eval_profile::{
     eval_signature, eval_signature_profile, EvalSignatureOverrideReason, EvalSignatureProfile,
 };
-pub use extensions::{complete_surface_modules, module_php_functions};
+pub use extensions::{complete_surface_modules, module_php_functions, php_registration_rank};
 pub use class_spec::{ClassContract, ClassKind, ClassRoute};
 pub use constant_spec::{ConstType, ConstValue, ConstantContract, ConstantRoute};
 pub use id::BuiltinId;

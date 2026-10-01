@@ -240,7 +240,66 @@ pub(super) fn coerce_to_tagged_scalar(
 }
 
 /// Widens returned container payload storage to the current function return contract.
+///
+/// The conversions (`HashToMixed`, `ArrayToMixed`, `ArrayToHash`) rewrite a container they hold
+/// the only reference to IN PLACE. That is right for a frame local the return consumes and wrong
+/// for a container its owner keeps after the return -- a function `static`, a static or object
+/// property: `static $h = ['a' => 0]; ...; return $h;` under a wider return type turned the
+/// static's own `int` slots into boxes while the slot still read them as ints. Such a source is
+/// acquired first, so the conversion copies and the owner keeps its container.
 pub(super) fn coerce_container_to_return_type(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<Span>,
+) -> Option<LoweredValue> {
+    if !matches!(
+        ctx.builder.value_defining_op(value.value),
+        Some(
+            Op::LoadStaticLocal
+                | Op::LoadStaticProperty
+                | Op::LoadDynamicStaticProperty
+                | Op::PropGet
+                | Op::DynamicPropGet
+                | Op::NullsafePropGet
+        )
+    ) {
+        return coerce_owned_container_to_return_type(ctx, value, span);
+    }
+    let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
+    let return_ty = ctx.return_php_type.codegen_repr();
+    if !container_return_conversion_applies(&source_ty, &return_ty) {
+        return None;
+    }
+    let acquired = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, span);
+    coerce_owned_container_to_return_type(ctx, acquired, span)
+}
+
+/// Whether `coerce_owned_container_to_return_type` converts a `source` container for `ret`.
+fn container_return_conversion_applies(source: &PhpType, ret: &PhpType) -> bool {
+    match (source, ret) {
+        (PhpType::AssocArray { value, .. }, PhpType::Array(element)) => {
+            element.codegen_repr() == PhpType::Mixed && value.codegen_repr() != PhpType::Mixed
+        }
+        // Boxed then hashed, or hashed as it is (`ArrayToHash`).
+        (PhpType::Array(element), PhpType::AssocArray { value, .. }) => {
+            element.as_ref() == &PhpType::Never
+                || element.codegen_repr() == value.codegen_repr()
+                || value.codegen_repr() == PhpType::Mixed
+        }
+        (PhpType::Array(source_elem), PhpType::Array(return_elem)) => {
+            source_elem.codegen_repr() != PhpType::Mixed
+                && return_elem.codegen_repr() == PhpType::Mixed
+        }
+        (PhpType::AssocArray { value: source_value, .. }, PhpType::AssocArray { value: return_value, .. }) => {
+            source_value.codegen_repr() != PhpType::Mixed
+                && return_value.codegen_repr() == PhpType::Mixed
+        }
+        _ => false,
+    }
+}
+
+/// [`coerce_container_to_return_type`] for a container this return may consume.
+fn coerce_owned_container_to_return_type(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     span: Option<Span>,

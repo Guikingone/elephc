@@ -45,6 +45,13 @@ fn core_loaded_extensions() -> &'static [&'static str] {
                 if names.iter().any(|existing| existing.eq_ignore_ascii_case(name)) {
                     continue;
                 }
+                // `xml`/`xmlwriter` are loaded exactly when the HOST linked the xml bridge
+                // (`eval_extension_is_loaded_in`), which `get_loaded_extensions` appends itself.
+                // Their eval homes exist in every magician build, so the catalog walk would claim
+                // them unconditionally -- and list them twice once the bridge is linked.
+                if name.eq_ignore_ascii_case("xml") || name.eq_ignore_ascii_case("xmlwriter") {
+                    continue;
+                }
                 let implemented = module.is_engine_surface()
                     || elephc_builtin_contract::module_php_functions(module).all(|contract| {
                         // A name-resolver rewrite (`date_create`, `cal_days_in_month`, …) reaches
@@ -65,6 +72,7 @@ fn core_loaded_extensions() -> &'static [&'static str] {
                     names.push(name);
                 }
             }
+            names.sort_by_key(|name| elephc_builtin_contract::php_registration_rank(name));
             names
         })
         .as_slice()

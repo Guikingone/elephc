@@ -244,8 +244,12 @@ mod tests {
                     .map(|reason| (contract.name, reason))
             })
             .collect::<Vec<_>>();
-        assert_eq!(overridden.len(), 4);
-        assert_eq!(overridden[0].0, "implode");
-        assert_eq!(overridden[3].0, "nl2br");
+        // Named rather than counted: a new override must be added here on purpose.
+        let mut names = overridden.iter().map(|(name, _)| *name).collect::<Vec<_>>();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            ["implode", "is_callable", "localtime", "nl2br", "str_ireplace", "str_replace"]
+        );
     }
 }

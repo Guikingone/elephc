@@ -86,5 +86,8 @@ pub(in crate::interpreter) fn eval_get_loaded_extensions_result(
             names = values.string_array_push(names, name)?;
         }
     }
+    // Kept in php's registration order (`Core` first) by construction: the shared set is sorted,
+    // and `curl`/`xml`/`xmlwriter` are the only appended names. php would place `curl` earlier;
+    // positions past the shared set are not something a program can rely on across builds.
     Ok(names)
 }

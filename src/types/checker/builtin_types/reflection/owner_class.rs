@@ -282,6 +282,27 @@ pub(super) fn builtin_reflection_owner_class(
             "__toString",
             "__string",
         ));
+        // A compiled reflector builds its parameter reflectors on first use: `__parameters_filler`
+        // holds the compiled filler's address until then, and `__parameter_count` answers
+        // `getNumberOfParameters()` without building them.
+        properties.push(member_filler_property("__parameters"));
+        properties.push(builtin_property(
+            "__parameter_count",
+            Visibility::Private,
+            Some(TypeExpr::Int),
+            int_lit(0),
+        ));
+        for method in &mut methods {
+            match method.name.as_str() {
+                "getParameters" | "isVariadic" => {
+                    method.body.insert(0, reflection_member_fill_preamble("__parameters"));
+                }
+                "getNumberOfParameters" => {
+                    method.body.insert(0, reflection_unfilled_parameter_count_return());
+                }
+                _ => {}
+            }
+        }
     }
     if name == "ReflectionFunction" {
         properties.push(builtin_property(
@@ -361,6 +382,18 @@ pub(super) fn builtin_reflection_owner_class(
             empty_string(),
         ));
         methods.push(builtin_reflection_set_accessible_method());
+    }
+    // php's `$constant->class`: the declaring class, which every dump of the reflector shows.
+    if matches!(
+        name,
+        "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase"
+    ) {
+        properties.push(builtin_property(
+            "__class",
+            Visibility::Private,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
     }
     properties.push(builtin_property(
         "__attrs",
@@ -463,6 +496,29 @@ fn reflection_materialized_declaring_class(span: crate::span::Span) -> Expr {
     function_call(
         "__elephc_reflection_materialize",
         vec![reflection_this_property("__declaring_class_thunk", span)],
+        span,
+    )
+}
+
+/// `if ($this->__parameters_filler !== 0) { return $this->__parameter_count; }`: the count of
+/// parameters a compiled reflector has not built yet.
+fn reflection_unfilled_parameter_count_return() -> Stmt {
+    let span = crate::span::Span::dummy();
+    Stmt::new(
+        StmtKind::If {
+            condition: binary_expr(
+                reflection_this_property("__parameters_filler", span),
+                BinOp::StrictNotEq,
+                Expr::new(ExprKind::IntLiteral(0), span),
+                span,
+            ),
+            then_body: vec![Stmt::new(
+                StmtKind::Return(Some(reflection_this_property("__parameter_count", span))),
+                span,
+            )],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
         span,
     )
 }

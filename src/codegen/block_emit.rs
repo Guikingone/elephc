@@ -1730,6 +1730,15 @@ fn emit_static_property_default(
     expr: &ExprKind,
 ) -> Result<()> {
     ensure_static_property_default_type_supported(class_name, property, php_type)?;
+    if let Some(value) = crate::codegen::literal_defaults::enum_case_literal_default(
+        ctx.module, class_name, php_type, expr,
+    ) {
+        ctx.emitter.comment(&format!(
+            "initialize static property {}::${}",
+            class_name, property
+        ));
+        return emit_static_property_default_value(ctx, class_name, property, php_type, &value);
+    }
     let expr = crate::codegen::eval_class_constant_helpers::resolve_class_like_constants_in_literal(
         ctx.module,
         class_name,
@@ -1822,6 +1831,15 @@ fn emit_static_property_default_value(
         }
         LiteralDefaultValue::BoxedNull => {
             emit_boxed_null_literal_to_result(ctx);
+        }
+        LiteralDefaultValue::EnumCase {
+            enum_name,
+            case_name,
+            boxed,
+        } => {
+            crate::codegen::literal_defaults::emit_enum_case_default_to_result(
+                ctx, enum_name, case_name, *boxed,
+            );
         }
         LiteralDefaultValue::BoxedStr(value) => {
             emit_boxed_string_literal_default_to_result(ctx, value);

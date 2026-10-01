@@ -181,11 +181,13 @@ pub(super) fn eval_reflection_method_object_result_if_exists(
 /// a compiled ancestor was reported missing, while `method_exists()` on the same object said
 /// true. MEASURED against php 8.5.10:
 ///
-///     class Base { public function registerCommands(int $x): void {} }     // compiled
-///     eval('class Child extends Base {}');
-///     new ReflectionMethod(new Child(), 'registerCommands')
-///         php     declaring class Base
-///         elephc  ReflectionException: Method Child::registerCommands() does not exist
+/// ```text
+/// class Base { public function registerCommands(int $x): void {} }     // compiled
+/// eval('class Child extends Base {}');
+/// new ReflectionMethod(new Child(), 'registerCommands')
+///     php     declaring class Base
+///     elephc  ReflectionException: Method Child::registerCommands() does not exist
+/// ```
 ///
 /// Symfony's `FrameworkBundle\Console\Application::registerCommands()` asks exactly that of every
 /// bundle (`new \ReflectionMethod($bundle, 'registerCommands')`), and every console command failed

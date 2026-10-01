@@ -114,6 +114,12 @@ pub(super) fn lower_release_unless_aliases(
 /// Lowers a release only for values that own or may own runtime-managed storage.
 pub(super) fn lower_release(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
+    release_value_if_owned(ctx, value)
+}
+
+/// Releases `value` when it owns or may own runtime-managed storage; a no-op for borrowed,
+/// persistent, scalar and scratch-string values.
+pub(super) fn release_value_if_owned(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
     let ownership = ctx.value_ownership(value)?;
     if !ownership.may_require_release() {
         return Ok(());

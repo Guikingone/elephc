@@ -531,6 +531,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         target,
     ));
     out.push_str(&comm_directive("_obj_handle_free_top", 8, target));
+    // A handle reserved for a `new` before its arguments ran, which the object's own allocation
+    // takes (`__rt_object_handle_reserve` / `_pend` / `_unpend`); 0 when none is pending.
+    out.push_str(&comm_directive("_obj_handle_pending", 8, target));
     // PHP RESOURCE ids. A SEPARATE numbering space from the object handles above —
     // php-src keeps `zend_resource.handle` and `zend_object.handle` in two unrelated
     // lists, so `resource(5)` and `object(C)#5` can and do coexist. The table maps a

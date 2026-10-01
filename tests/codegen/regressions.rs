@@ -37,3 +37,5 @@ mod switch_and_float_params;
 mod return_this_ownership;
 #[path = "regressions/symbol_collisions.rs"]
 mod symbol_collisions;
+#[path = "regressions/handles_statics_and_reflectors.rs"]
+mod handles_statics_and_reflectors;

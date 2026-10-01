@@ -73,6 +73,24 @@ pub(super) fn resolve_class_like_constant_literal(
     }
 }
 
+/// Returns `(enum, case)` when a default expression names an enum case (`Status::On`,
+/// `self::On` inside the enum, or a class constant whose value is one).
+pub(crate) fn resolve_class_like_enum_case(
+    module: &Module,
+    current_class: &str,
+    expr: &ExprKind,
+) -> Option<(String, String)> {
+    let current_info = module.class_infos.get(current_class);
+    let expr = Expr::new(expr.clone(), crate::span::Span::dummy());
+    match eval_class_constant_value(module, current_class, current_info, &expr, 0)? {
+        EvalClassConstantValue::EnumCase {
+            enum_name,
+            case_name,
+        } => Some((enum_name, case_name)),
+        _ => None,
+    }
+}
+
 /// Recursively resolves supported class-like constants used as keys or values inside a literal
 /// array default while leaving expressions that require runtime evaluation unchanged.
 pub(super) fn resolve_class_like_constants_in_literal(

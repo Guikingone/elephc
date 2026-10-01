@@ -12,62 +12,78 @@ use super::*;
 /// Builds the `ReflectionClass` shell with retained eval metadata accessors.
 pub(super) fn builtin_reflection_class() -> FlattenedClass {
     let mut class = builtin_reflection_class_shell();
+    // The address of each member slot's compiled filler, until a getter that reads the slot runs
+    // it; 0 once filled or when the slot was filled up front.
+    class
+        .properties
+        .extend(REFLECTION_CLASS_LAZY_SLOTS.iter().map(|slot| member_filler_property(slot)));
     add_member_fill_preambles(&mut class, REFLECTION_CLASS_MEMBER_READERS);
     class
 }
 
-/// The `ReflectionClass` getters whose bodies read a member-reflector slot (`__methods`,
-/// `__properties`, `__reflection_constants`, `__constructor`, `__parent_class`).
+/// The `ReflectionClass` getters whose bodies read a member-reflector slot, with that slot.
 ///
 /// `test_every_member_slot_reader_fills_the_members_first` keeps this list complete.
-const REFLECTION_CLASS_MEMBER_READERS: &[&str] = &[
-    "getReflectionConstants",
-    "getReflectionConstant",
-    "getMethod",
-    "getConstructor",
-    "getParentClass",
-    "getMethods",
-    "getProperties",
-    "getProperty",
-    "isSubclassOf",
+const REFLECTION_CLASS_MEMBER_READERS: &[(&str, &str)] = &[
+    ("getReflectionConstants", "__reflection_constants"),
+    ("getReflectionConstant", "__reflection_constants"),
+    ("getMethod", "__methods"),
+    ("getMethods", "__methods"),
+    ("getConstructor", "__constructor"),
+    ("getParentClass", "__parent_class"),
+    ("isSubclassOf", "__parent_class"),
+    ("getProperties", "__properties"),
+    ("getProperty", "__properties"),
 ];
 
 /// The `ReflectionEnum` getters whose bodies read its `__cases` member-reflector slot.
-const REFLECTION_ENUM_MEMBER_READERS: &[&str] = &["getCases", "getCase", "hasCase"];
+const REFLECTION_ENUM_MEMBER_READERS: &[(&str, &str)] = &[
+    ("getCases", "__cases"),
+    ("getCase", "__cases"),
+    ("hasCase", "__cases"),
+];
 
-/// The member-reflector slots a compiled class reflector may leave for its filler.
-#[cfg(test)]
-const REFLECTION_MEMBER_SLOTS: &[&str] = &[
-    "__interfaces",
-    "__traits",
+/// The member-reflector slots a compiled class reflector fills on first use, each through its
+/// own `<slot>_filler` (codegen's `REFLECTION_LAZY_MEMBER_SLOTS`).
+const REFLECTION_CLASS_LAZY_SLOTS: &[&str] = &[
     "__reflection_constants",
     "__methods",
     "__constructor",
     "__parent_class",
     "__properties",
-    "__cases",
 ];
 
-/// Prepends `reflection_member_fill_preamble()` to each named method of `class`.
-fn add_member_fill_preambles(class: &mut FlattenedClass, readers: &[&str]) {
+/// Prepends the fill preamble of its slot to each listed method of `class`.
+fn add_member_fill_preambles(class: &mut FlattenedClass, readers: &[(&str, &str)]) {
     for method in &mut class.methods {
-        if readers.contains(&method.name.as_str()) {
-            method.body.insert(0, reflection_member_fill_preamble());
+        if let Some((_, slot)) = readers.iter().find(|(name, _)| *name == method.name) {
+            method.body.insert(0, reflection_member_fill_preamble(slot));
         }
     }
 }
 
-/// `if ($this->__members_filler !== 0) { __elephc_reflection_fill_members($this->__members_filler, $this); }`
+/// The int property holding the address of `slot`'s compiled filler, or 0.
+pub(super) fn member_filler_property(slot: &str) -> ClassProperty {
+    builtin_property(
+        &format!("{}_filler", slot),
+        Visibility::Private,
+        Some(TypeExpr::Int),
+        int_lit(0),
+    )
+}
+
+/// `if ($this->S_filler !== 0) { __elephc_reflection_fill_members($this->S_filler, $this); }`
 ///
-/// A compiled class reflector records its members filler instead of building its member
+/// A compiled class reflector records one filler per member slot instead of building its member
 /// reflectors (`emit_reflection_owner_object_with_members`); the filler clears the slot first,
 /// so it runs once. A reflector the eval bridge built, or one filled up front, has 0 there.
-fn reflection_member_fill_preamble() -> Stmt {
+pub(super) fn reflection_member_fill_preamble(slot: &str) -> Stmt {
     let span = crate::span::Span::dummy();
+    let filler = format!("{}_filler", slot);
     Stmt::new(
         StmtKind::If {
             condition: binary_expr(
-                reflection_this_property("__members_filler", span),
+                reflection_this_property(&filler, span),
                 BinOp::StrictNotEq,
                 Expr::new(ExprKind::IntLiteral(0), span),
                 span,
@@ -76,7 +92,7 @@ fn reflection_member_fill_preamble() -> Stmt {
                 StmtKind::ExprStmt(function_call(
                     "__elephc_reflection_fill_members",
                     vec![
-                        reflection_this_property("__members_filler", span),
+                        reflection_this_property(&filler, span),
                         Expr::new(ExprKind::This, span),
                     ],
                     span,
@@ -276,15 +292,6 @@ fn builtin_reflection_class_shell() -> FlattenedClass {
                 Visibility::Private,
                 Some(bool_type()),
                 false_bool(),
-            ),
-            // The address of the compiled filler that builds this reflector's member
-            // reflectors, until a getter that reads them runs it; 0 once filled or when the
-            // slots were filled up front (see `reflection_member_fill_preamble`).
-            builtin_property(
-                "__members_filler",
-                Visibility::Private,
-                Some(TypeExpr::Int),
-                int_lit(0),
             ),
             builtin_property(
                 "__property_names",
@@ -565,6 +572,7 @@ pub(super) fn builtin_reflection_enum_class() -> FlattenedClass {
         builtin_reflection_enum_get_case_method(),
         builtin_reflection_enum_has_case_method(),
     ]);
+    class.properties.push(member_filler_property("__cases"));
     add_member_fill_preambles(&mut class, REFLECTION_ENUM_MEMBER_READERS);
     class
 }
@@ -706,19 +714,31 @@ mod tests {
         ] {
             for method in &class.methods {
                 let body = format!("{:?}", method.body);
-                let reads_member_slot = REFLECTION_MEMBER_SLOTS
-                    .iter()
-                    .any(|slot| body.contains(&format!("property: \"{}\"", slot)));
-                if !reads_member_slot {
-                    continue;
+                // A lazy compiled reflector never builds these: nothing may read them.
+                for unread in ["__interfaces", "__traits"] {
+                    assert!(
+                        !body.contains(&format!("property: \"{}\"", unread)),
+                        "{}::{} reads {}, which lazy reflectors leave empty",
+                        class.name,
+                        method.name,
+                        unread
+                    );
                 }
-                let first = method.body.first().map(|stmt| format!("{:?}", stmt));
-                assert!(
-                    first.is_some_and(|stmt| stmt.contains("__elephc_reflection_fill_members")),
-                    "{}::{} reads a member-reflector slot without filling the members first",
-                    class.name,
-                    method.name
-                );
+                for slot in REFLECTION_CLASS_LAZY_SLOTS.iter().chain(["__cases"].iter()) {
+                    if !body.contains(&format!("property: \"{}\"", slot)) {
+                        continue;
+                    }
+                    let first = method.body.first().map(|stmt| format!("{:?}", stmt));
+                    assert!(
+                        first.is_some_and(|stmt| stmt
+                            .contains("__elephc_reflection_fill_members")
+                            && stmt.contains(&format!("\"{}_filler\"", slot))),
+                        "{}::{} reads {} without running its filler first",
+                        class.name,
+                        method.name,
+                        slot
+                    );
+                }
             }
         }
     }

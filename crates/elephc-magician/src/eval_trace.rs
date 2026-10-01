@@ -36,12 +36,37 @@ static TRACE_STATE: AtomicU8 = AtomicU8::new(TRACE_UNKNOWN);
 
 /// Returns whether any eval trace output is enabled.
 pub(crate) fn enabled() -> bool {
-    state() >= TRACE_ON
+    verdict_enables(state())
 }
 
 /// Returns whether the per-FFI-entry trace is enabled, which needs `ffi` or `all` specifically.
 pub(crate) fn ffi_enabled() -> bool {
-    state() == TRACE_ON_FFI
+    verdict_enables_ffi(state())
+}
+
+/// Whether a cached verdict switches the trace on.
+fn verdict_enables(verdict: u8) -> bool {
+    verdict >= TRACE_ON
+}
+
+/// Whether a cached verdict switches the per-FFI-entry trace on.
+fn verdict_enables_ffi(verdict: u8) -> bool {
+    verdict == TRACE_ON_FFI
+}
+
+/// The verdict an `ELEPHC_EVAL_TRACE` value (or its absence) gives.
+fn verdict_for_level(level: Option<&std::ffi::OsStr>) -> u8 {
+    match level {
+        None => TRACE_OFF,
+        Some(level) => {
+            let level = level.to_string_lossy();
+            if level == "ffi" || level == "all" {
+                TRACE_ON_FFI
+            } else {
+                TRACE_ON
+            }
+        }
+    }
 }
 
 thread_local! {
@@ -130,17 +155,7 @@ fn state() -> u8 {
     if cached != TRACE_UNKNOWN {
         return cached;
     }
-    let computed = match std::env::var_os("ELEPHC_EVAL_TRACE") {
-        None => TRACE_OFF,
-        Some(level) => {
-            let level = level.to_string_lossy();
-            if level == "ffi" || level == "all" {
-                TRACE_ON_FFI
-            } else {
-                TRACE_ON
-            }
-        }
-    };
+    let computed = verdict_for_level(std::env::var_os("ELEPHC_EVAL_TRACE").as_deref());
     TRACE_STATE.store(computed, Ordering::Relaxed);
     computed
 }
@@ -149,22 +164,34 @@ fn state() -> u8 {
 mod tests {
     use super::*;
 
-    /// Verifies the verdict is recomputed after an invalidation rather than frozen.
+    // These test the verdict as pure functions: storing into the process-wide `TRACE_STATE`
+    // raced the other test in this module and any interpreter test whose `putenv()` invalidates
+    // it, and switched every trace site on underneath tests running in parallel.
+
+    /// Verifies the level spellings map to their verdicts and what each verdict enables.
     #[test]
-    fn recomputes_after_invalidation() {
-        TRACE_STATE.store(TRACE_ON_FFI, Ordering::Relaxed);
-        assert!(enabled());
-        assert!(ffi_enabled());
-        invalidate();
-        assert_eq!(TRACE_STATE.load(Ordering::Relaxed), TRACE_UNKNOWN);
+    fn levels_map_to_verdicts() {
+        assert_eq!(verdict_for_level(None), TRACE_OFF);
+        assert_eq!(verdict_for_level(Some(std::ffi::OsStr::new("1"))), TRACE_ON);
+        assert_eq!(verdict_for_level(Some(std::ffi::OsStr::new("ffi"))), TRACE_ON_FFI);
+        assert_eq!(verdict_for_level(Some(std::ffi::OsStr::new("all"))), TRACE_ON_FFI);
+        assert!(!verdict_enables(TRACE_OFF));
+        assert!(verdict_enables(TRACE_ON_FFI));
+        assert!(verdict_enables_ffi(TRACE_ON_FFI));
     }
 
     /// Verifies an enabled trace that does not name `ffi` leaves the FFI-entry trace off.
     #[test]
     fn a_plain_level_does_not_enable_the_ffi_entry_trace() {
-        TRACE_STATE.store(TRACE_ON, Ordering::Relaxed);
-        assert!(enabled());
-        assert!(!ffi_enabled());
+        assert!(verdict_enables(TRACE_ON));
+        assert!(!verdict_enables_ffi(TRACE_ON));
+    }
+
+    /// Verifies an invalidation forgets the cached verdict.
+    #[test]
+    fn invalidate_forgets_the_verdict() {
         invalidate();
+        // Another thread may recompute it at once; either way it is a real verdict or unknown.
+        assert!(TRACE_STATE.load(Ordering::Relaxed) <= TRACE_ON_FFI);
     }
 }

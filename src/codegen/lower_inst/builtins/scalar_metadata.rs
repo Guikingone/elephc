@@ -637,6 +637,7 @@ pub(in crate::codegen::lower_inst) fn always_loaded_extension_names(
             names.push(name.to_string());
         }
     }
+    names.sort_by_key(|name| elephc_builtin_contract::php_registration_rank(name));
     names
 }
 

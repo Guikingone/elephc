@@ -1360,3 +1360,22 @@ var_dump($c->i, $c->f, $c->s, $c->b, $c->i2, $c->f2);
          int(9)\nfloat(1.5)\nstring(1) \"a\"\nbool(true)\nint(0)\nfloat(0)\n"
     );
 }
+
+/// Verifies an enum case is a property default: untyped (boxed), static through an enum
+/// constant, and nullable-typed, each the case's own singleton. There was no default form for a
+/// case, so `public $mode = Mode::Slow;` failed the build in `object_new` and a static one in the
+/// static-property initializer.
+#[test]
+fn test_enum_case_property_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+enum Mode { case Fast; case Slow; }
+enum Level: int { case Low = 1; case High = 2; const DEFAULT = self::High; }
+class Cfg { public $mode = Mode::Slow; public static $lvl = Level::DEFAULT; private ?Level $opt = Level::Low; public function opt() { return $this->opt; } }
+$c = new Cfg();
+var_dump($c->mode, Cfg::$lvl, $c->opt());
+var_dump(spl_object_id($c->mode) === spl_object_id(Mode::Slow));
+"#,
+    );
+    assert_eq!(out, "enum(Mode::Slow)\nenum(Level::High)\nenum(Level::Low)\nbool(true)\n");
+}

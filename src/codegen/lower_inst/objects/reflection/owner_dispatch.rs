@@ -83,6 +83,28 @@ fn reflection_member_literals_name_a_compiled_member(
     if matches!(class_name, "ReflectionClass" | "ReflectionEnum") {
         return reflection_class_literal_names_a_compiled_class_like(ctx, class_name, inst);
     }
+    // A compiled class constant or enum case. The interpreter knows the cases only of enums it
+    // declared, so `new ReflectionEnumUnitCase(E::class, 'A')` over a compiled enum threw
+    // "Constant E::A is not a case"; and its `$r->class` came back empty.
+    if matches!(
+        class_name,
+        "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase"
+    ) {
+        if inst.operands.len() != 2 || reflection_owner_requires_runtime_metadata(ctx, inst)? {
+            return Ok(false);
+        }
+        let reflected_class = const_string_or_class_operand(ctx, inst.operands[0], class_name)?;
+        let member = const_required_string_operand(ctx, inst.operands[1], class_name)?;
+        return Ok(match class_name {
+            "ReflectionClassConstant" => {
+                reflection_class_constant_lookup(ctx, &reflected_class, &member)?.is_some()
+            }
+            // A pure enum's case is not a backed case: php's exception stays with the interpreter.
+            "ReflectionEnumBackedCase" => resolve_reflection_enum_case(ctx, &reflected_class, &member)
+                .is_some_and(|(_, case)| case.value.is_some()),
+            _ => resolve_reflection_enum_case(ctx, &reflected_class, &member).is_some(),
+        });
+    }
     if !matches!(class_name, "ReflectionProperty" | "ReflectionMethod")
         || inst.operands.len() != 2
         || reflection_owner_requires_runtime_metadata(ctx, inst)?

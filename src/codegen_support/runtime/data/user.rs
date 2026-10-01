@@ -996,22 +996,36 @@ pub(crate) fn emit_runtime_data_user(
         // Per-property name strings used by the JSON descriptor below. We
         // emit them as labels before the descriptor so the descriptor
         // table holds plain (ptr, len) pairs.
-        let public_props: Vec<(usize, &(String, PhpType))> = class_info
-            .properties
-            .iter()
-            .enumerate()
-            .filter(|(prop_index, (name, _))| {
-                class_info
-                    .visible_property_index(name)
-                    .is_some_and(|visible_index| visible_index == *prop_index)
-            })
-            .filter(|(_, (name, _))| {
-                class_info
-                    .property_visibilities
-                    .get(name)
-                    .map_or(true, |v| matches!(v, Visibility::Public))
-            })
-            .collect();
+        // `(json key, slot index, slot type)`: the public properties, or for one of php's own
+        // Reflection classes the `name`/`class` it shows (`builtin_reflection_dump_projection`).
+        let public_props: Vec<(usize, (String, PhpType))> =
+            match builtin_reflection_dump_projection(class_info, class_name) {
+                Some(projection) => projection
+                    .into_iter()
+                    .filter_map(|(key, slot)| {
+                        let index = class_info.visible_property_index(&slot)?;
+                        let slot_ty = class_info.properties.get(index)?.1.clone();
+                        Some((index, (key, slot_ty)))
+                    })
+                    .collect(),
+                None => class_info
+                    .properties
+                    .iter()
+                    .enumerate()
+                    .filter(|(prop_index, (name, _))| {
+                        class_info
+                            .visible_property_index(name)
+                            .is_some_and(|visible_index| visible_index == *prop_index)
+                    })
+                    .filter(|(_, (name, _))| {
+                        class_info
+                            .property_visibilities
+                            .get(name)
+                            .map_or(true, |v| matches!(v, Visibility::Public))
+                    })
+                    .map(|(index, prop)| (index, prop.clone()))
+                    .collect(),
+            };
         for (prop_index, (prop_name, _)) in &public_props {
             out.push_str(&format!(
                 ".globl _class_json_pname_{}_{}\n_class_json_pname_{}_{}:\n    .ascii {:?}\n",
@@ -1132,12 +1146,44 @@ pub(crate) fn emit_runtime_data_user(
         // Serialize property-info table: one row per declared property in
         // declaration order with the PHP-mangled serialize key bytes, the
         // property's byte offset within the object, and its runtime value tag.
-        // __rt_serialize_object / __rt_unserialize_object walk this by class id.
-        for prop_index in 0..class_info.properties.len() {
-            let mangled = mangled_property_slot_name(class_info, class_name, prop_index);
+        // __rt_serialize_object / __rt_unserialize_object walk this by class id, and so do
+        // get_object_vars(), `(array)` and `foreach` over an object (`__rt_object_to_hash`).
+        // One of php's own Reflection classes lists only the public `name`/`class` php shows
+        // (`builtin_reflection_dump_projection`), not its private `__*` metadata slots.
+        let serprop_rows: Vec<(Vec<u8>, usize, u64, u64)> =
+            match builtin_reflection_dump_projection(class_info, class_name) {
+                Some(projection) => projection
+                    .into_iter()
+                    .filter_map(|(key, slot)| {
+                        let index = class_info.visible_property_index(&slot)?;
+                        Some((
+                            key.into_bytes(),
+                            class_info.property_slot_offset(index),
+                            prop_slot_value_tag(class_info, index),
+                            class_info.class_id,
+                        ))
+                    })
+                    .collect(),
+                None => (0..class_info.properties.len())
+                    .map(|prop_index| {
+                        let (_, declaring_class) =
+                            class_info.property_slot_owner(prop_index, class_name);
+                        (
+                            mangled_property_slot_name(class_info, class_name, prop_index),
+                            class_info.property_slot_offset(prop_index),
+                            prop_slot_value_tag(class_info, prop_index),
+                            all_class_id_by_name
+                                .get(declaring_class)
+                                .copied()
+                                .unwrap_or(class_info.class_id),
+                        )
+                    })
+                    .collect(),
+            };
+        for (row_index, (mangled, _, _, _)) in serprop_rows.iter().enumerate() {
             out.push_str(&format!(
                 ".globl _class_serpname_{}_{}\n_class_serpname_{}_{}:\n",
-                class_info.class_id, prop_index, class_info.class_id, prop_index,
+                class_info.class_id, row_index, class_info.class_id, row_index,
             ));
             out.push_str("    .byte ");
             for (i, byte) in mangled.iter().enumerate() {
@@ -1153,17 +1199,13 @@ pub(crate) fn emit_runtime_data_user(
             ".globl _class_serprop_{}\n_class_serprop_{}:\n",
             class_info.class_id, class_info.class_id,
         ));
-        out.push_str(&format!("    .quad {}\n", class_info.properties.len()));
-        for prop_index in 0..class_info.properties.len() {
-            let mangled_len =
-                mangled_property_slot_name(class_info, class_name, prop_index).len();
-            let offset = class_info.property_slot_offset(prop_index);
-            let tag = prop_slot_value_tag(class_info, prop_index);
+        out.push_str(&format!("    .quad {}\n", serprop_rows.len()));
+        for (row_index, (mangled, offset, tag, _)) in serprop_rows.iter().enumerate() {
             out.push_str(&format!(
                 "    .quad _class_serpname_{}_{}\n",
-                class_info.class_id, prop_index
+                class_info.class_id, row_index
             ));
-            out.push_str(&format!("    .quad {}\n", mangled_len)); // mangled key byte length
+            out.push_str(&format!("    .quad {}\n", mangled.len())); // mangled key byte length
             out.push_str(&format!("    .quad {}\n", offset)); // byte offset within the object
             out.push_str(&format!("    .quad {}\n", tag)); // runtime value tag
         }
@@ -1172,12 +1214,7 @@ pub(crate) fn emit_runtime_data_user(
             ".globl _class_serprop_declaring_{}\n_class_serprop_declaring_{}:\n",
             class_info.class_id, class_info.class_id,
         ));
-        for prop_index in 0..class_info.properties.len() {
-            let (_, declaring_class) = class_info.property_slot_owner(prop_index, class_name);
-            let declaring_class_id = all_class_id_by_name
-                .get(declaring_class)
-                .copied()
-                .unwrap_or(class_info.class_id);
+        for (_, _, _, declaring_class_id) in &serprop_rows {
             out.push_str(&format!("    .quad {}\n", declaring_class_id));
         }
 
@@ -3307,7 +3344,9 @@ struct VarDumpRow {
 /// Builds the `var_dump` rows for a class: the `__debugInfo()` projection when the
 /// class declares a foldable one, otherwise every declared property in layout order.
 fn var_dump_descriptor_rows(class_info: &ClassInfo, class_name: &str) -> Vec<VarDumpRow> {
-    if let Some(projection) = var_dump_debug_info_projection(class_info) {
+    let projection = builtin_reflection_dump_projection(class_info, class_name)
+        .or_else(|| var_dump_debug_info_projection(class_info));
+    if let Some(projection) = projection {
         return projection
             .into_iter()
             .filter_map(|(key, prop_name)| {
@@ -3343,6 +3382,38 @@ fn var_dump_descriptor_rows(class_info: &ClassInfo, class_name: &str) -> Vec<Var
             type_name: var_dump_property_type_name(prop_ty),
         })
         .collect()
+}
+
+/// The properties php shows for one of its own Reflection classes, as `(key, backing slot)`.
+///
+/// php's reflectors expose only `name` (and `class` on a member reflector); elephc's carry
+/// their metadata in private `__*` slots, which every dump printed -- 43 of them for a
+/// `ReflectionClass`. The projection is the same row list a foldable `__debugInfo()` produces.
+/// Only the compiler-injected class gets it: a user subclass keeps its declared properties.
+fn builtin_reflection_dump_projection(
+    class_info: &ClassInfo,
+    class_name: &str,
+) -> Option<Vec<(String, String)>> {
+    if class_info.declaration_span != crate::span::Span::dummy() {
+        return None;
+    }
+    let keys: &[(&str, &str)] = match class_name {
+        "ReflectionClass" | "ReflectionObject" | "ReflectionEnum" | "ReflectionFunction"
+        | "ReflectionParameter" | "ReflectionAttribute" => &[("name", "__name")],
+        "ReflectionMethod" | "ReflectionProperty" | "ReflectionClassConstant"
+        | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase" => {
+            &[("name", "__name"), ("class", "__class")]
+        }
+        "ReflectionNamedType" | "ReflectionUnionType" | "ReflectionIntersectionType"
+        | "ReflectionType" | "ReflectionReference" => &[],
+        _ => return None,
+    };
+    Some(
+        keys.iter()
+            .filter(|(_, slot)| class_info.visible_property(slot).is_some())
+            .map(|(key, slot)| (key.to_string(), slot.to_string()))
+            .collect(),
+    )
 }
 
 /// Folds a class's `__debugInfo()` into the `(array key, property name)` pairs

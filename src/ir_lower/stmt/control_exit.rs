@@ -181,6 +181,13 @@ pub(super) fn acquire_borrowed_return_value(
     value: LoweredValue,
     span: Span,
 ) -> LoweredValue {
+    // A function-static container load reads as a movable owner (`value_is_owned_unboxed_local_load`),
+    // which is right for a frame local the return consumes and wrong for a static: its slot keeps
+    // the container for the next call. `static $h = [...]; ...; return $h;` handed the caller the
+    // static's only reference, the caller freed it, and the next call wrote into freed storage.
+    if ctx.builder.value_defining_op(value.value) == Some(Op::LoadStaticLocal) {
+        return crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
+    }
     if ctx.value_is_owning_temporary(value) {
         return value;
     }

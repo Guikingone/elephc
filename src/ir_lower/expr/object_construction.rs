@@ -52,10 +52,64 @@ pub(super) fn lower_new_object(
         );
     }
     let sig = constructor_signature(ctx, class_name).cloned();
+    // php-src allocates the object before evaluating the arguments, so `new A(new B())` numbers
+    // A `#1`: reserve A's handle now when an argument may allocate one first.
+    let reserved_handle = args.iter().any(arg_may_allocate_object).then(|| {
+        ctx.emit_value(
+            Op::ObjectHandleReserve,
+            Vec::new(),
+            None,
+            PhpType::Int,
+            Op::ObjectHandleReserve.default_effects(),
+            Some(expr.span),
+        )
+    });
     let operands = lower_user_args_with_signature(ctx, sig.as_ref(), args);
     append_optional_constructor_argc_marker(ctx, sig.as_ref(), args, &operands, expr);
     let php_type = PhpType::Object(class_name.as_str().to_string());
-    emit_fixed_object_new(ctx, class_name.as_str(), operands, php_type, expr.span)
+    if let Some(handle) = &reserved_handle {
+        ctx.emit_void(
+            Op::ObjectHandlePend,
+            vec![handle.value],
+            None,
+            Op::ObjectHandlePend.default_effects(),
+            Some(expr.span),
+        );
+    }
+    let object = emit_fixed_object_new(ctx, class_name.as_str(), operands, php_type, expr.span);
+    if reserved_handle.is_some() {
+        ctx.emit_void(
+            Op::ObjectHandleUnpend,
+            Vec::new(),
+            None,
+            Op::ObjectHandleUnpend.default_effects(),
+            Some(expr.span),
+        );
+    }
+    object
+}
+
+/// Whether evaluating a constructor argument may allocate an object: anything but a literal,
+/// a variable or a constant read (a call, a `new`, a closure, an operator over those...).
+fn arg_may_allocate_object(arg: &Expr) -> bool {
+    match &arg.kind {
+        ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null
+        | ExprKind::Variable(_)
+        | ExprKind::ConstRef(_)
+        | ExprKind::ClassConstant { .. }
+        | ExprKind::This => false,
+        ExprKind::NamedArg { value, .. } => arg_may_allocate_object(value),
+        ExprKind::Negate(inner) => arg_may_allocate_object(inner),
+        ExprKind::ArrayLiteral(items) => items.iter().any(arg_may_allocate_object),
+        ExprKind::ArrayLiteralAssoc(items) => items
+            .iter()
+            .any(|(key, value)| arg_may_allocate_object(key) || arg_may_allocate_object(value)),
+        _ => true,
+    }
 }
 
 

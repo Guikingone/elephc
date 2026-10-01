@@ -691,6 +691,8 @@ fn validate_opcode_rules(
         | DynamicPdoCalledClassStatus => check_count(inst_id, inst, 1, "1"),
         DynamicPdoStatementConstructorCall => check_count(inst_id, inst, 3, "3"),
         ReflectionFillMembers => check_count(inst_id, inst, 2, "2"),
+        ObjectHandleReserve | ObjectHandleUnpend => check_count(inst_id, inst, 0, "0"),
+        ObjectHandlePend => check_count(inst_id, inst, 1, "1"),
         DynamicPdoStatementInitialize => check_count(inst_id, inst, 5, "5"),
         RuntimeCall => validate_typed_runtime_call(function, inst_id, inst),
         _ => Ok(()),

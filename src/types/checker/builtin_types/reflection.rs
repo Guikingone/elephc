@@ -135,7 +135,12 @@ pub(crate) fn reflection_virtual_property_backing(
         "class"
             if matches!(
                 class_name,
-                "ReflectionFunctionAbstract" | "ReflectionMethod" | "ReflectionProperty"
+                "ReflectionFunctionAbstract"
+                    | "ReflectionMethod"
+                    | "ReflectionProperty"
+                    | "ReflectionClassConstant"
+                    | "ReflectionEnumUnitCase"
+                    | "ReflectionEnumBackedCase"
             ) =>
         {
             Some("__class")
@@ -154,7 +159,16 @@ pub(crate) fn reflection_virtual_property_type(
         "name" if reflection_virtual_property_backing(class_name, property).is_some() => {
             Some(PhpType::Str)
         }
-        "class" if matches!(class_name, "ReflectionMethod" | "ReflectionProperty") => {
+        "class"
+            if matches!(
+                class_name,
+                "ReflectionMethod"
+                    | "ReflectionProperty"
+                    | "ReflectionClassConstant"
+                    | "ReflectionEnumUnitCase"
+                    | "ReflectionEnumBackedCase"
+            ) =>
+        {
             Some(PhpType::Str)
         }
         "class" if class_name == "ReflectionFunctionAbstract" => {

@@ -39,6 +39,32 @@ pub fn module_php_functions(module: PhpModule) -> impl Iterator<Item = &'static 
     })
 }
 
+/// php's module registration order, as reference PHP 8.5's `get_loaded_extensions()` lists it.
+///
+/// php numbers modules as it registers them: `Core` first, then the static extensions in the
+/// order the build configured them, the Zend extension among them. MEASURED (8.5, static build):
+/// `Core,date,lexbor,openssl,pcre,sqlite3,zlib,bcmath,…,odbc,Zend OPcache,pcntl,…,zip`. Both
+/// backends list what they report in this order, so `get_loaded_extensions()[0]` is `Core` as it
+/// is in every php, and an AOT and an eval read of the same program agree on positions.
+const PHP_REGISTRATION_ORDER: &[&str] = &[
+    "Core", "date", "lexbor", "openssl", "pcre", "sqlite3", "zlib", "bcmath", "bz2", "calendar",
+    "ctype", "curl", "dba", "uri", "json", "mbstring", "SPL", "FFI", "fileinfo", "filter", "ftp",
+    "gd", "gettext", "gmp", "hash", "iconv", "intl", "session", "ldap", "standard", "libxml",
+    "mysqlnd", "mysqli", "odbc", "Zend OPcache", "pcntl", "PDO", "pdo_dblib", "pdo_mysql",
+    "PDO_ODBC", "pdo_pgsql", "pdo_sqlite", "pgsql", "Phar", "posix", "random", "readline",
+    "Reflection", "exif", "shmop", "SimpleXML", "snmp", "soap", "sockets", "sodium", "sysvmsg",
+    "sysvsem", "sysvshm", "tidy", "tokenizer", "dom", "xml", "xmlreader", "xmlwriter", "xsl", "zip",
+];
+
+/// Returns where php registers an extension name, case-insensitively; names php does not
+/// bundle (PECL modules elephc provides) sort after every bundled one.
+pub fn php_registration_rank(name: &str) -> usize {
+    PHP_REGISTRATION_ORDER
+        .iter()
+        .position(|known| known.eq_ignore_ascii_case(name))
+        .unwrap_or(PHP_REGISTRATION_ORDER.len())
+}
+
 /// Returns every module elephc may report as loaded, in declaration order.
 ///
 /// Two admissions, and they are different claims:
@@ -65,6 +91,23 @@ pub fn complete_surface_modules() -> impl Iterator<Item = PhpModule> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every reportable module's display name has a registration rank, so none sorts to the end
+    /// by a spelling mismatch; `Core` ranks first and the Zend extension sits among the others.
+    #[test]
+    fn reportable_modules_have_a_php_registration_rank() {
+        assert_eq!(php_registration_rank("Core"), 0);
+        assert_eq!(php_registration_rank("core"), 0);
+        assert!(php_registration_rank("Zend OPcache") > php_registration_rank("standard"));
+        assert!(php_registration_rank("Zend OPcache") < PHP_REGISTRATION_ORDER.len());
+        for module in complete_surface_modules() {
+            assert!(
+                php_registration_rank(module.display_name()) < PHP_REGISTRATION_ORDER.len(),
+                "{} has no php registration rank",
+                module.display_name()
+            );
+        }
+    }
 
     /// Every complete-surface module must own at least one catalog function, except `Reflection`,
     /// which php exports no procedural functions for at all and which elephc provides as classes.
