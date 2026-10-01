@@ -404,9 +404,15 @@ echo call_user_func_array($encode, ["charset" => "UTF-8", "string" => "café", "
 /// Checks one named-call ownership path without combining enough compile cycles to exceed CI limits.
 fn check_mime_named_ownership(call: &str) {
     for eval in [false, true] {
-        let mut residual = Vec::new();
-        for count in [1, 4] {
-            let body = format!(r#"
+        check_mime_named_ownership_in_mode(call, eval);
+    }
+}
+
+/// Compares MIME named-argument ownership in one backend without compiling the other backend.
+fn check_mime_named_ownership_in_mode(call: &str, eval: bool) {
+    let mut residual = Vec::new();
+    for count in [1, 4] {
+        let body = format!(r#"
 class OwnedOutgoingHeader {{ public function __toString(): string {{ return "café"; }} }}
 class OutgoingCharset {{ public function __toString(): string {{ return "UTF-8"; }} }}
 function failingOutgoingArgument(): string {{ throw new Exception("argument failed"); }}
@@ -414,14 +420,13 @@ $encode = $argc > 0 ? "mb_encode_mimeheader" : "mb_strtoupper";
 {}
 echo "done";
 "#, call.repeat(count));
-            let output = compile_and_run_with_gc_stats(&program(&body, eval));
-            assert!(output.success, "eval={eval}: {}", output.stderr);
-            assert_eq!(output.stdout, "done");
-            let (allocated, freed) = parse_gc_stats(&output.stderr);
-            residual.push(allocated as i64 - freed as i64);
-        }
-        assert_eq!(residual[0], residual[1], "eval={eval}: {call}");
+        let output = compile_and_run_with_gc_stats(&program(&body, eval));
+        assert!(output.success, "eval={eval}: {}", output.stderr);
+        assert_eq!(output.stdout, "done");
+        let (allocated, freed) = parse_gc_stats(&output.stderr);
+        residual.push(allocated as i64 - freed as i64);
     }
+    assert_eq!(residual[0], residual[1], "eval={eval}: {call}");
 }
 
 /// Releases original named argument objects after shared Stringable coercion.
@@ -436,10 +441,21 @@ fn test_mbstring_mime_encode_named_array_ownership() {
     check_mime_named_ownership("call_user_func_array($encode, [\"string\" => new OwnedOutgoingHeader(), \"charset\" => new OutgoingCharset()]); call_user_func_array($encode, [0 => new OwnedOutgoingHeader(), \"charset\" => new OutgoingCharset()]);");
 }
 
-/// Releases a named argument container when destination validation raises a PHP error.
+/// Shares the same failing named-call fixture between independent backend test cases.
+fn check_mime_named_error_ownership(eval: bool) {
+    check_mime_named_ownership_in_mode("try { $encode(string: new OwnedOutgoingHeader(), charset: \"missing\"); } catch (ValueError) {}", eval);
+}
+
+/// Native destination-validation errors release their named argument container.
 #[test]
 fn test_mbstring_mime_encode_named_error_ownership() {
-    check_mime_named_ownership("try { $encode(string: new OwnedOutgoingHeader(), charset: \"missing\"); } catch (ValueError) {}");
+    check_mime_named_error_ownership(false);
+}
+
+/// Eval destination-validation errors release their named argument container.
+#[test]
+fn test_mbstring_mime_encode_named_error_ownership_eval() {
+    check_mime_named_error_ownership(true);
 }
 
 /// Releases partial associative literals when a later argument expression throws.
