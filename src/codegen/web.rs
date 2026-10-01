@@ -566,6 +566,14 @@ const REQUEST_SCOPED_RUNTIME_FLAGS: &[&str] = &[
     "_json_error_column",
     // The `@` suppression depth, which a fatal inside a suppressed call leaves raised.
     "_rt_diag_suppression",
+    // The two retained dynamic C-string scratch buffers. Each holds a raw pointer into the arena
+    // (`__rt_cstr`/`__rt_cstr2` keep the buffer of the last long conversion so the next one can
+    // free it), and the arena wipe below makes that pointer dangle: the next request's first long
+    // conversion -- a regex pattern over 4 KiB -- freed whatever LIVE block began at that address
+    // in the new request. Laravel's `mb_ucfirst()` title-case pattern is 6 KiB, which is how the
+    // free surfaced as an intermittent "heap debug detected double free" worker crash.
+    "_cstr_buf_dynamic",
+    "_cstr_buf2_dynamic",
     // The cycle collector's re-entry guard, safepoint counter and release suppression.
     "_gc_collecting",
     "_gc_safepoint_count",
