@@ -217,6 +217,35 @@ fn test_integer_range_large_integer_equality_is_exact_in_both_modes() {
     }
 }
 
+/// Narrowing keeps resource-to-integer loose equality on the full PHP comparison table.
+#[test]
+fn test_integer_range_resource_equality_matches_in_both_modes() {
+    let source = r#"<?php
+function hide_resource(mixed $value): mixed { return $value; }
+$resource = fopen("php://memory", "r");
+$id = (int)$resource;
+$float_id = (float)$id;
+$mixed = hide_resource($resource);
+var_dump((($id & 254) + ($id & 1)) == $mixed);
+var_dump($mixed == (($id & 254) + ($id & 1)));
+var_dump((($id & 254) + ($id & 1)) != $mixed);
+var_dump($mixed != (($id & 254) + ($id & 1)));
+var_dump($float_id == $mixed);
+var_dump($mixed == $float_id);
+var_dump($float_id != $mixed);
+var_dump($mixed != $float_id);
+"#;
+    let expected = concat!(
+        "bool(true)\nbool(true)\nbool(false)\nbool(false)\n",
+        "bool(true)\nbool(true)\nbool(false)\nbool(false)\n",
+    );
+    for optimized in [false, true] {
+        let output = run_variant(source, optimized);
+        assert_eq!(output.0, expected, "optimized={optimized}");
+        assert!(output.1.is_empty(), "{}", output.1);
+    }
+}
+
 /// Runtime ordering keeps PHP bool/null coercions after range analysis and constant folding.
 #[test]
 fn test_integer_range_boxed_ordering_preserves_php_coercions() {
@@ -439,6 +468,34 @@ function boxed_spaceship_probe(int $input): int {
             assert!(assembly.contains("op=php_rel_cmp"), "{target}");
             assert!(assembly.contains("op=spaceship"), "{target}");
             assert!(assembly.contains("op=ichecked_add"), "{target}");
+        }
+    }
+}
+
+/// Resource-to-integer loose equality uses the display-id path on every target.
+#[test]
+fn test_integer_range_all_supported_targets_keep_resource_equality() {
+    let source = r#"<?php
+function resource_equality_probe(int $id, mixed $resource): bool {
+    return (($id & 254) + ($id & 1)) == $resource;
+}
+function resource_float_equality_probe(float $id, mixed $resource): bool {
+    return $id == $resource;
+}
+$resource = fopen("php://memory", "r");
+$id = (int)$resource;
+var_dump(resource_equality_probe($id, $resource));
+var_dump(resource_float_equality_probe((float)$id, $resource));
+"#;
+    for target in [
+        "macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64",
+    ] {
+        for optimized in [false, true] {
+            let assembly = target_assembly(source, target, optimized);
+            assert!(assembly.contains("mixed_numeric_resource"),
+                "{target}, optimized={optimized}");
+            assert_eq!(assembly.contains("mixed_numeric_integer"), optimized,
+                "{target}, optimized={optimized}");
         }
     }
 }
