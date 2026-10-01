@@ -28,6 +28,10 @@ use super::loops::compute_loops;
 /// Maximum number of block transfers before a malformed or unexpectedly complex CFG fails closed.
 const MAX_DATAFLOW_STEPS: usize = 100_000;
 
+#[cfg(test)]
+#[path = "tests/integer_range_domain_test.rs"]
+mod domain_tests;
+
 /// Inclusive signed integer interval.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct IntRange {
@@ -403,7 +407,23 @@ fn instruction_range(
             hi: !operand(0)?.lo,
         }),
         (Op::ICmp, _) => Some(IntRange { lo: 0, hi: 1 }),
-        (Op::Cast, Some(Immediate::CastTarget(IrType::I64))) => operand(0),
+        (Op::Cast, Some(Immediate::CastTarget(IrType::I64))) => {
+            if inst.result_php_type == PhpType::Bool {
+                Some(IntRange { lo: 0, hi: 1 })
+            } else if inst.result_php_type == PhpType::Int
+                && inst.operands.first().and_then(|value| function.value(*value))
+                .is_some_and(|value| matches!(
+                    value.php_type, PhpType::Int | PhpType::Bool
+                ) || (value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Mixed)
+                    && matches!(value.php_type, PhpType::Mixed | PhpType::Union(_))))
+            {
+                operand(0)
+            } else {
+                // Resource IDs, nullable scalar tags, strings, and floats are conversions,
+                // not identities even when their input happens to use I64 storage.
+                scalar_result_top(function, inst)
+            }
+        }
         _ => scalar_result_top(function, inst),
     }
 }
@@ -741,13 +761,11 @@ fn discover_induction_ranges(function: &Function) -> HashMap<ValueId, IntRange> 
                 continue;
             }
             let mut memo = HashMap::new();
-            let mut visiting = HashSet::new();
             let Some(init_range) = static_value_range(
                 function,
                 init,
                 &summaries,
                 &mut memo,
-                &mut visiting,
             ) else {
                 continue;
             };
@@ -756,7 +774,6 @@ fn discover_induction_ranges(function: &Function) -> HashMap<ValueId, IntRange> 
                 bound,
                 &summaries,
                 &mut memo,
-                &mut visiting,
             ) else {
                 continue;
             };
@@ -851,7 +868,6 @@ fn recurrence_step(
         return None;
     }
     let mut memo = HashMap::new();
-    let mut visiting = HashSet::new();
     match instruction.op {
         Op::IAdd | Op::ICheckedAddToInt if instruction.operands[0] == param => {
             static_value_range(
@@ -859,7 +875,6 @@ fn recurrence_step(
                 instruction.operands[1],
                 summaries,
                 &mut memo,
-                &mut visiting,
             )?
             .exact()
         }
@@ -869,7 +884,6 @@ fn recurrence_step(
                 instruction.operands[0],
                 summaries,
                 &mut memo,
-                &mut visiting,
             )?
             .exact()
         }
@@ -879,7 +893,6 @@ fn recurrence_step(
                 instruction.operands[1],
                 summaries,
                 &mut memo,
-                &mut visiting,
             )?
             .exact()?
             .checked_neg()
@@ -959,44 +972,47 @@ fn induction_summary(
     Some(init.hull(next))
 }
 
-/// Recursively evaluates loop-invariant scalar expressions without following cyclic parameters.
+/// Evaluates an expression DAG in postorder, caching unknown results without native recursion.
 fn static_value_range(
     function: &Function,
     value: ValueId,
     summaries: &HashMap<ValueId, IntRange>,
-    memo: &mut HashMap<ValueId, IntRange>,
-    visiting: &mut HashSet<ValueId>,
+    memo: &mut HashMap<ValueId, Option<IntRange>>,
 ) -> Option<IntRange> {
-    if let Some(range) = summaries.get(&value).or_else(|| memo.get(&value)) {
-        return Some(*range);
-    }
-    if !visiting.insert(value) {
-        return value_is_i64(function, value).then_some(IntRange::full());
-    }
-    let range = match function.value(value)?.def {
-        ValueDef::BlockParam { .. } => value_is_i64(function, value).then_some(IntRange::full()),
-        ValueDef::Instruction { inst, .. } => {
-            let instruction = function.instruction(inst)?;
-            let mut state = RangeState::new();
-            for operand in &instruction.operands {
-                if let Some(range) = static_value_range(
-                    function,
-                    *operand,
-                    summaries,
-                    memo,
-                    visiting,
-                ) {
-                    state.insert(*operand, range);
-                }
-            }
-            instruction_range(function, instruction, &state)
+    let mut work = vec![(value, false)];
+    let mut visiting = HashSet::new();
+    while let Some((current, ready)) = work.pop() {
+        if let Some(range) = summaries.get(&current) {
+            memo.insert(current, Some(*range));
+            continue;
         }
-    };
-    visiting.remove(&value);
-    if let Some(range) = range {
-        memo.insert(value, range);
+        if memo.contains_key(&current) {
+            continue;
+        }
+        let range = match function.value(current)?.def {
+            ValueDef::BlockParam { .. } => {
+                value_is_i64(function, current).then_some(IntRange::full())
+            }
+            ValueDef::Instruction { inst, .. } => {
+                let instruction = function.instruction(inst)?;
+                if !ready {
+                    if !visiting.insert(current) {
+                        return None;
+                    }
+                    work.push((current, true));
+                    work.extend(instruction.operands.iter().map(|operand| (*operand, false)));
+                    continue;
+                }
+                visiting.remove(&current);
+                let state = instruction.operands.iter().filter_map(|operand| {
+                    memo.get(operand).copied().flatten().map(|range| (*operand, range))
+                }).collect();
+                instruction_range(function, instruction, &state)
+            }
+        };
+        memo.insert(current, range);
     }
-    range
+    memo.get(&value).copied().flatten()
 }
 
 /// Replays final entry states to collect checked operations whose complete interval fits.
@@ -1057,13 +1073,14 @@ fn blocked_boxed_results(function: &Function) -> HashSet<ValueId> {
         }
     }
     for user in &function.instructions {
+        // StoreStaticLocal does not box scalar assignments to Mixed slots. Unlike
+        // InitStaticLocal, it cannot consume a narrowed result without changing storage.
         if !matches!(
             user.op,
             Op::Acquire
                 | Op::Release
                 | Op::StoreLocal
                 | Op::StoreGlobal
-                | Op::StoreStaticLocal
                 | Op::InitStaticLocal
                 | Op::StoreStaticProperty
                 | Op::StoreReflectionStaticProperty

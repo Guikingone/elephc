@@ -139,6 +139,35 @@ fn test_integer_range_narrows_boxed_checked_output() {
     assert_eq!(run_variant(source, false), run_variant(source, true));
 }
 
+/// Boolean normalization must precede proofs about arithmetic using the cast result.
+#[test]
+fn test_integer_range_boolean_cast_preserves_overflow() {
+    let source = r#"<?php
+for ($i = 1; $i < 3; $i++) {
+    var_dump(is_float(PHP_INT_MIN + (int)((int)(bool)($i << 4) - 2)));
+}
+"#;
+    let plain = run_variant(source, false);
+    let optimized = run_variant(source, true);
+    assert_eq!(plain.0, "bool(true)\nbool(true)\n");
+    assert_eq!(plain, optimized);
+}
+
+/// The pass before IntegerRange must preserve truthiness and boolean result metadata too.
+#[test]
+fn test_integer_range_checked_boolean_cast_keeps_type_and_truthiness() {
+    let source = r#"<?php
+var_dump((bool)($argc + 1));
+var_dump((bool)($argc - 1));
+var_dump((bool)($argc * -3));
+var_dump((bool)(PHP_INT_MAX + $argc));
+var_dump((bool)(($argc + 1) * 2));
+"#;
+    let plain = run_variant(source, false);
+    assert_eq!(plain.0, "bool(true)\nbool(false)\nbool(true)\nbool(true)\nbool(true)\n");
+    assert_eq!(plain, run_variant(source, true));
+}
+
 /// Unbounded add, subtract, and multiply retain PHP overflow-to-float behavior.
 #[test]
 fn test_integer_range_keeps_unproven_overflow_checked() {
@@ -229,6 +258,43 @@ function range_overflow_probe(int $input): bool {
         for optimized in [false, true] {
             let assembly = target_assembly(source, target, optimized);
             assert!(assembly.contains("op=ichecked_mul"), "{target}, optimized={optimized}");
+        }
+    }
+}
+
+/// Cast normalization and its remaining overflow check survive every supported emitter.
+#[test]
+fn test_integer_range_all_supported_targets_preserve_boolean_casts() {
+    let source = r#"<?php
+#[Export]
+function range_boolean_overflow(): bool {
+    $overflow = false;
+    for ($i = 1; $i < 3; $i++) {
+        $overflow = is_float(PHP_INT_MIN + (int)((int)(bool)($i << 4) - 2));
+    }
+    return $overflow;
+}
+"#;
+    let sinks = r#"<?php
+#[Export]
+function range_boolean_sink(int $input): bool {
+    return (bool)($input + 1);
+}
+#[Export]
+function range_boolean_chain(int $input): bool {
+    return (bool)(($input + 1) * 2);
+}
+"#;
+    for target in [
+        "macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64",
+    ] {
+        for optimized in [false, true] {
+            let assembly = target_assembly(source, target, optimized);
+            assert!(assembly.contains("op=ichecked_add"), "{target}, optimized={optimized}");
+            assert!(assembly.contains("op=cast"), "{target}, optimized={optimized}");
+            let assembly = target_assembly(sinks, target, optimized);
+            assert!(assembly.matches("op=cast").count() >= 2, "{target}, optimized={optimized}");
+            assert!(!assembly.contains("op=ichecked_numeric_chain_to_int"), "{target}");
         }
     }
 }

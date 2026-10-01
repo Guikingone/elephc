@@ -23,10 +23,27 @@ Runtime tests compare optimizer-on and optimizer-off behavior for both proven-sa
 - [x] Invalidate facts absent from an incoming range state, preserve unsupported comparison edges, and check every parallel loop back edge.
 - [x] Reduce repeated full-function work in range specialization and split composite ownership fixtures responsible for CI timeouts without reducing coverage.
 - [x] Run focused EIR, optimizer-on/off, all-target emission, and ownership regressions.
-- [ ] Commit and push the fixes, and inspect the new CI run.
+- [x] Commit and push the fixes, and inspect the new CI run.
 
 Splitting native and eval ownership fixtures preserves both repetition counts and
 all assertions. The scalar eval-only fixture still takes 79 seconds with warm
 bridges locally, so only the four affected eval tests receive a 120-second
 Nextest budget on Linux x86_64; native tests, the existing ARM64 family budget,
 and the global 60-second budget are unchanged.
+
+## Deep implementation audit
+
+- [x] Audit transfer semantics, loop proofs, boxed consumers, and convergence limits.
+- [x] Reproduce and fix boolean-cast interval corruption, including boolean sinks in adjacent passes.
+- [x] Preserve boxed representation for direct static-local assignments.
+- [x] Bound static loop-expression analysis on deep and shared expression graphs.
+- [x] Validate focused regressions and update documentation.
+
+The deep audit reproduced boolean-cast miscompilation in native optimizer-on/off
+execution and isolated regressions in the range, integer-sink, and numeric-chain
+passes. It also exposed unsafe narrowing into direct static-local stores and
+missing memoization of unknown static expressions. Focused validation passed:
+198 EIR unit tests, 10 range-related codegen tests, 11 adjacent checked-arithmetic
+codegen tests, all five target emitters in both modes, and a warning-free build.
+Sampled domain checks cover arithmetic, bitwise operations, shifts, comparison
+refinements, and induction summaries, including signed 64-bit boundary values.

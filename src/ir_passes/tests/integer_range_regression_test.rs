@@ -9,9 +9,8 @@
 //! - Checked operations must survive when any reachable path can overflow.
 
 use crate::ir::{
-    validate_function, Builder, CmpPredicate, Function, IrHeapKind, IrType, Op, Ownership,
-    SwitchCase, Terminator, ValueDef,
-    ValueId,
+    validate_function, Builder, CmpPredicate, Function, Immediate, IrHeapKind, IrType, LocalKind,
+    Op, Ownership, SwitchCase, Terminator, ValueDef, ValueId,
 };
 use crate::types::PhpType;
 
@@ -234,4 +233,62 @@ fn boxed_candidates_narrow_as_one_valid_batch() {
         assert_eq!(function.value(value).expect("result").ir_type, IrType::I64);
     }
     assert!(!specialize(&mut function), "batch rewrite is idempotent");
+}
+
+/// Casting a nonzero integer to bool produces one, not the source integer interval.
+#[test]
+fn boolean_cast_does_not_inherit_integer_magnitude() {
+    for source in [-16, 16] {
+        let mut function = Function::new("bool_cast".to_string(), IrType::I64, PhpType::Int);
+        let result;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", vec![]);
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let input = builder.emit_const_i64(source);
+            let boolean = builder.emit(
+                Op::Cast, vec![input], Some(Immediate::CastTarget(IrType::I64)),
+                IrType::I64, PhpType::Bool, Ownership::NonHeap,
+            ).expect("boolean cast");
+            let (base, delta) = if source > 0 {
+                let two = builder.emit_const_i64(2);
+                let delta = emit_scalar_binop(&mut builder, Op::ISub, boolean, two);
+                (builder.emit_const_i64(i64::MIN), delta)
+            } else {
+                (builder.emit_const_i64(i64::MAX), boolean)
+            };
+            result = emit_scalar_binop(&mut builder, Op::ICheckedAddToInt, base, delta);
+            builder.terminate(Terminator::Return { value: Some(result) });
+        }
+        assert_specialized_op(&mut function, result, Op::ICheckedAddToInt);
+    }
+}
+
+/// Static Mixed assignments require the boxed pointer rather than an unboxed integer.
+#[test]
+fn boxed_static_store_keeps_its_representation() {
+    let mut function = Function::new("static_store".to_string(), IrType::Void, PhpType::Void);
+    let sum;
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let slot = builder.add_local(
+            Some("value".to_string()), IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed, LocalKind::StaticLocal,
+        );
+        let one = builder.emit_const_i64(1);
+        sum = builder.emit(
+            Op::ICheckedAdd, vec![one, one], None,
+            IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed, Ownership::Owned,
+        ).expect("checked sum");
+        builder.emit(
+            Op::StoreStaticLocal, vec![sum], Some(Immediate::LocalSlot(slot)),
+            IrType::Void, PhpType::Void, Ownership::NonHeap,
+        );
+        builder.terminate(Terminator::Return { value: None });
+    }
+    assert_specialized_op(&mut function, sum, Op::ICheckedAdd);
 }

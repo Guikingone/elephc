@@ -816,12 +816,21 @@ arithmetic. It recognizes constant-step loop-carried parameters in natural loops
 and combines their initial value, comparison bound, and update step to constrain
 induction variables on the loop body and back edge.
 
+Boolean casts normalize to `[0, 1]`; sharing the `I64` representation with integers
+does not make them identity conversions. Integer-sink specialization and numeric
+chain fusion require an actual PHP `int` cast, never a `bool` cast. Loop-invariant
+expression analysis uses an iterative postorder walk and caches unknown results
+as well as proven intervals, so deep expressions and shared unsupported graphs
+do not cause recursive stack growth or exponential reevaluation.
+
 At joins, a fact survives only if every reachable incoming state provides it;
 losing a shift bound invalidates any earlier narrow result interval. Unsupported
 comparison predicates leave both edges reachable. Induction summaries require
 all edges from each latch to the header to agree, including parallel conditional
 and switch edges. Boxed result narrowing is validated as one conservative batch
 instead of cloning and validating the whole function for each operation.
+Direct static-local assignments remain boxed because their emitter does not
+rebox scalar values for `Mixed` storage, unlike static-local initialization.
 
 Checked add, subtract, and multiply instructions become ordinary scalar EIR only
 when the complete operand interval proves that every possible result remains in
