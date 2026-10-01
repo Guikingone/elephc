@@ -22,4 +22,11 @@ Runtime tests compare optimizer-on and optimizer-off behavior for both proven-sa
 - [x] Reproduce all three Greptile findings with valid hand-built EIR regressions.
 - [x] Invalidate facts absent from an incoming range state, preserve unsupported comparison edges, and check every parallel loop back edge.
 - [x] Reduce repeated full-function work in range specialization and split composite ownership fixtures responsible for CI timeouts without reducing coverage.
-- [ ] Run focused verification, commit and push the fixes, and inspect the new CI run.
+- [x] Run focused EIR, optimizer-on/off, all-target emission, and ownership regressions.
+- [ ] Commit and push the fixes, and inspect the new CI run.
+
+Splitting native and eval ownership fixtures preserves both repetition counts and
+all assertions. The scalar eval-only fixture still takes 79 seconds with warm
+bridges locally, so only the four affected eval tests receive a 120-second
+Nextest budget on Linux x86_64; native tests, the existing ARM64 family budget,
+and the global 60-second budget are unchanged.
