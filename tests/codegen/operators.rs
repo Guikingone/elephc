@@ -1172,6 +1172,45 @@ echo '|', $value;
     assert_eq!(out, "aZc|abc|aZQ|aZQ  Y|6|!ZQ  Y");
 }
 
+/// Verifies a string offset write through a local that is only known as boxed `mixed` (an
+/// untyped parameter, a value that is sometimes `false`) reaches the string, while the same
+/// statement on an array still writes the element.
+///
+/// The write had no lowering for a boxed container holding a string and was dropped silently, so
+/// `function up($s) { $s[0] = 'H'; return $s; }` returned its argument unchanged and
+/// symfony/polyfill-mbstring's `mb_convert_case()` upper-cased nothing. Oracle: php 8.5.
+#[test]
+fn test_string_offset_write_through_a_boxed_mixed_local() {
+    let out = compile_and_run(
+        r#"<?php
+function first($s) { $s[0] = 'H'; return $s; }
+function at($s, $i) { $s[$i] = 'Z'; return $s; }
+function back($s) { $s[-1] = 'Q'; return $s; }
+function wide($s) { $s[5] = 'Q'; return $s; }
+function upper($s) {
+    $map = ['h' => 'H', 'e' => 'E', 'l' => 'L', 'o' => 'O'];
+    $len = strlen($s);
+    $i = 0;
+    while ($i < $len) {
+        $c = substr($s, $i, 1);
+        if (isset($map[$c])) {
+            $n = $i + 1;
+            $u = $map[$c];
+            do {
+                $s[--$n] = $u[0];
+            } while ($n > $i);
+        }
+        $i++;
+    }
+    return $s;
+}
+echo first('hello'), '|', first([1, 2])[0] === 'H' ? 'arr' : 'bad', '|', at('abc', 1), '|', json_encode(at([1, 2], 1));
+echo '|', back('abc'), '|', json_encode(wide('abc')), '|', upper('hello');
+"#,
+    );
+    assert_eq!(out, "Hello|arr|aZc|[1,\"Z\"]|abQ|\"abc  Q\"|HELLO");
+}
+
 
 /// Verifies `<<` with a shift count of 64 or more yields `0` instead of masking the count.
 ///

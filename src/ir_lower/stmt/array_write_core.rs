@@ -112,6 +112,110 @@ pub(super) fn lower_write_key_and_value(
     (index_value, lower_array_reference_or_value(ctx, value))
 }
 
+/// Returns whether `expr` holds a node whose lowering must not be emitted twice: a closure or an
+/// anonymous class registers a function/class body per lowered occurrence.
+fn offset_operand_is_duplicable(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::IntLiteral(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null
+        | ExprKind::Variable(_) => true,
+        ExprKind::PreIncrement(_)
+        | ExprKind::PreDecrement(_)
+        | ExprKind::PostIncrement(_)
+        | ExprKind::PostDecrement(_) => true,
+        ExprKind::BinaryOp { left, right, .. } => {
+            offset_operand_is_duplicable(left) && offset_operand_is_duplicable(right)
+        }
+        ExprKind::ArrayAccess { array, index } => {
+            offset_operand_is_duplicable(array) && offset_operand_is_duplicable(index)
+        }
+        ExprKind::Negate(inner) | ExprKind::Not(inner) => offset_operand_is_duplicable(inner),
+        ExprKind::Cast { expr, .. } => offset_operand_is_duplicable(expr),
+        ExprKind::FunctionCall { args, .. } => args.iter().all(offset_operand_is_duplicable),
+        ExprKind::Ternary { condition, then_expr, else_expr } => {
+            offset_operand_is_duplicable(condition)
+                && offset_operand_is_duplicable(then_expr)
+                && offset_operand_is_duplicable(else_expr)
+        }
+        _ => false,
+    }
+}
+
+/// Lowers `$container[$index] = $value` for a local whose storage is a boxed `Mixed`/union cell by
+/// dispatching on the cell's run-time tag, and returns whether it did.
+///
+/// php decides between a string offset write and an element write when the statement runs. The
+/// element write has a lowering for every array shape, but a boxed container that holds a STRING
+/// reached no lowering at all: the store was dropped, so `function f($s) { $s[0] = 'H'; return
+/// $s; }` handed the string back unchanged (symfony/polyfill-mbstring's `mb_convert_case()` then
+/// upper-cased nothing). The statement becomes
+/// `if (is_string($c)) { $t = (string) $c; $t[$i] = $v; $c = $t; } else { <the original write> }`:
+/// the string arm borrows the `string`-typed offset write, the other arm is the write this
+/// lowering always emitted. Only one arm runs, so the operands are evaluated once either way; they
+/// are lowered twice, so operands that register code per occurrence (closures) opt out.
+fn lower_boxed_container_offset_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
+    index: &Expr,
+    value: &Expr,
+    span: Span,
+) -> bool {
+    if ctx.offset_dispatch_bypass.contains(&span) {
+        return false;
+    }
+    if crate::superglobals::is_superglobal(array)
+        || crate::globals_array::is_alias(array)
+        || !ctx.has_local_slot(array)
+        || !matches!(
+            ctx.local_type(array).codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        )
+        || !offset_operand_is_duplicable(index)
+        || !offset_operand_is_duplicable(value)
+    {
+        return false;
+    }
+    use crate::synthetic_class::{e_call, e_cast, e_var, s_assign, s_if};
+    let scratch = "__elephc_offset_string";
+    let original = Stmt::new(
+        StmtKind::ArrayAssign {
+            array: array.to_string(),
+            index: index.clone(),
+            value: value.clone(),
+        },
+        span,
+    );
+    let string_arm = vec![
+        s_assign(scratch, e_cast(crate::parser::ast::CastType::String, e_var(array))),
+        Stmt::new(
+            StmtKind::ArrayAssign {
+                array: scratch.to_string(),
+                index: index.clone(),
+                value: value.clone(),
+            },
+            span,
+        ),
+        s_assign(array, e_var(scratch)),
+    ];
+    let dispatch = s_if(
+        e_call("is_string", vec![e_var(array)]),
+        string_arm,
+        Vec::new(),
+        Some(vec![original]),
+    );
+    // The span is bypassed for the whole synthesized `if`: the string arm's own write targets a
+    // `string` local, which never reaches the boxed-container case, so only the array arm's copy
+    // of the original statement is affected.
+    let before = ctx.local_type(array);
+    ctx.offset_dispatch_bypass.insert(span);
+    lower_stmt(ctx, &dispatch);
+    ctx.offset_dispatch_bypass.remove(&span);
+    ctx.set_local_logical_type(array, before);
+    true
+}
+
 /// Lowers an indexed array assignment.
 pub(super) fn lower_array_assign(
     ctx: &mut LoweringContext<'_, '_>,
@@ -120,6 +224,9 @@ pub(super) fn lower_array_assign(
     value: &Expr,
     span: Span,
 ) {
+    if lower_boxed_container_offset_write(ctx, array, index, value, span) {
+        return;
+    }
     // The container is fetched for writing AFTER the key and the value, as PHP does. Loading it
     // first kept a pointer the right-hand side could invalidate: `$a['x'] = grow($a)` with a
     // by-reference `grow` that appends reallocates `$a`, and the write then went into the old
