@@ -50,6 +50,8 @@ mod putenv;
 mod regressions;
 #[path = "runtime_gc/assoc_rebind_release.rs"]
 mod assoc_rebind_release;
+#[path = "runtime_gc/hash_value_widening.rs"]
+mod hash_value_widening;
 #[path = "runtime_gc/by_ref_foreach_reference_cells.rs"]
 mod by_ref_foreach_reference_cells;
 #[path = "runtime_gc/compound_assign_stores.rs"]
