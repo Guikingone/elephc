@@ -241,3 +241,33 @@ eval($code);
         "tr:ae:ac:a\ntr:be:bc:b\ntr:ce:cc:c\nbool(true)\nbool(true)\nbool(true)\n"
     );
 }
+
+/// `get_defined_vars()` inside interpreted code answers the running scope's variables: the ones
+/// the compiled caller exposes plus those the fragment bound, without an `unset` one and without
+/// `$this`. It was "call to undefined function get_defined_vars()", which killed every Laravel
+/// page whose Blade view uses `@include` (it compiles to
+/// `array_diff_key(get_defined_vars(), ['__data' => 1, '__path' => 1])`). The ORDER php reports
+/// is the lexical slot order of the enclosing function, which an interpreter cannot know, so the
+/// fixture sorts the keys; and a compiled local that was never assigned is exposed to the
+/// fragment as null, so the fixture keeps only non-null entries. Output is php 8.5's.
+#[test]
+fn test_eval_get_defined_vars_reports_the_running_scope() {
+    let out = compile_and_run(r#"<?php
+function render($__path, $__data) {
+    extract($__data);
+    $local = 5;
+    $code = '$more = 1; $zap = 2; unset($zap); $vars = array_filter(array_diff_key(get_defined_vars(), ["__data" => 1, "__path" => 1, "code" => 1]), fn($v) => $v !== null); ksort($vars); echo json_encode($vars), "\n";';
+    eval($code);
+}
+render('p', ['a' => 1, 'b' => [2, 3]]);
+class T {
+    public $p = 1;
+    function run() { $q = 2; $code = '$names = array_keys(array_filter(get_defined_vars(), fn($v) => $v !== null)); sort($names); echo json_encode($names), "\n";'; eval($code); }
+}
+(new T)->run();
+"#);
+    assert_eq!(
+        out,
+        "{\"a\":1,\"b\":[2,3],\"local\":5,\"more\":1}\n[\"code\",\"q\"]\n"
+    );
+}
