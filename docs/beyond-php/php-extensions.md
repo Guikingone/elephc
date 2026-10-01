@@ -146,16 +146,12 @@ arguments the extension wrote are written back even when it then throws.
   *requires* another extension's C API fails to link, and `add` names the
   missing symbols; one that reaches a stream or output-buffering entry point
   at run time ends the program with a fatal error naming it.
-- **A by-reference output parameter** must be passed a variable already
-  holding a value of the type the extension writes (`$success = false;
-  apcu_fetch("k", $success);`). Elephc types a variable by its storage: a
-  variable that has only ever held `null` stays `null`, and an undefined
-  variable is refused at compile time.
+- **A by-reference output parameter** must be passed a declared variable,
+  whatever it holds (`$success = null; apcu_fetch("k", $success);`): it comes
+  back holding whatever the extension wrote. An undefined variable is refused
+  at compile time.
 - **Extensions are built for the host target.** Their surface is read by
   running them, so cross-installing for another target is not supported yet.
-- Arrays that contain objects cost one small allocation per call that is not
-  reclaimed until exit — a compiler ownership defect in rebuilding such arrays,
-  not in the extension bridge.
 
 ## Tested extensions
 
