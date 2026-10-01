@@ -25,8 +25,8 @@
 
 use crate::parser::ast::{BinOp, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
-    e_array, e_binop, e_bool, e_call, e_index, e_int, e_null, e_str, e_ternary, e_var, function,
-    e_not as e_unary_not, internal_declarations, s_array_assign, s_array_push, s_assign, s_break, s_foreach, s_if,
+    e_array, e_array_assoc, e_binop, e_bool, e_call, e_index, e_int, e_null, e_str, e_ternary, e_var, function,
+    e_not as e_unary_not, internal_declarations, s_array_assign, s_array_push, s_assign, s_break, s_expr, s_foreach, s_if,
     s_return, s_while,
 };
 /// Reserved helper for `preg_match_all()` calls that pass `$flags` (and possibly `$offset`).
@@ -125,7 +125,20 @@ fn preg_match_all_flags() -> Stmt {
                         Vec::new(),
                         None,
                     ),
-                    s_assign("set", e_array(Vec::new())),
+                    // Every row is built as a HASH, never as a list that later grows string keys.
+                    // `$set[$k] = ...` with a key of unknown type may promote its destination to
+                    // a hash at run time while the local keeps the static type `array`, and the
+                    // outer `$sets` is typed from the rows it was given: a list-shaped first row
+                    // followed by a named-group row (`/(x)|(?<s>,)/` under PREG_SET_ORDER) put a
+                    // hash where the outer array's element type promised a list, and the first
+                    // read of that row took a bus error. A row seeded as a hash and emptied again
+                    // stays one, and php's own output is the same either way (a hash whose keys
+                    // are 0..n-1 is a list to `json_encode`, `var_dump` and `array_is_list`).
+                    s_assign("set", e_array_assoc(vec![(e_str("__elephc_row"), e_int(0))])),
+                    s_expr(e_call(
+                        "unset",
+                        vec![e_index(e_var("set"), e_str("__elephc_row"))],
+                    )),
                     s_foreach(e_var("keys"), None, "k", group_into_set()),
                     s_array_push("sets", e_var("set")),
                     s_assign("start", e_index(e_index(e_var("m"), e_int(0)), e_int(1))),
