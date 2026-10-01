@@ -33,11 +33,56 @@ pub(crate) fn lower_define(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     ctx.emitter.label(&first_label);
     ctx.load_value_to_result(value)?;
     abi::emit_store_result_to_symbol(ctx.emitter, &global_symbol, &value_ty, false);
+    if ctx.module.required_runtime_features.eval_bridge {
+        publish_define_to_eval(ctx, &constant_name, value)?;
+    }
     abi::emit_load_int_immediate(ctx.emitter, result_reg, 1);
     abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, &flag_symbol, 0);
 
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
+}
+
+/// Hands a freshly defined constant's value to the eval bridge.
+///
+/// php has ONE constant namespace, but this program keeps a `define()`d value in a program global
+/// the interpreter cannot read, so `defined('NAME')` and a bare `NAME` inside an eval()ed
+/// fragment or an included Blade view (Laravel's `defined('LARAVEL_START')`) did not see it. The
+/// bridge keeps the boxed copy for the rest of the request. A boxed operand is cloned first: the
+/// bridge takes ownership of whatever box it receives.
+fn publish_define_to_eval(
+    ctx: &mut FunctionContext<'_>,
+    constant_name: &str,
+    value: ValueId,
+) -> Result<()> {
+    let ty = ctx.load_value_to_result(value)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    if matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
+        abi::emit_reg_move(ctx.emitter, arg0, result_reg);
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
+    } else {
+        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &ty);
+    }
+    let cell_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    abi::emit_reg_move(ctx.emitter, cell_arg, result_reg);
+    let (name_label, name_len) = ctx.data.add_string(constant_name.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        &name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        name_len as i64,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_publish_constant");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    Ok(())
 }
 
 /// Emits the PHP warning for a repeated `define()` call.

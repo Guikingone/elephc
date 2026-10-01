@@ -271,3 +271,26 @@ class T {
         "{\"a\":1,\"b\":[2,3],\"local\":5,\"more\":1}\n[\"code\",\"q\"]\n"
     );
 }
+
+/// A constant the compiled program `define()`s is visible to interpreted code: `defined()` is
+/// true and a bare name reads the value, as in php's single constant namespace. The compiled
+/// `define()` kept its value in a program global the interpreter could not read, so Laravel's
+/// `health-up` view (`@if (defined('LARAVEL_START'))`) silently dropped its timing line. The value
+/// is the runtime one (`$n * 2`), not a folded literal, and an undefined name stays undefined.
+/// Output is php 8.5's.
+#[test]
+fn test_eval_sees_constants_the_compiled_program_defined() {
+    let out = compile_and_run(r#"<?php
+$n = (int) "21";
+define('LV_INT', $n * 2);
+define('LV_STR', 'a' . 'b' . $n);
+define('LV_FLOAT', $n / 4);
+define('LV_BOOL', $n > 5);
+$code = 'var_dump(defined("LV_INT"), LV_INT, LV_STR, LV_FLOAT, LV_BOOL, constant("LV_STR"), defined("LV_NOPE"));';
+eval($code);
+"#);
+    assert_eq!(
+        out,
+        "bool(true)\nint(42)\nstring(4) \"ab21\"\nfloat(5.25)\nbool(true)\nstring(4) \"ab21\"\nbool(false)\n"
+    );
+}

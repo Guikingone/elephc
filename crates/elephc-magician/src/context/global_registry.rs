@@ -509,6 +509,25 @@ pub(crate) fn adopt_dying_context_constants(context: &mut ElephcEvalContext) {
     }
 }
 
+/// Publishes a constant the COMPILED program defined (`define('NAME', ...)`) to interpreted code.
+///
+/// php constants are one request-wide namespace, but a compiled `define()` stores its value in a
+/// program global the interpreter cannot read, so `defined('NAME')` and a bare `NAME` inside an
+/// eval()ed fragment or an included Blade view answered "undefined". The compiled `define()` hands
+/// its boxed value here instead; it lands in the same table a context's constants move to when the
+/// context dies, which every lookup consults last. A repeated publication replaces the value, as
+/// the next `--web` request's `define()` of the same name must.
+///
+/// `handle` is owned by the registry from here on (it lives in the request arena, which the
+/// request boundary wipes together with the table: see [`reset_global_eval_constants`]).
+#[cfg(not(test))]
+pub(crate) fn publish_compiled_constant(name: &str, handle: RuntimeCellHandle) {
+    let key = normalize_constant_name(name);
+    if let Ok(mut orphans) = global_eval_orphan_constants().lock() {
+        orphans.insert(key, handle.as_ptr() as usize);
+    }
+}
+
 /// Forgets every request-defined constant at a `--web` request boundary.
 ///
 /// Both tables hold addresses in the request arena, which the boundary wipes; a constant that

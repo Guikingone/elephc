@@ -476,3 +476,37 @@ echo json_encode(eval($code)), "\n";
 "#);
     assert_eq!(out, "string(2) \"xy\"\nint(1)\nint(1)\n[\"a\",\"b\",\"c\"]\n[\"xy\",1]\n");
 }
+
+/// `preg_match_all(..., PREG_SET_ORDER)` drops, per match, the trailing groups that did not
+/// participate, as php does (`["ab","ab"]`, then `["cd=5","cd","5"]`); PATTERN_ORDER still fills
+/// every column and UNMATCHED_AS_NULL keeps every group. The interpreter padded every row with
+/// `""`, so Symfony's `HeaderBag::parseCacheControl()` read an empty string where php had `true`
+/// and answered `Cache-Control: no-cache0private, private`. The same body runs compiled and
+/// inside eval() (where it is declared by the fragment, so the interpreter's engine runs it).
+/// Output is php 8.5's.
+#[test]
+fn test_preg_match_all_set_order_drops_trailing_unmatched_groups() {
+    let out = compile_and_run(r##"<?php
+function probe() {
+    preg_match_all("#([a-z]+)(?:=([0-9]+))?#", "ab, cd=5", $m, PREG_SET_ORDER);
+    echo json_encode($m), "\n";
+    preg_match_all("#([a-z]+)(?:=([0-9]+))?#", "ab, cd=5", $m);
+    echo json_encode($m), "\n";
+    preg_match_all("#([a-z]+)(?:=([0-9]+))?#", "ab, cd=5", $m, PREG_SET_ORDER | PREG_UNMATCHED_AS_NULL);
+    echo json_encode($m), "\n";
+}
+probe();
+$code = 'function probe_eval() {
+    preg_match_all("#([a-z]+)(?:=([0-9]+))?#", "ab, cd=5", $m, PREG_SET_ORDER);
+    echo json_encode($m), "\n";
+    preg_match_all("#([a-z]+)(?:=([0-9]+))?#", "ab, cd=5", $m);
+    echo json_encode($m), "\n";
+    preg_match_all("#([a-z]+)(?:=([0-9]+))?#", "ab, cd=5", $m, PREG_SET_ORDER | PREG_UNMATCHED_AS_NULL);
+    echo json_encode($m), "\n";
+}
+probe_eval();';
+eval($code);
+"##);
+    let expected = "[[\"ab\",\"ab\"],[\"cd=5\",\"cd\",\"5\"]]\n[[\"ab\",\"cd=5\"],[\"ab\",\"cd\"],[\"\",\"5\"]]\n[[\"ab\",\"ab\",null],[\"cd=5\",\"cd\",\"5\"]]\n";
+    assert_eq!(out, format!("{expected}{expected}"));
+}

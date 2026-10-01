@@ -32,6 +32,8 @@ pub(crate) mod ob_handlers;
 pub mod execute;
 pub mod include;
 #[cfg(not(test))]
+pub mod compiled_constants;
+#[cfg(not(test))]
 pub mod extract;
 #[cfg(not(test))]
 pub mod function_calls;
@@ -55,6 +57,8 @@ pub use context::*;
 pub use declared_symbols::*;
 pub use execute::*;
 pub use include::*;
+#[cfg(not(test))]
+pub use compiled_constants::*;
 #[cfg(not(test))]
 pub use extract::*;
 #[cfg(not(test))]
