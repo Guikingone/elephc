@@ -1035,3 +1035,33 @@ echo $ok ? "yes" : "no";
     );
     assert_eq!(out, "42|yes");
 }
+
+/// A by-reference variadic slot holds a marker to the caller's variable, and only a value
+/// boxed by the write itself was checked for one. A Mixed operand (a call's `mixed` result)
+/// went straight to the runtime setter and overwrote the marker, so the caller never saw the
+/// write: `$flag` stayed `false` and `$found` stayed `null`. This is the shape hosted
+/// extensions use to write their optional by-reference parameters back.
+#[test]
+fn test_mixed_result_written_into_a_by_ref_variadic_reaches_the_caller() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function rebuild(int $n): mixed {
+    return $n > 100;
+}
+function inc(int $n, mixed &...$rest): int {
+    if (array_key_exists(0, $rest)) {
+        $rest[0] = rebuild($n);
+    }
+    return $n + 1;
+}
+$flag = false;
+echo inc(41, $flag), " ", var_export($flag, true), "\n";
+echo inc(500, $flag), " ", var_export($flag, true), "\n";
+$found = null;
+echo inc(500, $found), " ", var_export($found, true), "\n";
+"#,
+    );
+    assert!(out.success, "stderr: {}", out.stderr);
+    assert_eq!(out.stdout, "42 false\n501 true\n501 true\n");
+    assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
+}
