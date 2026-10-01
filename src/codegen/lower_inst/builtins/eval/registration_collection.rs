@@ -37,7 +37,7 @@ pub(super) fn eval_native_function_registrations(
         })
         .collect();
     for group in &groups {
-        if group.name.starts_with('_') {
+        if is_compiler_internal_function_name(&group.name) {
             continue;
         }
         let Some(variant) =

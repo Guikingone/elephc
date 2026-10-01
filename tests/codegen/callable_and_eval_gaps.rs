@@ -216,3 +216,28 @@ echo $k->viaName('collect', ['a', 'b']), "\n";
 "#);
     assert_eq!(out, "[\"v\",[1]]\n[\"v\",[2]]\n[\"w\",[3]]\n[\"a\",\"b\"]\n");
 }
+
+/// A compiled user function whose name begins with an underscore (`__()` and `_e()`, the
+/// translation helpers frameworks define) is an ordinary function that interpreted code can call,
+/// find with `function_exists()` and use as a callable. eval hid every compiled function whose
+/// name started with `_` to keep the compiler's synthetic functions private, so a Laravel view
+/// calling `__('Not Found')` died with "call to undefined function __()". Output is php 8.5's.
+#[test]
+fn test_eval_sees_compiled_functions_whose_names_start_with_an_underscore() {
+    let out = compile_and_run(r#"<?php
+function __($key = null) { return 'tr:' . $key; }
+function _e($key) { return 'e:' . $key; }
+if (! function_exists('_cond')) {
+    function _cond($key) { return 'c:' . $key; }
+}
+echo __('a'), _e('a'), _cond('a'), "\n";
+$code = 'echo __("b"), _e("b"), _cond("b"), "\n";
+echo call_user_func("__", "c"), call_user_func("_e", "c"), call_user_func("_cond", "c"), "\n";
+var_dump(function_exists("__"), function_exists("_e"), function_exists("_cond"));';
+eval($code);
+"#);
+    assert_eq!(
+        out,
+        "tr:ae:ac:a\ntr:be:bc:b\ntr:ce:cc:c\nbool(true)\nbool(true)\nbool(true)\n"
+    );
+}

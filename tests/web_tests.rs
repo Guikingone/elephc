@@ -3447,3 +3447,33 @@ echo inspectRuntimeConstructor(makeRuntimeReflection());
         "the ReflectionMethod ownership diverged on a later request: {second:?}"
     );
 }
+
+/// Verifies `$_GET` and `$_POST` follow php's request-variable grammar, the one `parse_str()`
+/// shares: `a[]=1&a[]=2` nests into an array, `+` is a space, and a key's dot or space becomes an
+/// underscore. The hand-rolled split kept `c[]` as a literal key, so every array-shaped parameter
+/// reached the application as a different request than `php -S` served.
+#[test]
+fn web_superglobals_nest_bracketed_keys_like_php() {
+    let dir = make_test_dir("web_sg_nested");
+    let src = "<?php echo json_encode(['get' => $_GET, 'post' => $_POST]);";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_request(
+        &addr,
+        "POST",
+        "/?q[]=1&q[]=2&x+y=a+b&n[k][]=v",
+        &[("Content-Type", "application/x-www-form-urlencoded")],
+        "a=1&c[]=x&c[]=y&d.e=f",
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        resp.ends_with(
+            r#"{"get":{"q":["1","2"],"x_y":"a b","n":{"k":["v"]}},"post":{"a":"1","c":["x","y"],"d_e":"f"}}"#
+        ),
+        "body: {:?}",
+        resp
+    );
+}

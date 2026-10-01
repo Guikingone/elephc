@@ -10,8 +10,24 @@
 use super::*;
 
 /// Returns true when a module function should expose metadata to eval fragments.
+///
+/// A user function whose name merely begins with an underscore (`__()`, `_e()`, Laravel's and
+/// WordPress's translation helpers) is an ordinary PHP-visible function; only the compiler's own
+/// synthetic functions are hidden.
 pub(super) fn function_has_eval_metadata(function: &Function) -> bool {
-    !function.flags.is_main && !function.name.starts_with('_')
+    !function.flags.is_main && !is_compiler_internal_function_name(&function.name)
+}
+
+/// Returns true for the names the compiler gives its own synthetic functions: runtime and prelude
+/// helpers (`__elephc…`), EIR-generated closures (`__eir…`), class property initialisers
+/// (`_class_propinit_N`) and method bodies of the `__Elephc…` helper classes (`Class::method`).
+pub(super) fn is_compiler_internal_function_name(name: &str) -> bool {
+    let key = php_symbol_key(name);
+    key.starts_with('_')
+        && (key.starts_with("__elephc")
+            || key.starts_with("__eir")
+            || key.starts_with("_class_")
+            || key.contains("::"))
 }
 
 /// Returns true when eval can dispatch a native function through the generated bridge.

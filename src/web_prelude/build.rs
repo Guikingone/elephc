@@ -1050,7 +1050,7 @@ fn decl_stmt_bootstrap_20() -> Stmt {
 fn decl_stmt_bootstrap_21() -> Stmt {
     s_if(
         e_binop(e_var("__elephc_qs"), BinOp::StrictNotEq, e_str("")),
-        vec![s_expr(e_call("parse_str", vec![e_var("__elephc_qs"), e_var("_GET")]))],
+        vec![s_expr(e_call("parse_str", vec![e_var("__elephc_qs"), e_var("__elephc_get_parsed")])), s_foreach(e_var("__elephc_get_parsed"), Some("__elephc_gpk"), "__elephc_gpv", vec![s_array_assign("_GET", e_var("__elephc_gpk"), e_var("__elephc_gpv"))])],
         vec![],
         None,
     )
@@ -1084,7 +1084,7 @@ fn decl_stmt_bootstrap_24() -> Stmt {
             ),
             s_if(
                 e_binop(e_var("__elephc_body"), BinOp::StrictNotEq, e_str("")),
-                vec![s_expr(e_call("parse_str", vec![e_var("__elephc_body"), e_var("_POST")]))],
+                vec![s_expr(e_call("parse_str", vec![e_var("__elephc_body"), e_var("__elephc_post_parsed")])), s_foreach(e_var("__elephc_post_parsed"), Some("__elephc_ppk"), "__elephc_ppv", vec![s_array_assign("_POST", e_var("__elephc_ppk"), e_var("__elephc_ppv"))])],
                 vec![],
                 None,
             ),
