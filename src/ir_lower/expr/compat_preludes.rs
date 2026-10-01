@@ -82,6 +82,40 @@ pub(super) fn lower_is_callable_with_options(
     ))
 }
 
+/// Routes `get_class_vars($class)` to `crate::class_vars_prelude`, adding the calling scope.
+///
+/// php filters non-public properties by the class the call is made FROM; that is the function's
+/// lexical class, known here and nowhere at run time, so it travels as a second argument.
+pub(super) fn lower_get_class_vars(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if php_symbol_key(name.trim_start_matches('\\')) != "get_class_vars"
+        || args.len() != 1
+        || args.iter().any(is_spread_arg)
+    {
+        return None;
+    }
+    let class = match &args[0].kind {
+        ExprKind::NamedArg { value, .. } => value.as_ref().clone(),
+        _ => args[0].clone(),
+    };
+    let scope = ctx
+        .current_class
+        .as_deref()
+        .map(|class| class.trim_start_matches('\\').to_ascii_lowercase())
+        .unwrap_or_default();
+    let scope = Expr::new(ExprKind::StringLiteral(scope), expr.span);
+    Some(lower_function_call(
+        ctx,
+        &crate::names::Name::unqualified(crate::class_vars_prelude::GET_CLASS_VARS_NAME),
+        &[class, scope],
+        expr,
+    ))
+}
+
 /// Routes narrowly supported builtin arities to their elephc-PHP compatibility helpers.
 pub(super) fn lower_backend_gap_builtin_shape(
     ctx: &mut LoweringContext<'_, '_>,

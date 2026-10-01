@@ -1262,6 +1262,11 @@ fn materialize_hash_value_aarch64(
         return materialize_hash_mixed_value_for_concrete_storage_aarch64(ctx, value, storage_value_ty);
     }
     match value_ty {
+        // `$h = []; $h['k'] = null;` types the hash `array<_, null>`: the entry is its null tag.
+        PhpType::Void if matches!(storage_value_ty, PhpType::Void) => {
+            ctx.emitter.instruction("mov x3, xzr");                             // null associative-array payloads use a zero low word
+            ctx.emitter.instruction("mov x4, xzr");                             // null associative-array payloads use a zero high word
+        }
         PhpType::Int | PhpType::Bool | PhpType::Float => {
             ctx.load_value_to_reg(value, "x3")?;
             ctx.emitter.instruction("mov x4, xzr");                             // scalar associative-array payloads leave the high value word empty
@@ -1308,6 +1313,11 @@ fn materialize_hash_value_x86_64(
         return materialize_hash_mixed_value_for_concrete_storage_x86_64(ctx, value, storage_value_ty);
     }
     match value_ty {
+        // `$h = []; $h['k'] = null;` types the hash `array<_, null>`: the entry is its null tag.
+        PhpType::Void if matches!(storage_value_ty, PhpType::Void) => {
+            ctx.emitter.instruction("xor rcx, rcx");                            // null associative-array payloads use a zero low word
+            ctx.emitter.instruction("xor r8, r8");                              // null associative-array payloads use a zero high word
+        }
         PhpType::Int | PhpType::Bool | PhpType::Float => {
             ctx.load_value_to_reg(value, "rcx")?;
             ctx.emitter.instruction("xor r8, r8");                              // scalar associative-array payloads leave the high value word empty
@@ -2125,6 +2135,9 @@ fn require_supported_hash_value(
         value_ty,
         PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float | PhpType::Str
     ) {
+        return Ok(value_ty);
+    }
+    if matches!(value_ty, PhpType::Void) && matches!(storage_value_ty, PhpType::Void) {
         return Ok(value_ty);
     }
     if matches!(value_ty, PhpType::Mixed | PhpType::Union(_))

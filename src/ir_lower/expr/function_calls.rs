@@ -101,6 +101,9 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     {
         return value;
     }
+    if let Some(value) = compat_preludes::lower_get_class_vars(ctx, canonical, args, expr) {
+        return value;
+    }
     if let Some(value) =
         compat_preludes::lower_backend_gap_builtin_shape(ctx, canonical, args, expr)
     {
@@ -424,6 +427,10 @@ fn lower_gradual_local_krsort(
 /// cast's copy on every call. Persisting the result makes it independent of every argument, so all
 /// of them are released as for a fresh result. Only a builtin whose result is never a fresh
 /// string qualifies: `str_replace()` may return a new one, which the copy would leak.
+///
+/// The trim family is the same shape: `__rt_ltrim`/`__rt_rtrim` and their mask forms only move
+/// the subject's pointer and length and never allocate, so `ltrim($mixed, "\\")` leaked the
+/// cast's copy on every call exactly as `substr()` did.
 fn persist_string_view_of_owned_args(
     ctx: &mut LoweringContext<'_, '_>,
     def: &crate::builtins::registry::BuiltinDef,
@@ -432,8 +439,10 @@ fn persist_string_view_of_owned_args(
     operands: &[crate::ir::ValueId],
     span: Span,
 ) -> (LoweredValue, ReturnArgAlias) {
-    if php_symbol_key(def.name) != "substr"
-        || ctx.builder.value_php_type(call.value).codegen_repr() != PhpType::Str
+    if !matches!(
+        php_symbol_key(def.name).as_str(),
+        "substr" | "trim" | "ltrim" | "rtrim" | "chop"
+    ) || ctx.builder.value_php_type(call.value).codegen_repr() != PhpType::Str
     {
         return (call, return_alias);
     }

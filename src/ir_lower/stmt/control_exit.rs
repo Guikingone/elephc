@@ -151,6 +151,13 @@ pub(super) fn persist_scratch_return_string(
     if !ctx.value_is_scratch_backed(value) {
         return value;
     }
+    // A string `Acquire` IS a persist (`__rt_str_persist` copies it to an owned heap block), so a
+    // value it defines left the scratch already. `value_is_scratch_backed` looks through it for
+    // the slot a store wrote, but persisting the acquired copy again left that copy unreleased:
+    // `return substr($mixed, 1);` leaked one block per call.
+    if ctx.builder.value_defining_op(value.value) == Some(Op::Acquire) {
+        return value;
+    }
     ctx.emit_value(
         Op::StrPersist,
         vec![value.value],

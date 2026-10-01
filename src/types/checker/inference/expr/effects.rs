@@ -1391,20 +1391,23 @@ impl Checker {
         arg: &Expr,
         env: &mut TypeEnv,
     ) -> Result<(), CompileError> {
+        // The receiver spine is itself probed: `isset($null->a->b)` and `isset($null['k']->p)`
+        // reach through a null link silently in PHP, so an inner read on a `null` base answers
+        // `null` here exactly as it does for the operand's outermost access.
         match &arg.kind {
             ExprKind::PropertyAccess { object, .. }
             | ExprKind::NullsafePropertyAccess { object, .. } => {
-                self.infer_type_with_assignment_effects(object, env)?;
+                self.infer_null_probe_operand_with_effects(object, env)?;
                 Ok(())
             }
             ExprKind::DynamicPropertyAccess { object, property }
             | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
-                self.infer_type_with_assignment_effects(object, env)?;
+                self.infer_null_probe_operand_with_effects(object, env)?;
                 self.infer_type_with_assignment_effects(property, env)?;
                 Ok(())
             }
             ExprKind::ArrayAccess { array, index } => {
-                self.infer_type_with_assignment_effects(array, env)?;
+                self.infer_null_probe_operand_with_effects(array, env)?;
                 self.infer_type_with_assignment_effects(index, env)?;
                 Ok(())
             }

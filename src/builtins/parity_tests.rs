@@ -94,6 +94,8 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         ("web_prelude(wrap)", vec![crate::web_prelude::web_wrap_stmt()]),
         ("addcslashes_prelude", crate::addcslashes_prelude::declarations()),
         ("parse_str_prelude", crate::parse_str_prelude::declarations()),
+        // Built from the program's classes; an empty program still declares the entry points.
+        ("class_vars_prelude", crate::class_vars_prelude::declarations(&Vec::new())),
         ("preg_array_prelude", crate::preg_array_prelude::declarations()),
         ("sodium_prelude", crate::sodium_prelude::declarations(true, true)),
     ];

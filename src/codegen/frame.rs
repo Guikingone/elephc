@@ -1350,9 +1350,14 @@ fn return_cleanup_skip_slot_inner(
         }
         Op::ArrayToMixed | Op::HashToMixed => {
             let source = *inst.operands.first()?;
-            let slot = direct_return_local_slot_inner(function, source, visited)?;
+            let (slot, load_ty) = direct_return_local_slot_inner(function, source, visited)?;
             let local_ty = local_codegen_type(function, slot)?;
-            if cleanup_tracked_codegen_type(&local_ty)
+            // The conversion consumes what the LOAD handed it, which is the slot's own reference
+            // only when the load moves it out. A boxed `Mixed` slot unboxes into a separately
+            // retained payload instead (`local_load_transfers_stored_owner` says no), and the box
+            // still needs its epilogue release: `$v = []; if ($c) { $v['k'] = 1; } return $v;`
+            // under `: array` skipped it and leaked the box and the hash on every call.
+            if local_load_transfers_stored_owner(&local_ty, &load_ty)
                 && return_preserves_result_owner(result_ty, return_ty)
             {
                 Some(slot)
@@ -1385,12 +1390,13 @@ fn return_cleanup_skip_slot_inner(
     }
 }
 
-/// Recursively traces forwarding values to the local slot that backs them.
+/// Recursively traces forwarding values to the local slot that backs them, with the codegen type
+/// the slot was LOADED as.
 fn direct_return_local_slot_inner(
     function: &Function,
     value: crate::ir::ValueId,
     visited: &mut HashSet<ValueId>,
-) -> Option<LocalSlotId> {
+) -> Option<(LocalSlotId, PhpType)> {
     if !visited.insert(value) {
         return None;
     }
@@ -1401,7 +1407,7 @@ fn direct_return_local_slot_inner(
     let inst = function.instruction(inst)?;
     match inst.op {
         Op::LoadLocal => match inst.immediate {
-            Some(Immediate::LocalSlot(slot)) => Some(slot),
+            Some(Immediate::LocalSlot(slot)) => Some((slot, value.php_type.codegen_repr())),
             _ => None,
         },
         Op::ArrayToMixed | Op::HashToMixed => {

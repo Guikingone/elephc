@@ -131,6 +131,7 @@ pub mod optimize;
 pub mod parser;
 /// `parse_str()` query-string prelude injection.
 mod parse_str_prelude;
+mod class_vars_prelude;
 /// Selected PHP compatibility version for version-sensitive compiler surfaces.
 pub mod php_version;
 /// PDO (SQLite) standard-library prelude injection.

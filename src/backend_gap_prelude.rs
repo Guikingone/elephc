@@ -1140,6 +1140,8 @@ pub fn inject_if_used(
     let needs_parse_str = usage.references("parse_str");
     // And so is `addcslashes()`, which has no backend implementation either.
     let needs_addcslashes = usage.references("addcslashes");
+    // And so is `get_class_vars()`, whose answer is the program's own class declarations.
+    let needs_class_vars = usage.references("get_class_vars");
     if sources.is_empty()
         && !needs_addcslashes
         && !inject_randomizer
@@ -1151,10 +1153,16 @@ pub fn inject_if_used(
         && !needs_preg_match_all_flags
         && !needs_preg_array
         && !needs_is_callable_ext
+        && !needs_class_vars
     {
         return program;
     }
     let mut combined = Vec::new();
+    if needs_class_vars {
+        let declarations = crate::class_vars_prelude::declarations(&program);
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
     if needs_addcslashes {
         let declarations = crate::addcslashes_prelude::declarations();
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);

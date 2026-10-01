@@ -161,3 +161,32 @@ echo $m->getNumberOfParameters(), "\n";
     );
     assert_eq!(out, "string string true\nint\n2 1\n0:a:int\n1:b:?S\n2\n");
 }
+
+/// `isset()`, `empty()` and `??` reach through a null receiver at any depth: a variable that is
+/// statically null, one indexed first, and one returned null all answer false / the default,
+/// where elephc refused to compile the nested forms and crashed on `$null->p ?? $d`.
+#[test]
+fn test_null_probes_reach_through_null_receivers() {
+    let out = compile_and_run(
+        r#"<?php
+class N { public ?N $next = null; public int $v = 3; }
+function f() { return null; }
+$o = null;
+echo $o->a ?? "d1", "\n";
+echo $o->a->b ?? "d2", "\n";
+echo $o['k']->b ?? "d3", "\n";
+$p = f();
+echo $p->x->y ?? "d4", "\n";
+$n = new N();
+echo $n->next->v ?? "d5", "\n";
+echo $n->next->next->v ?? "d6", "\n";
+var_dump(isset($o->a->b), isset($o["k"]->a), isset($p->x->y), isset($n->next->v), empty($p->x->y));
+$o ??= 5;
+var_dump($o);
+"#,
+    );
+    assert_eq!(
+        out,
+        "d1\nd2\nd3\nd4\nd5\nd6\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(true)\nint(5)\n"
+    );
+}

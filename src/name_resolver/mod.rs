@@ -239,6 +239,9 @@ pub(crate) fn canonical_compat_prelude_function_name(name: &str) -> Option<Strin
         "strnatcmp",
         "strnatcasecmp",
         "parse_str",
+        // `get_class_vars` is an eval-only contract, absent from the registry fallback, and
+        // Eloquent's `Model` calls it bare from `namespace Illuminate\Database\Eloquent`.
+        "get_class_vars",
         "hash_init",
         "hash_update",
         "hash_final",

@@ -184,7 +184,9 @@ pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
 /// it. Each therefore has a real interpreter implementation rather than a forward:
 /// `interpreter::builtins::core::var_export` (Symfony's routing dumper is interpreted and calls
 /// it), `interpreter::builtins::string::levenshtein`, and
-/// `interpreter::builtins::filesystem::file`. The four `sodium_crypto_box_*` entries are the
+/// `interpreter::builtins::filesystem::file`. `get_class_vars` is the same: the compiled side
+/// builds it from the program's classes, the interpreter answers for its own. The four
+/// `sodium_crypto_box_*` entries are the
 /// same case: Symfony's `SodiumVault` is interpreted in an eval-heavy build, so
 /// `interpreter::builtins::string::sodium_box` calls `elephc_crypto::sodium` directly.
 /// Leaving one out is not a quiet loss of coverage —
@@ -192,6 +194,7 @@ pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
 const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] = &[
     "addcslashes",
     "file",
+    "get_class_vars",
     "hash_copy",
     "hash_final",
     "hash_init",
@@ -353,7 +356,6 @@ const AOT_IMPLEMENTATION_PENDING: &[&str] =
 fn is_eval_only_reflection(id: BuiltinId) -> bool {
     [
         "get_called_class",
-        "get_class_vars",
     ]
     .into_iter()
     .any(|name| id == BuiltinId::from_canonical_name(name))
@@ -476,11 +478,12 @@ mod tests {
         // `aot_unsupported` count below, which drops by the same one.
         // Sodium: the four `sodium_crypto_box_*` prelude declarations. Regex: `preg_filter` and
         // `preg_replace_callback_array`, built by `crate::preg_array_prelude`.
-        assert_eq!(aot_external, 424 + curl_surface);
-        // `get_called_class` and `get_class_vars` from main, plus this branch's
-        // `register_tick_function` and `unregister_tick_function`. `get_class_methods` is
-        // compiled natively (per-class method rows filtered by the calling scope).
-        assert_eq!(aot_unsupported, 4);
+        // `get_class_vars`: built per program by `crate::class_vars_prelude`.
+        assert_eq!(aot_external, 425 + curl_surface);
+        // `get_called_class` from main, plus this branch's `register_tick_function` and
+        // `unregister_tick_function`. `get_class_methods` is compiled natively (per-class method
+        // rows filtered by the calling scope) and `get_class_vars` moved to `aot_external`.
+        assert_eq!(aot_unsupported, 3);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.

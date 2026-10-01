@@ -39,3 +39,5 @@ mod return_this_ownership;
 mod symbol_collisions;
 #[path = "regressions/handles_statics_and_reflectors.rs"]
 mod handles_statics_and_reflectors;
+#[path = "regressions/class_vars_and_owned_views.rs"]
+mod class_vars_and_owned_views;

@@ -340,6 +340,11 @@ pub(super) fn lower_property_get_from_value(
     if op == Op::NullsafePropGet && value_is_definitely_null(ctx, object.value) {
         return lower_boxed_null(ctx, expr);
     }
+    // A plain read on a receiver that is statically `null` only type-checks inside a null probe
+    // (`$null->p ?? $d`, `$null->a->b ?? $d`), where PHP answers null without a warning.
+    if op == Op::PropGet && matches!(ctx.builder.value_php_type(object.value), PhpType::Void) {
+        return lower_boxed_null(ctx, expr);
+    }
     if property_receiver_is_unresolved_nominal_class(ctx, object.value) {
         // PHP declarations may name a class that is absent until a runtime path actually
         // constructs it. Preserve a property read in such a body as a gradual class-id dispatch
@@ -670,6 +675,10 @@ pub(super) fn property_can_be_uninitialized(
     property: &str,
 ) -> bool {
     let object_ty = ctx.builder.value_php_type(object);
+    // A statically-null receiver has no slot to probe; the plain read answers null for it.
+    if matches!(object_ty, PhpType::Void) {
+        return false;
+    }
     let Some((class_name, nullable)) = singular_object_class(&object_ty) else {
         // No single receiver class to name a slot in — an untyped parameter, a `mixed` local, a
         // union of two classes. `Op::PropInitialized` dispatches on the runtime class instead and

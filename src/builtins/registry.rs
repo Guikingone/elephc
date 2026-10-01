@@ -970,11 +970,14 @@ mod tests {
     }
 
     /// Verifies checker hooks can retain a representation-safe result resolver for EIR lowering.
+    ///
+    /// `array_pop` is the witness: `preg_split` used to be, until its EIR result began following
+    /// the checker's type vetted by `checked_result_type_fits_operands` instead.
     #[test]
     fn checker_hook_preserves_shared_eir_result_metadata() {
         assert!(matches!(
-            lookup("preg_split")
-                .expect("preg_split must be registered")
+            lookup("array_pop")
+                .expect("array_pop must be registered")
                 .spec
                 .semantics
                 .result_type,

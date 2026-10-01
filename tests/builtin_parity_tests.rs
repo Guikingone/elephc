@@ -32,9 +32,11 @@ const CURL_SURFACE_LEN: usize = if cfg!(feature = "curl") { 34 } else { 0 };
 ///
 /// Named rather than inlined because it is the number a landing prelude family changes, and a
 /// bare literal in the middle of five assertions gives no clue which of them is the live one.
-/// See the derivation note at its use site. 362 = 357 + `addcslashes` + the four
-/// `sodium_crypto_box_*` wrappers `sodium_prelude` declares.
-const PRELUDE_PROVIDED_NON_CURL: usize = 362;
+/// See the derivation note at its use site. 365 = 357 + `addcslashes` + the four
+/// `sodium_crypto_box_*` wrappers `sodium_prelude` declares + `preg_filter` and
+/// `preg_replace_callback_array` (`preg_array_prelude`) + `get_class_vars`
+/// (`class_vars_prelude`).
+const PRELUDE_PROVIDED_NON_CURL: usize = 365;
 
 /// The two curl contracts whose eval route needs caller-addressable storage.
 ///
@@ -120,11 +122,11 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
     //
     // - `language_constructs` — compiled as syntax, not calls (`isset` and friends).
     // - `dedicated_syntax` — the one surface with its own parser production.
-    // - `unsupported` — 5, and it is a SUM of two lists in `support.rs`, which is why it read
-    //   3 for so long: `is_eval_only_reflection` (`get_called_class`, `get_class_methods`,
-    //   `get_class_vars`) plus `AOT_IMPLEMENTATION_PENDING` (`register_tick_function`,
-    //   `unregister_tick_function`). The tick pair is one of this branch's own additions, and
-    //   nothing moved this number when it landed.
+    // - `unsupported` — 3, and it is a SUM of two lists in `support.rs`:
+    //   `is_eval_only_reflection` (`get_called_class`) plus `AOT_IMPLEMENTATION_PENDING`
+    //   (`register_tick_function`, `unregister_tick_function`). `get_class_methods` left the
+    //   first list when it was compiled natively, and `get_class_vars` when
+    //   `crate::class_vars_prelude` began building it, which moved it to `preludes`.
     // - `rewrites` — the date/calendar names the name resolver rewrites.
     // - `preludes` — every PHP-declared prelude function outside `ext/curl`. To re-derive:
     //   count `BuiltinKind::PreludeProvided` contracts whose `area` is not `Area::Curl`
@@ -132,7 +134,7 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
     //   whenever a prelude family lands, which is the ONLY number here that routinely does.
     assert_eq!(language_constructs, 5);
     assert_eq!(dedicated_syntax, 1);
-    assert_eq!(unsupported, 5);
+    assert_eq!(unsupported, 3);
     assert_eq!(rewrites, 54);
     assert_eq!(preludes.len(), PRELUDE_PROVIDED_NON_CURL);
     assert_eq!(

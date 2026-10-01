@@ -146,11 +146,14 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         Mixed,
         "Returns method names visible on an object or class."
     ),
+    // `PreludeProvided` like `parse_str` below: the AOT side builds it per program from the
+    // compiled class declarations (`src/class_vars_prelude.rs`), and the lowering passes the
+    // calling scope. The INTERPRETER keeps its own implementation for interpreted code.
     surface!(
         "get_class_vars",
         Callables,
         Core,
-        Function,
+        PreludeProvided,
         [param!("class", Mixed)],
         None,
         Mixed,
@@ -385,7 +388,8 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         Pcre,
         PreludeProvided,
         [
-            param!("pattern", Mixed),
+            // php: `array $pattern`, which is what `preg_array_prelude` declares.
+            param!("pattern", Array),
             param!("subject", Mixed),
             param!("limit", Int = DefaultSpec::Int(-1)),
             param!(ref "count", Mixed = DefaultSpec::Null),
