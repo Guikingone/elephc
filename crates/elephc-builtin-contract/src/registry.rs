@@ -169,9 +169,9 @@ mod tests {
         // mbstring case mapping adds `mb_strtolower` and `mb_strtoupper`. The regex surface adds
         // four: `preg_last_error`, `preg_last_error_msg`, `preg_filter` and
         // `preg_replace_callback_array`. The password API adds five (`password_*`), php 8.5
-        // adds `array_first` / `array_last`, and the user-comparator set family adds eight
-        // (`array_udiff_assoc` and its siblings).
-        assert_eq!(contracts().len(), 1105 + curl_surface);
+        // adds `array_first` / `array_last`, `array_change_key_case` adds one, and the user-comparator
+        // set family adds eight (`array_udiff_assoc` and its siblings).
+        assert_eq!(contracts().len(), 1106 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

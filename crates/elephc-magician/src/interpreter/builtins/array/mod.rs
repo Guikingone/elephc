@@ -42,6 +42,7 @@ mod array_slice;
 mod array_splice;
 mod array_sum;
 mod array_is_list;
+mod array_change_key_case;
 mod array_first;
 mod array_ucompare;
 mod array_key_first;

@@ -309,18 +309,46 @@ fn parse_expr_bp_inner(
                             }
                             // `$obj->$method(args)` reuses the runtime dynamic-dispatch path by
                             // desugaring to `call_user_func([$obj, $method], ...args)`.
-                            let mut call_args = vec![Expr::new(
+                            //
+                            // A call whose ONLY argument is a spread goes to
+                            // `call_user_func_array` instead: php binds a spread's string keys to
+                            // the parameters NAMED by them (`$this->{$method}(...['view' => 'v'])`),
+                            // which is what `call_user_func_array` does with its array, while
+                            // `call_user_func`'s variadic passes every entry positionally. Laravel's
+                            // `ViewController::callAction` is exactly `$this->{$method}(...$parameters)`.
+                            let target = Expr::new(
                                 ExprKind::ArrayLiteral(vec![lhs, property]),
                                 arrow_span,
-                            )];
-                            call_args.extend(dynamic_args);
-                            lhs = Expr::new(
-                                ExprKind::FunctionCall {
-                                    name: crate::names::Name::unqualified("call_user_func"),
-                                    args: call_args,
-                                },
-                                arrow_span,
                             );
+                            lhs = match dynamic_args.as_slice() {
+                                [only] if matches!(only.kind, ExprKind::Spread(_)) => {
+                                    let ExprKind::Spread(inner) = &only.kind else {
+                                        unreachable!("guarded by the match arm");
+                                    };
+                                    Expr::new(
+                                        ExprKind::FunctionCall {
+                                            name: crate::names::Name::unqualified(
+                                                "call_user_func_array",
+                                            ),
+                                            args: vec![target, inner.as_ref().clone()],
+                                        },
+                                        arrow_span,
+                                    )
+                                }
+                                _ => {
+                                    let mut call_args = vec![target];
+                                    call_args.extend(dynamic_args);
+                                    Expr::new(
+                                        ExprKind::FunctionCall {
+                                            name: crate::names::Name::unqualified(
+                                                "call_user_func",
+                                            ),
+                                            args: call_args,
+                                        },
+                                        arrow_span,
+                                    )
+                                }
+                            };
                             continue;
                         }
                         lhs = Expr::new(

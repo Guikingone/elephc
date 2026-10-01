@@ -1117,8 +1117,12 @@ pub fn inject_if_used(
     let needs_array_find = usage.references("array_any")
         || usage.references("array_all")
         || usage.references("array_find");
+    // And so is `array_splice()` over a hash or a boxed receiver: the native lowering splices a
+    // dense slot array only.
+    let needs_array_splice = usage.references("array_splice");
     if sources.is_empty()
         && !needs_array_find
+        && !needs_array_splice
         && !needs_addcslashes
         && !needs_htmlspecialchars
         && !inject_randomizer
@@ -1136,6 +1140,11 @@ pub fn inject_if_used(
     let mut combined = Vec::new();
     if needs_array_find {
         let declarations = crate::array_find_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_array_splice {
+        let declarations = crate::array_splice_prelude::declarations();
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);
         combined.extend(declarations);
     }

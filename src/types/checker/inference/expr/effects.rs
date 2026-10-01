@@ -441,6 +441,9 @@ impl Checker {
                         self.canonical_function_name_folded(builtin_name)
                             .unwrap_or_else(|| builtin_name.to_string())
                     });
+                    if internal_callable {
+                        self.widen_hash_splice_receiver(builtin_name, args, env);
+                    }
                     self.prepare_by_ref_variable_storage(
                         &signature,
                         args,
@@ -1171,6 +1174,31 @@ impl Checker {
             .get(&key)
             .or_else(|| info.methods.get(&key))
             .cloned()
+    }
+
+    /// Gives a hash local spliced by `array_splice()` the boxed gradual storage the splice needs.
+    ///
+    /// The native splice rewrites a dense slot array, so a hash receiver is spliced by the prelude
+    /// walk `array_splice_prelude` builds, which binds the receiver as `mixed &$array` and answers
+    /// an array of EITHER kind: `['a' => 1]` spliced at offset 0 becomes `[0 => 'x', 'a' => 1]`,
+    /// and a hash whose keys are all integers comes back as a list. A slot still typed as the
+    /// original hash could not hold that, so the local is boxed from here on -- the same decision
+    /// `prepare_by_ref_variable_storage` makes for a `mixed &$x` parameter.
+    fn widen_hash_splice_receiver(&mut self, name: &str, args: &[Expr], env: &mut TypeEnv) {
+        if php_symbol_key(name) != "array_splice" {
+            return;
+        }
+        let Some(ExprKind::Variable(receiver)) = args.first().map(|arg| &arg.kind) else {
+            return;
+        };
+        if !matches!(env.get(receiver), Some(PhpType::AssocArray { .. })) {
+            return;
+        }
+        self.by_ref_local_storage_types.insert(
+            (self.current_loop_storage_scope.clone(), receiver.clone()),
+            PhpType::Mixed,
+        );
+        env.insert(receiver.clone(), PhpType::Mixed);
     }
 
     /// Prepares caller storage for variables supplied to by-reference parameters.

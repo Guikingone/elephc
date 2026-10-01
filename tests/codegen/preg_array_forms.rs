@@ -459,3 +459,20 @@ array(1) {
 "#, "stderr: {}", out.stderr);
     assert!(!out.stderr.contains("Warning:"), "stderr: {}", out.stderr);
 }
+
+/// A NUL byte inside a pattern is an ordinary character to match, compiled and interpreted. The
+/// compiled helper that hands the pattern to PCRE2 as a C string truncated it at the NUL, so
+/// `"~[\s\0]+~"` (Laravel's `Str::trim()`) lost its closing bracket and failed to compile.
+/// Output is php 8.5's.
+#[test]
+fn test_preg_pattern_with_a_nul_byte_matches_php() {
+    let out = compile_and_run(r#"<?php
+var_dump(preg_replace("~[\\s\0]+~", "", " x\0y "));
+var_dump(preg_match("~a\0b~", "a\0b"));
+var_dump(preg_match("~a\\\0b~", "a\0b"));
+echo json_encode(preg_split("~\0~", "a\0b\0c")), "\n";
+$code = 'return [preg_replace("~[\\\\s\0]+~", "", " x\0y "), preg_match("~a\0b~", "a\0b")];';
+echo json_encode(eval($code)), "\n";
+"#);
+    assert_eq!(out, "string(2) \"xy\"\nint(1)\nint(1)\n[\"a\",\"b\",\"c\"]\n[\"xy\",1]\n");
+}

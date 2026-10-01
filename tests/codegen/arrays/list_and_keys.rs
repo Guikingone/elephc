@@ -139,3 +139,31 @@ var_dump(\array_last($b), \array_first([]));
          string(9) \"localhost\"\nint(1)\nNULL\n"
     );
 }
+
+/// Verifies `array_change_key_case()` in compiled code and in eval().
+///
+/// The function did not exist, so `symfony/http-foundation`'s `AcceptHeader` and
+/// `RedirectResponse` died on it (Laravel answered every 404 and every redirect with the
+/// fatal). Expected output is php 8.5's: string keys are case-mapped, integer keys are kept, a
+/// collision keeps the first position with the later value, and any non-zero `$case` is upper.
+#[test]
+fn test_array_change_key_case_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+echo json_encode(array_change_key_case(['Foo' => 1, 'BAR' => 2, 5 => 'x'])), "\n";
+echo json_encode(array_change_key_case(['Foo' => 1, 'foo' => 2, 7 => 3], CASE_UPPER)), "\n";
+echo json_encode(array_change_key_case([])), "\n";
+echo json_encode(array_change_key_case(['a' => 'A', 'A' => 'B'])), "\n";
+$k = 'AbC';
+echo json_encode(array_change_key_case([$k => 1], 1)), "\n";
+$code = 'echo json_encode(array_change_key_case(["Foo" => 1, "BAR" => 2, 5 => "x"])), "\n";
+echo json_encode(array_change_key_case(["Foo" => 1, "foo" => 2], CASE_UPPER)), "\n";';
+eval($code);
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"foo\":1,\"bar\":2,\"5\":\"x\"}\n{\"FOO\":2,\"7\":3}\n[]\n{\"a\":\"B\"}\n{\"ABC\":1}\n\
+         {\"foo\":1,\"bar\":2,\"5\":\"x\"}\n{\"FOO\":2}\n"
+    );
+}

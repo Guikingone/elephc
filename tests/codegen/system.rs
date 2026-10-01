@@ -4205,3 +4205,25 @@ echo $hits, "|",
     );
     assert_eq!(out, "2|yes|true|true|true|true");
 }
+
+/// Verifies `strtotime()` accepts a keyword followed by a signed offset (`now - 7200 seconds`,
+/// `tomorrow - 1 hour`) and still refuses trailing junk after a keyword. php 8.5 answers each
+/// offset from the base; the keyword-plus-offset forms returned false, which broke Carbon's
+/// `now - N seconds` (Laravel's session garbage-collection lottery).
+#[test]
+fn test_strtotime_keyword_followed_by_signed_offset_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set('UTC');
+$base = 1767268800;
+foreach (['now - 7200 seconds', 'now -7200 seconds', 'now + 1 day', 'tomorrow - 1 hour', 'yesterday + 2 hours', 'now junk', 'now -'] as $s) {
+    $t = strtotime($s, $base);
+    echo $s, ' => ', $t === false ? 'false' : ($t - $base), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "now - 7200 seconds => -7200\nnow -7200 seconds => -7200\nnow + 1 day => 86400\ntomorrow - 1 hour => 39600\nyesterday + 2 hours => -122400\nnow junk => false\nnow - => false\n"
+    );
+}

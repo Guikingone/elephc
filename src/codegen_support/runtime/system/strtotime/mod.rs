@@ -181,8 +181,54 @@ fn emit_dispatcher_arm64(emitter: &mut Emitter) {
     emitter.instruction("b.hi __rt_strtotime_alpha_not_keyword");               // no → check modifiers/weekdays
     emitter.instruction("ldr x8, [sp, #56]");                                   // reload trimmed input length
     emitter.instruction("cmp x10, x8");                                         // keyword consumed the whole input ?
-    emitter.instruction("b.ne __rt_strtotime_fail");                            // trailing junk after keyword → fail
+    emitter.instruction("b.ne __rt_strtotime_kw_trailing");                     // trailing input after keyword → only a signed offset may follow
     emitter.instruction("b __rt_strtotime_kw_entry");                           // → keyword strategy
+
+    // -- keyword followed by a signed offset ("now - 7200 seconds", "tomorrow + 1 hour") --
+    // x10 = keyword length, x8 = trimmed length. The keyword alone is evaluated first by a
+    // nested call on the current clock, and the signed remainder is then parsed by another
+    // nested call whose base is that result: the offsets strategy already applies a
+    // "+/- N unit" expression to whatever clock it is given. Anything else after a keyword
+    // ("noon tomorrow", "now junk") still fails, as it always did.
+    emitter.label("__rt_strtotime_kw_trailing");
+    emitter.instruction("ldr x3, [sp, #48]");                                   // x3 = trimmed input pointer
+    emitter.instruction("mov x11, x10");                                        // cursor = first byte after the keyword
+    emitter.label("__rt_strtotime_kw_trailing_skip");
+    emitter.instruction("cmp x11, x8");                                         // cursor reached the end of the input ?
+    emitter.instruction("b.ge __rt_strtotime_fail");                            // nothing follows the separator → fail
+    emitter.instruction("ldrb w12, [x3, x11]");                                 // load the byte under the cursor
+    emitter.instruction("cmp w12, #32");                                        // space ?
+    emitter.instruction("b.eq __rt_strtotime_kw_trailing_adv");                 // skip separating whitespace
+    emitter.instruction("cmp w12, #9");                                         // tab ?
+    emitter.instruction("b.eq __rt_strtotime_kw_trailing_adv");                 // skip separating whitespace
+    emitter.instruction("cmp w12, #43");                                        // '+' starts a signed offset ?
+    emitter.instruction("b.eq __rt_strtotime_kw_trailing_go");                  // offset found → evaluate in two steps
+    emitter.instruction("cmp w12, #45");                                        // '-' starts a signed offset ?
+    emitter.instruction("b.eq __rt_strtotime_kw_trailing_go");                  // offset found → evaluate in two steps
+    emitter.instruction("b __rt_strtotime_fail");                               // anything else after a keyword is not a form we parse
+    emitter.label("__rt_strtotime_kw_trailing_adv");
+    emitter.instruction("add x11, x11, #1");                                    // advance past one separator byte
+    emitter.instruction("b __rt_strtotime_kw_trailing_skip");                   // keep skipping
+    emitter.label("__rt_strtotime_kw_trailing_go");
+    emitter.instruction("str x10, [sp, #88]");                                  // keep the keyword length across the nested calls
+    emitter.adrp("x0", "_strtotime_clock");                                     // page of the effective-clock global
+    emitter.add_lo12("x0", "x0", "_strtotime_clock");                           // resolve the clock global address
+    emitter.instruction("ldr x0, [x0]");                                        // x0 = base timestamp for the keyword
+    emitter.instruction("mov x1, x3");                                          // x1 = keyword pointer
+    emitter.instruction("mov x2, x10");                                         // x2 = keyword length
+    emitter.instruction("mov x3, #1");                                          // the base timestamp is supplied
+    emitter.instruction("bl __rt_strtotime");                                   // x0 = keyword timestamp or the failure sentinel
+    emitter.instruction("movz x9, #0x8000, lsl #48");                           // failure sentinel = i64::MIN
+    emitter.instruction("cmp x0, x9");                                          // did the keyword fail to parse ?
+    emitter.instruction("b.eq __rt_strtotime_fail");                            // propagate the failure
+    emitter.instruction("ldr x3, [sp, #48]");                                   // reload the trimmed input pointer
+    emitter.instruction("ldr x10, [sp, #88]");                                  // reload the keyword length
+    emitter.instruction("ldr x2, [sp, #56]");                                   // reload the trimmed input length
+    emitter.instruction("add x1, x3, x10");                                     // x1 = first byte after the keyword
+    emitter.instruction("sub x2, x2, x10");                                     // x2 = remaining length
+    emitter.instruction("mov x3, #1");                                          // the keyword timestamp is the base
+    emitter.instruction("bl __rt_strtotime");                                   // x0 = offset applied to the keyword timestamp, or the failure sentinel
+    emitter.instruction("b __rt_strtotime_ret");                                // return through the shared epilogue
 
     emitter.label("__rt_strtotime_alpha_not_keyword");
 
@@ -409,8 +455,51 @@ fn emit_dispatcher_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rdx, 5");                                          // kind in 0..5 = bare keyword ?
     emitter.instruction("ja __rt_strtotime_alpha_not_keyword_linux_x86_64");    // no → check modifiers/weekdays
     emitter.instruction("cmp rax, QWORD PTR [rbp - 72]");                       // keyword consumed the whole input ?
-    emitter.instruction("jne __rt_strtotime_fail_linux_x86_64");                // trailing junk after keyword → fail
+    emitter.instruction("jne __rt_strtotime_kw_trailing_linux_x86_64");         // trailing input after keyword → only a signed offset may follow
     emitter.instruction("jmp __rt_strtotime_kw_entry_linux_x86_64");            // yes → keyword strategy
+
+    // -- keyword followed by a signed offset ("now - 7200 seconds", "tomorrow + 1 hour") --
+    // rax = keyword length. The keyword alone is evaluated first by a nested call on the
+    // current clock, and the signed remainder is then parsed by another nested call whose base
+    // is that result. Anything else after a keyword still fails, as it always did.
+    emitter.label("__rt_strtotime_kw_trailing_linux_x86_64");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                       // rdi = trimmed input pointer
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 72]");                       // rcx = trimmed input length
+    emitter.instruction("mov r8, rax");                                         // cursor = first byte after the keyword
+    emitter.label("__rt_strtotime_kw_trailing_skip_linux_x86_64");
+    emitter.instruction("cmp r8, rcx");                                         // cursor reached the end of the input ?
+    emitter.instruction("jge __rt_strtotime_fail_linux_x86_64");                // nothing follows the separator → fail
+    emitter.instruction("movzx r9d, BYTE PTR [rdi + r8]");                      // load the byte under the cursor
+    emitter.instruction("cmp r9b, 32");                                         // space ?
+    emitter.instruction("je __rt_strtotime_kw_trailing_adv_linux_x86_64");      // skip separating whitespace
+    emitter.instruction("cmp r9b, 9");                                          // tab ?
+    emitter.instruction("je __rt_strtotime_kw_trailing_adv_linux_x86_64");      // skip separating whitespace
+    emitter.instruction("cmp r9b, 43");                                         // '+' starts a signed offset ?
+    emitter.instruction("je __rt_strtotime_kw_trailing_go_linux_x86_64");       // offset found → evaluate in two steps
+    emitter.instruction("cmp r9b, 45");                                         // '-' starts a signed offset ?
+    emitter.instruction("je __rt_strtotime_kw_trailing_go_linux_x86_64");       // offset found → evaluate in two steps
+    emitter.instruction("jmp __rt_strtotime_fail_linux_x86_64");                // anything else after a keyword is not a form we parse
+    emitter.label("__rt_strtotime_kw_trailing_adv_linux_x86_64");
+    emitter.instruction("add r8, 1");                                           // advance past one separator byte
+    emitter.instruction("jmp __rt_strtotime_kw_trailing_skip_linux_x86_64");    // keep skipping
+    emitter.label("__rt_strtotime_kw_trailing_go_linux_x86_64");
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // keep the keyword length across the nested calls
+    emitter.instruction("mov rsi, rax");                                        // rsi = keyword length
+    emitter.instruction("mov rdx, QWORD PTR [rip + _strtotime_clock]");         // rdx = base timestamp for the keyword
+    emitter.instruction("mov rcx, 1");                                          // the base timestamp is supplied
+    emitter.instruction("call __rt_strtotime");                                 // rax = keyword timestamp or the failure sentinel
+    emitter.instruction("movabs r9, -9223372036854775808");                     // failure sentinel = i64::MIN
+    emitter.instruction("cmp rax, r9");                                         // did the keyword fail to parse ?
+    emitter.instruction("je __rt_strtotime_fail_linux_x86_64");                 // propagate the failure
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the keyword length
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                       // reload the trimmed input pointer
+    emitter.instruction("add rdi, r10");                                        // rdi = first byte after the keyword
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 72]");                       // reload the trimmed input length
+    emitter.instruction("sub rsi, r10");                                        // rsi = remaining length
+    emitter.instruction("mov rdx, rax");                                        // the keyword timestamp is the base
+    emitter.instruction("mov rcx, 1");                                          // the base timestamp is supplied
+    emitter.instruction("call __rt_strtotime");                                 // rax = offset applied to the keyword timestamp, or the failure sentinel
+    emitter.instruction("jmp __rt_strtotime_ret_linux_x86_64");                 // return through the shared epilogue
 
     emitter.label("__rt_strtotime_alpha_not_keyword_linux_x86_64");
 

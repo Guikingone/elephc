@@ -483,6 +483,27 @@ impl Checker {
             stores.insert(key.as_str(), Vec::new());
         }
         collect_local_stores(body, &mut stores);
+        // A `array &$p` parameter's callers may hand it a HASH (`function f(array $params)` fed a
+        // `['id' => 1]` route-parameter map hands it on). The indexed-only builtins below rebuild
+        // or drop entries by POSITION and renumber integer keys, so over hash storage they read
+        // the header as a list: `array_shift`/`array_pop` answered garbage and `array_splice`,
+        // `array_unshift`, `sort`, `rsort` and `usort` took a bus error. With the cell boxed the
+        // same calls dispatch on the runtime kind, which is what `mixed &$p` already does.
+        // Laravel's `ResolvesRouteDependencies::spliceIntoParameters(array &$parameters, ...)`.
+        let mut positional_receivers: Vec<&str> = Vec::new();
+        for_each_call(body, &mut |call| {
+            let CallTarget::Function(name) = &call.target else {
+                return;
+            };
+            if !POSITIONAL_ARRAY_BUILTINS
+                .contains(&name.trim_start_matches('\\').to_ascii_lowercase().as_str())
+            {
+                return;
+            }
+            if let Some(ExprKind::Variable(receiver)) = call.args.first().map(|arg| &arg.kind) {
+                positional_receivers.push(receiver.as_str());
+            }
+        });
         // No parameter is filtered out up front, including one already declared `mixed`: the
         // predicate below answers `false` for it (`mixed` merges everything and keeps its own
         // representation), and a declared UNION must NOT be filtered out on the strength of
@@ -508,7 +529,9 @@ impl Checker {
                     .into_iter()
                     .flatten()
                     .any(|index| index_is_string_key(index, params));
-            if widens || promotes_to_hash {
+            let positional_on_array = matches!(declared.codegen_repr(), PhpType::Array(_))
+                && positional_receivers.contains(&name);
+            if widens || promotes_to_hash || positional_on_array {
                 widened.push((scope.to_string(), name.to_string()));
             }
         }
@@ -1011,6 +1034,18 @@ struct CallSite<'a> {
     target: CallTarget<'a>,
     args: &'a [Expr],
 }
+
+/// By-reference array builtins that work by position and renumber integer keys, and so cannot
+/// run over hash storage when their receiver's representation is the dense indexed one.
+const POSITIONAL_ARRAY_BUILTINS: &[&str] = &[
+    "array_shift",
+    "array_unshift",
+    "array_pop",
+    "array_splice",
+    "sort",
+    "rsort",
+    "usort",
+];
 
 /// Visits every call in a body, including calls nested in expressions and in nested statements.
 ///

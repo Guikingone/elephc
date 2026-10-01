@@ -1,6 +1,6 @@
 //! Purpose:
-//! Declares PHP 8.5's `array_first()` and `array_last()`, and PHP 8.4's `array_find_key()`, as
-//! AST-built functions.
+//! Declares PHP 8.5's `array_first()` and `array_last()`, PHP 8.4's `array_find_key()` and
+//! `array_change_key_case()`, as AST-built functions.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` in the compat-prelude phase, after autoload expansion, so a
@@ -21,17 +21,23 @@
 //!   (`elephc_magician::interpreter::builtins::array::array_first` / `array_find`), because a
 //!   compiler prelude is never reachable from interpreted code.
 
-use crate::parser::ast::{BinOp, Program, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, Program, Stmt, StmtKind, TypeExpr};
 use crate::synthetic_class::{
-    e_array, e_binop, e_call, e_closure_call, e_index, e_null, e_var, function,
-    internal_declarations, s_foreach, s_if, s_return, t_array, t_mixed,
+    e_array, e_binop, e_call, e_closure_call, e_const, e_index, e_null, e_ternary, e_var,
+    function, internal_declarations, s_array_assign, s_assign, s_foreach, s_if, s_return,
+    t_array, t_mixed,
 };
 
 /// Prelude inventory group holding the declarations.
 pub(crate) const GROUP: &str = "array_edge";
 
 /// The PHP functions this prelude declares.
-pub(crate) const FUNCTIONS: &[&str] = &["array_first", "array_last", "array_find_key"];
+pub(crate) const FUNCTIONS: &[&str] = &[
+    "array_first",
+    "array_last",
+    "array_find_key",
+    "array_change_key_case",
+];
 
 /// Builds the two functions.
 fn function_declarations() -> Vec<Stmt> {
@@ -95,7 +101,46 @@ fn function_declarations() -> Vec<Stmt> {
         ])
         .build();
 
-    vec![first, last, find_key]
+    // function array_change_key_case(array $array, int $case = CASE_LOWER): array {
+    //     $result = [];
+    //     foreach ($array as $key => $value) {
+    //         if (is_string($key)) { $key = $case ? strtoupper($key) : strtolower($key); }
+    //         $result[$key] = $value;
+    //     }
+    //     return $result;
+    // }
+    let change_key_case = function("array_change_key_case")
+        .param("array", t_array())
+        .param_default("case", TypeExpr::Int, e_const("CASE_LOWER"))
+        .returns(t_array())
+        .body(vec![
+            s_assign("result", e_array(Vec::new())),
+            s_foreach(
+                e_var("array"),
+                Some("key"),
+                "value",
+                vec![
+                    s_if(
+                        e_call("is_string", vec![e_var("key")]),
+                        vec![s_assign(
+                            "key",
+                            e_ternary(
+                                e_var("case"),
+                                e_call("strtoupper", vec![e_var("key")]),
+                                e_call("strtolower", vec![e_var("key")]),
+                            ),
+                        )],
+                        Vec::new(),
+                        None,
+                    ),
+                    s_array_assign("result", e_var("key"), e_var("value")),
+                ],
+            ),
+            s_return(e_var("result")),
+        ])
+        .build();
+
+    vec![first, last, find_key, change_key_case]
 }
 
 /// Returns the declarations to inject.

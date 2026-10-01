@@ -390,6 +390,35 @@ pub(super) fn lower_backend_gap_builtin_shape(
         ));
     }
     if builtin == "array_splice" && !args.iter().any(is_spread_arg) {
+        // A hash or a boxed receiver is spliced by the prelude walk: the native path splices a
+        // dense slot array, refusing a hash at compile time and dropping a boxed one silently.
+        let receiver = args.iter().enumerate().find_map(|(index, arg)| match &arg.kind {
+            ExprKind::NamedArg { name, value } if php_symbol_key(name) == "array" => {
+                Some(value.as_ref())
+            }
+            ExprKind::NamedArg { .. } => None,
+            _ if index == 0 => Some(arg),
+            _ => None,
+        });
+        // Only a plain variable: the helper binds its receiver as `mixed &$array`, and a variable
+        // is the one place the checker has boxed (`widen_hash_splice_receiver`) so the result
+        // can be published back. A property or element keeps the native path.
+        if receiver.is_some_and(|receiver| {
+            matches!(receiver.kind, ExprKind::Variable(_))
+                && matches!(
+                    materialized_expr_type_for_merge(ctx, receiver).codegen_repr(),
+                    PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_)
+                )
+        }) {
+            return Some(lower_function_call(
+                ctx,
+                &crate::names::Name::unqualified(
+                    crate::array_splice_prelude::ARRAY_SPLICE_GRADUAL_NAME,
+                ),
+                args,
+                expr,
+            ));
+        }
         let replacement = args.iter().enumerate().find_map(|(index, arg)| match &arg.kind {
             ExprKind::NamedArg { name, value } if php_symbol_key(name) == "replacement" => {
                 Some(value.as_ref())

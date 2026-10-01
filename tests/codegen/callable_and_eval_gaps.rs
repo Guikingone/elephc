@@ -194,3 +194,25 @@ int(5)
 bool(false)
 "#);
 }
+
+/// A dynamic method call whose only argument is a spread binds the spread's string keys to the
+/// parameters NAMED by them, as php does: `$this->{$m}(...['data' => [1], 'view' => 'v'])` reaches
+/// `named('v', [1])`. The call used to be desugared to `call_user_func`, which passes every entry
+/// positionally. Laravel's `ViewController::callAction` is exactly this shape. Output is php 8.5's.
+#[test]
+fn test_dynamic_method_call_with_a_lone_spread_binds_string_keys_by_name() {
+    let out = compile_and_run(r#"<?php
+class K {
+    public function collect(...$args) { return json_encode($args); }
+    public function named($view, $data = []) { return json_encode([$view, $data]); }
+    public function viaName($m, $p) { return $this->{$m}(...$p); }
+    public function viaPositional($m, $a, $b) { return $this->{$m}($a, $b); }
+}
+$k = new K();
+echo $k->viaName('named', ['data' => [1], 'view' => 'v']), "\n";
+echo $k->viaName('named', ['v', [2]]), "\n";
+echo $k->viaPositional('named', 'w', [3]), "\n";
+echo $k->viaName('collect', ['a', 'b']), "\n";
+"#);
+    assert_eq!(out, "[\"v\",[1]]\n[\"v\",[2]]\n[\"w\",[3]]\n[\"a\",\"b\"]\n");
+}

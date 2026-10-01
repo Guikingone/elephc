@@ -1824,6 +1824,14 @@ fn magic_method_param_keeps_eir_contract(
         "__set" => {
             param_index == 0 && matches!(php_type.codegen_repr(), PhpType::Str)
         }
+        // The unserialize runtime calls a user `__unserialize($data)` with the bare hash it
+        // parsed, whatever the declaration says: the checker types the first parameter as that
+        // hash (`build_method_sig`), and boxing an UNDECLARED one as `mixed` here made the body
+        // read the hash header as a Mixed cell -- `gettype($data)` answered "string" and every
+        // `$data['key']` was null. A declared `array $data` already kept its contract.
+        "__unserialize" => {
+            param_index == 0 && matches!(php_type.codegen_repr(), PhpType::AssocArray { .. })
+        }
         "__call" | "__callstatic" => {
             // The $args array keeps its contract only once call sites have
             // specialized the element type. The checker seeds it as
