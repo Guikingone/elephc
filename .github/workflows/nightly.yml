@@ -32,6 +32,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Same release as RUST_VERSION in .github/docker/ci.Dockerfile. Not `stable`:
+  # a newer rustc must not fail the no-warnings gate unannounced.
+  RUST_TOOLCHAIN: "1.98"
 
 jobs:
   gate:
@@ -154,6 +157,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       # Patched in the runner's working tree and never committed: `main` keeps
       # the version `release.yml` owns, and a nightly binary still identifies
