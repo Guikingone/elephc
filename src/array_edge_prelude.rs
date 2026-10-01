@@ -23,7 +23,7 @@
 
 use crate::parser::ast::{BinOp, Program, Stmt, StmtKind, TypeExpr};
 use crate::synthetic_class::{
-    e_array, e_binop, e_call, e_closure_call, e_const, e_index, e_null, e_ternary, e_var,
+    e_array, e_binop, e_call, e_closure_call, e_index, e_int, e_null, e_ternary, e_var,
     function, internal_declarations, s_array_assign, s_assign, s_foreach, s_if, s_return,
     t_array, t_mixed,
 };
@@ -101,7 +101,7 @@ fn function_declarations() -> Vec<Stmt> {
         ])
         .build();
 
-    // function array_change_key_case(array $array, int $case = CASE_LOWER): array {
+    // function array_change_key_case(array $array, int $case = 0 /* CASE_LOWER */): array {
     //     $result = [];
     //     foreach ($array as $key => $value) {
     //         if (is_string($key)) { $key = $case ? strtoupper($key) : strtolower($key); }
@@ -111,7 +111,7 @@ fn function_declarations() -> Vec<Stmt> {
     // }
     let change_key_case = function("array_change_key_case")
         .param("array", t_array())
-        .param_default("case", TypeExpr::Int, e_const("CASE_LOWER"))
+        .param_default("case", TypeExpr::Int, e_int(0))
         .returns(t_array())
         .body(vec![
             s_assign("result", e_array(Vec::new())),
