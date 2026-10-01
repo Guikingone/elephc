@@ -483,7 +483,7 @@ mod tests {
             "linux-x86_64",
         ] {
             let target = Target::parse(name).expect("supported target");
-            let asm = generate_branch_arg_main_asm(target);
+            let asm = generate_branch_arg_asm(target);
             let move_into_home = match target.arch {
                 Arch::AArch64 => "mov x12, x0",
                 Arch::X86_64 => "mov rsi, rax",
@@ -871,11 +871,10 @@ mod tests {
             .expect("storage-backed return module should lower")
     }
 
-    /// Builds a minimal `br` fixture with one integer block argument.
-    fn generate_branch_arg_main_asm(target: Target) -> String {
+    /// Builds a `br` fixture whose returned integer block parameter needs a live register home.
+    fn generate_branch_arg_asm(target: Target) -> String {
         let mut module = Module::new(target);
-        let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
-        function.flags.is_main = true;
+        let mut function = Function::new("branch_arg_fixture".to_string(), IrType::I64, PhpType::Int);
         {
             let mut builder = Builder::new(&mut function);
             let entry = builder.create_named_block("entry", Vec::new());
@@ -888,9 +887,21 @@ mod tests {
                 args: vec![value],
             });
             builder.position_at_end(body);
-            builder.terminate(Terminator::Unreachable);
+            let parameter = builder.block_param(body, 0);
+            builder.terminate(Terminator::Return { value: Some(parameter) });
         }
         module.add_function(function);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut main);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
 
         generate_user_asm_from_ir(&module, false, false).expect("branch-arg module should lower")
     }
