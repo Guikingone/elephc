@@ -694,6 +694,14 @@ fn lower_gradual_object_nominal_guard(
             &native_fallback_label,
         )?;
         ctx.emitter.label(&native_fallback_label);
+        // The bridge call clobbered every caller-saved register, the unboxed payload with them:
+        // reload and unbox the cell again so the native matcher reads the object, not whatever
+        // the bridge left in the payload register. An interpreted object the bridge said is not
+        // a `target` (an `EInner` handed to a property inferred as `Inner`) used to fall through
+        // here with garbage in the register and fault in `__rt_exception_matches`; it is now
+        // matched by its class id like any object and rejected with a TypeError.
+        ctx.load_value_to_result(value)?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     }
     if let Some((target_id, target_kind)) = target_metadata {
         match ctx.emitter.target.arch {

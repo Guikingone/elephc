@@ -1475,3 +1475,49 @@ echo $p->a, json_encode($p->b), "\n";
         "O:7:\"Wrapper\":1:{s:12:\"serializable\";O:5:\"Inner\":1:{s:4:\"code\";s:1:\"x\";}}\nx!\nstring\n11[1,2]\n"
     );
 }
+
+/// Verifies handing an eval-declared object to a compiled property whose type was inferred from
+/// the compiled call sites no longer faults the process.
+///
+/// `unserialize()` of a wire naming an eval-declared class hydrates that class in the interpreter
+/// and gives the compiled `__unserialize($data)` a boxed object it did not construct. Writing it
+/// into `Wrapper::$serializable` -- inferred as `Inner` from `new Wrapper($inner)` -- runs the
+/// nominal property guard, whose native fallback read the object from a register the interpreter
+/// bridge call had just clobbered: a segfault in `__rt_exception_matches`. The guard now
+/// reloads the payload and refuses the foreign class with a catchable `TypeError`. (php accepts
+/// the object, as the property is untyped; making the inferred type admit it is the checker's
+/// property inference, not this guard.)
+#[test]
+fn test_unserialize_eval_class_into_inferred_property_is_refused_not_a_crash() {
+    let out = compile_and_run(
+        r##"<?php
+class Wrapper {
+    protected $serializable;
+    public function __construct($s) { $this->serializable = $s; }
+    public function get() { return $this->serializable->get(); }
+    public function __serialize() { return ['serializable' => $this->serializable]; }
+    public function __unserialize($data) { $this->serializable = $data['serializable']; }
+}
+class Inner {
+    public $code;
+    public function get() { return $this->code; }
+    public function __serialize() { return ['code' => $this->code]; }
+    public function __unserialize($data) { $this->code = $data['code'] . '!'; }
+}
+$i = new Inner();
+$i->code = 'x';
+$s = serialize(new Wrapper($i));
+echo unserialize($s)->get(), "\n";
+$code = 'class EInner { public $code; public function get() { return $this->code; } public function __serialize() { return ["code" => $this->code]; } public function __unserialize($data) { $this->code = $data["code"] . "?"; } }';
+eval($code);
+$foreign = str_replace('O:5:"Inner"', 'O:6:"EInner"', $s);
+try {
+    echo unserialize($foreign)->get(), "\n";
+} catch (TypeError $e) {
+    echo "refused\n";
+}
+echo "alive\n";
+"##,
+    );
+    assert_eq!(out, "x!\nrefused\nalive\n");
+}
