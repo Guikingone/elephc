@@ -9,7 +9,6 @@
 //! - String parents preserve reference markers and publish their stored child before leaf writes.
 
 use super::*;
-
 /// Lowers a nested array assignment that already carries an expression target.
 pub(super) fn lower_nested_array_assign(
     ctx: &mut LoweringContext<'_, '_>,
@@ -18,11 +17,77 @@ pub(super) fn lower_nested_array_assign(
     span: Span,
 ) {
     let update = desugared_element_update(value, span, |read| read == target);
-    if matches!(&update, Some(ElementUpdate::Compound))
-        && crate::ir_lower::expr::lower_weak_map_incdec_stmt(ctx, value, span)
+    let compound = matches!(&update, Some(ElementUpdate::Compound));
+    if compound && crate::ir_lower::expr::lower_weak_map_incdec_stmt(ctx, value, span)
     {
         return;
     }
+    if compound && nested_target_has_static_array_root(ctx, target)
+    {
+        let mut snapshots = Vec::new();
+        let (read, write) = snapshot_nested_update_keys(ctx, target, &mut snapshots);
+        let ExprKind::BinaryOp { op, right, .. } = &value.kind else { unreachable!() };
+        let value = Expr::new(ExprKind::BinaryOp {
+            left: Box::new(read), op: op.clone(), right: right.clone(),
+        }, value.span);
+        lower_nested_array_assign_inner(ctx, &write, &value, span, true);
+        let null = LoweredValue { value: ctx.builder.emit_const_null(), ir_type: IrType::I64 };
+        for name in snapshots {
+            ctx.unset_local(&name, null, Some(span));
+        }
+        return;
+    }
+    lower_nested_array_assign_inner(ctx, target, value, span, false);
+}
+
+/// Rebuilds the read with key captures at each dimension, not before the entire chain.
+fn snapshot_nested_update_keys(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    snapshots: &mut Vec<String>,
+) -> (Expr, Expr) {
+    let ExprKind::ArrayAccess { array, index } = &target.kind else {
+        return (target.clone(), target.clone());
+    };
+    let (read_array, write_array) = snapshot_nested_update_keys(ctx, array, snapshots);
+    let key_type = match &index.kind {
+        ExprKind::Variable(name) if ctx.is_ref_bound_local(name) => PhpType::Mixed,
+        ExprKind::Variable(name) => ctx.local_type(name),
+        _ => crate::types::checker::infer_expr_type_syntactic(index),
+    };
+    let name = ctx.declare_synthetic_php_local(key_type);
+    snapshots.push(name.clone());
+    let key = Expr::new(ExprKind::Variable(name), index.span);
+    let captured = Expr::new(ExprKind::Assignment {
+        target: Box::new(key.clone()), value: index.clone(), result_target: None,
+        prelude: Vec::new(), conditional_value_temp: None,
+    }, index.span);
+    (
+        Expr::new(ExprKind::ArrayAccess { array: Box::new(read_array), index: Box::new(captured) }, target.span),
+        Expr::new(ExprKind::ArrayAccess { array: Box::new(write_array), index: Box::new(key) }, target.span),
+    )
+}
+
+/// Restricts the update protocol to class-static array chains, leaving ordinary store timing intact.
+fn nested_target_has_static_array_root(ctx: &LoweringContext<'_, '_>, target: &Expr) -> bool {
+    match &target.kind {
+        ExprKind::ArrayAccess { array, .. } => nested_target_has_static_array_root(ctx, array),
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            static_property_type(ctx, receiver, property)
+                .is_some_and(|ty| ty.is_php_array() || is_indexed_array_type(&ty))
+        }
+        _ => false,
+    }
+}
+
+/// Writes a captured update after its read, or applies ordinary nested assignment ordering.
+fn lower_nested_array_assign_inner(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    value: &Expr,
+    span: Span,
+    key_already_diagnosed: bool,
+) {
     // Lowering the FULL target as an expression routes the write through the
     // read helper (`__rt_mixed_array_get`), which returns a detached fresh box
     // whenever the slot storage is not already a boxed Mixed cell; the
@@ -48,11 +113,15 @@ pub(super) fn lower_nested_array_assign(
             if let Some(owner) = owner { roots.push(owner); }
             operand
         };
-        let value_first = deferred.then(|| {
+        let value_first = (deferred || key_already_diagnosed).then(|| {
             let value = lower_expr(ctx, value);
             root_operand(ctx, value)
         });
-        let parent = lower_nested_assign_parent(ctx, array, span);
+        let parent = if key_already_diagnosed {
+            lower_nested_assign_parent_with_diagnosed_key(ctx, array, span, true)
+        } else {
+            lower_nested_assign_parent(ctx, array, span)
+        };
         let parent = if ctx.builder.value_php_type(parent.value).codegen_repr() == PhpType::Mixed {
             let resolved = ctx.emit_owned_value(
                 Op::RuntimeCall, vec![parent.value],
@@ -108,6 +177,16 @@ pub(crate) fn lower_nested_assign_parent(
     expr: &Expr,
     span: Span,
 ) -> LoweredValue {
+    lower_nested_assign_parent_with_diagnosed_key(ctx, expr, span, false)
+}
+
+/// Reuses key diagnoses when the same parent chain was already read by a captured update.
+fn lower_nested_assign_parent_with_diagnosed_key(
+    ctx: &mut LoweringContext<'_, '_>,
+    expr: &Expr,
+    span: Span,
+    key_already_diagnosed: bool,
+) -> LoweredValue {
     let ExprKind::ArrayAccess { array, index } = &expr.kind else {
         if let ExprKind::Variable(name) = &expr.kind {
             if ctx.local_type(name).codegen_repr() == PhpType::Mixed {
@@ -131,14 +210,16 @@ pub(crate) fn lower_nested_assign_parent(
     }
     // Boxed Mixed receivers: chains recurse with for-write semantics; other
     // receiver shapes evaluate once as plain reads of the receiver cell.
-    let receiver = lower_nested_assign_parent(ctx, array, span);
+    let receiver = lower_nested_assign_parent_with_diagnosed_key(ctx, array, span, key_already_diagnosed);
     if ctx.builder.value_php_type(receiver.value).codegen_repr() == PhpType::Mixed {
         let key = lower_expr(ctx, index);
-        let target = match &array.kind {
-            ExprKind::Variable(name) if ctx.append_update_cell_aliases.contains(name) => {
-                RuntimeCallTarget::PendingAppendFetchForWrite
-            }
-            _ => RuntimeCallTarget::ArrayFetchForWrite,
+        let pending_append = matches!(&array.kind,
+            ExprKind::Variable(name) if ctx.append_update_cell_aliases.contains(name));
+        let target = match (pending_append, key_already_diagnosed) {
+            (false, false) => RuntimeCallTarget::ArrayFetchForWrite,
+            (false, true) => RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed,
+            (true, false) => RuntimeCallTarget::PendingAppendFetchForWrite,
+            (true, true) => RuntimeCallTarget::PendingAppendFetchForWriteAlreadyDiagnosed,
         };
         let parent = ctx.emit_value(
             Op::RuntimeCall,

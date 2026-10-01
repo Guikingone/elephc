@@ -84,9 +84,13 @@ pub enum RuntimeCallTarget {
     /// Fetches an intermediate array element in write context, installing an
     /// empty child container when the addressed parent slot is missing or null.
     ArrayFetchForWrite,
+    /// Fetches a parent whose key conversion was diagnosed by the update's preceding read.
+    ArrayFetchForWriteAlreadyDiagnosed,
     /// Fetches through a pending append parent, preserving a payload-only survivor selected
     /// before a diagnostic callback instead of separating it through ordinary COW.
     PendingAppendFetchForWrite,
+    /// Fetches through a pending append parent after the update read diagnosed its key.
+    PendingAppendFetchForWriteAlreadyDiagnosed,
     /// Retains the concrete cell behind PHP wrappers and boxed caller-reference markers.
     MixedCellResolveForWrite,
     /// Checks whether exactly one of the selected array cell and its payload survives beyond
@@ -172,7 +176,9 @@ impl RuntimeCallTarget {
                 result: IrType::Void,
             }),
             RuntimeCallTarget::ArrayFetchForWrite
-            | RuntimeCallTarget::PendingAppendFetchForWrite => Some(RuntimeCallSignature::Polymorphic {
+            | RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
+            | RuntimeCallTarget::PendingAppendFetchForWrite
+            | RuntimeCallTarget::PendingAppendFetchForWriteAlreadyDiagnosed => Some(RuntimeCallSignature::Polymorphic {
                 min_operands: 2,
                 max_operands: Some(2),
             }),
@@ -253,7 +259,11 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::ThrowableInitialize => "object.throwable_initialize",
             RuntimeCallTarget::ExceptionChain => "object.exception_chain",
             RuntimeCallTarget::ArrayFetchForWrite => "array.fetch_for_write",
+            RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed => "array.fetch_for_write_already_diagnosed",
             RuntimeCallTarget::PendingAppendFetchForWrite => "array.pending_append_fetch_for_write",
+            RuntimeCallTarget::PendingAppendFetchForWriteAlreadyDiagnosed => {
+                "array.pending_append_fetch_for_write_already_diagnosed"
+            }
             RuntimeCallTarget::StringWriteOffset => "string.write_offset",
             RuntimeCallTarget::MixedCellResolveForWrite => "array.mixed_cell_resolve_for_write",
             RuntimeCallTarget::MixedArrayCellHasLiveOwner => "array.mixed_cell_has_live_owner",
