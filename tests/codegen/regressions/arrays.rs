@@ -3919,3 +3919,65 @@ echo "\n", json_encode(["wrapped" => $m]), "\n";
     );
     assert_eq!(out, "alpha,7\nalpha=a 7=b \n{\"wrapped\":{\"alpha\":\"a\",\"7\":\"b\"}}\n");
 }
+
+/// A write under a key a call returned as `mixed` never released the key cell (the
+/// helper only borrows it) nor a Mixed value the backend retained for the write, so
+/// `$map[key()] = value()` leaked both on every write. The output is PHP's: a shared
+/// copy stays unchanged, and negative and sparse keys promote to a hash.
+#[test]
+fn test_mixed_key_writes_release_the_key_the_value_and_the_old_array() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function skey(int $i): mixed { return "k" . $i; }
+function ikey(int $i): mixed { return $i; }
+function marr(): mixed { return [1, "two"]; }
+function tarr(): array { return [3, "four"]; }
+function tobj(): stdClass { $o = new stdClass(); $o->a = 1; return $o; }
+function indexed(): string {
+    $map = [1, 2];
+    $copy = $map;
+    $map[ikey(2)] = marr();
+    $map[skey(1)] = tarr();
+    $map[ikey(-5)] = 7;
+    return json_encode($copy) . json_encode($map);
+}
+function sparse(): string {
+    $m = [];
+    $m[ikey(3)] = 1;
+    $m[ikey(0)] = 2;
+    return json_encode($m);
+}
+function by_ref(array &$a): void {
+    $a[ikey(count($a))] = "r";
+    $a[skey(9)] = "s";
+}
+function mixed_slot(int $argc): string {
+    $m = $argc > 50 ? "str" : [];
+    $m[ikey(0)] = marr();
+    $m[skey(1)] = tarr();
+    $m[2] = tobj();
+    $m["x"] = marr();
+    return json_encode($m);
+}
+$out = "";
+for ($k = 0; $k < 30; $k++) {
+    $arr = ["x"];
+    by_ref($arr);
+    $out = indexed() . sparse() . json_encode($arr) . mixed_slot($argc);
+}
+echo $out, "\n";
+"#,
+    );
+    assert!(out.success, "stderr: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "[1,2]{\"0\":1,\"1\":2,\"2\":[1,\"two\"],\"k1\":[3,\"four\"],\"-5\":7}",
+            "{\"3\":1,\"0\":2}",
+            "{\"0\":\"x\",\"1\":\"r\",\"k9\":\"s\"}",
+            "{\"0\":[1,\"two\"],\"k1\":[3,\"four\"],\"2\":{\"a\":1},\"x\":[1,\"two\"]}\n",
+        )
+    );
+    assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
+}
+

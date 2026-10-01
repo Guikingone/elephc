@@ -140,15 +140,9 @@ echo "after\n";
     fs::remove_dir_all(dir).unwrap();
 }
 
-/// Many calls returning strings, arrays and objects leave the heap flat: the
-/// engine copies are freed with each call and Elephc owns one copy of each
-/// result.
-///
-/// An ARRAY HOLDING AN OBJECT (`demo_nested()`) is left out: rebuilding it
-/// writes into an array inside a loop, and on the current backend any
-/// function doing that leaks one block per call — reproducible with no
-/// extension at all (`$map = []; for (...) { $map[$k] = f(); } return $map;`
-/// in a function returning mixed). It is a lowering defect, tracked apart.
+/// Many calls returning strings, arrays, objects and arrays holding objects
+/// leave the heap flat: the engine copies are freed with each call and Elephc
+/// owns one copy of each result.
 #[test]
 #[ignore = "downloads php-src and builds a C extension"]
 fn repeated_calls_do_not_grow_the_heap() {
@@ -163,6 +157,7 @@ for ($i = 0; $i < 300; $i++) {
     $total += count(demo_split("a,b,c"));
     $total += demo_object("xy")->length;
     $total += count(demo_echo(["k" => [1, "two", 3.5]]));
+    $total += count(demo_nested());
 }
 echo $total, "\n";
 "#,
