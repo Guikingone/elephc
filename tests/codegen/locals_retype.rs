@@ -901,9 +901,9 @@ fn test_retype_whose_throwing_rhs_unwinds_out_of_the_callee_frame() {
 /// The heap shape: the string the RE-BOUND binding allocates is owned once, however many copies
 /// of the retype the optimizer made.
 ///
-/// The local read above the retype is an `int` here on purpose. The shape with a STRING read
-/// above it (the fixtures directly above) is the one that pays the pre-existing boxed-detach
-/// leak, which would mask what this fixture is for.
+/// The local read above the retype is an `int` to isolate ownership of the new string.
+/// String reads above a retype are also leak-free, as pinned separately by
+/// `test_string_reads_above_a_retype_leave_a_clean_heap`.
 #[test]
 fn test_retype_below_an_if_leaves_a_clean_heap() {
     let out = compile_and_run_with_heap_debug(fixtures::RETYPE_SCALAR_TAIL_SINKING);
