@@ -95,6 +95,7 @@ mod destructor_catch_cleanup;
 mod callback_argument_cleanup;
 mod argument_evaluation_owners;
 mod codegen_guard_operand_owners;
+mod offset_unset_key_guards;
 mod call_coercion_owners;
 mod eval_sparse_arrays;
 mod boxed_array_merge;

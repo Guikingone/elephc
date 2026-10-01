@@ -20,12 +20,14 @@
 //!   containers get boxed, as they always have: their own offset check does not accept a
 //!   numeric string yet. The caller transfers ownership of the first box.
 //! - A PHP `offsetUnset()` BORROWS the offset box, so this frame frees it after the call. The
+//!   shared exceptional-owner guard also frees it when the method throws instead of returning.
 //!   SPL helpers CONSUME theirs, as they do for `__rt_mixed_array_get`, and the unused original
 //!   box is freed first. The Error path frees it too.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::runtime::exceptions::guards;
 
 /// Emits `__rt_mixed_object_offset_unset` for the current target.
 ///
@@ -41,14 +43,14 @@ pub fn emit_mixed_object_offset_unset(emitter: &mut Emitter) {
 }
 
 /// Emits the ARM64 helper. Frame: `[sp]` receiver, `[sp, #8]` boxed offset, `[sp, #16]` /
-/// `[sp, #24]` normalized key words, `[sp, #32]` saved fp/lr.
+/// `[sp, #24]` normalized key words, `[sp, #32..64]` exceptional key owner, `[sp, #64]` fp/lr.
 fn emit_mixed_object_offset_unset_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_object_offset_unset ---");
     emitter.label_global("__rt_mixed_object_offset_unset");
-    emitter.instruction("sub sp, sp, #48");                                     // reserve receiver, offset, key words and frame linkage
-    emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve the caller frame and return address
-    emitter.instruction("add x29, sp, #32");                                    // establish a stable frame
+    emitter.instruction("sub sp, sp, #80");                                     // reserve receiver, offset, key words, exceptional owner and linkage
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // preserve the caller frame and return address
+    emitter.instruction("add x29, sp, #64");                                    // establish a stable frame
     emitter.instruction("str x0, [sp, #0]");                                    // save the unboxed receiver
     emitter.instruction("str x1, [sp, #8]");                                    // save the owned boxed offset
     emitter.instruction("stp x2, x3, [sp, #16]");                               // save the normalized key words for the SPL containers
@@ -71,7 +73,14 @@ fn emit_mixed_object_offset_unset_aarch64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x12", "_class_offsetunset_ptrs");
     emitter.instruction("ldr x12, [x12, x11, lsl #3]");                         // resolve the concrete or inherited offsetUnset
     emitter.instruction("cbz x12, __rt_mixed_object_offset_unset_not_indexable"); // 0 means the class is not ArrayAccess
+    emitter.instruction("str x12, [sp, #24]");                                  // the PHP path no longer needs normalized key metadata
+    emitter.instruction("mov x0, x1");                                          // register this frame's owned key before entering PHP
+    guards::guard(emitter, 32, 64);
+    emitter.instruction("ldr x12, [sp, #24]");                                  // restore the selected method after guard registration
+    emitter.instruction("ldr x0, [sp, #0]");                                    // restore the borrowed PHP receiver
+    emitter.instruction("ldr x1, [sp, #8]");                                    // restore the original key box borrowed by the method
     emitter.instruction("blr x12");                                             // remove through PHP's ArrayAccess::offsetUnset (x0 receiver, x1 offset)
+    guards::unguard(emitter, 32, 64);
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the boxed offset
     emitter.instruction("bl __rt_decref_mixed");                                // a PHP method BORROWED it, so this frame frees it
     emitter.instruction("b __rt_mixed_object_offset_unset_done");               // the offset is gone
@@ -95,28 +104,28 @@ fn emit_mixed_object_offset_unset_aarch64(emitter: &mut Emitter) {
         emitter.comment(&format!("end of the {what} path"));
     }
     emitter.label("__rt_mixed_object_offset_unset_done");
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // release the local frame
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // release the local frame
     emitter.instruction("ret");                                                 // return to the unset site
 
     emitter.label("__rt_mixed_object_offset_unset_not_indexable");
     emitter.instruction("ldr x0, [sp, #8]");                                    // the owned boxed offset nobody will take
     emitter.instruction("bl __rt_decref_mixed");                                // free it before leaving through the Error
     emitter.instruction("ldr x0, [sp, #0]");                                    // pass the receiver so the Error names its class
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // release the local frame before the tail-call
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // release the local frame before the tail-call
     emitter.instruction("b __rt_throw_object_not_array");                       // never returns
 }
 
 /// Emits the x86_64 helper. Frame: `[rbp - 8]` receiver, `[rbp - 16]` boxed offset,
-/// `[rbp - 24]` / `[rbp - 32]` normalized key words.
+/// `[rbp - 24]` / `[rbp - 32]` normalized key words, `[rbp - 64..32]` exceptional key owner.
 fn emit_mixed_object_offset_unset_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_object_offset_unset ---");
     emitter.label_global("__rt_mixed_object_offset_unset");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
-    emitter.instruction("sub rsp, 32");                                         // reserve receiver, offset and key-word slots
+    emitter.instruction("sub rsp, 64");                                         // reserve receiver, offset, key words and exceptional owner
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the unboxed receiver
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the owned boxed offset
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the normalized key low word for the SPL containers
@@ -140,7 +149,14 @@ fn emit_mixed_object_offset_unset_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r12, QWORD PTR [r12 + r11 * 8]");                  // resolve the concrete or inherited offsetUnset
     emitter.instruction("test r12, r12");                                       // 0 means the class is not ArrayAccess
     emitter.instruction("jz __rt_mixed_object_offset_unset_not_indexable");     // raise PHP's object-as-array Error
+    emitter.instruction("mov QWORD PTR [rbp - 32], r12");                       // the PHP path no longer needs normalized key metadata
+    emitter.instruction("mov rax, rsi");                                        // register this frame's owned key before entering PHP
+    guards::guard(emitter, 32, 64);
+    emitter.instruction("mov r12, QWORD PTR [rbp - 32]");                       // restore the selected method after guard registration
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // restore the borrowed PHP receiver
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // restore the original key box borrowed by the method
     emitter.instruction("call r12");                                            // remove through PHP's ArrayAccess::offsetUnset (rdi receiver, rsi offset)
+    guards::unguard(emitter, 32, 64);
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the boxed offset
     emitter.instruction("call __rt_decref_mixed");                              // a PHP method BORROWED it, so this frame frees it
     emitter.instruction("jmp __rt_mixed_object_offset_unset_done");             // the offset is gone
@@ -181,4 +197,28 @@ fn emit_mixed_object_offset_unset_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // restore the stack pointer
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before the tail-call
     emitter.instruction("jmp __rt_throw_object_not_array");                     // never returns
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Every target guards its owned key only around the borrowing PHP method invocation.
+    #[test]
+    fn offset_unset_php_key_owner_is_guarded_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_mixed_object_offset_unset(&mut emitter);
+            let assembly = emitter.output();
+            let guard = assembly.find("__rt_exception_guard_owned").unwrap();
+            let call = assembly.find(if target.arch == Arch::AArch64 { "blr x12" } else { "call r12" }).unwrap();
+            let detach = assembly.find("__rt_exception_unguard_owned").unwrap();
+            let release = assembly.find("__rt_decref_mixed").unwrap();
+            assert!(guard < call && call < detach && detach < release, "{name}: {assembly}");
+            assert_eq!(assembly.matches("__rt_exception_guard_owned").count(), 1, "{name}");
+            assert_eq!(assembly.matches("__rt_exception_unguard_owned").count(), 1, "{name}");
+        }
+    }
 }
