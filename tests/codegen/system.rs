@@ -4227,3 +4227,77 @@ foreach (['now - 7200 seconds', 'now -7200 seconds', 'now + 1 day', 'tomorrow - 
         "now - 7200 seconds => -7200\nnow -7200 seconds => -7200\nnow + 1 day => 86400\ntomorrow - 1 hour => 39600\nyesterday + 2 hours => -122400\nnow junk => false\nnow - => false\n"
     );
 }
+
+/// Verifies `strtotime()` composes the forms php lets a sentence combine: the 12-hour clock
+/// (`9am`, `9:30 pm`, `12am`), a keyword or weekday followed by a time of day (`tomorrow 9am`,
+/// `friday noon`), and two keywords in either order (`noon tomorrow`, `tomorrow noon`), the later
+/// keyword resetting what the earlier one set, with a trailing offset still applied last. Every
+/// expected value is php 8.5's answer from the same base (a Tuesday); out-of-range clock times and
+/// trailing junk are refused. Carbon's `Carbon::parse('tomorrow 9am')` and
+/// `strtotime('noon tomorrow')` were `false` here.
+#[test]
+fn test_strtotime_keyword_time_of_day_and_meridiem_forms_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set('UTC');
+$base = 1700000000;
+foreach ([
+    '9am',
+    '9:30am',
+    '9 am',
+    '9:30 pm',
+    '12am',
+    '12pm',
+    '12:30 PM',
+    '1PM',
+    '11:59:59 pm',
+    'tomorrow 9am',
+    'tomorrow 14:30:15',
+    'tomorrow 12AM',
+    'Tomorrow NOON',
+    'TODAY 9AM',
+    'noon tomorrow',
+    'tomorrow noon',
+    'midnight tomorrow',
+    'tomorrow midnight',
+    'yesterday noon',
+    'noon yesterday',
+    'midnight yesterday',
+    'yesterday 6pm',
+    'today 5:15pm',
+    'now noon',
+    'noon now',
+    'today noon',
+    'noon today',
+    'noon tomorrow +1 day',
+    'tomorrow noon +1 hour',
+    'noon + 1 hour',
+    'monday noon',
+    'next monday noon',
+    'friday noon',
+    'next friday 6pm',
+    'last friday 3pm',
+    'this friday 9:15am',
+    ' tomorrow  noon ',
+    'noon  tomorrow',
+    '13pm',
+    '0am',
+    '9:61am',
+    '9:30:61pm',
+    'tomorrow 13pm',
+    '9amx',
+    '9 amm',
+    'tomorrow junk',
+    'noon junk',
+    'AM',
+] as $s) {
+    $t = strtotime($s, $base);
+    echo $s, ' => ', $t === false ? 'false' : $t, "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "9am => 1699952400\n9:30am => 1699954200\n9 am => 1699952400\n9:30 pm => 1699997400\n12am => 1699920000\n12pm => 1699963200\n12:30 PM => 1699965000\n1PM => 1699966800\n11:59:59 pm => 1700006399\ntomorrow 9am => 1700038800\ntomorrow 14:30:15 => 1700058615\ntomorrow 12AM => 1700006400\nTomorrow NOON => 1700049600\nTODAY 9AM => 1699952400\nnoon tomorrow => 1700006400\ntomorrow noon => 1700049600\nmidnight tomorrow => 1700006400\ntomorrow midnight => 1700006400\nyesterday noon => 1699876800\nnoon yesterday => 1699833600\nmidnight yesterday => 1699833600\nyesterday 6pm => 1699898400\ntoday 5:15pm => 1699982100\nnow noon => 1699963200\nnoon now => 1699963200\ntoday noon => 1699963200\nnoon today => 1699920000\nnoon tomorrow +1 day => 1700092800\ntomorrow noon +1 hour => 1700053200\nnoon + 1 hour => 1699966800\nmonday noon => 1700481600\nnext monday noon => 1700481600\nfriday noon => 1700222400\nnext friday 6pm => 1700244000\nlast friday 3pm => 1699628400\nthis friday 9:15am => 1700212500\n tomorrow  noon  => 1700049600\nnoon  tomorrow => 1700006400\n13pm => false\n0am => false\n9:61am => false\n9:30:61pm => false\ntomorrow 13pm => false\n9amx => false\n9 amm => false\ntomorrow junk => false\nnoon junk => false\nAM => false\n"
+    );
+}

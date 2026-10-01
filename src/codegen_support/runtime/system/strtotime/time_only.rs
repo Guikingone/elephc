@@ -16,10 +16,12 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 pub(crate) fn emit_time_only(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_time_only_linux_x86_64(emitter);
+        emit_ampm_linux_x86_64(emitter);
         return;
     }
 
     emit_time_only_arm64(emitter);
+    emit_ampm_arm64(emitter);
 }
 
 /// Emits ARM64 assembly for the `HH:MM[:SS]` time-only parsing sub-routine.
@@ -251,4 +253,224 @@ fn emit_time_only_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rsp");                                        // rdi = &tm
     emitter.instruction("call __rt_mktime_shifted");                            // → rax = ts
     emitter.instruction("jmp __rt_strtotime_ret_linux_x86_64");                 // return
+}
+
+/// Emits ARM64 assembly for the 12-hour clock forms `H[H][:MM[:SS]][ ]am|pm` (`9am`, `9 am`, `9:30pm`,
+/// `12:00:15 AM`). The dispatcher routes every digit-leading input whose last two bytes are `am` or
+/// `pm` here. The hour must be 1..12; `12am` is hour 0 and `12pm` is hour 12, as in PHP. The parsed
+/// fields are stashed in the same `[sp+80/84/88]` slots the 24-hour parser uses and the shared
+/// `__rt_strtotime_time_apply` tail builds the timestamp from the effective clock's date.
+fn emit_ampm_arm64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- strtotime: H[H][:MM[:SS]][ ]am|pm sub-routine ---");
+    emitter.label("__rt_strtotime_ampm_entry");
+    emitter.instruction("ldr x1, [sp, #48]");                                   // trimmed input pointer
+    emitter.instruction("ldr x2, [sp, #56]");                                   // trimmed input length
+    emitter.instruction("ldrb w9, [x1]");                                       // first hour digit (the dispatcher routed a digit-leading input)
+    emitter.instruction("sub w9, w9, #48");                                     // numeric value of the first digit
+    emitter.instruction("mov x3, #1");                                          // cursor = index of the byte after the first digit
+    emitter.instruction("ldrb w10, [x1, x3]");                                  // second byte (the length is at least 3)
+    emitter.instruction("sub w11, w10, #48");                                   // numeric value of the second byte
+    emitter.instruction("cmp w11, #9");                                         // a second hour digit ?
+    emitter.instruction("b.hi __rt_strtotime_ampm_hour_done");                  // no → one-digit hour
+    emitter.instruction("mov w12, #10");                                        // tens multiplier
+    emitter.instruction("mul w9, w9, w12");                                     // first digit * 10
+    emitter.instruction("add w9, w9, w11");                                     // hour = digit1*10 + digit2
+    emitter.instruction("add x3, x3, #1");                                      // cursor past the second digit
+    emitter.label("__rt_strtotime_ampm_hour_done");
+    emitter.instruction("cmp w9, #1");                                          // 12-hour clock starts at 1
+    emitter.instruction("b.lo __rt_strtotime_fail");                            // hour 0 has no meridiem form
+    emitter.instruction("cmp w9, #12");                                         // 12-hour clock ends at 12
+    emitter.instruction("b.hi __rt_strtotime_fail");                            // hour above 12 with a meridiem is invalid
+    emitter.instruction("mov w4, #0");                                          // minute = 0
+    emitter.instruction("mov w5, #0");                                          // second = 0
+    emitter.instruction("cmp x3, x2");                                          // anything left for the meridiem ?
+    emitter.instruction("b.ge __rt_strtotime_fail");                            // no → malformed
+    emitter.instruction("ldrb w10, [x1, x3]");                                  // byte under the cursor
+    emitter.instruction("cmp w10, #58");                                        // ':' opens the minutes ?
+    emitter.instruction("b.ne __rt_strtotime_ampm_ws");                         // no → optional space and the meridiem
+    emitter.instruction("add x6, x3, #3");                                      // cursor after ":MM"
+    emitter.instruction("cmp x6, x2");                                          // does ":MM" fit before the end ?
+    emitter.instruction("b.gt __rt_strtotime_fail");                            // no → malformed
+    emitter.instruction("add x7, x1, x3");                                      // pointer to the ':'
+    emitter.instruction("ldrb w10, [x7, #1]");                                  // first minute digit
+    emitter.instruction("sub w10, w10, #48");                                   // numeric value
+    emitter.instruction("cmp w10, #9");                                         // digit ?
+    emitter.instruction("b.hi __rt_strtotime_fail");                            // not a digit
+    emitter.instruction("ldrb w11, [x7, #2]");                                  // second minute digit
+    emitter.instruction("sub w11, w11, #48");                                   // numeric value
+    emitter.instruction("cmp w11, #9");                                         // digit ?
+    emitter.instruction("b.hi __rt_strtotime_fail");                            // not a digit
+    emitter.instruction("mov w12, #10");                                        // tens multiplier
+    emitter.instruction("mul w4, w10, w12");                                    // first minute digit * 10
+    emitter.instruction("add w4, w4, w11");                                     // minute
+    emitter.instruction("cmp w4, #59");                                         // minute in 0..59 ?
+    emitter.instruction("b.hi __rt_strtotime_fail");                            // reject invalid minute
+    emitter.instruction("mov x3, x6");                                          // cursor past the minutes
+    emitter.instruction("cmp x3, x2");                                          // anything left for the meridiem ?
+    emitter.instruction("b.ge __rt_strtotime_fail");                            // no → malformed
+    emitter.instruction("ldrb w10, [x1, x3]");                                  // byte under the cursor
+    emitter.instruction("cmp w10, #58");                                        // ':' opens the seconds ?
+    emitter.instruction("b.ne __rt_strtotime_ampm_ws");                         // no → optional space and the meridiem
+    emitter.instruction("add x6, x3, #3");                                      // cursor after ":SS"
+    emitter.instruction("cmp x6, x2");                                          // does ":SS" fit before the end ?
+    emitter.instruction("b.gt __rt_strtotime_fail");                            // no → malformed
+    emitter.instruction("add x7, x1, x3");                                      // pointer to the ':'
+    emitter.instruction("ldrb w10, [x7, #1]");                                  // first second digit
+    emitter.instruction("sub w10, w10, #48");                                   // numeric value
+    emitter.instruction("cmp w10, #9");                                         // digit ?
+    emitter.instruction("b.hi __rt_strtotime_fail");                            // not a digit
+    emitter.instruction("ldrb w11, [x7, #2]");                                  // second second digit
+    emitter.instruction("sub w11, w11, #48");                                   // numeric value
+    emitter.instruction("cmp w11, #9");                                         // digit ?
+    emitter.instruction("b.hi __rt_strtotime_fail");                            // not a digit
+    emitter.instruction("mov w12, #10");                                        // tens multiplier
+    emitter.instruction("mul w5, w10, w12");                                    // first second digit * 10
+    emitter.instruction("add w5, w5, w11");                                     // second
+    emitter.instruction("cmp w5, #59");                                         // second in 0..59 ?
+    emitter.instruction("b.hi __rt_strtotime_fail");                            // reject invalid second
+    emitter.instruction("mov x3, x6");                                          // cursor past the seconds
+    emitter.label("__rt_strtotime_ampm_ws");
+    emitter.instruction("cmp x3, x2");                                          // anything left for the meridiem ?
+    emitter.instruction("b.ge __rt_strtotime_fail");                            // no → malformed
+    emitter.instruction("ldrb w10, [x1, x3]");                                  // byte under the cursor
+    emitter.instruction("cmp w10, #32");                                        // optional single space before the meridiem ?
+    emitter.instruction("b.ne __rt_strtotime_ampm_meridiem");                   // no → the byte is the meridiem
+    emitter.instruction("add x3, x3, #1");                                      // skip the space
+    emitter.label("__rt_strtotime_ampm_meridiem");
+    emitter.instruction("sub x6, x2, x3");                                      // bytes left
+    emitter.instruction("cmp x6, #2");                                          // exactly "am" or "pm" must remain
+    emitter.instruction("b.ne __rt_strtotime_fail");                            // anything else is trailing junk
+    emitter.instruction("add x7, x1, x3");                                      // pointer to the meridiem
+    emitter.instruction("ldrb w10, [x7]");                                      // a or p
+    emitter.instruction("orr w10, w10, #32");                                   // fold ASCII case
+    emitter.instruction("ldrb w11, [x7, #1]");                                  // m
+    emitter.instruction("orr w11, w11, #32");                                   // fold ASCII case
+    emitter.instruction("cmp w11, #109");                                       // 'm' ?
+    emitter.instruction("b.ne __rt_strtotime_fail");                            // not a meridiem
+    emitter.instruction("cmp w10, #97");                                        // am ?
+    emitter.instruction("b.eq __rt_strtotime_ampm_am");                         // yes → ante meridiem
+    emitter.instruction("cmp w10, #112");                                       // pm ?
+    emitter.instruction("b.ne __rt_strtotime_fail");                            // not a meridiem
+    emitter.instruction("cmp w9, #12");                                         // 12pm stays 12 ?
+    emitter.instruction("b.eq __rt_strtotime_ampm_store");                      // yes → noon
+    emitter.instruction("add w9, w9, #12");                                     // 1pm..11pm → 13..23
+    emitter.instruction("b __rt_strtotime_ampm_store");                         // store the fields
+    emitter.label("__rt_strtotime_ampm_am");
+    emitter.instruction("cmp w9, #12");                                         // 12am is midnight ?
+    emitter.instruction("b.ne __rt_strtotime_ampm_store");                      // 1am..11am keep their hour
+    emitter.instruction("mov w9, #0");                                          // 12am → hour 0
+    emitter.label("__rt_strtotime_ampm_store");
+    emitter.instruction("str w9, [sp, #80]");                                   // save hour
+    emitter.instruction("str w4, [sp, #84]");                                   // save minute
+    emitter.instruction("str w5, [sp, #88]");                                   // save second
+    emitter.instruction("b __rt_strtotime_time_apply");                         // build the timestamp from the effective clock's date
+}
+
+/// Emits x86_64 Linux assembly for the 12-hour clock forms `H[H][:MM[:SS]][ ]am|pm`; the ARM64 twin
+/// documents the grammar. Fields land in `[rbp-48]`/`[rbp-44]`/`[rbp-40]` and the shared
+/// `__rt_strtotime_time_apply_linux_x86_64` tail builds the timestamp.
+fn emit_ampm_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- strtotime: H[H][:MM[:SS]][ ]am|pm sub-routine ---");
+    emitter.label("__rt_strtotime_ampm_entry_linux_x86_64");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                       // trimmed input pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 72]");                       // trimmed input length
+    emitter.instruction("movzx eax, BYTE PTR [rdi]");                           // first hour digit (the dispatcher routed a digit-leading input)
+    emitter.instruction("sub eax, 48");                                         // numeric value of the first digit
+    emitter.instruction("mov r8d, 1");                                          // cursor = index of the byte after the first digit
+    emitter.instruction("movzx ecx, BYTE PTR [rdi + r8]");                      // second byte (the length is at least 3)
+    emitter.instruction("mov r9d, ecx");                                        // copy for the digit test
+    emitter.instruction("sub r9d, 48");                                         // numeric value of the second byte
+    emitter.instruction("cmp r9d, 9");                                          // a second hour digit ?
+    emitter.instruction("ja __rt_strtotime_ampm_hour_done_linux_x86_64");       // no → one-digit hour
+    emitter.instruction("imul eax, eax, 10");                                   // first digit * 10
+    emitter.instruction("add eax, r9d");                                        // hour = digit1*10 + digit2
+    emitter.instruction("add r8, 1");                                           // cursor past the second digit
+    emitter.label("__rt_strtotime_ampm_hour_done_linux_x86_64");
+    emitter.instruction("cmp eax, 1");                                          // 12-hour clock starts at 1
+    emitter.instruction("jb __rt_strtotime_fail_linux_x86_64");                 // hour 0 has no meridiem form
+    emitter.instruction("cmp eax, 12");                                         // 12-hour clock ends at 12
+    emitter.instruction("ja __rt_strtotime_fail_linux_x86_64");                 // hour above 12 with a meridiem is invalid
+    emitter.instruction("xor r10d, r10d");                                      // minute = 0
+    emitter.instruction("xor r11d, r11d");                                      // second = 0
+    emitter.instruction("cmp r8, rsi");                                         // anything left for the meridiem ?
+    emitter.instruction("jge __rt_strtotime_fail_linux_x86_64");                // no → malformed
+    emitter.instruction("movzx ecx, BYTE PTR [rdi + r8]");                      // byte under the cursor
+    emitter.instruction("cmp cl, 58");                                          // ':' opens the minutes ?
+    emitter.instruction("jne __rt_strtotime_ampm_ws_linux_x86_64");             // no → optional space and the meridiem
+    emitter.instruction("lea r9, [r8 + 3]");                                    // cursor after ":MM"
+    emitter.instruction("cmp r9, rsi");                                         // does ":MM" fit before the end ?
+    emitter.instruction("jg __rt_strtotime_fail_linux_x86_64");                 // no → malformed
+    emitter.instruction("movzx edx, BYTE PTR [rdi + r8 + 1]");                  // first minute digit
+    emitter.instruction("sub edx, 48");                                         // numeric value
+    emitter.instruction("cmp edx, 9");                                          // digit ?
+    emitter.instruction("ja __rt_strtotime_fail_linux_x86_64");                 // not a digit
+    emitter.instruction("movzx ecx, BYTE PTR [rdi + r8 + 2]");                  // second minute digit
+    emitter.instruction("sub ecx, 48");                                         // numeric value
+    emitter.instruction("cmp ecx, 9");                                          // digit ?
+    emitter.instruction("ja __rt_strtotime_fail_linux_x86_64");                 // not a digit
+    emitter.instruction("imul edx, edx, 10");                                   // first minute digit * 10
+    emitter.instruction("add edx, ecx");                                        // minute
+    emitter.instruction("cmp edx, 59");                                         // minute in 0..59 ?
+    emitter.instruction("ja __rt_strtotime_fail_linux_x86_64");                 // reject invalid minute
+    emitter.instruction("mov r10d, edx");                                       // keep the minute
+    emitter.instruction("mov r8, r9");                                          // cursor past the minutes
+    emitter.instruction("cmp r8, rsi");                                         // anything left for the meridiem ?
+    emitter.instruction("jge __rt_strtotime_fail_linux_x86_64");                // no → malformed
+    emitter.instruction("movzx ecx, BYTE PTR [rdi + r8]");                      // byte under the cursor
+    emitter.instruction("cmp cl, 58");                                          // ':' opens the seconds ?
+    emitter.instruction("jne __rt_strtotime_ampm_ws_linux_x86_64");             // no → optional space and the meridiem
+    emitter.instruction("lea r9, [r8 + 3]");                                    // cursor after ":SS"
+    emitter.instruction("cmp r9, rsi");                                         // does ":SS" fit before the end ?
+    emitter.instruction("jg __rt_strtotime_fail_linux_x86_64");                 // no → malformed
+    emitter.instruction("movzx edx, BYTE PTR [rdi + r8 + 1]");                  // first second digit
+    emitter.instruction("sub edx, 48");                                         // numeric value
+    emitter.instruction("cmp edx, 9");                                          // digit ?
+    emitter.instruction("ja __rt_strtotime_fail_linux_x86_64");                 // not a digit
+    emitter.instruction("movzx ecx, BYTE PTR [rdi + r8 + 2]");                  // second second digit
+    emitter.instruction("sub ecx, 48");                                         // numeric value
+    emitter.instruction("cmp ecx, 9");                                          // digit ?
+    emitter.instruction("ja __rt_strtotime_fail_linux_x86_64");                 // not a digit
+    emitter.instruction("imul edx, edx, 10");                                   // first second digit * 10
+    emitter.instruction("add edx, ecx");                                        // second
+    emitter.instruction("cmp edx, 59");                                         // second in 0..59 ?
+    emitter.instruction("ja __rt_strtotime_fail_linux_x86_64");                 // reject invalid second
+    emitter.instruction("mov r11d, edx");                                       // keep the second
+    emitter.instruction("mov r8, r9");                                          // cursor past the seconds
+    emitter.label("__rt_strtotime_ampm_ws_linux_x86_64");
+    emitter.instruction("cmp r8, rsi");                                         // anything left for the meridiem ?
+    emitter.instruction("jge __rt_strtotime_fail_linux_x86_64");                // no → malformed
+    emitter.instruction("movzx ecx, BYTE PTR [rdi + r8]");                      // byte under the cursor
+    emitter.instruction("cmp cl, 32");                                          // optional single space before the meridiem ?
+    emitter.instruction("jne __rt_strtotime_ampm_meridiem_linux_x86_64");       // no → the byte is the meridiem
+    emitter.instruction("add r8, 1");                                           // skip the space
+    emitter.label("__rt_strtotime_ampm_meridiem_linux_x86_64");
+    emitter.instruction("mov r9, rsi");                                         // length ...
+    emitter.instruction("sub r9, r8");                                          // ... minus cursor = bytes left
+    emitter.instruction("cmp r9, 2");                                           // exactly "am" or "pm" must remain
+    emitter.instruction("jne __rt_strtotime_fail_linux_x86_64");                // anything else is trailing junk
+    emitter.instruction("movzx ecx, BYTE PTR [rdi + r8]");                      // a or p
+    emitter.instruction("or ecx, 32");                                          // fold ASCII case
+    emitter.instruction("movzx edx, BYTE PTR [rdi + r8 + 1]");                  // m
+    emitter.instruction("or edx, 32");                                          // fold ASCII case
+    emitter.instruction("cmp dl, 109");                                         // 'm' ?
+    emitter.instruction("jne __rt_strtotime_fail_linux_x86_64");                // not a meridiem
+    emitter.instruction("cmp cl, 97");                                          // am ?
+    emitter.instruction("je __rt_strtotime_ampm_am_linux_x86_64");              // yes → ante meridiem
+    emitter.instruction("cmp cl, 112");                                         // pm ?
+    emitter.instruction("jne __rt_strtotime_fail_linux_x86_64");                // not a meridiem
+    emitter.instruction("cmp eax, 12");                                         // 12pm stays 12 ?
+    emitter.instruction("je __rt_strtotime_ampm_store_linux_x86_64");           // yes → noon
+    emitter.instruction("add eax, 12");                                         // 1pm..11pm → 13..23
+    emitter.instruction("jmp __rt_strtotime_ampm_store_linux_x86_64");          // store the fields
+    emitter.label("__rt_strtotime_ampm_am_linux_x86_64");
+    emitter.instruction("cmp eax, 12");                                         // 12am is midnight ?
+    emitter.instruction("jne __rt_strtotime_ampm_store_linux_x86_64");          // 1am..11am keep their hour
+    emitter.instruction("xor eax, eax");                                        // 12am → hour 0
+    emitter.label("__rt_strtotime_ampm_store_linux_x86_64");
+    emitter.instruction("mov DWORD PTR [rbp - 48], eax");                       // save hour
+    emitter.instruction("mov DWORD PTR [rbp - 44], r10d");                      // save minute
+    emitter.instruction("mov DWORD PTR [rbp - 40], r11d");                      // save second
+    emitter.instruction("jmp __rt_strtotime_time_apply_linux_x86_64");          // build the timestamp from the effective clock's date
 }
