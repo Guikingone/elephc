@@ -16,6 +16,7 @@
 //! - Purely syntactic. It never consults the type environment, so it produces the same answer on
 //!   every one of the checker's repeated walks over the same body (top level twice, method bodies
 //!   to stability, function bodies once per call-site specialization).
+//! - Guard visibility follows each statement's physical source mode, not the caller's mode.
 //! - Disabled under `--strict-locals`: the scan returns without marking anything and a divergent
 //!   assignment errors exactly as it does today.
 //! - The same walk also answers a question that has nothing to do with marking: does this body
@@ -814,6 +815,13 @@ fn guarded_variable_name(expr: &Expr) -> Option<&str> {
 /// `If`/`IfDef`/`Switch`/`While`/`DoWhile`/`For`/`Foreach`/`Try`/`Throw`/`IncludeOnceGuard`
 /// (conditions, `for` init/update and loop subjects included).
 fn collect_stmt(checker: &Checker, stmt: &Stmt, depth: u32, facts: &mut Facts) {
+    crate::strict_php::with_source_mode(stmt.source_mode, || {
+        collect_stmt_in_current_source_mode(checker, stmt, depth, facts);
+    });
+}
+
+/// Collects one statement after installing the same physical source profile as the checker.
+fn collect_stmt_in_current_source_mode(checker: &Checker, stmt: &Stmt, depth: u32, facts: &mut Facts) {
     match &stmt.kind {
         StmtKind::Assign { name, value } => {
             // `$x .= "a"` / `$x ??= 1` reach the checker as a plain `Assign` whose value is a
