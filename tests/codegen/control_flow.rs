@@ -32,3 +32,5 @@ mod closures;
 mod guarded_reassignment;
 #[path = "control_flow/branch_join_locals.rs"]
 mod branch_join_locals;
+#[path = "control_flow/switch_initialization.rs"]
+mod switch_initialization;

@@ -294,6 +294,7 @@ fn enter_switch_body(
     if dispatch.len() == 1 {
         let edge = dispatch.pop().expect("one edge");
         ctx.restore_local_types(edge.types);
+        ctx.restore_initialized_slots(edge.initialized);
         ctx.builder.position_at_end(edge.tail);
         return;
     }
@@ -309,16 +310,25 @@ fn enter_switch_body(
 /// is entered after the WHOLE dispatch was lowered, so the context holds the facts of the last
 /// label: a local the last label assigned (`case ($o = null) === null:`) would read as that
 /// label left it in an earlier body whose own edges all agree it still holds the object.
+/// Initialization is a must-fact: only slots initialized on every incoming edge are visible
+/// in the body or exit. Restore that intersection after any type-join conversion stores.
 fn join_switch_edges(
     ctx: &mut LoweringContext<'_, '_>,
     edges: Vec<IfArmExit>,
     merge: BlockId,
     span: Span,
 ) {
+    let mut initialized = HashSet::new();
     if let Some(first) = edges.first() {
         ctx.restore_local_types(first.types.clone());
+        ctx.restore_initialized_slots(first.initialized.clone());
+        initialized = first.initialized.clone();
+        for edge in edges.iter().skip(1) {
+            initialized.retain(|slot| edge.initialized.contains(slot));
+        }
     }
     finish_if_type_join(ctx, edges, merge, span);
+    ctx.restore_initialized_slots(initialized);
 }
 
 /// Ends one switch body, deferring its fall-through edge when control can still leave it.
