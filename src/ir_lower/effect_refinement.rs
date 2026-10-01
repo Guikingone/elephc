@@ -1,6 +1,6 @@
 //! Purpose:
 //! Refines call and read effects after the complete checked EIR module has been lowered.
-//! Computes closed-world callable summaries and attaches them to direct and instance calls.
+//! Computes closed-world callable summaries and attaches them to direct, static, and instance calls.
 //!
 //! Called from:
 //! - `crate::ir_lower::program::lower()` before final EIR validation.
@@ -110,6 +110,11 @@ fn all_functions(module: &Module) -> impl Iterator<Item = &Function> {
 fn summarize_function(function: &Function, context: &RefinementContext<'_>) -> Effects {
     let mut effects = Effects::PURE;
     for instruction in &function.instructions {
+        // The reset restores this frame's inherited scratch offset, which PHP cannot observe.
+        // Keep its instruction effect so intra-function passes retain and order the reset.
+        if instruction.op == Op::ConcatReset {
+            continue;
+        }
         effects |= refined_instruction_effects(function, instruction, context);
     }
     for block in &function.blocks {
@@ -147,6 +152,9 @@ fn refined_instruction_effects(
 ) -> Effects {
     match instruction.op {
         Op::Call => direct_call_effects(instruction, context).unwrap_or(instruction.effects),
+        Op::StaticMethodCall => {
+            static_call_effects(instruction, context).unwrap_or(instruction.effects)
+        }
         Op::MethodCall | Op::NullsafeMethodCall => {
             instance_call_effects(function, instruction, context).unwrap_or(instruction.effects)
         }
@@ -158,6 +166,27 @@ fn refined_instruction_effects(
         }
         _ => instruction.effects,
     }
+}
+
+/// Resolves an explicitly named static receiver through its inherited implementation.
+/// Forwarding self/parent/static receivers and runtime-selected callables keep their defaults.
+fn static_call_effects(
+    instruction: &crate::ir::Instruction,
+    context: &RefinementContext<'_>,
+) -> Option<Effects> {
+    let Immediate::Data(name_id) = instruction.immediate.as_ref()? else {
+        return None;
+    };
+    let name = context.data.strings.get(name_id.as_raw() as usize)?;
+    let (class_name, method) = name.rsplit_once("::")?;
+    let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
+    let (_, class) = context.classes.iter()
+        .find(|(name, _)| php_symbol_key(name) == class_key)?;
+    let method_key = php_symbol_key(method);
+    let implementation = class.static_method_impl_classes.get(&method_key)?;
+    context.summaries
+        .get(&callable_key(&format!("{implementation}::{method_key}")))
+        .copied()
 }
 
 /// Resolves a direct user-function call through the function-name data pool.
