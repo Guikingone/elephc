@@ -8,7 +8,7 @@
 //! - Range proofs and constant folding must both preserve unsupported boxed consumers.
 //! - Integer and float constants have different typed-store conversion contracts.
 
-use crate::ir::{validate_function, Builder, DataPool, Function, Immediate, IrHeapKind, IrType,
+use crate::ir::{validate_function, Builder, CmpPredicate, DataPool, Function, Immediate, IrHeapKind, IrType,
     LocalKind, Op, Ownership, Terminator};
 use crate::ir_passes::{const_fold::ConstFold, driver::IrPass, integer_range::IntegerRange};
 use crate::types::PhpType;
@@ -90,4 +90,33 @@ fn folded_float_keeps_integer_store_conversion() {
     }
     assert!(validate_function(&function).is_ok());
     assert!(!ConstFold.run(&mut function, &mut DataPool::default()));
+}
+
+/// Runtime ordering must retain tagged inputs and bool/null spaceship coercion rules.
+#[test]
+fn ordering_consumers_preserve_required_boxed_operands() {
+    for op in [Op::PhpRelCmp, Op::Spaceship] {
+        for null_rhs in [false, true] {
+            for overflow in [false, true] {
+                for pass in [&IntegerRange as &dyn IrPass, &ConstFold as &dyn IrPass] {
+                    let mut function = Function::new("ordering".to_string(), IrType::Void, PhpType::Void);
+                    let mut builder = Builder::new(&mut function);
+                    let entry = builder.create_named_block("entry", vec![]);
+                    builder.set_entry(entry);
+                    builder.position_at_end(entry);
+                    let lhs = builder.emit_const_i64(if overflow { i64::MAX } else { 1 });
+                    let sum = builder.emit(Op::ICheckedAdd, vec![lhs, lhs], None,
+                        IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed, Ownership::Owned).unwrap();
+                    let rhs = if null_rhs { builder.emit_const_null() } else { builder.emit_const_bool(true) };
+                    let (immediate, ty) = if op == Op::PhpRelCmp {
+                        (Some(Immediate::CmpPredicate(CmpPredicate::Slt)), PhpType::Bool)
+                    } else { (None, PhpType::Int) };
+                    builder.emit(op, vec![sum, rhs], immediate, IrType::I64, ty, Ownership::NonHeap);
+                    builder.terminate(Terminator::Return { value: None });
+                    assert!(validate_function(&function).is_ok());
+                    assert!(!pass.run(&mut function, &mut DataPool::default()), "{op:?}, {}", pass.name());
+                }
+            }
+        }
+    }
 }

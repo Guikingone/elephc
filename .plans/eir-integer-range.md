@@ -66,3 +66,25 @@ checks cover 972 cyclic CFGs and 180 composed-expression results; target emissio
 checks cover all five targets with optimization enabled and disabled.
 The previous head's CI still reports unrelated fixture timeouts. A preexisting
 by-reference float-parameter discrepancy was recorded separately for follow-up.
+
+## Third deep audit
+
+- [x] Recheck dataflow, induction, and direct consumer contracts after the shared guard change.
+- [x] Reproduce precision loss in Mixed/int loose equality and preserve exact integer payloads.
+- [x] Preserve runtime-tagged relational operands and bool/null spaceship coercions.
+- [x] Add concrete expected-output, generated observer, unit, and all-target regressions.
+- [x] Complete focused validation and record the local-only commit.
+
+The audit reproduced three further failures: loose equality rounded integer
+payloads above the exact double range, PhpRelCmp rejected two narrowed scalar
+operands, and spaceship narrowing changed bool/null comparisons from truthiness
+to numeric ordering. Exact integer-tag equality now has a target-aware path;
+the shared consumer guard retains boxed ordering inputs where required.
+The observer matrix checks 675 cast, predicate, and comparison results plus
+echo/print_r output with optimization enabled and disabled. Separate expected
+outputs cover 36 large-integer equality comparisons and bool/null ordering,
+including the zero-mask constant-folding path.
+Focused validation passed: 203 EIR unit tests, 17 range codegen tests, 15 loose
+comparison codegen tests, all five target emitters in both modes, a warning-free
+build, and assembly-comment alignment. The changes remain local because the PR
+is ready for review and the contribution policy prohibits further pushes.

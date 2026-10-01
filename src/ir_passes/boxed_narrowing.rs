@@ -47,15 +47,20 @@ fn accepts_scalar(function: &Function, user: &Instruction, scalar: IrType) -> bo
             accepts_scalar_store(&local.php_type, scalar)
                 && (user.op != Op::StoreRefCell || accepts_scalar_store(&user.result_php_type, scalar))
         }
+        // Scalar spaceship uses numeric ordering, unlike boxed bool/null truthiness ordering.
+        Op::Spaceship => user.operands.iter().all(|value| function.value(*value)
+            .is_some_and(|value| matches!(value.php_type.codegen_repr(),
+                PhpType::Int | PhpType::Float | PhpType::Mixed | PhpType::TaggedScalar))),
         // Scalar casts and observations dispatch on the operand's current PHP type.
         Op::Acquire | Op::Release | Op::MixedBox
         | Op::EchoValue | Op::PrintValue | Op::WriteStdout | Op::VarDump | Op::PrintR
         | Op::StrictEq | Op::StrictNotEq | Op::LooseEq | Op::LooseNotEq
-        | Op::PhpRelCmp | Op::Spaceship | Op::IsNull | Op::IsTruthy
+        | Op::IsNull | Op::IsTruthy
         | Op::TypePredicate | Op::IsEmpty => true,
         // Static properties require module metadata and may need a Mixed-to-scalar cast.
         // Static-local assignments do not rebox. Web superglobals can use raw storage.
         // Extern stores select their ABI from the source rather than the declared target.
+        // PhpRelCmp requires at least one runtime-tagged operand even after batch narrowing.
         _ => false,
     }
 }

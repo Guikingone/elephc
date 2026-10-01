@@ -836,6 +836,11 @@ array casts still require a boxed cell, typed reference stores must retain their
 numeric coercions, and static-property, global, and extern stores remain boxed
 when the function-local pass cannot establish their complete storage contract.
 Scalar casts and representation-polymorphic observations can still narrow.
+`PhpRelCmp` retains boxed operands because its lowering requires runtime tags.
+Spaceship narrowing is restricted to numeric or runtime-tagged counterparts,
+preserving boxed boolean/null truthiness comparisons. Loose equality compares
+integer-tagged boxed payloads with scalar integers exactly, without rounding
+through double precision before or after specialization.
 Constant folding uses the same consumer policy for both integer and floating-point
 results, so a later constant fold cannot bypass a range pass's representation guard.
 Block arguments and other terminator uses keep their declared representation;

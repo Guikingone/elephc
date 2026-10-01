@@ -172,6 +172,84 @@ fn test_integer_range_preserves_array_cast_box() {
     }
 }
 
+/// Narrowing must not change loose equality by avoiding a lossy boxed-to-float comparison.
+#[test]
+fn test_integer_range_large_integer_equality_is_exact_in_both_modes() {
+    let mut source = String::from("<?php\n");
+    let mut expected = String::new();
+    for base in [9_007_199_254_740_992i64, i64::MAX - 256, i64::MIN] {
+        for rhs in [base, base + 1, base + 2] {
+            for op in ["==", "!="] {
+                let result = (base + 1 == rhs) == (op == "==");
+                for reversed in [false, true] {
+                    let base_text = if base == i64::MIN { "PHP_INT_MIN".to_string() }
+                        else { base.to_string() };
+                    let rhs_text = if rhs == i64::MIN { "PHP_INT_MIN".to_string() }
+                        else { rhs.to_string() };
+                    let value = format!("(($argc & 255) + ({base_text}))");
+                    let comparison = if reversed { format!("({rhs_text}) {op} {value}") }
+                        else { format!("{value} {op} ({rhs_text})") };
+                    source.push_str(&format!("var_dump({comparison});\n"));
+                    expected.push_str(if result { "bool(true)\n" } else { "bool(false)\n" });
+                }
+            }
+        }
+    }
+    for optimized in [false, true] {
+        let output = run_variant(&source, optimized);
+        assert_eq!(output.0, expected, "optimized={optimized}");
+        assert!(output.1.is_empty(), "{}", output.1);
+    }
+}
+
+/// Runtime ordering keeps PHP bool/null coercions after range analysis and constant folding.
+#[test]
+fn test_integer_range_boxed_ordering_preserves_php_coercions() {
+    for mask in [255, 0] {
+        let source = format!("<?php
+var_dump((($argc & {mask}) + 2) <=> true);
+var_dump((($argc & {mask}) - 2) <=> null);
+var_dump(true <=> (($argc & {mask}) + 2));
+var_dump(null <=> (($argc & {mask}) - 2));
+var_dump((($argc & {mask}) + 2) < true);
+var_dump((($argc & {mask}) - 2) < null);
+var_dump((($argc & {mask}) - 2) > null);
+var_dump((($argc & {mask}) + 2) >= true);
+");
+        for optimized in [false, true] {
+            assert_eq!(run_variant(&source, optimized).0,
+                "int(0)\nint(1)\nint(0)\nint(-1)\nbool(false)\nbool(false)\nbool(true)\nbool(true)\n");
+        }
+    }
+}
+
+/// Scalar and boxed observations agree for zero, negative, large and overflowing results.
+#[test]
+fn test_integer_range_observer_matrix_matches_in_both_modes() {
+    let mut source = String::from("<?php for ($i = -1; $i <= 1; $i++) {\n");
+    for expression in ["(($argc & 255) + $i)",
+        "(($argc & 255) + 9007199254740992)", "(PHP_INT_MAX + ($argc & 255))"] {
+        for cast in ["int", "float", "string", "bool"] {
+            source.push_str(&format!("var_dump(({cast}){expression});\n"));
+        }
+        for predicate in ["is_int", "is_float", "is_bool", "is_null", "empty"] {
+            source.push_str(&format!("var_dump({predicate}({expression}));\n"));
+        }
+        for rhs in ["0", "1", "1.0", "true", "false", "null", "\"0\"", "\"1\"", "[]"] {
+            for op in ["===", "!==", "==", "!=", "<", "<=", ">", ">=", "<=>"] {
+                if matches!(rhs, "\"0\"" | "\"1\"" | "[]")
+                    && !matches!(op, "===" | "!==" | "==" | "!=") { continue; }
+                source.push_str(&format!("var_dump({expression} {op} {rhs});\n"));
+            }
+        }
+        source.push_str(&format!("echo {expression}; print_r({expression});\n"));
+    }
+    source.push_str("}\n");
+    let plain = run_variant(&source, false);
+    assert!(plain.1.is_empty(), "{}", plain.1);
+    assert_eq!(plain, run_variant(&source, true));
+}
+
 /// Boolean normalization must precede proofs about arithmetic using the cast result.
 #[test]
 fn test_integer_range_boolean_cast_preserves_overflow() {
@@ -311,6 +389,41 @@ function range_overflow_probe(int $input): bool {
         for optimized in [false, true] {
             let assembly = target_assembly(source, target, optimized);
             assert!(assembly.contains("op=ichecked_mul"), "{target}, optimized={optimized}");
+        }
+    }
+}
+
+/// Exact integer-tag comparison remains available on both architectures before narrowing.
+#[test]
+fn test_integer_range_all_supported_targets_keep_exact_integer_equality() {
+    let source = r#"<?php
+#[Export]
+function exact_equality_probe(int $input): bool {
+    return (($input & 255) + 9007199254740992) == 9007199254740992;
+}
+#[Export]
+function boxed_relational_probe(int $input): bool {
+    return (($input & 255) + 2) < true;
+}
+#[Export]
+function boxed_spaceship_probe(int $input): int {
+    return (($input & 255) + 2) <=> true;
+}
+"#;
+    for target in [
+        "macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64",
+    ] {
+        for optimized in [false, true] {
+            let assembly = target_assembly(source, target, optimized);
+            assert_eq!(assembly.contains("mixed_numeric_integer"), !optimized,
+                "{target}, optimized={optimized}");
+            if !optimized {
+                let compare = if target == "linux-x86_64" { "cmp r10, rax" } else { "cmp x10, x0" };
+                assert!(assembly.contains(compare), "{target}");
+            }
+            assert!(assembly.contains("op=php_rel_cmp"), "{target}");
+            assert!(assembly.contains("op=spaceship"), "{target}");
+            assert!(assembly.contains("op=ichecked_add"), "{target}");
         }
     }
 }
