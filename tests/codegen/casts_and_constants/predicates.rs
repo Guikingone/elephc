@@ -39,6 +39,26 @@ fn test_boolval_object_callable_ownership() {
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Capturing closures remain truthy through runtime-selected boolval calls without leaks.
+#[test]
+fn test_boolval_closure_callable_ownership() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function chooseClosureBoolFunction(string $name): string { return $name; }
+$callback = chooseClosureBoolFunction("BoOlVaL");
+$captured = str_repeat("closure", 4);
+$closure = function () use ($captured): string { return $captured; };
+echo $callback($closure) ? "1" : "0";
+echo call_user_func($callback, $closure) ? "1" : "0";
+echo call_user_func_array($callback, [$closure]) ? "1" : "0";
+unset($closure, $captured, $callback);
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "111", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Runtime-selected boolval retains false and true scalar/container conversions.
 #[test]
 fn test_boolval_runtime_callable_truthiness_controls() {
