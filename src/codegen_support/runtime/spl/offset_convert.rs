@@ -25,11 +25,16 @@
 //! - The helper CONSUMES the boxed offset, and releases it before any diagnostic: a deprecation or
 //!   warning can run a user error handler that throws, which would strand the box. A lossy
 //!   float-string buffers the string into the diagnostic before the box goes.
+//! - A stack-local exceptional owner covers numeric parsing and diagnostic-buffer allocation.
+//!   Normal paths detach it before releasing the box, preventing double cleanup.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::{emit_throwable_creation_line_unknown, x86_64_heap_kind_word};
+
+#[cfg(test)]
+mod tests;
 
 /// `SplFixedArray` offset rules: canonical integer strings only, null is a type error.
 pub(crate) const SPL_OFFSET_MODE_FIXED: i64 = 0;
@@ -81,16 +86,19 @@ pub(crate) fn emit_spl_offset_runtime(emitter: &mut Emitter) {
 /// Emits `__rt_spl_offset_convert` for ARM64.
 ///
 /// Input: `x0` = owned boxed offset, `x1` = mode. Output: `x0` = status (int, 1 for a type error,
-/// or null), `x1` = the integer index or the name-row address. Frame (64 bytes): `[sp]` box,
-/// `[sp, #8]` mode, `[sp, #16]` status, `[sp, #24]`/`[sp, #32]` payload words, `[sp, #40]` result.
+/// or null), `x1` = the integer index or the name-row address. Frame (96 bytes): `[sp]` box,
+/// `[sp, #8]` mode, `[sp, #16]` status, `[sp, #24]`/`[sp, #32]` payload words, `[sp, #40]` result,
+/// `[sp, #48..80]` owner guard, `[sp, #80]` linkage.
 fn emit_convert_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: spl offset convert ---");
     emitter.label_global("__rt_spl_offset_convert");
-    emitter.instruction("sub sp, sp, #64");                                     // reserve box, mode, status, payload and result slots
-    emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the caller frame and return address
-    emitter.instruction("add x29, sp, #48");                                    // establish the conversion frame
+    emitter.instruction("sub sp, sp, #96");                                     // reserve conversion slots and the exceptional owner guard
+    emitter.instruction("stp x29, x30, [sp, #80]");                             // preserve the caller frame and return address
+    emitter.instruction("add x29, sp, #80");                                    // establish the conversion frame
     emitter.instruction("stp x0, x1, [sp]");                                    // keep the owned box and the conversion mode
+    super::super::exceptions::guards::guard(emitter, 48, 80);
+    emitter.instruction("ldr x0, [sp]");                                        // reload the guarded box after registration
     emitter.instruction("bl __rt_mixed_unbox");                                 // read the offset's tag and payload words
     emitter.instruction("stp x1, x2, [sp, #24]");                               // keep the payload across the classification calls
     emitter.instruction("cmp x0, #0");                                          // an int is already an index
@@ -158,6 +166,7 @@ fn emit_convert_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_diag_warning_fragment");                       // start the float-string deprecation
     emitter.instruction("ldp x1, x2, [sp, #24]");                               // the string as written, still borrowed from the box
     emitter.instruction("bl __rt_diag_warning_fragment");                       // quote it in the deprecation
+    super::super::exceptions::guards::unguard(emitter, 48, 80);
     emitter.instruction("ldr x0, [sp]");                                        // the owned boxed offset
     emitter.instruction("bl __rt_decref_mixed");                                // release it before the handler can run
     abi::emit_symbol_address(emitter, "x1", "_spl_float_string_suffix");
@@ -180,6 +189,7 @@ fn emit_convert_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_spl_offset_convert_named");                     // record the type error
 
     emitter.label("__rt_spl_offset_convert_float");
+    super::super::exceptions::guards::unguard(emitter, 48, 80);
     emitter.instruction("ldr x0, [sp]");                                        // the owned box holds nothing the float needs
     emitter.instruction("bl __rt_decref_mixed");                                // release it before a diagnostic can run user code
     emitter.instruction("ldr x9, [sp, #24]");                                   // the float's bits
@@ -243,13 +253,14 @@ fn emit_convert_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x9, [sp, #16]");                                   // record the status
 
     emitter.label("__rt_spl_offset_convert_release");
+    super::super::exceptions::guards::unguard(emitter, 48, 80);
     emitter.instruction("ldr x0, [sp]");                                        // the owned boxed offset
     emitter.instruction("bl __rt_decref_mixed");                                // this helper consumes it
     emitter.instruction("ldr x0, [sp, #16]");                                   // return the status
     emitter.instruction("ldr x1, [sp, #40]");                                   // and the index or name row
     emitter.label("__rt_spl_offset_convert_return");
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the caller frame and return address
-    emitter.instruction("add sp, sp, #64");                                     // release the conversion frame
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore the caller frame and return address
+    emitter.instruction("add sp, sp, #96");                                     // release the conversion frame
     emitter.instruction("ret");                                                 // return status and value
 }
 
@@ -297,17 +308,19 @@ fn emit_throw_aarch64(emitter: &mut Emitter) {
 ///
 /// Input: `rdi` = owned boxed offset, `rsi` = mode. Output: `rax` = status, `rdi` = the integer
 /// index or the name-row address. Frame: `[rbp - 8]` box, `[rbp - 16]` mode, `[rbp - 24]` status,
-/// `[rbp - 32]`/`[rbp - 40]` payload words, `[rbp - 48]` result.
+/// `[rbp - 32]`/`[rbp - 40]` payload words, `[rbp - 48]` result, `[rbp - 80..48]` owner guard.
 fn emit_convert_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: spl offset convert ---");
     emitter.label_global("__rt_spl_offset_convert");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the conversion frame
-    emitter.instruction("sub rsp, 48");                                         // reserve box, mode, status, payload and result slots
+    emitter.instruction("sub rsp, 80");                                         // reserve conversion slots and the exceptional owner guard
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // keep the owned box
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // keep the conversion mode
-    emitter.instruction("mov rax, rdi");                                        // pass the box to the unbox helper
+    emitter.instruction("mov rax, rdi");                                        // publish the consumed box through the native owner convention
+    super::super::exceptions::guards::guard(emitter, 48, 80);
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the guarded box after registration
     emitter.instruction("call __rt_mixed_unbox");                               // read the offset's tag and payload words
     emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // keep the payload low word
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // keep the payload high word
@@ -377,6 +390,7 @@ fn emit_convert_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // the string as written, still borrowed from the box
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // and its length
     emitter.instruction("call __rt_diag_warning_fragment");                     // quote it in the deprecation
+    super::super::exceptions::guards::unguard(emitter, 48, 80);
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // the owned boxed offset
     emitter.instruction("call __rt_decref_mixed");                              // release it before the handler can run
     emitter.instruction("lea rdi, [rip + _spl_float_string_suffix]");           // deprecation suffix
@@ -397,6 +411,7 @@ fn emit_convert_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_spl_offset_convert_named_x");                 // record the type error
 
     emitter.label("__rt_spl_offset_convert_float_x");
+    super::super::exceptions::guards::unguard(emitter, 48, 80);
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // the owned box holds nothing the float needs
     emitter.instruction("call __rt_decref_mixed");                              // release it before a diagnostic can run user code
     emitter.instruction("movq xmm0, QWORD PTR [rbp - 32]");                     // pass the float
@@ -455,6 +470,7 @@ fn emit_convert_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], 1");                         // status: type error
 
     emitter.label("__rt_spl_offset_convert_release_x");
+    super::super::exceptions::guards::unguard(emitter, 48, 80);
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // the owned boxed offset
     emitter.instruction("call __rt_decref_mixed");                              // this helper consumes it
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the status
