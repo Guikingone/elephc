@@ -46,6 +46,34 @@ echo call_user_func([$class, $method], "value");
     assert!(!check.classes.contains_key("Unrelated"));
 }
 
+/// Ordinary Reflection-looking text adds no discovery hazards or unrelated declaration roots.
+#[test]
+fn prune_ordinary_reflection_strings_keeps_unused_declarations_pruned() {
+    for literal in [r#""reflection""#, r#""Reflection failed""#, r#""App\\ReflectionText""#] {
+        let source = format!("<?php function unused(): int {{ return 1; }} class Unused {{ public function hidden(): int {{ return 2; }} }} echo {literal};");
+        let usage = scan_program(&parse(&source));
+        assert!(!usage.hazards.dynamic_function, "{literal}");
+        assert!(!usage.hazards.dynamic_method, "{literal}");
+        assert!(!usage.hazards.dynamic_class, "{literal}");
+        let (program, check) = prune(&source);
+        assert!(!has_function(&program, "unused"), "{literal}");
+        assert!(!has_class(&program, "Unused"), "{literal}");
+        assert!(!check.functions.contains_key("unused"), "{literal}");
+        assert!(!check.classes.contains_key("Unused"), "{literal}");
+    }
+}
+
+/// A folded Reflection-prefixed class name keeps its exact class edge without discovery.
+#[test]
+fn scan_folded_reflection_class_string_records_only_the_class_edge() {
+    let program = crate::optimize::fold_constants(parse("<?php class ReflectionHelper {} echo ReflectionHelper::class;"));
+    let usage = scan_program(&program);
+    assert!(usage.classes.contains(&php_symbol_key("ReflectionHelper")));
+    assert!(!usage.hazards.dynamic_function);
+    assert!(!usage.hazards.dynamic_method);
+    assert!(!usage.hazards.dynamic_class);
+}
+
 /// Parses one PHP fixture without running resolution or optimization passes.
 fn parse(source: &str) -> Program {
     let tokens = crate::lexer::tokenize(source).expect("fixture must tokenize");

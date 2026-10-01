@@ -214,8 +214,9 @@ impl Scanner<'_> {
                 } else {
                     // Named ::class constants have already folded to strings. Keep the
                     // class edge even when a runtime call obscures the resulting value.
-                    // Strings without a matching declaration add no graph node.
-                    self.record_class(name);
+                    // Text alone does not perform Reflection discovery. Strings without
+                    // a matching declaration add no graph node.
+                    self.usage.classes.insert(php_symbol_key(name));
                 }
             }
             ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)
