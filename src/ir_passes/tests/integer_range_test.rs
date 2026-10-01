@@ -17,12 +17,12 @@ use crate::ir_passes::integer_range::IntegerRange;
 use crate::types::PhpType;
 
 /// Runs integer range specialization once.
-fn specialize(function: &mut Function) -> bool {
+pub(super) fn specialize(function: &mut Function) -> bool {
     IntegerRange.run(function, &mut DataPool::default())
 }
 
 /// Adds and loads one unconstrained scalar integer local.
-fn emit_unknown_int(builder: &mut Builder<'_>, name: &str) -> ValueId {
+pub(super) fn emit_unknown_int(builder: &mut Builder<'_>, name: &str) -> ValueId {
     let slot = builder.add_local(
         Some(name.to_string()),
         IrType::I64,
@@ -33,7 +33,7 @@ fn emit_unknown_int(builder: &mut Builder<'_>, name: &str) -> ValueId {
 }
 
 /// Emits an integer binary operation with scalar result metadata.
-fn emit_scalar_binop(
+pub(super) fn emit_scalar_binop(
     builder: &mut Builder<'_>,
     op: Op,
     lhs: ValueId,
@@ -52,7 +52,7 @@ fn emit_scalar_binop(
 }
 
 /// Emits an integer comparison with its signed predicate.
-fn emit_icmp(
+pub(super) fn emit_icmp(
     builder: &mut Builder<'_>,
     lhs: ValueId,
     rhs: ValueId,

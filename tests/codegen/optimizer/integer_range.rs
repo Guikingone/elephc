@@ -155,6 +155,27 @@ echo PHP_INT_MAX * $one;
     assert_eq!(run_variant(source, false), run_variant(source, true));
 }
 
+/// A widening shift count must not leave a stale no-overflow proof in its successor.
+#[test]
+fn test_integer_range_widening_shift_preserves_float_overflow() {
+    let source = r#"<?php
+$shift = $argc & 0;
+while ($shift < 63) {
+    $value = 1 << $shift;
+    if ($argc > 0) {
+        $product = $value * 4;
+        if ($shift >= 60) { echo is_float($product) ? "float|" : "int|"; }
+    }
+    $shift = ($shift + 1) & 63;
+}
+"#;
+    let plain = run_variant(source, false);
+    let optimized = run_variant(source, true);
+    assert_eq!(plain, optimized);
+    assert_eq!(optimized.0, "int|float|float|");
+    assert!(optimized.1.is_empty(), "{}", optimized.1);
+}
+
 /// Every supported target emits both modes and removes only the bounded multiply.
 #[test]
 fn test_integer_range_all_supported_targets_compile_both_modes() {
@@ -190,5 +211,24 @@ function bounded_checksum(): int {
             !optimized.contains("op=ichecked_mul"),
             "optimized {target} assembly retained bounded checked multiply"
         );
+    }
+}
+
+/// Both modes retain an unproven shifted multiply on all supported emitters.
+#[test]
+fn test_integer_range_all_supported_targets_keep_shift_overflow_checked() {
+    let source = r#"<?php
+#[Export]
+function range_overflow_probe(int $input): bool {
+    return is_float((1 << ($input & 63)) * 4);
+}
+"#;
+    for target in [
+        "macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64",
+    ] {
+        for optimized in [false, true] {
+            let assembly = target_assembly(source, target, optimized);
+            assert!(assembly.contains("op=ichecked_mul"), "{target}, optimized={optimized}");
+        }
     }
 }

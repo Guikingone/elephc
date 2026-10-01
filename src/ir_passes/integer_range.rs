@@ -107,14 +107,7 @@ impl IrPass for IntegerRange {
             return false;
         };
         let candidates = collect_safe_candidates(function, &states);
-        let mut changed = false;
-        for candidate in candidates {
-            if can_rewrite_candidate(function, candidate) {
-                rewrite_candidate(function, candidate);
-                changed = true;
-            }
-        }
-        changed
+        rewrite_candidates(function, &candidates)
     }
 }
 
@@ -327,14 +320,14 @@ fn merge_entry_state(
         .map(|block| block.params.iter().copied().collect())
         .unwrap_or_default();
     let mut changed = false;
-    for (value, next) in incoming {
-        let Some(previous) = current.get(&value).copied() else {
-            current.insert(value, next);
+    // Absence means unknown, not an unseen contribution to the join.
+    current.retain(|&value, previous| {
+        let Some(&next) = incoming.get(&value) else {
             changed = true;
-            continue;
+            return false;
         };
         let mut joined = previous.hull(next);
-        if joined != previous
+        if joined != *previous
             && loop_headers.contains(&target)
             && params.contains(&value)
             && !induction.contains_key(&value)
@@ -350,11 +343,12 @@ fn merge_entry_state(
                 }
             }
         }
-        if joined != previous {
-            current.insert(value, joined);
+        if joined != *previous {
+            *previous = joined;
             changed = true;
         }
-    }
+        true
+    });
     changed
 }
 
@@ -582,13 +576,20 @@ fn refine_comparison_edge(
     let Some(Immediate::CmpPredicate(mut predicate)) = compare.immediate else {
         return Some(());
     };
+    // Unsupported comparisons cannot prove that either successor is unreachable.
+    if matches!(predicate, CmpPredicate::Olt | CmpPredicate::Ole | CmpPredicate::Ogt | CmpPredicate::Oge) {
+        return Some(());
+    }
     if !taken {
         predicate = invert_predicate(predicate)?;
     }
     let lhs = compare.operands[0];
     let rhs = compare.operands[1];
-    let lhs_range = range_for_value(function, state, lhs)?;
-    let rhs_range = range_for_value(function, state, rhs)?;
+    let Some((lhs_range, rhs_range)) = range_for_value(function, state, lhs)
+        .zip(range_for_value(function, state, rhs))
+    else {
+        return Some(());
+    };
     let (next_lhs, next_rhs) = refine_ranges(lhs_range, predicate, rhs_range)?;
     state.insert(lhs, next_lhs);
     state.insert(rhs, next_rhs);
@@ -774,17 +775,18 @@ fn value_def_block(function: &Function, value: ValueId) -> Option<BlockId> {
     }
 }
 
-/// Returns the arguments passed from one predecessor to a selected target.
+/// Returns arguments only when every parallel edge to the target agrees.
 fn branch_args_to(
     function: &Function,
     from: BlockId,
     target: BlockId,
 ) -> Option<Vec<ValueId>> {
     let term = function.block(from)?.terminator.as_ref()?;
-    outgoing_edges(term)
+    let mut edges = outgoing_edges(term)
         .into_iter()
-        .find(|edge| edge.target == target)
-        .map(|edge| edge.args)
+        .filter(|edge| edge.target == target);
+    let args = edges.next()?.args;
+    edges.all(|edge| edge.args == args).then_some(args)
 }
 
 /// Finds a loop header comparison and whether its true edge continues the loop.
@@ -1046,22 +1048,16 @@ fn unchecked_op(op: Op) -> Option<Op> {
     }
 }
 
-/// Returns whether narrowing one boxed checked result preserves every direct use shape.
-fn boxed_result_users_are_safe(function: &Function, result: ValueId) -> bool {
+/// Collects values whose direct users cannot consume a narrowed scalar result.
+fn blocked_boxed_results(function: &Function) -> HashSet<ValueId> {
+    let mut blocked = HashSet::new();
     for block in &function.blocks {
-        if block
-            .terminator
-            .as_ref()
-            .is_some_and(|term| super::liveness::terminator_uses(term).contains(&result))
-        {
-            return false;
+        if let Some(term) = &block.terminator {
+            blocked.extend(super::liveness::terminator_uses(term));
         }
     }
-    function.instructions.iter().all(|user| {
-        if !user.operands.contains(&result) {
-            return true;
-        }
-        matches!(
+    for user in &function.instructions {
+        if !matches!(
             user.op,
             Op::Acquire
                 | Op::Release
@@ -1107,30 +1103,46 @@ fn boxed_result_users_are_safe(function: &Function, result: ValueId) -> bool {
                 | Op::IsTruthy
                 | Op::TypePredicate
                 | Op::IsEmpty
-        )
-    })
+        ) {
+            blocked.extend(user.operands.iter().copied());
+        }
+    }
+    blocked
 }
 
-/// Validates a trial rewrite so strict operand and block-argument contracts fail closed.
-fn can_rewrite_candidate(function: &Function, candidate: InstId) -> bool {
-    let Some(inst) = function.instruction(candidate) else {
-        return false;
-    };
-    if unchecked_op(inst.op).is_none() {
+/// Applies scalar proofs directly and validates boxed narrowing as one fail-closed batch.
+fn rewrite_candidates(function: &mut Function, candidates: &[InstId]) -> bool {
+    if candidates.is_empty() {
         return false;
     }
-    if inst.result_type == IrType::I64 {
+    let blocked = blocked_boxed_results(function);
+    let mut boxed = Vec::new();
+    let mut changed = false;
+    for &candidate in candidates {
+        let Some(inst) = function.instruction(candidate) else {
+            continue;
+        };
+        if inst.result_type == IrType::I64 {
+            rewrite_candidate(function, candidate);
+            changed = true;
+        } else if inst.result.is_some_and(|result| !blocked.contains(&result)) {
+            boxed.push(candidate);
+        }
+    }
+    if boxed.is_empty() {
+        return changed;
+    }
+    // Avoid cloning and validating the entire function for every arithmetic operation.
+    // If any representation contract rejects the batch, retain all its checked forms.
+    let mut trial = function.clone();
+    for candidate in boxed {
+        rewrite_candidate(&mut trial, candidate);
+    }
+    if validate_function(&trial).is_ok() {
+        *function = trial;
         return true;
     }
-    let Some(result) = inst.result else {
-        return false;
-    };
-    if !boxed_result_users_are_safe(function, result) {
-        return false;
-    }
-    let mut trial = function.clone();
-    rewrite_candidate(&mut trial, candidate);
-    validate_function(&trial).is_ok()
+    changed
 }
 
 /// Rewrites one proven checked operation and narrows boxed result metadata when required.

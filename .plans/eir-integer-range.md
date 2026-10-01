@@ -15,3 +15,11 @@ The pass runs after `mem2reg` and checked-integer sink specialization, before ch
 Arithmetic transfer uses wider intermediate calculations. A checked operation is rewritten only when every endpoint calculation remains inside the signed 64-bit range. Boxed checked results are narrowed to scalar `I64` only when their complete use shape can consume the narrowed representation; otherwise they remain checked even when a local range fact exists. Unknown inputs, unsupported CFG shapes, invalid shift counts, exceptional control flow, and any range merge that loses the needed bound fail closed.
 
 Runtime tests compare optimizer-on and optimizer-off behavior for both proven-safe loops and deliberately overflowing expressions. Target tests emit both optimized and unoptimized assembly for `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, and `linux-x86_64`, proving the optimization stays target-neutral while unproven overflow paths retain the checked helper.
+
+## PR review and CI follow-up
+
+- [x] Integrate the current mem2reg dependency and current main without rewriting published commits.
+- [x] Reproduce all three Greptile findings with valid hand-built EIR regressions.
+- [x] Invalidate facts absent from an incoming range state, preserve unsupported comparison edges, and check every parallel loop back edge.
+- [x] Reduce repeated full-function work in range specialization and split composite ownership fixtures responsible for CI timeouts without reducing coverage.
+- [ ] Run focused verification, commit and push the fixes, and inspect the new CI run.

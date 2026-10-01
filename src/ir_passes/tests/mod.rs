@@ -20,6 +20,7 @@ mod driver_test;
 mod identity_arith_test;
 mod inline_test;
 mod integer_range_test;
+mod integer_range_regression_test;
 mod immutable_local_loads_test;
 mod intervals_test;
 mod licm_test;

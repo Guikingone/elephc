@@ -816,6 +816,13 @@ arithmetic. It recognizes constant-step loop-carried parameters in natural loops
 and combines their initial value, comparison bound, and update step to constrain
 induction variables on the loop body and back edge.
 
+At joins, a fact survives only if every reachable incoming state provides it;
+losing a shift bound invalidates any earlier narrow result interval. Unsupported
+comparison predicates leave both edges reachable. Induction summaries require
+all edges from each latch to the header to agree, including parallel conditional
+and switch edges. Boxed result narrowing is validated as one conservative batch
+instead of cloning and validating the whole function for each operation.
+
 Checked add, subtract, and multiply instructions become ordinary scalar EIR only
 when the complete operand interval proves that every possible result remains in
 the signed 64-bit range. The proof uses wider intermediate arithmetic and fails
