@@ -1205,8 +1205,6 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayIntersectKey |
             RuntimeFnId::ArrayIsList |
             RuntimeFnId::ArrayKeyExists |
-            RuntimeFnId::ArrayKeyFirst |
-            RuntimeFnId::ArrayKeyLast |
             RuntimeFnId::ArrayKeys |
             RuntimeFnId::ArrayMergeRecursive |
             RuntimeFnId::ArrayReplace |
@@ -1364,15 +1362,17 @@ impl RuntimeFnId {
             | RuntimeFnId::ElephcObjectPropCount
             | RuntimeFnId::ElephcObjectPropName
             | RuntimeFnId::SplObjectId => crate::ir::Effects::READS_HEAP,
-            // `array_first()` / `array_last()` read one edge element and box it into a fresh
+            // Array-edge value/key functions read one edge and box it into a fresh
             // Mixed cell (retaining a container payload inside the box). No user code runs and
             // nothing is written, but the result depends on the array's current contents, so
             // the call must never be treated as pure and merged with an earlier read. A `mixed`
             // argument holding no array raises PHP's TypeError, so the call may throw: operands
             // are pinned for unwind and stores before it stay observable by a catch.
-            RuntimeFnId::ArrayFirst | RuntimeFnId::ArrayLast => crate::ir::Effects::from_bits_retain(
+            RuntimeFnId::ArrayFirst | RuntimeFnId::ArrayLast
+            | RuntimeFnId::ArrayKeyFirst | RuntimeFnId::ArrayKeyLast => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits()
                     | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_CONCAT.bits()
                     | crate::ir::Effects::MAY_THROW.bits(),
             ),
             // Re-boxing a property slot allocates the Mixed cell it hands back.
@@ -2318,11 +2318,13 @@ impl RuntimeFnId {
                 // the box is independently owned and never aliases the receiving array.
                 | RuntimeFnId::ArrayPtrKey
                 | RuntimeFnId::ArrayPtrValue
-                // `array_first()` / `array_last()` box their answer through the same
+                // Array-edge value/key functions box their answer through the same
                 // `__rt_mixed_from_value` / `__rt_array_get_mixed_key` paths, so the cell is
                 // independently owned and never aliases the source array.
                 | RuntimeFnId::ArrayFirst
                 | RuntimeFnId::ArrayLast
+                | RuntimeFnId::ArrayKeyFirst
+                | RuntimeFnId::ArrayKeyLast
                 | RuntimeFnId::ArrayProduct
                 | RuntimeFnId::ArrayReduce
                 | RuntimeFnId::ArrayReplace

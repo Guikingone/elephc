@@ -14569,6 +14569,7 @@
         "names": [
           "reads_heap",
           "alloc_heap",
+          "alloc_concat",
           "may_throw"
         ]
       },
@@ -15422,7 +15423,12 @@
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "reads_heap",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",
@@ -15430,7 +15436,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -15527,7 +15533,12 @@
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "reads_heap",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",
@@ -15535,7 +15546,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -15760,6 +15771,7 @@
         "names": [
           "reads_heap",
           "alloc_heap",
+          "alloc_concat",
           "may_throw"
         ]
       },

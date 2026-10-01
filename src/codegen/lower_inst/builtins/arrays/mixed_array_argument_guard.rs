@@ -10,9 +10,8 @@
 //! - The checker admits a `mixed` argument to an `array` parameter, so the check is PHP's
 //!   run-time one. Without it the edge helpers answered `null` for a string or an int.
 //! - The type name follows php-src: `int`, `string`, `float`, `null`, `resource`, `Closure` for a
-//!   callable, and the literal `true` / `false` for a bool. An object is named `object`, where
-//!   php-src names its class: the class name is not available at this lowering site (the same
-//!   divergence `array_keys()` has).
+//!   callable, and the literal `true` / `false` for a bool. Objects use the bounds-checked
+//!   runtime class-name lookup shared with `count()`, including namespaced subclasses.
 //! - On the array path the guard leaves the UNBOXED container in `holder`, peeled through every
 //!   nested Mixed box by `__rt_mixed_unbox`, so the edge helpers never see a box wrapping another
 //!   box that their own normalizer would not unwrap. The caller's box keeps owning it.
@@ -20,6 +19,7 @@
 use crate::codegen::abi;
 use crate::codegen::context::FunctionContext;
 use crate::codegen::lower_inst::exceptions::emit_type_error;
+use crate::codegen::lower_inst::runtime_class_messages;
 use crate::codegen::platform::Arch;
 use crate::codegen::Result;
 
@@ -46,6 +46,7 @@ pub(super) fn emit_mixed_array_argument_guard(
     let true_label = ctx.next_label("mixed_array_arg_true");
     let false_label = ctx.next_label("mixed_array_arg_false");
     let object_label = ctx.next_label("mixed_array_arg_object");
+    let unknown_label = ctx.next_label("mixed_array_arg_unknown");
     let error_labels: Vec<(u64, &'static str, String)> = NON_ARRAY_TAG_TYPE_NAMES
         .iter()
         .map(|(tag, name)| (*tag, *name, ctx.next_label("mixed_array_arg_error")))
@@ -83,7 +84,9 @@ pub(super) fn emit_mixed_array_argument_guard(
         ctx.emitter.instruction(&format!("{cmp} {tag}, {}", imm(*value)));      // identify the payload kind for PHP's TypeError wording
         ctx.emitter.instruction(&format!("{beq} {label}"));                     // raise the TypeError naming this payload kind
     }
-    ctx.emitter.instruction(&format!("{jmp} {object_label}"));                  // any remaining tag is an object or other non-array
+    ctx.emitter.instruction(&format!("{cmp} {tag}, {}", imm(6)));               // only an object payload can be read for its runtime class id
+    ctx.emitter.instruction(&format!("{beq} {object_label}"));                  // compose the TypeError using the actual object class
+    ctx.emitter.instruction(&format!("{jmp} {unknown_label}"));                 // unknown tags retain the safe generic non-array fallback
     ctx.emitter.label(&bool_label);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -107,6 +110,16 @@ pub(super) fn emit_mixed_array_argument_guard(
         emit_type_error(ctx, &message(type_name));
     }
     ctx.emitter.label(&object_label);
+    ctx.emitter.instruction(&format!("mov {result}, {payload}"));               // class lookup reads the bare object, not its Mixed owner
+    runtime_class_messages::emit_runtime_class_name_to_string_result(ctx, result, "object");
+    runtime_class_messages::emit_concat_static_prefix(
+        ctx,
+        &format!("{function}(): Argument #1 ($array) must be of type array, "),
+    );
+    runtime_class_messages::emit_concat_static_suffix(ctx, " given");
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    crate::codegen::lower_inst::exceptions::emit_type_error_from_string_result(ctx);
+    ctx.emitter.label(&unknown_label);
     emit_type_error(ctx, &message("object"));
     ctx.emitter.label(&ok_label);
     ctx.emitter.instruction(&format!("mov {holder}, {payload}"));               // hand the helper the unboxed container, not the box
