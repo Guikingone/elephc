@@ -19,14 +19,16 @@
 //! - Only single-word `NonHeap` scalars (`I64`, `F64`) are register-eligible.
 //!   Edge copies materialize branch arguments into block-parameter homes, so
 //!   promoted loop values can remain in registers across back edges.
-//!   Generators fall back to all-spilled; handler functions still allocate
-//!   scalar ranges, with call clobber analysis protecting exception edges.
+//!   Unused parameters stay spilled because edge copies still write their homes.
+//!   Generators and handler functions fall back to all-spilled: implicit
+//!   exception edges are absent from liveness and interval numbering.
 
 use std::collections::HashMap;
 
 use crate::codegen::platform::{Arch, Target};
-use crate::ir::{Function, IrType, Ownership, ValueId};
+use crate::ir::{Function, IrType, Ownership, ValueDef, ValueId};
 use crate::ir_passes::allocation::Allocation;
+use crate::ir_passes::cfg::has_exception_handlers;
 use crate::ir_passes::intervals::{build_intervals, LiveInterval};
 use crate::ir_passes::liveness::compute_liveness;
 
@@ -34,10 +36,10 @@ use crate::ir_passes::liveness::compute_liveness;
 ///
 /// Runs liveness and interval analysis, then a linear scan that assigns
 /// callee-saved registers to eligible intervals and spills the longest-lived
-/// interval when a pool is exhausted. Generators conservatively fall back to
-/// all-spilled, while handlers retain ordinary scalar allocation.
+/// interval when a pool is exhausted. Generators and functions with implicit
+/// exception-handler edges conservatively fall back to all-spilled.
 pub fn allocate_registers(func: &Function, target: Target) -> Allocation {
-    if func.flags.is_generator {
+    if func.flags.is_generator || has_exception_handlers(func) {
         return Allocation::all_spilled();
     }
 
@@ -52,13 +54,20 @@ pub fn allocate_registers(func: &Function, target: Target) -> Allocation {
 }
 
 /// Returns true when an interval's value can live in a register: a single-word
-/// non-heap scalar. Branch edge copies support register and stack homes.
+/// non-heap scalar. Branch edge copies support register and stack homes, but
+/// unused parameters need distinct homes despite their zero-length intervals.
 fn is_eligible(func: &Function, iv: &LiveInterval) -> bool {
     if !matches!(iv.ir_type, IrType::I64 | IrType::F64) {
         return false;
     }
     func.value(iv.value)
-        .map(|value| value.ownership == Ownership::NonHeap)
+        .map(|value| {
+            // Edge copies still write dead parameters. Their interval expires at
+            // entry before a later parameter is allocated, so a shared register
+            // would let the dead destination overwrite the live one.
+            value.ownership == Ownership::NonHeap
+                && !(iv.weight == 0 && matches!(value.def, ValueDef::BlockParam { .. }))
+        })
         .unwrap_or(false)
 }
 

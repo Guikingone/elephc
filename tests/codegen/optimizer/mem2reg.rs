@@ -211,3 +211,41 @@ fn test_mem2reg_preserves_swap_across_back_edge() {
     assert_eq!(run_variant(source, false), "2:1");
     assert_eq!(run_variant(source, true), "2:1");
 }
+
+/// Identity folding leaves a dead loop parameter without corrupting the returned scalar.
+#[test]
+fn test_mem2reg_dead_loop_parameter_preserves_live_result() {
+    let source = r#"<?php
+function select_loop_value(int $input): int {
+    $c = $input; $a = 7; $b = 42;
+    while ($c > 0) {
+        $a = $c ^ 3; $b = $c ^ 42; $c = 0;
+    }
+    return ($a ^ $a) ^ $b;
+}
+echo select_loop_value($argc), ":", select_loop_value(0), "\n";
+"#;
+    for optimized in [false, true] {
+        assert_eq!(run_variant(source, optimized), "43:42\n");
+    }
+}
+
+/// An inlined scalar return survives runtime calls and a catch reached through finally.
+#[test]
+fn test_mem2reg_inlined_return_survives_finally_handler() {
+    let source = r#"<?php
+function pick(int $c): int { return ($c & 255) ^ 41; }
+function guarded(int $c): int {
+    try { return pick($c); }
+    finally {
+        $z = strlen("z" . $c);
+        try { throw new Exception("x"); }
+        catch (Exception $e) { echo $z, "\n"; }
+    }
+}
+echo guarded($argc), "\n";
+"#;
+    for optimized in [true, false] {
+        assert_eq!(run_variant(source, optimized), "2\n40\n");
+    }
+}

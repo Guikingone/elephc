@@ -1955,10 +1955,17 @@ registers.
 The prologue saves and the epilogue restores exactly the callee-saved registers
 the allocator used; caller-saved registers need neither.
 
-The first cut register-allocates only single-word `NonHeap` scalars (`I64`,
-`F64`) that are neither block parameters nor branch arguments, keeping the
-slot-based block-parameter moves and the ownership/GC cleanup paths unchanged.
+Only single-word `NonHeap` scalars (`I64`, `F64`) are register-eligible,
+including live block parameters and branch arguments. Unused block parameters
+stay spilled: edge copies still write them, and their zero-length intervals
+would otherwise allow them to share and overwrite a live parameter's register
+at the same block entry.
+
 Generators and functions containing exception handlers fall back to all-spilled.
+The allocator's reachability and liveness use explicit terminator edges, so they
+can omit a scalar's uses after a catch or finally block. Stack homes preserve
+those values until the analyses account for implicit exception edges, including
+parameters introduced by inlining rather than local promotion.
 
 ## Phase 02 Implementation Contract
 
