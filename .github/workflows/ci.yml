@@ -54,6 +54,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Test nextest artifact validation
+        run: sh scripts/ci/test_validate_archived_nextest.sh
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
 
@@ -133,6 +136,7 @@ jobs:
         run: |
           cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
           cp "$(command -v cargo-nextest)" "$RUNNER_TEMP/cargo-nextest"
+          (cd "$RUNNER_TEMP" && shasum -a 256 cargo-nextest > cargo-nextest.sha256)
 
       - name: Run doctests
         # Doctests cannot run from a nextest archive, so run them here where the
@@ -212,6 +216,7 @@ jobs:
           path: |
             ${{ runner.temp }}/nextest-archive.tar.zst
             ${{ runner.temp }}/cargo-nextest
+            ${{ runner.temp }}/cargo-nextest.sha256
           retention-days: 1
           if-no-files-found: error
 
@@ -584,14 +589,11 @@ jobs:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
-      - name: Prepare archived cargo-nextest
-        run: chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-
       - name: Validate archived cargo-nextest
         id: validate_archived_nextest
         continue-on-error: true
         run: |
-          "$RUNNER_TEMP/cargo-nextest" nextest --version
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
       - name: Remove invalid cargo-nextest
         if: steps.validate_archived_nextest.outcome == 'failure'
@@ -607,8 +609,7 @@ jobs:
       - name: Validate retried cargo-nextest
         if: steps.validate_archived_nextest.outcome == 'failure'
         run: |
-          chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-          "$RUNNER_TEMP/cargo-nextest" nextest --version
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
       - name: Run non-codegen tests
         run: |
@@ -710,14 +711,11 @@ jobs:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
-      - name: Prepare archived cargo-nextest
-        run: chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-
       - name: Validate archived cargo-nextest
         id: validate_archived_nextest
         continue-on-error: true
         run: |
-          "$RUNNER_TEMP/cargo-nextest" nextest --version
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
       - name: Remove invalid cargo-nextest
         if: steps.validate_archived_nextest.outcome == 'failure'
@@ -733,8 +731,7 @@ jobs:
       - name: Validate retried cargo-nextest
         if: steps.validate_archived_nextest.outcome == 'failure'
         run: |
-          chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-          "$RUNNER_TEMP/cargo-nextest" nextest --version
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
       - name: Run web test shard
         run: |
@@ -833,14 +830,11 @@ jobs:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
-      - name: Prepare archived cargo-nextest
-        run: chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-
       - name: Validate archived cargo-nextest
         id: validate_archived_nextest
         continue-on-error: true
         run: |
-          "$RUNNER_TEMP/cargo-nextest" nextest --version
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
       - name: Remove invalid cargo-nextest
         if: steps.validate_archived_nextest.outcome == 'failure'
@@ -856,8 +850,7 @@ jobs:
       - name: Validate retried cargo-nextest
         if: steps.validate_archived_nextest.outcome == 'failure'
         run: |
-          chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-          "$RUNNER_TEMP/cargo-nextest" nextest --version
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
       - name: Cache managed native libxml2
         # tests/codegen/xml fixtures link the elephc_xml bridge against the managed
@@ -1073,14 +1066,11 @@ jobs:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
-      - name: Prepare archived cargo-nextest
-        run: chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-
       - name: Validate archived cargo-nextest
         id: validate_archived_nextest
         continue-on-error: true
         run: |
-          "$RUNNER_TEMP/cargo-nextest" nextest --version
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
       - name: Remove invalid cargo-nextest
         if: steps.validate_archived_nextest.outcome == 'failure'
@@ -1096,8 +1086,7 @@ jobs:
       - name: Validate retried cargo-nextest
         if: steps.validate_archived_nextest.outcome == 'failure'
         run: |
-          chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-          "$RUNNER_TEMP/cargo-nextest" nextest --version
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
       - name: Run PDO codegen shard in one process
         env:
@@ -1241,14 +1230,11 @@ jobs:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
-      - name: Prepare archived cargo-nextest
-        run: chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-
       - name: Validate archived cargo-nextest
         id: validate_archived_nextest
         continue-on-error: true
         run: |
-          "$RUNNER_TEMP/cargo-nextest" nextest --version
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
       - name: Remove invalid cargo-nextest
         if: steps.validate_archived_nextest.outcome == 'failure'
@@ -1264,8 +1250,7 @@ jobs:
       - name: Validate retried cargo-nextest
         if: steps.validate_archived_nextest.outcome == 'failure'
         run: |
-          chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-          "$RUNNER_TEMP/cargo-nextest" nextest --version
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
       - name: Extract test archive
         # `elephc` is a build dependency of other integration tests that invoke it via
@@ -1610,14 +1595,11 @@ jobs:
           name: nextest-archive-macos-aarch64
           path: ${{ runner.temp }}
 
-      - name: Prepare archived cargo-nextest
-        run: chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-
       - name: Validate archived cargo-nextest
         id: validate_archived_nextest
         continue-on-error: true
         run: |
-          "$RUNNER_TEMP/cargo-nextest" nextest --version
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
       - name: Remove invalid cargo-nextest
         if: steps.validate_archived_nextest.outcome == 'failure'
@@ -1633,8 +1615,7 @@ jobs:
       - name: Validate retried cargo-nextest
         if: steps.validate_archived_nextest.outcome == 'failure'
         run: |
-          chmod 0755 "$RUNNER_TEMP/cargo-nextest"
-          "$RUNNER_TEMP/cargo-nextest" nextest --version
+          sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
       - name: Extract test archive
         run: |
