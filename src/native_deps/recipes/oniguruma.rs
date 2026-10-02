@@ -2,10 +2,12 @@
 //! Builds the pinned Oniguruma library and opaque mbregex provider for every supported target.
 //!
 //! Called from:
-//! - `crate::native_deps::recipe::CuratedRecipes` for oniguruma revision 3.
+//! - `crate::native_deps::recipe::CuratedRecipes` for oniguruma revision 4.
 //!
 //! Key details:
 //! - Retains static PIC archives and public headers; no system library fallback is used.
+//! - MinGW uses its canonical Autoconf host tuple and the selected compiler/sysroot for both
+//!   upstream Oniguruma and the opaque provider shim.
 
 use std::{fs, path::Path};
 use crate::codegen_support::platform::Target;
@@ -47,7 +49,8 @@ pub fn build(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
     let object = build.join("provider.o");
     fs::write(&source, SHIM_SOURCE).map_err(|error| NativeError::io("write Oniguruma provider source", &source, error))?;
     let mut compile = request.toolchain.command(&request.toolchain.cc);
-    compile.args(["-std=c11", "-fPIC", "-DONIG_EXTERN=extern", "-I"]).arg(&include)
+    request.toolchain.append_compiler_flags(&mut compile);
+    compile.args(["-std=c11", "-DONIG_EXTERN=extern", "-I"]).arg(&include)
         .arg("-c").arg(&source).arg("-o").arg(&object);
     run_checked(&mut compile, "compile Oniguruma provider")?;
     let shim = library.join("libelephc_oniguruma_shim.a");
