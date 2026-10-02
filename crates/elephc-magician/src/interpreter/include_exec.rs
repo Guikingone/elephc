@@ -220,6 +220,11 @@ pub(crate) fn fast_include_answer(path: &str, once: bool, value_discarded: bool)
         if crate::eval_trace::enabled() {
             eprintln!("[elephc-eval-trace] kind=include phase=include_fast_skip path={include_key:?}");
         }
+        // Counted like the full path's skip: the autoloader retries a file whose class is still
+        // missing after a skip (Carbon's `Translator.php` declares its class from top-level code),
+        // and it can only tell that a skip happened from this count. Uncounted, Laravel's boot
+        // died on `Carbon\Translator::get()` with "eval callback dispatch failed".
+        COMPILER_INCLUDE_SKIPS.with(|skips| skips.set(skips.get().wrapping_add(1)));
         crate::runtime_hooks::activate_compiled_source(&include_key);
         return true;
     }

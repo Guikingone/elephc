@@ -26,6 +26,9 @@ pub(super) fn lower_static_array_map(
         return None;
     }
     let callback = static_call_user_func_callback(ctx, &args[0])?;
+    if !static_callback_takes_arg_count(ctx, &callback, 1) {
+        return None;
+    }
     let ExprKind::ArrayLiteral(items) = &args[1].kind else {
         return None;
     };
@@ -75,6 +78,9 @@ pub(super) fn lower_static_array_reduce(
         return None;
     }
     let callback = static_call_user_func_callback(ctx, &args[1])?;
+    if !static_callback_takes_arg_count(ctx, &callback, 2) {
+        return None;
+    }
     let result_type = fallback_expr_type(expr);
     let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let initial = lower_expr(ctx, &args[2]);
@@ -116,11 +122,35 @@ pub(super) fn lower_static_array_walk(
         return None;
     }
     let callback = static_call_user_func_callback(ctx, &args[1])?;
+    if !static_callback_takes_arg_count(ctx, &callback, 1) {
+        return None;
+    }
     for item in items {
         let item_value = lower_expr(ctx, item);
         lower_static_callable_value_call(ctx, callback.clone(), vec![item_value.value], expr)?;
     }
     Some(lower_null(ctx, expr))
+}
+
+/// Returns whether a directly bound callback can be called with `count` arguments.
+///
+/// php hands a callback more arguments than it declares and the callee ignores them, but a DIRECT
+/// call carries one operand per argument and the backend refuses a surplus: `array_map(['K',
+/// 's'], [1])` with a parameterless `K::s()` failed the build once the literal became a direct
+/// static binding. Such a callback takes the generic path, whose descriptor absorbs the surplus.
+fn static_callback_takes_arg_count(
+    ctx: &LoweringContext<'_, '_>,
+    callback: &StaticCallableBinding,
+    count: usize,
+) -> bool {
+    let sig = match callback {
+        StaticCallableBinding::UserFunction(name) => ctx.functions.get(name),
+        StaticCallableBinding::StaticMethod { receiver, method } => {
+            static_method_implementation_signature(ctx, receiver, method)
+        }
+        _ => return true,
+    };
+    sig.is_none_or(|sig| sig.variadic.is_some() || sig.params.len() >= count)
 }
 
 /// Returns whether a literal array element can be reordered around callback invocation safely.

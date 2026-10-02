@@ -151,10 +151,13 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_str_persist");                                 // own a heap copy of the message bytes
     emitter.instruction("str x1, [sp, #0]");                                    // park the owned message pointer
     emitter.instruction("str x2, [sp, #8]");                                    // park the owned message length
-    emitter.instruction("mov x0, #32");                                         // request Throwable payload storage
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the \Error object payload
+    // The standard Throwable payload, as every runtime-raised \Error is built: a 32-byte block
+    // left the object without a handle, a creation line or a `previous` slot, and the unzeroed
+    // bytes read as `previous` were released when a later `catch` rebound the variable.
+    crate::codegen_support::throwable_layout::emit_allocate(emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
     emitter.instruction("mov x9, #6");                                          // heap kind 6 = object instance
     emitter.instruction("str x9, [x0, #-8]");                                   // stamp the allocation as a runtime object
+    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the \Error to its PHP object handle
     abi::emit_load_symbol_to_reg(emitter, "x9", "_constant_error_class_id", 0);
     emitter.instruction("str x9, [x0]");                                        // store the \Error class id at the object header
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the owned message pointer
@@ -162,6 +165,8 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the owned message length
     emitter.instruction("str x9, [x0, #16]");                                   // store the exception message length
     emitter.instruction("str xzr, [x0, #24]");                                  // exception code defaults to zero
+    crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "x0");
+    emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous = null
     abi::emit_symbol_address(emitter, "x9", "_exc_value");
     emitter.instruction("str x0, [x9]");                                        // publish the active exception object
     emitter.instruction("b __rt_throw_current");                                // enter the standard exception unwinder
@@ -279,13 +284,13 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_str_persist");                               // own a heap copy of the message bytes
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // park the owned message pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // park the owned message length
-    emitter.instruction("mov rax, 32");                                         // request Throwable payload storage
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the \Error object payload
+    crate::codegen_support::throwable_layout::emit_allocate(emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
     emitter.instruction(&format!(
         "mov r10, 0x{:x}",
         crate::codegen_support::sentinels::x86_64_heap_kind_word(6)
     ));                                                                         // x86_64 heap-kind word: heap marker + object kind 6
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the allocation as a runtime object
+    abi::emit_call_label(emitter, "__rt_object_handle_acquire");                // bind the \Error to its PHP object handle
     abi::emit_load_symbol_to_reg(emitter, "r10", "_constant_error_class_id", 0);
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store the \Error class id at the object header
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owned message pointer
@@ -293,6 +298,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the owned message length
     emitter.instruction("mov QWORD PTR [rax + 16], r10");                       // store the exception message length
     emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // exception code defaults to zero
+    crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "rax");
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous = null
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);
     emitter.instruction("mov rsp, rbp");                                        // release the helper frame before throwing
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before throwing

@@ -59,3 +59,5 @@ mod callback_elements_and_results;
 mod numeric_folds;
 #[path = "regressions/mbstring_and_string_ownership.rs"]
 mod mbstring_and_string_ownership;
+#[path = "regressions/laravel_merge_seams.rs"]
+mod laravel_merge_seams;

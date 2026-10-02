@@ -287,8 +287,13 @@ pub(super) fn coerce_container_to_return_type(
 /// Whether `coerce_owned_container_to_return_type` converts a `source` container for `ret`.
 fn container_return_conversion_applies(source: &PhpType, ret: &PhpType) -> bool {
     match (source, ret) {
-        (PhpType::AssocArray { value, .. }, PhpType::Array(element)) => {
-            element.codegen_repr() == PhpType::Mixed && value.codegen_repr() != PhpType::Mixed
+        // Any hash meets a bare `array` contract by relabelling (`Op::Move`), mixed-valued ones
+        // included. Leaving those out sent `return $this->headers;` (a mixed-valued hash
+        // property, declared `: array`) to the generic runtime conversion, which handed back the
+        // property's own storage as an owned result: the caller's release freed the property,
+        // and the next `ResponseHeaderBag::all()` read freed memory (Laravel's sendHeaders()).
+        (PhpType::AssocArray { .. }, PhpType::Array(element)) => {
+            element.codegen_repr() == PhpType::Mixed
         }
         // Boxed then hashed, or hashed as it is (`ArrayToHash`).
         (PhpType::Array(element), PhpType::AssocArray { value, .. }) => {
