@@ -68,7 +68,7 @@ fn spl_object_storage_methods() -> Vec<ClassMethod> {
         method_with_body("__construct", Vec::new(), Some(TypeExpr::Void), construct_body()),
         method_with_body(
             "attach",
-            vec![param("object", mixed_type()), param("info", mixed_type())],
+            vec![param("object", mixed_type()), param_default("info", mixed_type(), null_expr())],
             Some(TypeExpr::Void),
             attach_body(),
         ),
@@ -95,7 +95,7 @@ fn spl_object_storage_methods() -> Vec<ClassMethod> {
         method_with_body("offsetGet", vec![param("object", mixed_type())], Some(mixed_type()), offset_get_body()),
         method_with_body(
             "offsetSet",
-            vec![param("object", mixed_type()), param("info", mixed_type())],
+            vec![param("object", mixed_type()), param_default("info", mixed_type(), null_expr())],
             Some(TypeExpr::Void),
             offset_set_body(),
         ),

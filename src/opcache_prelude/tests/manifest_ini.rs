@@ -211,7 +211,7 @@ pub(super) fn ini_keys_are_sorted_but_directive_table_is_not() {
 
     /// `render_ini_module_known` renders the known-module predicate from
     /// `INI_KNOWN_MODULES`, LOWERCASED so the comparison is verbatim against php-src's
-    /// lowercase registry keys, and adds `'session'` only for the web SAPI. Every recognized
+    /// lowercase registry keys, `'session'` included in both SAPIs. Every recognized
     /// module must appear, and the canonical mixed-case spellings must NOT.
     ///
     /// `ctype` and `mbstring` are the load-bearing members here: they are NOT in the
@@ -241,9 +241,10 @@ pub(super) fn module_known_list_is_lowercased_core_extensions() {
         assert!(!cli.contains("'SPL'"));
         assert!(cli.contains("$m === 'ctype'"), "ctype stays a RECOGNIZED module");
         assert!(cli.contains("$m === 'mbstring'"), "mbstring stays a RECOGNIZED module");
-        // 'session' is a --web-only module.
-        assert!(!cli.contains("$m === 'session'"));
+        // php ships ext/session in the CLI SAPI as well as the built-in server.
+        assert!(cli.contains("$m === 'session'"));
         assert!(web.contains("$m === 'session'"));
+        assert_eq!(web.matches("$m === 'session'").count(), 1, "session is listed once");
         // The parameter is nullable so `$extension !== null` need not narrow ?string to Str.
         assert!(cli.contains("function __elephc_ini_module_known(?string $m): bool"));
         let _ = parse(&format!("<?php {cli}"));

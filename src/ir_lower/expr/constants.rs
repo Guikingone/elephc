@@ -15,6 +15,91 @@ use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
+/// Returns whether the program has the run-time constant table and this body may route to it.
+///
+/// The table's own `defined()` / `constant()` calls are the ordinary ones: routing them back
+/// would recurse.
+fn dynamic_constant_table(ctx: &LoweringContext<'_, '_>) -> bool {
+    let table = crate::dynamic_define_prelude::DYNAMIC_CONSTANTS_NAME;
+    (ctx.functions.contains_key(table) || ctx.functions.contains_key(&php_symbol_key(table)))
+        && !ctx.builder.function().name.eq_ignore_ascii_case(table)
+}
+
+/// Calls the run-time constant table with one operation.
+fn call_dynamic_constant_table(
+    ctx: &mut LoweringContext<'_, '_>,
+    op: i64,
+    name: Expr,
+    value: Option<Expr>,
+    expr: &Expr,
+) -> LoweredValue {
+    let args = vec![
+        Expr::new(ExprKind::IntLiteral(op), expr.span),
+        name,
+        value.unwrap_or_else(|| Expr::new(ExprKind::Null, expr.span)),
+    ];
+    super::function_calls::lower_function_call(
+        ctx,
+        &Name::unqualified(crate::dynamic_define_prelude::DYNAMIC_CONSTANTS_NAME),
+        &args,
+        expr,
+    )
+}
+
+/// Routes `define()` with a computed name, and the lookups that may have to see its constants,
+/// to the run-time constant table when the program has one.
+///
+/// `defined('LIT')` and `constant()` with a computed name ask the table only after the compiled
+/// constants (the table falls back to the ordinary lookups); a literal name the compiler knows is
+/// left to `lower_static_defined_call`.
+pub(super) fn lower_dynamic_constant_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &Name,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_)))
+        || !dynamic_constant_table(ctx)
+    {
+        return None;
+    }
+    let key = php_symbol_key(name.as_str().trim_start_matches('\\'));
+    let literal = |arg: &Expr| match &arg.kind {
+        ExprKind::StringLiteral(value) => Some(value.clone()),
+        _ => None,
+    };
+    match (key.rsplit('\\').next().unwrap_or(""), args) {
+        ("define", [constant, value]) if literal(constant).is_none() => Some(
+            call_dynamic_constant_table(
+                ctx,
+                crate::dynamic_define_prelude::OP_DEFINE,
+                constant.clone(),
+                Some(value.clone()),
+                expr,
+            ),
+        ),
+        ("defined", [constant])
+            if literal(constant).is_none_or(|known| ctx.constant_value(&known).is_none()) =>
+        {
+            Some(call_dynamic_constant_table(
+                ctx,
+                crate::dynamic_define_prelude::OP_DEFINED,
+                constant.clone(),
+                None,
+                expr,
+            ))
+        }
+        ("constant", [constant]) if literal(constant).is_none() => Some(call_dynamic_constant_table(
+            ctx,
+            crate::dynamic_define_prelude::OP_FETCH,
+            constant.clone(),
+            None,
+            expr,
+        )),
+        _ => None,
+    }
+}
+
 /// Records `define("NAME", value)` constants for later source-order references.
 pub(super) fn register_static_define_call(
     ctx: &mut LoweringContext<'_, '_>,
@@ -138,6 +223,18 @@ pub(super) fn lower_const_ref(
     if let Some(php_type) = crate::types::predefined_constants::target_restricted_type(name.as_str())
     {
         return lower_target_undefined_constant(ctx, name, php_type, expr);
+    }
+    // A name the compiler cannot resolve may come from a `define()` with a computed name: the
+    // run-time table answers it, or falls back to the ordinary lookup (and its `Error`).
+    if dynamic_constant_table(ctx) && !ctx.has_eval_barrier() && !ctx.eval_executed() {
+        let bare = name.as_str().trim_start_matches('\\').to_string();
+        return call_dynamic_constant_table(
+            ctx,
+            crate::dynamic_define_prelude::OP_FETCH,
+            Expr::new(ExprKind::StringLiteral(bare), expr.span),
+            None,
+            expr,
+        );
     }
     if !ctx.has_eval_barrier()
         && !ctx.eval_executed()

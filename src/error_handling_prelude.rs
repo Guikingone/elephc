@@ -79,7 +79,7 @@ use crate::synthetic_class::{
 /// reaches it, and declaration reachability cannot see a call that lives in assembly. Recorded
 /// as its own group and forced by `pipeline::compile`, so a program whose only error-handler
 /// use is `set_error_handler()` still has the dispatch rule compiled in.
-pub(crate) const DIAG_DISPATCH_GROUP: &str = "diag_dispatch";
+pub const DIAG_DISPATCH_GROUP: &str = "diag_dispatch";
 
 /// Prelude inventory group holding the surface itself, on the non-`--web` path.
 ///
@@ -116,7 +116,7 @@ pub(crate) const SURFACE: &[&str] = &[
 /// Recorded as its own group and forced by `pipeline::compile` — but only when the program
 /// SPELLS `register_shutdown_function`, so a program that merely names `error_reporting()`
 /// still gets the whole registry pruned and pays for no drain call at its exits.
-pub(crate) const SHUTDOWN_RUN_GROUP: &str = "shutdown_run";
+pub const SHUTDOWN_RUN_GROUP: &str = "shutdown_run";
 
 /// `__FILE__` — the MAGIC-CONSTANT node, not a string literal.
 ///
@@ -1180,7 +1180,12 @@ fn without_shadowing_names(
 /// pay-for-use gate reads what the source SPELLS.
 fn program_names_the_surface(program: &[Stmt]) -> bool {
     let used = usage::collect(program);
+    // A `define()` with a computed name goes through `crate::dynamic_define_prelude`, whose
+    // "already defined" warning is raised with `trigger_error()`.
     SURFACE.iter().any(|name| program_names(&used, name))
+        || program
+            .iter()
+            .any(|stmt| crate::ast_usage::collect_stmt(stmt).dynamic_define)
 }
 
 /// Returns true for the three declarations that make up the shutdown registry.

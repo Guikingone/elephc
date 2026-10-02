@@ -1118,7 +1118,6 @@ impl RuntimeFnId {
             RuntimeFnId::Htmlspecialchars |
             RuntimeFnId::Hexdec |
             RuntimeFnId::Hypot |
-            RuntimeFnId::Implode |
             RuntimeFnId::InetNtop |
             RuntimeFnId::InetPton |
             RuntimeFnId::Ip2long |
@@ -1309,7 +1308,9 @@ impl RuntimeFnId {
             // A `%s` conversion can invoke arbitrary userland `__toString()` code. Keep the
             // full externally observable call surface here so AST try/catch pruning retains
             // handlers and propagation never treats state touched by that method as stable.
+            // `implode()` joins an object element through the same conversion.
             RuntimeFnId::Fprintf
+            | RuntimeFnId::Implode
             | RuntimeFnId::Printf
             | RuntimeFnId::Sprintf
             | RuntimeFnId::Vfprintf

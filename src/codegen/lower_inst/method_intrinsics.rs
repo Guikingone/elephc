@@ -353,6 +353,12 @@ pub(super) fn lower_nullable_receiver_method_call(
         ctx.emitter.label(&done_label);
         return Ok(());
     }
+    // A built-in Throwable class has no method bodies behind its vtable slots: the typed path
+    // answers `getMessage()` and the rest from the compact payload, and so must the nullable one.
+    // `function g(): ?LogicException` then `g()->getMessage()` jumped to a null slot.
+    if is_throwable_standard_method_call(ctx, class_name, method_name) {
+        return lower_nullable_throwable_standard_method(ctx, inst, object, method_name);
+    }
     if !class_declares_method(ctx, class_name, method_name)
         && !narrowed_interface_candidates(ctx, class_name, method_name, inst.operands.len())?
             .is_empty()
@@ -410,6 +416,27 @@ pub(super) fn lower_nullable_receiver_method_call(
     Ok(())
 }
 
+/// Lowers a compact-payload Throwable method on a nullable receiver, fataling on null.
+fn lower_nullable_throwable_standard_method(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    method_name: &str,
+) -> Result<()> {
+    let null_label = ctx.next_label("method_receiver_null");
+    let done_label = ctx.next_label("method_receiver_done");
+    let receiver_reg = abi::nested_call_reg(ctx.emitter);
+    objects::emit_nullable_receiver_object_payload(ctx, object, &null_label, receiver_reg)?;
+    // The unboxed object is already in `receiver_reg`; the shared lowerer must not reload the
+    // SSA operand, which may still be the boxed cell.
+    lower_throwable_standard_method_from_reg(ctx, inst, receiver_reg, method_name)?;
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&null_label);
+    emit_method_call_on_null_fatal(ctx, method_name);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
 /// Lowers a nullable receiver call whose non-null payload is known only by interface type.
 pub(super) fn lower_nullable_receiver_interface_method_call(
     ctx: &mut FunctionContext<'_>,
@@ -421,18 +448,7 @@ pub(super) fn lower_nullable_receiver_interface_method_call(
     // Same compact-payload intrinsic path as `lower_interface_method_call`: Throwable's
     // interface vtable slots are empty, so nullable `?Throwable` must not dispatch through them.
     if is_throwable_standard_method_call(ctx, interface_name, method_name) {
-        let null_label = ctx.next_label("method_receiver_null");
-        let done_label = ctx.next_label("method_receiver_done");
-        let receiver_reg = abi::nested_call_reg(ctx.emitter);
-        objects::emit_nullable_receiver_object_payload(ctx, object, &null_label, receiver_reg)?;
-        // Re-materialize the unboxed object into the SSA operand's result register so the
-        // shared Throwable intrinsic lowerer can `load_value_to_reg` the receiver.
-        lower_throwable_standard_method_from_reg(ctx, inst, receiver_reg, method_name)?;
-        abi::emit_jump(ctx.emitter, &done_label);
-        ctx.emitter.label(&null_label);
-        emit_method_call_on_null_fatal(ctx, method_name);
-        ctx.emitter.label(&done_label);
-        return Ok(());
+        return lower_nullable_throwable_standard_method(ctx, inst, object, method_name);
     }
     let normalized = interface_name.trim_start_matches('\\');
     let method_key = php_symbol_key(method_name);
@@ -616,6 +632,23 @@ pub(super) fn lower_instance_runtime_intrinsic(
     let mut ref_params = Vec::with_capacity(callee_ref_params.len() + 1);
     ref_params.push(false);
     ref_params.extend(callee_ref_params.iter().copied());
+    // A writer that adopts its value box needs a reference of its own when the operand already is
+    // a box: that box belongs to the caller, which releases it after the call. A concrete operand
+    // is boxed afresh by the materialization below and that box is handed over as it is. Without
+    // this, `$stack->push(7)` stored a box the caller then freed, and the next allocation of that
+    // block rewrote the element (`pop()` answered the stack itself, or heap debug reported
+    // free-list corruption).
+    if let Some(index) = intrinsic.kind().adopted_value_operand() {
+        if let Some(&value) = inst.operands.get(index) {
+            if matches!(
+                ctx.value_php_type(value)?.codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
+            ) {
+                ctx.load_value_to_result(value)?;
+                abi::emit_call_label(ctx.emitter, "__rt_incref"); // the runtime keeps this box; the caller keeps its own
+            }
+        }
+    }
     let call_args =
         materialize_direct_call_args_with_refs(ctx, &inst.operands, &param_types, &ref_params)?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);

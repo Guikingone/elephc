@@ -41,3 +41,9 @@ mod symbol_collisions;
 mod handles_statics_and_reflectors;
 #[path = "regressions/class_vars_and_owned_views.rs"]
 mod class_vars_and_owned_views;
+#[path = "regressions/nullable_receivers_and_spl_lists.rs"]
+mod nullable_receivers_and_spl_lists;
+#[path = "regressions/dynamic_define_and_static_hashes.rs"]
+mod dynamic_define_and_static_hashes;
+#[path = "regressions/untyped_getters_and_properties.rs"]
+mod untyped_getters_and_properties;

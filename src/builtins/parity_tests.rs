@@ -96,6 +96,8 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         ("parse_str_prelude", crate::parse_str_prelude::declarations()),
         // Built from the program's classes; an empty program still declares the entry points.
         ("class_vars_prelude", crate::class_vars_prelude::declarations(&Vec::new())),
+        ("implode_prelude", crate::implode_prelude::declarations()),
+        ("dynamic_define_prelude", crate::dynamic_define_prelude::declarations()),
         ("preg_array_prelude", crate::preg_array_prelude::declarations()),
         ("sodium_prelude", crate::sodium_prelude::declarations(true, true)),
     ];

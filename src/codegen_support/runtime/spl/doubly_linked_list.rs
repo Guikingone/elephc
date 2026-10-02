@@ -23,6 +23,10 @@ const STR_TAG: i64 = 1;
 const BOOL_TAG: i64 = 3;
 const ITER_MODE_DELETE: i64 = 1;
 const ITER_MODE_LIFO: i64 = 2;
+/// php's `SPL_DLLIST_IT_FIX`: the traversal direction of an `SplStack`/`SplQueue` is frozen.
+const ITER_MODE_FIXED: i64 = 4;
+const SPL_DLL_FROZEN_MODE_MSG_LEN: usize =
+    "Iterators' LIFO/FIFO modes for SplStack/SplQueue objects are frozen".len();
 const SPL_DLL_POP_EMPTY_MSG_LEN: usize = "Can't pop from an empty datastructure".len();
 const SPL_DLL_SHIFT_EMPTY_MSG_LEN: usize = "Can't shift from an empty datastructure".len();
 const SPL_DLL_PEEK_EMPTY_MSG_LEN: usize = "Can't peek at an empty datastructure".len();
@@ -115,6 +119,20 @@ fn emit_new_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x0, [x9, #{}]", SPL_DLL_STORAGE_OFFSET)); // object.storage = internal Mixed array
     emitter.instruction(&format!("str xzr, [x9, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // iterator index starts at zero
     emitter.instruction(&format!("str xzr, [x9, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // iterator mode starts FIFO/KEEP
+    // php constructs SplStack in frozen LIFO mode (6) and SplQueue in frozen FIFO mode (4); every
+    // SplStack used to iterate, index and insert as a queue.
+    emitter.instruction("ldr x13, [x9]");                                       // concrete class id of the new list
+    abi::emit_load_symbol_to_reg(emitter, "x11", "_spl_stack_class_id", 0);
+    emitter.instruction("mov x12, #0");                                         // a plain SplDoublyLinkedList keeps FIFO/KEEP
+    emitter.instruction("cmp x13, x11");                                        // is the list an SplStack?
+    emitter.instruction(&format!("mov x14, #{}", ITER_MODE_LIFO | ITER_MODE_FIXED)); // frozen LIFO mode
+    emitter.instruction("csel x12, x14, x12, eq");                              // SplStack starts in frozen LIFO mode
+    abi::emit_load_symbol_to_reg(emitter, "x11", "_spl_queue_class_id", 0);
+    emitter.instruction("cmp x13, x11");                                        // is the list an SplQueue?
+    emitter.instruction(&format!("mov x14, #{}", ITER_MODE_FIXED));             // frozen FIFO mode
+    emitter.instruction("csel x12, x14, x12, eq");                              // SplQueue starts in frozen FIFO mode
+    emitter.instruction("ldr x9, [sp, #8]");                                    // reload the object pointer after the symbol loads
+    emitter.instruction(&format!("str x12, [x9, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // store the class's initial iterator mode
     emitter.instruction("mov x0, x9");                                          // return the initialized SPL object
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release constructor spill slots
@@ -214,12 +232,22 @@ fn emit_shift_aarch64(emitter: &mut Emitter) {
 }
 
 /// Emits `__rt_spl_dll_unshift` on ARM64: receiver in x0, owned value in x1. Moves x1 to
-/// the insert helper's value argument and sets index to zero before tail-calling
-/// `__rt_spl_dll_insert`.
+/// the insert helper's value argument and tail-calls `__rt_spl_dll_insert` at the logical index
+/// of the PHYSICAL head: php's `unshift()` prepends to the list whatever the traversal direction,
+/// while `add()` counts from the top of a LIFO list. That index is 0 in FIFO mode and the last
+/// one (`count - 1`, which the insert helper maps back to slot 0) in LIFO mode.
 fn emit_unshift_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_unshift");
     emitter.instruction("mov x2, x1");                                          // move value to the insert helper's value argument
-    emitter.instruction("mov x1, #0");                                          // unshift inserts at index zero
+    emitter.instruction("mov x1, #0");                                          // a FIFO or empty list inserts at index zero
+    emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // iterator mode bits
+    emitter.instruction(&format!("tst x9, #{}", ITER_MODE_LIFO));               // does logical indexing run from the top?
+    emitter.instruction("b.eq __rt_spl_dll_unshift_ready");                     // FIFO index zero already is the head
+    emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_DLL_STORAGE_OFFSET)); // internal storage
+    emitter.instruction("ldr x10, [x9]");                                       // list length
+    emitter.instruction("cbz x10, __rt_spl_dll_unshift_ready");                 // an empty list inserts at index zero either way
+    emitter.instruction("sub x1, x10, #1");                                     // the head is the last logical index of a LIFO list
+    emitter.label("__rt_spl_dll_unshift_ready");
     emitter.instruction("b __rt_spl_dll_insert");                               // tail-call the shared insertion helper
 }
 
@@ -349,12 +377,29 @@ fn emit_peek_index_aarch64(emitter: &mut Emitter, null_label: &str, last: bool) 
 }
 
 /// Emits `__rt_spl_dll_set_iterator_mode` and `__rt_spl_dll_get_iterator_mode` on ARM64.
-/// Set: receiver in x0, mode bits in x1; stores x1 at the iterator mode offset and returns void.
-/// Get: receiver in x0; returns iterator mode bits in x0.
+/// Set: receiver in x0, mode bits in x1. Only the LIFO and DELETE bits are settable; a frozen
+/// list (SplStack, SplQueue) keeps its frozen bit and throws php's RuntimeException when the
+/// direction would change. Get: receiver in x0; returns iterator mode bits in x0.
 fn emit_iterator_mode_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_set_iterator_mode");
+    emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // current iterator mode bits
+    emitter.instruction(&format!("and x1, x1, #{}", ITER_MODE_LIFO | 1));        // only the LIFO and DELETE bits are settable
+    emitter.instruction(&format!("tst x9, #{}", ITER_MODE_FIXED));              // is the traversal direction frozen?
+    emitter.instruction("b.eq __rt_spl_dll_set_iterator_mode_store");           // a plain list takes the new mode as it is
+    emitter.instruction("eor x10, x9, x1");                                     // bits the new mode would change
+    emitter.instruction(&format!("tst x10, #{}", ITER_MODE_LIFO));              // would the direction change?
+    emitter.instruction("b.ne __rt_spl_dll_set_iterator_mode_frozen");          // php refuses to turn a frozen list around
+    emitter.instruction(&format!("orr x1, x1, #{}", ITER_MODE_FIXED));          // keep the frozen bit
+    emitter.label("__rt_spl_dll_set_iterator_mode_store");
     emitter.instruction(&format!("str x1, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // store iterator mode bits on the receiver
     emitter.instruction("ret");                                                 // return void
+    emitter.label("__rt_spl_dll_set_iterator_mode_frozen");
+    emit_throw_exception_aarch64(
+        emitter,
+        "_spl_runtime_exception_class_id",
+        "_spl_dll_frozen_mode_msg",
+        SPL_DLL_FROZEN_MODE_MSG_LEN,
+    );
     emitter.label_global("__rt_spl_dll_get_iterator_mode");
     emitter.instruction(&format!("ldr x0, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // return iterator mode bits
     emitter.instruction("ret");                                                 // return integer mode
@@ -1331,6 +1376,18 @@ fn emit_new_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", SPL_DLL_STORAGE_OFFSET)); // object.storage = internal Mixed array
     emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", SPL_DLL_ITER_INDEX_OFFSET)); // iterator index starts at zero
     emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", SPL_DLL_ITER_MODE_OFFSET)); // iterator mode starts FIFO/KEEP
+    // php constructs SplStack in frozen LIFO mode (6) and SplQueue in frozen FIFO mode (4).
+    emitter.instruction("mov rcx, QWORD PTR [r11]");                            // concrete class id of the new list
+    emitter.instruction("xor edx, edx");                                        // a plain SplDoublyLinkedList keeps FIFO/KEEP
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_stack_class_id", 0);
+    emitter.instruction(&format!("mov r8, {}", ITER_MODE_LIFO | ITER_MODE_FIXED)); // frozen LIFO mode
+    emitter.instruction("cmp rcx, r10");                                        // is the list an SplStack?
+    emitter.instruction("cmove rdx, r8");                                       // SplStack starts in frozen LIFO mode
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_queue_class_id", 0);
+    emitter.instruction(&format!("mov r8, {}", ITER_MODE_FIXED));               // frozen FIFO mode
+    emitter.instruction("cmp rcx, r10");                                        // is the list an SplQueue?
+    emitter.instruction("cmove rdx, r8");                                       // SplQueue starts in frozen FIFO mode
+    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rdx", SPL_DLL_ITER_MODE_OFFSET)); // store the class's initial iterator mode
     emitter.instruction("mov rax, r11");                                        // return initialized SPL object
     emitter.instruction("add rsp, 16");                                         // release constructor spills
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
@@ -1433,12 +1490,20 @@ fn emit_shift_x86_64(emitter: &mut Emitter) {
 }
 
 /// Emits `__rt_spl_dll_unshift` on x86_64: receiver in rdi, owned value in rsi. Moves rsi
-/// to rdx for the insert helper's value argument and sets rsi to zero (index zero) before
-/// tail-calling `__rt_spl_dll_insert`.
+/// to rdx for the insert helper's value argument and tail-calls `__rt_spl_dll_insert` at the
+/// logical index of the physical head, as on ARM64.
 fn emit_unshift_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_unshift");
     emitter.instruction("mov rdx, rsi");                                        // move value to insert helper's value argument
-    emitter.instruction("xor rsi, rsi");                                        // unshift inserts at index zero
+    emitter.instruction("xor esi, esi");                                        // a FIFO or empty list inserts at index zero
+    emitter.instruction(&format!("test QWORD PTR [rdi + {}], {}", SPL_DLL_ITER_MODE_OFFSET, ITER_MODE_LIFO)); // does logical indexing run from the top?
+    emitter.instruction("jz __rt_spl_dll_unshift_ready");                       // FIFO index zero already is the head
+    emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // internal storage
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // list length
+    emitter.instruction("test r10, r10");                                       // is the list empty?
+    emitter.instruction("jz __rt_spl_dll_unshift_ready");                       // an empty list inserts at index zero either way
+    emitter.instruction("lea rsi, [r10 - 1]");                                  // the head is the last logical index of a LIFO list
+    emitter.label("__rt_spl_dll_unshift_ready");
     emitter.instruction("jmp __rt_spl_dll_insert");                             // tail-call shared insertion helper
 }
 
@@ -1563,12 +1628,29 @@ fn emit_peek_index_x86_64(emitter: &mut Emitter, null_label: &str, last: bool) {
 }
 
 /// Emits `__rt_spl_dll_set_iterator_mode` and `__rt_spl_dll_get_iterator_mode` on x86_64.
-/// Set: receiver in rdi, mode bits in rsi; stores rsi at the iterator mode offset and returns void.
+/// Set: receiver in rdi, mode bits in rsi, with the ARM64 rules for settable and frozen bits.
 /// Get: receiver in rdi; returns iterator mode bits in rax.
 fn emit_iterator_mode_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_set_iterator_mode");
+    emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", SPL_DLL_ITER_MODE_OFFSET)); // current iterator mode bits
+    emitter.instruction(&format!("and rsi, {}", ITER_MODE_LIFO | 1));            // only the LIFO and DELETE bits are settable
+    emitter.instruction(&format!("test r10, {}", ITER_MODE_FIXED));             // is the traversal direction frozen?
+    emitter.instruction("jz __rt_spl_dll_set_iterator_mode_store");             // a plain list takes the new mode as it is
+    emitter.instruction("mov r11, r10");                                        // copy the current bits
+    emitter.instruction("xor r11, rsi");                                        // bits the new mode would change
+    emitter.instruction(&format!("test r11, {}", ITER_MODE_LIFO));              // would the direction change?
+    emitter.instruction("jnz __rt_spl_dll_set_iterator_mode_frozen");           // php refuses to turn a frozen list around
+    emitter.instruction(&format!("or rsi, {}", ITER_MODE_FIXED));               // keep the frozen bit
+    emitter.label("__rt_spl_dll_set_iterator_mode_store");
     emitter.instruction(&format!("mov QWORD PTR [rdi + {}], rsi", SPL_DLL_ITER_MODE_OFFSET)); // store iterator mode bits on receiver
     emitter.instruction("ret");                                                 // return void
+    emitter.label("__rt_spl_dll_set_iterator_mode_frozen");
+    emit_throw_exception_x86_64(
+        emitter,
+        "_spl_runtime_exception_class_id",
+        "_spl_dll_frozen_mode_msg",
+        SPL_DLL_FROZEN_MODE_MSG_LEN,
+    );
     emitter.label_global("__rt_spl_dll_get_iterator_mode");
     emitter.instruction(&format!("mov rax, QWORD PTR [rdi + {}]", SPL_DLL_ITER_MODE_OFFSET)); // return iterator mode bits
     emitter.instruction("ret");                                                 // return integer mode

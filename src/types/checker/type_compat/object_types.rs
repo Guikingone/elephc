@@ -464,6 +464,35 @@ impl Checker {
         else {
             return;
         };
+        // Every `new C(...)` used to OVERWRITE the property's type with its own argument's, so the
+        // last call site checked won: `new A(new A([1]))` typed `$x` as `A` (the outer call is
+        // checked after the inner one) and the inner array then failed the property's nominal guard,
+        // a TypeError php never raises for an untyped property. A later argument now keeps the type
+        // when compatible and widens to `Mixed` otherwise, the type an untyped property holds.
+        // A DECLARED property type is not a guess to widen: the argument keeps its own type, so
+        // `$this->value = $value` is still checked against `int $value` (php's TypeError).
+        let declared = self
+            .classes
+            .get(&declaring_class)
+            .is_some_and(|class_info| class_info.visible_property_is_declared(&prop_name));
+        let current = self
+            .classes
+            .get(&declaring_class)
+            .and_then(|class_info| {
+                class_info
+                    .visible_property_index(&prop_name)
+                    .and_then(|slot| class_info.properties.get(slot))
+                    .map(|prop| prop.1.clone())
+            })
+            .unwrap_or(PhpType::Void);
+        let joined = if declared || current == PhpType::Void || current == *arg_ty {
+            arg_ty.clone()
+        } else if self.type_accepts(&current, arg_ty) {
+            current.clone()
+        } else {
+            PhpType::Mixed
+        };
+        let arg_ty = &joined;
 
         for class_info in self.classes.values_mut() {
             let shares_inherited_property = class_info

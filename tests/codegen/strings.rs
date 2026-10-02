@@ -31,6 +31,8 @@ mod openssl;
 mod sodium;
 #[path = "strings/parse_url.rs"]
 mod parse_url;
+#[path = "strings/implode_conversions.rs"]
+mod implode_conversions;
 
 /// Verifies `mb_strlen()` counts valid UTF-8 across ASCII, multibyte, and empty strings.
 #[test]

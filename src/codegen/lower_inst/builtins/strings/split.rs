@@ -467,6 +467,7 @@ pub(crate) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         Arch::X86_64 => lower_implode_x86_64(ctx, inst, array_index)?,
     }
     let Some(value_ty) = hash_copy else {
+        load_implode_eval_context(ctx)?;
         abi::emit_call_label(ctx.emitter, runtime_label);
         return store_if_result(ctx, inst);
     };
@@ -476,6 +477,7 @@ pub(crate) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     // copy being released first, which would free the payload the join just read.
     let array_reg = implode_array_argument_reg(ctx);
     abi::emit_push_reg(ctx.emitter, array_reg);
+    load_implode_eval_context(ctx)?;
     abi::emit_call_label(ctx.emitter, runtime_label);
     abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
     abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
@@ -530,6 +532,7 @@ fn lower_implode_mixed_array(
             abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
             abi::emit_push_reg(ctx.emitter, "x0");
             ctx.emitter.instruction("mov x3, x0");                              // pass the owned indexed values array to implode
+            load_implode_eval_context(ctx)?;
             abi::emit_call_label(ctx.emitter, "__rt_implode");
             abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 16);
@@ -557,6 +560,7 @@ fn lower_implode_mixed_array(
             abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
             abi::emit_push_reg(ctx.emitter, "rax");
             ctx.emitter.instruction("mov rdx, rax");                            // pass the owned indexed values array to implode
+            load_implode_eval_context(ctx)?;
             abi::emit_call_label(ctx.emitter, "__rt_implode");
             abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 16);
@@ -614,6 +618,7 @@ fn lower_implode_gradual(
             abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
             abi::emit_push_reg(ctx.emitter, "x0");
             ctx.emitter.instruction("mov x3, x0");                              // pass the temporary indexed values array to implode
+            load_implode_eval_context(ctx)?;
             abi::emit_call_label(ctx.emitter, "__rt_implode");
             abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 16);
@@ -651,6 +656,7 @@ fn lower_implode_gradual(
             abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
             abi::emit_push_reg(ctx.emitter, "rax");
             ctx.emitter.instruction("mov rdx, rax");                            // pass the temporary indexed values array to implode
+            load_implode_eval_context(ctx)?;
             abi::emit_call_label(ctx.emitter, "__rt_implode");
             abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 16);
@@ -754,6 +760,7 @@ fn lower_implode_assoc(
             abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
             abi::emit_push_reg(ctx.emitter, "x0");
             ctx.emitter.instruction("mov x3, x0");
+            load_implode_eval_context(ctx)?;
             abi::emit_call_label(ctx.emitter, runtime_label);
             abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 16);
@@ -764,6 +771,7 @@ fn lower_implode_assoc(
             ctx.emitter.label(&indexed_label);
             ctx.emitter.instruction("mov x3, x0");                              // pass the reindexed array directly to the ordinary implode helper
             abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            load_implode_eval_context(ctx)?;
             abi::emit_call_label(ctx.emitter, runtime_label);
         }
         Arch::X86_64 => {
@@ -786,6 +794,7 @@ fn lower_implode_assoc(
             abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
             abi::emit_push_reg(ctx.emitter, "rax");
             ctx.emitter.instruction("mov rdx, rax");
+            load_implode_eval_context(ctx)?;
             abi::emit_call_label(ctx.emitter, runtime_label);
             abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 16);
@@ -796,6 +805,7 @@ fn lower_implode_assoc(
             ctx.emitter.label(&indexed_label);
             ctx.emitter.instruction("mov rdx, rax");                            // pass the reindexed array directly to the ordinary implode helper
             abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
+            load_implode_eval_context(ctx)?;
             abi::emit_call_label(ctx.emitter, runtime_label);
         }
     }
@@ -1032,6 +1042,18 @@ pub(super) fn materialize_str_split_length_x86_64(
         ctx.emitter.instruction("mov rdi, 1");                                  // default to one-byte chunks when length is omitted
     }
     Ok(())
+}
+
+/// Loads the eval context `__rt_implode` hands to `__toString()` for a boxed object element.
+///
+/// It travels in the argument register after the array (`x4` / `rcx`), which every implode
+/// helper's other inputs leave free; the int and bool renderers ignore it.
+fn load_implode_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let arg_index = match ctx.emitter.target.arch {
+        Arch::AArch64 => 4,
+        Arch::X86_64 => 3,
+    };
+    super::printf::load_optional_sprintf_eval_context(ctx, arg_index)
 }
 
 /// Returns the runtime helper label required for an `implode()` array operand.

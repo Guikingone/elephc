@@ -1142,6 +1142,10 @@ pub fn inject_if_used(
     let needs_addcslashes = usage.references("addcslashes");
     // And so is `get_class_vars()`, whose answer is the program's own class declarations.
     let needs_class_vars = usage.references("get_class_vars");
+    // And so is `implode()` over objects or floats, which the native joiners cannot render.
+    let needs_implode_values = usage.references("implode") || usage.references("join");
+    // And so is a `define()` whose name is computed, which needs the run-time constant table.
+    let needs_dynamic_define = usage.dynamic_define;
     if sources.is_empty()
         && !needs_addcslashes
         && !inject_randomizer
@@ -1154,12 +1158,24 @@ pub fn inject_if_used(
         && !needs_preg_array
         && !needs_is_callable_ext
         && !needs_class_vars
+        && !needs_implode_values
+        && !needs_dynamic_define
     {
         return program;
     }
     let mut combined = Vec::new();
     if needs_class_vars {
         let declarations = crate::class_vars_prelude::declarations(&program);
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_dynamic_define {
+        let declarations = crate::dynamic_define_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_implode_values {
+        let declarations = crate::implode_prelude::declarations();
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);
         combined.extend(declarations);
     }

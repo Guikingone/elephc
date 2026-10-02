@@ -321,6 +321,16 @@ fn try_compile_source_to_asm_with_defines_repr(
     // gap prelude. Omitting it here left the harness unable to compile any `filter_var()`
     // call with a runtime `$filter`, so that whole path had no test coverage at all.
     let resolved = elephc::filter_var_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    // Mirrors `pipeline::compile`: the error-handling surface (`trigger_error()`,
+    // `set_error_handler()`, `error_reporting()`, ...) is injected when the program names it,
+    // or defines a constant under a computed name, whose prelude warns through it. Without it a
+    // fixture naming any of them died at run time on an undefined function.
+    let resolved = elephc::error_handling_prelude::inject_if_used(
+        resolved,
+        false,
+        &synthetic_main,
+        &mut prelude_inventory,
+    );
     let resolved = elephc::backend_gap_prelude::inject_if_used(resolved, &mut prelude_inventory);
     // Mirrors `pipeline::compile`: `func_num_args`/`func_get_args`/`func_get_arg` are
     // desugared into a hidden variadic parameter plus plain PHP after autoloading and
@@ -357,6 +367,16 @@ fn try_compile_source_to_asm_with_defines_repr(
         .contains_key(elephc::backend_gap_prelude::BACKEND_GAP_GROUP)
     {
         forced_groups.insert(elephc::backend_gap_prelude::BACKEND_GAP_GROUP.to_string());
+    }
+    // Reached from the generated runtime and from `exit()` lowering, never from PHP, exactly as
+    // `pipeline::compile` forces them.
+    for group in [
+        elephc::error_handling_prelude::DIAG_DISPATCH_GROUP,
+        elephc::error_handling_prelude::SHUTDOWN_RUN_GROUP,
+    ] {
+        if prelude_inventory.groups.contains_key(group) {
+            forced_groups.insert(group.to_string());
+        }
     }
     if prelude_inventory
         .groups

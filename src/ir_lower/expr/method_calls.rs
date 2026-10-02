@@ -543,6 +543,37 @@ pub(super) fn method_is_fiber_start(
     php_symbol_key(class_name.trim_start_matches('\\')) == "fiber"
 }
 
+/// Unboxes a boxed `?C` receiver to `C` once the null branch has been taken away.
+///
+/// The call then lowers exactly as on a `C` receiver. Left boxed, it took the backend's nullable
+/// path, which knows ordinary method bodies but none of the built-in classes' intrinsics:
+/// `function g(): ?LogicException` then `g()->getMessage()` jumped to an empty vtable slot,
+/// `?SplStack->top()` printed the stack, and `?Generator->current()` dispatched over every
+/// `Iterator` and pulled in pcre2. The unbox takes its own reference, which the call releases
+/// as it does any owning receiver; the caller still releases the box it was given.
+fn narrow_non_null_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    span: Span,
+) -> Option<LoweredValue> {
+    let object_ty = ctx.builder.value_php_type(object.value);
+    if !matches!(object_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return None;
+    }
+    let (class_name, true) = singular_object_class(&object_ty)? else {
+        return None;
+    };
+    let target = PhpType::Object(class_name.to_string());
+    Some(ctx.emit_value(
+        Op::MixedUnbox,
+        vec![object.value],
+        None,
+        target,
+        Op::MixedUnbox.default_effects(),
+        Some(span),
+    ))
+}
+
 /// Lowers `?Object->method()` calls so null receivers fatal before argument evaluation.
 pub(super) fn lower_nullable_regular_method_call(
     ctx: &mut LoweringContext<'_, '_>,
@@ -582,7 +613,15 @@ pub(super) fn lower_nullable_regular_method_call(
     terminate_method_call_on_null(ctx, method);
 
     ctx.builder.position_at_end(call_block);
-    let call = lower_method_call_with_receiver(ctx, object, method, args, Op::MethodCall, expr);
+    let call = match narrow_non_null_receiver(ctx, object, expr.span) {
+        Some(narrowed) => {
+            let call =
+                lower_method_call_with_receiver(ctx, narrowed, method, args, Op::MethodCall, expr);
+            release_owning_receiver_temporary(ctx, object, expr.span);
+            call
+        }
+        None => lower_method_call_with_receiver(ctx, object, method, args, Op::MethodCall, expr),
+    };
     store_value_into_temp(ctx, &temp_name, result_type.clone(), call, expr.span);
     branch_to(ctx, merge);
 

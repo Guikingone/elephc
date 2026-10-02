@@ -47,6 +47,9 @@ pub(crate) struct Usage {
     /// Variables stored into an array as a reference (`$a[$k] = &$v`, `[&$v]`), which must
     /// then BE a shareable reference cell rather than an alias of some other storage.
     pub(crate) array_reference_sources: HashSet<String>,
+    /// Whether a `define()` names its constant with anything but a string literal, which needs
+    /// the run-time constant table (`crate::dynamic_define_prelude`).
+    pub(crate) dynamic_define: bool,
 }
 
 impl Usage {
@@ -60,6 +63,7 @@ impl Usage {
         self.globals_keys.extend(other.globals_keys);
         self.array_reference_sources
             .extend(other.array_reference_sources);
+        self.dynamic_define |= other.dynamic_define;
     }
 
     /// Returns true when a PHP function is referenced case-insensitively.
@@ -152,6 +156,16 @@ fn record_literal_builtin_callback_arguments(usage: &mut Usage, name: &str, args
         }
         record_literal_function(usage, args.get(position));
     }
+}
+
+/// Returns whether a `define()` call names its constant with a string literal.
+fn define_name_is_literal(args: &[Expr]) -> bool {
+    let name = args.iter().find_map(|arg| match &arg.kind {
+        ExprKind::NamedArg { name, value } if name == "constant_name" => Some(value.as_ref()),
+        ExprKind::NamedArg { .. } => None,
+        _ => Some(arg),
+    });
+    matches!(name.map(|arg| &arg.kind), Some(ExprKind::StringLiteral(_)) | None)
 }
 
 /// Records a literal callback/probe target when it denotes a free function.
@@ -479,6 +493,9 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             }
             let name = php_symbol_key(name.as_str().trim_start_matches('\\'));
             record_name(usage, &name);
+            if name.rsplit('\\').next() == Some("define") && !define_name_is_literal(args) {
+                usage.dynamic_define = true;
+            }
             match name.as_str() {
                 "function_exists" | "is_callable" => {
                     if matches!(args.first().map(|arg| &arg.kind), Some(ExprKind::StringLiteral(_))) {

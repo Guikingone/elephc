@@ -415,6 +415,13 @@ impl Checker {
                 let mut class_name = None;
                 let mut nullable = false;
                 for member in members {
+                    // `?Closure` is typed `callable|null`; its object is a `Closure`.
+                    let closure_class = PhpType::Object("Closure".to_string());
+                    let member = if matches!(member, PhpType::Callable) {
+                        &closure_class
+                    } else {
+                        member
+                    };
                     match member {
                         PhpType::Void => nullable = true,
                         PhpType::Object(candidate) => {

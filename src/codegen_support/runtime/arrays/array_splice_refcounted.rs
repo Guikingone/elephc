@@ -9,6 +9,9 @@
 //! - Array helpers operate on runtime array headers and element cells; mutations must respect capacity and COW contracts.
 //! - The removal window is normalized by the shared `slice_bounds` prologue, so the removal count is
 //!   always non-negative and the compaction loop never reads or writes outside the source payload.
+//! - A removed element MOVES to the result: the retaining push takes a reference for the result and
+//!   the source's own reference is released before the compaction overwrites its slot. Without
+//!   that release every spliced-out box, array or object leaked one reference.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -49,9 +52,9 @@ pub fn emit_array_splice_refcounted(emitter: &mut Emitter) {
     emitter.label_global("__rt_array_splice_refcounted");
 
     // -- set up stack frame, save arguments --
-    emitter.instruction("sub sp, sp, #48");                                     // allocate stack frame
-    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #32");                                    // set up new frame pointer
+    emitter.instruction("sub sp, sp, #64");                                     // allocate stack frame
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #48");                                    // set up new frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save source array pointer
 
     // -- normalize the requested removal window against PHP's offset/length rules --
@@ -65,21 +68,27 @@ pub fn emit_array_splice_refcounted(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_array_new");                                   // allocate result array
     emitter.instruction("str x0, [sp, #24]");                                   // save result array pointer
 
-    // -- copy removed elements into the result with retains --
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload source array pointer
-    emitter.instruction("add x5, x0, #24");                                     // compute source data base
-    emitter.instruction("ldr x6, [sp, #8]");                                    // reload offset
-    emitter.instruction("ldr x7, [sp, #16]");                                   // reload removal length
-    emitter.instruction("mov x8, #0");                                          // initialize copy-loop index
+    // -- move removed elements into the result: retain for the result, release the source's share --
+    emitter.instruction("str xzr, [sp, #32]");                                  // initialize copy-loop index
     emitter.label("__rt_array_splice_ref_copy");
+    emitter.instruction("ldr x8, [sp, #32]");                                   // reload copy index after helper calls
+    emitter.instruction("ldr x7, [sp, #16]");                                   // reload removal length
     emitter.instruction("cmp x8, x7");                                          // compare copy index with removal length
     emitter.instruction("b.ge __rt_array_splice_ref_shift");                    // move on to in-place shifting after copying removed elements
+    emitter.instruction("ldr x6, [sp, #8]");                                    // reload offset
     emitter.instruction("add x9, x6, x8");                                      // compute source index = offset + copy index
-    emitter.instruction("ldr x1, [x5, x9, lsl #3]");                            // load borrowed removed payload
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload source array pointer
+    emitter.instruction("add x5, x0, #24");                                     // compute source data base
+    emitter.instruction("ldr x1, [x5, x9, lsl #3]");                            // load the removed payload
+    emitter.instruction("str x1, [sp, #40]");                                   // keep it for the release below
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload result array pointer
-    emitter.instruction("bl __rt_array_push_refcounted");                       // append retained removed payload into result array
+    emitter.instruction("bl __rt_array_push_refcounted");                       // append the removed payload, retained for the result
     emitter.instruction("str x0, [sp, #24]");                                   // persist result pointer after possible growth
+    emitter.instruction("ldr x0, [sp, #40]");                                   // the removed payload
+    emitter.instruction("bl __rt_decref_any");                                  // drop the source's reference: the element moved
+    emitter.instruction("ldr x8, [sp, #32]");                                   // reload copy index
     emitter.instruction("add x8, x8, #1");                                      // increment copy-loop index
+    emitter.instruction("str x8, [sp, #32]");                                   // persist copy index across helper calls
     emitter.instruction("b __rt_array_splice_ref_copy");                        // continue copying removed elements
 
     // -- shift remaining elements left inside the source array --
@@ -109,8 +118,8 @@ pub fn emit_array_splice_refcounted(emitter: &mut Emitter) {
     // -- return removed-elements result array --
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload result array pointer
     emitter.instruction("ldr x1, [sp, #8]");                                    // return the normalized removal offset, the index a $replacement is inserted at
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return result array
 }
 
@@ -156,6 +165,10 @@ fn emit_array_splice_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the removed-elements result indexed-array pointer before appending the retained payload
     emitter.instruction("call __rt_array_push_refcounted");                     // append the retained removed payload into the result indexed array
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // persist the possibly-grown removed-elements result indexed-array pointer after the append helper returns
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer
+    emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // reload the source removal cursor
+    emitter.instruction("mov rax, QWORD PTR [r10 + r11 * 8 + 24]");             // the removed payload, now also held by the result
+    emitter.instruction("call __rt_decref_any");                                // drop the source's reference: the element moved
     emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // reload the removal-copy index after helper calls clobbered caller-saved registers
     emitter.instruction("add rcx, 1");                                          // advance the removal-copy index after copying one removed refcounted payload
     emitter.instruction("mov QWORD PTR [rbp - 40], rcx");                       // persist the updated removal-copy index across the next append helper call

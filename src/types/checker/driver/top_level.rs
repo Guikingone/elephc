@@ -184,6 +184,20 @@ impl Checker {
                 | "Cannot index non-array"
                 | "Property access requires an object or typed pointer"
         ) || (message.starts_with("Cannot call $") && message.contains("not a callable"))
+            || Self::is_stale_array_argument_error(message)
+    }
+
+    /// Returns true for a builtin's array-argument refusal, which the first pass raises against an
+    /// untyped method's PLACEHOLDER return type.
+    ///
+    /// Until `type_check_methods_until_stable` has walked a method's body, a `return $this->x;` is
+    /// typed `int` (`infer_return_type_syntactic`). The first top-level pass therefore refused
+    /// `count($o->get())`, `array_keys($o->get())`, `in_array($v, $o->get())`, ... even for a
+    /// property DECLARED `array`, although the final pass, with the real return type, accepts them.
+    fn is_stale_array_argument_error(message: &str) -> bool {
+        message.contains("() ")
+            && (message.ends_with("must be array")
+                || message == "count() argument must be array or Countable object")
     }
 
     /// Builds the initial `TypeEnv` with built-in globals `$argc`, `$argv`, and external globals.

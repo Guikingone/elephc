@@ -25,9 +25,9 @@ use crate::codegen_support::platform::Arch;
 /// Emits the `__rt_implode` runtime helper for joining array elements with a glue string.
 /// Dispatches to platform-specific implementations (x86_64 Linux vs ARM64).
 ///
-/// Input registers (ARM64): x1=glue_ptr, x2=glue_len, x3=array_ptr
+/// Input registers (ARM64): x1=glue_ptr, x2=glue_len, x3=array_ptr, x4=eval context or 0
 /// Output registers (ARM64): x1=result_ptr, x2=result_len
-/// Input registers (x86_64 Linux): rdi=glue_ptr, rsi=glue_len, rdx=array_ptr
+/// Input registers (x86_64 Linux): rdi=glue_ptr, rsi=glue_len, rdx=array_ptr, rcx=eval context or 0
 /// Output registers (x86_64 Linux): rax=result_ptr, rdx=result_len
 ///
 /// The result is written into the shared concat buffer and _concat_off is updated
@@ -42,12 +42,13 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.comment("--- runtime: implode ---");
     emitter.label_global("__rt_implode");
 
-    // -- set up stack frame (96 bytes) --
-    emitter.instruction("sub sp, sp, #96");                                     // allocate 96 bytes on the stack
-    emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #80");                                    // establish new frame pointer
+    // -- set up stack frame (112 bytes) --
+    emitter.instruction("sub sp, sp, #112");                                    // allocate 112 bytes on the stack
+    emitter.instruction("stp x29, x30, [sp, #96]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #96");                                    // establish new frame pointer
     emitter.instruction("stp x1, x2, [sp]");                                    // save glue string ptr and length
     emitter.instruction("str x3, [sp, #16]");                                   // save array pointer
+    emitter.instruction("str x4, [sp, #80]");                                   // save the eval context an object element's __toString() may need
 
     // -- get concat_buf write position --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
@@ -111,6 +112,13 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("sub x14, x9, x13");                                    // absolute offset of the live implode destination cursor
     emitter.instruction("ldr x13, [sp, #32]");                                  // reload the concat offset variable address
     emitter.instruction("str x14, [x13]");                                      // reserve everything written so far against the nested cast's scratch
+    // An object payload converts through `__toString()`, which the scalar cast below cannot reach:
+    // it answered "" for one. The printf-family coercion owns that dispatch, eval classes included.
+    emitter.instruction("str x0, [sp, #88]");                                   // keep the boxed element while its payload tag is inspected
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the element's concrete tag
+    emitter.instruction("cmp x0, #6");                                          // is the element an object?
+    emitter.instruction("b.eq __rt_implode_mixed_object");                      // objects convert through __toString()
+    emitter.instruction("ldr x0, [sp, #88]");                                   // reload the boxed element for the scalar cast
     emitter.instruction("bl __rt_mixed_cast_string");                           // cast the boxed Mixed element to a string payload
     emitter.instruction("ldr x9, [sp, #56]");                                   // restore destination cursor after the mixed string cast
     emitter.instruction("ldr x10, [sp, #64]");                                  // restore array length after the mixed string cast
@@ -163,16 +171,28 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("str x14, [x6]");                                       // store updated concat_off
 
     // -- restore frame and return --
-    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #96");                                     // deallocate stack frame
+    emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #112");                                    // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
+
+    // -- object element: __toString() through the printf-family coercion --
+    emitter.label("__rt_implode_mixed_object");
+    emitter.instruction("mov x0, #7");                                          // the record is a boxed Mixed cell
+    emitter.instruction("ldr x1, [sp, #88]");                                   // the boxed object element
+    emitter.instruction("ldr x2, [sp, #80]");                                   // eval context for eval-declared classes
+    emitter.instruction("bl __rt_sprintf_mixed_to_string");                     // owner in x0, string in x1/x2; Error when not stringable
+    emitter.instruction("str x0, [sp, #48]");                                   // release the owned conversion once its bytes are copied
+    emitter.instruction("ldr x9, [sp, #56]");                                   // restore destination cursor after the conversion
+    emitter.instruction("ldr x10, [sp, #64]");                                  // restore array length after the conversion
+    emitter.instruction("ldr x11, [sp, #72]");                                  // restore loop index after the conversion
+    emitter.instruction("b __rt_implode_copy_value");                           // copy the converted string into the result
 }
 
 /// Emits the x86_64 Linux variant of `__rt_implode`.
 /// Implements the same join logic as the ARM64 path but uses x86_64 System V ABI
 /// registers and x86_64 assembly conventions (r8-r11, rdx for length, rax for pointer).
 ///
-/// Input registers: rdi=glue_ptr, rsi=glue_len, rdx=array_ptr
+/// Input registers: rdi=glue_ptr, rsi=glue_len, rdx=array_ptr, rcx=eval context or 0
 /// Output registers: rax=result_ptr, rdx=result_len
 ///
 /// The result is written into the shared concat buffer and _concat_off is updated.
@@ -183,7 +203,8 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving implode spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for glue, array, and concat-buffer bookkeeping
-    emitter.instruction("sub rsp, 80");                                         // reserve aligned spill slots for glue, array, concat destination, array length, loop index, and the owned mixed-cast string
+    emitter.instruction("sub rsp, 96");                                         // reserve aligned spill slots for glue, array, concat destination, array length, loop index, the owned mixed-cast string, the eval context, and the boxed element
+    emitter.instruction("mov QWORD PTR [rbp - 80], rcx");                       // preserve the eval context an object element's __toString() may need
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the glue string pointer across the indexed-array copy loop and concat-buffer bookkeeping
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the glue string length across the indexed-array copy loop and concat-buffer bookkeeping
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // preserve the indexed-array pointer across the element copy loop and concat-buffer bookkeeping
@@ -252,6 +273,13 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r9, r8");                                          // absolute offset of the live implode destination cursor
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
     emitter.instruction("mov QWORD PTR [r8], r9");                              // reserve everything written so far against the nested cast's scratch
+    // An object payload converts through `__toString()`, which the scalar cast below cannot reach:
+    // it answered "" for one. The printf-family coercion owns that dispatch, eval classes included.
+    emitter.instruction("mov QWORD PTR [rbp - 88], rax");                       // keep the boxed element while its payload tag is inspected
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the element's concrete tag in rax
+    emitter.instruction("cmp rax, 6");                                          // is the element an object?
+    emitter.instruction("je __rt_implode_mixed_object");                        // objects convert through __toString()
+    emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                       // reload the boxed element for the scalar cast
     emitter.instruction("call __rt_mixed_cast_string");                         // cast the boxed Mixed element to a string payload
     // Record the cast result as this frame's owned temporary (#601): only tag 1 (string) routes
     // through `__rt_str_persist` and allocates. Int/float/bool scratch pointers into `_concat_buf`
@@ -294,9 +322,20 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r9, r8");                                          // absolute offset one past the joined result
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
     emitter.instruction("mov QWORD PTR [r8], r9");                              // persist the updated concat-buffer write offset after writing the implode output bytes
-    emitter.instruction("add rsp, 80");                                         // release the implode spill slots before returning the joined string
+    emitter.instruction("add rsp, 96");                                         // release the implode spill slots before returning the joined string
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the joined string
     emitter.instruction("ret");                                                 // return the joined string in the standard x86_64 string result registers
+
+    emitter.label("__rt_implode_mixed_object");
+    emitter.instruction("mov edi, 7");                                          // the record is a boxed Mixed cell
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 88]");                       // the boxed object element
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 80]");                       // eval context for eval-declared classes
+    emitter.instruction("call __rt_sprintf_mixed_to_string");                   // string in rax/rdx, owner in rcx; Error when not stringable
+    emitter.instruction("mov QWORD PTR [rbp - 72], rcx");                       // release the owned conversion once its bytes are copied
+    emitter.instruction("mov r8, rax");                                         // move the converted string pointer into the copy-loop source register
+    emitter.instruction("mov r9, rdx");                                         // move the converted string length into the copy-loop counter register
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current concat-buffer destination cursor after converting
+    emitter.instruction("jmp __rt_implode_copy");                               // copy the converted string into the result
 }
 
 #[cfg(test)]
@@ -306,7 +345,7 @@ mod tests {
 
     /// Verifies the ARM64 implode emitter releases the persisted mixed-cast string:
     /// it records the cast pointer, guards borrowed slots, and frees owned temporaries
-    /// with a balanced 96-byte frame.
+    /// with a balanced 112-byte frame.
     #[test]
     fn test_implode_arm64_releases_mixed_cast_string() {
         let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
@@ -317,12 +356,13 @@ mod tests {
         assert!(asm.contains("cbz x0, __rt_implode_next_advance"));
         assert!(asm.contains("bl __rt_heap_free"));
         assert!(asm.contains("__rt_implode_next_advance:\n"));
-        assert_eq!(asm.matches("sub sp, sp, #96").count(), 1);
+        assert_eq!(asm.matches("sub sp, sp, #112").count(), 1);
+        assert_eq!(asm.matches("add sp, sp, #112").count(), 1);
     }
 
     /// Verifies the x86_64 implode emitter releases the persisted mixed-cast string:
     /// it records the cast pointer in the owned slot, guards borrowed slots, and frees
-    /// owned temporaries with a balanced 80-byte frame.
+    /// owned temporaries with a balanced 96-byte frame.
     #[test]
     fn test_implode_x86_64_releases_mixed_cast_string() {
         let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
@@ -333,8 +373,8 @@ mod tests {
         assert!(asm.contains("jz __rt_implode_next_advance"));
         assert!(asm.contains("call __rt_heap_free"));
         assert!(asm.contains("__rt_implode_next_advance:\n"));
-        assert_eq!(asm.matches("sub rsp, 80").count(), 1);
-        assert_eq!(asm.matches("add rsp, 80").count(), 1);
+        assert_eq!(asm.matches("sub rsp, 96").count(), 1);
+        assert_eq!(asm.matches("add rsp, 96").count(), 1);
     }
 
     /// The owned mixed-cast slot must be cleared at the TOP of every element iteration, so a
@@ -353,6 +393,32 @@ mod tests {
         let x86_asm = x86.output();
         assert_eq!(x86_asm.matches("mov QWORD PTR [rbp - 72], 0").count(), 1);
         assert_eq!(x86_asm.matches("mov QWORD PTR [rbp - 72], rax").count(), 1);
+    }
+
+    /// An object element converts through `__toString()`: the boxed element is unboxed, an object
+    /// tag branches to the printf-family coercion with the caller's eval context, and that
+    /// coercion's OWNER (not the string pointer) is what the release slot records.
+    #[test]
+    fn test_implode_routes_object_elements_through_tostring() {
+        let mut arm = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emit_implode(&mut arm);
+        let arm_asm = arm.output();
+        assert!(arm_asm.contains("str x4, [sp, #80]"));
+        assert!(arm_asm.contains("b.eq __rt_implode_mixed_object"));
+        assert!(arm_asm.contains("__rt_implode_mixed_object:\n"));
+        assert!(arm_asm.contains("ldr x2, [sp, #80]"));
+        assert!(arm_asm.contains("bl __rt_sprintf_mixed_to_string"));
+        assert!(arm_asm.contains("str x0, [sp, #48]"));
+
+        let mut x86 = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_implode(&mut x86);
+        let x86_asm = x86.output();
+        assert!(x86_asm.contains("mov QWORD PTR [rbp - 80], rcx"));
+        assert!(x86_asm.contains("je __rt_implode_mixed_object"));
+        assert!(x86_asm.contains("__rt_implode_mixed_object:\n"));
+        assert!(x86_asm.contains("mov rdx, QWORD PTR [rbp - 80]"));
+        assert!(x86_asm.contains("call __rt_sprintf_mixed_to_string"));
+        assert!(x86_asm.contains("mov QWORD PTR [rbp - 72], rcx"));
     }
 
     /// Pins the ARM64 cursor discipline: the LIVE destination cursor is published as

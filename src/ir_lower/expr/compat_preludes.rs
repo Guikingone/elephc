@@ -195,6 +195,28 @@ pub(super) fn lower_backend_gap_builtin_shape(
     {
         return None;
     }
+    // `implode()` over elements the native joiners cannot render: objects (php calls
+    // `__toString()`) and floats were refused at compile time, and a boxed object joined as "".
+    // The single-argument form joins with an empty separator.
+    if matches!(builtin.as_str(), "implode" | "join")
+        && matches!(args.len(), 1 | 2)
+        && implode_elements_need_prelude(&materialized_expr_type_for_merge(
+            ctx,
+            &args[args.len() - 1],
+        ))
+    {
+        let call_args = if args.len() == 2 {
+            args.to_vec()
+        } else {
+            vec![Expr::new(ExprKind::StringLiteral(String::new()), expr.span), args[0].clone()]
+        };
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(crate::implode_prelude::IMPLODE_VALUES_NAME),
+            &call_args,
+            expr,
+        ));
+    }
     if builtin == "array_unique"
         && args.len() == 1
         && match materialized_expr_type_for_merge(ctx, &args[0]).codegen_repr() {
@@ -742,6 +764,28 @@ pub(super) fn lower_gradual_array_merge(
         args,
         expr,
     ))
+}
+
+/// Returns whether `implode()`'s array operand holds elements only the prelude joins correctly.
+///
+/// The native renderers take string, int and bool slots, and boxed ones (objects included, through
+/// `__toString()`). An unboxed object, float or nested-array slot has no renderer.
+fn implode_elements_need_prelude(array_ty: &PhpType) -> bool {
+    let element = match array_ty {
+        PhpType::Array(element) => element,
+        PhpType::AssocArray { value, .. } => value,
+        _ => return false,
+    };
+    !matches!(
+        element.codegen_repr(),
+        PhpType::Bool
+            | PhpType::Int
+            | PhpType::Str
+            | PhpType::Mixed
+            | PhpType::Union(_)
+            | PhpType::Never
+            | PhpType::Void
+    )
 }
 
 /// Returns whether an `array_merge` argument needs key-aware PHP-level iteration.

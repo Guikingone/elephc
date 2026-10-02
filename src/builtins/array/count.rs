@@ -77,7 +77,13 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         | PhpType::AssocArray { .. }
         | PhpType::Iterable
         | PhpType::Mixed => Ok(PhpType::Int),
-        PhpType::Union(members) if members.iter().any(union_member_is_countable_array) => {
+        // An object member counts too: `?SplStack` and `Countable|null` are ordinary PHP, and the
+        // null arm raises the run-time `TypeError` like any other non-countable value.
+        PhpType::Union(members)
+            if members.iter().any(|member| {
+                union_member_is_countable_array(member) || matches!(member, PhpType::Object(_))
+            }) =>
+        {
             Ok(PhpType::Int)
         }
         // A non-Countable object is accepted here and REFUSED AT RUN TIME, the way PHP does it.

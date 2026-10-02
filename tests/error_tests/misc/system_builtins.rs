@@ -258,15 +258,6 @@ fn test_error_define_wrong_args() {
     expect_error("<?php define(\"X\");", "define() takes exactly 2 arguments");
 }
 
-/// Verifies that `define()` with a non-string first argument (int name) yields a non-string-name error.
-#[test]
-fn test_error_define_non_string_name() {
-    expect_error(
-        "<?php define(42, 100);",
-        "define() first argument must be a string literal",
-    );
-}
-
 /// Verifies that `defined()` requires exactly one argument.
 #[test]
 fn test_error_defined_wrong_args() {

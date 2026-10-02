@@ -132,6 +132,10 @@ pub mod parser;
 /// `parse_str()` query-string prelude injection.
 mod parse_str_prelude;
 mod class_vars_prelude;
+/// `implode()` fallback for elements the native joiners cannot render.
+mod implode_prelude;
+/// Run-time constant table behind `define()` calls with a computed name.
+mod dynamic_define_prelude;
 /// Selected PHP compatibility version for version-sensitive compiler surfaces.
 pub mod php_version;
 /// PDO (SQLite) standard-library prelude injection.

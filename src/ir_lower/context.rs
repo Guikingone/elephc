@@ -2575,6 +2575,42 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return;
         }
         let slot = self.declare_local(name, replacement_type.clone());
+        // A BOXED static differs from a boxed frame slot twice: loading its box takes no
+        // reference, and its store releases the previous value itself. Releasing the "stored" box
+        // here therefore freed the live static, and the store freed it again: `static $v = [];
+        // $v[$name] = $mixed;` rebuilt its hash from freed storage on the second call. The unboxed
+        // source load DOES hold its own reference, so the static is cleared through its own store
+        // instead: that releases the box, the source becomes the payload's only owner, and the
+        // mutation runs in place rather than cloning the container on every write.
+        if previous_kind == LocalKind::StaticLocal {
+            self.builder
+                .widen_local_storage_type(slot, replacement_type);
+            if self.static_local_is_boxed(slot) {
+                let null = self
+                    .builder
+                    .emit_with_effects(
+                        Op::ConstNull,
+                        Vec::new(),
+                        None,
+                        IrType::I64,
+                        PhpType::Void,
+                        Ownership::NonHeap,
+                        Op::ConstNull.default_effects(),
+                        span,
+                    )
+                    .expect("const_null produces a value");
+                self.store_slot_with_op(
+                    slot,
+                    LoweredValue {
+                        value: null,
+                        ir_type: IrType::I64,
+                    },
+                    Op::StoreStaticLocal,
+                    span,
+                );
+            }
+            return;
+        }
         let is_ref_bound =
             self.is_ref_bound_local(name) && previous_kind == LocalKind::PhpLocal;
         let source_type = self.builder.value_php_type(source.value).codegen_repr();
@@ -2666,6 +2702,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let value_type = self.builder.value_php_type(value.value).codegen_repr();
         self.set_local_type_impl(name, php_type.clone(), track_array_conversion);
         let storage_type = self.builder.local_php_type(slot).codegen_repr();
+        // A boxed static's store releases its previous box and RETAINS what it boxes, unlike the
+        // consuming frame store this path is written for: skip the frame-slot release (a second
+        // release of the same box) and drop the mutation result's own reference once stored.
+        if !is_ref_bound
+            && previous_kind == LocalKind::StaticLocal
+            && self.static_local_is_boxed(slot)
+        {
+            self.store_slot_with_op(slot, value, Op::StoreStaticLocal, span);
+            crate::ir_lower::ownership::release_if_owned(self, value, span);
+            return value;
+        }
         if release_previous
             && !is_ref_bound
             && matches!(storage_type, PhpType::Mixed | PhpType::Union(_))
@@ -2683,6 +2730,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             }
         }
         value
+    }
+
+    /// Returns whether a static local's storage is a boxed `Mixed` cell.
+    fn static_local_is_boxed(&self, slot: LocalSlotId) -> bool {
+        matches!(
+            self.builder.local_php_type(slot).codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        )
     }
 
     /// Emits `unset($local)`, breaking by-reference aliases without writing through them.
