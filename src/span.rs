@@ -88,6 +88,16 @@ fn interned_span_end(index: u32) -> (u32, u32) {
 
 std::thread_local! {
     static NEXT_SOURCE_ID: std::cell::Cell<u32> = const { std::cell::Cell::new(1) };
+    /// Source identities for synthetic parses (literal `eval` fragments).
+    ///
+    /// A SEPARATE counter from [`NEXT_SOURCE_ID`], which [`Span::reset_source_ids`] rewinds per
+    /// include-resolution unit: sharing it let a fragment parsed after a reset alias an included
+    /// file's identity in span-keyed maps such as `builtin_call_types` (issue #1291). Starting
+    /// above [`SOURCE_ID_MASK`] keeps every synthetic id clear of the include range for any
+    /// realistic include count (an include id only reaches that range after 16_383 includes in
+    /// one resolution unit, which is pathological).
+    static NEXT_SYNTHETIC_SOURCE_ID: std::cell::Cell<u32> =
+        const { std::cell::Cell::new(SOURCE_ID_MASK + 1) };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -161,6 +171,23 @@ impl Span {
     /// Resets source identities at the beginning of a new include-resolution unit.
     pub fn reset_source_ids() {
         NEXT_SOURCE_ID.with(|next| next.set(1));
+    }
+
+    /// Returns a source identity for a synthetic parse that [`Span::reset_source_ids`] must not
+    /// rewind.
+    ///
+    /// Used for literal `eval` fragments: an included file's identity is only unique WITHIN one
+    /// include-resolution unit, so a fragment sharing that counter could alias an already-stored
+    /// include id in span-keyed maps such as `builtin_call_types` (issue #1291).
+    pub fn fresh_synthetic_source_id() -> u32 {
+        NEXT_SYNTHETIC_SOURCE_ID.with(|next| {
+            let id = next.get();
+            next.set(
+                id.checked_add(1)
+                    .expect("synthetic source identity counter overflowed u32"),
+            );
+            id
+        })
     }
 
     /// Returns the source end column without the included-file identity bits.
@@ -314,6 +341,18 @@ mod tests {
     #[test]
     fn span_stays_16_bytes() {
         assert_eq!(std::mem::size_of::<Span>(), 16);
+    }
+
+    /// A synthetic source id survives an include-resolution reset and stays clear of the include
+    /// range, so an eval fragment cannot alias an included file's identity (issue #1291).
+    #[test]
+    fn synthetic_source_ids_survive_an_include_reset() {
+        let first = Span::fresh_synthetic_source_id();
+        Span::reset_source_ids();
+        let second = Span::fresh_synthetic_source_id();
+        assert_ne!(first, second);
+        assert!(first > SOURCE_ID_MASK, "synthetic ids stay clear of the include range");
+        assert!(second > SOURCE_ID_MASK);
     }
 
     /// A column past the inline 16 bits keeps its value and its source identity (#1292), and
