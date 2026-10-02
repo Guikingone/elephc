@@ -201,7 +201,8 @@ Current pruning coverage includes:
 
 PHP decides generator-ness **syntactically, at declaration**. The checker records
 that on `FunctionSig::is_generator` from the source body, before any later pass
-runs, and lowering reads the bit. A declared `: Generator` return is not a
+runs. Named functions and methods pass that checker bit to lowering; closures
+rebuild it from the optimized body in `closure_signature_from_ast`. A declared `: Generator` return is not a
 substitute: `function factory(): Generator { return inner(); }` declares the type
 without containing `yield`, and it is an ordinary function (issue #1086). A body
 that held a `yield` is still a generator when no `yield` can run, so

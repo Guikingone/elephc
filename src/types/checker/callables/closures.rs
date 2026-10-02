@@ -178,8 +178,9 @@ impl Checker {
             declared_params: closure_sig.declared_params,
             variadic: variadic.clone(),
             deprecation: None,
-            // Taken from the SOURCE body, for the same reason the named-function site does:
-            // lowering must not have to re-derive this after a pass may have pruned the yield.
+            // The checker classifies this source body for callable typing. Unlike named
+            // functions, EIR closures rebuild their signature from the optimized body, so
+            // optimizer passes must retain a yield token to preserve that classification.
             is_generator: super::super::yield_validation::body_contains_yield(body),
         })
     }
