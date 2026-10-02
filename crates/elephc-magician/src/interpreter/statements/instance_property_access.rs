@@ -371,6 +371,13 @@ pub(in crate::interpreter) fn eval_property_get_result(
             {
                 return Ok(result);
             }
+            // `isset`/`empty`/`??` answer "absent" for a property the caller cannot see, they
+            // never raise. A compiled `isset($object->$name)` on an interpreted object reaches
+            // here in quiet mode: Twig's `CoreExtension::getAttribute()` asks it first for every
+            // `post.title`, and the Error it raised left every entity attribute empty.
+            if context.quiet_property_fetch() {
+                return values.null();
+            }
             return eval_throw_property_access_error(
                 &declaring_class,
                 property.name(),
@@ -453,6 +460,9 @@ pub(in crate::interpreter) fn eval_property_get_result(
                         values,
                     )? {
                         return Ok(result);
+                    }
+                    if context.quiet_property_fetch() {
+                        return values.null();
                     }
                     return eval_throw_property_access_error(
                         &declaring_class,
@@ -987,6 +997,22 @@ pub(super) fn eval_property_reference_bind_result(
         scope,
         values,
     )?;
+    // The alias outlives the activation that bound it (`new Holder($this->items)` inside a method
+    // that returns, the holder kept for good), and an object target names its owner by cell
+    // handle. That handle is the activation's own `$this` cell, which the frame releases on exit:
+    // keep a reference of the alias's own, or the next write through it reads a freed cell.
+    let target = match target {
+        EvalReferenceTarget::ObjectProperty {
+            object,
+            property,
+            access_scope,
+        } => EvalReferenceTarget::ObjectProperty {
+            object: values.retain(object)?,
+            property,
+            access_scope,
+        },
+        other => other,
+    };
     let value = eval_reference_target_value(&target, context, values)?;
     context.bind_dynamic_property_alias(identity, &storage_property_name, target);
     eval_store_dynamic_property_value(identity, &storage_property_name, value, context, values)?;

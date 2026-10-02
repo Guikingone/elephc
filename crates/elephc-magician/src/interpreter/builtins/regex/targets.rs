@@ -19,7 +19,7 @@ pub(in crate::interpreter) fn eval_preg_matches_target(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalReferenceTarget, EvalStatus> {
-    let (value, target) = eval_call_arg_value(expr, context, scope, values)?;
+    let (value, target) = eval_direct_ref_arg_value(expr, context, scope, values)?;
     let target = target.ok_or(EvalStatus::RuntimeFatal)?;
     eval_preg_define_matches_target(&target, value, context, values)?;
     Ok(target)

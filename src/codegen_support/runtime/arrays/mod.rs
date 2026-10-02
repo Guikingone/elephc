@@ -152,6 +152,7 @@ mod hash_sort;
 mod hash_spread;
 mod hash_sum_mixed;
 mod hash_to_mixed;
+mod array_unbox_values;
 mod hash_union;
 mod hash_unshift_mixed;
 mod hash_unset;
@@ -485,6 +486,7 @@ pub use hash_spread::emit_hash_spread;
 pub use hash_sum_mixed::emit_hash_sum_mixed;
 /// Emit boxed-Mixed associative-array sum helper.
 pub use hash_to_mixed::emit_hash_to_mixed;
+pub use array_unbox_values::emit_array_unbox_values;
 /// Emit hash-to-Mixed conversion helper.
 pub use hash_union::emit_hash_union;
 /// Emit hash union helper.

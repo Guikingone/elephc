@@ -2,7 +2,7 @@
 title: "session_abort()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 931
+  order: 951
 ---
 
 ## session_abort()

@@ -2,7 +2,7 @@
 title: "imagechar()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 464
+  order: 476
 ---
 
 ## imagechar()

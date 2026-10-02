@@ -173,7 +173,7 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 | [`preg_quote()`](./builtins/string/preg_quote.md) | `(string $str, string $delimiter = null): string` | `string` | ✓ | ✓ |
 | [`preg_replace()`](./builtins/regex/preg_replace.md) | `(string $pattern, string $replacement, string $subject, int $limit = -1, mixed $count = null): string` | `string` | ✓ | ✓ |
 | [`preg_replace_callback()`](./builtins/regex/preg_replace_callback.md) | `(string $pattern, callable $callback, string $subject, int $limit = -1, mixed $count = null, int $flags = 0): string` | `string` | ✓ | ✓ |
-| [`preg_replace_callback_array()`](./builtins/misc/preg_replace_callback_array.md) | `(mixed $pattern, mixed $subject, int $limit = -1, mixed $count = null, int $flags = 0): mixed` | `mixed` | ✓ | ✓ |
+| [`preg_replace_callback_array()`](./builtins/misc/preg_replace_callback_array.md) | `(array $pattern, mixed $subject, int $limit = -1, mixed $count = null, int $flags = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`preg_split()`](./builtins/regex/preg_split.md) | `(string $pattern, string $subject, int $limit = -1, int $flags = 0): array` | `array` | ✓ | ✓ |
 
 Constants: `PCRE_VERSION`, `PCRE_VERSION_MAJOR`, `PCRE_VERSION_MINOR`, `PREG_BACKTRACK_LIMIT_ERROR`, `PREG_BAD_UTF8_ERROR`, `PREG_BAD_UTF8_OFFSET_ERROR`, `PREG_GREP_INVERT`, `PREG_INTERNAL_ERROR`, `PREG_JIT_STACKLIMIT_ERROR`, `PREG_NO_ERROR`, `PREG_OFFSET_CAPTURE`, `PREG_PATTERN_ORDER`, `PREG_RECURSION_LIMIT_ERROR`, `PREG_SET_ORDER`, `PREG_SPLIT_DELIM_CAPTURE`, `PREG_SPLIT_NO_EMPTY`, `PREG_SPLIT_OFFSET_CAPTURE`, `PREG_UNMATCHED_AS_NULL`.

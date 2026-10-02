@@ -427,20 +427,6 @@ fn missing_override_target(class: &FlattenedClass, method: &ClassMethod) -> Comp
     )
 }
 
-/// Gives an override's UNDECLARED parameters the storage the ancestor declared for them.
-///
-/// A virtual call site is typed against the ancestor: `$container->load($file)` on a receiver
-/// typed `Container` materializes whatever `Container::load(string $file)` declares — a raw
-/// string. If the override writes `load($file)` with no type, its own frame expects a boxed
-/// `mixed`, and the raw string arrives where a cell pointer belongs. Symfony's generated DI
-/// container is exactly this pair, and the argument came back EMPTY: every service lookup asked
-/// the container to `require` a file whose name it had lost.
-///
-/// PHP's contravariance is what makes adopting the ancestor's type safe: an override may only
-/// WIDEN a parameter, so every value that can reach it already satisfies the ancestor's
-/// declaration. Only undeclared parameters are touched — an override that declares its own type
-/// has already been checked against the ancestor by `validate_override_signature`, and its
-/// declaration is the one its body was checked against.
 /// Gives an override the RETURN storage of the ancestor its vtable slot belongs to.
 ///
 /// The return-side twin of [`adopt_ancestor_parameter_storage`]. A virtual call typed against the
@@ -472,11 +458,34 @@ fn adopt_ancestor_return_storage(
     sig.return_type = ancestor.return_type.clone();
 }
 
+/// Gives an override's UNDECLARED parameters the storage the ancestor declared for them.
+///
+/// A virtual call site is typed against the ancestor: `$container->load($file)` on a receiver
+/// typed `Container` materializes whatever `Container::load(string $file)` declares — a raw
+/// string. If the override writes `load($file)` with no type, its own frame expects a boxed
+/// `mixed`, and the raw string arrives where a cell pointer belongs. Symfony's generated DI
+/// container is exactly this pair, and the argument came back EMPTY: every service lookup asked
+/// the container to `require` a file whose name it had lost.
+///
+/// PHP's contravariance is what makes adopting the ancestor's type safe: an override may only
+/// WIDEN a parameter, so every value that can reach it already satisfies the ancestor's
+/// declaration. Only undeclared parameters are touched — an override that declares its own type
+/// has already been checked against the ancestor by `validate_override_signature`, and its
+/// declaration is the one its body was checked against.
+///
+/// An ancestor's VARIADIC parameter is never adopted: its storage is the packed array of every
+/// surplus argument, not the value of the override's parameter at that position. Twig's
+/// `Node::getAttribute(string $name)` reads `func_get_arg(1)`, so it carries the hidden variadic
+/// tail in position 1, and a trait override `getAttribute($name, $default = null)` took that
+/// array storage for `$default`.
 fn adopt_ancestor_parameter_storage(
     sig: &mut crate::types::FunctionSig,
     ancestor: &crate::types::FunctionSig,
 ) {
-    for (index, (_, ancestor_ty)) in ancestor.params.iter().enumerate() {
+    for (index, (name, ancestor_ty)) in ancestor.params.iter().enumerate() {
+        if ancestor.variadic.as_deref() == Some(name.as_str()) {
+            break;
+        }
         if sig.declared_params.get(index).copied().unwrap_or(false) {
             continue;
         }

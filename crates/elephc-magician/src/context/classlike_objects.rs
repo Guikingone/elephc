@@ -739,6 +739,18 @@ impl ElephcEvalContext {
             .get(&(array_identity, key.clone()))
     }
 
+    /// Whether any element of the array payload is bound to a PHP reference target.
+    ///
+    /// The slots live in a side table keyed by array identity, which a fresh payload does not
+    /// inherit, so an array that holds references must not be replaced by a copy of itself.
+    pub fn array_has_element_aliases(&self, array_identity: u64) -> bool {
+        !self.array_element_aliases.is_empty()
+            && self
+                .array_element_aliases
+                .keys()
+                .any(|(identity, _)| *identity == array_identity)
+    }
+
     /// Marks one eval object storage slot as initialized.
     pub fn mark_dynamic_property_initialized(
         &mut self,

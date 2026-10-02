@@ -124,7 +124,7 @@ pub(super) fn eval_reflection_instance_property_set_value(
         context,
         values,
     )?;
-    validate_eval_reflection_property_write(declaring_class, &property, context)?;
+    validate_eval_reflection_property_write(declaring_class, &property, object, context, values)?;
     if property.has_set_hook() {
         if !current_eval_property_hook_is(
             declaring_class,
@@ -315,7 +315,7 @@ pub(super) fn eval_reflection_instance_property_set_raw_value(
     if property.is_virtual() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    validate_eval_reflection_property_write(declaring_class, &property, context)?;
+    validate_eval_reflection_property_write(declaring_class, &property, object, context, values)?;
     let storage_property_name = eval_instance_property_storage_name(declaring_class, &property);
     eval_reflection_store_property_value(object, &storage_property_name, value, context, values)
 }
@@ -422,22 +422,42 @@ pub(super) fn eval_reflection_instance_property_target(
 }
 
 /// Rejects writes to eval properties ReflectionProperty is not allowed to mutate.
+///
+/// php lets Reflection INITIALIZE a readonly property from any scope -- that is how an ORM
+/// hydrates `private readonly string $name` -- and refuses only a second write, with a catchable
+/// `Error: Cannot modify readonly property C::$p`. Refusing the first write as a fatal killed
+/// Doctrine's hydration of every entity with a readonly field.
 pub(super) fn validate_eval_reflection_property_write(
     declaring_class: &str,
     property: &EvalClassProperty,
-    context: &ElephcEvalContext,
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    if !property.is_readonly() {
+    if !property.is_readonly()
+        || current_eval_property_hook_is(
+            declaring_class,
+            property.name(),
+            &property_hook_set_method(property.name()),
+            context,
+        )
+    {
         return Ok(());
     }
-    current_eval_property_hook_is(
-        declaring_class,
-        property.name(),
-        &property_hook_set_method(property.name()),
+    let identity = values.object_identity(object)?;
+    let storage_property_name = eval_instance_property_storage_name(declaring_class, property);
+    if !context.dynamic_property_is_initialized(identity, &storage_property_name) {
+        return Ok(());
+    }
+    eval_throw_error(
+        &format!(
+            "Cannot modify readonly property {}::${}",
+            declaring_class.trim_start_matches('\\'),
+            property.name()
+        ),
         context,
+        values,
     )
-    .then_some(())
-    .ok_or(EvalStatus::RuntimeFatal)
 }
 
 /// Throws PHP's `ReflectionException` for invalid static-property writes.

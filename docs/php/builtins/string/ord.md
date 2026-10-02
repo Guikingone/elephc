@@ -2,7 +2,7 @@
 title: "ord()"
 description: "Returns the ASCII value of the first character of a string."
 sidebar:
-  order: 834
+  order: 848
 ---
 
 ## ord()

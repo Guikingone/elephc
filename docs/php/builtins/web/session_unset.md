@@ -2,7 +2,7 @@
 title: "session_unset()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 952
+  order: 972
 ---
 
 ## session_unset()

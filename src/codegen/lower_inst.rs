@@ -76,7 +76,9 @@ pub(super) use exception_instructions::lower_mixed_throw_value;
 mod fiber_methods;
 mod generator_instructions;
 mod globals_constants;
-pub(in crate::codegen) use globals_constants::lower_store_shared_global;
+pub(in crate::codegen) use globals_constants::{
+    lower_store_shared_global, lower_writeback_shared_global,
+};
 mod instruction_helpers;
 mod local_loads;
 mod local_stores;

@@ -20,6 +20,8 @@ use crate::errors::EvalStatus;
 #[cfg(not(test))]
 use crate::interpreter::eval_dynamic_destructor_for_object_cell;
 #[cfg(not(test))]
+use crate::interpreter::eval_json_encode_serialized_object;
+#[cfg(not(test))]
 use crate::interpreter::RuntimeValueOps;
 #[cfg(not(test))]
 use crate::runtime_hooks::{self, ElephcRuntimeOps};
@@ -177,6 +179,52 @@ pub extern "C" fn __elephc_eval_object_has_dynamic_owner(identity: u64) -> u64 {
     u64::from(dynamic_object_owner_context(identity).is_some())
 }
 
+/// Answers what a compiled `json_encode()` should encode for an object the interpreter owns.
+///
+/// Returns an owned boxed Mixed cell -- the object's `jsonSerialize()` result, or an array of its
+/// public properties -- or null when the interpreter does not own the object or cannot answer, in
+/// which case the compiled encoder emits `null`.
+///
+/// # Safety
+/// `object` must be null or a live elephc runtime object pointer.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_json_serialize(object: *mut RuntimeCell) -> *mut RuntimeCell {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_json_serialize");
+    std::panic::catch_unwind(|| unsafe { json_serialize_inner(object) })
+        .unwrap_or(std::ptr::null_mut())
+}
+
+/// Executes the serializer body after the exported ABI shim has installed a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_json_serialize`.
+#[cfg(not(test))]
+unsafe fn json_serialize_inner(object: *mut RuntimeCell) -> *mut RuntimeCell {
+    if object.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Some(context) = dynamic_object_owner_context(object as u64) else {
+        return std::ptr::null_mut();
+    };
+    let Some(context) = (unsafe { context.as_mut() }) else {
+        return std::ptr::null_mut();
+    };
+    if context.abi_version() != ABI_VERSION {
+        return std::ptr::null_mut();
+    }
+    let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+    let Ok(object_cell) = ElephcRuntimeOps::object_from_raw(object) else {
+        return std::ptr::null_mut();
+    };
+    let result = eval_json_encode_serialized_object(object_cell, context, &mut values);
+    let _ = values.release(object_cell);
+    match result {
+        Ok(handle) => handle.as_ptr(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
 /// Runs an eval dynamic object destructor from the native object free path.
 ///
 /// # Safety
@@ -238,7 +286,14 @@ unsafe fn dynamic_object_destruct_inner(object: *mut RuntimeCell) -> u64 {
         }
         return 0;
     }
-    if context.dynamic_object_class(identity).is_none() {
+    // A generator the interpreter created is an instance of the compiled `Generator` class, not
+    // of an eval class, but its frame lives in this context and has to go with the object:
+    // `eval_dynamic_destructor_for_object_cell` runs its pending `finally` blocks and drops it.
+    // Returning here left the frame registered under the freed ADDRESS, and the next compiled
+    // generator allocated there was answered for by the dead one -- "finished" before it ran,
+    // so an interpreted `yield from compiled_gen()` produced nothing the second time (every
+    // Twig block after the first rendered empty).
+    if context.dynamic_object_class(identity).is_none() && !context.has_eval_generator(identity) {
         unregister_dynamic_object(identity);
         return 0;
     }

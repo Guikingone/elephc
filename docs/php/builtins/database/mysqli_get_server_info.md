@@ -2,7 +2,7 @@
 title: "mysqli_get_server_info()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 134
+  order: 146
 ---
 
 ## mysqli_get_server_info()

@@ -999,7 +999,32 @@ fn check_callback_builtin_call_in_engine_frame(
             return Ok(PhpType::Int);
         }
         if let Some(builtin_name) = canonical_builtin_function_name(cb_name) {
-            if let Some(ret_ty) = checker.check_builtin(&builtin_name, callback_args, span, env)? {
+            // An opaque element (a `mixed` or not-yet-known array) is a `never` placeholder so a
+            // USER callback's declaration is not compared against it. A builtin has no
+            // declaration to defer: it takes the value gradually and checks it at run time, as
+            // php does. `array_map('current', $rows)` over Doctrine's scalar rows and
+            // `array_map('spl_object_id', $this->snapshot)` were refused ("current() argument
+            // must be array"), and `Paginator` / `PersistentCollection` went to the interpreter.
+            // Only a builtin the runtime string dispatch can wrap for a gradual element is widened:
+            // one it cannot (`current()`, whose cursor lowering is static-only) stays refused and
+            // its class keeps running in the interpreter, which calls it correctly.
+            let mut builtin_env = env.clone();
+            let gradual_wrapper = crate::codegen_support::callable_dispatch::runtime_builtin_wrapper_supported(
+                &builtin_name,
+                Some(&PhpType::Mixed),
+            );
+            for arg in callback_args.iter().filter(|_| gradual_wrapper) {
+                if let ExprKind::Variable(name) = &arg.kind {
+                    if name.starts_with(CALLBACK_ARG_PLACEHOLDER_PREFIX)
+                        && builtin_env.get(name) == Some(&PhpType::Never)
+                    {
+                        builtin_env.insert(name.clone(), PhpType::Mixed);
+                    }
+                }
+            }
+            if let Some(ret_ty) =
+                checker.check_builtin(&builtin_name, callback_args, span, &builtin_env)?
+            {
                 return Ok(ret_ty);
             }
             return Ok(PhpType::Int);

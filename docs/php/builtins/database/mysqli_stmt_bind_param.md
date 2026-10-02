@@ -2,7 +2,7 @@
 title: "mysqli_stmt_bind_param()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 161
+  order: 173
 ---
 
 ## mysqli_stmt_bind_param()

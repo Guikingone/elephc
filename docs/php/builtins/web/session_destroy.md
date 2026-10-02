@@ -2,7 +2,7 @@
 title: "session_destroy()"
 description: "Implemented by the compiler-injected web prelude."
 sidebar:
-  order: 937
+  order: 957
 ---
 
 ## session_destroy()

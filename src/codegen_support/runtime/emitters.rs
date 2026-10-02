@@ -189,10 +189,10 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_json_encode_bool(emitter);
     system::emit_json_encode_null(emitter);
     system::emit_json_encode_str(emitter);
-    system::emit_json_encode_mixed(emitter);
+    system::emit_json_encode_mixed(emitter, features.eval_bridge);
     system::emit_json_encode_float(emitter);
     system::emit_json_ftoa(emitter);
-    system::emit_json_encode_object(emitter);
+    system::emit_json_encode_object(emitter, features.eval_bridge);
     system::emit_json_pretty_helpers(emitter);
     system::emit_json_throw_error(emitter);
     system::emit_json_depth_enter(emitter);
@@ -260,6 +260,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     exceptions::emit_report_uncaught_exception(emitter);
     exceptions::emit_throw_current(emitter);
     exceptions::emit_rethrow_current(emitter);
+    exceptions::emit_throwable_capture_trace(emitter);
 
     // Generator runtime helpers for Iterator methods, send/throw, and return-value retrieval.
     generators::emit_generator_runtime(emitter);

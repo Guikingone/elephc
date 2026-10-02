@@ -204,6 +204,41 @@ fn trace_call_arg_error(
     status
 }
 
+/// [`eval_call_arg_value`] for the by-reference output argument of a DIRECT builtin call
+/// (`sort($a)`, `array_pop($a)`, `settype($a, ..)`, `preg_match(.., $m)`).
+///
+/// When the argument names a by-reference PARAMETER of the running function, the ordinary capture
+/// resolves straight to the caller's variable, so the builtin's write lands there and the
+/// function's own entry keeps the cell the write just released -- `function f(array &$a) {
+/// sort($a); }` read freed storage afterwards and wrote it back at return. For such a variable
+/// the target stays the LOCAL one: `eval_write_direct_ref_target` then writes through the
+/// recorded reference and rebinds the local entry to the new value in one step.
+///
+/// NOT for the arguments of a call to a user function: the callee records the target as its own
+/// parameter's reference, which can outlive this activation (`$this->attributes = &$attributes;`
+/// in Symfony's `AttributeBag::initialize()`), and a target naming this activation's variable
+/// would then dangle. A builtin's write is finished before the call returns.
+pub(in crate::interpreter) fn eval_direct_ref_arg_value(
+    expr: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
+    let (value, target) = eval_call_arg_value(expr, context, scope, values)?;
+    if let EvalExpr::LoadVar(name) = expr {
+        if scope.reference_target(name).is_some() {
+            return Ok((
+                value,
+                Some(EvalReferenceTarget::Variable {
+                    scope: crate::scope::EvalScopeRef::new(scope),
+                    name: name.clone(),
+                }),
+            ));
+        }
+    }
+    Ok((value, target))
+}
+
 /// Evaluates one call arg and captures caller-side storage for by-reference parameters.
 pub(in crate::interpreter) fn eval_call_arg_value(
     expr: &EvalExpr,
@@ -239,6 +274,19 @@ pub(in crate::interpreter) fn eval_call_arg_value(
             Ok((value, Some(target)))
         }
         EvalExpr::ArrayGet { array, index } => {
+            // `$GLOBALS['name']` names a global variable, not an element of a local called
+            // `GLOBALS`: `f($GLOBALS['x'])` passed null while `$v = $GLOBALS['x']` read the value.
+            if is_globals_array(array) {
+                let name = eval_global_name(index, context, caller_scope, values)?;
+                let value = read_global_value(
+                    &name,
+                    context.quiet_property_fetch(),
+                    context,
+                    caller_scope,
+                    values,
+                )?;
+                return Ok((value, None));
+            }
             let EvalExpr::LoadVar(array_name) = array.as_ref() else {
                 return eval_nested_array_element_call_arg_value(
                     array,
@@ -256,14 +304,47 @@ pub(in crate::interpreter) fn eval_call_arg_value(
                 return Ok((value, None));
             }
             let index = eval_array_reference_key(index, values)?.ok_or(EvalStatus::RuntimeFatal)?;
-            Ok((
-                value,
-                Some(EvalReferenceTarget::ArrayElement {
+            // An element of an array that is ITSELF a reference -- a by-reference parameter, a
+            // `$session = &$_SESSION` -- is an element of what that reference names, and is
+            // resolved now, as the `LoadVar` arm above resolves a variable, while `caller_scope`
+            // is known good. Naming it through `caller_scope` kept a path into a scope that dies
+            // with the call: Symfony's `NativeSessionStorage::loadSession(&$session)` binds each
+            // bag's `$this->attributes = &$attributes` to `$session[$key]`, and every later
+            // `$bag->set()` failed once `loadSession()` had returned.
+            // The same holds for a `global`/superglobal alias (`$session = &$_SESSION`): the
+            // element lives in the GLOBAL scope, under the global's own name.
+            let global_alias = crate::interpreter::scope_cells::effective_global_alias_target(
+                caller_scope,
+                array_name,
+            )
+            .map(str::to_string);
+            let global_scope = context
+                .global_scope_ptr()
+                .filter(|global| !std::ptr::eq(*global, caller_scope as *mut ElephcEvalScope));
+            let target = match (caller_scope.reference_target(array_name).cloned(), global_alias) {
+                (Some(array_target), _) => EvalReferenceTarget::NestedArrayElement {
+                    array_target: Box::new(array_target),
+                    index,
+                },
+                (None, Some(global_name)) => match global_scope.and_then(|global| unsafe { global.as_mut() }) {
+                    Some(global) => EvalReferenceTarget::ArrayElement {
+                        scope: crate::scope::EvalScopeRef::new(global),
+                        array_name: global_name,
+                        index,
+                    },
+                    None => EvalReferenceTarget::ArrayElement {
+                        scope: crate::scope::EvalScopeRef::new(caller_scope),
+                        array_name: global_name,
+                        index,
+                    },
+                },
+                (None, None) => EvalReferenceTarget::ArrayElement {
                     scope: crate::scope::EvalScopeRef::new(caller_scope),
                     array_name: array_name.clone(),
                     index,
-                }),
-            ))
+                },
+            };
+            Ok((value, Some(target)))
         }
         EvalExpr::PropertyGet { object, property } => {
             let access_scope = context.execution_scope();

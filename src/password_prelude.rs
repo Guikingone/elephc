@@ -43,7 +43,8 @@ pub(crate) const FUNCTIONS: &[&str] = &[
 /// php's default bcrypt cost (`PASSWORD_BCRYPT_DEFAULT_COST`), 12 since php 8.4.
 const DEFAULT_COST: i64 = 12;
 
-/// `$algo` names bcrypt when it is `null`, `"2y"` or the legacy integer `1`.
+/// `$algo` names bcrypt when it is `null` or the legacy integer `0` (php's default algorithm),
+/// `"2y"`, or the legacy integer `1` -- php's `php_password_algo_find_zval`.
 fn names_bcrypt(algo: &str) -> crate::parser::ast::Expr {
     e_binop(
         e_binop(
@@ -52,7 +53,11 @@ fn names_bcrypt(algo: &str) -> crate::parser::ast::Expr {
             e_binop(e_var(algo), BinOp::StrictEq, e_str("2y")),
         ),
         BinOp::Or,
-        e_binop(e_var(algo), BinOp::StrictEq, e_int(1)),
+        e_binop(
+            e_binop(e_var(algo), BinOp::StrictEq, e_int(1)),
+            BinOp::Or,
+            e_binop(e_var(algo), BinOp::StrictEq, e_int(0)),
+        ),
     )
 }
 
@@ -141,11 +146,10 @@ fn function_declarations() -> Vec<Stmt> {
         .param_default("options", t_array(), e_array(Vec::new()))
         .returns(TypeExpr::Bool)
         .body(vec![
+            // php: an unknown new algorithm never prompts a rehash.
             s_if(
                 crate::synthetic_class::e_not(names_bcrypt("algo")),
-                vec![throw_value_error(
-                    "password_needs_rehash(): Argument #2 ($algo) must be a valid password hashing algorithm",
-                )],
+                vec![s_return(crate::synthetic_class::e_bool(false))],
                 Vec::new(),
                 None,
             ),

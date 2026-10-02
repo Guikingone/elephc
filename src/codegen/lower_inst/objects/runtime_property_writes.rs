@@ -231,7 +231,7 @@ pub(super) fn lower_runtime_object_prop_set(
     let slots = declared_dynamic_property_set_slots(ctx, class_name, value, inst)?;
     let match_labels = slots
         .iter()
-        .map(|slot| ctx.next_label(&format!("dyn_prop_set_{}", label_fragment(&slot.property))))
+        .map(|(slot, _)| ctx.next_label(&format!("dyn_prop_set_{}", label_fragment(&slot.property))))
         .collect::<Vec<_>>();
     let miss_label = ctx.next_label("dyn_prop_set_miss");
     let done_label = ctx.next_label("dyn_prop_set_done");
@@ -243,13 +243,28 @@ pub(super) fn lower_runtime_object_prop_set(
     ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
 
-    for (slot, label) in slots.iter().zip(match_labels.iter()) {
+    for ((slot, _), label) in slots.iter().zip(match_labels.iter()) {
         emit_branch_if_dynamic_name_matches(ctx, &slot.property, label);
     }
     abi::emit_jump(ctx.emitter, &miss_label);
 
-    for (slot, label) in slots.iter().zip(match_labels.iter()) {
+    let value_ty = ctx.value_php_type(value)?;
+    for ((slot, accepts), label) in slots.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
+        if !accepts {
+            let given = match value_ty.codegen_repr() {
+                PhpType::Void => "null".to_string(),
+                other => other.to_string(),
+            };
+            crate::codegen::lower_inst::exceptions::emit_type_error(
+                ctx,
+                &format!(
+                    "Cannot assign {} to property {}::${} of type {}",
+                    given, slot.class_name, slot.property, slot.php_type
+                ),
+            );
+            continue;
+        }
         let base_reg = abi::symbol_scratch_reg(ctx.emitter);
         abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
         emit_property_store(ctx, value, slot, base_reg)?;
@@ -325,7 +340,7 @@ pub(super) fn declared_dynamic_property_set_slots(
     class_name: &str,
     value: ValueId,
     inst: &Instruction,
-) -> Result<Vec<PropertySlot>> {
+) -> Result<Vec<(PropertySlot, bool)>> {
     let value_ty = ctx.value_php_type(value)?;
     let normalized = class_name.trim_start_matches('\\');
     let property_names = {
@@ -342,8 +357,12 @@ pub(super) fn declared_dynamic_property_set_slots(
     let mut slots = Vec::new();
     for property in property_names {
         let slot = resolve_property_slot_for_class(ctx, normalized, &property, inst)?;
-        ensure_property_value_supported(ctx, &slot, value, &value_ty, inst)?;
-        slots.push(slot);
+        // A declared slot this value cannot be stored in is still a match for its NAME: php
+        // raises a TypeError there (`$this->$offset = null` in Doctrine's mapping classes'
+        // `offsetUnset()` against a `string` property). Refusing to compile the write sent every
+        // one of those classes to the interpreter.
+        let accepts = ensure_property_value_supported(ctx, &slot, value, &value_ty, inst).is_ok();
+        slots.push((slot, accepts));
     }
     Ok(slots)
 }

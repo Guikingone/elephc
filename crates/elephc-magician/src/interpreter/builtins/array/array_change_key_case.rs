@@ -2,69 +2,70 @@
 //! Eval registry entry and implementation for `array_change_key_case`.
 //!
 //! Called from:
-//! - `crate::interpreter::builtins::array` dispatch tables.
+//! - `crate::interpreter::builtins::array`.
 //!
 //! Key details:
-//! - String keys are ASCII-lowercased (`CASE_LOWER`, the default) or uppercased; any non-zero
-//!   `$case` means upper, as in php. Integer keys pass through untouched, and on a collision the
-//!   later entry wins while the first position is kept.
-//! - The compiled program gets this function from `elephc::array_edge_prelude`, which interpreted
-//!   code cannot reach (Symfony's `AcceptHeader` and `RedirectResponse` call it while a request is
-//!   interpreted).
+//! - php-src's loop: integer keys are kept, string keys are ASCII-lowercased for `CASE_LOWER`
+//!   (0) and ASCII-uppercased for any other `$case`, and a later key that folds onto an earlier
+//!   one overwrites the earlier entry's value in place.
+//! - The compiled side is the AST prelude `src/array_change_key_case_prelude.rs`; interpreted
+//!   code cannot reach a compiler prelude, and Symfony's `RedirectResponse` calls it from
+//!   interpreted code for every redirect it builds.
 
 use super::super::super::*;
 
 eval_builtin! {
     contract: "array_change_key_case",
     area: Array,
-    direct: Array,
-    values: Array,
+    direct: ArrayChangeKeyCase,
+    values: ArrayChangeKeyCase,
 }
 
-/// Dispatches direct eval calls for `array_change_key_case()`.
-pub(in crate::interpreter) fn eval_array_change_key_case_declared_call(
+/// Evaluates PHP `array_change_key_case(...)` from unevaluated call-site expressions.
+pub(in crate::interpreter) fn eval_builtin_array_change_key_case(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    match args {
-        [array] => {
-            let array = eval_expr(array, context, scope, values)?;
-            eval_array_change_key_case_result(array, None, values)
-        }
-        [array, case] => {
-            let array = eval_expr(array, context, scope, values)?;
-            let case = eval_expr(case, context, scope, values)?;
-            eval_array_change_key_case_result(array, Some(case), values)
-        }
-        _ => Err(EvalStatus::RuntimeFatal),
+    let mut evaluated = Vec::with_capacity(args.len());
+    for arg in args {
+        evaluated.push(eval_expr(arg, context, scope, values)?);
     }
+    eval_array_change_key_case_values(&evaluated, context, values)
 }
 
-/// Dispatches evaluated-argument eval calls for `array_change_key_case()`.
-pub(in crate::interpreter) fn eval_array_change_key_case_declared_values_result(
+/// Evaluates PHP `array_change_key_case(...)` from already-evaluated argument cells.
+pub(in crate::interpreter) fn eval_array_change_key_case_values(
     evaluated_args: &[RuntimeCellHandle],
-    _context: &mut ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    match evaluated_args {
-        [array] => eval_array_change_key_case_result(*array, None, values),
-        [array, case] => eval_array_change_key_case_result(*array, Some(*case), values),
-        _ => Err(EvalStatus::RuntimeFatal),
-    }
-}
-
-/// Rebuilds the array with every string key case-mapped.
-fn eval_array_change_key_case_result(
-    array: RuntimeCellHandle,
-    case: Option<RuntimeCellHandle>,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let upper = match case {
-        Some(case) => eval_int_value(case, values)? != 0,
-        None => false,
+    let (array, upper) = match evaluated_args {
+        [array] => (*array, false),
+        [array, case] => (*array, eval_int_value(*case, values)? != 0),
+        _ => {
+            let bound = if evaluated_args.is_empty() { "at least 1 argument" } else { "at most 2 arguments" };
+            return eval_throw_argument_count_error(
+                &format!(
+                    "array_change_key_case() expects {bound}, {} given",
+                    evaluated_args.len()
+                ),
+                context,
+                values,
+            );
+        }
     };
+    if !matches!(values.type_tag(array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        let given = eval_given_type_spelling(array, values)?;
+        return eval_throw_type_error(
+            &format!(
+                "array_change_key_case(): Argument #1 ($array) must be of type array, {given} given"
+            ),
+            context,
+            values,
+        );
+    }
     let len = values.array_len(array)?;
     let mut result = values.assoc_new(len)?;
     for position in 0..len {
@@ -72,6 +73,7 @@ fn eval_array_change_key_case_result(
         let value = values.array_get(array, key)?;
         let key = if values.type_tag(key)? == EVAL_TAG_STRING {
             let mut bytes = values.string_bytes(key)?;
+            values.release(key)?;
             if upper {
                 bytes.make_ascii_uppercase();
             } else {

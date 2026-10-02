@@ -309,6 +309,63 @@ try {
     assert_eq!(out, "Lib\\Native\ncaught: Amp needs MissingDep, which is not installed\n");
 }
 
+/// A class file that declares its class inside a run-time `if` is left to the runtime
+/// autoloader, and the class it declares is thrown, caught and type-tested from compiled code.
+///
+/// This is `symfony/cache`'s `Exception/InvalidArgumentException.php`, which declares one of two
+/// class bodies depending on `interface_exists(SimpleCacheInterface::class)`. The compiled world
+/// has no run-time class declaration, so both branches lost their class while the file stayed
+/// claimed as included; the autoloader then skipped the include and `new InvalidArgumentException`
+/// from a compiled cache pool died with `Class "...\InvalidArgumentException" not found` in the
+/// middle of the Symfony demo's homepage. Expected output is php 8.5.10's.
+#[test]
+fn test_class_file_declaring_its_class_conditionally_loads_at_run_time() {
+    let out = compile_cli_files_and_run(
+        &[
+            ("composer.json", r#"{"autoload":{"psr-4":{"Lib\\":"src/"}}}"#),
+            ("src/Marker.php", "<?php\nnamespace Lib;\n\ninterface Marker {}\n"),
+            (
+                "src/BadKey.php",
+                "<?php\nnamespace Lib;\n\nif (interface_exists(Marker::class)) {\n    class BadKey extends \\InvalidArgumentException implements Marker {}\n} else {\n    class BadKey extends \\InvalidArgumentException {}\n}\n",
+            ),
+            (
+                "src/Pool.php",
+                "<?php\nnamespace Lib;\n\nclass Pool {\n    public function get(string $key): string {\n        if (str_contains($key, ':')) {\n            throw new BadKey(sprintf('Key \"%s\" is reserved', $key));\n        }\n        return 'value:' . $key;\n    }\n}\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+class Loader {
+    public function __construct(private string $dir) {}
+    public function loadClass($class) {
+        $file = $this->dir . '/src/' . substr($class, 4) . '.php';
+        if (str_starts_with($class, 'Lib\\') && is_file($file)) {
+            require $file;
+        }
+    }
+}
+spl_autoload_register([new Loader(__DIR__), 'loadClass']);
+
+$pool = new Lib\Pool();
+echo $pool->get('ok'), "\n";
+try {
+    echo $pool->get('a:b'), "\n";
+} catch (Lib\BadKey $e) {
+    echo get_class($e), ': ', $e->getMessage(), "\n";
+    echo $e instanceof Lib\Marker ? "marker" : "no marker", "\n";
+    echo $e instanceof \InvalidArgumentException ? "invalid argument" : "other", "\n";
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "value:ok\nLib\\BadKey: Key \"a:b\" is reserved\nmarker\ninvalid argument\n"
+    );
+}
+
 /// An enum the runtime autoloader declares is usable, case for case and by identity, from a
 /// class another autoloaded file declares.
 ///
@@ -351,4 +408,59 @@ eval($code);
         "main.php",
     );
     assert_eq!(out, "int,float\nbool(true)\nbool(true)\n");
+}
+
+/// A class file that picks its class-like by an autoloading existence probe is compiled, not
+/// handed to the interpreter.
+///
+/// `if (!class_exists(X::class)) { trait T {...} } else { trait T {...} }` (Doctrine's
+/// `GetReflectionClassImplementation`) and `if (interface_exists(Y::class)) { class E ... } else
+/// { class E ... }` (Symfony Cache's exceptions) run when the autoloader includes the file, and the
+/// probe's answer is whether X can be autoloaded -- which the compile-time registry decides. Left
+/// undecided, both files went to the runtime autoloader, and so did every class using the trait
+/// (`ClassMetadata`) or extending the exception. Expected output is php 8.5.10's.
+#[test]
+fn test_class_file_choosing_its_class_like_by_an_existence_probe_is_compiled() {
+    let (compile_stderr, out) = compile_cli_files_and_run_with_compile_stderr(
+        &[
+            ("composer.json", r#"{"autoload":{"psr-4":{"Lib\\":"src/"}}}"#),
+            ("src/Marker.php", "<?php\nnamespace Lib;\ninterface Marker {}\n"),
+            (
+                "src/Impl.php",
+                "<?php\nnamespace Lib;\nif (!class_exists(Missing\\StaticService::class)) {\n    trait Impl { public function kind(): string { return \"runtime:\" . $this->name; } }\n} else {\n    trait Impl { public function kind(): ?string { return null; } }\n}\n",
+            ),
+            (
+                "src/BadKey.php",
+                "<?php\nnamespace Lib;\nif (interface_exists(Marker::class)) {\n    class BadKey extends \\InvalidArgumentException implements Marker {}\n} else {\n    class BadKey extends \\InvalidArgumentException {}\n}\n",
+            ),
+            (
+                "src/Meta.php",
+                "<?php\nnamespace Lib;\nclass Meta { use Impl; public function __construct(public string $name) {} }\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+spl_autoload_register(function ($class) {
+    $file = __DIR__ . '/src/' . substr($class, 4) . '.php';
+    if (str_starts_with($class, 'Lib\\') && is_file($file)) {
+        require $file;
+    }
+});
+$m = new Lib\Meta('post');
+echo $m->kind(), "\n";
+try {
+    throw new Lib\BadKey('bad');
+} catch (Lib\BadKey $e) {
+    echo get_class($e), $e instanceof Lib\Marker ? ' marker' : ' plain', "\n";
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "runtime:post\nLib\\BadKey marker\n");
+    assert!(
+        !compile_stderr.contains("is not compiled"),
+        "a class file was handed to the runtime autoloader: {compile_stderr}"
+    );
 }

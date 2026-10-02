@@ -2,7 +2,7 @@
 title: "mysqli_rollback()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 153
+  order: 165
 ---
 
 ## mysqli_rollback()

@@ -636,6 +636,19 @@ pub(crate) fn global_eval_function_owner_context(
         .map(|context| context as *mut ElephcEvalContext)
 }
 
+/// Whether some live context declared exactly this function name.
+///
+/// `function_exists()` asks about ONE name: unlike a call, it has no namespace-to-global fallback,
+/// so `function_exists('Ns\\f')` is false while only the global `f` exists.
+#[cfg(not(test))]
+pub(crate) fn global_eval_function_is_declared(name: &str) -> bool {
+    let key = normalize_global_function_name(name);
+    global_eval_functions()
+        .lock()
+        .map(|functions| functions.contains_key(&key))
+        .unwrap_or(false)
+}
+
 /// Clones one dynamically included PHP function out of the context that declared it.
 ///
 /// The owner entry is removed when its context is destroyed

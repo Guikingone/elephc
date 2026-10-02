@@ -2,7 +2,7 @@
 title: "imagesavealpha()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 528
+  order: 540
 ---
 
 ## imagesavealpha()

@@ -2,7 +2,7 @@
 title: "mysqli_use_result()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 181
+  order: 193
 ---
 
 ## mysqli_use_result()

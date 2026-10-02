@@ -2,7 +2,7 @@
 title: "ob_get_contents()"
 description: "Returns the contents of the output buffer."
 sidebar:
-  order: 347
+  order: 359
 ---
 
 ## ob_get_contents()

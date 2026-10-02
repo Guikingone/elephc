@@ -8,6 +8,8 @@ use super::{abi, emit::Emitter, platform::Arch};
 // declared property occupies sixteen bytes after the eight-byte class id.
 pub(crate) const FILE_OFFSET: usize = 8 + 3 * 16;
 pub(crate) const LINE_OFFSET: usize = 8 + 4 * 16;
+/// PHP's private `trace` array, filled by `__rt_throwable_capture_trace` when eval frames exist.
+pub(crate) const TRACE_OFFSET: usize = 8 + 5 * 16;
 pub(crate) const PREVIOUS_OFFSET: usize = 8 + 6 * 16;
 pub(crate) const PAYLOAD_SIZE: usize = 8 + 7 * 16;
 
@@ -66,7 +68,7 @@ mod tests {
         for name in ["Exception", "Error", "ReflectionException"] {
             let info = &checked.classes[name];
             assert_eq!(8 + info.properties.len() * 16, PAYLOAD_SIZE, "{name}");
-            for (property, expected) in [("file", FILE_OFFSET), ("line", LINE_OFFSET), ("previous", PREVIOUS_OFFSET)] {
+            for (property, expected) in [("file", FILE_OFFSET), ("line", LINE_OFFSET), ("trace", TRACE_OFFSET), ("previous", PREVIOUS_OFFSET)] {
                 let index = info.properties.iter().position(|(name, _)| name == property).unwrap();
                 assert_eq!(8 + index * 16, expected, "{name}::{property}");
             }

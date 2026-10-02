@@ -522,6 +522,9 @@ pub(super) fn eval_builtin_reflection_class_constant(
             "IS_FINAL" => Some(32),
             "IS_EXPLICIT_ABSTRACT" => Some(64),
             "IS_READONLY" => Some(65_536),
+            // PHP 8.4 lazy-object option flags; see the checker's `reflection_class_constants`.
+            "SKIP_INITIALIZATION_ON_SERIALIZE" => Some(8),
+            "SKIP_DESTRUCTOR" => Some(16),
             _ => None,
         }
     } else if class_name.eq_ignore_ascii_case("ReflectionMethod") {

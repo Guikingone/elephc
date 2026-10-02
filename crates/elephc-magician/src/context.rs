@@ -57,6 +57,7 @@ pub use classlike_objects::{
     eval_array_iterator_class_is_a, eval_builtin_class_is_a, EvalArrayIteratorState,
 };
 pub use closure_metadata::*;
+pub use reflection_registry::EvalReflectionKind;
 pub use generators::*;
 pub use core::*;
 pub(crate) use global_registry::*;

@@ -38,6 +38,80 @@ pub(super) fn lower_mixed_array_runtime_get(
     let receiver = expect_operand(inst, 0)?;
     let key = expect_operand(inst, 1)?;
     let warn_on_missing = expect_operand(inst, 2)?;
+    if !for_write && ctx.module.required_runtime_features.eval_bridge {
+        // An object the interpreter declared has no compiled class id, so the runtime reader
+        // cannot find its `ArrayAccess` methods and answered "Cannot use object of type stdClass
+        // as array". Ask the bridge first; a native receiver falls straight through.
+        let native_label = ctx.next_label("mixed_array_get_native");
+        let done_label = ctx.next_label("mixed_array_get_done");
+        lower_eval_owned_array_get(ctx, inst, receiver, key, warn_on_missing, &native_label, &done_label)?;
+        ctx.emitter.label(&native_label);
+        lower_mixed_array_runtime_get_native(ctx, inst, receiver, key, warn_on_missing, for_write)?;
+        ctx.emitter.label(&done_label);
+        return Ok(());
+    }
+    lower_mixed_array_runtime_get_native(ctx, inst, receiver, key, warn_on_missing, for_write)
+}
+
+/// Reads `$receiver[$key]` from an object the interpreter owns through its `ArrayAccess` methods.
+///
+/// A quiet read (`isset()`, `??`) asks `offsetExists()` first and answers null without calling
+/// `offsetGet()` when it says no, as php does; a normal read calls `offsetGet()` directly. A
+/// receiver the interpreter does not own branches to `native_label` untouched.
+fn lower_eval_owned_array_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    receiver: ValueId,
+    key: ValueId,
+    warn_on_missing: ValueId,
+    native_label: &str,
+    done_label: &str,
+) -> Result<()> {
+    let mut call = inst.clone();
+    call.operands = vec![receiver, key];
+    let quiet = value_is_const_int(ctx, warn_on_missing, 0)?;
+    if !quiet {
+        return builtins::lower_eval_owned_method_call(
+            ctx,
+            &call,
+            receiver,
+            "offsetGet",
+            native_label,
+            done_label,
+        );
+    }
+    let exists_label = ctx.next_label("mixed_array_get_exists");
+    let absent_label = ctx.next_label("mixed_array_get_absent");
+    builtins::lower_eval_owned_method_call_with_result(
+        ctx,
+        &call,
+        receiver,
+        "offsetExists",
+        native_label,
+        &exists_label,
+        &PhpType::Bool,
+        false,
+    )?;
+    ctx.emitter.label(&exists_label);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &absent_label);
+    builtins::lower_eval_owned_method_call(ctx, &call, receiver, "offsetGet", native_label, done_label)?;
+    ctx.emitter.label(&absent_label);
+    objects::emit_boxed_null(ctx);
+    cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
+    store_if_result(ctx, inst)?;
+    abi::emit_jump(ctx.emitter, done_label);
+    Ok(())
+}
+
+/// The compiled `__rt_mixed_array_get` call for `$mixed[$key]`.
+fn lower_mixed_array_runtime_get_native(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    receiver: ValueId,
+    key: ValueId,
+    warn_on_missing: ValueId,
+    for_write: bool,
+) -> Result<()> {
     if let Some(slot) = callable_array_slot(ctx, key, for_write)? {
         return lower_mixed_callable_slot_or_array_get(
             ctx,
@@ -338,6 +412,20 @@ pub(super) fn lower_mixed_array_runtime_set(ctx: &mut FunctionContext<'_>, inst:
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&object_label);
+    if ctx.module.required_runtime_features.eval_bridge {
+        // An object the interpreter declared has no compiled interface table: the dispatch below
+        // found nothing to call and the write silently vanished. Ask the bridge first.
+        let compiled_label = ctx.next_label("mixed_array_set_compiled_array_access");
+        builtins::lower_eval_owned_method_call(
+            ctx,
+            inst,
+            receiver,
+            "offsetSet",
+            &compiled_label,
+            &done_label,
+        )?;
+        ctx.emitter.label(&compiled_label);
+    }
     array_access_runtime::lower_boxed_array_access_interface_call(ctx, inst, "offsetSet")?;
     ctx.emitter.label(&done_label);
     Ok(())

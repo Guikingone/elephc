@@ -2,7 +2,7 @@
 title: "opcache_get_status()"
 description: "Implemented by the compiler-injected OPcache prelude."
 sidebar:
-  order: 629
+  order: 642
 ---
 
 ## opcache_get_status()

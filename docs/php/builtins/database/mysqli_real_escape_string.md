@@ -2,7 +2,7 @@
 title: "mysqli_real_escape_string()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 149
+  order: 161
 ---
 
 ## mysqli_real_escape_string()

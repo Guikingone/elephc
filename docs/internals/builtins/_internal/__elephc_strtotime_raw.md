@@ -2,7 +2,7 @@
 title: "__elephc_strtotime_raw() — internals"
 description: "Compiler internals for __elephc_strtotime_raw(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1109
+  order: 1129
 ---
 
 ## `__elephc_strtotime_raw()` — internals

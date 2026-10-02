@@ -2,7 +2,7 @@
 title: "cairo_surface_write_to_png() — internals"
 description: "Compiler internals for cairo_surface_write_to_png(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 446
+  order: 458
 ---
 
 ## `cairo_surface_write_to_png()` — internals

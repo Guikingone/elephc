@@ -309,6 +309,15 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
         "x9",
         "__rt_mixed_array_gfw_autovivify_receiver",
     );
+    // A nested write mutates the element this lookup returns, and that element is reachable
+    // through every holder of a SHARED hash (`$copy = $o->opts;` before `$o->opts[$k][$j] = $v`,
+    // two cloned objects). Split the receiver hash first, as the indexed path's COW split does,
+    // so the cells the lookup finds belong to this holder alone.
+    emitter.instruction("mov x0, x10");                                         // pass the receiver hash to the COW helper
+    emitter.instruction("bl __rt_hash_ensure_unique");                          // split a shared hash, consuming the cell's old owner reference
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the receiver cell clobbered by the helper call
+    emitter.instruction("str x0, [x9, #8]");                                    // republish the unique-or-original hash into the receiver cell
+    emitter.instruction("mov x10, x0");                                         // continue with the receiver's current hash
     emitter.instruction("mov x0, x10");                                         // pass the hash pointer to hash_get
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the normalized key low word
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload the normalized key high word
@@ -320,6 +329,24 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x1]");                                        // load the stored cell's payload tag
     emitter.instruction("cmp x9, #8");                                          // does the entry hold a boxed Mixed(null)?
     emitter.instruction("b.eq __rt_mixed_array_gfw_assoc_create");              // PHP autovivifies null elements: overwrite (hash_set releases it)
+    // A cell holding an array that another container's entry also points at (the hash was cloned
+    // for a copy-on-write split, and a clone shares its cells) must not be written through: the
+    // payload sits at refcount 1, so an in-place nested write would be seen by every holder.
+    // Replace the entry with a private cell over the same, retained payload; the write that follows
+    // then splits the payload like any other shared array.
+    emitter.instruction("cmp x9, #4");                                          // does the cell hold an indexed array?
+    emitter.instruction("b.eq __rt_mixed_array_gfw_assoc_check_shared");        // check whether another entry shares the cell
+    emitter.instruction("cmp x9, #5");                                          // does the cell hold an associative array?
+    emitter.instruction("b.ne __rt_mixed_array_gfw_assoc_plain");               // scalars and objects are returned as-is
+    emitter.label("__rt_mixed_array_gfw_assoc_check_shared");
+    emitter.instruction("ldr w10, [x1, #-12]");                                 // load the stored cell's refcount from the uniform heap header
+    emitter.instruction("cmp w10, #1");                                         // is the cell owned by this entry alone?
+    emitter.instruction("b.ls __rt_mixed_array_gfw_assoc_plain");               // yes: write through it
+    emitter.instruction("mov x0, x1");                                          // pass the shared cell to the clone helper
+    emitter.instruction("bl __rt_mixed_clone");                                 // x0 = a private cell over the same payload (payload refcount raised)
+    emitter.instruction("str x0, [sp, #32]");                                   // save the private cell across the hash update
+    emitter.instruction("b __rt_mixed_array_gfw_assoc_install");                // install it in place of the shared cell
+    emitter.label("__rt_mixed_array_gfw_assoc_plain");
     emitter.instruction("mov x0, x1");                                          // move the stored cell into the retain register
     emitter.instruction("bl __rt_incref");                                      // retain the STORED cell so the caller owns the returned result
     emitter.instruction("b __rt_mixed_array_gfw_return");                       // existing elements are returned as-is (set decides compatibility)
@@ -345,6 +372,7 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_array_gfw_assoc_create");
     emitter.instruction("bl __rt_mixed_new_empty_array_cell");                  // allocate the autovivified empty-array cell
     emitter.instruction("str x0, [sp, #32]");                                   // save the fresh child cell across the hash insertion
+    emitter.label("__rt_mixed_array_gfw_assoc_install");
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the receiver cell
     emitter.instruction("ldr x0, [x9, #8]");                                    // reload the current hash pointer
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the normalized key low word
@@ -640,6 +668,13 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
         "r11",
         "__rt_mixed_array_gfw_autovivify_receiver",
     );
+    // Split a shared receiver hash before a nested write reaches into its cells (see the AArch64
+    // variant above).
+    emitter.instruction("mov rdi, r10");                                        // pass the receiver hash to the COW helper
+    emitter.instruction("call __rt_hash_ensure_unique");                        // split a shared hash, consuming the cell's old owner reference
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the receiver cell clobbered by the helper call
+    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // republish the unique-or-original hash into the receiver cell
+    emitter.instruction("mov r10, rax");                                        // continue with the receiver's current hash
     emitter.instruction("mov rdi, r10");                                        // pass the hash pointer to hash_get
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the normalized key low word
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the normalized key high word
@@ -653,6 +688,22 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rdi]");                            // load the stored cell's payload tag
     emitter.instruction("cmp r11, 8");                                          // does the entry hold a boxed Mixed(null)?
     emitter.instruction("je __rt_mixed_array_gfw_assoc_create");                // PHP autovivifies null elements: overwrite (hash_set releases it)
+    // A cell holding an array that another container's entry also points at is replaced by a
+    // private cell over the same, retained payload before any in-place nested write (see the
+    // AArch64 variant above).
+    emitter.instruction("cmp r11, 4");                                          // does the cell hold an indexed array?
+    emitter.instruction("je __rt_mixed_array_gfw_assoc_check_shared");          // check whether another entry shares the cell
+    emitter.instruction("cmp r11, 5");                                          // does the cell hold an associative array?
+    emitter.instruction("jne __rt_mixed_array_gfw_assoc_plain");                // scalars and objects are returned as-is
+    emitter.label("__rt_mixed_array_gfw_assoc_check_shared");
+    emitter.instruction("mov r10d, DWORD PTR [rdi - 12]");                      // load the stored cell's refcount from the uniform heap header
+    emitter.instruction("cmp r10d, 1");                                         // is the cell owned by this entry alone?
+    emitter.instruction("jbe __rt_mixed_array_gfw_assoc_plain");                // yes: write through it
+    emitter.instruction("mov rax, rdi");                                        // pass the shared cell to the clone helper in the Mixed register
+    emitter.instruction("call __rt_mixed_clone");                               // rax = a private cell over the same payload (payload refcount raised)
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the private cell across the hash update
+    emitter.instruction("jmp __rt_mixed_array_gfw_assoc_install");              // install it in place of the shared cell
+    emitter.label("__rt_mixed_array_gfw_assoc_plain");
     emitter.instruction("mov rax, rdi");                                        // move the stored cell into the retain register
     abi::emit_push_reg(emitter, "rax");
     emitter.instruction("call __rt_incref");                                    // retain the STORED cell so the caller owns the returned result
@@ -680,6 +731,7 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_array_gfw_assoc_create");
     emitter.instruction("call __rt_mixed_new_empty_array_cell");                // allocate the autovivified empty-array cell
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the fresh child cell across the hash insertion
+    emitter.label("__rt_mixed_array_gfw_assoc_install");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the receiver cell
     emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");                        // reload the current hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the normalized key low word

@@ -2,7 +2,7 @@
 title: "array_push()"
 description: "Pushes zero or more elements onto the end of array and returns the new count."
 sidebar:
-  order: 30
+  order: 38
 ---
 
 ## array_push()

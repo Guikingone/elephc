@@ -86,6 +86,12 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         {
             Ok(PhpType::Int)
         }
+        // `$document->body->childNodes`: a property read through a nullable receiver is
+        // `NodeList|null`, and the object member may well be Countable. The lowering checks the
+        // value at run time and raises PHP's own TypeError, as it does for a bare object.
+        PhpType::Union(members) if members.iter().any(|member| matches!(member, PhpType::Object(_))) => {
+            Ok(PhpType::Int)
+        }
         // A non-Countable object is accepted here and REFUSED AT RUN TIME, the way PHP does it.
         // Refusing at compile time looked stricter for free, but it stopped programs PHP runs:
         // a `count($plain)` inside a function that is never called took the whole program down,

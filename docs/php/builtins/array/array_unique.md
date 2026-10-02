@@ -2,7 +2,7 @@
 title: "array_unique()"
 description: "Removes duplicate values from an array."
 sidebar:
-  order: 43
+  order: 55
 ---
 
 ## array_unique()

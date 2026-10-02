@@ -2,7 +2,7 @@
 title: "ob_clean()"
 description: "Cleans (erases) the contents of the active output buffer."
 sidebar:
-  order: 342
+  order: 354
 ---
 
 ## ob_clean()

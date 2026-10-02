@@ -300,7 +300,7 @@ fn eval_array_cast_value(
     match values.type_tag(value)? {
         EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => values.retain(value),
         EVAL_TAG_NULL => values.array_new(0),
-        EVAL_TAG_OBJECT => eval_object_array_cast_value(value, context, values),
+        EVAL_TAG_OBJECT => eval_object_array_cast_with_mangled_keys(value, context, values),
         _ => {
             let array = values.array_new(1)?;
             let key = values.int(0)?;
@@ -311,14 +311,51 @@ fn eval_array_cast_value(
     }
 }
 
+/// `(array) $object`: every property the object has, protected ones keyed `"\0*\0name"` and
+/// private ones `"\0Class\0name"`, as php lays the cast out.
+///
+/// An interpreter-declared object used to cast through the public-only walk below, so a protected
+/// or private property came back under its plain name -- or not at all: Symfony's
+/// `ArrayAdapter::save()` reads `(array) $item` and then `$item["\0*\0key"]`, got null and called
+/// `getItem(null)`, so every metadata-cache save died with "Cache key must be string".
+/// A compiled object keeps its own cast (the compiled layout already carries php's mangling).
+fn eval_object_array_cast_with_mangled_keys(
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let identity = values.object_identity(object)?;
+    if context.dynamic_object_declaring_class(identity).is_none() {
+        return eval_object_array_cast_value(object, context, values);
+    }
+    let class_name = eval_debug_object_class_name(object, Some(identity), context, values)?;
+    let properties = eval_debug_object_properties(object, Some(identity), &class_name, context, values)?;
+    let mut result = values.assoc_new(properties.len())?;
+    for property in properties {
+        let key = values.string(&eval_serialize_mangled_property_key(&property))?;
+        result = values.array_set(result, key, property.value)?;
+    }
+    Ok(result)
+}
+
 /// Casts the runtime-visible public properties of one object to an associative PHP array.
 pub(in crate::interpreter) fn eval_object_array_cast_value(
     object: RuntimeCellHandle,
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let property_count = values.object_property_len(object)?;
     let identity = values.object_identity(object)?;
+    // An object the compiled program laid out keeps its declared properties in class slots the
+    // bridge's property walk (a stdClass dynamic-property hash) never sees: `(array) $entity`
+    // came back EMPTY. The compiled cast knows the layout and php's key mangling.
+    if context.dynamic_object_class(identity).is_none()
+        && context.dynamic_property_values_for_clone(identity).is_empty()
+    {
+        if let Some(array) = values.compiled_object_to_array(object)? {
+            return Ok(array);
+        }
+    }
+    let property_count = values.object_property_len(object)?;
     let dynamic_properties = context.dynamic_property_values_for_clone(identity);
     if crate::eval_trace::enabled() {
         eprintln!(
@@ -357,7 +394,26 @@ pub(in crate::interpreter) fn eval_new_object_result(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if class_name.trim_start_matches('\\').eq_ignore_ascii_case("ArrayIterator") {
+    // The interpreter's own `ArrayIterator` keeps its state on the context, which only eval can
+    // see: once the object reaches compiled code (`iterator_to_array()`, `count()`, a compiled
+    // `foreach`) it is an ArrayIterator whose typed `$values` was never initialized. Doctrine's
+    // `Paginator::getIterator()` returns exactly such an object to the compiled caller. When the
+    // build carries the compiled class, construct THAT one; the shim stays for builds without it
+    // and for the deprecated object-backed form the compiled constructor does not take.
+    if class_name.trim_start_matches('\\').eq_ignore_ascii_case("ArrayIterator")
+        && (args
+            .first()
+            .map(|arg| values.type_tag(arg.value))
+            .transpose()?
+            == Some(EVAL_TAG_OBJECT)
+            || eval_aot_method_dispatch_metadata_in_hierarchy(
+                "ArrayIterator",
+                "__construct",
+                context,
+                values,
+            )?
+            .is_none())
+    {
         return eval_array_iterator_new(args, context, values);
     }
     let reflection = eval_reflection_owner_new_object(class_name, args.clone(), context, values)
@@ -493,7 +549,10 @@ fn initialize_native_throwable_source(
         release
     })();
     context.pop_class_scope();
-    result
+    result?;
+    // The trace is captured with the source, at allocation and before any constructor runs. A
+    // compiled `new` does both itself; this is the interpreted spelling of the same moment.
+    values.capture_throwable_trace(object)
 }
 
 /// Emits the failing AOT/eval construction substage under opt-in runtime tracing.
@@ -813,6 +872,27 @@ fn eval_closure_capture(
     Ok(EvalClosureCaptureBinding::new(capture.name(), value, None))
 }
 
+/// Evaluates one `match` arm value as an OWNED result.
+///
+/// Every consumer treats a `match` result as a fresh temporary (neither
+/// `eval_expr_result_aliases_storage` nor the return statement's shared-cell rule lists it), but
+/// an arm that reads a variable, a class constant or an enum case hands back the cell its owner
+/// still holds. `return match ($t) { self::INTEGER => ParameterType::INTEGER, ... };` gave every
+/// caller the enum singleton as its own; the caller's next reassignment released it, the
+/// singleton was freed, and Doctrine's next `ParameterType::INTEGER` read reused memory.
+fn eval_match_arm_value(
+    expr: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let value = eval_expr(expr, context, scope, values)?;
+    if super::eval_expr_result_aliases_storage(expr) {
+        return values.retain(value);
+    }
+    Ok(value)
+}
+
 /// Evaluates a PHP `match` expression with strict comparison and lazy arm values.
 pub(in crate::interpreter) fn eval_match_expr(
     subject: &EvalExpr,
@@ -828,12 +908,12 @@ pub(in crate::interpreter) fn eval_match_expr(
             let pattern = eval_expr(pattern, context, scope, values)?;
             let matched = values.compare(EvalBinOp::StrictEq, subject, pattern)?;
             if values.truthy(matched)? {
-                return eval_expr(&arm.value, context, scope, values);
+                return eval_match_arm_value(&arm.value, context, scope, values);
             }
         }
     }
     if let Some(expr) = default {
-        return eval_expr(expr, context, scope, values);
+        return eval_match_arm_value(expr, context, scope, values);
     }
     eval_throw_unhandled_match_error(subject, context, values)
 }

@@ -2,7 +2,7 @@
 title: "gc_mem_caches()"
 description: "Reclaims memory used by the Zend Engine memory manager and returns the number of bytes freed."
 sidebar:
-  order: 616
+  order: 628
 ---
 
 ## gc_mem_caches()

@@ -176,6 +176,29 @@ pub(in crate::codegen::lower_inst) fn lower_eval_owned_method_call(
     eval::lower_eval_owned_method_call(ctx, inst, object, method_name, miss_label, done_label)
 }
 
+/// [`lower_eval_owned_method_call`] with a caller-chosen result type, optionally left unstored.
+pub(in crate::codegen::lower_inst) fn lower_eval_owned_method_call_with_result(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    method_name: &str,
+    miss_label: &str,
+    done_label: &str,
+    result_type: &PhpType,
+    store_result: bool,
+) -> Result<()> {
+    eval::lower_eval_owned_method_call_with_result(
+        ctx,
+        inst,
+        object,
+        method_name,
+        miss_label,
+        done_label,
+        result_type,
+        store_result,
+    )
+}
+
 /// Lowers a post-eval static method call to an eval-declared class.
 pub(in crate::codegen::lower_inst) fn lower_eval_static_method_call(
     ctx: &mut FunctionContext<'_>,
@@ -316,6 +339,15 @@ pub(in crate::codegen::lower_inst) fn lower_eval_global_class_relation_to_result
     eval::lower_eval_global_class_relation_to_result(ctx, target, name)
 }
 
+/// Emits a `defined()` / `constant()` lookup through the eval bridge's shared null-handle context.
+pub(in crate::codegen::lower_inst) fn emit_eval_dynamic_constant_null_context(
+    ctx: &mut FunctionContext<'_>,
+    name: ValueId,
+    want_value: bool,
+) -> Result<()> {
+    eval::emit_eval_dynamic_constant_null_context(ctx, name, want_value)
+}
+
 /// Lowers post-eval object class-name introspection against eval dynamic metadata.
 pub(in crate::codegen::lower_inst) fn lower_eval_object_class_name(
     ctx: &mut FunctionContext<'_>,
@@ -344,6 +376,7 @@ pub(in crate::codegen::lower_inst) fn emit_eval_object_is_a_named_fallback(
     target_class: &str,
     matched_label: &str,
     native_fallback_label: &str,
+    definite_no_label: &str,
 ) -> Result<()> {
     eval::emit_eval_object_is_a_named_fallback(
         ctx,
@@ -351,6 +384,7 @@ pub(in crate::codegen::lower_inst) fn emit_eval_object_is_a_named_fallback(
         target_class,
         matched_label,
         native_fallback_label,
+        definite_no_label,
     )
 }
 

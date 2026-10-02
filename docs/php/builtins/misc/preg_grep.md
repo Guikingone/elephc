@@ -2,7 +2,7 @@
 title: "preg_grep()"
 description: "Returns entries whose values match a regular expression while preserving keys."
 sidebar:
-  order: 674
+  order: 687
 ---
 
 ## preg_grep()

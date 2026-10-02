@@ -2,7 +2,7 @@
 title: "mysqli_escape_string()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 112
+  order: 124
 ---
 
 ## mysqli_escape_string()

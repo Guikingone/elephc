@@ -236,10 +236,49 @@ pub(super) fn eval_array_unset_element_stmt(
             }
             return Ok(());
         }
+        EvalExpr::ArrayGet { .. } => {
+            return eval_nested_array_unset_element(array, index, context, scope, values);
+        }
         _ => {}
     }
     let array = eval_expr(array, context, scope, values)?;
     eval_array_access_unset_result(array, index, context, scope, values)
+}
+
+/// Executes `unset($container[$a][$b])`: the element one level down is itself the container.
+///
+/// php reads the nested container, removes the key from it and writes the container back; an
+/// absent or null link anywhere in the chain makes the whole `unset` a silent no-op. Only the
+/// ArrayAccess form was supported, so Doctrine's
+/// `unset($this->initializedHashMapping[$event][$hash])` (`ContainerAwareEventManager`) failed as
+/// an unsupported construct and took every database-backed page down with it.
+fn eval_nested_array_unset_element(
+    container: &EvalExpr,
+    index: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if !crate::interpreter::builtins::eval_isset_arg(container, context, scope, values)? {
+        return Ok(());
+    }
+    let element = eval_expr(container, context, scope, values)?;
+    let tag = values.type_tag(element)?;
+    if tag == EVAL_TAG_OBJECT {
+        let result = eval_array_access_unset_result(element, index, context, scope, values);
+        eval_release_value(context, values, element)?;
+        return result;
+    }
+    if !matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        eval_release_value(context, values, element)?;
+        return Err(EvalStatus::UnsupportedConstruct);
+    }
+    let updated = eval_array_unset_target_result(element, index, context, scope, values);
+    eval_release_value(context, values, element)?;
+    if let Some(updated) = updated? {
+        eval_store_value_in_lvalue(container, updated, context, scope, values)?;
+    }
+    Ok(())
 }
 
 /// Unsets one offset from an already-resolved array-like target and returns a replacement array.
@@ -392,10 +431,34 @@ pub(super) fn eval_non_object_array_append_var_stmt(
     }
     let array = stored?;
     released_index?;
+    let ownership = eval_write_back_referenced_array(name, array, ownership, context, scope, values)?;
     for replaced in set_scope_cell(context, scope, name.to_string(), array, ownership)? {
         values.release(replaced)?;
     }
     Ok(())
+}
+
+/// Forwards an element write on a variable that is a PHP reference to the storage it names.
+///
+/// `$r = &$a['k']; $r['x'] = 1;` must change `$a['k']`, and `$r` names that element only through
+/// its recorded reference target: the scope cell is a copy of the element's value, so writing it
+/// alone left the array untouched. A plain `$r = value;` already writes back (`StoreVar`); an
+/// element write through the reference did not -- dflydev's `Data::set()` walks its key path with
+/// `$cv = &$cv[$k]; ... $cv[$k] = $value;` and lost every key. The scope entry then borrows the
+/// value the target now holds, exactly as `StoreVar` leaves it.
+fn eval_write_back_referenced_array(
+    name: &str,
+    array: RuntimeCellHandle,
+    ownership: ScopeCellOwnership,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<ScopeCellOwnership, EvalStatus> {
+    let Some(target) = scope.reference_target(name).cloned() else {
+        return Ok(ownership);
+    };
+    write_back_method_ref_target(&target, array, context, values)?;
+    Ok(ScopeCellOwnership::Borrowed)
 }
 
 /// Executes `$var[index] = value` and dispatches object writes through `ArrayAccess::offsetSet()`.
@@ -537,6 +600,7 @@ pub(super) fn eval_non_object_array_set_var_stmt(
     let value = eval_expr_value_for_consuming_store(value, context, scope, values)?;
     let array = eval_array_set_target_for_index(array, index, values)?;
     let array = values.array_set(array, index, value)?;
+    let ownership = eval_write_back_referenced_array(name, array, ownership, context, scope, values)?;
     for replaced in set_scope_cell(context, scope, name.to_string(), array, ownership)? {
         values.release(replaced)?;
     }

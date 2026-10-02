@@ -1695,9 +1695,17 @@ fn eval_reflection_method_flags_with_source_lines(
     if start_line == 0 || start_line > EVAL_REFLECTION_METHOD_SOURCE_LINE_MASK {
         return flags;
     }
+    // The parser widens a method's span to its closing brace; a synthesized method has a point
+    // span, and then the start line is the best end there is.
+    let end_line = u64::from(method.span.end_line);
+    let end_line = if end_line < start_line || end_line > EVAL_REFLECTION_METHOD_SOURCE_LINE_MASK {
+        start_line
+    } else {
+        end_line
+    };
     flags
         | (start_line << EVAL_REFLECTION_METHOD_SOURCE_START_SHIFT)
-        | (start_line << EVAL_REFLECTION_METHOD_SOURCE_END_SHIFT)
+        | (end_line << EVAL_REFLECTION_METHOD_SOURCE_END_SHIFT)
 }
 
 /// Returns the class name that declares one visible instance method.

@@ -2,7 +2,7 @@
 title: "enum_exists()"
 description: "Checks if the enum has been defined."
 sidebar:
-  order: 82
+  order: 94
 ---
 
 ## enum_exists()

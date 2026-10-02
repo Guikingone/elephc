@@ -121,7 +121,22 @@ pub(in crate::interpreter) fn eval_extension_is_loaded_in(
     if name.eq_ignore_ascii_case("xml") || name.eq_ignore_ascii_case("xmlwriter") {
         return context.native_function("xml_parser_create").is_some();
     }
+    if name.eq_ignore_ascii_case("session") {
+        return eval_session_bridge_linked(context);
+    }
     eval_extension_is_loaded(name)
+}
+
+/// Returns whether the host program carries PHP's `session` extension.
+///
+/// The session surface is a compiled prelude (`web_prelude::build::session_declarations`),
+/// present under `--web` and in the CLI profile, and the compiled half of the program answers
+/// `extension_loaded('session')` from its link manifest. Eval sees that prelude only as the
+/// native AOT callbacks the host registered, so `session_start` being one of them is the same
+/// fact. Without this, code the runtime loads (a class file left to the autoloader) was told
+/// the extension is missing while `session_start()` was callable from that very code.
+pub(in crate::interpreter) fn eval_session_bridge_linked(context: &ElephcEvalContext) -> bool {
+    context.native_function("session_start").is_some()
 }
 
 /// Returns whether `name` is in eval's known extension set, compared case-insensitively.

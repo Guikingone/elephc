@@ -25,6 +25,77 @@ pub(super) fn validate_declared_class_interface_members(
     Ok(())
 }
 
+/// Loads the classes a pending class's method signatures name before those signatures are checked
+/// against the interfaces and parent it inherits from.
+///
+/// php performs a variance check at declaration time, and a check that meets a class it has not
+/// seen yet AUTOLOADS it: `IdleConnectionMiddleware::wrap(Driver $driver): IdleConnectionDriver`
+/// implements `Middleware::wrap(Driver $driver): Driver`, and php loads `IdleConnectionDriver`
+/// to learn that it is a `Driver`. Eval checked the unloaded name, could not prove the relation,
+/// and refused the declaration -- the Symfony demo's Doctrine connection factory died there on
+/// every page that touches the database.
+///
+/// Only methods that actually meet a contract are considered (an interface requirement or a
+/// parent method of the same name), and only class-like names nothing knows yet are loaded, so a
+/// class whose signatures need no proof loads exactly what it loaded before.
+pub(super) fn autoload_pending_class_variance_types(
+    class: &EvalClass,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let mut contracted: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for interface in pending_class_contract_interface_names(class, context) {
+        for (_, requirement) in context.interface_method_requirements_with_owners(&interface) {
+            contracted.insert(requirement.name().to_ascii_lowercase());
+        }
+    }
+    for requirement in pending_class_aot_interface_method_requirements(class, context, values)? {
+        contracted.insert(requirement.name.to_ascii_lowercase());
+    }
+    let mut names: Vec<String> = Vec::new();
+    for method in class.methods() {
+        let key = method.name().to_ascii_lowercase();
+        let meets_parent = class
+            .parent()
+            .is_some_and(|parent| context.class_method(parent, method.name()).is_some());
+        if !meets_parent && !contracted.contains(&key) {
+            continue;
+        }
+        let signature_types = method
+            .return_type()
+            .into_iter()
+            .chain(method.parameter_types().iter().flatten());
+        for declared in signature_types {
+            for variant in declared.variants() {
+                let EvalParameterTypeVariant::Class(name) = variant else {
+                    continue;
+                };
+                let name = name.trim_start_matches('\\');
+                if matches!(
+                    name.to_ascii_lowercase().as_str(),
+                    "self" | "static" | "parent"
+                ) || name.eq_ignore_ascii_case(class.name())
+                    || names.iter().any(|seen| seen.eq_ignore_ascii_case(name))
+                {
+                    continue;
+                }
+                names.push(name.to_string());
+            }
+        }
+    }
+    for name in names {
+        if context.has_class(&name) || context.has_interface(&name) {
+            continue;
+        }
+        // The autoloader answers whether it produced the class; a name nothing supplies is left
+        // for the signature check itself to judge, exactly as before.
+        let _ = eval_spl_autoload_class(&name, context, values)?;
+    }
+    #[cfg(not(test))]
+    context.sync_global_eval_classes();
+    Ok(())
+}
+
 /// Validates declared class methods against PHP builtin runtime interface contracts.
 pub(super) fn validate_declared_class_builtin_interface_members(
     class: &EvalClass,

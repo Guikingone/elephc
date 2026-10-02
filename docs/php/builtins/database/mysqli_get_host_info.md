@@ -2,7 +2,7 @@
 title: "mysqli_get_host_info()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 132
+  order: 144
 ---
 
 ## mysqli_get_host_info()

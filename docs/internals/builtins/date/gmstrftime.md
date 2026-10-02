@@ -2,7 +2,7 @@
 title: "gmstrftime() — internals"
 description: "Compiler internals for gmstrftime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 224
+  order: 236
 ---
 
 ## `gmstrftime()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:823](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L823) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:910](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L910) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

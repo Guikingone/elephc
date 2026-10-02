@@ -2,7 +2,7 @@
 title: "mysqli_next_result()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 141
+  order: 153
 ---
 
 ## mysqli_next_result()

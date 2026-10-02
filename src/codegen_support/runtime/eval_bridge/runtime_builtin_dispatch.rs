@@ -59,6 +59,8 @@ pub(super) fn emit_aarch64_runtime_builtin_dispatch(emitter: &mut Emitter) {
     emit_aarch64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndClean, "ob_end_clean", "__elephc_eval_ob_end", Some(0));
     emit_aarch64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndFlush, "ob_end_flush", "__elephc_eval_ob_end", Some(1));
     emit_aarch64_headers_sent_case(emitter);
+    emit_aarch64_headers_list_case(emitter);
+    emit_aarch64_header_remove_case(emitter);
 
     emitter.label("__elephc_runtime_builtin_v1_result");
     emitter.instruction("cbz x0, __elephc_runtime_builtin_v1_fatal");           // null helper results report runtime failure
@@ -128,6 +130,8 @@ pub(super) fn emit_x86_64_runtime_builtin_dispatch(emitter: &mut Emitter) {
     emit_x86_64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndClean, "ob_end_clean", "__elephc_eval_ob_end", Some(0));
     emit_x86_64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndFlush, "ob_end_flush", "__elephc_eval_ob_end", Some(1));
     emit_x86_64_headers_sent_case(emitter);
+    emit_x86_64_headers_list_case(emitter);
+    emit_x86_64_header_remove_case(emitter);
 
     emitter.label("__elephc_runtime_builtin_v1_result_x86");
     emitter.instruction("test rax, rax");                                       // null helper results report runtime failure
@@ -150,7 +154,7 @@ pub(super) fn emit_x86_64_runtime_builtin_dispatch(emitter: &mut Emitter) {
 }
 
 /// Returns stable branch labels for every version-one runtime builtin ID.
-fn runtime_dispatch_labels() -> [(RuntimeBuiltinId, &'static str); 22] {
+fn runtime_dispatch_labels() -> [(RuntimeBuiltinId, &'static str); 24] {
     let labels = [
         (RuntimeBuiltinId::Boolval, "__elephc_runtime_builtin_v1_boolval"),
         (RuntimeBuiltinId::Floatval, "__elephc_runtime_builtin_v1_floatval"),
@@ -174,6 +178,8 @@ fn runtime_dispatch_labels() -> [(RuntimeBuiltinId, &'static str); 22] {
         (RuntimeBuiltinId::ObEndClean, "__elephc_runtime_builtin_v1_ob_end_clean"),
         (RuntimeBuiltinId::ObEndFlush, "__elephc_runtime_builtin_v1_ob_end_flush"),
         (RuntimeBuiltinId::HeadersSent, "__elephc_runtime_builtin_v1_headers_sent"),
+        (RuntimeBuiltinId::HeadersList, "__elephc_runtime_builtin_v1_headers_list"),
+        (RuntimeBuiltinId::HeaderRemove, "__elephc_runtime_builtin_v1_header_remove"),
     ];
     for (runtime_id, _) in labels {
         let binding = crate::builtins::registry::lookup_runtime_builtin(runtime_id);
@@ -441,6 +447,85 @@ fn emit_x86_64_headers_sent_case(emitter: &mut Emitter) {
     emitter.instruction("jmp __elephc_runtime_builtin_v1_result_x86");          // transfer the boxed boolean result
 }
 
+/// Emits the AArch64 `headers_list` dispatch arm.
+///
+/// `__rt_headers_list` hands back a fresh string array the arm owns, so it is boxed WITHOUT a
+/// retain: `__rt_mixed_from_value` would retain it and leave the helper's own reference behind.
+fn emit_aarch64_headers_list_case(emitter: &mut Emitter) {
+    emitter.label("__elephc_runtime_builtin_v1_headers_list");
+    emitter.instruction("cbnz x21, __elephc_runtime_builtin_v1_unsupported");   // require zero PHP arguments
+    emitter.instruction("bl __rt_headers_list");                                // build the owned list of pending header lines
+    emitter.instruction("mov x1, x0");                                          // the owned array becomes the box payload
+    emitter.instruction("mov x0, #4");                                          // runtime tag 4 = indexed array
+    emitter.instruction("mov x2, xzr");                                         // indexed arrays do not use the high payload word
+    emitter.instruction("bl __rt_mixed_box_raw");                               // adopt the array into a fresh Mixed cell without a retain
+    emitter.instruction("b __elephc_runtime_builtin_v1_result");                // transfer the boxed array result
+}
+
+/// Emits the x86_64 `headers_list` dispatch arm.
+fn emit_x86_64_headers_list_case(emitter: &mut Emitter) {
+    emitter.label("__elephc_runtime_builtin_v1_headers_list_x86");
+    emitter.instruction("test r13, r13");                                       // require zero PHP arguments
+    emitter.instruction("jnz __elephc_runtime_builtin_v1_unsupported_x86");     // reject unsupported arity
+    emitter.instruction("call __rt_headers_list");                              // build the owned list of pending header lines
+    emitter.instruction("mov rdi, rax");                                        // the owned array becomes the box payload
+    emitter.instruction("mov eax, 4");                                          // runtime tag 4 = indexed array
+    emitter.instruction("xor esi, esi");                                        // indexed arrays do not use the high payload word
+    emitter.instruction("call __rt_mixed_box_raw");                             // adopt the array into a fresh Mixed cell without a retain
+    emitter.instruction("jmp __elephc_runtime_builtin_v1_result_x86");          // transfer the boxed array result
+}
+
+/// Emits the AArch64 `header_remove` dispatch arm.
+///
+/// No argument, or a `null` one, clears every pending header (`__rt_header_remove` with a negative
+/// length); any other argument is converted to its string and removes the headers of that name.
+fn emit_aarch64_header_remove_case(emitter: &mut Emitter) {
+    emitter.label("__elephc_runtime_builtin_v1_header_remove");
+    emitter.instruction("cmp x21, #1");                                         // accept zero or one PHP argument
+    emitter.instruction("b.hi __elephc_runtime_builtin_v1_unsupported");        // reject more than one argument
+    emitter.instruction("b.ne __elephc_runtime_builtin_v1_header_remove_all");  // no argument clears every header
+    emitter.instruction("ldr x0, [x20]");                                       // load the borrowed boxed name cell
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the concrete tag of the name
+    emitter.instruction("cmp x0, #8");                                          // runtime tag 8 = null
+    emitter.instruction("b.eq __elephc_runtime_builtin_v1_header_remove_all");  // header_remove(null) clears every header too
+    emitter.instruction("ldr x0, [x20]");                                       // reload the borrowed boxed name cell
+    emitter.instruction("bl __rt_mixed_cast_string");                           // x1/x2 = the name as a PHP string
+    emitter.instruction("mov x0, x1");                                          // pass the name pointer to the bridge helper
+    emitter.instruction("mov x1, x2");                                          // pass the name length to the bridge helper
+    emitter.instruction("b __elephc_runtime_builtin_v1_header_remove_call");    // remove the headers of that name
+    emitter.label("__elephc_runtime_builtin_v1_header_remove_all");
+    emitter.instruction("mov x0, xzr");                                         // no name pointer
+    emitter.instruction("mov x1, #-1");                                         // a negative length asks the bridge to clear every header
+    emitter.label("__elephc_runtime_builtin_v1_header_remove_call");
+    emitter.instruction("bl __rt_header_remove");                               // edit the pending header list the compiled side sends
+    emitter.bl_c("__elephc_eval_value_null");
+    emitter.instruction("b __elephc_runtime_builtin_v1_result");                // transfer the boxed void result
+}
+
+/// Emits the x86_64 `header_remove` dispatch arm.
+fn emit_x86_64_header_remove_case(emitter: &mut Emitter) {
+    emitter.label("__elephc_runtime_builtin_v1_header_remove_x86");
+    emitter.instruction("cmp r13, 1");                                          // accept zero or one PHP argument
+    emitter.instruction("ja __elephc_runtime_builtin_v1_unsupported_x86");      // reject more than one argument
+    emitter.instruction("jne __elephc_runtime_builtin_v1_header_remove_all_x86"); // no argument clears every header
+    emitter.instruction("mov rax, QWORD PTR [r12]");                            // load the borrowed boxed name cell
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the concrete tag of the name
+    emitter.instruction("cmp rax, 8");                                          // runtime tag 8 = null
+    emitter.instruction("je __elephc_runtime_builtin_v1_header_remove_all_x86"); // header_remove(null) clears every header too
+    emitter.instruction("mov rax, QWORD PTR [r12]");                            // reload the borrowed boxed name cell
+    emitter.instruction("call __rt_mixed_cast_string");                         // rax/rdx = the name as a PHP string
+    emitter.instruction("mov rdi, rax");                                        // pass the name pointer to the bridge helper
+    emitter.instruction("mov rsi, rdx");                                        // pass the name length to the bridge helper
+    emitter.instruction("jmp __elephc_runtime_builtin_v1_header_remove_call_x86"); // remove the headers of that name
+    emitter.label("__elephc_runtime_builtin_v1_header_remove_all_x86");
+    emitter.instruction("xor edi, edi");                                        // no name pointer
+    emitter.instruction("mov rsi, -1");                                         // a negative length asks the bridge to clear every header
+    emitter.label("__elephc_runtime_builtin_v1_header_remove_call_x86");
+    emitter.instruction("call __rt_header_remove");                             // edit the pending header list the compiled side sends
+    emitter.bl_c("__elephc_eval_value_null");
+    emitter.instruction("jmp __elephc_runtime_builtin_v1_result_x86");          // transfer the boxed void result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -481,6 +566,8 @@ mod tests {
             "runtime_builtin_v1_strrev_x86",
             "runtime_builtin_v1_array_key_exists_x86",
             "runtime_builtin_v1_ob_get_level_x86",
+            "runtime_builtin_v1_headers_list_x86",
+            "runtime_builtin_v1_header_remove_x86",
         ] {
             assert!(asm.contains(label), "missing {label}:\n{asm}");
         }
@@ -494,13 +581,13 @@ mod tests {
             (
                 Target::new(Platform::Linux, Arch::AArch64),
                 "__elephc_runtime_builtin_v1_ob_length_false:\n",
-                "__elephc_runtime_builtin_v1_result:\n",
+                "__elephc_runtime_builtin_v1_ob_clean:\n",
                 "mov x0, #0",
             ),
             (
                 Target::new(Platform::Linux, Arch::X86_64),
                 "__elephc_runtime_builtin_v1_ob_length_false_x86:\n",
-                "__elephc_runtime_builtin_v1_result_x86:\n",
+                "__elephc_runtime_builtin_v1_ob_clean_x86:\n",
                 "xor edi, edi",
             ),
         ] {
@@ -511,7 +598,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing false arm for {target:?}:\n{asm}"))
                 .split(next_label)
                 .next()
-                .expect("false arm precedes the shared result arm");
+                .expect("false arm precedes the next dispatch arm");
             let bool_boxer = target.extern_symbol("__elephc_eval_value_bool");
             let null_boxer = target.extern_symbol("__elephc_eval_value_null");
             assert!(

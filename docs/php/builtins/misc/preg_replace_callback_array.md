@@ -2,19 +2,19 @@
 title: "preg_replace_callback_array()"
 description: "Performs a regular expression search and replace using one callback per pattern."
 sidebar:
-  order: 677
+  order: 690
 ---
 
 ## preg_replace_callback_array()
 
 ```php
-function preg_replace_callback_array(mixed $pattern, mixed $subject, int $limit = -1, mixed $count = null, int $flags = 0): mixed
+function preg_replace_callback_array(array $pattern, mixed $subject, int $limit = -1, mixed $count = null, int $flags = 0): mixed
 ```
 
 Performs a regular expression search and replace using one callback per pattern.
 
 **Parameters**:
-- `$pattern` (`mixed`)
+- `$pattern` (`array`)
 - `$subject` (`mixed`)
 - `$limit` (`int`), default `-1`, optional
 - `$count` (`mixed`), passed by reference, default `null`, optional

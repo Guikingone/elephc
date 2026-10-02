@@ -52,6 +52,9 @@ pub(in crate::interpreter) fn eval_expr_result_aliases_storage(expr: &EvalExpr) 
         | EvalExpr::ArrayAppendAssign { .. }
         | EvalExpr::CompoundAssign { .. }
         | EvalExpr::NullCoalesceAssign { .. }
+        // `$a = $b = []`: the inner assignment returns the very cell it stored into `$b`, so the
+        // outer store must take its own copy or both targets write through one array.
+        | EvalExpr::Assign { .. }
         // A class-like constant cell is cached under the declaring class and handed out by
         // handle, exactly like a scope variable read: `eval_class_like_constant_cell` and
         // `context.enum_case()` return the SAME cell on every fetch. A static property fetch
@@ -113,8 +116,44 @@ pub(in crate::interpreter) fn eval_expr_value_for_consuming_store(
     if aliases_storage {
         values.copy_value(value)
     } else {
-        Ok(value)
+        eval_detach_property_read(expr, value, context, values)
     }
+}
+
+/// Whether an expression reads an instance property.
+pub(in crate::interpreter) fn eval_expr_reads_instance_property(expr: &EvalExpr) -> bool {
+    matches!(
+        expr,
+        EvalExpr::PropertyGet { .. }
+            | EvalExpr::NullsafePropertyGet { .. }
+            | EvalExpr::DynamicPropertyGet { .. }
+            | EvalExpr::NullsafeDynamicPropertyGet { .. }
+    )
+}
+
+/// Gives a property read that is being STORED a cell of its own, so the store shares the
+/// property's value the way php's copy-on-write does instead of sharing its cell.
+///
+/// `$id = $this->idTemplate;` must leave the property alone when `$id` is written next: php
+/// shares the array until either side writes, then separates. The property read hands back the
+/// property's own cell, whose array payload has a single owner, so the write through `$id`
+/// landed in the property -- Doctrine's `ObjectHydrator` then saw every row's id appended to its
+/// id TEMPLATE, never matched a row it had already hydrated, and returned the same entity once
+/// per joined row. A fresh cell retains the payload, which makes the next write separate it.
+/// The read's own reference is released, so ownership is unchanged whichever kind of cell the
+/// read returned.
+pub(in crate::interpreter) fn eval_detach_property_read(
+    expr: &EvalExpr,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !eval_expr_reads_instance_property(expr) {
+        return Ok(value);
+    }
+    let copy = values.copy_value(value)?;
+    eval_release_value(context, values, value)?;
+    Ok(copy)
 }
 
 /// Evaluates a boolean condition, consuming its temporary but not a borrowed scope value.

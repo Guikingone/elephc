@@ -2,7 +2,7 @@
 title: "imagepolygon()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 524
+  order: 536
 ---
 
 ## imagepolygon()

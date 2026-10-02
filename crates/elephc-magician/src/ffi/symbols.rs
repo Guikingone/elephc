@@ -232,21 +232,46 @@ pub unsafe extern "C" fn __elephc_eval_constant_fetch(
 /// # Safety
 /// Mirrors `__elephc_eval_function_exists`; invalid handles or unreadable name
 /// storage fail closed as `false`.
+///
+/// A null context asks the process-wide registry instead: compiled code with no eval frame of
+/// its own still has to see a function a runtime-included file declared, since PHP's function
+/// table is global. The name may carry PHP's one optional leading namespace separator.
 unsafe fn eval_function_exists_inner(
     ctx: *const ElephcEvalContext,
     name_ptr: *const u8,
     name_len: u64,
 ) -> i32 {
-    let Some(context) = ctx.as_ref() else {
+    let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
         return 0;
+    };
+    let name = name.strip_prefix('\\').unwrap_or(&name).to_ascii_lowercase();
+    if name.is_empty() || name.starts_with('\\') {
+        return 0;
+    }
+    let Some(context) = ctx.as_ref() else {
+        #[cfg(not(test))]
+        {
+            return i32::from(crate::context::global_eval_function_is_declared(&name));
+        }
+        #[cfg(test)]
+        {
+            return 0;
+        }
     };
     if context.abi_version() != ABI_VERSION {
         return 0;
     }
-    let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
-        return 0;
-    };
-    i32::from(context.has_function(&name.to_ascii_lowercase()))
+    // Exact names only: `has_function()` also retries a namespaced name as a global one, which is
+    // right for resolving a CALL and wrong for `function_exists('Ns\\f')`.
+    #[cfg(not(test))]
+    let declared_elsewhere = crate::context::global_eval_function_is_declared(&name);
+    #[cfg(test)]
+    let declared_elsewhere = false;
+    i32::from(
+        context.function(&name).is_some()
+            || context.native_function(&name).is_some()
+            || declared_elsewhere,
+    )
 }
 
 /// Runs the eval constant-exists ABI body after installing a panic boundary.

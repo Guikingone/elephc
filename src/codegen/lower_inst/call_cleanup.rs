@@ -205,6 +205,16 @@ pub(super) fn direct_call_arg_temp_cleanup_type(
     {
         return Some(PhpType::Array(Box::new(PhpType::Mixed)));
     }
+    // A hash handed to an `array<mixed>` parameter goes through the list-packing helper on a
+    // reference of its own (see `materialize_direct_call_arg_for_param`): either the packed copy
+    // or the retained hash, released through the kind-dispatching `array<mixed>` helper.
+    if matches!(
+        param_ty.codegen_repr(),
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed
+    ) && matches!(source_ty.codegen_repr(), PhpType::AssocArray { .. })
+    {
+        return Some(PhpType::Array(Box::new(PhpType::Mixed)));
+    }
     None
 }
 

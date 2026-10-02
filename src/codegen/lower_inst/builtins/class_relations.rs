@@ -19,7 +19,10 @@ use crate::names::php_symbol_key;
 use crate::types::{ClassInfo, InterfaceInfo, PhpType};
 
 use super::super::super::context::FunctionContext;
-use super::{expect_operand, has_eval_context, lower_eval_class_relation, store_if_result};
+use super::{
+    expect_operand, has_eval_context,
+    lower_eval_class_relation, store_if_result,
+};
 
 enum ClassLikeTarget {
     Class(String),

@@ -375,6 +375,42 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_global_class_relation
     Ok(())
 }
 
+/// Asks the eval bridge's shared context `defined($name)` (`want_value == false`) or
+/// `constant($name)` for a runtime name the compiled constant registry missed.
+///
+/// Leaves the published boxed Mixed result (a bool for `defined`, the value for `constant`) in the
+/// integer result register. A `constant()` of an unknown name rethrows the bridge's `Error`.
+pub(in crate::codegen::lower_inst::builtins) fn emit_eval_dynamic_constant_null_context(
+    ctx: &mut FunctionContext<'_>,
+    name: ValueId,
+    want_value: bool,
+) -> Result<()> {
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    let mut boxed = EvalBoxedOperands::new();
+    boxed.extend(store_eval_mixed_operand_at(ctx, name, EVAL_TEMP_CELL_OFFSET)?);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);
+    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, name_arg, EVAL_TEMP_CELL_OFFSET);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        i64::from(want_value),
+    );
+    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_dynamic_constant");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_status_check(ctx);
+    emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    Ok(())
+}
+
 /// Lowers object class-name introspection through the eval bridge.
 ///
 /// The bridge borrows the receiver cell rather than taking it, so the box this frame made is still
@@ -488,12 +524,17 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_is_a(
 ///
 /// The bridge borrows the receiver cell rather than taking it, so the box this frame made is
 /// released before the scratch frame goes away, on the matched and the fall-through answer alike.
+///
+/// An answer of 2 means the bridge owns the object and it is NOT an instance: the native matcher
+/// only sees such an object's carrier header (`stdClass`), so it must not be asked. That answer
+/// branches to `definite_no_label`.
 pub(in crate::codegen::lower_inst::builtins) fn emit_eval_object_is_a_named_fallback(
     ctx: &mut FunctionContext<'_>,
     object: ValueId,
     target_class: &str,
     matched_label: &str,
     native_fallback_label: &str,
+    definite_no_label: &str,
 ) -> Result<()> {
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     let mut boxed = EvalBoxedOperands::new();
@@ -516,6 +557,16 @@ pub(in crate::codegen::lower_inst::builtins) fn emit_eval_object_is_a_named_fall
     abi::emit_call_label(ctx.emitter, &symbol);
     emit_release_eval_boxed_operands_keeping_int_answer(ctx, &boxed);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #2");                              // 2 = a bridge-owned object that is definitely not an instance
+            ctx.emitter.instruction(&format!("b.eq {}", definite_no_label));    // never ask the native matcher about its carrier header
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 2");                              // 2 = a bridge-owned object that is definitely not an instance
+            ctx.emitter.instruction(&format!("je {}", definite_no_label));      // never ask the native matcher about its carrier header
+        }
+    }
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, matched_label);
     abi::emit_jump(ctx.emitter, native_fallback_label);
     Ok(())
@@ -600,7 +651,19 @@ pub(in crate::codegen::lower_inst::builtins) fn emit_eval_object_is_a_dynamic_na
     abi::emit_call_label(ctx.emitter, &symbol);
     emit_release_eval_boxed_operands_keeping_int_answer(ctx, &boxed);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
-    abi::emit_branch_if_int_result_nonzero(ctx.emitter, matched_label);
+    // Only 1 is "an instance": 2 is the bridge's "owned here and definitely not", which the
+    // native matcher below also answers no to. Branching on any non-zero answer made
+    // `$q instanceof $c` true for every class name an eval declared.
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #1");                              // 1 = the object is an instance of the named class
+            ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // a match needs no native check
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 1");                              // 1 = the object is an instance of the named class
+            ctx.emitter.instruction(&format!("je {}", matched_label));          // a match needs no native check
+        }
+    }
     abi::emit_jump(ctx.emitter, native_fallback_label);
     Ok(())
 }

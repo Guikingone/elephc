@@ -49,13 +49,15 @@ pub(in crate::interpreter) fn eval_reflection_class_get_reflection_constants_res
     if !method_name.eq_ignore_ascii_case("getReflectionConstants") {
         return Ok(None);
     }
-    let filter = eval_reflection_member_filter(evaluated_args, values)?;
+    // The receiver is checked BEFORE the filter argument is read: a user class with its own
+    // method of this name reaches here too, and its arguments are not a reflection filter.
     let Some(reflected_name) = context
         .eval_reflection_class_name(identity)
         .map(str::to_string)
     else {
         return Ok(None);
     };
+    let filter = eval_reflection_member_filter(evaluated_args, values)?;
     let names = eval_reflection_constant_names(&reflected_name, context, values)?;
     let mut result = values.array_new(names.len())?;
     let mut index = 0;
@@ -89,13 +91,17 @@ pub(in crate::interpreter) fn eval_reflection_class_get_members_result(
     } else {
         return Ok(None);
     };
-    let filter = eval_reflection_member_filter(evaluated_args, values)?;
+    // The receiver is checked BEFORE the filter argument is read: Symfony UX's
+    // `ComponentProperties::getProperties(object $component, bool $publicProps)` is an ordinary
+    // method of this name, and reading `$component` as a reflection filter failed the call, so
+    // every page rendering a Twig component died.
     let Some(reflected_name) = context
         .eval_reflection_class_name(identity)
         .map(str::to_string)
     else {
         return Ok(None);
     };
+    let filter = eval_reflection_member_filter(evaluated_args, values)?;
     if eval_reflection_is_builtin_closure(&reflected_name, context) {
         let names = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
             eval_reflection_builtin_closure_method_names()

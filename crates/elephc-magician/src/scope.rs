@@ -448,6 +448,26 @@ impl ElephcEvalScope {
         self.entries.get(name).copied()
     }
 
+    /// Returns another visible name that is a PHP reference to the same storage as `name`
+    /// (`$b = &$a` makes each the other's peer), the smallest one for determinism.
+    pub fn reference_peer(&self, name: &str) -> Option<String> {
+        let entry = self.entries.get(name).copied()?;
+        if !entry.flags().is_visible() || !entry.flags().by_ref {
+            return None;
+        }
+        let cell = entry.cell();
+        self.entries
+            .iter()
+            .filter(|(other, other_entry)| {
+                other.as_str() != name
+                    && other_entry.flags().is_visible()
+                    && other_entry.flags().by_ref
+                    && other_entry.cell() == cell
+            })
+            .map(|(other, _)| other.clone())
+            .min()
+    }
+
     /// Returns the visible runtime cell for a named variable, excluding unset markers.
     pub fn visible_cell(&self, name: &str) -> Option<RuntimeCellHandle> {
         self.entry(name)

@@ -2,7 +2,7 @@
 title: "error_log()"
 description: "Writes a message to the configured error log destination."
 sidebar:
-  order: 609
+  order: 621
 ---
 
 ## error_log()

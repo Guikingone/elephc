@@ -64,6 +64,113 @@ pub unsafe extern "C" fn __elephc_eval_dynamic_object_class_name(object: *const 
     .unwrap_or(none)
 }
 
+/// Turns an interpreted `Traversable` into a compiled `ArrayIterator` a compiled `foreach` drives.
+///
+/// `object` is a raw object payload pointer (its identity). Returns the iterator's object pointer
+/// -- the compiled loop keeps it as its source, the way it keeps a `getIterator()` result -- or 0
+/// when the object is not owned by an eval context or could not be drained, in which case the loop
+/// goes on with the original object exactly as before.
+///
+/// # Safety
+/// `object` must be 0 or a live object payload pointer.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_native_iterator_for_object(object: u64) -> u64 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_native_iterator_for_object");
+    std::panic::catch_unwind(|| unsafe { native_iterator_for_object_inner(object) }).unwrap_or(0)
+}
+
+/// Drains one eval-owned object through its owner context; see the extern above.
+#[cfg(not(test))]
+unsafe fn native_iterator_for_object_inner(object: u64) -> u64 {
+    if object == 0 {
+        return 0;
+    }
+    let Some(owner) = crate::ffi::dynamic_destructors::dynamic_object_owner_context(object) else {
+        return 0;
+    };
+    let Some(context) = owner.as_mut() else {
+        return 0;
+    };
+    if context.abi_version() != ABI_VERSION {
+        return 0;
+    }
+    // Only an instance of an INTERPRETED class: a generator, a closure or any other object of a
+    // compiled class is driven by the compiled dispatch already, and a generator drained here
+    // could never be resumed again ("Cannot rewind a generator that was already run").
+    if context.dynamic_object_declaring_class(object).is_none() {
+        return 0;
+    }
+    let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+    let Ok(cell) = values.raw_heap_word_value(object) else {
+        return 0;
+    };
+    let iterator = interpreter::execute_context_native_iterator(context, cell, &mut values);
+    let _ = values.release(cell);
+    match iterator {
+        // The cell is deliberately kept: it holds the iterator's only reference, which the
+        // compiled loop now owns through the raw pointer it stores as its source.
+        Ok(iterator) => values.raw_value_word(iterator).unwrap_or(0),
+        Err(_) => {
+            let _ = context.take_pending_throw();
+            0
+        }
+    }
+}
+
+/// Unwraps an interpreted `IteratorAggregate` for a compiled `new IteratorIterator($object)`.
+///
+/// Returns the raw object pointer of `getIterator()`'s final result, with one reference owned by
+/// the caller, or 0 when `object` is not an interpreted aggregate (the caller then wraps the
+/// object itself, exactly as before).
+///
+/// # Safety
+/// `object` must be 0 or a live object payload pointer.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_unwrap_aggregate(object: u64) -> u64 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_unwrap_aggregate");
+    std::panic::catch_unwind(|| unsafe { unwrap_aggregate_inner(object) }).unwrap_or(0)
+}
+
+/// Resolves one interpreted aggregate through its owner context; see the extern above.
+#[cfg(not(test))]
+unsafe fn unwrap_aggregate_inner(object: u64) -> u64 {
+    if object == 0 {
+        return 0;
+    }
+    let Some(owner) = crate::ffi::dynamic_destructors::dynamic_object_owner_context(object) else {
+        return 0;
+    };
+    let Some(context) = owner.as_mut() else {
+        return 0;
+    };
+    if context.abi_version() != ABI_VERSION || context.dynamic_object_declaring_class(object).is_none() {
+        return 0;
+    }
+    let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+    let Ok(cell) = values.raw_heap_word_value(object) else {
+        return 0;
+    };
+    let unwrapped = interpreter::execute_context_unwrap_aggregate(context, cell, &mut values);
+    let _ = values.release(cell);
+    match unwrapped {
+        Ok(Some(inner)) => {
+            // Keep one reference for the compiled object that will store the pointer, then drop
+            // the box that carried it.
+            let word = values.raw_value_word(inner).unwrap_or(0);
+            let word = if word == 0 { 0 } else { values.retain_raw_heap_word(word).unwrap_or(0) };
+            let _ = values.release(inner);
+            word
+        }
+        Ok(None) => 0,
+        Err(_) => {
+            let _ = context.take_pending_throw();
+            0
+        }
+    }
+}
+
 /// Returns a process-lifetime copy of a class name (the set of class names is small and bounded).
 #[cfg(not(test))]
 fn intern_class_name(name: &str) -> &'static str {
@@ -169,6 +276,56 @@ pub unsafe extern "C" fn __elephc_eval_member_exists(
         eval_member_exists_inner(ctx, target, member, lookup_kind)
     })
     .unwrap_or(0)
+}
+
+/// Answers `defined($name)` (`want_value == 0`) or `constant($name)` for a runtime name that the
+/// compiled constant registry does not hold.
+///
+/// The registry only lists global constants; `Class::CONST` and enum-case names, and constants an
+/// `eval()` defined, live on this side. A compiled function asks with a null handle, which resolves
+/// to the shared null-handle context that holds the request's interpreted classes. `constant()` of
+/// an unknown name publishes the `Error` php throws.
+///
+/// # Safety
+/// `ctx` must be null or a valid eval context handle. `name` must point at a boxed runtime cell,
+/// and `out` may be null.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_dynamic_constant(
+    ctx: *mut ElephcEvalContext,
+    name: *mut RuntimeCell,
+    want_value: u64,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_dynamic_constant");
+    std::panic::catch_unwind(|| unsafe {
+        let context = match ctx.as_mut() {
+            Some(context) => context,
+            None => {
+                let context = crate::ffi::context::shared_null_handle_context();
+                context.sync_global_eval_classes();
+                context
+            }
+        };
+        if context.abi_version() != ABI_VERSION {
+            return EvalStatus::AbiMismatch.code();
+        }
+        if name.is_null() {
+            return EvalStatus::RuntimeFatal.code();
+        }
+        clear_result(out);
+        let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+        match interpreter::execute_context_dynamic_constant(
+            context,
+            want_value != 0,
+            RuntimeCellHandle::from_raw(name),
+            &mut values,
+        ) {
+            Ok(outcome) => write_outcome(outcome, out).code(),
+            Err(status) => status.code(),
+        }
+    })
+    .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
 
 /// Resolves class/interface/trait relation metadata in the eval context.
@@ -315,6 +472,12 @@ unsafe fn eval_object_is_a_inner(
     let Ok(target) = abi_name_to_string(target_ptr, target_len) else {
         return 0;
     };
+    // Without a caller context the answer feeds compiled code that falls back to its own class-id
+    // matcher on a 0. For an object an eval context declared that matcher only sees the generic
+    // carrier header, `stdClass`, so it answered `true` for `$evalObject instanceof \stdClass` --
+    // league/config then cast every configured service object to an array. Such an object's
+    // definitive "no" is reported as `EVAL_OBJECT_IS_A_DEFINITELY_NOT` so the caller stops there.
+    let caller_takes_definite_no = ctx.is_null();
     let context = if let Some(context) = ctx.as_mut() {
         context
     } else {
@@ -379,10 +542,27 @@ unsafe fn eval_object_is_a_inner(
         );
     }
     match result {
-        Ok(result) => i32::from(result),
+        Ok(true) => 1,
+        Ok(false) if caller_takes_definite_no => {
+            let eval_declared = values
+                .object_identity(object)
+                .ok()
+                .is_some_and(|identity| context.dynamic_object_declaring_class(identity).is_some());
+            if eval_declared {
+                EVAL_OBJECT_IS_A_DEFINITELY_NOT
+            } else {
+                0
+            }
+        }
+        Ok(false) => 0,
         Err(_) => 0,
     }
 }
+
+/// `__elephc_eval_object_is_a` answer, for a caller that passed no context, meaning "an object an
+/// eval context declared, and it is NOT an instance": do not ask the compiled matcher, whose view
+/// of such an object is only its carrier header.
+const EVAL_OBJECT_IS_A_DEFINITELY_NOT: i32 = 2;
 
 /// Names the object one `object_is_a` probe was asked about, for `ELEPHC_EVAL_TRACE`.
 ///

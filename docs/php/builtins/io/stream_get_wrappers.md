@@ -2,7 +2,7 @@
 title: "stream_get_wrappers()"
 description: "Retrieves list of registered streams."
 sidebar:
-  order: 376
+  order: 388
 ---
 
 ## stream_get_wrappers()

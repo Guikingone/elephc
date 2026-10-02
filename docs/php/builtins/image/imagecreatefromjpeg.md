@@ -2,7 +2,7 @@
 title: "imagecreatefromjpeg()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 491
+  order: 503
 ---
 
 ## imagecreatefromjpeg()

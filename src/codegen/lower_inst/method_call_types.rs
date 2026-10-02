@@ -28,6 +28,8 @@ pub(super) struct MixedMethodCandidate {
     /// The candidate's declared defaults, one per parameter, for the arguments the call site
     /// omits (see `omitted_default_is_materializable`).
     pub(super) defaults: Vec<Option<crate::parser::ast::Expr>>,
+    /// The last parameter is a variadic tail the call packs from the surplus operands.
+    pub(super) variadic_last: bool,
 }
 
 /// Outgoing call argument state that must be cleaned up after the call returns.

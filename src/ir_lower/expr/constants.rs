@@ -175,8 +175,10 @@ pub(super) fn lower_static_defined_call(
 /// so no namespace/`use` resolution applies and a leading `\` is stripped. Reusing
 /// [`lower_const_ref`] means the call inherits the constant's real type and value — including
 /// the prescanned `define()` metadata recorded earlier in source order — instead of an opaque
-/// `mixed`. A `Foo::BAR` name keeps the runtime call, which reads the class-constant table; a
-/// name nothing defines takes `lower_const_ref`'s throwing runtime lookup.
+/// `mixed`. A literal `Foo::BAR` lowers as the class-constant expression it names, which the
+/// checker (`crate::builtins::system::constant`) typed the same way; any other `::` name keeps the
+/// runtime call, which reads the class-constant table; a name nothing defines takes
+/// `lower_const_ref`'s throwing runtime lookup.
 pub(super) fn lower_static_constant_call(
     ctx: &mut LoweringContext<'_, '_>,
     name: &Name,
@@ -187,6 +189,12 @@ pub(super) fn lower_static_constant_call(
         return None;
     }
     let constant_name = static_constant_name_arg(&args[0])?;
+    if let Some(access) =
+        crate::builtins::literal_class_constant_expr(constant_name, expr.span)
+    {
+        // `constant('Foo::BAR')` is the `Foo::BAR` expression the checker already typed.
+        return Some(super::lower_expr(ctx, &access));
+    }
     if constant_name.contains("::") {
         // A class constant or enum case: the runtime lookup reads the class-constant table.
         return None;

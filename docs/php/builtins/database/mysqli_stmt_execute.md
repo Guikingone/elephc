@@ -2,7 +2,7 @@
 title: "mysqli_stmt_execute()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 166
+  order: 178
 ---
 
 ## mysqli_stmt_execute()

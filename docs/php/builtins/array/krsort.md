@@ -2,7 +2,7 @@
 title: "krsort()"
 description: "Sorts an array by key in descending SORT_REGULAR order; PHP sort flags are not yet supported."
 sidebar:
-  order: 58
+  order: 70
 ---
 
 ## krsort()

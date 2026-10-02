@@ -2,7 +2,7 @@
 title: "array_uintersect() — internals"
 description: "Compiler internals for array_uintersect(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 42
+  order: 52
 ---
 
 ## `array_uintersect()` — internals
@@ -48,7 +48,10 @@ function array_uintersect(array $array1, array $array2, callable $callback): arr
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `interpreter-specific-value-semantics`.
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

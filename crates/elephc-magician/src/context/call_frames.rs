@@ -174,6 +174,23 @@ thread_local! {
     static EVAL_CONSTANT_CONTEXT_BARRIERS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
 }
 
+/// Returns whether calls from the interpreter into compiled code record a frame.
+///
+/// TEMPORARY A/B SWITCH for measuring the cost of those frames: `ELEPHC_NO_NATIVE_FRAMES` turns
+/// them off for one process so the same binary can be measured both ways.
+pub fn native_call_frames_enabled() -> bool {
+    static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    !*DISABLED.get_or_init(|| std::env::var_os("ELEPHC_NO_NATIVE_FRAMES").is_some())
+}
+
+/// Returns whether no interpreter call is live on this thread.
+///
+/// Readable without a context, which is what lets a compiled `new` of a Throwable ask the
+/// question before paying for one.
+pub fn eval_call_frames_are_empty() -> bool {
+    EVAL_CALL_FRAMES.with(|frames| frames.borrow().is_empty())
+}
+
 impl ElephcEvalContext {
     /// Records one call as entered, and closes the quiet-fetch mode across the call.
     ///

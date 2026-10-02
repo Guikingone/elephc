@@ -2,7 +2,7 @@
 title: "imagestring()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 533
+  order: 545
 ---
 
 ## imagestring()

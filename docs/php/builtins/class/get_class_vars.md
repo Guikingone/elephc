@@ -2,7 +2,7 @@
 title: "get_class_vars()"
 description: "Returns visible default properties for a class."
 sidebar:
-  order: 87
+  order: 99
 ---
 
 ## get_class_vars()
@@ -20,7 +20,7 @@ Returns visible default properties for a class.
 
 ## Availability
 
-- **Compiled (AOT)**: not available — compiled programs cannot call this builtin (`eval-only-reflection`).
+- **Compiled (AOT)**: supported through the compiler-injected class_vars prelude.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/get_class_vars.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/get_class_vars.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._

@@ -184,6 +184,8 @@ fn emit_diag_buffered_path_aarch64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "x11", "_rt_diag_file_ptr", 0);      // a location is consumed by exactly one diagnostic
     abi::emit_store_reg_to_symbol(emitter, "x11", "_rt_diag_file_len", 0);      // so the next one cannot inherit this one's
     abi::emit_store_reg_to_symbol(emitter, "x11", "_rt_diag_line", 0);          // and report a line it was never raised on
+    abi::emit_load_symbol_to_reg(emitter, "x11", "_exc_handler_top", 0);        // the handler that would catch a throw escaping this dispatch
+    abi::emit_store_reg_to_symbol(emitter, "x11", "_rt_diag_dispatch_handler", 0); // `__rt_throw_current` ends the dispatch when it unwinds to it
     emitter.instruction("mov x11, #1");
     abi::emit_store_reg_to_symbol(emitter, "x11", "_rt_diag_dispatching", 0);   // a diagnostic raised inside the handler must not re-enter
     abi::emit_load_symbol_to_reg(emitter, "x11", "_concat_off", 0);             // snapshot the shared concat cursor
@@ -353,6 +355,8 @@ fn emit_diag_buffered_path_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "rax", "_rt_diag_file_ptr", 0);      // a location is consumed by exactly one diagnostic
     abi::emit_store_reg_to_symbol(emitter, "rax", "_rt_diag_file_len", 0);      // so the next one cannot inherit this one's
     abi::emit_store_reg_to_symbol(emitter, "rax", "_rt_diag_line", 0);          // and report a line it was never raised on
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_exc_handler_top", 0);        // the handler that would catch a throw escaping this dispatch
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_rt_diag_dispatch_handler", 0); // `__rt_throw_current` ends the dispatch when it unwinds to it
     emitter.instruction("mov rax, 1");
     abi::emit_store_reg_to_symbol(emitter, "rax", "_rt_diag_dispatching", 0);   // a diagnostic raised inside the handler must not re-enter
     abi::emit_load_symbol_to_reg(emitter, "rax", "_concat_off", 0);             // snapshot the shared concat cursor

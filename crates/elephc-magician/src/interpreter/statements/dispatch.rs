@@ -350,7 +350,8 @@ pub(in crate::interpreter) fn execute_stmt(
             // takes ownership of it, or a later reassignment releases storage this statement
             // never owned. This used to check `LoadVar` alone, which is what let `$state =
             // self::STATE_B;` bind straight to the class constant's shared cell.
-            let copies_borrowed_variable = eval_expr_result_aliases_storage(value);
+            let value_expr = value;
+            let copies_borrowed_variable = eval_expr_result_aliases_storage(value_expr);
             let value = eval_expr(value, context, scope, values).map_err(|status| {
                 if trace {
                     eprintln!("[elephc-eval-trace] phase=store_var_error stage=value name={name:?} status={status:?}");
@@ -360,7 +361,7 @@ pub(in crate::interpreter) fn execute_stmt(
             let value = if copies_borrowed_variable {
                 values.copy_value(value)?
             } else {
-                value
+                eval_detach_property_read(value_expr, value, context, values)?
             };
             let reference_target = scope.reference_target(name).cloned();
             if let Some(target) = reference_target {

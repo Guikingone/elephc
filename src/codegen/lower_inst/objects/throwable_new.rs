@@ -33,7 +33,30 @@ pub(super) fn lower_builtin_throwable_new(
     emit_throwable_code_field(ctx, inst.operands.get(1).copied())?;
     emit_throwable_previous_field(ctx, inst.operands.get(2).copied())?;
     restore_throwable_after_init(ctx);
+    let object_reg = abi::int_result_reg(ctx.emitter);
+    emit_throwable_trace_capture(ctx, object_reg);
     store_if_result(ctx, inst)
+}
+
+/// Records the interpreter frames live at this `new` as the Throwable's `getTrace()`.
+///
+/// PHP fills a Throwable's trace when the object is created, not when it is thrown. Only a module
+/// that links the eval bridge can have interpreter frames to record, so every other module emits
+/// nothing here and keeps the declared empty trace. `object_reg` survives the call.
+pub(super) fn emit_throwable_trace_capture(ctx: &mut FunctionContext<'_>, object_reg: &str) {
+    if !ctx.module.required_runtime_features.eval_bridge {
+        return;
+    }
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    if object_reg != result_reg {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction(&format!("mov x0, {}", object_reg)), // pass the Throwable to the trace helper
+            Arch::X86_64 => ctx.emitter.instruction(&format!("mov rax, {}", object_reg)), // pass the Throwable to the trace helper
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_throwable_capture_trace");
+    abi::emit_pop_reg(ctx.emitter, object_reg);
 }
 
 /// Returns true for builtin classes that share PHP's compact Throwable payload.
@@ -241,6 +264,7 @@ pub(super) fn emit_throwable_creation_site(
         Arch::AArch64 => emit_throwable_creation_line_aarch64(ctx, object_reg, "x9", creation_line),
         Arch::X86_64 => emit_throwable_creation_line_x86_64(ctx, object_reg, creation_line),
     }
+    emit_throwable_trace_capture(ctx, object_reg);
 }
 
 /// Writes the message pointer and length into the compact Throwable payload.

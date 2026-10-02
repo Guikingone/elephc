@@ -2,7 +2,7 @@
 title: "imagecrop()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 497
+  order: 509
 ---
 
 ## imagecrop()

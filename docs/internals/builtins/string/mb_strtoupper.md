@@ -2,7 +2,7 @@
 title: "mb_strtoupper() — internals"
 description: "Compiler internals for mb_strtoupper(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 826
+  order: 840
 ---
 
 ## `mb_strtoupper()` — internals
@@ -28,7 +28,7 @@ sidebar:
 - **Result ownership**: `fresh`
 - **Effects**: `static (3 declared effects)`
 - **Requirements**: `static (2 requirements)`
-- **Callable policy**: `static_only`
+- **Callable policy**: `dynamic`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary

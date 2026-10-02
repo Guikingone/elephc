@@ -32,11 +32,12 @@ sidebar:
 | [`hash_final()`](./string/hash_final.md) | `(HashContext $context, bool $binary = false): string` | `string` | ✓ | ✓ |
 | [`hash_hmac()`](./string/hash_hmac.md) | `(string $algo, string $data, string $key, bool $binary = false): string` | `string` | ✓ | ✓ |
 | [`hash_init()`](./string/hash_init.md) | `(string $algo): HashContext` | `HashContext` | ✓ | ✓ |
+| [`hash_pbkdf2()`](./string/hash_pbkdf2.md) | `(string $algo, string $password, string $salt, int $iterations, int $length = 0, bool $binary = false, array $options = []): string` | `string` | ✓ | ✓ |
 | [`hash_update()`](./string/hash_update.md) | `(HashContext $context, string $data): bool` | `bool` | ✓ | ✓ |
 | [`hex2bin()`](./string/hex2bin.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`html_entity_decode()`](./string/html_entity_decode.md) | `(string $string, int $flags = 11, string $encoding = 'UTF-8'): string` | `string` | ✓ | ✓ |
 | [`htmlentities()`](./string/htmlentities.md) | `(string $string, int $flags = 11, string $encoding = 'UTF-8'): string` | `string` | ✓ | ✓ |
-| [`htmlspecialchars()`](./string/htmlspecialchars.md) | `(string $string, int $flags = 11, string $encoding = 'UTF-8'): string` | `string` | ✓ | ✓ |
+| [`htmlspecialchars()`](./string/htmlspecialchars.md) | `(string $string, int $flags = 11, string $encoding = 'UTF-8', bool $double_encode = true): string` | `string` | ✓ | ✓ |
 | [`iconv()`](./string/iconv.md) | `(string $from_encoding, string $to_encoding, string $string): mixed` | `mixed` | ✓ | ✓ |
 | [`iconv_get_encoding()`](./string/iconv_get_encoding.md) | `(string $type = 'all'): mixed` | `mixed` | ✓ | ✓ |
 | [`iconv_mime_decode()`](./string/iconv_mime_decode.md) | `(string $string, int $mode = 0, ?string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
@@ -69,6 +70,11 @@ sidebar:
 | [`ord()`](./string/ord.md) | `(string $character): int` | `int` | ✓ | ✓ |
 | [`parse_str()`](./string/parse_str.md) | `(string $string, mixed $result): void` | `void` | ✓ | ✓ |
 | [`parse_url()`](./string/parse_url.md) | `(string $url, int $component = -1): mixed` | `mixed` | ✓ | ✓ |
+| [`password_algos()`](./string/password_algos.md) | `(): array` | `array` | ✓ | ✓ |
+| [`password_get_info()`](./string/password_get_info.md) | `(string $hash): array` | `array` | ✓ | ✓ |
+| [`password_hash()`](./string/password_hash.md) | `(string $password, mixed $algo, array $options = []): string` | `string` | ✓ | ✓ |
+| [`password_needs_rehash()`](./string/password_needs_rehash.md) | `(string $hash, mixed $algo, array $options = []): bool` | `bool` | ✓ | ✓ |
+| [`password_verify()`](./string/password_verify.md) | `(string $password, string $hash): bool` | `bool` | ✓ | ✓ |
 | [`preg_quote()`](./string/preg_quote.md) | `(string $str, string $delimiter = null): string` | `string` | ✓ | ✓ |
 | [`printf()`](./string/printf.md) | `(string $format, ...$values): int` | `int` | ✓ | ✓ |
 | [`quoted_printable_encode()`](./string/quoted_printable_encode.md) | `(string $string): string` | `string` | ✓ | ✓ |
@@ -121,6 +127,7 @@ sidebar:
 | [`unpack()`](./string/unpack.md) | `(string $format, string $string, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`urldecode()`](./string/urldecode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`urlencode()`](./string/urlencode.md) | `(string $string): string` | `string` | ✓ | ✓ |
+| [`version_compare()`](./string/version_compare.md) | `(string $version1, string $version2, string $operator = null): mixed` | `mixed` | ✓ | ✓ |
 | [`vprintf()`](./string/vprintf.md) | `(string $format, array $values): int` | `int` | ✓ | ✓ |
 | [`vsprintf()`](./string/vsprintf.md) | `(string $format, array $values): string` | `string` | ✓ | ✓ |
 | [`wordwrap()`](./string/wordwrap.md) | `(string $string, int $width = 75, string $break = '\n', bool $cut_long_words = false): string` | `string` | ✓ | ✓ |

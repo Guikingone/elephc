@@ -2,7 +2,7 @@
 title: "imagepng()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 523
+  order: 535
 ---
 
 ## imagepng()

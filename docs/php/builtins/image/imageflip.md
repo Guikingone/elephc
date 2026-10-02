@@ -2,7 +2,7 @@
 title: "imageflip()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 509
+  order: 521
 ---
 
 ## imageflip()

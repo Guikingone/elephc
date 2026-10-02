@@ -2,7 +2,7 @@
 title: "cairo_rectangle()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 431
+  order: 443
 ---
 
 ## cairo_rectangle()

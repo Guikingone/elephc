@@ -2,7 +2,7 @@
 title: "mysqli_fetch_fields()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 121
+  order: 133
 ---
 
 ## mysqli_fetch_fields()

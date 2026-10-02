@@ -2,7 +2,7 @@
 title: "mysqli_savepoint()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 154
+  order: 166
 ---
 
 ## mysqli_savepoint()

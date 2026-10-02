@@ -376,8 +376,22 @@ fn lower_reflection_object_by_runtime_class(
         abi::emit_jump(ctx.emitter, &done_label);
     }
     ctx.emitter.label(&miss_label);
-    let message = b"Fatal error: ReflectionObject runtime class is not available\n";
-    super::super::emit_fatal_message(ctx, message);
+    // The candidates are the classes THIS binary compiled. An object whose class an eval fragment
+    // or a runtime include declared matches none of them, yet it is a perfectly ordinary object:
+    // Twig's compiled templates are exactly that, and `new \ReflectionObject($template)` is how
+    // Twig and Symfony UX find a template's file. The bridge owns those classes' metadata, so a
+    // program that can reach it asks it instead of dying.
+    if ctx.module.required_runtime_features.eval_bridge {
+        crate::codegen::lower_inst::builtins::lower_eval_native_object_new(ctx, inst)?;
+        if let Some(result) = inst.result {
+            let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+            ctx.load_value_to_reg(result, &result_reg)?;
+        }
+        abi::emit_jump(ctx.emitter, &done_label);
+    } else {
+        let message = b"Fatal error: ReflectionObject runtime class is not available\n";
+        super::super::emit_fatal_message(ctx, message);
+    }
     ctx.emitter.label(&done_label);
     Ok(true)
 }

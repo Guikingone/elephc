@@ -2,7 +2,7 @@
 title: "mysqli_get_client_info()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 130
+  order: 142
 ---
 
 ## mysqli_get_client_info()

@@ -2,7 +2,7 @@
 title: "array_walk()"
 description: "Applies a user function to every member of an array."
 sidebar:
-  order: 46
+  order: 58
 ---
 
 ## array_walk()

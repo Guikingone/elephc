@@ -170,6 +170,10 @@ pub(super) fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
             | PhpType::Iterable
             | PhpType::Object(_) => {
                 emit_unbox_mixed_to_owned_refcounted_result(ctx, &result_ty);
+                if let Some(tag) = concrete_element_value_tag(&result_ty) {
+                    let list = matches!(result_ty, PhpType::Array(_));
+                    emit_unbox_container_values(ctx, tag, list);
+                }
             }
             other => {
                 return Err(CodegenIrError::unsupported(format!(
@@ -184,6 +188,53 @@ pub(super) fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "runtime_call from PHP type {:?} to PHP type {:?}",
         source_ty, inst.result_php_type
     )))
+}
+
+/// Returns the runtime value tag of a typed array's elements when a boxed-Mixed element cell
+/// must be unboxed before the destination reads it, or `None` when the destination reads Mixed
+/// cells itself (or keeps a representation that cannot be rewritten in place).
+fn concrete_element_value_tag(result_ty: &PhpType) -> Option<i64> {
+    let element = match result_ty {
+        PhpType::Array(element) => element.codegen_repr(),
+        PhpType::AssocArray { value, .. } => value.codegen_repr(),
+        _ => return None,
+    };
+    match element {
+        PhpType::Int => Some(0),
+        PhpType::Float => Some(2),
+        PhpType::Bool => Some(3),
+        PhpType::Array(_) => Some(4),
+        PhpType::AssocArray { .. } => Some(5),
+        PhpType::Object(_) => Some(6),
+        _ => None,
+    }
+}
+
+/// Unboxes the element cells of the container in the result register into the concrete
+/// representation `tag` names.
+///
+/// A Mixed value can carry an array whose elements are Mixed cells while the checker proved a
+/// concrete element type: `array_map()` over an untyped `array` property keeps a Mixed result slot
+/// and widens every entry, and a caller typed `array<Foo>` then read each cell pointer as the
+/// object itself. `__rt_array_unbox_values` leaves already-concrete containers untouched.
+///
+/// The same `array_map()` preserves its source keys, so its result is hash storage even for a
+/// list source; a list destination iterates packed slots, and `foreach` over the typed result
+/// read hash entries as slots. A `list` destination therefore also gets a list-shaped hash back
+/// in packed storage -- the same PHP value.
+fn emit_unbox_container_values(ctx: &mut FunctionContext<'_>, tag: i64, list: bool) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x1", tag);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", i64::from(list));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the unboxed container to the narrowing helper
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", tag);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", i64::from(list));
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_unbox_values");
 }
 
 /// Narrows an `iterable` value to the `array` half of that hint, or throws php's `TypeError`.
@@ -523,87 +574,55 @@ fn lower_generic_object_nominal_guard(
         )
         .map(Some);
     }
-    let eval_bridge = ctx.module.required_runtime_features.eval_bridge;
-    let Some((target_id, target_kind)) = target_metadata else {
-        // An unresolved nominal declaration can name a class the RUNTIME declares: a class file
-        // handed to the autoloader, whose instances the interpreter builds. The bridge knows its
-        // hierarchy, so it answers; `$app->handleRequest(Request::capture())` refused every
-        // request while the request class was interpreted.
-        if eval_bridge {
-            let accepted = ctx.next_label("generic_object_boundary_eval_accepted");
-            let rejected = ctx.next_label("generic_object_boundary_eval_rejected");
-            super::builtins::emit_eval_object_is_a_named_fallback(
-                ctx,
-                value,
-                &target_name,
-                &accepted,
-                &rejected,
-            )?;
-            ctx.emitter.label(&rejected);
-            let message =
-                nominal_object_type_error_message(boundary, &target_name, false, "object");
-            exceptions::emit_type_error(ctx, &message);
-            ctx.emitter.label(&accepted);
-            ctx.load_value_to_result(value)?;
-            store_nominal_object_result(ctx, inst, &source_ty)?;
-            return Ok(Some(()));
-        }
-        // Without the bridge nothing can declare it later. The exact-name case was accepted
-        // above; any other statically known object cannot be proven compatible without inventing
-        // hierarchy metadata.
-        let message = nominal_object_type_error_message(
-            boundary,
-            &target_name,
-            false,
-            "object",
-        );
-        exceptions::emit_type_error(ctx, &message);
-        return Ok(Some(()));
-    };
+    let message = nominal_object_type_error_message(boundary, &target_name, false, "object");
     let source_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    ctx.load_value_to_reg(value, source_reg)?;
-    abi::emit_push_reg(ctx.emitter, source_reg);
-    objects::emit_match_call(ctx, target_id, target_kind, "__rt_exception_matches");
     let accepted = ctx.next_label("generic_object_boundary_accepted");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbnz x0, {}", accepted));         // accept a runtime object matching the nominal return contract
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("test rax, rax");                           // test the nominal object matcher result
-            ctx.emitter.instruction(&format!("jne {}", accepted));              // accept a runtime object matching the nominal return contract
-        }
-    }
-    abi::emit_pop_reg(ctx.emitter, source_reg);
-    // An interpreted subclass may implement an interface its compiled ancestor does not, which
-    // only the bridge can see.
-    if eval_bridge {
-        let eval_accepted = ctx.next_label("generic_object_boundary_eval_match");
-        let rejected = ctx.next_label("generic_object_boundary_rejected");
+    // An object an interpreter context created carries the generic wrapper as its native header,
+    // so the matcher below sees `stdClass` and refuses it for every interface or class it
+    // implements. The bridge's ownership table answers first, exactly as the gradual boundary and
+    // `instanceof` already do: `$this->tags = new ArrayCollection()` in a compiled entity died
+    // with "Cannot assign object to property of type Collection" when `ArrayCollection` was a
+    // class left to the runtime autoloader. The bridge also knows targets the compiled program
+    // has no metadata for, so the unresolved-target refusal below comes after it.
+    if ctx.module.required_runtime_features.eval_bridge {
+        let eval_matched = ctx.next_label("generic_object_boundary_eval_matched");
+        let eval_definite_no = ctx.next_label("generic_object_boundary_eval_definite_no");
+        let native_fallback = ctx.next_label("generic_object_boundary_native_fallback");
         super::builtins::emit_eval_object_is_a_named_fallback(
             ctx,
             value,
             &target_name,
-            &eval_accepted,
-            &rejected,
+            &eval_matched,
+            &native_fallback,
+            &eval_definite_no,
         )?;
-        ctx.emitter.label(&eval_accepted);
-        ctx.load_value_to_result(value)?;
-        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-        ctx.emit_branch(&accepted);
-        ctx.emitter.label(&rejected);
+        ctx.emitter.label(&eval_matched);
+        ctx.load_value_to_reg(value, source_reg)?;
+        abi::emit_push_reg(ctx.emitter, source_reg);
+        abi::emit_jump(ctx.emitter, &accepted);
+        ctx.emitter.label(&eval_definite_no);
+        exceptions::emit_type_error(ctx, &message);
+        ctx.emitter.label(&native_fallback);
     }
-    let message = match boundary {
-        NominalObjectBoundary::Parameter => {
-            format!("Argument must be of type {}, object given", target_name)
+    if let Some((target_id, target_kind)) = target_metadata {
+        ctx.load_value_to_reg(value, source_reg)?;
+        abi::emit_push_reg(ctx.emitter, source_reg);
+        objects::emit_match_call(ctx, target_id, target_kind, "__rt_exception_matches");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cbnz x0, {}", accepted));     // accept a runtime object matching the nominal return contract
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("test rax, rax");                       // test the nominal object matcher result
+                ctx.emitter.instruction(&format!("jne {}", accepted));          // accept a runtime object matching the nominal return contract
+            }
         }
-        NominalObjectBoundary::Property => {
-            format!("Cannot assign object to property of type {}", target_name)
-        }
-        NominalObjectBoundary::Return => {
-            format!("Return value must be of type {}, object returned", target_name)
-        }
-    };
+        abi::emit_pop_reg(ctx.emitter, source_reg);
+    }
+    // An unresolved nominal declaration can name an optional runtime type that is not part of the
+    // compiled program. The exact-name case was accepted above, and the bridge was asked; any
+    // other statically known object cannot be proven compatible without inventing hierarchy
+    // metadata.
     exceptions::emit_type_error(ctx, &message);
     ctx.emitter.label(&accepted);
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
@@ -684,6 +703,7 @@ fn lower_gradual_object_nominal_guard(
     );
 
     ctx.emitter.label(&object_label);
+    let definite_no_label = ctx.next_label("gradual_object_boundary_eval_definite_no");
     if ctx.module.required_runtime_features.eval_bridge {
         let native_fallback_label = ctx.next_label("gradual_object_boundary_native_fallback");
         super::builtins::emit_eval_object_is_a_named_fallback(
@@ -692,6 +712,7 @@ fn lower_gradual_object_nominal_guard(
             target_name,
             &accepted_label,
             &native_fallback_label,
+            &definite_no_label,
         )?;
         ctx.emitter.label(&native_fallback_label);
         // The bridge call clobbered every caller-saved register, the unboxed payload with them:
@@ -719,6 +740,7 @@ fn lower_gradual_object_nominal_guard(
             }
         }
     }
+    ctx.emitter.label(&definite_no_label);
     let message = nominal_object_type_error_message(
         boundary,
         target_name,

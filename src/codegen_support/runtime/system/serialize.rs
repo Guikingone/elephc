@@ -600,8 +600,18 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emit_symbol_address(emitter, "x9", "_elephc_eval_serialize_object_fn");
     emitter.instruction("ldr x9, [x9]");                                        // load the eval object-rendering callback, if one is installed
     emitter.instruction("cbz x9, __rt_serialize_object_native");                // without the bridge every object is a native one
+    // The rendering runs interpreted code -- a `__serialize()` or `__sleep()` among it -- which may
+    // call compiled code that builds strings in `_concat_buf` at the very offset this
+    // serialization is appending at. The offset is put back before the fragment is appended, so
+    // that scratch is overwritten instead of landing inside the output.
+    emit_symbol_address(emitter, "x10", "_concat_off");
+    emitter.instruction("ldr x10, [x10]");                                      // capture the append offset before the interpreter runs
+    emitter.instruction("str x10, [sp, #64]");                                  // keep it across the callback
     emitter.instruction("ldr x0, [sp, #0]");                                    // pass the raw object pointer, which is its eval identity
     emitter.instruction("blr x9");                                              // ask the interpreter to render this object
+    emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("ldr x10, [sp, #64]");                                  // reload the append offset from before the callback
+    emitter.instruction("str x10, [x9]");                                       // discard any concat scratch the interpreted code left
     emitter.instruction("cbz x0, __rt_serialize_object_native");                // not eval-owned: keep the header-driven rendering
     emitter.instruction("str x0, [sp, #56]");                                   // save the boxed fragment while unboxing it
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the fragment's tag and payload words
@@ -1551,8 +1561,15 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the eval object-rendering callback, if one is installed
     emitter.instruction("test r10, r10");                                       // without the bridge every object is a native one
     emitter.instruction("jz __rt_serialize_object_native_x");                   // keep the header-driven rendering
+    // See the ARM64 body: the interpreter may leave concat scratch at the append offset.
+    emit_symbol_address(emitter, "r11", "_concat_off");
+    emitter.instruction("mov r11, QWORD PTR [r11]");                            // capture the append offset before the interpreter runs
+    emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // keep it across the callback
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the raw object pointer, which is its eval identity
     emitter.instruction("call r10");                                            // ask the interpreter to render this object
+    emit_symbol_address(emitter, "r11", "_concat_off");
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the append offset from before the callback
+    emitter.instruction("mov QWORD PTR [r11], rcx");                            // discard any concat scratch the interpreted code left
     emitter.instruction("test rax, rax");                                       // did the interpreter own this object?
     emitter.instruction("jz __rt_serialize_object_native_x");                   // not eval-owned: keep the header-driven rendering
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the boxed fragment while unboxing it

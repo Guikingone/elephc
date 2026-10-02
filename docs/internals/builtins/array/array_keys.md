@@ -2,7 +2,7 @@
 title: "array_keys() — internals"
 description: "Compiler internals for array_keys(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 22
+  order: 29
 ---
 
 ## `array_keys()` — internals
@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function array_keys(array $array): array
+function array_keys(array $array, mixed $filter_value, bool $strict = false): array
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 2–3 arguments (1 optional).
 
 ## Eval interpreter (magician)
 

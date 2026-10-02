@@ -27,6 +27,8 @@ pub(crate) mod object_relation;
 #[cfg(not(test))]
 pub(crate) mod serialize_objects;
 #[cfg(not(test))]
+pub(crate) mod throwable_trace;
+#[cfg(not(test))]
 pub(crate) mod unserialize_objects;
 pub(crate) mod ob_handlers;
 pub mod execute;

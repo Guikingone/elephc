@@ -2,7 +2,7 @@
 title: "image_type_to_extension()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 456
+  order: 468
 ---
 
 ## image_type_to_extension()

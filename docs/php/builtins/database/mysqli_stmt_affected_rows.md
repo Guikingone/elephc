@@ -2,7 +2,7 @@
 title: "mysqli_stmt_affected_rows()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 160
+  order: 172
 ---
 
 ## mysqli_stmt_affected_rows()

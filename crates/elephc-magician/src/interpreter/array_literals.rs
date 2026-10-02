@@ -38,11 +38,14 @@ pub(super) fn eval_indexed_array(
         let index = values.int(next_index)?;
         next_index += 1;
         let (value, owned, target) = match element {
-            EvalArrayElement::Value(element) => (
-                eval_expr(element, context, scope, values)?,
-                !expressions::eval_expr_result_aliases_storage(element),
-                None,
-            ),
+            EvalArrayElement::Value(element) => {
+                // Every element gets a cell of its own -- a copy of a variable's, a detached
+                // property read's -- or a later write through the array (`$f[0]['x'] = ...`)
+                // lands in the variable or property it was read from.
+                let value =
+                    expressions::eval_expr_value_for_consuming_store(element, context, scope, values)?;
+                (value, true, None)
+            }
             EvalArrayElement::Reference(element) => {
                 let (value, target) =
                     eval_reference_array_element_value(element, context, scope, values)?;
@@ -108,10 +111,24 @@ pub(super) fn eval_assoc_array(
                 };
                 let one = values.int(1)?;
                 next_key = Some(values.add(key, one)?);
-                let owned = eval_expr_is_owning_temporary(value);
-                let value = eval_expr(value, context, scope, values).map_err(|status| {
+                let value_expr = value;
+                let owned = eval_expr_is_owning_temporary(value_expr);
+                let value = eval_expr(value_expr, context, scope, values).map_err(|status| {
                     trace_array_literal_error("value", element_index, status, context)
                 })?;
+                // A variable or property read gets a cell of its own, which this literal then
+                // owns: sharing the source's cell let `$e = ['k' => $src]; $e['k']['x'] = 1;`
+                // write into `$src` (see `eval_detach_property_read`).
+                let (value, owned) = if expressions::eval_expr_result_aliases_storage(value_expr) {
+                    (values.copy_value(value)?, true)
+                } else if expressions::eval_expr_reads_instance_property(value_expr) {
+                    (
+                        expressions::eval_detach_property_read(value_expr, value, context, values)?,
+                        true,
+                    )
+                } else {
+                    (value, owned)
+                };
                 (key, value, owned, None)
             }
             EvalArrayElement::Reference(value) => {
@@ -130,10 +147,24 @@ pub(super) fn eval_assoc_array(
                     trace_array_literal_error("key", element_index, status, context)
                 })?;
                 next_key = eval_array_next_key_after_explicit_key(key, next_key, values)?;
-                let owned = eval_expr_is_owning_temporary(value);
-                let value = eval_expr(value, context, scope, values).map_err(|status| {
+                let value_expr = value;
+                let owned = eval_expr_is_owning_temporary(value_expr);
+                let value = eval_expr(value_expr, context, scope, values).map_err(|status| {
                     trace_array_literal_error("value", element_index, status, context)
                 })?;
+                // A variable or property read gets a cell of its own, which this literal then
+                // owns: sharing the source's cell let `$e = ['k' => $src]; $e['k']['x'] = 1;`
+                // write into `$src` (see `eval_detach_property_read`).
+                let (value, owned) = if expressions::eval_expr_result_aliases_storage(value_expr) {
+                    (values.copy_value(value)?, true)
+                } else if expressions::eval_expr_reads_instance_property(value_expr) {
+                    (
+                        expressions::eval_detach_property_read(value_expr, value, context, values)?,
+                        true,
+                    )
+                } else {
+                    (value, owned)
+                };
                 (key, value, owned, None)
             }
             EvalArrayElement::KeyReference { key, value } => {

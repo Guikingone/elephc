@@ -93,6 +93,8 @@ pub(super) struct RuntimeCallableInvoker<'a> {
     pub(super) label: &'a str,
     pub(super) sig: &'a FunctionSig,
     pub(super) captures: &'a [(String, PhpType, bool)],
+    /// True when the eval bridge (and so its boxed-Closure adapter helper) is linked.
+    pub(super) eval_bridge: bool,
 }
 
 /// Minimal state needed by the descriptor invoker emitter.
@@ -106,6 +108,9 @@ struct InvokerEmitContext {
     mixed_cleanup_offsets: Vec<Option<usize>>,
     /// The visible parameter whose argument is being pushed, for slot lookups in shared helpers.
     current_arg: Option<usize>,
+    /// True for the boundary form the interpreter calls, whose boxed arguments may hold Closures
+    /// the interpreter owns (and which exists only when the eval bridge is linked).
+    eval_args: bool,
 }
 
 impl InvokerEmitContext {
@@ -157,6 +162,7 @@ impl InvokerEmitContext {
             array_cleanup_offsets,
             mixed_cleanup_offsets,
             current_arg: None,
+            eval_args: false,
         }
     }
 
@@ -257,6 +263,7 @@ fn emit_runtime_callable_invoker_impl(
     catch_native_throws: bool,
 ) {
     let mut ctx = InvokerEmitContext::new(invoker.label, invoker.sig);
+    ctx.eval_args = catch_native_throws && invoker.eval_bridge;
     let call_reg = abi::nested_call_reg(emitter);
     let escape_label = format!("{}_eval_escape", invoker.label);
     let cleanup_slot_count = ctx.active_string_cleanup_offsets().len()
@@ -2470,6 +2477,18 @@ fn coerce_result_to_type(
             // segfaulted and `foreach` hung. That is the Symfony `--web` SIGSEGV, whose
             // `ResourceCheckerConfigCache::isFresh()` reads a container-built RewindableGenerator
             // out of a promoted `private iterable` property.
+            // A `callable` ABI slot holds the descriptor pointer, which is what a boxed
+            // callable carries as its payload -- the local-load conversion unboxes it the same
+            // way. Passing the box through handed a closure invoked from an untyped slot
+            // (`$w = $this->wrapper; $w($callback, ...)` with `static fn (callable $callback,
+            // ...) => $callback(...)`) the CELL as its descriptor, and the inner call jumped into
+            // the cell's bytes: Symfony's cache `ContractsTrait` wrapper, on every cache miss.
+            // A Closure the INTERPRETER created is an object, not a descriptor. When this invoker
+            // is the interpreter's entry, such a value is adapted into a descriptor that
+            // dispatches back through magician; anything the adapter declines keeps the payload.
+            PhpType::Callable if ctx.eval_args => {
+                emit_eval_boxed_result_to_callable_descriptor(emitter, ctx);
+            }
             PhpType::Array(_)
             | PhpType::AssocArray { .. }
             | PhpType::Object(_)
@@ -2512,6 +2531,60 @@ fn coerce_result_to_type(
         abi::emit_int_result_to_float_result(emitter);
     } else if *target_ty == PhpType::Int && *source_ty == PhpType::Float {
         abi::emit_float_result_to_int_result(emitter);
+    }
+}
+
+/// Converts the boxed Mixed in the result register into a `callable` descriptor pointer.
+///
+/// A runtime tag 10 value already carries a descriptor as its payload. Any other value is offered
+/// to the shared eval helper, which adapts a Closure the interpreter owns; when the helper
+/// declines (it returns 0), the payload is used as it always was.
+fn emit_eval_boxed_result_to_callable_descriptor(emitter: &mut Emitter, ctx: &mut InvokerEmitContext) {
+    let payload_label = ctx.next_label("invoker_callable_payload");
+    let done_label = ctx.next_label("invoker_callable_done");
+    let helper = crate::codegen::eval_boxed_callable_helper::EVAL_BOXED_CALLABLE_DESCRIPTOR_LABEL;
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("str x0, [sp, #-16]!");                         // keep the boxed argument across its tag inspection
+            abi::emit_call_label(emitter, "__rt_mixed_unbox");
+            emitter.instruction("cmp x0, #10");                                 // runtime tag 10 is an AOT callable descriptor
+            emitter.instruction(&format!("b.eq {}", payload_label));
+            emitter.instruction("ldr x0, [sp]");                                // reload the boxed argument for the eval adapter
+            abi::emit_call_label(emitter, helper);
+            emitter.instruction(&format!("cbnz x0, {}", done_label));           // the adapter produced a descriptor
+            // Anything the Closure adapter declines -- a callable string or array -- is resolved by
+            // the module helper every other callable slot uses; its payload is no descriptor, and
+            // handing it through jumped into the string's bytes (`call_callable("named_five")`).
+            emitter.instruction("ldr x0, [sp]");                                // reload the boxed argument for the module helper
+            abi::emit_call_label(emitter, INVOKER_CALLABLE_ARG_HELPER);
+            emitter.instruction(&format!("b {}", done_label));                  // the helper left the descriptor in x0
+            emitter.label(&payload_label);
+            emitter.instruction("ldr x0, [sp]");                                // reload the boxed argument for payload extraction
+            abi::emit_call_label(emitter, "__rt_mixed_unbox");
+            emitter.instruction("mov x0, x1");                                  // the unboxed payload is the descriptor pointer
+            emitter.label(&done_label);
+            emitter.instruction("add sp, sp, #16");                             // release the saved boxed argument
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rax");                                    // keep the boxed argument across its tag inspection
+            emitter.instruction("push rax");                                    // second slot keeps calls 16-byte aligned
+            abi::emit_call_label(emitter, "__rt_mixed_unbox");
+            emitter.instruction("cmp rax, 10");                                 // runtime tag 10 is an AOT callable descriptor
+            emitter.instruction(&format!("je {}", payload_label));
+            emitter.instruction("mov rdi, QWORD PTR [rsp]");                    // pass the boxed argument to the eval adapter
+            abi::emit_call_label(emitter, helper);
+            emitter.instruction("test rax, rax");                               // did the adapter produce a descriptor?
+            emitter.instruction(&format!("jnz {}", done_label));
+            emitter.instruction("mov rax, QWORD PTR [rsp]");                    // reload the boxed argument for the module helper
+            abi::emit_call_label(emitter, INVOKER_CALLABLE_ARG_HELPER);
+            emitter.instruction(&format!("jmp {}", done_label));                // the helper left the descriptor in rax
+            emitter.label(&payload_label);
+            emitter.instruction("mov rax, QWORD PTR [rsp]");                    // reload the boxed argument for payload extraction
+            abi::emit_call_label(emitter, "__rt_mixed_unbox");
+            emitter.instruction("mov rax, rdi");                                // the unboxed payload is the descriptor pointer
+            emitter.label(&done_label);
+            emitter.instruction("add rsp, 16");                                 // release the saved boxed argument
+        }
     }
 }
 
@@ -2566,9 +2639,9 @@ fn can_coerce_result_to_type(source_ty: &PhpType, target_ty: &PhpType) -> bool {
                 | PhpType::Array(_)
                 | PhpType::AssocArray { .. }
                 | PhpType::Object(_)
+                | PhpType::Callable
                 | PhpType::Iterable
                 | PhpType::TaggedScalar
-                | PhpType::Callable
                 | PhpType::Mixed
                 | PhpType::Union(_)
         );
@@ -3330,6 +3403,7 @@ mod tests {
                 label: "test_string_parameter_invoker",
                 sig: &sig,
                 captures: &[],
+                eval_bridge: false,
             },
         );
         emitter.output()

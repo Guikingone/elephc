@@ -249,7 +249,15 @@ pub(super) fn eval_dynamic_class_new_object_with_ref_mode(
                 )
             })?;
         } else {
-            return Err(EvalStatus::RuntimeFatal);
+            // No constructor anywhere in the hierarchy: php evaluates the arguments and ignores
+            // them. A container compiled against a newer library passes one to a class that no
+            // longer declares a constructor (Symfony's `ReflectionTypeResolver`), and refusing it
+            // killed every page that resolves a type.
+            for arg in evaluated_args {
+                if arg.owned {
+                    eval_release_value(context, values, arg.value)?;
+                }
+            }
         }
     } else if let Some(parent) = context.class_native_parent_name(class.name()) {
         if eval_aot_method_dispatch_metadata_in_hierarchy(
@@ -344,6 +352,16 @@ pub(in crate::interpreter) fn eval_object_clone_result(
         let clone_identity = values.object_identity(clone)?;
         context.register_dynamic_object(clone_identity, &class_name);
         for (property, value) in context.dynamic_property_values_for_clone(identity) {
+            // An array is COPIED (its elements stay shared, counted). Handing the clone the same
+            // cell made `$clone->p[] = ...` write the original's array in place, since the cell's
+            // own count says nothing about whether its payload is shared.
+            if values.is_array_like(value)? {
+                let copy = values.copy_value(value)?;
+                if let Some(replaced) = context.set_dynamic_property_value(clone_identity, &property, copy) {
+                    eval_release_value(context, values, replaced)?;
+                }
+                continue;
+            }
             eval_store_dynamic_property_value(clone_identity, &property, value, context, values)?;
         }
         context.clone_dynamic_property_aliases(identity, clone_identity);

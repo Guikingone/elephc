@@ -154,6 +154,8 @@ pub(super) struct EvalSprintfSpec {
     pub(super) force_sign: bool,
     pub(super) space_sign: bool,
     pub(super) zero_pad: bool,
+    /// A custom padding byte from PHP's `'c` flag (`%'*10s`), which pads on the aligned side.
+    pub(super) padding: Option<u8>,
     pub(super) alternate: bool,
     pub(super) width: Option<usize>,
     pub(super) precision: Option<usize>,

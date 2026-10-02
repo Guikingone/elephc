@@ -96,7 +96,7 @@ pub(in crate::parser::stmt) fn parse_class_decl(
 }
 
 /// Widens a declaration span to end at the closing brace the parser has just consumed.
-fn close_brace_span(tokens: &[SpannedToken], pos: usize, span: Span) -> Span {
+pub(super) fn close_brace_span(tokens: &[SpannedToken], pos: usize, span: Span) -> Span {
     let Some(close) = pos.checked_sub(1).and_then(|index| tokens.get(index)) else {
         return span;
     };

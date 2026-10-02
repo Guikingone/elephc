@@ -2,7 +2,7 @@
 title: "cairo_pattern_create_linear()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 427
+  order: 439
 ---
 
 ## cairo_pattern_create_linear()

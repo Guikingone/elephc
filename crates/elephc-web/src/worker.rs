@@ -332,7 +332,7 @@ pub fn serve(
                     probe_route::profile_request_kind(0);
                     probe_route::clear();
                     let status = request_state::take_status();
-                    let mut resp_headers = request_state::take_headers();
+                    let mut resp_headers = request_state::take_headers_for_send();
                     // Propagate the session id through same-origin URLs / forms when
                     // `session.use_trans_sid` is active (no-op otherwise). Runs on the
                     // plaintext body, before the gzip decision below.

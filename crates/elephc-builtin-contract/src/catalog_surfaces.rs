@@ -362,6 +362,48 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         Str,
         "Quotes the listed characters with C-style backslash escapes."
     ),
+    // `PreludeProvided` for the same asymmetry as `addcslashes` above: the AOT side declares it as
+    // a conditionally injected AST prelude (`src/version_compare_prelude.rs`) and the INTERPRETER
+    // has its own implementation (`interpreter::builtins::string::version_compare`), because
+    // Symfony's password hasher factory calls it from interpreted code on every login. Returns
+    // `int` without `$operator`, `bool` with one.
+    surface!(
+        "version_compare",
+        String,
+        Standard,
+        PreludeProvided,
+        [
+            param!("version1", Str),
+            param!("version2", Str),
+            param!("operator", Str = DefaultSpec::Null),
+        ],
+        None,
+        Mixed,
+        "Compares two PHP-standardized version number strings."
+    ),
+    // `PreludeProvided` for the same asymmetry again: the AOT side declares it as an AST prelude
+    // over the backend's raw `hash_hmac()` (`src/hash_pbkdf2_prelude.rs`) and the INTERPRETER
+    // derives the key through `elephc_crypto::pbkdf2`
+    // (`interpreter::builtins::string::hash_pbkdf2`), because Symfony's `Pbkdf2PasswordHasher`
+    // is interpreted and derives a key in its constructor on every login.
+    surface!(
+        "hash_pbkdf2",
+        String,
+        Hash,
+        PreludeProvided,
+        [
+            param!("algo", Str),
+            param!("password", Str),
+            param!("salt", Str),
+            param!("iterations", Int),
+            param!("length", Int = DefaultSpec::Int(0)),
+            param!("binary", Bool = DefaultSpec::Bool(false)),
+            param!("options", Array = DefaultSpec::EmptyArray),
+        ],
+        None,
+        Str,
+        "Generates a PBKDF2 key derivation of a supplied password."
+    ),
     // `PreludeProvided` for the same asymmetry as `levenshtein` above: the AOT side BUILDS both as
     // prelude declarations over the native one-pattern calls (`src/preg_array_prelude.rs`), and
     // the INTERPRETER has its own implementations (`interpreter::builtins::regex::preg_filter`,

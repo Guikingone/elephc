@@ -27,6 +27,8 @@ use crate::ffi::object_relation::install_object_relation_hook;
 #[cfg(not(test))]
 use crate::ffi::serialize_objects::install_serialize_object_hook;
 #[cfg(not(test))]
+use crate::ffi::throwable_trace::install_throwable_trace_hook;
+#[cfg(not(test))]
 use crate::ffi::unserialize_objects::install_unserialize_object_hook;
 #[cfg(not(test))]
 use crate::ffi::generator_protocol::install_generator_protocol_hook;
@@ -237,6 +239,8 @@ pub extern "C" fn __elephc_eval_context_new() -> *mut ElephcEvalContext {
     install_object_clone_hook();
     #[cfg(not(test))]
     install_serialize_object_hook();
+    #[cfg(not(test))]
+    install_throwable_trace_hook();
     let context = Box::into_raw(Box::new(ElephcEvalContext::new()));
     #[cfg(not(test))]
     register_live_eval_context(context);

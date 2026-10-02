@@ -2,7 +2,7 @@
 title: "mysqli_autocommit()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 100
+  order: 112
 ---
 
 ## mysqli_autocommit()

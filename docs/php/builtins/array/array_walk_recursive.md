@@ -2,7 +2,7 @@
 title: "array_walk_recursive()"
 description: "Applies a user function recursively to every member of an array."
 sidebar:
-  order: 47
+  order: 59
 ---
 
 ## array_walk_recursive()

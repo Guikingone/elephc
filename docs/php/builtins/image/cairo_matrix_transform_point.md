@@ -2,7 +2,7 @@
 title: "cairo_matrix_transform_point()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 420
+  order: 432
 ---
 
 ## cairo_matrix_transform_point()

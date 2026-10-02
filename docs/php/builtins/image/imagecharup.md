@@ -2,7 +2,7 @@
 title: "imagecharup()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 465
+  order: 477
 ---
 
 ## imagecharup()

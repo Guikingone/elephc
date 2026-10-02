@@ -2,7 +2,7 @@
 title: "set_time_limit() — internals"
 description: "Compiler internals for set_time_limit(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 681
+  order: 694
 ---
 
 ## `set_time_limit()` — internals

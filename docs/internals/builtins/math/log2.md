@@ -2,7 +2,7 @@
 title: "log2() — internals"
 description: "Compiler internals for log2(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 589
+  order: 601
 ---
 
 ## `log2()` — internals

@@ -2,7 +2,7 @@
 title: "mysqli_num_rows()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 143
+  order: 155
 ---
 
 ## mysqli_num_rows()

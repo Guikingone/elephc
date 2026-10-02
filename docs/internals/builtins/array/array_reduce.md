@@ -2,7 +2,7 @@
 title: "array_reduce() — internals"
 description: "Compiler internals for array_reduce(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 32
+  order: 40
 ---
 
 ## `array_reduce()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function array_reduce(array $array, callable $callback, mixed $initial = null): int
+function array_reduce(array $array, callable $callback, mixed $initial = null): mixed
 ```
 
 ## What the type checker enforces

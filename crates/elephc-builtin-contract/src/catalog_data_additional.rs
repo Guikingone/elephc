@@ -156,6 +156,16 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         "function.headers-sent"
     ),
     contract!(
+        "headers_list",
+        System,
+        Standard,
+        [],
+        None,
+        Array,
+        "Returns the pending response headers as `Name: value` lines.",
+        "function.headers-list"
+    ),
+    contract!(
         "preg_grep",
         System,
         Pcre,

@@ -2,7 +2,7 @@
 title: "cairo_arc_negative()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 402
+  order: 414
 ---
 
 ## cairo_arc_negative()

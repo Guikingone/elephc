@@ -2,7 +2,7 @@
 title: "array_merge_recursive()"
 description: "Recursively merges two arrays, combining scalar collisions into lists."
 sidebar:
-  order: 25
+  order: 33
 ---
 
 ## array_merge_recursive()
@@ -21,7 +21,7 @@ Recursively merges two arrays, combining scalar collisions into lists.
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_recursive.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_recursive.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

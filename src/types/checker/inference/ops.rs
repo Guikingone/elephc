@@ -321,14 +321,16 @@ impl Checker {
                 if is_empty_indexed_array_literal(right) {
                     return Ok(PhpType::Array(left_elem.clone()));
                 }
-                self.merge_array_element_type(left_elem, right_elem)
+                // Two lists whose element storages differ (`Level::NAMES + Level::VALUES`, strings
+                // and ints -- Monolog's `Logger`) union into a gradual hash: lowering copies both
+                // into one (`numeric_binary::indexed_union_via_hash`) and php's key rule applies.
+                Ok(self
+                    .merge_array_element_type(left_elem, right_elem)
                     .map(|elem| PhpType::Array(Box::new(elem)))
-                    .ok_or_else(|| {
-                        CompileError::new(
-                            expr.span,
-                            "Array union requires compatible indexed array element types",
-                        )
-                    })
+                    .unwrap_or_else(|| PhpType::AssocArray {
+                        key: Box::new(PhpType::Mixed),
+                        value: Box::new(PhpType::Mixed),
+                    }))
             }
             (
                 PhpType::AssocArray {

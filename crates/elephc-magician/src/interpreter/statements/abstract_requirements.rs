@@ -72,14 +72,29 @@ fn trace_unmet_requirements(
 }
 
 /// Validates concrete class methods required by PHP builtin runtime interfaces.
+///
+/// A method the class inherits from a native ancestor satisfies the contract too: Symfony's
+/// `InheritDataAwareIterator extends \IteratorIterator implements \RecursiveIterator` declares
+/// only `getChildren()`/`hasChildren()` and inherits `current()`, `key()`, `next()`, `rewind()`
+/// and `valid()` from `IteratorIterator`, and every form with a nested type was refused with
+/// `class ... could not be declared`.
 pub(super) fn validate_concrete_class_builtin_interface_requirements(
     class: &EvalClass,
     context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     for (requirement_owner, requirement) in
         pending_class_builtin_interface_method_requirements(class, context)
     {
-        if !class_has_builtin_interface_method(class, &requirement_owner, &requirement, context) {
+        if !class_has_builtin_interface_method(class, &requirement_owner, &requirement, context)
+            && !native_ancestor_provides_method(
+                class,
+                requirement.name(),
+                requirement.is_static(),
+                context,
+                values,
+            )?
+        {
             return Err(EvalStatus::RuntimeFatal);
         }
     }

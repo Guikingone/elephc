@@ -1096,6 +1096,18 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             // the runtime promotion (`append_vivify::locals_written_with_non_integer_keys`).
             return PhpType::gradual_empty_array_storage();
         }
+        if php_type.is_empty_array_literal() {
+            // The string-keyed case: a hash from the declaration on. Typed `array<never>`, the
+            // slot kept an indexed header over the hash the first string-key write promoted it
+            // to, and on the SAME call a read of `$cache[$class]` after `$cache[$class] = ...`
+            // missed (`static $cache = []` is how Twig's `CoreExtension::getAttribute()` memoizes
+            // an object's methods); a later call re-promoted the hash and duplicated its keys.
+            // `lower_static_var` converts the initializer to match.
+            return PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
+            };
+        }
         if matches!(initial_repr, PhpType::Void | PhpType::Never)
             || checked_repr.is_some_and(|checked| checked != initial_repr)
         {
@@ -1767,6 +1779,22 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.global_alias_type(name)
         } else {
             self.local_type(name)
+        };
+        // A static's slot is ONE storage for the whole function, reached from every path: a
+        // body lowered again as a `goto` target starts with no flow facts, and read the hash
+        // behind `static $cache = []` as a Mixed cell (Twig's `CoreExtension::getAttribute()`
+        // jumps to `methodCheck:` and memoizes there). The slot's own type is the one fact that
+        // holds on every path.
+        let php_type = match (kind, self.local_slots.get(name)) {
+            (LocalKind::StaticLocal, Some(slot)) if !uses_global => {
+                let slot_type = self.builder.local_php_type(*slot);
+                if slot_type.codegen_repr() != php_type.codegen_repr() {
+                    slot_type
+                } else {
+                    php_type
+                }
+            }
+            _ => php_type,
         };
         if !uses_global && matches!(php_type.codegen_repr(), PhpType::Void) {
             let value = self

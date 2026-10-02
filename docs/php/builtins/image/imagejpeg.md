@@ -2,7 +2,7 @@
 title: "imagejpeg()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 517
+  order: 529
 ---
 
 ## imagejpeg()

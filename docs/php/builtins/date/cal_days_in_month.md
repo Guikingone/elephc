@@ -2,7 +2,7 @@
 title: "cal_days_in_month()"
 description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
 sidebar:
-  order: 184
+  order: 196
 ---
 
 ## cal_days_in_month()

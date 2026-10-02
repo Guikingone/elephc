@@ -364,6 +364,38 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #0");                                          // report zero JSON-visible object properties
     emitter.instruction("ret");                                                 // return the empty property count to Rust
 
+    // `(array) $object` for an object the COMPILED program laid out: its declared properties
+    // live in the class's slots, not in a dynamic-property hash, so the bridge's stdClass walk
+    // saw none of them. The compiled cast already produces php's visibility-mangled keys
+    // (`"\0Class\0name"`, `"\0*\0name"`); Doctrine's `RawValuePropertyAccessor::getValue()`
+    // reads an entity's fields exactly that way.
+    label_c_global(emitter, "__elephc_eval_value_object_to_array");
+    emitter.instruction("sub sp, sp, #32");                                     // reserve spills for the fresh hash and its box
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #16");                                    // establish the wrapper frame
+    emitter.instruction("cbz x0, __elephc_eval_value_object_to_array_null");    // a null handle is not an object
+    emitter.instruction("ldr x9, [x0]");                                        // load the boxed Mixed runtime tag
+    emitter.instruction("cmp x9, #6");                                          // tag 6 = object
+    emitter.instruction("b.ne __elephc_eval_value_object_to_array_null");       // only objects take the compiled cast
+    emitter.instruction("ldr x0, [x0, #8]");                                    // borrowed object payload for the cast
+    emitter.instruction("bl __rt_object_to_array");                             // fresh owned hash with mangled keys
+    emitter.instruction("str x0, [sp]");                                        // keep the creation reference to drop after boxing
+    emitter.instruction("mov x1, x0");                                          // hash payload becomes the boxing low word
+    emitter.instruction("mov x0, #5");                                          // runtime tag 5 = associative array
+    emitter.instruction("mov x2, xzr");                                         // hashes use no high payload word
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the hash (the box takes its own reference)
+    emitter.instruction("str x0, [sp, #8]");                                    // keep the box across the release
+    emitter.instruction("ldr x0, [sp]");                                        // reload the creation reference
+    emitter.instruction("bl __rt_decref_any");                                  // the box now owns the only reference
+    emitter.instruction("ldr x0, [sp, #8]");                                    // return the owned box to Rust
+    emitter.instruction("b __elephc_eval_value_object_to_array_done");          // share the frame teardown
+    emitter.label("__elephc_eval_value_object_to_array_null");
+    emitter.instruction("mov x0, #0");                                          // report "not a compiled object" to Rust
+    emitter.label("__elephc_eval_value_object_to_array_done");
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the wrapper frame
+    emitter.instruction("ret");                                                 // return the boxed hash or null
+
     label_c_global(emitter, "__elephc_eval_value_object_property_iter_key");
     emitter.instruction("sub sp, sp, #48");                                     // allocate a wrapper frame for insertion-order property iteration
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across helper calls

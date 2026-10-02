@@ -2,7 +2,7 @@
 title: "imagecreatefromgif() — internals"
 description: "Compiler internals for imagecreatefromgif(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 490
+  order: 502
 ---
 
 ## `imagecreatefromgif()` — internals

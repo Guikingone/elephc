@@ -729,6 +729,19 @@ fn report_throwing_class_file(path: &Path, missing: &str) {
     ));
 }
 
+/// Reports a class file left to the runtime because it declares a class-like conditionally.
+fn report_conditional_class_file(path: &Path, class_like: &str) {
+    crate::errors::report_warning(&crate::errors::CompileWarning::new(
+        Span::dummy(),
+        &format!(
+            "autoload: '{}' is not compiled (it declares '{}' inside a run-time condition); its \
+             classes are loaded at run time by the autoloader instead",
+            path.display(),
+            class_like
+        ),
+    ));
+}
+
 /// Finds the direct class-like dependencies of the requested declaration in one loaded source.
 fn direct_binding_dependencies(program: &Program, target: &str) -> Option<Vec<String>> {
     let target_key = crate::names::php_symbol_key(target.trim_start_matches('\\'));
@@ -853,6 +866,15 @@ fn load_autoloaded_bundle(
             }
             Err(AutoloadFileError::Fatal(error)) => return Err(error),
         };
+    let loaded = fold_file_scope_existence_conditions(loaded, declared, registry);
+    // Before the bind check: a class the file declares only under a run-time condition cannot be
+    // taken by the compiled world at all, and keeping the file claimed would make the runtime skip
+    // the one include that declares it. See `walk::first_conditionally_declared_class_like`.
+    if let Some(conditional) = walk::first_conditionally_declared_class_like(&loaded) {
+        report_conditional_class_file(canonical, &conditional);
+        deferred.push(canonical.to_path_buf());
+        return Ok(Vec::new());
+    }
     if !autoload_target_can_bind(&loaded, fqn, declared, registry) {
         return Ok(Vec::new());
     }
@@ -1245,12 +1267,132 @@ fn fold_file_scope_profile_conditions(body: Program) -> Program {
             folded.push(stmt);
             continue;
         };
-        match decided_branch(condition, then_body, elseif_clauses, else_body, stmt.span) {
+        match decided_branch(
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+            stmt.span,
+            &profile_condition,
+        ) {
             Ok(taken) => folded.extend(fold_file_scope_profile_conditions(taken)),
             Err(untouched) => folded.push(untouched),
         }
     }
     folded
+}
+
+/// Folds a file-scope `if` that chooses WHICH class-like a class file declares by an existence
+/// probe the closed world answers: `if (!class_exists(StaticReflectionService::class)) { trait T
+/// {...} } else { trait T {...} }` (Doctrine's `GetReflectionClassImplementation`), or
+/// `if (interface_exists(SimpleCacheInterface::class)) { class E ... } else { class E ... }`
+/// (Symfony Cache's exception classes).
+///
+/// php runs that `if` when the autoloader includes the file, and with the probe autoloading
+/// (`class_exists(X::class)`, or an explicit `true`), its answer is whether X can be loaded --
+/// which the compile-time autoload registry is the authority on, exactly as it already is for
+/// [`unsatisfiable_file_scope_guard`]. Left undecided, the file declared its class-like nowhere
+/// the compiler could take it, so the whole file went to the interpreter, and every class using
+/// the trait or extending the exception with it (`ClassMetadata`, the Cache adapters).
+///
+/// Narrow on purpose: only an `if` whose branches DECLARE a class-like is folded (anything else
+/// keeps running at run time, as [`fold_file_scope_profile_conditions`] explains), and only a
+/// probe of a literal name that autoloads.
+fn fold_file_scope_existence_conditions(
+    body: Program,
+    declared: &HashSet<String>,
+    registry: &Registry,
+) -> Program {
+    let available = |name: &str| {
+        let key = crate::names::php_symbol_key(name);
+        declared
+            .iter()
+            .any(|declared| crate::names::php_symbol_key(declared) == key)
+            || resolve_class(name, registry).is_some()
+    };
+    let decide = |condition: &Expr| existence_condition(condition, &available);
+    fold_existence_conditions_in(body, &decide)
+}
+
+/// Applies [`fold_file_scope_existence_conditions`] to one statement list, through namespaces.
+fn fold_existence_conditions_in(body: Program, decide: &dyn Fn(&Expr) -> Option<bool>) -> Program {
+    let mut folded: Program = Vec::with_capacity(body.len());
+    for stmt in body {
+        let span = stmt.span;
+        match stmt.kind {
+            StmtKind::NamespaceBlock { name, body } => folded.push(Stmt::new(
+                StmtKind::NamespaceBlock {
+                    name,
+                    body: fold_existence_conditions_in(body, decide),
+                },
+                span,
+            )),
+            StmtKind::If {
+                condition,
+                then_body,
+                elseif_clauses,
+                else_body,
+            } => {
+                let declares_class_like = walk::first_conditionally_declared_class_like(&vec![Stmt::new(
+                    StmtKind::If {
+                        condition: Expr::new(ExprKind::BoolLiteral(true), span),
+                        then_body: then_body.clone(),
+                        elseif_clauses: elseif_clauses.clone(),
+                        else_body: else_body.clone(),
+                    },
+                    span,
+                )])
+                .is_some();
+                if !declares_class_like {
+                    folded.push(Stmt::new(
+                        StmtKind::If {
+                            condition,
+                            then_body,
+                            elseif_clauses,
+                            else_body,
+                        },
+                        span,
+                    ));
+                    continue;
+                }
+                match decided_branch(condition, then_body, elseif_clauses, else_body, span, decide) {
+                    Ok(taken) => folded.extend(fold_existence_conditions_in(taken, decide)),
+                    Err(untouched) => folded.push(untouched),
+                }
+            }
+            kind => folded.push(Stmt::new(kind, span)),
+        }
+    }
+    folded
+}
+
+/// Evaluates an autoloading class-like existence probe (and `!`/`&&`/`||` over probes).
+fn existence_condition(expr: &Expr, available: &dyn Fn(&str) -> bool) -> Option<bool> {
+    match &expr.kind {
+        ExprKind::Not(inner) => existence_condition(inner, available).map(|value| !value),
+        ExprKind::BinaryOp {
+            left,
+            op: BinOp::And,
+            right,
+        } => match existence_condition(left, available)? {
+            false => Some(false),
+            true => existence_condition(right, available),
+        },
+        ExprKind::BinaryOp {
+            left,
+            op: BinOp::Or,
+            right,
+        } => match existence_condition(left, available)? {
+            true => Some(true),
+            false => existence_condition(right, available),
+        },
+        ExprKind::FunctionCall { .. } => {
+            let negated = Expr::new(ExprKind::Not(Box::new(expr.clone())), expr.span);
+            let name = negated_existence_probe(&negated)?;
+            Some(available(&name))
+        }
+        _ => profile_condition(expr),
+    }
 }
 
 /// Picks the branch of an `if`/`elseif`/`else` chain the profile decides, or hands the statement
@@ -1266,6 +1408,7 @@ fn decided_branch(
     elseif_clauses: Vec<(Expr, Program)>,
     else_body: Option<Program>,
     span: Span,
+    decide: &dyn Fn(&Expr) -> Option<bool>,
 ) -> Result<Program, Stmt> {
     let rebuild = |condition, then_body, elseif_clauses, else_body| {
         Stmt::new(
@@ -1278,13 +1421,13 @@ fn decided_branch(
             span,
         )
     };
-    match profile_condition(&condition) {
+    match decide(&condition) {
         Some(true) => return Ok(then_body),
         None => return Err(rebuild(condition, then_body, elseif_clauses, else_body)),
         Some(false) => {}
     }
     for (index, (guard, _)) in elseif_clauses.iter().enumerate() {
-        match profile_condition(guard) {
+        match decide(guard) {
             Some(true) => {
                 let mut clauses = elseif_clauses;
                 return Ok(clauses.swap_remove(index).1);

@@ -2,7 +2,7 @@
 title: "imagegammacorrect()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 512
+  order: 524
 ---
 
 ## imagegammacorrect()

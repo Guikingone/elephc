@@ -2,7 +2,7 @@
 title: "extract() — internals"
 description: "Compiler internals for extract(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 55
+  order: 67
 ---
 
 ## `extract()` — internals

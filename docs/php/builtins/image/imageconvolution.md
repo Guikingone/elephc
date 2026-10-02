@@ -2,7 +2,7 @@
 title: "imageconvolution()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 482
+  order: 494
 ---
 
 ## imageconvolution()

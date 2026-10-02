@@ -106,6 +106,36 @@ pub(in crate::codegen) fn lower_store_shared_global(
     symbol: &str,
     ty: &PhpType,
 ) -> Result<()> {
+    store_shared_global(ctx, symbol, ty, true)
+}
+
+/// Publishes a container that was mutated in place back into its global's shared reference
+/// cell, without releasing what the cell held.
+///
+/// The ordinary-global write-back (`writeback_global_array_source`) stores with
+/// `release_previous: false` because the cell already owns this container: only its ADDRESS may
+/// have changed, and the relocating helper (`__rt_hash_set`'s growth or split) has accounted for
+/// the old one. Routing the shared-cell twin through the releasing store decremented the
+/// container the cell was about to hold again -- when `__rt_hash_set` updated in place, that
+/// freed the live `$_SESSION` hash on the first `$_SESSION[$key] = ...` of a request whose
+/// program also takes `&$_SESSION` (Symfony's session storage), and the next write reused the
+/// freed block.
+pub(in crate::codegen) fn lower_writeback_shared_global(
+    ctx: &mut FunctionContext<'_>,
+    symbol: &str,
+    ty: &PhpType,
+) -> Result<()> {
+    store_shared_global(ctx, symbol, ty, false)
+}
+
+/// Stores the result register into a global's shared reference cell, creating the cell on first
+/// use, and releasing the payload it held when `release_previous` is set.
+fn store_shared_global(
+    ctx: &mut FunctionContext<'_>,
+    symbol: &str,
+    ty: &PhpType,
+    release_previous: bool,
+) -> Result<()> {
     let store_ty = ty.codegen_repr();
     if !matches!(store_ty, PhpType::AssocArray { .. } | PhpType::Mixed) {
         return Err(CodegenIrError::unsupported(format!(
@@ -159,18 +189,20 @@ pub(in crate::codegen) fn lower_store_shared_global(
     let cell_reg = abi::secondary_scratch_reg(ctx.emitter);
     abi::emit_reg_move(ctx.emitter, cell_reg, abi::int_result_reg(ctx.emitter));
     abi::emit_push_reg(ctx.emitter, cell_reg);
-    abi::emit_load_from_address(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        cell_reg,
-        0,
-    );
-    let release_payload = if store_ty == PhpType::Mixed {
-        "__rt_decref_mixed"
-    } else {
-        "__rt_decref_hash"
-    };
-    abi::emit_call_label(ctx.emitter, release_payload);
+    if release_previous {
+        abi::emit_load_from_address(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            cell_reg,
+            0,
+        );
+        let release_payload = if store_ty == PhpType::Mixed {
+            "__rt_decref_mixed"
+        } else {
+            "__rt_decref_hash"
+        };
+        abi::emit_call_label(ctx.emitter, release_payload);
+    }
     abi::emit_pop_reg(ctx.emitter, cell_reg);
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     abi::emit_store_to_address(

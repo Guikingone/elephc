@@ -2,7 +2,7 @@
 title: "xmlwriter_write_element_ns() — internals"
 description: "Compiler internals for xmlwriter_write_element_ns(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1020
+  order: 1040
 ---
 
 ## `xmlwriter_write_element_ns()` — internals

@@ -2,7 +2,7 @@
 title: "mysqli_connect()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 105
+  order: 117
 ---
 
 ## mysqli_connect()

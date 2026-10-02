@@ -2,7 +2,7 @@
 title: "imagerotate()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 527
+  order: 539
 ---
 
 ## imagerotate()

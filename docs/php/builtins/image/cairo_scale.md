@@ -2,7 +2,7 @@
 title: "cairo_scale()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 435
+  order: 447
 ---
 
 ## cairo_scale()

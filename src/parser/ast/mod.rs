@@ -36,3 +36,12 @@ pub use types::TypeExpr;
 /// contract between those two — and it must not be reused by any other desugar, or that
 /// recognizer would claim statements it does not own.
 pub const NESTED_APPEND_TEMP_PREFIX: &str = "__elephc_napp_";
+
+/// Name prefix of the hidden local `$values[$key] = &$object->property` binds to the property's
+/// reference cell before storing that local's reference into the array element.
+///
+/// The parser mints it in `stmt::assign::postfix::parse_complex_ref_assignment`, and the checker
+/// recognizes it to refuse the shape: an array element that aliases a typed property cell is not
+/// something the native backend lays out (the element read back null), so the class that writes it
+/// is handed to the runtime autoloader (or the build is refused) instead of miscompiling.
+pub const ARRAY_PROPERTY_REF_TEMP_PREFIX: &str = "__elephc_refsrc_";

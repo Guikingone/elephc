@@ -961,6 +961,33 @@ fn resolve_dynamic_object_iterator_source(
     ctx: &mut FunctionContext<'_>,
     offset: usize,
 ) -> Result<()> {
+    if ctx.module.required_runtime_features.eval_bridge {
+        // An object an eval context built wraps the generic native header, so neither dispatch
+        // below finds its `getIterator()`/`rewind()`, and the loop ran zero times: every
+        // interpreted Doctrine collection a compiled Twig helper iterated looked empty. The
+        // bridge drains such an object into a compiled ArrayIterator (0 for any other object),
+        // which the Iterator dispatch below then drives like any compiled iterator.
+        let keep_source = ctx.next_label("iter_dynamic_eval_keep_source");
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+        abi::load_at_offset(ctx.emitter, object_arg, offset - ITER_SOURCE_OFFSET_DELTA);
+        let symbol = ctx
+            .emitter
+            .target
+            .extern_symbol("__elephc_eval_native_iterator_for_object");
+        abi::emit_call_label(ctx.emitter, &symbol);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cbz {}, {}", result_reg, keep_source)); // not an eval-owned iterable: keep the original object
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // did the bridge produce a compiled iterator?
+                ctx.emitter.instruction(&format!("je {}", keep_source));        // not an eval-owned iterable: keep the original object
+            }
+        }
+        abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
+        ctx.emitter.label(&keep_source);
+    }
     if !ctx.module.interface_infos.contains_key("IteratorAggregate") {
         return Ok(());
     }

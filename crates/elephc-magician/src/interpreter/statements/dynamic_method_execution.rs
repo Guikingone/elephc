@@ -9,23 +9,34 @@
 
 use super::*;
 
-/// Installs a class declaration's physical source as the active magic-constant site.
-fn enter_dynamic_class_method_source(
+/// Returns the source site a class method's body runs under: its declaring file, that file's
+/// directory, the method's first line and the `__FILE__` override naming the file.
+fn dynamic_class_method_site(
     class_name: &str,
     method: &EvalClassMethod,
-    context: &mut ElephcEvalContext,
+    context: &ElephcEvalContext,
 ) -> Option<(String, String, i64, Option<String>)> {
     let file = context.class_source_file(class_name)?.to_string();
-    let previous = context.call_site();
     let dir = std::path::Path::new(&file)
         .parent()
         .map(|parent| parent.to_string_lossy().into_owned())
         .unwrap_or_default();
     let line = method
         .source_location()
-        .map_or(previous.2, |location| location.start_line() as i64);
-    context.set_call_site(file.clone(), dir, line);
-    context.set_file_magic_override(Some(file));
+        .map_or(context.call_line(), |location| location.start_line() as i64);
+    Some((file.clone(), dir, line, Some(file)))
+}
+
+/// Installs a class declaration's physical source as the active magic-constant site.
+fn enter_dynamic_class_method_source(
+    class_name: &str,
+    method: &EvalClassMethod,
+    context: &mut ElephcEvalContext,
+) -> Option<(String, String, i64, Option<String>)> {
+    let (file, dir, line, file_magic) = dynamic_class_method_site(class_name, method, context)?;
+    let previous = context.call_site();
+    context.set_call_site(file, dir, line);
+    context.set_file_magic_override(file_magic);
     Some(previous)
 }
 
@@ -242,6 +253,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
                 class_name,
                 called_class_name,
                 method,
+                dynamic_class_method_site(class_name, method, context),
             ),
             context,
             values,
@@ -443,6 +455,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
                 class_name,
                 called_class_name,
                 method,
+                dynamic_class_method_site(class_name, method, context),
             ),
             context,
             values,

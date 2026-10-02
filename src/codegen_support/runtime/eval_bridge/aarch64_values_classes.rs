@@ -100,6 +100,8 @@ pub(super) fn emit_aarch64_values_classes(emitter: &mut Emitter) {
     emit_aarch64_install_array_access_hook(emitter);
     emit_aarch64_install_object_clone_hook(emitter);
     emit_aarch64_install_serialize_object_hook(emitter);
+    emit_aarch64_install_throwable_trace_hook(emitter);
+    emit_aarch64_capture_throwable_trace_wrapper(emitter);
     emit_aarch64_object_clone_shallow_wrapper(emitter);
 
     label_c_global(emitter, "__elephc_eval_class_exists");

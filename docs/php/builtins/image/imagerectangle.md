@@ -2,7 +2,7 @@
 title: "imagerectangle()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 525
+  order: 537
 ---
 
 ## imagerectangle()

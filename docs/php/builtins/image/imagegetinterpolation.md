@@ -2,7 +2,7 @@
 title: "imagegetinterpolation()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 513
+  order: 525
 ---
 
 ## imagegetinterpolation()

@@ -9,6 +9,28 @@
 
 use super::*;
 
+/// Records a compiled method activation as a live call frame so `debug_backtrace()` and the
+/// throwable trace see the eval-to-compiled boundary the way PHP shows every call.
+///
+/// Returns whether a frame was pushed, which the caller pairs with `pop_call_frame()` after the
+/// compiled body returns. Without it the frame whose `file` and `line` describe the eval-side call
+/// site never exists: a compiled method reading the trace sees the caller's callers and nothing
+/// for the call that reached it.
+fn eval_push_native_call_frame(
+    class_name: &str,
+    method_name: &str,
+    object: Option<RuntimeCellHandle>,
+    args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
+) -> bool {
+    if !crate::context::native_call_frames_enabled() {
+        return false;
+    }
+    let frame = EvalCallFrame::method(class_name, method_name, object, Some(args.to_vec()), context);
+    context.push_call_frame(frame);
+    true
+}
+
 /// Calls one generated/AOT instance method after native signature binding.
 pub(in crate::interpreter) fn eval_native_method_with_evaluated_args(
     object: RuntimeCellHandle,
@@ -237,25 +259,31 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
         status
     })?;
     let mut result = RuntimeCellHandle::from_raw(std::ptr::null_mut());
+    let arg_values = native_bound_arg_values(&bound_args);
+    let pushed_frame = eval_push_native_call_frame(
+        signature_owner,
+        method_name,
+        Some(object),
+        &arg_values,
+        context,
+    );
     let call_result = if let Some(scope) = bridge_scope {
         eval_native_method_call_with_scope_out(
             scope,
             called_class_scope,
             object,
             method_name,
-            native_bound_arg_values(&bound_args),
+            arg_values,
             &mut result,
             context,
             values,
         )
     } else {
-        values.method_call_out(
-            object,
-            method_name,
-            native_bound_arg_values(&bound_args),
-            &mut result,
-        )
+        values.method_call_out(object, method_name, arg_values, &mut result)
     };
+    if pushed_frame {
+        context.pop_call_frame();
+    }
     let writeback = if native_bound_args_require_writeback(&bound_args) {
         write_back_native_callable_ref_args(&bound_args, context, values)
     } else {
@@ -547,19 +575,25 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
             return Err(status);
         }
     };
+    let arg_values = native_bound_arg_values(&bound_args);
+    let pushed_frame =
+        eval_push_native_call_frame(signature_owner, method_name, None, &arg_values, context);
     let result = if let Some(scope) = bridge_scope {
         eval_native_static_method_call_with_scope(
             scope,
             called_class_scope,
             class_name,
             method_name,
-            native_bound_arg_values(&bound_args),
+            arg_values,
             context,
             values,
         )
     } else {
-        values.static_method_call(class_name, method_name, native_bound_arg_values(&bound_args))
+        values.static_method_call(class_name, method_name, arg_values)
     };
+    if pushed_frame {
+        context.pop_call_frame();
+    }
     if traced {
         eprintln!(
             "[elephc-eval-trace] phase=native_static_call stage=called class={class_name:?} method={method_name:?} outcome={}",

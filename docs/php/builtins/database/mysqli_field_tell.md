@@ -2,7 +2,7 @@
 title: "mysqli_field_tell()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 127
+  order: 139
 ---
 
 ## mysqli_field_tell()

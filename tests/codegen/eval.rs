@@ -14904,7 +14904,13 @@ echo ":" . \EvalBarrierNs\DYN_EVAL_BARRIER_CONST;
     assert_eq!(out, "fcdFICD:fn:9");
 }
 
-/// Verifies eval-aware dynamic probes do not leak into sibling functions without a barrier.
+/// Verifies a function without an eval barrier still sees a function another function's eval
+/// declared, once that eval has run.
+///
+/// PHP's function table is process-global, so php 8.5.10 prints `NYY`: the third probe runs after
+/// `eval_with_barrier_probe()` declared the function. This test used to pin `NYN`, the answer of
+/// a literal `function_exists()` folded at compile time in a frame with no eval barrier -- the
+/// same fold that told Symfony a polyfill's runtime-declared `grapheme_extract()` did not exist.
 #[test]
 fn test_eval_barrier_is_not_inherited_by_sibling_functions() {
     let out = compile_and_run(
@@ -14921,7 +14927,7 @@ echo eval_with_barrier_probe();
 echo eval_no_barrier_probe();
 "#,
     );
-    assert_eq!(out, "NYN");
+    assert_eq!(out, "NYY");
 }
 
 /// Verifies callable probes inside eval inspect dynamic functions and supported builtins.
@@ -20481,7 +20487,8 @@ echo count($r->getMethods()); echo ":";
 echo get_class_methods("EvalAotOnlyReflectableContract")[0] ?? "none";');
 "#,
     );
-    assert_eq!(out, "H:1:aotlabel");
+    // php reports the declared spelling (`php -n` 8.5: `H:1:aotLabel`).
+    assert_eq!(out, "H:1:aotLabel");
 }
 
 /// Verifies eval ReflectionClass materializes only members of the selected AOT class.
@@ -21584,6 +21591,9 @@ echo EvalClassNameChild::staticName();');
 }
 
 /// Verifies eval-declared class attributes expose names and supported literal args.
+///
+/// `newInstance()` on an attribute whose class nothing declares throws php's `Attribute class
+/// "X" not found`; it used to answer null, which also hid the missing autoload of a real one.
 #[test]
 fn test_eval_declared_class_attribute_metadata() {
     let out = compile_and_run_capture(
@@ -21610,7 +21620,12 @@ echo $attrArgs[5] . ":";
 echo count($attrArgs[6]) . ":" . $attrArgs[6][0] . ":" . $attrArgs[6][1] . ":";
 $tagArgs = $attrs[1]->getArguments();
 echo $attrs[1]->getName() . ":" . $tagArgs[0] . ":";
-echo is_null($attrs[0]->newInstance()) ? "N" : "bad";');
+try {
+    $attrs[0]->newInstance();
+    echo "bad";
+} catch (\Error $e) {
+    echo $e->getMessage();
+}');
 "#,
     );
     assert!(
@@ -21620,7 +21635,7 @@ echo is_null($attrs[0]->newInstance()) ? "N" : "bad";');
     );
     assert_eq!(
         out.stdout,
-        "3:Route:Tag:Tag:7:/home:-1:1.5:T:N:EvalAttrDep:2:nested:2:first:3:Route:7:/home:-1:1.5:T:N:EvalAttrDep:2:nested:2:Tag:first:N"
+        "3:Route:Tag:Tag:7:/home:-1:1.5:T:N:EvalAttrDep:2:nested:2:first:3:Route:7:/home:-1:1.5:T:N:EvalAttrDep:2:nested:2:Tag:first:Attribute class \"Route\" not found"
     );
 }
 
@@ -33015,7 +33030,10 @@ echo $wrapped->getPrevious()->getMessage(), "|";
 echo ($root->getPrevious() === null) ? "noprev" : "prev";');
 "#,
     );
-    assert_eq!(out, "AotChainEx|3|0||root|noprev");
+    // php records the `eval()` frame in the trace of an exception created inside it, so the count is
+    // 1 (the interpreter now captures frames for classes compiled ahead of time, see
+    // `__rt_throwable_capture_trace`); `getTraceAsString()` stays the synthetic empty string.
+    assert_eq!(out, "AotChainEx|3|1||root|noprev");
 }
 
 /// Declares an eval class that extends an AOT parent and meets its interface through inheritance.

@@ -2,7 +2,7 @@
 title: "jdtojulian()"
 description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
 sidebar:
-  order: 233
+  order: 245
 ---
 
 ## jdtojulian()

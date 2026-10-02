@@ -31,7 +31,12 @@ pub(crate) fn current_native_call_context() -> *mut ElephcEvalContext {
 }
 
 /// Evaluates a registered AOT function through its descriptor-compatible invoker.
+///
+/// `name` is the PHP name the call was written with (`{closure}` for an anonymous function). The
+/// call is recorded as a live frame while the compiled body runs, so a compiled callee that reads
+/// `debug_backtrace()` or builds a throwable sees the interpreted call site that entered it.
 pub(in crate::interpreter) fn eval_native_function(
+    name: &str,
     function: NativeFunction,
     args: &[EvalCallArg],
     context: &mut ElephcEvalContext,
@@ -40,7 +45,15 @@ pub(in crate::interpreter) fn eval_native_function(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let evaluated_args =
         eval_native_function_call_args(&function, args, context, caller_scope, values)?;
-    eval_native_function_with_values(function, evaluated_args, context, values)
+    if !crate::context::native_call_frames_enabled() {
+        return eval_native_function_with_values(function, evaluated_args, context, values);
+    }
+    let frame_args = evaluated_args.values.clone();
+    let frame = EvalCallFrame::function(name, Some(frame_args), context);
+    context.push_call_frame(frame);
+    let result = eval_native_function_with_values(function, evaluated_args, context, values);
+    context.pop_call_frame();
+    result
 }
 
 /// Invokes a registered AOT function after its arguments have been bound and staged.

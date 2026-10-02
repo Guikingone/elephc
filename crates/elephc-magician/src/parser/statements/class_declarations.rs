@@ -379,6 +379,14 @@ impl Parser {
         attributes: &[EvalAttribute],
     ) -> Result<Vec<EvalClassConstant>, EvalParseError> {
         self.advance();
+        // PHP 8.3 typed class constants: `const array MAP = [...]`, `const ?string X = null`.
+        // A type is present exactly when the constant's name does not follow `const` directly,
+        // i.e. when the token after the current one is not `=`. The declared type constrains
+        // only the compile-time value, which php has already accepted, so it is parsed and
+        // dropped. Doctrine's `ConnectionFactory::DEFAULT_SCHEME_MAP` is declared this way.
+        if !matches!(self.peek(), TokenKind::Equal) {
+            self.parse_type_decl(EvalTypePosition::Property)?;
+        }
         let mut constants = Vec::new();
         loop {
             let TokenKind::Ident(name) = self.current() else {

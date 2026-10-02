@@ -746,7 +746,12 @@ fn eval_closure_with_optional_binding_inner(
         let generator = eval_generator_new(
             function.body(),
             std::mem::replace(&mut function_scope, ElephcEvalScope::new()),
-            eval_closure_activation(function.name(), bound_class_scope, bound_called_class),
+            eval_closure_activation(
+                function.name(),
+                bound_class_scope,
+                bound_called_class,
+                closure.declaring_call_site().cloned(),
+            ),
             context,
             values,
         );

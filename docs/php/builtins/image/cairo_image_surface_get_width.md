@@ -2,7 +2,7 @@
 title: "cairo_image_surface_get_width()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 413
+  order: 425
 ---
 
 ## cairo_image_surface_get_width()

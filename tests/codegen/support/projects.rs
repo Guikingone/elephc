@@ -304,6 +304,44 @@ pub(crate) fn compile_cli_files_and_run(files: &[(&str, &str)], main_file: &str)
     String::from_utf8(output.stdout).unwrap()
 }
 
+/// Like [`compile_cli_files_and_run`], but also returns the compiler's stderr.
+///
+/// A multi-file fixture uses it to assert which files the build took into the compiled program:
+/// a class file the compiler hands to the runtime autoloader is reported there
+/// (`warning: autoload: '…' is not compiled`), while the program's output is the same either way.
+pub(crate) fn compile_cli_files_and_run_with_compile_stderr(
+    files: &[(&str, &str)],
+    main_file: &str,
+) -> (String, String) {
+    let dir = make_cli_test_dir("elephc_cli_project");
+
+    for (path, content) in files {
+        let full_path = dir.join(path);
+        if let Some(parent) = full_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&full_path, content).unwrap();
+    }
+
+    let main_path = dir.join(main_file);
+    let mut compile_cmd = elephc_cli_command(&dir);
+    compile_cmd.arg(&main_path);
+    let compile_out = compile_cmd.output().expect("failed to run elephc CLI");
+    let compile_stderr = String::from_utf8_lossy(&compile_out.stderr).to_string();
+    assert!(compile_out.status.success(), "elephc CLI failed: {compile_stderr}");
+
+    let bin_path = main_path.with_extension("");
+    let output = run_binary(&bin_path, &dir);
+    assert!(
+        output.status.success(),
+        "CLI-compiled binary exited with error: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    (compile_stderr, String::from_utf8(output.stdout).unwrap())
+}
+
 // Compiles a PHP source string and runs the resulting binary, asserting that it
 // terminates with a non-zero exit code. Returns stderr from the failed binary.
 // Uses the library directly (not CLI), with default heap size 8_388_608 bytes.

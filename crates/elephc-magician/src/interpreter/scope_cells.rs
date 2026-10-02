@@ -28,7 +28,7 @@ pub(in crate::interpreter) fn is_request_superglobal_name(name: &str) -> bool {
 
 /// Returns the effective global-alias target for a name: an explicit `global` alias first, then
 /// a request superglobal's own name, matching php's implicit per-mention auto-global fetch.
-fn effective_global_alias_target<'a>(scope: &'a ElephcEvalScope, name: &'a str) -> Option<&'a str> {
+pub(in crate::interpreter) fn effective_global_alias_target<'a>(scope: &'a ElephcEvalScope, name: &'a str) -> Option<&'a str> {
     scope
         .global_alias_target(name)
         .or_else(|| is_request_superglobal_name(name).then_some(name))
@@ -132,8 +132,13 @@ pub(in crate::interpreter) fn set_reference_alias(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
     let source_reference_target = scope.reference_target(source).cloned();
-    if let Some(global_name) = scope.global_alias_target(source).map(str::to_string) {
+    // A superglobal source (`$session = &$_SESSION`) is a global alias too: the target names the
+    // global itself. Only explicit `global` aliases were recognized, so the reference was made
+    // between two LOCAL entries and died with the scope -- Symfony's session storage binds every
+    // bag to an element of that local, and each later write to a bag failed.
+    if let Some(global_name) = effective_global_alias_target(scope, source).map(str::to_string) {
         scope.mark_global_alias_to(target.to_string(), global_name);
+        scope.remove_reference_target(target);
         return Ok(Vec::new());
     }
     let (cell, ownership) = scope_entry(context, scope, source)

@@ -372,6 +372,35 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
     emitter.instruction("xor eax, eax");                                        // report zero JSON-visible object properties
     emitter.instruction("ret");                                                 // return the empty property count to Rust
 
+    // `(array) $object` for a compiled object; see the AArch64 twin.
+    label_c_global(emitter, "__elephc_eval_value_object_to_array");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the wrapper frame
+    emitter.instruction("sub rsp, 16");                                         // reserve spills for the fresh hash and its box
+    emitter.instruction("test rdi, rdi");                                       // a null handle is not an object
+    emitter.instruction("jz __elephc_eval_value_object_to_array_null");         // report null for null handles
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the boxed Mixed runtime tag
+    emitter.instruction("cmp r10, 6");                                          // tag 6 = object
+    emitter.instruction("jne __elephc_eval_value_object_to_array_null");        // only objects take the compiled cast
+    emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                        // borrowed object payload for the cast
+    emitter.instruction("call __rt_object_to_array");                           // fresh owned hash with mangled keys
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // keep the creation reference to drop after boxing
+    emitter.instruction("mov rdi, rax");                                        // hash payload becomes the boxing low word
+    emitter.instruction("mov eax, 5");                                          // runtime tag 5 = associative array
+    emitter.instruction("xor esi, esi");                                        // hashes use no high payload word
+    emitter.instruction("call __rt_mixed_from_value");                          // box the hash (the box takes its own reference)
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // keep the box across the release
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the creation reference
+    emitter.instruction("call __rt_decref_any");                                // the box now owns the only reference
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the owned box to Rust
+    emitter.instruction("jmp __elephc_eval_value_object_to_array_done");        // share the frame teardown
+    emitter.label("__elephc_eval_value_object_to_array_null");
+    emitter.instruction("xor eax, eax");                                        // report "not a compiled object" to Rust
+    emitter.label("__elephc_eval_value_object_to_array_done");
+    emitter.instruction("mov rsp, rbp");                                        // release the wrapper frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed hash or null
+
     label_c_global(emitter, "__elephc_eval_value_object_property_iter_key");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls
     emitter.instruction("mov rbp, rsp");                                        // establish a stable property-iterator wrapper frame pointer

@@ -2,7 +2,7 @@
 title: "json_decode() — internals"
 description: "Compiler internals for json_decode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 543
+  order: 555
 ---
 
 ## `json_decode()` — internals

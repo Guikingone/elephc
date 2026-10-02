@@ -2,7 +2,7 @@
 title: "shuffle()"
 description: "Shuffles an array into random order."
 sidebar:
-  order: 67
+  order: 79
 ---
 
 ## shuffle()

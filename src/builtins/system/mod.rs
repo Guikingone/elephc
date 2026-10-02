@@ -60,6 +60,7 @@ pub mod gmdate;
 pub mod gmmktime;
 pub mod header;
 pub mod header_remove;
+pub mod headers_list;
 pub mod headers_sent;
 pub mod hrtime;
 pub mod http_response_code;

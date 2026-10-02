@@ -2,7 +2,7 @@
 title: "imagelayereffect()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 518
+  order: 530
 ---
 
 ## imagelayereffect()

@@ -2,7 +2,7 @@
 title: "php_sapi_name()"
 description: "Implemented by the compiler-injected version prelude."
 sidebar:
-  order: 668
+  order: 681
 ---
 
 ## php_sapi_name()

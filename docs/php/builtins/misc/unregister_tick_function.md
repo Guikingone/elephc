@@ -2,7 +2,7 @@
 title: "unregister_tick_function()"
 description: "Removes a function previously registered to run on each tick."
 sidebar:
-  order: 683
+  order: 696
 ---
 
 ## unregister_tick_function()

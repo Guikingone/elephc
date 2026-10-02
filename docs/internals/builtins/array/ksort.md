@@ -2,7 +2,7 @@
 title: "ksort() — internals"
 description: "Compiler internals for ksort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 59
+  order: 71
 ---
 
 ## `ksort()` — internals

@@ -63,6 +63,7 @@ pub(in crate::codegen) fn emit_runtime_callable_invoker_inline_with_boundary(
         label: &label,
         sig,
         captures,
+        eval_bridge: ctx.module.required_runtime_features.eval_bridge,
     };
     // The thunk's global entry opens its own `.text` section on ELF; put the
     // enclosing function back before continuing it, or its tail lands in there.

@@ -2,7 +2,7 @@
 title: "cairo_set_line_width()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 439
+  order: 451
 ---
 
 ## cairo_set_line_width()

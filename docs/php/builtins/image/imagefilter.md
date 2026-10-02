@@ -2,7 +2,7 @@
 title: "imagefilter()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 508
+  order: 520
 ---
 
 ## imagefilter()

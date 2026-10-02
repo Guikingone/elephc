@@ -2,7 +2,7 @@
 title: "cairo_translate()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 448
+  order: 460
 ---
 
 ## cairo_translate()

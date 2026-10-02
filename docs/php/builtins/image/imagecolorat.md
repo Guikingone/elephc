@@ -2,7 +2,7 @@
 title: "imagecolorat()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 468
+  order: 480
 ---
 
 ## imagecolorat()

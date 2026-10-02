@@ -2,7 +2,7 @@
 title: "mysqli_get_proto_info()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 133
+  order: 145
 ---
 
 ## mysqli_get_proto_info()

@@ -165,7 +165,29 @@ pub(in crate::codegen::lower_inst) fn emit_mixed_is_iterable(ctx: &mut FunctionC
         }
     }
     ctx.emitter.label(&object_case);
-    emit_runtime_object_iterable_check(ctx, &true_case, &done);
+    if ctx.module.required_runtime_features.eval_bridge {
+        // An object an eval context built wraps the generic native header, so the compiled
+        // Traversable matcher only ever sees `stdClass`; `instanceof` asks the bridge's identity
+        // table for exactly this reason. Twig's compiled `ensureTraversable()` answered `[]` for
+        // every interpreted Doctrine collection, and each `{% for tag in post.tags %}` was empty.
+        let native_miss = ctx.next_label("is_iterable_mixed_native_miss");
+        let not_iterable = ctx.next_label("is_iterable_mixed_not_iterable");
+        emit_runtime_object_iterable_check(ctx, &true_case, &native_miss);
+        ctx.emitter.label(&native_miss);
+        super::emit_eval_object_is_a_named_fallback(
+            ctx,
+            value,
+            "Traversable",
+            &true_case,
+            &not_iterable,
+            &not_iterable,
+        )?;
+        ctx.emitter.label(&not_iterable);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        abi::emit_jump(ctx.emitter, &done);
+    } else {
+        emit_runtime_object_iterable_check(ctx, &true_case, &done);
+    }
     ctx.emitter.label(&true_case);
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
     ctx.emitter.label(&done);

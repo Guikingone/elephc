@@ -77,6 +77,44 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         );
     }
     eval_rebind_foreign_reflection_target(object, identity, context, values)?;
+    // An eval class extending a Reflection owner OVERRIDES the owner's methods, and the fast
+    // paths below answer those methods for any reflector without asking which class the object
+    // is: Doctrine's `RuntimeReflectionProperty::getValue()` (which reads the mangled property
+    // out of `(array) $object`) was bypassed and the plain `ReflectionProperty::getValue()` ran
+    // instead. An override the object's eval class provides is dispatched first.
+    if let Some((_, class)) = context.dynamic_object_declaring_class(identity) {
+        let called_class_name = class.name().to_string();
+        let extends_reflection_owner = context
+            .class_native_parent_name(&called_class_name)
+            .is_some_and(|parent| eval_is_reflection_owner_class(&parent));
+        if extends_reflection_owner {
+            if let Some((class_name, method)) =
+                eval_dynamic_method_for_call(&called_class_name, method_name, context)
+            {
+                if !method.is_abstract()
+                    && !method.is_static()
+                    && validate_eval_method_access(
+                        &class_name,
+                        method_name,
+                        method.visibility(),
+                        context,
+                        values,
+                    )
+                    .is_ok()
+                {
+                    return eval_dynamic_method_with_values(
+                        &class_name,
+                        &called_class_name,
+                        &method,
+                        object,
+                        evaluated_args,
+                        context,
+                        values,
+                    );
+                }
+            }
+        }
+    }
     if crate::eval_trace::enabled() && method_name.eq_ignore_ascii_case("getInterfaces") {
         eprintln!("[elephc-eval-trace] phase=reflection_get_interfaces_dispatch stage=after_rebind");
     }
@@ -1079,6 +1117,24 @@ fn eval_rebind_foreign_reflection_target(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let owner_class = runtime_object_class_name(object, values)?;
+    // A live reflector is exactly one kind; entries of any other kind under its address belong
+    // to a freed reflector of that kind (see `forget_eval_reflection_identity_except`).
+    let live_kind = match owner_class.as_str() {
+        "ReflectionClass" | "ReflectionObject" | "ReflectionEnum" => {
+            Some(crate::context::EvalReflectionKind::Class)
+        }
+        "ReflectionMethod" => Some(crate::context::EvalReflectionKind::Method),
+        "ReflectionProperty" => Some(crate::context::EvalReflectionKind::Property),
+        "ReflectionFunction" => Some(crate::context::EvalReflectionKind::Function),
+        "ReflectionAttribute" => Some(crate::context::EvalReflectionKind::Attribute),
+        "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase" => {
+            Some(crate::context::EvalReflectionKind::ClassConstant)
+        }
+        _ => None,
+    };
+    if let Some(live_kind) = live_kind {
+        context.forget_eval_reflection_identity_except(identity, live_kind);
+    }
     match owner_class.as_str() {
         "ReflectionClass" | "ReflectionObject" | "ReflectionEnum" => {
             // The registry is keyed by object ADDRESS and lives for the request, while the

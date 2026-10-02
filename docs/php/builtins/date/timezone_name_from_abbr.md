@@ -2,7 +2,7 @@
 title: "timezone_name_from_abbr()"
 description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
 sidebar:
-  order: 247
+  order: 259
 ---
 
 ## timezone_name_from_abbr()

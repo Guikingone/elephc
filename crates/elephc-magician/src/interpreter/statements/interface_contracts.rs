@@ -412,7 +412,7 @@ pub(super) fn class_has_interface_method(
 /// AOT ancestor's own declaration was validated when it was compiled, and the eval side holds no
 /// full type metadata for a native method — refusing a valid class is the worse failure of the
 /// two.
-fn native_ancestor_provides_method(
+pub(super) fn native_ancestor_provides_method(
     class: &EvalClass,
     method_name: &str,
     is_static: bool,
@@ -477,14 +477,22 @@ pub(super) fn class_method_satisfies_aot_interface_requirement(
     {
         return false;
     }
+    // A PHP-internal interface reaches eval through the host program's metadata too, and its
+    // return types are TENTATIVE: an implementation that declares none is accepted (php only
+    // raises a deprecation, silenced by `#[\ReturnTypeWillChange]`). dflydev's
+    // `Data::offsetExists($key)` implements `ArrayAccess` that way, and the class could not be
+    // declared at all.
+    let tentative_returns = elephc_builtin_contract::lookup_class(&requirement.owner)
+        .is_some_and(|class| class.module != elephc_builtin_contract::PhpModule::Elephc);
     requirement.signature.as_ref().is_none_or(|signature| {
-        class_method_satisfies_interface_signature(
+        class_method_satisfies_interface_signature_with_return_mode(
             method,
             method_owner,
             signature,
             &requirement.owner,
             pending_class,
             context,
+            tentative_returns,
         )
     })
 }

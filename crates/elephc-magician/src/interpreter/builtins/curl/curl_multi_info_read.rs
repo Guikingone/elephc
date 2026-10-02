@@ -69,7 +69,7 @@ pub(in crate::interpreter) fn eval_builtin_curl_multi_info_read(
         [multi_handle] => (eval_expr(multi_handle, context, scope, values)?, None, false),
         [multi_handle, queued] => {
             let multi_handle = eval_expr(multi_handle, context, scope, values)?;
-            let (_, target) = eval_call_arg_value(queued, context, scope, values)?;
+            let (_, target) = eval_direct_ref_arg_value(queued, context, scope, values)?;
             (multi_handle, target, true)
         }
         _ => return Err(EvalStatus::RuntimeFatal),

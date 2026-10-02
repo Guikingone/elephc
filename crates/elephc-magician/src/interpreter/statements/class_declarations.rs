@@ -87,6 +87,14 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
         )
     };
     let class = &prepared;
+    // The parent-override half of php's variance check runs inside the modifier validation, so
+    // the classes an override's signature names must be loaded before it; the interface half is
+    // loaded again below once the interfaces themselves are available.
+    trace_class_decl_result(
+        class,
+        "autoload_parent_variance_types",
+        autoload_pending_class_variance_types(class, context, values),
+    )?;
     trace_class_decl_result(
         class,
         "validate_modifiers",
@@ -150,6 +158,11 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
     )?;
     trace_class_decl_result(
         class,
+        "autoload_variance_types",
+        autoload_pending_class_variance_types(class, context, values),
+    )?;
+    trace_class_decl_result(
+        class,
         "validate_interface_members",
         validate_declared_class_interface_members(class, context, values),
     )?;
@@ -172,7 +185,7 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
         trace_class_decl_result(
             class,
             "validate_builtin_interface_requirements",
-            validate_concrete_class_builtin_interface_requirements(class, context),
+            validate_concrete_class_builtin_interface_requirements(class, context, values),
         )?;
         trace_class_decl_result(
             class,

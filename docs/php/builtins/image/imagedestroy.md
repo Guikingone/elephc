@@ -2,7 +2,7 @@
 title: "imagedestroy()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 500
+  order: 512
 ---
 
 ## imagedestroy()

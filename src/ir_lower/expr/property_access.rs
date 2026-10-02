@@ -1050,7 +1050,11 @@ pub(super) fn dynamic_property_get_result_type(
     };
     let nullable = nullable || value_may_carry_container_miss(ctx, object);
     let normalized = class_name.trim_start_matches('\\');
-    if is_builtin_stdclass_name(normalized) {
+    // The bare `object` type names no class, so its runtime-named read can be any property of any
+    // class. It fell through to the expression's checker type, `int`, and a string property read
+    // through `function f(object $o, string $n) { return $o->$n; }` came back as `1` (Twig's
+    // compiled `CoreExtension::getAttribute()` reads every public property this way).
+    if normalized.is_empty() || is_builtin_stdclass_name(normalized) {
         return if nullable {
             nullable_result_type(PhpType::Mixed)
         } else {

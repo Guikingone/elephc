@@ -114,6 +114,14 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
                 context,
                 values,
             )?;
+            // A Reflection owner's methods are answered by the interpreter's own reflection
+            // layer, which the ordinary method dispatch consults first; the native body sees a
+            // reflector the interpreter materialized and answers nothing useful for it. Doctrine's
+            // Instantiator returns `[$reflectionClass, 'newInstanceWithoutConstructor']` and calls
+            // it, so every entity hydration built a null and then `ReflectionClass("")`.
+            let native_class = native_class
+                .as_deref()
+                .filter(|class| !crate::interpreter::reflection::eval_is_reflection_owner_class(class));
             match native_class {
             Some(native_class) => eval_native_method_with_evaluated_args_for_call_user_func_unchecked_bridge_scope(
                 *object,

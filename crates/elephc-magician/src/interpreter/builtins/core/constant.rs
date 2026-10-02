@@ -61,12 +61,18 @@ fn eval_constant_lookup(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let name = eval_constant_name(name, values)?;
     if let Some((class_name, constant)) = name.split_once("::") {
-        return eval_class_constant_fetch_result(
+        // The class-constant fetch hands back the cached cell (an enum case is its singleton)
+        // BORROWED, as an expression operand; a builtin's result is owned by its caller, so
+        // returning it unretained let the caller's release free the singleton -- the next
+        // `constant('TT::T_JOIN')` returned whatever the allocator had put there (Doctrine's DQL
+        // lexer typed the second `JOIN` of a query as an identifier).
+        let value = eval_class_constant_fetch_result(
             class_name.trim_start_matches('\\'),
             constant,
             context,
             values,
-        );
+        )?;
+        return values.retain(value);
     }
     eval_const_fetch(&name, context, values)
 }

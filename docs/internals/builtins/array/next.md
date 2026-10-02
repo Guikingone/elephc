@@ -2,7 +2,7 @@
 title: "next() — internals"
 description: "Compiler internals for next(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 62
+  order: 74
 ---
 
 ## `next()` — internals

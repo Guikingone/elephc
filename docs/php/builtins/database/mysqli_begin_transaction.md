@@ -2,7 +2,7 @@
 title: "mysqli_begin_transaction()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 101
+  order: 113
 ---
 
 ## mysqli_begin_transaction()

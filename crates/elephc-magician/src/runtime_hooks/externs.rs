@@ -124,6 +124,8 @@ unsafe extern "C" {
         object: *mut RuntimeCell,
     ) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_object_property_len(object: *mut RuntimeCell) -> u64;
+    /// Returns the compiled `(array)` cast of a boxed object, or null for a non-object.
+    pub(super) fn __elephc_eval_value_object_to_array(object: *mut RuntimeCell) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_object_property_iter_key(
         object: *mut RuntimeCell,
         position: u64,
@@ -513,6 +515,10 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_install_object_relation_hook(callback: usize);
     /// Installs the optional eval serialize-object callback.
     pub(super) fn __elephc_eval_install_serialize_object_hook(callback: usize);
+    /// Installs the optional eval Throwable-trace callback.
+    pub(super) fn __elephc_eval_install_throwable_trace_hook(callback: usize);
+    /// Records the live interpreter frames into the trace slot of a Throwable eval created.
+    pub(super) fn __elephc_eval_value_capture_throwable_trace(object: *mut RuntimeCell);
     /// Reports whether one COMPILED generator can still produce a value.
     ///
     /// These four are the other half of `__elephc_eval_install_generator_protocol_hook`: that one

@@ -2,7 +2,7 @@
 title: "preg_last_error_msg()"
 description: "Returns the error message of the last PCRE regex execution."
 sidebar:
-  order: 676
+  order: 689
 ---
 
 ## preg_last_error_msg()

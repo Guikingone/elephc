@@ -475,6 +475,26 @@ fn reflection_source_lines(
     let Some(reflected_class) = reflected_class else {
         return (0, 0);
     };
+    // A method's lines are its OWN declaration's, not its class's: php's
+    // `ReflectionMethod::getStartLine()` names the `function` line and `getEndLine()` the
+    // closing brace.
+    if class_name == "ReflectionMethod" {
+        let method_key = metadata.reflected_name.as_deref().map(php_symbol_key);
+        let method_span = ctx
+            .module
+            .class_infos
+            .get(reflected_class)
+            .zip(method_key)
+            .and_then(|(info, method_key)| {
+                info.method_decls
+                    .iter()
+                    .find(|method| php_symbol_key(&method.name) == method_key)
+                    .map(|method| method.span)
+            });
+        if let Some(span) = method_span.filter(|span| span.line > 0) {
+            return (span.line, span.end_line.max(span.line));
+        }
+    }
     if let Some(info) = ctx.module.class_infos.get(reflected_class) {
         return (info.declaration_span.line, info.declaration_span.end_line);
     }

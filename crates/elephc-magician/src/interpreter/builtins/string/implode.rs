@@ -37,18 +37,25 @@ pub(in crate::interpreter) fn eval_builtin_implode(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [separator, array] = args else {
-        return Err(EvalStatus::RuntimeFatal);
+    let (separator, array) = match args {
+        [separator, array] => (
+            eval_expr(separator, context, scope, values)?,
+            eval_expr(array, context, scope, values)?,
+        ),
+        [array] => (values.string("")?, eval_expr(array, context, scope, values)?),
+        _ => return Err(EvalStatus::RuntimeFatal),
     };
-    let separator = eval_expr(separator, context, scope, values)?;
-    let array = eval_expr(array, context, scope, values)?;
-    eval_implode_result(separator, array, values)
+    eval_implode_result(separator, array, context, values)
 }
 
 /// Joins array values in eval iteration order using PHP string conversion.
+///
+/// An object element joins through its `__toString()`, as in any string context: the plain byte
+/// conversion has no object arm and joined Doctrine's `Expr\Select` parts as empty strings.
 pub(in crate::interpreter) fn eval_implode_result(
     separator: RuntimeCellHandle,
     array: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if !values.is_array_like(array)? {
@@ -63,6 +70,7 @@ pub(in crate::interpreter) fn eval_implode_result(
         }
         let key = values.array_iter_key(array, position)?;
         let value = values.array_get(array, key)?;
+        let value = eval_string_context_value(value, context, values)?;
         let value = values.string_bytes(value)?;
         output.extend_from_slice(&value);
     }
@@ -72,10 +80,15 @@ pub(in crate::interpreter) fn eval_implode_result(
 /// Dispatches evaluated `implode()` calls through the builtin leaf.
 pub(in crate::interpreter) fn eval_implode_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [separator, array] = evaluated_args else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
-    eval_implode_result(*separator, *array, values)
+    match evaluated_args {
+        [separator, array] => eval_implode_result(*separator, *array, context, values),
+        [array] => {
+            let separator = values.string("")?;
+            eval_implode_result(separator, *array, context, values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
 }

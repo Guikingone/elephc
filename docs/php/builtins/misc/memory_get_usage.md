@@ -2,7 +2,7 @@
 title: "memory_get_usage()"
 description: "Returns the bytes currently held by live elephc heap blocks."
 sidebar:
-  order: 626
+  order: 639
 ---
 
 ## memory_get_usage()

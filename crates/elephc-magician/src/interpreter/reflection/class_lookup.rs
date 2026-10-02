@@ -121,22 +121,9 @@ pub(super) fn eval_reflection_eval_class_interface_names(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<String>, EvalStatus> {
-    let mut names = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    if let Some(parent) = context.class_native_parent_name(class_name) {
-        for name in eval_reflection_aot_class_interface_names(&parent, values)? {
-            eval_reflection_push_unique_class_name(name, &mut names, &mut seen);
-        }
-    }
-    for name in context.class_interface_names(class_name) {
-        eval_reflection_push_unique_class_name(name.clone(), &mut names, &mut seen);
-        if !context.has_interface(&name) && eval_runtime_interface_exists(&name, values)? {
-            for parent in eval_reflection_aot_class_interface_names(&name, values)? {
-                eval_reflection_push_unique_class_name(parent, &mut names, &mut seen);
-            }
-        }
-    }
-    Ok(names)
+    crate::interpreter::builtins::eval_class_relation_eval_class_interface_names(
+        class_name, context, values,
+    )
 }
 
 /// Returns eval interface parents plus inherited generated/AOT interface parents.

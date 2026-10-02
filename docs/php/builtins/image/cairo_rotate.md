@@ -2,7 +2,7 @@
 title: "cairo_rotate()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 433
+  order: 445
 ---
 
 ## cairo_rotate()

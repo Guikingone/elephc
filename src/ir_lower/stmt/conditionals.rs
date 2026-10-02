@@ -266,6 +266,18 @@ fn join_arm_types(ctx: &LoweringContext<'_, '_>, arms: &[IfArmExit]) -> TypeEnv 
             .iter()
             .all(|arm_type| matches!(arm_type, PhpType::Array(_)))
         {
+            // An arm that left the array at `array<never>` added no element to it: `[]` has no
+            // element to contradict the type another arm gave it. `$names = []; foreach (… as $c)
+            // { if (…) { $names[] = "e.$c"; } }` joined `array<string>` with `array<never>` as
+            // boxed `array<mixed>`, while the checker -- which types the function's return from
+            // the same pushes -- promised the CALLER `array<string>`; the caller then read each
+            // boxed cell pointer as a string (garbage, or a multi-gigabyte persist request).
+            // Joining at the one concrete element keeps both layers on the same representation,
+            // and the empty arm needs no conversion to be read at it.
+            if let Some(element) = shared_filled_array_element(&arm_types) {
+                joined.insert(name, PhpType::Array(Box::new(element)));
+                continue;
+            }
             if !arms
                 .iter()
                 .all(|arm| local_slot_is_convertible(ctx, &name, &arm.initialized))
@@ -327,6 +339,36 @@ fn join_arm_types(ctx: &LoweringContext<'_, '_>, arms: &[IfArmExit]) -> TypeEnv 
     joined
 }
 
+/// Returns the element type every non-empty arm agrees on, when at least one arm left the array
+/// empty (`array<never>`) and the others all hold the same concrete, unboxed element.
+fn shared_filled_array_element(arm_types: &[PhpType]) -> Option<PhpType> {
+    let mut shared: Option<PhpType> = None;
+    let mut saw_empty = false;
+    for arm_type in arm_types {
+        let PhpType::Array(element) = arm_type else {
+            return None;
+        };
+        let element = element.codegen_repr();
+        if array_write_storage::is_empty_indexed_array_element(&element) {
+            saw_empty = true;
+            continue;
+        }
+        if element == PhpType::Mixed {
+            return None;
+        }
+        match &shared {
+            None => shared = Some(element),
+            Some(existing) if *existing == element => {}
+            Some(_) => return None,
+        }
+    }
+    if saw_empty {
+        shared
+    } else {
+        None
+    }
+}
+
 /// Returns indexed-array locals whose current arm needs converting before entering the merge,
 /// each with the joined type it converts to.
 fn arm_conversions(arm: &IfArmExit, joined: &TypeEnv) -> Vec<(String, PhpType)> {
@@ -338,6 +380,13 @@ fn arm_conversions(arm: &IfArmExit, joined: &TypeEnv) -> Vec<(String, PhpType)> 
             else {
                 return false;
             };
+            // A join at a concrete element (an empty arm meeting a filled one) reads every
+            // arm's array as it already is; only a boxed or hash target converts.
+            if let PhpType::Array(target_element) = target.codegen_repr() {
+                if target_element.codegen_repr() != PhpType::Mixed {
+                    return false;
+                }
+            }
             matches!(target, PhpType::AssocArray { .. })
                 || element.codegen_repr() != PhpType::Mixed
         })

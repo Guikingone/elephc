@@ -554,15 +554,39 @@ pub(super) fn lower_mixed_method_candidate_call(
     ref_params.push(false);
     ref_params.extend(candidate.target.ref_params.iter().copied());
     guard_mixed_method_candidate_object_arguments(ctx, inst, candidate)?;
-    let call_args = materialize_method_call_args_with_receiver_reg_refs_and_defaults(
+    // Arguments past this candidate's parameters are not passed, and those past its fixed
+    // parameters are packed into a trailing variadic (see `mixed_method_candidates`).
+    let fixed_abi = if candidate.variadic_last {
+        candidate.target.params.len()
+    } else {
+        candidate.target.params.len() + 1
+    };
+    // A site lowered WITH a signature naming the variadic already packed it: exactly one operand
+    // in the tail position, an array. That operand is the parameter itself.
+    let site_packed_tail = candidate.variadic_last
+        && inst.operands.len() == fixed_abi + 1
+        && matches!(
+            ctx.value_php_type(inst.operands[fixed_abi])?.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        );
+    let (passed, variadic_tail) = if site_packed_tail || !candidate.variadic_last {
+        (inst.operands.len().min(candidate.target.params.len() + 1), None)
+    } else {
+        (
+            inst.operands.len().min(fixed_abi),
+            Some(inst.operands.get(fixed_abi..).unwrap_or(&[])),
+        )
+    };
+    let call_args = materialize_method_call_args_with_receiver_reg_refs_defaults_and_tail(
         ctx,
         receiver_reg,
         &receiver_ty,
-        &inst.operands,
+        &inst.operands[..passed],
         &param_types,
         &ref_params,
         crate::codegen::lower_inst::RefArgCellLifetime::for_callee(ctx, method_name),
         &candidate.defaults,
+        variadic_tail,
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
@@ -659,6 +683,9 @@ fn emit_mixed_method_candidate_object_argument_guard(
             value,
             target_name,
             &accepted_label,
+            &native_fallback,
+            // A bridge-owned object the bridge rules out reaches the matcher below, which fails
+            // on its carrier header and raises the TypeError.
             &native_fallback,
         )?;
         ctx.emitter.label(&native_fallback);
@@ -914,28 +941,63 @@ pub(super) fn mixed_method_candidates(
         let Some(signature) = class_info.methods.get(&method_key) else {
             continue;
         };
+        // A variadic tail -- declared, or the hidden `...$__elephc_func_args` a body that calls
+        // `func_get_args()` receives -- collects whatever the call passes past the fixed
+        // parameters, an EMPTY array when that is nothing; the candidate call packs it. Requiring a
+        // default for it left every such method out of the dispatch: Symfony's
+        // `ServiceLocator::get()` reads `func_get_args()`, and each `$locator->get($id)` through
+        // an `object` receiver died "Call to undefined method". Only a variadic that occupies the
+        // last parameter slot is packed; a signature that lists its variadic separately keeps the
+        // old rules.
+        let variadic_last = signature.variadic.as_deref().is_some_and(|name| {
+            signature.params.last().is_some_and(|(param, _)| param == name)
+        });
+        let fixed = if variadic_last {
+            signature.params.len().saturating_sub(1)
+        } else {
+            signature.params.len()
+        };
+        // php ignores arguments past a non-variadic method's parameters, so a site that passes
+        // more -- one lowered against a sibling implementation that declares an extra defaulted
+        // parameter, as `Container::get($id, $invalidBehavior)` does for every
+        // `ContainerInterface::get($id)` call -- still dispatches to this method; the surplus is
+        // simply not materialized.
         let provided = operand_count.saturating_sub(1);
-        if provided > signature.params.len()
-            || signature.defaults[provided..]
-                .iter()
-                .zip(signature.params[provided..].iter())
-                .any(|(default, (_, param_ty))| {
-                    !omitted_default_is_materializable(default.as_ref(), param_ty)
-                })
-        {
+        let surplus = !variadic_last && provided > signature.params.len();
+        // Constructors are left out: a generated container's `$lazyLoad->__construct(...)` would
+        // otherwise dispatch over every class whose constructor takes fewer arguments.
+        if surplus && (signature.variadic.is_some() || method_key == "__construct") {
             continue;
         }
-        let target = resolve_method_call_target(
+        let provided = provided.min(fixed);
+        if (provided..fixed).any(|index| {
+            !omitted_default_is_materializable(
+                signature.defaults.get(index).and_then(|default| default.as_ref()),
+                &signature.params[index].1,
+            )
+        }) {
+            continue;
+        }
+        let target = match resolve_method_call_target(
             ctx,
             class_name,
             method_name,
             signature.params.len() + 1,
-        )?;
+        ) {
+            Ok(target) => target,
+            // A narrower method that only became a candidate by dropping surplus arguments and
+            // has no callable body here (a builtin class's `__construct`, reached from
+            // `$lazyLoad->__construct(...)` in a generated container) stays out of the dispatch,
+            // as it was before surplus arguments were accepted.
+            Err(_) if surplus => continue,
+            Err(error) => return Err(error),
+        };
         candidates.push(MixedMethodCandidate {
             class_id: class_info.class_id,
             class_name: class_name.clone(),
             target,
             defaults: signature.defaults.clone(),
+            variadic_last,
         });
     }
     candidates.sort_by_key(|candidate| candidate.class_id);

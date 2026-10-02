@@ -2,7 +2,7 @@
 title: "imagecolorstotal()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 480
+  order: 492
 ---
 
 ## imagecolorstotal()

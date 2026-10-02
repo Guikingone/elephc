@@ -2,7 +2,7 @@
 title: "imagecreatefromstring()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 493
+  order: 505
 ---
 
 ## imagecreatefromstring()

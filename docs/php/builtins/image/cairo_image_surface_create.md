@@ -2,7 +2,7 @@
 title: "cairo_image_surface_create()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 410
+  order: 422
 ---
 
 ## cairo_image_surface_create()

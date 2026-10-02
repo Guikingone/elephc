@@ -8,6 +8,7 @@
 //! - Leaf files register metadata through `eval_builtin!` and own the concrete
 //!   direct or evaluated-argument adapter used by registry hooks.
 
+mod array_change_key_case;
 mod array_chunk;
 mod array_column;
 mod array_combine;
@@ -42,7 +43,6 @@ mod array_slice;
 mod array_splice;
 mod array_sum;
 mod array_is_list;
-mod array_change_key_case;
 mod array_first;
 mod array_ucompare;
 mod array_key_first;
@@ -81,6 +81,7 @@ mod uksort;
 mod usort;
 mod values_dispatch;
 
+pub(in crate::interpreter) use array_change_key_case::*;
 pub(in crate::interpreter) use array_pointer::eval_array_pointer_move;
 pub(in crate::interpreter) use array_pop::eval_array_pop_shift_replacement;
 pub(in crate::interpreter) use array_push::{

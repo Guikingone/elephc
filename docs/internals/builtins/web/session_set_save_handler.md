@@ -2,7 +2,7 @@
 title: "session_set_save_handler() — internals"
 description: "Compiler internals for session_set_save_handler(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 949
+  order: 969
 ---
 
 ## `session_set_save_handler()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3732](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3732) (`session_set_save_handler`)
+- **Lowering**: [`src/web_prelude/build.rs`:3689](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3689) (`session_set_save_handler`)
 - **Function symbol**: `session_set_save_handler()`
 
 

@@ -136,6 +136,23 @@ pub(super) fn check_property_array_push(
 ) -> Result<(), CompileError> {
     let obj_ty = checker.infer_type_with_assignment_effects(object, env)?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
+    // A gradual receiver (`$batches[$i]->entities[] = $e`, the element of an untyped array) is
+    // resolved at run time, exactly as the keyed write `$x->prop[$k] = $v` already is.
+    if matches!(obj_ty, PhpType::Mixed) {
+        return Ok(());
+    }
+    // So is a union of object types, which a property chain keeps after an `instanceof` test
+    // the checker does not narrow through (`$stmt->whereClause->conditionalExpression
+    // ->conditionalFactors[] = $primary` in Doctrine's pagination walkers).
+    if let PhpType::Union(members) = &obj_ty {
+        if members.iter().any(|member| matches!(member, PhpType::Object(_)))
+            && members
+                .iter()
+                .all(|member| matches!(member, PhpType::Object(_) | PhpType::Void))
+        {
+            return Ok(());
+        }
+    }
     match &obj_ty {
         PhpType::Object(class_name) => {
             if class_name.trim_start_matches('\\').is_empty() {
@@ -149,6 +166,12 @@ pub(super) fn check_property_array_push(
             }
             let (prop_ty, property_has_declared_type) =
                 resolve_object_array_property(checker, class_name, property, span)?;
+            // `$this->lines[] = $line` on an `ArrayAccess` property is `offsetSet(null, $line)`
+            // (league/commonmark's block parsers hold an `ArrayCollection` there), as the keyed
+            // form already accepts.
+            if type_satisfies_array_access(checker, &prop_ty) {
+                return Ok(());
+            }
             let updated_prop_ty = updated_array_property_push_type(
                 checker,
                 &prop_ty,

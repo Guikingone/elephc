@@ -265,6 +265,11 @@ impl ElephcEvalContext {
                     &mut seen,
                 );
             }
+            // php-src adds `Stringable` to the interface list of every class that declares
+            // `__toString`, after the ones it names; a subclass inherits it like any other.
+            if !is_enum && class.method("__toString").is_some() {
+                push_unique_class_name("Stringable", &mut interfaces, &mut seen);
+            }
         }
         if let Some(enum_decl) = self.enum_decl(class_name) {
             push_unique_class_name("UnitEnum", &mut interfaces, &mut seen);

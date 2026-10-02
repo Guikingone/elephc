@@ -64,6 +64,9 @@ pub(in crate::interpreter) fn eval_get_class_vars_result(
     let [target] = evaluated_args else {
         return Err(EvalStatus::RuntimeFatal);
     };
+    // Same process-wide class view as `get_class_methods()` (see there).
+    #[cfg(not(test))]
+    context.sync_global_eval_classes();
     let class_name = eval_resolved_class_metadata_name(*target, context, values)?;
     if context.has_class(&class_name) || context.has_enum(&class_name) {
         return eval_dynamic_class_vars_result(&class_name, context, values);

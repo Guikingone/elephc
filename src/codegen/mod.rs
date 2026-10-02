@@ -19,6 +19,7 @@ pub(crate) mod callable_reachability;
 pub(crate) mod context;
 mod enum_singletons;
 mod eval_argument_owners;
+mod eval_boxed_callable_helper;
 mod eval_callable_helpers;
 mod eval_class_constant_helpers;
 mod class_id_dispatch;
@@ -460,6 +461,7 @@ fn finalize_user_asm(
         &eval_callable_support,
     );
     if eval_bridge {
+        eval_boxed_callable_helper::emit_eval_boxed_callable_descriptor_helper(&mut emitter, &mut data);
         // After the callable support: a `\Closure`-typed property slot converts the boxed eval
         // callback into a descriptor with the same cast a `callable` parameter uses.
         eval_property_helpers::emit_eval_property_helpers(

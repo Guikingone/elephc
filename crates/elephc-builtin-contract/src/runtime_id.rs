@@ -64,6 +64,16 @@ pub enum RuntimeBuiltinId {
     /// compiled side for it: an eval-local answer would report "not sent" for output the
     /// compiled program had already flushed.
     HeadersSent = 22,
+    /// PHP `headers_list`.
+    ///
+    /// The pending headers live in the web bridge the compiled runtime writes through, so an
+    /// interpreted caller reads the same list the compiled `header()` fills.
+    HeadersList = 23,
+    /// PHP `header_remove` with no argument (clear all) or one header name.
+    ///
+    /// Removal has to act on the same bridge list: an eval-local copy would leave the header
+    /// that `SessionUtils::popSessionCookie()`-style code removes in the response.
+    HeaderRemove = 24,
 }
 
 /// Status returned by `__elephc_runtime_builtin_call_v1`.
@@ -95,7 +105,7 @@ impl RuntimeBuiltinStatus {
 
 impl RuntimeBuiltinId {
     /// Every version-one runtime builtin in stable ABI order.
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 24] = [
         Self::Boolval,
         Self::Floatval,
         Self::Intval,
@@ -118,6 +128,8 @@ impl RuntimeBuiltinId {
         Self::ObEndClean,
         Self::ObEndFlush,
         Self::HeadersSent,
+        Self::HeadersList,
+        Self::HeaderRemove,
     ];
 
     /// Returns the canonical shared-contract identity implemented by this ABI ID.
@@ -145,6 +157,8 @@ impl RuntimeBuiltinId {
             Self::ObEndClean => "ob_end_clean",
             Self::ObEndFlush => "ob_end_flush",
             Self::HeadersSent => "headers_sent",
+            Self::HeadersList => "headers_list",
+            Self::HeaderRemove => "header_remove",
         };
         BuiltinId::from_canonical_name(name)
     }
@@ -179,6 +193,8 @@ impl RuntimeBuiltinId {
             20 => Some(Self::ObEndClean),
             21 => Some(Self::ObEndFlush),
             22 => Some(Self::HeadersSent),
+            23 => Some(Self::HeadersList),
+            24 => Some(Self::HeaderRemove),
             _ => None,
         }
     }
@@ -204,7 +220,9 @@ impl RuntimeBuiltinId {
             | Self::ObFlush
             | Self::ObEndClean
             | Self::ObEndFlush
-            | Self::HeadersSent => arg_count == 0,
+            | Self::HeadersSent
+            | Self::HeadersList => arg_count == 0,
+            Self::HeaderRemove => arg_count <= 1,
         }
     }
 }
@@ -223,7 +241,7 @@ mod tests {
     /// Verifies every published runtime ID round-trips through its raw ABI value.
     #[test]
     fn runtime_builtin_ids_round_trip() {
-        for raw in 1..=22 {
+        for raw in 1..=24 {
             let id = RuntimeBuiltinId::from_u32(raw).expect("published runtime ID must decode");
             assert_eq!(id.as_u32(), raw);
             assert!(id.supports_arity(match id {
@@ -237,12 +255,15 @@ mod tests {
                 | RuntimeBuiltinId::ObFlush
                 | RuntimeBuiltinId::ObEndClean
                 | RuntimeBuiltinId::ObEndFlush
-                | RuntimeBuiltinId::HeadersSent => 0,
+                | RuntimeBuiltinId::HeadersSent
+                | RuntimeBuiltinId::HeadersList => 0,
                 _ => 1,
             }));
         }
         assert_eq!(RuntimeBuiltinId::from_u32(0), None);
-        assert_eq!(RuntimeBuiltinId::from_u32(23), None);
+        assert!(RuntimeBuiltinId::HeaderRemove.supports_arity(0));
+        assert!(!RuntimeBuiltinId::HeaderRemove.supports_arity(2));
+        assert_eq!(RuntimeBuiltinId::from_u32(25), None);
         assert_eq!(
             RuntimeBuiltinStatus::from_i32(0),
             Some(RuntimeBuiltinStatus::Success)

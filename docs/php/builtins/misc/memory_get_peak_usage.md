@@ -2,7 +2,7 @@
 title: "memory_get_peak_usage()"
 description: "Returns the high-water mark of the elephc heap in bytes."
 sidebar:
-  order: 625
+  order: 638
 ---
 
 ## memory_get_peak_usage()

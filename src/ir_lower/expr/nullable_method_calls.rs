@@ -239,6 +239,14 @@ pub(super) fn lower_nullsafe_method_call(
     ctx.builder.position_at_end(call_block);
     let call = if invokes_a_nullable_callable {
         lower_expr_call_from_value(ctx, object, args, expr)
+    } else if let Some(object_ty) =
+        super::override_arity::nullable_receiver_ladder_type(ctx, object, method, args)
+    {
+        // The null arm is already split off, so this is the same call a plain `->` makes on a
+        // proven-non-null nullable receiver: the class-id ladder has to be in charge of it, or an
+        // implementation whose parameters are stored differently from the interface's (`mixed
+        // $key` against `string $key`) is entered through the interface table with the wrong ABI.
+        lower_call_on_unboxed_receiver(ctx, object, object_ty, method, args, expr)
     } else {
         lower_method_call_with_receiver(ctx, object, method, args, Op::NullsafeMethodCall, expr)
     };

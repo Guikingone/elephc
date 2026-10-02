@@ -316,6 +316,16 @@ fn lower_nullsafe_postfix_segment(
             {
                 return Some(lower_expr_call_from_value(ctx, current, args, expr));
             }
+            // The null arm is split off above, so a nullable receiver is non-null here and the
+            // call takes the class-id ladder a plain `->` call on it takes (see
+            // `lower_nullable_regular_method_call`).
+            if let Some(object_ty) =
+                super::override_arity::nullable_receiver_ladder_type(ctx, current, method, args)
+            {
+                return Some(super::lower_call_on_unboxed_receiver(
+                    ctx, current, object_ty, method, args, expr,
+                ));
+            }
             Some(lower_method_call_with_receiver(
                 ctx,
                 current,

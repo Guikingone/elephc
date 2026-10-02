@@ -737,6 +737,34 @@ pub(in crate::codegen::lower_inst) fn lower_eval_owned_method_call(
     miss_label: &str,
     done_label: &str,
 ) -> Result<()> {
+    let result_type = inst.result_php_type.clone();
+    lower_eval_owned_method_call_with_result(
+        ctx,
+        inst,
+        object,
+        method_name,
+        miss_label,
+        done_label,
+        &result_type,
+        true,
+    )
+}
+
+/// [`lower_eval_owned_method_call`] with the result type chosen by the caller and, optionally,
+/// left in the integer result register instead of being stored into the instruction's value.
+///
+/// `ArrayAccess` probes need it: the `offsetExists()` answer is a bool the surrounding lowering
+/// branches on, while the instruction's own value is the `offsetGet()` element.
+pub(in crate::codegen::lower_inst) fn lower_eval_owned_method_call_with_result(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    method_name: &str,
+    miss_label: &str,
+    done_label: &str,
+    result_type: &PhpType,
+    store_result: bool,
+) -> Result<()> {
     // Native receivers need neither boxed arguments nor reference markers. Look up
     // dynamic ownership before preparing that pack, including on the fallback path.
     let object_ty = ctx.load_value_to_result(object)?.codegen_repr();
@@ -832,9 +860,11 @@ pub(in crate::codegen::lower_inst) fn lower_eval_owned_method_call(
     emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
-    emit_eval_owned_result_as_type(ctx, &inst.result_php_type)?;
+    emit_eval_owned_result_as_type(ctx, result_type)?;
     abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
-    store_if_result(ctx, inst)?;
+    if store_result {
+        store_if_result(ctx, inst)?;
+    }
     abi::emit_jump(ctx.emitter, done_label);
 
     ctx.emitter.label(&miss_stack_label);

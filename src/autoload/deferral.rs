@@ -59,9 +59,15 @@ pub fn deferrable_class_files(
         if !deferrable_files.contains(&canonical(Path::new(path))) {
             continue;
         }
-        files
-            .entry(path.clone())
-            .or_insert_with(|| error.message.clone());
+        // The position is kept with the reason: the warning is the demo's gap list, and a reason
+        // without a line ("Cannot index non-array") cannot be acted on in a 2,000-line file.
+        files.entry(path.clone()).or_insert_with(|| {
+            if error.span == crate::span::Span::dummy() {
+                error.message.clone()
+            } else {
+                format!("{}:{}: {}", error.span.line, error.span.col, error.message)
+            }
+        });
     }
     files
 }
@@ -101,6 +107,158 @@ pub fn propagate_to_subclasses(
                 deferred.insert(file.clone());
                 added.push(file);
                 changed = true;
+            }
+        }
+        if !changed {
+            return added;
+        }
+    }
+}
+
+/// Which constructor parameters of one class declaration are promoted by-reference properties.
+struct ByRefConstructor {
+    /// Parent class name, to find an inherited constructor.
+    parent: Option<String>,
+    /// `(parameter name, promoted to a by-reference property)` in declaration order, when the
+    /// class declares its own constructor.
+    params: Option<Vec<(String, bool)>>,
+}
+
+/// Collects, per class, the by-reference shape of its constructor and everything its methods
+/// construct with place arguments.
+fn collect_by_ref_constructors(
+    program: &Program,
+    constructors: &mut HashMap<String, ByRefConstructor>,
+    callers: &mut Vec<(String, crate::ast_usage::Usage)>,
+) {
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::ClassDecl { name, extends, methods, properties, .. } => {
+                // Only a parameter the constructor PROMOTES to a by-reference property keeps the
+                // reference past the call. A by-reference parameter used during the call alone
+                // (a transient out-parameter) is a different, narrower gap and stays compiled.
+                let params = methods
+                    .iter()
+                    .find(|method| method.name.eq_ignore_ascii_case("__construct"))
+                    .map(|constructor| {
+                        constructor
+                            .params
+                            .iter()
+                            .map(|(param, _, _, by_ref)| {
+                                let kept = *by_ref
+                                    && properties.iter().any(|property| {
+                                        property.is_promoted
+                                            && property.by_ref
+                                            && property.name == *param
+                                    });
+                                (param.clone(), kept)
+                            })
+                            .collect()
+                    });
+                constructors.insert(
+                    php_symbol_key(name),
+                    ByRefConstructor {
+                        parent: extends.as_ref().map(|parent| parent.as_str().to_string()),
+                        params,
+                    },
+                );
+                callers.push((name.clone(), crate::ast_usage::collect_stmt(stmt)));
+            }
+            StmtKind::NamespaceBlock { body, .. }
+            | StmtKind::Synthetic(body)
+            | StmtKind::IncludeOnceGuard { body, .. } => {
+                collect_by_ref_constructors(body, constructors, callers)
+            }
+            StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
+                collect_by_ref_constructors(then_body, constructors, callers);
+                for (_, body) in elseif_clauses {
+                    collect_by_ref_constructors(body, constructors, callers);
+                }
+                if let Some(body) = else_body {
+                    collect_by_ref_constructors(body, constructors, callers);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Resolves the constructor parameters `class` runs, walking up to the nearest declared one.
+fn effective_constructor_params<'a>(
+    constructors: &'a HashMap<String, ByRefConstructor>,
+    class: &str,
+) -> Option<&'a Vec<(String, bool)>> {
+    let mut current = php_symbol_key(class.trim_start_matches('\\'));
+    for _ in 0..64 {
+        let info = constructors.get(&current)?;
+        if let Some(params) = &info.params {
+            return Some(params);
+        }
+        current = php_symbol_key(info.parent.as_deref()?.trim_start_matches('\\'));
+    }
+    None
+}
+
+/// Defers every compiled class that hands a PLACE (a property, a static property or an array
+/// element) to a constructor parameter another class promotes to a by-reference property, together with that class,
+/// and returns the files it added.
+///
+/// A native `new Foo($this->items)` copies the property into a temporary: the callee's reference
+/// never reaches the caller's storage, so a constructor that keeps it
+/// (`__construct(private array &$elements)`, then `$this->elements[] = $x`) writes into a copy
+/// and the owner never sees it -- a silent wrong answer. The interpreter implements references,
+/// so the pair is left to the runtime autoloader and runs there, the way php runs it. Symfony's
+/// `OrderedHashMap::getIterator()` builds `new OrderedHashMapIterator($this->elements,
+/// $this->orderedKeys, $this->managedCursors)`, which is the shape.
+///
+/// Both files have to be deferrable: a pair the autoloader cannot hand back is left as it is,
+/// because deferring only one half would turn a by-value copy into a call across the compiled
+/// and interpreted worlds that has no reference support at all.
+pub fn propagate_by_ref_place_constructions(
+    program: &Program,
+    class_files: &HashMap<String, String>,
+    deferrable: &HashSet<PathBuf>,
+    deferred: &mut HashSet<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut constructors = HashMap::new();
+    let mut callers = Vec::new();
+    collect_by_ref_constructors(program, &mut constructors, &mut callers);
+    let file_of = |name: &str| class_file(class_files, name).map(|path| canonical(Path::new(path)));
+    let mut added = Vec::new();
+    loop {
+        let mut changed = false;
+        for (caller, usage) in &callers {
+            let Some(caller_file) = file_of(caller) else {
+                continue;
+            };
+            if deferred.contains(&caller_file) || !deferrable.contains(&caller_file) {
+                continue;
+            }
+            for construction in &usage.place_constructions {
+                let Some(params) = effective_constructor_params(&constructors, &construction.class_key)
+                else {
+                    continue;
+                };
+                let hits_by_ref = construction.places.iter().any(|place| match &place.name {
+                    Some(name) => params.iter().any(|(param, by_ref)| *by_ref && param == name),
+                    None => params.get(place.position).is_some_and(|(_, by_ref)| *by_ref),
+                });
+                if !hits_by_ref {
+                    continue;
+                }
+                let Some(callee_file) = file_of(&construction.class_key) else {
+                    continue;
+                };
+                if !deferrable.contains(&callee_file) {
+                    continue;
+                }
+                for file in [caller_file.clone(), callee_file] {
+                    if deferred.insert(file.clone()) {
+                        added.push(file);
+                        changed = true;
+                    }
+                }
+                break;
             }
         }
         if !changed {

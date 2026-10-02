@@ -10687,6 +10687,229 @@
         {
           "by_ref": false,
           "default": null,
+          "name": "filler",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "reflector",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_reflection_fill_members",
+    "description": "Fills a compiled reflector's member reflectors through its compiled filler, on first use.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 676,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_reflection_fill_members.rs",
+      "sig_line": null
+    },
+    "module": "elephc",
+    "name": "__elephc_reflection_fill_members",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "internal compiler primitive"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_heap",
+          "writes_heap",
+          "alloc_heap"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "filler",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "reflector",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "void",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_reflection_fill_members",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "materializer",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_reflection_materialize",
+    "description": "Builds a member reflector's declaring ReflectionClass through its compiled materializer.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 676,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_reflection_materialize.rs",
+      "sig_line": null
+    },
+    "module": "elephc",
+    "name": "__elephc_reflection_materialize",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "internal compiler primitive"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_heap",
+          "alloc_heap"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "materializer",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_reflection_materialize",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
           "name": "op",
           "optional": false,
           "type": "int"
@@ -12776,9 +12999,36 @@
     "canonical_name": "array_all",
     "description": "Returns true when every array element satisfies the predicate callback.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "array",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/array/array_find.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "callback",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "examples": [],
@@ -12912,9 +13162,36 @@
     "canonical_name": "array_any",
     "description": "Returns true when at least one array element satisfies the predicate callback.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "array",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/array/array_find.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "callback",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "examples": [],
@@ -13018,6 +13295,111 @@
     },
     "since": null,
     "slug": "array_any",
+    "sub_area": "Array"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "case",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Array",
+    "canonical_name": "array_change_key_case",
+    "description": "Changes the case of all string keys in an array.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "array",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/array/array_change_key_case.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "case",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/array_edge_prelude.rs",
+      "codegen_function": "array_change_key_case",
+      "codegen_line": 112,
+      "notes": [
+        "Implemented by the compiler-injected array-edge prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs",
+      "sig_line": null
+    },
+    "module": "standard",
+    "name": "array_change_key_case",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "case",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "array",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "array_change_key_case",
     "sub_area": "Array"
   },
   {
@@ -13792,9 +14174,29 @@
     "canonical_name": "array_diff_assoc",
     "description": "Computes the difference of arrays with additional index check.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "array",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": "arrays"
     },
     "eval_only": false,
     "examples": [],
@@ -13999,6 +14401,174 @@
     },
     "since": null,
     "slug": "array_diff_key",
+    "sub_area": "Array"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": "rest"
+    },
+    "area": "Array",
+    "canonical_name": "array_diff_uassoc",
+    "description": "Computes the difference of arrays with an additional index check performed by a user callback.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "array",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": "rest"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/array_ucompare_prelude.rs",
+      "codegen_function": "array_diff_uassoc",
+      "codegen_line": 47,
+      "notes": [
+        "Implemented by the compiler-injected array-ucompare prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs",
+      "sig_line": null
+    },
+    "module": "standard",
+    "name": "array_diff_uassoc",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "return_type": "array",
+      "variadic": "rest"
+    },
+    "since": null,
+    "slug": "array_diff_uassoc",
+    "sub_area": "Array"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": "rest"
+    },
+    "area": "Array",
+    "canonical_name": "array_diff_ukey",
+    "description": "Computes the difference of arrays using a user callback to compare keys.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "array",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": "rest"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/array_ucompare_prelude.rs",
+      "codegen_function": "array_diff_ukey",
+      "codegen_line": 48,
+      "notes": [
+        "Implemented by the compiler-injected array-ucompare prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs",
+      "sig_line": null
+    },
+    "module": "standard",
+    "name": "array_diff_ukey",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "return_type": "array",
+      "variadic": "rest"
+    },
+    "since": null,
+    "slug": "array_diff_ukey",
     "sub_area": "Array"
   },
   {
@@ -14528,9 +15098,36 @@
     "canonical_name": "array_find",
     "description": "Returns the first element satisfying a predicate callback, or null.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "array",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/array/array_find.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "callback",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "examples": [],
@@ -14634,6 +15231,195 @@
     },
     "since": null,
     "slug": "array_find",
+    "sub_area": "Array"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "callback",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Array",
+    "canonical_name": "array_find_key",
+    "description": "Returns the key of the first element satisfying a predicate callback, or null.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "array",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/array/array_find.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "callback",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/array_edge_prelude.rs",
+      "codegen_function": "array_find_key",
+      "codegen_line": 84,
+      "notes": [
+        "Implemented by the compiler-injected array-edge prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs",
+      "sig_line": null
+    },
+    "module": "standard",
+    "name": "array_find_key",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "callback",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": "8.4",
+    "slug": "array_find_key",
+    "sub_area": "Array"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Array",
+    "canonical_name": "array_first",
+    "description": "Gets the first value of an array, or null when it is empty.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "array",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/array/array_first.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/array_edge_prelude.rs",
+      "codegen_function": "array_first",
+      "codegen_line": 48,
+      "notes": [
+        "Implemented by the compiler-injected array-edge prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs",
+      "sig_line": null
+    },
+    "module": "standard",
+    "name": "array_first",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": "8.5",
+    "slug": "array_first",
     "sub_area": "Array"
   },
   {
@@ -14907,9 +15693,29 @@
     "canonical_name": "array_intersect_assoc",
     "description": "Computes the intersection of arrays with additional index check.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "array",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": "arrays"
     },
     "eval_only": false,
     "examples": [],
@@ -15114,6 +15920,174 @@
     },
     "since": null,
     "slug": "array_intersect_key",
+    "sub_area": "Array"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": "rest"
+    },
+    "area": "Array",
+    "canonical_name": "array_intersect_uassoc",
+    "description": "Computes the intersection of arrays with an additional index check performed by a user callback.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "array",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": "rest"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/array_ucompare_prelude.rs",
+      "codegen_function": "array_intersect_uassoc",
+      "codegen_line": 49,
+      "notes": [
+        "Implemented by the compiler-injected array-ucompare prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs",
+      "sig_line": null
+    },
+    "module": "standard",
+    "name": "array_intersect_uassoc",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "return_type": "array",
+      "variadic": "rest"
+    },
+    "since": null,
+    "slug": "array_intersect_uassoc",
+    "sub_area": "Array"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": "rest"
+    },
+    "area": "Array",
+    "canonical_name": "array_intersect_ukey",
+    "description": "Computes the intersection of arrays using a user callback to compare keys.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "array",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": "rest"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/array_ucompare_prelude.rs",
+      "codegen_function": "array_intersect_ukey",
+      "codegen_line": 50,
+      "notes": [
+        "Implemented by the compiler-injected array-ucompare prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs",
+      "sig_line": null
+    },
+    "module": "standard",
+    "name": "array_intersect_ukey",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "return_type": "array",
+      "variadic": "rest"
+    },
+    "since": null,
+    "slug": "array_intersect_ukey",
     "sub_area": "Array"
   },
   {
@@ -15644,9 +16618,23 @@
           "name": "array",
           "optional": false,
           "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "filter_value",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": false,
+          "name": "strict",
+          "optional": true,
+          "type": "bool"
         }
       ],
-      "required_param_count": 1,
+      "required_param_count": 2,
       "signature_override_reason": null,
       "supported": true,
       "variadic": null
@@ -15671,9 +16659,23 @@
           "name": "array",
           "optional": false,
           "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "filter_value",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "strict",
+          "optional": true,
+          "type": "bool"
         }
       ],
-      "required_param_count": 1,
+      "required_param_count": 2,
       "runtime_builtin_id": null,
       "signature_override_reason": null,
       "supported": true,
@@ -15750,6 +16752,20 @@
           "name": "array",
           "optional": false,
           "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "filter_value",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "strict",
+          "optional": true,
+          "type": "bool"
         }
       ],
       "return_type": "array",
@@ -15757,6 +16773,90 @@
     },
     "since": null,
     "slug": "array_keys",
+    "sub_area": "Array"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Array",
+    "canonical_name": "array_last",
+    "description": "Gets the last value of an array, or null when it is empty.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "array",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/array/array_first.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/array_edge_prelude.rs",
+      "codegen_function": "array_last",
+      "codegen_line": 61,
+      "notes": [
+        "Implemented by the compiler-injected array-edge prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs",
+      "sig_line": null
+    },
+    "module": "standard",
+    "name": "array_last",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": "8.5",
+    "slug": "array_last",
     "sub_area": "Array"
   },
   {
@@ -16036,9 +17136,21 @@
     "canonical_name": "array_merge_recursive",
     "description": "Recursively merges two arrays, combining scalar collisions into lists.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "array",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/array/array_recursive.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": "arrays"
     },
     "eval_only": false,
     "examples": [],
@@ -17164,7 +18276,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "int",
+      "return_type": "mixed",
       "variadic": null
     },
     "since": null,
@@ -17317,9 +18429,29 @@
     "canonical_name": "array_replace_recursive",
     "description": "Replaces elements from passed arrays into the first array recursively.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "array",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/array/array_recursive.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": "replacements"
     },
     "eval_only": false,
     "examples": [],
@@ -18407,9 +19539,43 @@
     "canonical_name": "array_udiff",
     "description": "Computes the difference of arrays using a callback comparator.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "array",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array1",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array2",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "callback",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 3,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "examples": [],
@@ -18524,6 +19690,174 @@
   },
   {
     "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": "rest"
+    },
+    "area": "Array",
+    "canonical_name": "array_udiff_assoc",
+    "description": "Computes the difference of arrays with an additional index check, comparing data by a user callback.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "array",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": "rest"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/array_ucompare_prelude.rs",
+      "codegen_function": "array_udiff_assoc",
+      "codegen_line": 51,
+      "notes": [
+        "Implemented by the compiler-injected array-ucompare prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs",
+      "sig_line": null
+    },
+    "module": "standard",
+    "name": "array_udiff_assoc",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "return_type": "array",
+      "variadic": "rest"
+    },
+    "since": null,
+    "slug": "array_udiff_assoc",
+    "sub_area": "Array"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": "rest"
+    },
+    "area": "Array",
+    "canonical_name": "array_udiff_uassoc",
+    "description": "Computes the difference of arrays with an additional index check, comparing data and indexes by user callbacks.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "array",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": "rest"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/array_ucompare_prelude.rs",
+      "codegen_function": "array_udiff_uassoc",
+      "codegen_line": 52,
+      "notes": [
+        "Implemented by the compiler-injected array-ucompare prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs",
+      "sig_line": null
+    },
+    "module": "standard",
+    "name": "array_udiff_uassoc",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "return_type": "array",
+      "variadic": "rest"
+    },
+    "since": null,
+    "slug": "array_udiff_uassoc",
+    "sub_area": "Array"
+  },
+  {
+    "aot": {
       "kind": "registry",
       "params": [
         {
@@ -18557,9 +19891,43 @@
     "canonical_name": "array_uintersect",
     "description": "Computes the intersection of arrays using a callback comparator.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "array",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array1",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array2",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "callback",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 3,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "examples": [],
@@ -18670,6 +20038,174 @@
     },
     "since": null,
     "slug": "array_uintersect",
+    "sub_area": "Array"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": "rest"
+    },
+    "area": "Array",
+    "canonical_name": "array_uintersect_assoc",
+    "description": "Computes the intersection of arrays with an additional index check, comparing data by a user callback.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "array",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": "rest"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/array_ucompare_prelude.rs",
+      "codegen_function": "array_uintersect_assoc",
+      "codegen_line": 53,
+      "notes": [
+        "Implemented by the compiler-injected array-ucompare prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs",
+      "sig_line": null
+    },
+    "module": "standard",
+    "name": "array_uintersect_assoc",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "return_type": "array",
+      "variadic": "rest"
+    },
+    "since": null,
+    "slug": "array_uintersect_assoc",
+    "sub_area": "Array"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": "rest"
+    },
+    "area": "Array",
+    "canonical_name": "array_uintersect_uassoc",
+    "description": "Computes the intersection of arrays with an additional index check, comparing data and indexes by user callbacks.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "array",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": "rest"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/array_ucompare_prelude.rs",
+      "codegen_function": "array_uintersect_uassoc",
+      "codegen_line": 54,
+      "notes": [
+        "Implemented by the compiler-injected array-ucompare prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs",
+      "sig_line": null
+    },
+    "module": "standard",
+    "name": "array_uintersect_uassoc",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "return_type": "array",
+      "variadic": "rest"
+    },
+    "since": null,
+    "slug": "array_uintersect_uassoc",
     "sub_area": "Array"
   },
   {
@@ -27867,7 +29403,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 724,
+      "codegen_line": 809,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -27952,7 +29488,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 723,
+      "codegen_line": 808,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -28023,7 +29559,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 727,
+      "codegen_line": 812,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -28108,7 +29644,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 722,
+      "codegen_line": 807,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -36416,7 +37952,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "independent"
       },
       "requirements": {
         "kind": "static",
@@ -36505,7 +38041,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 875,
+      "codegen_line": 960,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -36583,7 +38119,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 702,
+      "codegen_line": 785,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -36668,7 +38204,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 704,
+      "codegen_line": 789,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -36753,7 +38289,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 703,
+      "codegen_line": 786,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -36838,7 +38374,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 707,
+      "codegen_line": 792,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -36937,7 +38473,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 883,
+      "codegen_line": 968,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37279,7 +38815,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 872,
+      "codegen_line": 957,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37364,7 +38900,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 874,
+      "codegen_line": 959,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37427,7 +38963,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 819,
+      "codegen_line": 904,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37483,7 +39019,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 869,
+      "codegen_line": 954,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37554,7 +39090,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 889,
+      "codegen_line": 974,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37646,7 +39182,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 884,
+      "codegen_line": 969,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37738,7 +39274,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 877,
+      "codegen_line": 962,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37809,7 +39345,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 882,
+      "codegen_line": 967,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37873,7 +39409,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 713,
+      "codegen_line": 798,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -37944,7 +39480,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 710,
+      "codegen_line": 795,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -38022,7 +39558,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 876,
+      "codegen_line": 961,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -38107,7 +39643,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 714,
+      "codegen_line": 799,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -38222,7 +39758,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 805,
+      "codegen_line": 890,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -38358,7 +39894,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 805,
+      "codegen_line": 890,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -38485,7 +40021,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 886,
+      "codegen_line": 971,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -38577,7 +40113,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 878,
+      "codegen_line": 963,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -38648,7 +40184,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 879,
+      "codegen_line": 964,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -38719,7 +40255,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 880,
+      "codegen_line": 965,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -38790,7 +40326,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 881,
+      "codegen_line": 966,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -40186,7 +41722,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 768,
+      "codegen_line": 853,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -40266,7 +41802,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 768,
+      "codegen_line": 853,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -40357,7 +41893,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/count_empty.rs",
       "codegen_function": "lower_empty",
-      "codegen_line": 453,
+      "codegen_line": 500,
       "notes": [
         "Lowers `empty()` for concrete scalar and array-like operands."
       ],
@@ -47336,7 +48872,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 736,
+      "codegen_line": 821,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -49660,7 +51196,7 @@
   },
   {
     "aot": {
-      "kind": "none",
+      "kind": "registry",
       "params": [
         {
           "by_ref": false,
@@ -49672,8 +51208,7 @@
       ],
       "required_param_count": 1,
       "signature_override_reason": null,
-      "supported": false,
-      "unsupported_reason": "eval-only-reflection",
+      "supported": true,
       "variadic": null
     },
     "area": "Class",
@@ -49704,7 +51239,7 @@
       "supported": true,
       "variadic": null
     },
-    "eval_only": true,
+    "eval_only": false,
     "examples": [],
     "in_catalog": true,
     "is_extension": false,
@@ -49712,18 +51247,78 @@
     "lowering": {
       "checker_file": null,
       "checker_line": null,
-      "codegen_file": null,
-      "codegen_function": null,
-      "codegen_line": null,
-      "notes": [],
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 676,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.get_class_methods` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
       "runtime_helpers": [],
       "sig_arm": null,
-      "sig_file": "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+      "sig_file": "src/builtins/callables/get_class_methods.rs",
       "sig_line": null
     },
     "module": "core",
     "name": "get_class_methods",
-    "semantics": null,
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "get_class_methods"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "independent"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [
+        "get_class_methods"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
     "sig": {
       "params": [
         {
@@ -49743,7 +51338,7 @@
   },
   {
     "aot": {
-      "kind": "none",
+      "kind": "prelude",
       "params": [
         {
           "by_ref": false,
@@ -49755,8 +51350,7 @@
       ],
       "required_param_count": 1,
       "signature_override_reason": null,
-      "supported": false,
-      "unsupported_reason": "eval-only-reflection",
+      "supported": true,
       "variadic": null
     },
     "area": "Class",
@@ -49787,7 +51381,7 @@
       "supported": true,
       "variadic": null
     },
-    "eval_only": true,
+    "eval_only": false,
     "examples": [],
     "in_catalog": true,
     "is_extension": false,
@@ -49795,10 +51389,12 @@
     "lowering": {
       "checker_file": null,
       "checker_line": null,
-      "codegen_file": null,
-      "codegen_function": null,
-      "codegen_line": null,
-      "notes": [],
+      "codegen_file": "src/class_vars_prelude.rs",
+      "codegen_function": "get_class_vars",
+      "codegen_line": 241,
+      "notes": [
+        "Implemented by the compiler-injected class-vars prelude."
+      ],
       "runtime_helpers": [],
       "sig_arm": null,
       "sig_file": "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
@@ -52561,7 +54157,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 816,
+      "codegen_line": 901,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -52992,7 +54588,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "independent"
       },
       "requirements": {
         "kind": "static",
@@ -53327,7 +54923,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 825,
+      "codegen_line": 910,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -53537,7 +55133,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 728,
+      "codegen_line": 813,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -55376,6 +56972,216 @@
         {
           "by_ref": false,
           "default": null,
+          "name": "algo",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "password",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "salt",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "iterations",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "length",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": false,
+          "name": "binary",
+          "optional": true,
+          "type": "bool"
+        },
+        {
+          "by_ref": false,
+          "default": [],
+          "name": "options",
+          "optional": true,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 4,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "String",
+    "canonical_name": "hash_pbkdf2",
+    "description": "Generates a PBKDF2 key derivation of a supplied password.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "string",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/hash_pbkdf2.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "algo",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "password",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "salt",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "iterations",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "length",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "binary",
+          "optional": true,
+          "type": "bool"
+        },
+        {
+          "by_ref": false,
+          "default": "[]",
+          "name": "options",
+          "optional": true,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 4,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/hash_pbkdf2_prelude.rs",
+      "codegen_function": "hash_pbkdf2",
+      "codegen_line": 178,
+      "notes": [
+        "Implemented by the compiler-injected hash_pbkdf2 prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+      "sig_line": null
+    },
+    "module": "hash",
+    "name": "hash_pbkdf2",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "algo",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "password",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "salt",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "iterations",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "length",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "binary",
+          "optional": true,
+          "type": "bool"
+        },
+        {
+          "by_ref": false,
+          "default": "[]",
+          "name": "options",
+          "optional": true,
+          "type": "array"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "hash_pbkdf2",
+    "sub_area": "String"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
           "name": "context",
           "optional": false,
           "type": "mixed"
@@ -55678,9 +57484,26 @@
     "canonical_name": "header_remove",
     "description": "Removes one or all pending HTTP response headers.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "adapter_reason": null,
+      "area": "time",
+      "execution": "shared-runtime",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/time/header_remove.rs",
+      "hooks": [],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "name",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 0,
+      "runtime_builtin_id": 24,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "examples": [],
@@ -55781,6 +57604,121 @@
   {
     "aot": {
       "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "headers_list",
+    "description": "Returns the pending response headers as `Name: value` lines.",
+    "eval": {
+      "adapter_reason": null,
+      "area": "time",
+      "execution": "shared-runtime",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/time/headers_list.rs",
+      "hooks": [],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": 23,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 676,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.headers_list` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/headers_list.rs",
+      "sig_line": null
+    },
+    "module": "standard",
+    "name": "headers_list",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "headers_list"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [
+        "headers_list"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [],
+      "return_type": "array",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "headers_list",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
       "params": [
         {
           "by_ref": true,
@@ -55806,11 +57744,14 @@
     "canonical_name": "headers_sent",
     "description": "Reports whether output has already committed response headers.",
     "eval": {
-      "adapter_reason": null,
+      "adapter_reason": "additional-signature-semantics",
       "area": "time",
-      "execution": "shared-runtime",
+      "execution": "hybrid-adapter",
       "home_file": "crates/elephc-magician/src/interpreter/builtins/time/headers_sent.rs",
-      "hooks": [],
+      "hooks": [
+        "direct",
+        "values"
+      ],
       "kind": "registry",
       "params": [
         {
@@ -56666,6 +58607,13 @@
           "name": "encoding",
           "optional": true,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": true,
+          "name": "double_encode",
+          "optional": true,
+          "type": "bool"
         }
       ],
       "required_param_count": 1,
@@ -56707,6 +58655,13 @@
           "name": "encoding",
           "optional": true,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "true",
+          "name": "double_encode",
+          "optional": true,
+          "type": "bool"
         }
       ],
       "required_param_count": 1,
@@ -56799,6 +58754,13 @@
           "name": "encoding",
           "optional": true,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "true",
+          "name": "double_encode",
+          "optional": true,
+          "type": "bool"
         }
       ],
       "return_type": "string",
@@ -58934,7 +60896,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 645,
+      "codegen_line": 727,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -67410,7 +69372,22 @@
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",
@@ -67934,7 +69911,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "ini_get",
-      "codegen_line": 4344,
+      "codegen_line": 4301,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -68005,7 +69982,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "ini_get_all",
-      "codegen_line": 5017,
+      "codegen_line": 4974,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -68147,7 +70124,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "ini_set",
-      "codegen_line": 4440,
+      "codegen_line": 4397,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -73226,7 +75203,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 742,
+      "codegen_line": 827,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -73304,7 +75281,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 745,
+      "codegen_line": 830,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -73375,7 +75352,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 737,
+      "codegen_line": 822,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -73439,7 +75416,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 731,
+      "codegen_line": 816,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -73517,7 +75494,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 739,
+      "codegen_line": 824,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -73595,7 +75572,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 735,
+      "codegen_line": 820,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -73659,7 +75636,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 746,
+      "codegen_line": 831,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -73737,7 +75714,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 738,
+      "codegen_line": 823,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -73870,7 +75847,22 @@
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",
@@ -74751,7 +76743,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 734,
+      "codegen_line": 819,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -75798,7 +77790,7 @@
       "checker_line": null,
       "codegen_file": "src/backend_gap_prelude.rs",
       "codegen_function": "levenshtein",
-      "codegen_line": 927,
+      "codegen_line": 930,
       "notes": [
         "Implemented by the compiler-injected backend-gap prelude."
       ],
@@ -77690,8 +79682,7 @@
     "semantics": {
       "argument_lowering": "nullable_string_operands",
       "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
+        "kind": "dynamic"
       },
       "effects": {
         "kind": "static",
@@ -77849,8 +79840,7 @@
     "semantics": {
       "argument_lowering": "nullable_string_operands",
       "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
+        "kind": "dynamic"
       },
       "effects": {
         "kind": "static",
@@ -89811,6 +91801,507 @@
   },
   {
     "aot": {
+      "kind": "prelude",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "String",
+    "canonical_name": "password_algos",
+    "description": "Returns the identifiers of the available password hashing algorithms (bcrypt).",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "string",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/password_algos.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/password_prelude.rs",
+      "codegen_function": "password_algos",
+      "codegen_line": 224,
+      "notes": [
+        "Implemented by the compiler-injected password prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs",
+      "sig_line": null
+    },
+    "module": "standard",
+    "name": "password_algos",
+    "semantics": null,
+    "sig": {
+      "params": [],
+      "return_type": "array",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "password_algos",
+    "sub_area": "String"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "hash",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "String",
+    "canonical_name": "password_get_info",
+    "description": "Returns the algorithm and options a password hash was made with.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "string",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/password_get_info.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "hash",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/password_prelude.rs",
+      "codegen_function": "password_get_info",
+      "codegen_line": 111,
+      "notes": [
+        "Implemented by the compiler-injected password prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs",
+      "sig_line": null
+    },
+    "module": "standard",
+    "name": "password_get_info",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "hash",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "array",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "password_get_info",
+    "sub_area": "String"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "password",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "algo",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": [],
+          "name": "options",
+          "optional": true,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "String",
+    "canonical_name": "password_hash",
+    "description": "Creates a bcrypt password hash with a random salt.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "string",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/password_hash.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "password",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "algo",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "[]",
+          "name": "options",
+          "optional": true,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/password_prelude.rs",
+      "codegen_function": "password_hash",
+      "codegen_line": 179,
+      "notes": [
+        "Implemented by the compiler-injected password prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs",
+      "sig_line": null
+    },
+    "module": "standard",
+    "name": "password_hash",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "password",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "algo",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "[]",
+          "name": "options",
+          "optional": true,
+          "type": "array"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "password_hash",
+    "sub_area": "String"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "hash",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "algo",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": [],
+          "name": "options",
+          "optional": true,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "String",
+    "canonical_name": "password_needs_rehash",
+    "description": "Reports whether a hash does not match the given algorithm and options.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "string",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/password_needs_rehash.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "hash",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "algo",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "[]",
+          "name": "options",
+          "optional": true,
+          "type": "array"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/password_prelude.rs",
+      "codegen_function": "password_needs_rehash",
+      "codegen_line": 143,
+      "notes": [
+        "Implemented by the compiler-injected password prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs",
+      "sig_line": null
+    },
+    "module": "standard",
+    "name": "password_needs_rehash",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "hash",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "algo",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "[]",
+          "name": "options",
+          "optional": true,
+          "type": "array"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "password_needs_rehash",
+    "sub_area": "String"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "password",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "hash",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "String",
+    "canonical_name": "password_verify",
+    "description": "Verifies that a password matches a bcrypt hash.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "string",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/password_verify.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "password",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "hash",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/password_prelude.rs",
+      "codegen_function": "password_verify",
+      "codegen_line": 83,
+      "notes": [
+        "Implemented by the compiler-injected password prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs",
+      "sig_line": null
+    },
+    "module": "standard",
+    "name": "password_verify",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "password",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "hash",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "password_verify",
+    "sub_area": "String"
+  },
+  {
+    "aot": {
       "kind": "registry",
       "params": [
         {
@@ -97638,7 +100129,7 @@
           "default": null,
           "name": "pattern",
           "optional": false,
-          "type": "mixed"
+          "type": "array"
         },
         {
           "by_ref": false,
@@ -97693,7 +100184,7 @@
           "default": null,
           "name": "pattern",
           "optional": false,
-          "type": "mixed"
+          "type": "array"
         },
         {
           "by_ref": false,
@@ -97759,7 +100250,7 @@
           "default": null,
           "name": "pattern",
           "optional": false,
-          "type": "mixed"
+          "type": "array"
         },
         {
           "by_ref": false,
@@ -104942,7 +107433,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_abort",
-      "codegen_line": 3361,
+      "codegen_line": 3318,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -104998,7 +107489,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_cache_expire",
-      "codegen_line": 3468,
+      "codegen_line": 3425,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -105062,7 +107553,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_cache_limiter",
-      "codegen_line": 3440,
+      "codegen_line": 3397,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -105118,7 +107609,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_commit",
-      "codegen_line": 3675,
+      "codegen_line": 3632,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -105174,7 +107665,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_create_id",
-      "codegen_line": 3286,
+      "codegen_line": 3243,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -105238,7 +107729,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_decode",
-      "codegen_line": 3052,
+      "codegen_line": 3009,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -105294,7 +107785,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_destroy",
-      "codegen_line": 2902,
+      "codegen_line": 2859,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -105342,7 +107833,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_encode",
-      "codegen_line": 3034,
+      "codegen_line": 2991,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -105390,7 +107881,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_gc",
-      "codegen_line": 3331,
+      "codegen_line": 3288,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -105438,7 +107929,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_get_cookie_params",
-      "codegen_line": 3496,
+      "codegen_line": 3453,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -105494,7 +107985,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_id",
-      "codegen_line": 2938,
+      "codegen_line": 2895,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -105558,7 +108049,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_module_name",
-      "codegen_line": 3695,
+      "codegen_line": 3652,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -105622,7 +108113,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_name",
-      "codegen_line": 2967,
+      "codegen_line": 2924,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -105686,7 +108177,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_regenerate_id",
-      "codegen_line": 3101,
+      "codegen_line": 3058,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -105742,7 +108233,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_register_shutdown",
-      "codegen_line": 3685,
+      "codegen_line": 3642,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -105790,7 +108281,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_reset",
-      "codegen_line": 3393,
+      "codegen_line": 3350,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -105846,7 +108337,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_save_path",
-      "codegen_line": 3072,
+      "codegen_line": 3029,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -105902,7 +108393,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_set_cookie_params",
-      "codegen_line": 3515,
+      "codegen_line": 3472,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -106014,7 +108505,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_set_save_handler",
-      "codegen_line": 3732,
+      "codegen_line": 3689,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -106134,7 +108625,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_start",
-      "codegen_line": 1874,
+      "codegen_line": 1831,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -106190,7 +108681,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_status",
-      "codegen_line": 3005,
+      "codegen_line": 2962,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -106238,7 +108729,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_unset",
-      "codegen_line": 3015,
+      "codegen_line": 2972,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -106286,7 +108777,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_write_close",
-      "codegen_line": 2814,
+      "codegen_line": 2771,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -106647,7 +109138,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "setcookie",
-      "codegen_line": 1349,
+      "codegen_line": 1306,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -106958,7 +109449,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "setrawcookie",
-      "codegen_line": 1365,
+      "codegen_line": 1322,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -109667,8 +112158,8 @@
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
+        "kind": "dynamic_target",
+        "target": "spl_object_id"
       },
       "effects": {
         "kind": "static",
@@ -110893,7 +113384,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "independent"
       },
       "requirements": {
         "kind": "static",
@@ -111054,7 +113545,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "independent"
       },
       "requirements": {
         "kind": "static",
@@ -119581,7 +122072,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 825,
+      "codegen_line": 910,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -120720,7 +123211,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 717,
+      "codegen_line": 802,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -124197,7 +126688,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 855,
+      "codegen_line": 940,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -124346,7 +126837,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 718,
+      "codegen_line": 803,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -124424,7 +126915,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 890,
+      "codegen_line": 975,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -124495,7 +126986,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 891,
+      "codegen_line": 976,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -124566,7 +127057,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 849,
+      "codegen_line": 934,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -124716,7 +127207,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 864,
+      "codegen_line": 949,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -125660,8 +128151,7 @@
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
+        "kind": "dynamic"
       },
       "effects": {
         "kind": "static",
@@ -125798,8 +128288,7 @@
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
+        "kind": "dynamic"
       },
       "effects": {
         "kind": "static",
@@ -125811,7 +128300,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "independent"
       },
       "requirements": {
         "kind": "static",
@@ -126196,7 +128685,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 749,
+      "codegen_line": 834,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -127671,6 +130160,132 @@
   },
   {
     "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "version1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "version2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "operator",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "String",
+    "canonical_name": "version_compare",
+    "description": "Compares two PHP-standardized version number strings.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "string",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/version_compare.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "version1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "version2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "operator",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/version_compare_prelude.rs",
+      "codegen_function": "version_compare",
+      "codegen_line": 444,
+      "notes": [
+        "Implemented by the compiler-injected version_compare prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+      "sig_line": null
+    },
+    "module": "standard",
+    "name": "version_compare",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "version1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "version2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "operator",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "version_compare",
+    "sub_area": "String"
+  },
+  {
+    "aot": {
       "kind": "registry",
       "params": [
         {
@@ -128299,7 +130914,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "independent"
       },
       "requirements": {
         "kind": "static",

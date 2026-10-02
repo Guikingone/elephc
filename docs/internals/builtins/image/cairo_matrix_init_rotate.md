@@ -2,7 +2,7 @@
 title: "cairo_matrix_init_rotate() — internals"
 description: "Compiler internals for cairo_matrix_init_rotate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 416
+  order: 428
 ---
 
 ## `cairo_matrix_init_rotate()` — internals

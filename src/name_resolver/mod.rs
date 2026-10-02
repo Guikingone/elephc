@@ -268,6 +268,11 @@ pub(crate) fn canonical_compat_prelude_function_name(name: &str) -> Option<Strin
         // autoloaded call is typed `string` rather than `string|null`, exactly as the entry
         // file's call already was.
         "var_export",
+        // A `BuiltinKind::PreludeProvided` contract like `trigger_error` above, and called bare
+        // from namespaced library code (Symfony's password hasher, Composer's platform check).
+        "version_compare",
+        "hash_pbkdf2",
+        "array_change_key_case",
     ];
     let bare = name.trim_start_matches('\\');
     FUNCTIONS

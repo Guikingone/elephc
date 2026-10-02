@@ -44,6 +44,10 @@ pub(crate) fn lower_array_filter(ctx: &mut FunctionContext<'_>, inst: &Instructi
         let wrapper_label =
             emit_array_filter_truthiness_wrapper(ctx, &elem_ty, boxed_callback_args)?;
         load_array_filter_runtime_args(ctx, array, None, &wrapper_label, 0)?;
+        if !gradual && !associative && elem_ty == PhpType::Mixed {
+            emit_list_or_hash_array_filter_call(ctx, runtime_label);
+            return store_if_result(ctx, inst);
+        }
         abi::emit_call_label(ctx.emitter, runtime_label);
         if associative {
             emit_take_array_filter_assoc_result(ctx);
@@ -137,6 +141,51 @@ pub(crate) fn lower_array_filter(ctx: &mut FunctionContext<'_>, inst: &Instructi
 }
 
 /// Transfers a filtered associative payload out of the temporary boxed runtime result.
+/// Calls the list filter runtime, or the hash one when the `array<mixed>` operand is hash-backed.
+///
+/// A declared `array` parameter accepts hash storage and keeps its keys (see
+/// `materialize_direct_call_arg_for_param`), so an `array<mixed>` value can be a hash at run time:
+/// Symfony's `LocaleListener::__construct()` receives `kernel.enabled_locales` as the hash a gradual
+/// container parameter converts to, and `array_filter($enabledLocales)` walked its buckets as
+/// packed Mixed slots and crashed on the first. The array operand is in the second argument
+/// register (see `load_array_filter_runtime_args`).
+fn emit_list_or_hash_array_filter_call(ctx: &mut FunctionContext<'_>, list_label: &str) {
+    let hash_label = ctx.next_label("array_filter_hash_backed");
+    let done_label = ctx.next_label("array_filter_storage_done");
+    let list_label_local = ctx.next_label("array_filter_list_backed");
+    let (array_reg, scratch) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x1", "x9"),
+        Arch::X86_64 => ("rsi", "r10"),
+    };
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        array_reg,
+        scratch,
+        &list_label_local,
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x1, #-8]");                       // load the operand's packed heap kind word
+            ctx.emitter.instruction("and x9, x9, #0xff");                       // isolate the storage kind byte
+            ctx.emitter.instruction("cmp x9, #3");                              // kind 3 = hash storage
+            ctx.emitter.instruction(&format!("b.eq {}", hash_label));           // filter hash buckets with the hash runtime
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r10, QWORD PTR [rsi - 8]");            // load the operand's packed heap kind word
+            ctx.emitter.instruction("and r10d, 0xff");                          // isolate the storage kind byte
+            ctx.emitter.instruction("cmp r10, 3");                              // kind 3 = hash storage
+            ctx.emitter.instruction(&format!("je {}", hash_label));             // filter hash buckets with the hash runtime
+        }
+    }
+    ctx.emitter.label(&list_label_local);
+    abi::emit_call_label(ctx.emitter, list_label);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&hash_label);
+    abi::emit_call_label(ctx.emitter, "__rt_array_filter_mixed_raw");
+    emit_take_array_filter_assoc_result(ctx);
+    ctx.emitter.label(&done_label);
+}
+
 fn emit_take_array_filter_assoc_result(ctx: &mut FunctionContext<'_>) {
     abi::emit_reserve_temporary_stack(ctx.emitter, 16);
     match ctx.emitter.target.arch {

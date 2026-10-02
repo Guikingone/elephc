@@ -77,6 +77,14 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Levenshtein,
     /// Dispatches `addcslashes(...)`.
     AddCSlashes,
+    /// Dispatches `version_compare(...)`.
+    VersionCompare,
+    /// Dispatches `hash_pbkdf2(...)`.
+    HashPbkdf2,
+    /// Dispatches the `password_*` API.
+    PasswordApi,
+    /// Dispatches `array_change_key_case(...)`.
+    ArrayChangeKeyCase,
     /// Dispatches `clamp(...)`.
     Clamp,
     /// Dispatches `count(...)`.
@@ -438,6 +446,12 @@ impl EvalValuesHook {
             Self::GetDebugType => eval_get_debug_type_values(evaluated_args, context, values),
             Self::Levenshtein => eval_levenshtein_values(evaluated_args, context, values),
             Self::AddCSlashes => eval_addcslashes_values(evaluated_args, context, values),
+            Self::VersionCompare => eval_version_compare_values(evaluated_args, context, values),
+            Self::HashPbkdf2 => eval_hash_pbkdf2_values(evaluated_args, context, values),
+            Self::PasswordApi => eval_password_api_values(name, evaluated_args, context, values),
+            Self::ArrayChangeKeyCase => {
+                eval_array_change_key_case_values(evaluated_args, context, values)
+            }
             Self::Clamp => three_args(evaluated_args, values, eval_clamp_result),
             Self::Core => eval_core_values_result(name, evaluated_args, context, values),
             Self::Cos => one_arg(evaluated_args, values, eval_cos_result),
@@ -707,7 +721,9 @@ impl EvalValuesHook {
             }),
             Self::StringSplitJoin => match name {
                 "explode" => eval_explode_declared_values_result(evaluated_args, values),
-                "implode" | "join" => eval_implode_declared_values_result(evaluated_args, values),
+                "implode" | "join" => {
+                    eval_implode_declared_values_result(evaluated_args, context, values)
+                }
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::StreamBoolPredicate => one_arg(evaluated_args, values, |stream, values| {

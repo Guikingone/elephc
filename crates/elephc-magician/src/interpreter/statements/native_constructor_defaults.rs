@@ -59,6 +59,15 @@ pub(super) fn eval_native_constructor_with_evaluated_args_and_ref_mode(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    if eval_is_reflection_owner_class(class_name) {
+        return eval_reflection_owner_parent_constructor(
+            class_name,
+            object,
+            evaluated_args,
+            context,
+            values,
+        );
+    }
     let constructor_metadata = eval_aot_method_dispatch_metadata_in_hierarchy(
         class_name,
         "__construct",
@@ -83,6 +92,8 @@ pub(super) fn eval_native_constructor_with_evaluated_args_and_ref_mode(
     }
     let bridge_scope = eval_native_constructor_bridge_scope(&constructor_class, context, values)
         .map_err(|status| trace_native_constructor_error("bridge_scope", &constructor_class, status))?;
+    let mut evaluated_args = evaluated_args;
+    eval_unwrap_aggregate_constructor_arg(&constructor_class, &mut evaluated_args, context, values)?;
     let mut signature = context.native_constructor_signature(&constructor_class);
     #[cfg(not(test))]
     if constructor_target_is_known && signature.is_none() {
@@ -165,6 +176,114 @@ pub(super) fn eval_native_constructor_with_evaluated_args_and_ref_mode(
         )),
         (Ok(()), Ok(())) => Ok(()),
     }
+}
+
+/// Hands `IteratorIterator` / `RecursiveIteratorIterator` the iterator an `IteratorAggregate` stands for.
+///
+/// Both constructors take a `Traversable` and unwrap an aggregate through `getIterator()` themselves,
+/// but the compiled constructor recognizes an aggregate by its compiled class id, which a class the
+/// interpreter declared does not have: `new IteratorIterator($orderedHashMap)` in Symfony Form's
+/// `Form::setData()` ended in "Cannot assign object to property of type Iterator". The unwrap is
+/// done here, with the interpreter's own method dispatch, until the argument is an `Iterator`.
+fn eval_unwrap_aggregate_constructor_arg(
+    constructor_class: &str,
+    evaluated_args: &mut [EvaluatedCallArg],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let lowered = constructor_class.trim_start_matches('\\').to_ascii_lowercase();
+    if lowered != "iteratoriterator" && lowered != "recursiveiteratoriterator" {
+        return Ok(());
+    }
+    let Some(first) = evaluated_args.first_mut() else {
+        return Ok(());
+    };
+    if first.name.as_deref().is_some_and(|name| name != "iterator") {
+        return Ok(());
+    }
+    // A cycle of aggregates would never end; PHP itself stops at an object that is no aggregate.
+    for _ in 0..16 {
+        if values.type_tag(first.value)? != EVAL_TAG_OBJECT {
+            return Ok(());
+        }
+        if eval_foreach_object_is_a(first.value, "Iterator", context, values)?
+            || !eval_foreach_object_is_a(first.value, "IteratorAggregate", context, values)?
+        {
+            return Ok(());
+        }
+        let iterator = eval_method_call_result(first.value, "getIterator", Vec::new(), context, values)?;
+        if first.owned {
+            eval_release_value(context, values, first.value)?;
+        }
+        first.value = iterator;
+        first.owned = true;
+        first.ref_target = None;
+    }
+    Ok(())
+}
+
+/// Runs a Reflection owner's constructor on behalf of an eval subclass instance.
+///
+/// A compiled `new ReflectionProperty(...)` is materialized by the compiler and the interpreter
+/// builds its own `new \ReflectionProperty(...)` through `eval_reflection_owner_new_object`; in
+/// neither case does the class's `__construct` body fill the reflector's backing fields, so an
+/// eval class extending an owner -- Doctrine's `RuntimeReflectionProperty extends
+/// \ReflectionProperty`, which backs every mapped entity field -- ended up with an empty
+/// reflector: `getName()` answered `""` and `parent::getValue($entity)` answered `null`.
+///
+/// php runs the owner's constructor on the subclass instance itself. Here the interpreter builds
+/// a complete owner from the same arguments and copies every declared backing field onto the
+/// subclass instance, which has the owner's native layout (`native_class_parent`).
+fn eval_reflection_owner_parent_constructor(
+    class_name: &str,
+    object: RuntimeCellHandle,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Some(template) = eval_reflection_owner_new_object(class_name, evaluated_args, context, values)?
+    else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let owner = class_name.trim_start_matches('\\').to_string();
+    let names = values.reflection_property_names(&owner)?;
+    let names = eval_runtime_string_array_to_vec(names, values);
+    // The backing fields are PRIVATE to the owner class, and the generated property bridge checks
+    // visibility against the context's class scope -- so the copy runs in the owner's scope, the
+    // scope php's own constructor would be running in.
+    let copied = names.and_then(|names| eval_with_native_bridge_scope(&owner, context, || {
+        for name in names {
+            // A field the owner leaves uninitialized for this reflector kind (a typed slot the
+            // materializer never wrote) stays uninitialized on the copy too.
+            if !values.property_is_initialized(template, &name)? {
+                continue;
+            }
+            let value = values.property_get(template, &name).map_err(|status| {
+                trace_native_constructor_error(&format!("owner_field_get:{name}"), class_name, status)
+            })?;
+            // A null or EMPTY array is the default the freshly allocated instance already holds,
+            // and a hook-map field reads back as null for a hookless property while being typed
+            // as a string-keyed map the bridge will not store a null into.
+            let tag = values.type_tag(value)?;
+            if tag == EVAL_TAG_NULL
+                || (matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) && values.array_len(value)? == 0)
+            {
+                values.release(value)?;
+                continue;
+            }
+            values.property_set(object, &name, value).map_err(|status| {
+                let tag = values.type_tag(value).ok();
+                trace_native_constructor_error(
+                    &format!("owner_field_set:{name}:tag={tag:?}"),
+                    class_name,
+                    status,
+                )
+            })?;
+        }
+        Ok(())
+    }));
+    values.release(template)?;
+    copied
 }
 
 /// Emits the failed native-constructor phase under opt-in eval tracing.

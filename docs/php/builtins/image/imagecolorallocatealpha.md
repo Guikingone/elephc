@@ -2,7 +2,7 @@
 title: "imagecolorallocatealpha()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 467
+  order: 479
 ---
 
 ## imagecolorallocatealpha()

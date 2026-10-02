@@ -2,7 +2,7 @@
 title: "date_offset_get()"
 description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
 sidebar:
-  order: 205
+  order: 217
 ---
 
 ## date_offset_get()

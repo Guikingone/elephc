@@ -434,7 +434,23 @@ pub(super) fn eval_reflection_attribute_new_instance_result(
         .resolve_class_name(attribute.name())
         .unwrap_or_else(|| attribute.name().trim_start_matches('\\').to_string());
     if !values.class_exists(&class_name)? {
-        return values.null();
+        // php autoloads the attribute class here: an attribute is often the ONLY mention of its
+        // class, so nothing loaded it before. Answering null instead made Symfony UX's
+        // `LiveComponentMetadataFactory` pass null for every `#[LiveProp]`.
+        let _ = crate::interpreter::eval_spl_autoload_class(&class_name, context, values)?;
+        #[cfg(not(test))]
+        context.sync_global_eval_classes();
+        if let Some(class) = context.class(&class_name).cloned() {
+            let mut scope = ElephcEvalScope::new();
+            return eval_dynamic_class_new_object(&class, args, context, &mut scope, values);
+        }
+        if !values.class_exists(&class_name)? {
+            return eval_throw_error(
+                &format!("Attribute class \"{class_name}\" not found"),
+                context,
+                values,
+            );
+        }
     }
     let object = values.new_object(&class_name)?;
     if let Err(err) = eval_native_constructor_with_evaluated_args(

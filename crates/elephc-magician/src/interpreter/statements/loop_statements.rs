@@ -183,7 +183,7 @@ pub(in crate::interpreter) fn execute_foreach_stmt(
     // `foreach (gen() as $v)` runs the generator's `finally`.
     let subject_owned = !value_by_ref && eval_foreach_owns_subject(array);
     let (array, array_target) = if value_by_ref {
-        eval_call_arg_value(array, context, scope, values)?
+        eval_direct_ref_arg_value(array, context, scope, values)?
     } else {
         (eval_expr(array, context, scope, values)?, None)
     };

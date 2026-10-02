@@ -183,6 +183,7 @@ pub(super) fn emit_eval_native_function_invoker_inline(
         label: &label,
         sig,
         captures: &captures,
+        eval_bridge: ctx.module.required_runtime_features.eval_bridge,
     };
     abi::emit_jump(ctx.emitter, &done_label);
     crate::codegen::runtime_callable_invoker::emit_runtime_callable_invoker_with_exception_boundary(

@@ -2,7 +2,7 @@
 title: "cairo_curve_to()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 405
+  order: 417
 ---
 
 ## cairo_curve_to()

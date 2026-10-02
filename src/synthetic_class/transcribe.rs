@@ -899,6 +899,9 @@ fn expr(value: &Expr, depth: usize) -> String {
         ExprKind::Variable(name) => format!("e_var({})", lit(name)),
         ExprKind::ConstRef(name) => format!("e_const({})", lit(&name.as_canonical())),
         ExprKind::PostIncrement(name) => format!("e_post_inc({})", lit(name)),
+        ExprKind::PostDecrement(name) => format!("e_post_dec({})", lit(name)),
+        ExprKind::PreIncrement(name) => format!("e_pre_inc({})", lit(name)),
+        ExprKind::PreDecrement(name) => format!("e_pre_dec({})", lit(name)),
         ExprKind::Negate(inner) => format!("e_neg({})", expr(inner, depth)),
         ExprKind::Not(inner) => format!("e_not({})", expr(inner, depth)),
         ExprKind::Cast { target, expr: inner } => format!(

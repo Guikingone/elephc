@@ -1236,7 +1236,7 @@ impl<'a> FunctionContext<'a> {
         let ty = self.value_php_type(value)?;
         if self.shared.uses_shared_ref_cell(self.module, &name) {
             self.load_value_to_result(value)?;
-            return crate::codegen::lower_inst::lower_store_shared_global(
+            return crate::codegen::lower_inst::lower_writeback_shared_global(
                 self,
                 &symbol,
                 &ty,

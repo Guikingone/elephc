@@ -2,7 +2,7 @@
 title: "register_tick_function() — internals"
 description: "Compiler internals for register_tick_function(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 679
+  order: 692
 ---
 
 ## `register_tick_function()` — internals

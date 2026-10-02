@@ -59,6 +59,27 @@ pub(crate) struct Usage {
     /// reach: a `use (&$x)` capture, `$a = &$x`, `[&$x]`, `$o->p = &$x`, a by-reference
     /// `foreach`, or a `global` binding.
     pub(crate) exposes_locals: bool,
+    /// Statically-named constructions (`new Foo($this->items, ...)`) that pass a PLACE -- a
+    /// property, static property or array element -- as an argument, with where each one sits.
+    /// Whether that argument reaches a by-reference parameter depends on `Foo`'s constructor,
+    /// which only a pass that sees the class declarations can answer.
+    pub(crate) place_constructions: Vec<PlaceConstruction>,
+}
+
+/// One `new Class(args)` whose arguments include places (see `Usage::place_constructions`).
+#[derive(Clone, Debug)]
+pub(crate) struct PlaceConstruction {
+    /// Case-folded class name without the leading backslash.
+    pub(crate) class_key: String,
+    /// Positional index (`name` is `None`) or parameter name of each place argument.
+    pub(crate) places: Vec<PlaceArgument>,
+}
+
+/// One place argument of a construction.
+#[derive(Clone, Debug)]
+pub(crate) struct PlaceArgument {
+    pub(crate) position: usize,
+    pub(crate) name: Option<String>,
 }
 
 impl Usage {
@@ -76,6 +97,7 @@ impl Usage {
         self.dynamic_define |= other.dynamic_define;
         self.ref_capture_writes.extend(other.ref_capture_writes);
         self.exposes_locals |= other.exposes_locals;
+        self.place_constructions.extend(other.place_constructions);
     }
 
     /// Returns true when a PHP function is referenced case-insensitively.
@@ -162,6 +184,37 @@ fn record_class_name(usage: &mut Usage, name: &str) {
     usage
         .classes
         .insert(php_symbol_key(name.trim_start_matches('\\')));
+}
+
+/// Records the place arguments of one statically-named construction.
+fn record_place_construction(usage: &mut Usage, class_name: &str, args: &[Expr]) {
+    let places: Vec<PlaceArgument> = args
+        .iter()
+        .enumerate()
+        .filter_map(|(position, arg)| {
+            let (value, name) = match &arg.kind {
+                ExprKind::NamedArg { name, value } => (value.as_ref(), Some(name.clone())),
+                _ => (arg, None),
+            };
+            matches!(
+                value.kind,
+                ExprKind::PropertyAccess { .. }
+                    | ExprKind::DynamicPropertyAccess { .. }
+                    | ExprKind::NullsafePropertyAccess { .. }
+                    | ExprKind::NullsafeDynamicPropertyAccess { .. }
+                    | ExprKind::StaticPropertyAccess { .. }
+                    | ExprKind::DynamicStaticPropertyAccess { .. }
+                    | ExprKind::ArrayAccess { .. }
+            )
+            .then_some(PlaceArgument { position, name })
+        })
+        .collect();
+    if !places.is_empty() {
+        usage.place_constructions.push(PlaceConstruction {
+            class_key: php_symbol_key(class_name.trim_start_matches('\\')),
+            places,
+        });
+    }
 }
 
 /// Records whether a static receiver requires the runtime called-class identity.
@@ -536,6 +589,29 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             if name.rsplit('\\').next() == Some("define") && !define_name_is_literal(args) {
                 usage.dynamic_define = true;
             }
+            // Only the multi-array form of `array_map()` is lowered to its prelude helper, so
+            // only that form pulls the helper (and its callable invokers) into the program.
+            let bare = name.rsplit('\\').next().unwrap_or(&name);
+            if bare == "array_map" && args.len() > 2 {
+                record_name(usage, crate::array_map_prelude::ARRAY_MAP_MULTI_NAME);
+            }
+            // A single-array map whose callback is read from storage (a property, an element) may
+            // be selected at run time; `compat_preludes` routes it to the gradual helper.
+            if bare == "array_map"
+                && args.len() == 2
+                && matches!(
+                    args[0].kind,
+                    ExprKind::PropertyAccess { .. }
+                        | ExprKind::NullsafePropertyAccess { .. }
+                        | ExprKind::StaticPropertyAccess { .. }
+                        | ExprKind::ArrayAccess { .. }
+                )
+            {
+                record_name(usage, crate::array_map_prelude::ARRAY_MAP_GRADUAL_NAME);
+            }
+            if bare == "array_keys" && args.len() > 1 {
+                record_name(usage, crate::array_keys_prelude::ARRAY_KEYS_SEARCH_NAME);
+            }
             match name.as_str() {
                 "function_exists" | "is_callable" => {
                     if matches!(args.first().map(|arg| &arg.kind), Some(ExprKind::StringLiteral(_))) {
@@ -691,6 +767,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         ExprKind::NamedArg { value, .. } => scan_expr(value, usage),
         ExprKind::NewObject { class_name, args } => {
             record_class_name(usage, class_name.as_str());
+            record_place_construction(usage, class_name.as_str(), args);
             for arg in args {
                 scan_expr(arg, usage);
             }

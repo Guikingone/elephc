@@ -2,7 +2,7 @@
 title: "mysqli_error_list()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 111
+  order: 123
 ---
 
 ## mysqli_error_list()

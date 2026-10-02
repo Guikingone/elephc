@@ -280,7 +280,7 @@ fn lower_json_encode_flags(
 ) -> Result<()> {
     if inst.operands.len() >= 2 {
         let flags = expect_operand(inst, 1)?;
-        require_integer_like(ctx.load_value_to_result(flags)?, "json_encode flags")?;
+        load_json_flags_as_int(ctx, flags, "json_encode flags")?;
         abi::emit_store_reg_to_symbol(
             ctx.emitter,
             abi::int_result_reg(ctx.emitter),
@@ -683,6 +683,39 @@ fn subtract_one_from_int_result(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Verifies a value can be passed as a JSON integer option.
+/// Loads a `json_encode()` flags operand into the integer result register.
+///
+/// A `?int` local (tagged-scalar storage) is the usual shape once code defaults it --
+/// `if (null === $flags) { $flags = self::DEFAULT; }` in Monolog's `Utils::jsonEncode()`, which
+/// every log line goes through -- and a gradual value converts the way php's int parameter
+/// converts it. A null reads as 0, as php's coercion of null to an int parameter does.
+fn load_json_flags_as_int(ctx: &mut FunctionContext<'_>, flags: ValueId, context: &str) -> Result<()> {
+    let ty = ctx.value_php_type(flags)?.codegen_repr();
+    match ty {
+        PhpType::Int | PhpType::Bool => {
+            ctx.load_value_to_result(flags)?;
+            Ok(())
+        }
+        PhpType::TaggedScalar => {
+            ctx.load_value_to_result(flags)?;
+            let null_label = ctx.next_label("json_flags_null");
+            let done_label = ctx.next_label("json_flags_done");
+            crate::codegen::sentinels::emit_branch_if_tagged_scalar_null(ctx.emitter, &null_label);
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&null_label);
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            ctx.emitter.label(&done_label);
+            Ok(())
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            load_value_to_first_int_arg(ctx, flags)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            Ok(())
+        }
+        other => require_integer_like(other, context),
+    }
+}
+
 fn require_integer_like(ty: PhpType, context: &str) -> Result<()> {
     if matches!(ty, PhpType::Int | PhpType::Bool) {
         return Ok(());

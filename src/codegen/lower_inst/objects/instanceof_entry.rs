@@ -83,6 +83,7 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext
         && matches!(value_ty, PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_))
     {
         let eval_matched = ctx.next_label("instanceof_eval_owner_matched");
+        let eval_definite_no = ctx.next_label("instanceof_eval_owner_definite_no");
         let native_fallback = ctx.next_label("instanceof_eval_owner_native_fallback");
         let done = ctx.next_label("instanceof_eval_owner_done");
         builtins::emit_eval_object_is_a_named_fallback(
@@ -91,9 +92,13 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext
             &class_name,
             &eval_matched,
             &native_fallback,
+            &eval_definite_no,
         )?;
         ctx.emitter.label(&eval_matched);
         abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+        abi::emit_jump(ctx.emitter, &done);
+        ctx.emitter.label(&eval_definite_no);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
         abi::emit_jump(ctx.emitter, &done);
         ctx.emitter.label(&native_fallback);
         Some(done)

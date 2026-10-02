@@ -2,7 +2,7 @@
 title: "mysqli_stmt_param_count()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 173
+  order: 185
 ---
 
 ## mysqli_stmt_param_count()

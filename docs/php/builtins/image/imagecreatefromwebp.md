@@ -2,7 +2,7 @@
 title: "imagecreatefromwebp()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 495
+  order: 507
 ---
 
 ## imagecreatefromwebp()

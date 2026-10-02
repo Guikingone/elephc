@@ -303,6 +303,15 @@ pub trait RuntimeValueOps {
     /// Returns the number of public JSON-visible properties on a runtime object.
     fn object_property_len(&mut self, object: RuntimeCellHandle) -> Result<usize, EvalStatus>;
 
+    /// Returns the compiled program's `(array)` cast of an object it laid out (declared
+    /// properties with php's visibility-mangled keys), or `None` when no such cast applies.
+    fn compiled_object_to_array(
+        &mut self,
+        _object: RuntimeCellHandle,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        Ok(None)
+    }
+
     /// Returns the public property key at a zero-based JSON object iteration position.
     fn object_property_iter_key(
         &mut self,
@@ -567,6 +576,15 @@ pub trait RuntimeValueOps {
 
     /// Returns whether a runtime enum table contains the requested enum name.
     fn enum_exists(&mut self, name: &str) -> Result<bool, EvalStatus>;
+
+    /// Records the interpreter frames live right now as the trace of a Throwable eval allocated.
+    ///
+    /// A compiled `new` does this itself at allocation; an interpreted `new Exception(...)`
+    /// allocates through the generated name-keyed factory instead and would keep the declared
+    /// empty trace. The default does nothing, for adapters with no compiled object layout.
+    fn capture_throwable_trace(&mut self, _object: RuntimeCellHandle) -> Result<(), EvalStatus> {
+        Ok(())
+    }
 
     /// Tests whether a boxed object cell satisfies a class/interface relation.
     fn object_is_a(

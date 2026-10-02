@@ -632,6 +632,20 @@ pub(super) fn write_back_method_nested_array_element_ref_target(
     result
 }
 
+/// Whether a reference target is rooted in an activation scope that no longer exists.
+fn reference_target_root_scope_is_dead(target: &EvalReferenceTarget) -> bool {
+    match target {
+        EvalReferenceTarget::Variable { scope, .. }
+        | EvalReferenceTarget::ArrayElement { scope, .. } => {
+            unsafe { scope.live_mut() }.is_none()
+        }
+        EvalReferenceTarget::NestedArrayElement { array_target, .. } => {
+            reference_target_root_scope_is_dead(array_target)
+        }
+        _ => false,
+    }
+}
+
 /// Stores one by-reference result using an already materialized nested array key.
 fn write_back_method_nested_array_element_ref_target_value(
     array_target: &EvalReferenceTarget,
@@ -640,6 +654,13 @@ fn write_back_method_nested_array_element_ref_target_value(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    // The activation the chain is rooted in has returned (a closure's `use (&$x)` outliving the
+    // method whose `foreach (... as &$x)` bound it): there is no variable left to update, exactly
+    // as for the plain `Variable` and `ArrayElement` targets, and the reading below would turn
+    // that into a fatal.
+    if reference_target_root_scope_is_dead(array_target) {
+        return Ok(());
+    }
     let current = eval_reference_target_value(array_target, context, values)?;
     let array = if values.is_array_like(current)? {
         values.array_clone_shallow(current)?

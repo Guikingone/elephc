@@ -2,7 +2,7 @@
 title: "cairo_set_source_rgb() — internals"
 description: "Compiler internals for cairo_set_source_rgb(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 442
+  order: 454
 ---
 
 ## `cairo_set_source_rgb()` — internals

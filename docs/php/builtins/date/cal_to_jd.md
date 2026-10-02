@@ -2,7 +2,7 @@
 title: "cal_to_jd()"
 description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
 sidebar:
-  order: 187
+  order: 199
 ---
 
 ## cal_to_jd()

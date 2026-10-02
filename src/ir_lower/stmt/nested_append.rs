@@ -312,6 +312,12 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
     // -- body: the slot now certainly holds an array --
     ctx.builder.position_at_end(body_block);
     ctx.restore_initialized_slots(split_initialized);
+    // The bucket is about to be read and appended to in place, so it must belong to this container
+    // alone. When the container is shared with a copy (`$copy = $o->items;`) or a clone, the bucket
+    // cell is reachable through the other holder too and an in-place append would show there.
+    // The for-write parent fetch is what a nested ELEMENT write already uses: it splits a shared
+    // container, republishes it, and replaces a shared bucket cell with a private one.
+    unshare_bucket_for_write(ctx, group, span);
     super::lower_stmt(ctx, group.read);
 
     // Hand the container slot's reference to the temporary, so the push below sees a uniquely-owned
@@ -353,6 +359,58 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
 
     super::lower_stmt(ctx, group.push);
     super::lower_stmt(ctx, group.write_back);
+}
+
+/// Makes the bucket the append is about to mutate private to its container (see the call site).
+///
+/// Only the shapes the for-write parent fetch lowers concretely take part -- a property whose
+/// storage is a Mixed-valued array, a local of the same kind -- and the rest keep their lowering.
+fn unshare_bucket_for_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    group: &NestedAppendGroup<'_>,
+    span: Span,
+) {
+    let parent = match &group.base {
+        BaseKind::Property { object, property } => {
+            let access = Expr::new(
+                ExprKind::PropertyAccess {
+                    object: Box::new((*object).clone()),
+                    property: (*property).to_string(),
+                },
+                span,
+            );
+            super::nested_array_writes::lower_property_parent_fetch_for_write(
+                ctx,
+                object,
+                property,
+                group.index,
+                &access,
+            )
+        }
+        BaseKind::Local(name) => {
+            let mixed_elements = matches!(
+                ctx.local_type(name).codegen_repr(),
+                PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed
+            ) || matches!(
+                ctx.local_type(name).codegen_repr(),
+                PhpType::AssocArray { value, .. } if value.codegen_repr() == PhpType::Mixed
+            );
+            if !mixed_elements || ctx.is_ref_bound_local(name) {
+                return;
+            }
+            let access = Expr::new(ExprKind::Variable((*name).to_string()), span);
+            super::nested_array_writes::lower_local_parent_fetch_for_write(
+                ctx,
+                name,
+                group.index,
+                &access,
+            )
+        }
+        BaseKind::StaticProperty { .. } | BaseKind::Nested => None,
+    };
+    if let Some(parent) = parent {
+        crate::ir_lower::ownership::release_if_owned(ctx, parent, Some(span));
+    }
 }
 
 /// Lowers an append whose bucket has more than one array-access parent.

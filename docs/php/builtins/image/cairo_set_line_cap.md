@@ -2,7 +2,7 @@
 title: "cairo_set_line_cap()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 437
+  order: 449
 ---
 
 ## cairo_set_line_cap()

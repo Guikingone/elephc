@@ -2,7 +2,7 @@
 title: "header_remove()"
 description: "Removes one or all pending HTTP response headers."
 sidebar:
-  order: 620
+  order: 632
 ---
 
 ## header_remove()
@@ -21,7 +21,7 @@ Removes one or all pending HTTP response headers.
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/header_remove.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/header_remove.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

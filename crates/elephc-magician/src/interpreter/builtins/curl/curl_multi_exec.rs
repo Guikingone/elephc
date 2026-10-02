@@ -69,7 +69,7 @@ pub(in crate::interpreter) fn eval_builtin_curl_multi_exec(
         return Err(EvalStatus::RuntimeFatal);
     };
     let multi_handle = eval_expr(multi_handle, context, scope, values)?;
-    let (_, target) = eval_call_arg_value(still_running, context, scope, values)?;
+    let (_, target) = eval_direct_ref_arg_value(still_running, context, scope, values)?;
     let (running, code) = eval_curl_multi_exec_perform(multi_handle, context, values)?;
     match target {
         Some(target) => eval_curl_multi_exec_write_back(&target, running, context, values)?,

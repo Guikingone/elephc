@@ -279,6 +279,13 @@ pub(super) fn check_ref_assign(
     // lowering binds them to it and `store_local` keeps the cell's representation. Widening
     // either slot in the checker would therefore degrade to a store through the cell at a type
     // it cannot hold.
+    if target.starts_with(crate::parser::ast::ARRAY_PROPERTY_REF_TEMP_PREFIX) {
+        return Err(CompileError::new(
+            span,
+            "An array element that references a property (`$array[$key] = &$object->property`) \
+             is not supported by the native backend",
+        ));
+    }
     checker.ref_aliased_locals.insert(target.to_string());
     checker.ref_bound_locals.insert(target.to_string());
     // A `=&` cell is not the boxed capture cell, so this name loses the widening exemption

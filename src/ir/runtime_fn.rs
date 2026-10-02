@@ -666,6 +666,7 @@ pub enum RuntimeFnId {
     Gmmktime,
     Header,
     HeaderRemove,
+    HeadersList,
     HeadersSent,
     Hrtime,
     HttpResponseCode,
@@ -823,6 +824,7 @@ impl RuntimeFnId {
             | RuntimeFnId::BcDivmod
             | RuntimeFnId::Explode
             | RuntimeFnId::Glob
+            | RuntimeFnId::HeadersList
             | RuntimeFnId::Scandir
             | RuntimeFnId::SplClasses => PhpType::Array(Box::new(PhpType::Str)),
             RuntimeFnId::ClassGetAttributes => PhpType::Array(Box::new(PhpType::Object(
@@ -1673,6 +1675,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::Fileperms
                 | RuntimeFnId::Fopen
                 | RuntimeFnId::GetClass
+                | RuntimeFnId::SplObjectId
                 | RuntimeFnId::Gettype
                 | RuntimeFnId::Lchgrp
                 | RuntimeFnId::Lchown
@@ -1716,7 +1719,9 @@ impl RuntimeFnId {
                         | PhpType::Void
                 )
             }),
-            RuntimeFnId::GetClass => source.is_none_or(|ty| {
+            // `spl_object_id` checks a gradual element at run time the same way (`array_map(
+            // 'spl_object_id', $entities)` is how Doctrine's `PersistentCollection` keys a diff).
+            RuntimeFnId::GetClass | RuntimeFnId::SplObjectId => source.is_none_or(|ty| {
                 matches!(ty, PhpType::Mixed | PhpType::Object(_) | PhpType::Union(_))
             }),
             RuntimeFnId::Gettype => true,
@@ -2771,6 +2776,7 @@ impl RuntimeFnId {
             RuntimeFnId::Gmmktime => "gmmktime",
             RuntimeFnId::Header => "header",
             RuntimeFnId::HeaderRemove => "header_remove",
+            RuntimeFnId::HeadersList => "headers_list",
             RuntimeFnId::HeadersSent => "headers_sent",
             RuntimeFnId::Hrtime => "hrtime",
             RuntimeFnId::HttpResponseCode => "http_response_code",

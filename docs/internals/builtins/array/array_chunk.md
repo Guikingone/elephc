@@ -2,7 +2,7 @@
 title: "array_chunk() — internals"
 description: "Compiler internals for array_chunk(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 3
+  order: 4
 ---
 
 ## `array_chunk()` — internals

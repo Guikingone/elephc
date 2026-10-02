@@ -2,7 +2,7 @@
 title: "array_diff_assoc() — internals"
 description: "Compiler internals for array_diff_assoc(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 8
+  order: 9
 ---
 
 ## `array_diff_assoc()` — internals
@@ -49,7 +49,11 @@ function array_diff_assoc(array $array, ...$arrays): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `interpreter-specific-value-semantics`.
+- **Dispatch hooks**: `direct`, `values`
+- **Variadic**: collects excess arguments into `$arrays`.
 
 ## Cross-references
 

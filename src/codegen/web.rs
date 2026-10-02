@@ -641,6 +641,9 @@ const REQUEST_SCOPED_RUNTIME_FLAGS: &[&str] = &[
     // free surfaced as an intermittent "heap debug detected double free" worker crash.
     "_cstr_buf_dynamic",
     "_cstr_buf2_dynamic",
+    // The error-handler dispatch guard, which a fatal inside a `set_error_handler()` callback
+    // leaves raised; a stuck guard sends every later request's diagnostics past its handler.
+    "_rt_diag_dispatching",
     // The cycle collector's re-entry guard, safepoint counter and release suppression.
     "_gc_collecting",
     "_gc_safepoint_count",

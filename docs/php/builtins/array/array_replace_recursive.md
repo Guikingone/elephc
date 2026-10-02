@@ -2,7 +2,7 @@
 title: "array_replace_recursive()"
 description: "Replaces elements from passed arrays into the first array recursively."
 sidebar:
-  order: 34
+  order: 42
 ---
 
 ## array_replace_recursive()
@@ -22,7 +22,7 @@ Replaces elements from passed arrays into the first array recursively.
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_recursive.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_recursive.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

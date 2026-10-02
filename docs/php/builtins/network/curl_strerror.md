@@ -2,7 +2,7 @@
 title: "curl_strerror()"
 description: "Returns string describing the given error code."
 sidebar:
-  order: 718
+  order: 731
 ---
 
 ## curl_strerror()

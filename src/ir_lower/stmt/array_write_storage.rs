@@ -50,29 +50,46 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
         release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, span);
         return;
     }
-    let operands = if op == Op::RuntimeCall && push_goes_through_offset_set(ctx, &ctx.local_type(array)) {
-        // php runs `$obj[] = $v` as `$obj->offsetSet(null, $v)`. The two-operand form is the
-        // SPL containers' native `append()`, which a user `ArrayAccess` class does not have:
-        // the backend refused the push with "method call to unknown method Bag::append".
-        let null_key = ctx
-            .builder
-            .emit_with_effects(
-                Op::ConstNull,
-                Vec::new(),
-                None,
-                IrType::I64,
-                PhpType::Void,
-                Ownership::NonHeap,
-                Op::ConstNull.default_effects(),
-                Some(span),
-            )
-            .expect("const_null produces a value");
-        vec![array_value.value, null_key, value.value]
+    let operands = if op == Op::RuntimeCall {
+        let receiver_ty = ctx.local_type(array);
+        object_push_operands(ctx, &receiver_ty, array_value, value, span)
     } else {
         vec![array_value.value, value.value]
     };
     ctx.emit_void(op, operands, None, op.default_effects(), Some(span));
     release_persisted_string_operand(ctx, value, span);
+}
+
+/// Operands of the runtime call that appends `value` to an object receiver (`$o[] = $v`).
+///
+/// php runs `$obj[] = $v` as `$obj->offsetSet(null, $v)`. The two-operand form is the SPL
+/// containers' native `append()`, which a user `ArrayAccess` class does not have: the backend
+/// refused the push with "method call to unknown method Bag::append" (Doctrine's
+/// `ArrayCollection`, league/commonmark's block parsers).
+pub(super) fn object_push_operands(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver_ty: &PhpType,
+    receiver: LoweredValue,
+    value: LoweredValue,
+    span: Span,
+) -> Vec<crate::ir::ValueId> {
+    if !push_goes_through_offset_set(ctx, receiver_ty) {
+        return vec![receiver.value, value.value];
+    }
+    let null_key = ctx
+        .builder
+        .emit_with_effects(
+            Op::ConstNull,
+            Vec::new(),
+            None,
+            IrType::I64,
+            PhpType::Void,
+            Ownership::NonHeap,
+            Op::ConstNull.default_effects(),
+            Some(span),
+        )
+        .expect("const_null produces a value");
+    vec![receiver.value, null_key, value.value]
 }
 
 /// Returns whether `$value[] = $v` on a value of this static type is `offsetSet(null, $v)`: an

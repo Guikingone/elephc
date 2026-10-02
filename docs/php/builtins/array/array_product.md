@@ -2,7 +2,7 @@
 title: "array_product()"
 description: "Calculate the product of values in an array."
 sidebar:
-  order: 29
+  order: 37
 ---
 
 ## array_product()

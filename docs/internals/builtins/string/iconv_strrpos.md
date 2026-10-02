@@ -2,7 +2,7 @@
 title: "iconv_strrpos() — internals"
 description: "Compiler internals for iconv_strrpos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 813
+  order: 827
 ---
 
 ## `iconv_strrpos()` — internals

@@ -2,7 +2,7 @@
 title: "mysqli_query()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 147
+  order: 159
 ---
 
 ## mysqli_query()

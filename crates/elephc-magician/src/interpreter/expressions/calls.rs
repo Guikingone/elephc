@@ -223,7 +223,7 @@ pub(in crate::interpreter) fn eval_call(
         return eval_dynamic_function(&function, args, context, scope, values);
     }
     if let Some(function) = context.native_function(name) {
-        return eval_native_function(function, args, context, scope, values);
+        return eval_native_function(name, function, args, context, scope, values);
     }
     // Last: a function declared by an include that ran inside ANOTHER eval context. Composer's
     // `files` autoload requires its shims from inside a bound closure, and every compiled frame
@@ -239,9 +239,6 @@ pub(in crate::interpreter) fn eval_call(
     }
     if eval_is_mb_strimwidth_fallback(name) {
         return eval_mb_strimwidth_fallback_call(args, context, scope, values);
-    }
-    if eval_is_version_compare_fallback(name) {
-        return eval_version_compare_fallback_call(args, context, scope, values);
     }
     note_eval_runtime_failure(format!("call to undefined function {name}()"), context);
     Err(EvalStatus::UnsupportedConstruct)
@@ -298,7 +295,7 @@ pub(in crate::interpreter) fn eval_namespaced_call(
         return eval_dynamic_function(&function, args, context, scope, values);
     }
     if let Some(function) = context.native_function(name) {
-        return eval_native_function(function, args, context, scope, values);
+        return eval_native_function(name, function, args, context, scope, values);
     }
     eval_call(fallback_name, args, context, scope, values)
 }
@@ -329,7 +326,14 @@ pub(in crate::interpreter) fn eval_dynamic_call(
             if crate::eval_trace::enabled() {
                 eprintln!("[elephc-eval-trace] phase=dynamic_call descriptor=direct");
             }
-            return eval_native_function(decoded.function, args, context, scope, values);
+            // A compiled closure carries the compiler's internal symbol as its name; php's frame
+            // calls it `{closure}`.
+            let frame_name = if decoded.display_name.starts_with("__eir_closure") {
+                "{closure}"
+            } else {
+                decoded.display_name.as_str()
+            };
+            return eval_native_function(frame_name, decoded.function, args, context, scope, values);
         }
         if let Some((captured_context, captured)) =
             unsafe { decode_eval_callback_adapter_capture(descriptor.cast()) }

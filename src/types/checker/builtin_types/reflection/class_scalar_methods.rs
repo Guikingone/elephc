@@ -16,6 +16,10 @@ pub(super) fn reflection_class_constants() -> Vec<ClassConst> {
         builtin_class_const("IS_FINAL", 32),
         builtin_class_const("IS_EXPLICIT_ABSTRACT", 64),
         builtin_class_const("IS_READONLY", 65_536),
+        // PHP 8.4's lazy-object option flags, accepted by `newLazyGhost()` / `newLazyProxy()`
+        // and friends. Symfony's `LazyGhostTrait` and Doctrine's proxies name them.
+        builtin_class_const("SKIP_INITIALIZATION_ON_SERIALIZE", 8),
+        builtin_class_const("SKIP_DESTRUCTOR", 16),
     ]
 }
 

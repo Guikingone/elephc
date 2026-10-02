@@ -2,7 +2,7 @@
 title: "imagefilledellipse()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 504
+  order: 516
 ---
 
 ## imagefilledellipse()

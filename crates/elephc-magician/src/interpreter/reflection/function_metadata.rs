@@ -533,17 +533,33 @@ pub(super) fn eval_reflection_function_method_short_name(
 }
 
 /// Returns eval-fragment source metadata for a ReflectionFunction or ReflectionMethod target.
-pub(super) fn eval_reflection_function_method_source_location(
-    target: &EvalReflectionFunctionMethodTarget,
-) -> (Option<&str>, Option<EvalSourceLocation>) {
+///
+/// A method of a class the interpreter declared carries no file of its own: its file is the one
+/// that declared its class, which the context records when the declaration executes. Without that
+/// fallback the caller answered with the CURRENT eval file -- the reflecting code's, not the
+/// reflected method's -- so the Symfony demo's source viewer showed the controller's lines cut out
+/// of its own Twig extension.
+pub(super) fn eval_reflection_function_method_source_location<'a>(
+    target: &'a EvalReflectionFunctionMethodTarget,
+    context: &'a ElephcEvalContext,
+) -> (Option<&'a str>, Option<EvalSourceLocation>) {
     match target {
         EvalReflectionFunctionMethodTarget::Function {
             source_location, ..
         } => (None, *source_location),
         EvalReflectionFunctionMethodTarget::Method {
             source_file,
-            source_location, ..
-        } => (source_file.as_deref(), *source_location),
+            source_location,
+            declaring_class,
+            ..
+        } => (
+            source_file.as_deref().or_else(|| {
+                declaring_class
+                    .as_deref()
+                    .and_then(|declaring_class| context.class_source_file(declaring_class))
+            }),
+            *source_location,
+        ),
     }
 }
 

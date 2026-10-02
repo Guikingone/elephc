@@ -129,6 +129,37 @@ pub(super) fn emit_iterator_iterator_inner_from_traversable(
     let done = ctx.next_label("iterator_iterator_source_done");
     emit_branch_if_saved_traversable_implements(ctx, "Iterator", &direct_case)?;
     emit_branch_if_saved_traversable_implements(ctx, "IteratorAggregate", &aggregate_case)?;
+    let owned_case = ctx.next_label("iterator_iterator_source_unwrapped");
+    let bridge = ctx.module.required_runtime_features.eval_bridge;
+    if bridge {
+        // A class the interpreter declared has no compiled class id, so neither check above can
+        // see its interfaces. The interpreter already refused a non-Traversable at the parameter
+        // boundary, so an object it owns is an IteratorAggregate (the bridge hands over what
+        // `getIterator()` returns, which `$inner` wraps) or an Iterator (kept as `$inner`, whose
+        // methods are dispatched through the bridge like every other call on such an object).
+        abi::emit_load_temporary_stack_slot(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            0,
+        );
+        let unwrap_symbol = ctx
+            .emitter
+            .target
+            .extern_symbol("__elephc_eval_unwrap_aggregate");
+        abi::emit_call_label(ctx.emitter, &unwrap_symbol);
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &owned_case);
+        abi::emit_load_temporary_stack_slot(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            0,
+        );
+        let owner_probe = ctx
+            .emitter
+            .target
+            .extern_symbol("__elephc_eval_object_has_dynamic_owner");
+        abi::emit_call_label(ctx.emitter, &owner_probe);
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &direct_case);
+    }
     abi::emit_release_temporary_stack(ctx.emitter, 32);
     abi::emit_call_label(ctx.emitter, "__rt_iterable_unsupported_kind");
 
@@ -137,6 +168,13 @@ pub(super) fn emit_iterator_iterator_inner_from_traversable(
     abi::emit_release_temporary_stack(ctx.emitter, 32);
     abi::emit_incref_if_refcounted(ctx.emitter, &slot.php_type.codegen_repr());
     abi::emit_jump(ctx.emitter, &done);
+
+    if bridge {
+        // The bridge returned the aggregate's traversable with a reference this object now owns.
+        ctx.emitter.label(&owned_case);
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+        abi::emit_jump(ctx.emitter, &done);
+    }
 
     ctx.emitter.label(&aggregate_case);
     emit_validate_iterator_iterator_aggregate_downcast(ctx)?;
@@ -167,6 +205,31 @@ pub(super) fn emit_push_iterator_iterator_downcast_status(
         }
         PhpType::Void | PhpType::Never => {
             emit_push_iterator_iterator_downcast_status_pair(ctx, 0, 0);
+        }
+        // The omitted optional `?string $class` reaches the constructor as a BOXED null, so the
+        // static type says nothing: only a null at run time means "no downcast requested". Taking
+        // every boxed value for an invalid downcast made `new IteratorIterator($aggregate)` throw
+        // "Class to downcast to not found..." for every IteratorAggregate source.
+        PhpType::Mixed | PhpType::Union(_) => {
+            let null_label = ctx.next_label("iterator_iterator_downcast_null");
+            let done_label = ctx.next_label("iterator_iterator_downcast_done");
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #8");                      // runtime tag 8 is null: no downcast class was given
+                    ctx.emitter.instruction(&format!("b.eq {}", null_label));
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 8");                      // runtime tag 8 is null: no downcast class was given
+                    ctx.emitter.instruction(&format!("je {}", null_label));
+                }
+            }
+            emit_push_iterator_iterator_downcast_status_pair(ctx, 2, 0);
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&null_label);
+            emit_push_iterator_iterator_downcast_status_pair(ctx, 0, 0);
+            ctx.emitter.label(&done_label);
         }
         _ => {
             emit_push_iterator_iterator_downcast_status_pair(ctx, 2, 0);

@@ -97,6 +97,7 @@ fn build_class_info_recursive_untagged(
         building,
     )?;
     interfaces::ensure_concrete_class_implements_abstracts(&state, &class)?;
+    interfaces::append_implicit_stringable(&mut state, &class);
 
     let constructor_param_to_prop = constructor_param_to_prop_for(&class, parent_info.as_ref());
     let class_info = state.into_class_info(*next_class_id, &class, constructor_param_to_prop)?;

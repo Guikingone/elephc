@@ -2,7 +2,7 @@
 title: "imageistruecolor()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 516
+  order: 528
 ---
 
 ## imageistruecolor()

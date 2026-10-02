@@ -2,7 +2,7 @@
 title: "headers_sent() — internals"
 description: "Compiler internals for headers_sent(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 621
+  order: 634
 ---
 
 ## `headers_sent()` — internals
@@ -50,8 +50,9 @@ function headers_sent(mixed $filename = null, mixed $line = null): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/headers_sent.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/headers_sent.rs) (`eval_builtin!`)
-- **Execution**: shared generated-runtime ABI (`RuntimeBuiltinId(22)`).
-- **Dispatch hooks**: _none_ (shared runtime dispatch)
+- **Execution**: generated-runtime ABI (`RuntimeBuiltinId(22)`) with a Magician fallback adapter.
+- **Adapter reason**: `additional-signature-semantics`.
+- **Dispatch hooks**: `direct`, `values`
 - **By-reference parameters**: `$filename`, `$line`.
 
 ## Cross-references

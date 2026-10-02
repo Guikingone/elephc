@@ -27,9 +27,9 @@ use crate::codegen_support::sentinels::emit_resolve_prop_desc_tag;
 /// Output:
 ///   ARM64: x1 = ptr in concat_buf, x2 = length
 ///   x86_64: rax = ptr, rdx = length
-pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
+pub(crate) fn emit_json_encode_object(emitter: &mut Emitter, eval_bridge: bool) {
     if emitter.target.arch == Arch::X86_64 {
-        emit_json_encode_object_linux_x86_64(emitter);
+        emit_json_encode_object_linux_x86_64(emitter, eval_bridge);
         return;
     }
 
@@ -71,6 +71,21 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("str x11, [sp, #8]");                                   // save the start pointer for the final result slice
     emitter.instruction("str x11, [sp, #16]");                                  // save the running write pointer for the encoder loop
 
+    if eval_bridge {
+        // An object the interpreter declared carries the generic wrapper's class id, which may
+        // not even index the descriptor table, and whose descriptor would know no
+        // `jsonSerialize()` and no properties. Ask the bridge before the descriptor lookup: the
+        // thunk below stands in for the descriptor's method target and hands back what the
+        // interpreter would encode, which the shared tail then encodes as the serialized value.
+        emitter.instruction("ldr x0, [sp, #0]");                                // pass the object identity to the owner probe
+        let probe = emitter.target.extern_symbol("__elephc_eval_object_has_dynamic_owner");
+        abi::emit_call_label(emitter, &probe);
+        emitter.instruction("cbz x0, __rt_json_obj_native_descriptor");         // a native object keeps its descriptor
+        abi::emit_symbol_address(emitter, "x14", "__rt_json_eval_serialize_thunk");
+        emitter.instruction("b __rt_json_obj_have_target");                     // dispatch through the interpreter-backed target
+        emitter.label("__rt_json_obj_native_descriptor");
+        emitter.instruction("ldr x0, [sp, #0]");                                // reload the object pointer for the class-id read
+    }
     // -- bounds-check the class id and resolve the JSON descriptor --
     emitter.instruction("ldr x12, [x0]");                                       // load class_id from the object header
     crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_class_gc_desc_count");
@@ -88,6 +103,7 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_json_obj_walk_props");                       // ordinary classes walk public properties directly
     emitter.instruction("ldr x14, [x13, #8]");                                  // load the jsonSerialize method symbol from the descriptor
     emitter.instruction("cbz x14, __rt_json_obj_walk_props");                   // missing method targets fall through to the property walker
+    emitter.label("__rt_json_obj_have_target");
     emitter.instruction("str x14, [sp, #32]");                                  // park the jsonSerialize target across helper calls that clobber x14
     // The user method's body resets _concat_off and writes scratch at the
     // beginning of concat_buf, which would trash any caller prefix already
@@ -165,6 +181,17 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address after JsonSerializable encoding
     emitter.instruction("add sp, sp, #128");                                    // deallocate the object encoder scratch frame
     emitter.instruction("ret");                                                 // return the JSON encoded result produced by mixed encoding
+
+    if eval_bridge {
+        // jsonSerialize() stand-in for an interpreter-owned object: x0 = object, returns the
+        // boxed Mixed value to encode in x0 (null when the interpreter cannot answer).
+        emitter.label("__rt_json_eval_serialize_thunk");
+        emitter.instruction("stp x29, x30, [sp, #-16]!");                       // preserve the encoder's frame across the bridge call
+        let serialize = emitter.target.extern_symbol("__elephc_eval_json_serialize");
+        abi::emit_call_label(emitter, &serialize);
+        emitter.instruction("ldp x29, x30, [sp], #16");                         // restore the encoder's frame
+        emitter.instruction("ret");                                             // return the boxed value like a compiled jsonSerialize()
+    }
 
     // -- empty object fallback (missing class id) --
     emitter.label("__rt_json_obj_open_only");
@@ -421,7 +448,7 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
 ///
 /// Called from:
 /// - `emit_json_encode_object` when `emitter.target.arch == Arch::X86_64`.
-fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
+fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_object ---");
     emitter.label_global("__rt_json_encode_object");
@@ -454,6 +481,18 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], r11");                       // save the start pointer for the final result slice
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the running write pointer for the encoder loop
 
+    if eval_bridge {
+        // See the AArch64 emitter: an interpreter-owned object is answered by the bridge, before
+        // its wrapper class id is used to index the descriptor table.
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // pass the object identity to the owner probe
+        let probe = emitter.target.extern_symbol("__elephc_eval_object_has_dynamic_owner");
+        abi::emit_call_label(emitter, &probe);
+        emitter.instruction("test rax, rax");                                   // does the interpreter own this object?
+        emitter.instruction("jz __rt_json_obj_native_descriptor_x");            // a native object keeps its descriptor
+        abi::emit_symbol_address(emitter, "rdx", "__rt_json_eval_serialize_thunk");
+        emitter.instruction("jmp __rt_json_obj_have_target_x");                 // dispatch through the interpreter-backed target
+        emitter.label("__rt_json_obj_native_descriptor_x");
+    }
     // Bounds-check the class id and resolve the JSON descriptor.
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the object pointer (depth_enter clobbered rax)
     emitter.instruction("mov rcx, QWORD PTR [rax]");                            // load class_id from the object header
@@ -471,6 +510,7 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rdi + 8]");                        // load the jsonSerialize method symbol from the descriptor
     emitter.instruction("test rdx, rdx");                                       // is the method target populated?
     emitter.instruction("je __rt_json_obj_walk_props_x");                       // missing method targets fall through to the property walker
+    emitter.label("__rt_json_obj_have_target_x");
     emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // park the jsonSerialize target across helper calls that clobber rdx
     // The user method's body resets _concat_off and writes scratch at the
     // beginning of concat_buf, which would trash any caller prefix already
@@ -541,6 +581,17 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the encoded result produced by mixed encoding
 
+    if eval_bridge {
+        // jsonSerialize() stand-in for an interpreter-owned object: rdi = object, returns the
+        // boxed Mixed value to encode in rax (null when the interpreter cannot answer).
+        emitter.label("__rt_json_eval_serialize_thunk");
+        emitter.instruction("push rbp");                                        // preserve the encoder's frame pointer
+        emitter.instruction("mov rbp, rsp");                                    // align the stack for the bridge call
+        let serialize = emitter.target.extern_symbol("__elephc_eval_json_serialize");
+        abi::emit_call_label(emitter, &serialize);
+        emitter.instruction("pop rbp");                                         // restore the encoder's frame pointer
+        emitter.instruction("ret");                                             // return the boxed value like a compiled jsonSerialize()
+    }
     emitter.label("__rt_json_obj_open_only_x");
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the running write pointer for the open-brace fallback
     emitter.instruction("mov BYTE PTR [r11], 123");                             // emit the opening brace for the empty object literal

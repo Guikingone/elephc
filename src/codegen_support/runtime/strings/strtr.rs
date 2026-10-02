@@ -342,6 +342,15 @@ fn emit_strtr_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #48]");                                   // request exactly the measured result size
     emitter.instruction("bl __rt_concat_reserve");                              // reserve scratch or heap storage for the replaced result
     emitter.instruction("str x0, [sp, #56]");                                   // save the reservation start
+    // CLAIM the reservation before the writing pass: a replacement coerced from a non-string
+    // value (`__rt_value_cast_string`, an int in `['%l' => $line]`) is spelled into the same
+    // concat scratch, at the offset the reservation did not advance, and it overwrote the first
+    // bytes of the result (`file://` came back as `1ile://`). Publishing is idempotent, so the
+    // closing publish below still leaves the offset right past the result.
+    emitter.instruction("mov x1, x0");                                          // the reservation start is the result pointer to claim
+    emitter.instruction("ldr x2, [sp, #48]");                                   // the measured size is the claimed length
+    emitter.instruction("bl __rt_concat_publish");                              // advance the scratch offset past the reservation now
+    emitter.instruction("ldr x0, [sp, #56]");                                   // reload the reservation start
     emitter.instruction("str x0, [sp, #48]");                                   // the destination cursor starts at the reservation
     emitter.instruction("str xzr, [sp, #64]");                                  // restart the scan for the writing pass
 
@@ -735,6 +744,10 @@ fn emit_strtr_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // request exactly the measured result size
     emitter.instruction("call __rt_concat_reserve");                            // reserve scratch or heap storage for the replaced result
     emitter.instruction("mov QWORD PTR [rbp - 88], rax");                       // save the reservation start
+    // CLAIM the reservation before the writing pass (see the AArch64 helper).
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 80]");                       // the measured size is the claimed length
+    emitter.instruction("call __rt_concat_publish");                            // advance the scratch offset past the reservation now
+    emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                       // reload the reservation start
     emitter.instruction("mov QWORD PTR [rbp - 80], rax");                       // the destination cursor starts at the reservation
     emitter.instruction("mov QWORD PTR [rbp - 96], 0");                         // restart the scan for the writing pass
 

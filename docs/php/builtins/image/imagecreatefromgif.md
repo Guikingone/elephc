@@ -2,7 +2,7 @@
 title: "imagecreatefromgif()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 490
+  order: 502
 ---
 
 ## imagecreatefromgif()

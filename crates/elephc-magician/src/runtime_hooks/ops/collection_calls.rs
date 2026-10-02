@@ -314,6 +314,18 @@ macro_rules! impl_collection_call_ops {
         usize::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)
     }
 
+    /// Returns the compiled `(array)` cast of a boxed object the compiled program laid out.
+    fn compiled_object_to_array(
+        &mut self,
+        object: RuntimeCellHandle,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        let result = unsafe { __elephc_eval_value_object_to_array(object.as_ptr()) };
+        if result.is_null() {
+            return Ok(None);
+        }
+        Ok(Some(RuntimeCellHandle::from_raw(result)))
+    }
+
     /// Returns one JSON-visible public property key for a boxed Mixed object.
     fn object_property_iter_key(
         &mut self,

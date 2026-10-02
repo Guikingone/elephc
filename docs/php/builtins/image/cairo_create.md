@@ -2,7 +2,7 @@
 title: "cairo_create()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 404
+  order: 416
 ---
 
 ## cairo_create()

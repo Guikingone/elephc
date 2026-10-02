@@ -2,7 +2,7 @@
 title: "date_isodate_set()"
 description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
 sidebar:
-  order: 203
+  order: 215
 ---
 
 ## date_isodate_set()

@@ -2,7 +2,7 @@
 title: "mysqli_fetch_object()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 123
+  order: 135
 ---
 
 ## mysqli_fetch_object()

@@ -189,9 +189,17 @@ pub(super) fn lower_property_array_push(
             Some(span),
         );
         let value = lower_expr(ctx, value);
+        let receiver_ty = ctx.builder.value_php_type(property_value.value);
+        let operands = super::array_write_storage::object_push_operands(
+            ctx,
+            &receiver_ty,
+            property_value,
+            value,
+            span,
+        );
         ctx.emit_void(
             Op::RuntimeCall,
-            vec![property_value.value, value.value],
+            operands,
             None,
             effects_lookup::runtime_effects(),
             Some(span),

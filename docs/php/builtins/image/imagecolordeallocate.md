@@ -2,7 +2,7 @@
 title: "imagecolordeallocate()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 472
+  order: 484
 ---
 
 ## imagecolordeallocate()

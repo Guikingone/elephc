@@ -572,14 +572,73 @@ pub(crate) fn lower_defined(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         );
     } else {
         emit_registry_string_lookup(ctx, value, "defined", "__rt_defined")?;
+        if ctx.module.required_runtime_features.eval_bridge {
+            // The registry holds global constants only. `defined('Cls::CONST')`, an enum case,
+            // and a constant an `eval()` defined are answered by the interpreter's shared
+            // context, which sees both the compiled classes and the ones it declared.
+            let done_label = ctx.next_label("defined_dynamic_done");
+            abi::emit_branch_if_int_result_nonzero(ctx.emitter, &done_label);
+            emit_eval_dynamic_defined_bool(ctx, value)?;
+            ctx.emitter.label(&done_label);
+        }
     }
     store_if_result(ctx, inst)
 }
 
+/// Asks the eval bridge's shared context `defined($name)` and leaves the unboxed bool answer in
+/// the integer result register; the boxed answer the bridge publishes is released.
+fn emit_eval_dynamic_defined_bool(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    emit_eval_dynamic_constant_null_context(ctx, value, false)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #16");                         // reserve the boxed answer and its payload
+            ctx.emitter.instruction("str x0, [sp]");                            // keep the boxed defined() answer for its release
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("str x1, [sp, #8]");                        // keep the unboxed bool payload
+            ctx.emitter.instruction("ldr x0, [sp]");                            // reload the boxed answer
+            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+            ctx.emitter.instruction("ldr x0, [sp, #8]");                        // the bool payload is the defined() answer
+            ctx.emitter.instruction("add sp, sp, #16");                         // release the scratch slots
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 16");                             // reserve the boxed answer and its payload
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // keep the boxed defined() answer for its release
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdi");            // keep the unboxed bool payload
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // reload the boxed answer
+            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");            // the bool payload is the defined() answer
+            ctx.emitter.instruction("add rsp, 16");                             // release the scratch slots
+        }
+    }
+    Ok(())
+}
+
 /// Lowers `constant($name)` against the closed-world scalar constant registry.
+///
+/// With the eval bridge linked, a name the registry misses (`Cls::CONST`, an enum case, a
+/// constant `eval()` defined) is resolved by the interpreter instead of throwing.
 pub(crate) fn lower_constant(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "constant", 1)?;
     let value = expect_operand(inst, 0)?;
+    if ctx.module.required_runtime_features.eval_bridge {
+        let registry_label = ctx.next_label("constant_dynamic_registry");
+        let done_label = ctx.next_label("constant_dynamic_done");
+        emit_registry_string_lookup(ctx, value, "defined", "__rt_defined")?;
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &registry_label);
+        // Only a name the interpreter knows is fetched there. Anything else goes to
+        // `__rt_constant`, which throws php's catchable `Error: Undefined constant` (and reads
+        // the compiled class-constant table for `Cls::NAME`); the bridge answered an unknown
+        // name with an uncatchable "eval() runtime failed".
+        emit_eval_dynamic_defined_bool(ctx, value)?;
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &registry_label);
+        emit_eval_dynamic_constant_null_context(ctx, value, true)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&registry_label);
+        emit_registry_string_lookup(ctx, value, "constant", "__rt_constant")?;
+        ctx.emitter.label(&done_label);
+        return store_if_result(ctx, inst);
+    }
     emit_registry_string_lookup(ctx, value, "constant", "__rt_constant")?;
     store_if_result(ctx, inst)
 }

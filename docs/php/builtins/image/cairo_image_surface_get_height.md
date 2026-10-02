@@ -2,7 +2,7 @@
 title: "cairo_image_surface_get_height()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 412
+  order: 424
 ---
 
 ## cairo_image_surface_get_height()

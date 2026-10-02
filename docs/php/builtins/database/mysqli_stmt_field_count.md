@@ -2,7 +2,7 @@
 title: "mysqli_stmt_field_count()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 167
+  order: 179
 ---
 
 ## mysqli_stmt_field_count()

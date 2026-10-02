@@ -2,7 +2,7 @@
 title: "ksort()"
 description: "Sorts an array by key in ascending SORT_REGULAR order; PHP sort flags are not yet supported."
 sidebar:
-  order: 59
+  order: 71
 ---
 
 ## ksort()

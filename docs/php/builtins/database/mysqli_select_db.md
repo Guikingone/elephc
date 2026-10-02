@@ -2,7 +2,7 @@
 title: "mysqli_select_db()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 155
+  order: 167
 ---
 
 ## mysqli_select_db()

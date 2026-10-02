@@ -2,7 +2,7 @@
 title: "mysqli_field_seek()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 126
+  order: 138
 ---
 
 ## mysqli_field_seek()

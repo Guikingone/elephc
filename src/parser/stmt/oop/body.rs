@@ -235,60 +235,68 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
             }
             *pos += 1; // consume `const`
             let type_expr = parse_optional_class_const_type(tokens, pos, member_span);
-            // PHP 8 allows semi-reserved keywords as class-constant names, except `class`,
-            // which is reserved for the `Foo::class` name fetch.
-            let const_name = match tokens.get(*pos).map(|(t, _)| t) {
-                Some(Token::Class) => {
+            // `const A = 1, B = 2;` declares several constants that share the modifiers
+            // and the (PHP 8.3) type; each one is its own member.
+            loop {
+                // PHP 8 allows semi-reserved keywords as class-constant names, except `class`,
+                // which is reserved for the `Foo::class` name fetch.
+                let const_name = match tokens.get(*pos).map(|(t, _)| t) {
+                    Some(Token::Class) => {
+                        return Err(CompileError::new(
+                            member_span,
+                            "Cannot use 'class' as a class constant name",
+                        ))
+                    }
+                    Some(t)
+                        if crate::parser::keyword_name::bareword_name_from_token(
+                            t,
+                            &tokens[*pos].1,
+                        )
+                        .is_some() =>
+                    {
+                        let n = crate::parser::keyword_name::bareword_name_from_token(
+                            t,
+                            &tokens[*pos].1,
+                        )
+                        .unwrap();
+                        *pos += 1;
+                        n
+                    }
+                    _ => {
+                        return Err(CompileError::new(
+                            member_span,
+                            "Expected class constant name after 'const'",
+                        ))
+                    }
+                };
+                if constants.iter().any(|c: &ClassConst| c.name == const_name) {
                     return Err(CompileError::new(
                         member_span,
-                        "Cannot use 'class' as a class constant name",
-                    ))
+                        &format!("Cannot redeclare class constant {}", const_name),
+                    ));
                 }
-                Some(t)
-                    if crate::parser::keyword_name::bareword_name_from_token(
-                        t,
-                        &tokens[*pos].1,
-                    )
-                    .is_some() =>
-                {
-                    let n = crate::parser::keyword_name::bareword_name_from_token(
-                        t,
-                        &tokens[*pos].1,
-                    )
-                    .unwrap();
-                    *pos += 1;
-                    n
+                expect_token(
+                    tokens,
+                    pos,
+                    &Token::Assign,
+                    "Expected '=' after class constant name",
+                )?;
+                let value = parse_expr(tokens, pos)?;
+                constants.push(ClassConst {
+                    name: const_name,
+                    visibility: modifiers.visibility.clone(),
+                    is_final: modifiers.is_final,
+                    type_expr: type_expr.clone(),
+                    value,
+                    span: member_span,
+                    attributes: member_attributes.clone(),
+                });
+                if tokens.get(*pos).map(|(t, _)| t) != Some(&Token::Comma) {
+                    break;
                 }
-                _ => {
-                    return Err(CompileError::new(
-                        member_span,
-                        "Expected class constant name after 'const'",
-                    ))
-                }
-            };
-            if constants.iter().any(|c: &ClassConst| c.name == const_name) {
-                return Err(CompileError::new(
-                    member_span,
-                    &format!("Cannot redeclare class constant {}", const_name),
-                ));
+                *pos += 1; // consume `,`
             }
-            expect_token(
-                tokens,
-                pos,
-                &Token::Assign,
-                "Expected '=' after class constant name",
-            )?;
-            let value = parse_expr(tokens, pos)?;
             expect_semicolon(tokens, pos)?;
-            constants.push(ClassConst {
-                name: const_name,
-                visibility: modifiers.visibility,
-                is_final: modifiers.is_final,
-                type_expr,
-                value,
-                span: member_span,
-                attributes: member_attributes,
-            });
             continue;
         }
 
@@ -664,6 +672,10 @@ fn parse_class_like_method(
     } else {
         (true, super::super::blocks::parse_executable_block(tokens, pos)?)
     };
+    // The method's extent ends at the `}` (or `;`) just consumed. `ReflectionMethod::getEndLine()`
+    // reads it, and it answered the START line for every compiled method, so code that slices a
+    // method's source out of its file (Symfony demo's "show controller code") got one line.
+    let span = super::declarations::close_brace_span(tokens, *pos, span);
     if !promoted_properties.is_empty() {
         if is_abstract || !has_body {
             return Err(CompileError::new(
@@ -738,60 +750,68 @@ fn parse_interface_body(
         if tokens[*pos].0 == Token::Const {
             *pos += 1; // consume `const`
             let type_expr = parse_optional_class_const_type(tokens, pos, member_span);
-            // PHP 8 allows semi-reserved keywords as class-constant names, except `class`,
-            // which is reserved for the `Foo::class` name fetch.
-            let const_name = match tokens.get(*pos).map(|(t, _)| t) {
-                Some(Token::Class) => {
+            // `const A = 1, B = 2;` declares several constants that share the modifiers
+            // and the (PHP 8.3) type; each one is its own member.
+            loop {
+                // PHP 8 allows semi-reserved keywords as class-constant names, except `class`,
+                // which is reserved for the `Foo::class` name fetch.
+                let const_name = match tokens.get(*pos).map(|(t, _)| t) {
+                    Some(Token::Class) => {
+                        return Err(CompileError::new(
+                            member_span,
+                            "Cannot use 'class' as a class constant name",
+                        ))
+                    }
+                    Some(t)
+                        if crate::parser::keyword_name::bareword_name_from_token(
+                            t,
+                            &tokens[*pos].1,
+                        )
+                        .is_some() =>
+                    {
+                        let n = crate::parser::keyword_name::bareword_name_from_token(
+                            t,
+                            &tokens[*pos].1,
+                        )
+                        .unwrap();
+                        *pos += 1;
+                        n
+                    }
+                    _ => {
+                        return Err(CompileError::new(
+                            member_span,
+                            "Expected class constant name after 'const'",
+                        ))
+                    }
+                };
+                if constants.iter().any(|c: &ClassConst| c.name == const_name) {
                     return Err(CompileError::new(
                         member_span,
-                        "Cannot use 'class' as a class constant name",
-                    ))
+                        &format!("Cannot redeclare interface constant {}", const_name),
+                    ));
                 }
-                Some(t)
-                    if crate::parser::keyword_name::bareword_name_from_token(
-                        t,
-                        &tokens[*pos].1,
-                    )
-                    .is_some() =>
-                {
-                    let n = crate::parser::keyword_name::bareword_name_from_token(
-                        t,
-                        &tokens[*pos].1,
-                    )
-                    .unwrap();
-                    *pos += 1;
-                    n
+                expect_token(
+                    tokens,
+                    pos,
+                    &Token::Assign,
+                    "Expected '=' after interface constant name",
+                )?;
+                let value = parse_expr(tokens, pos)?;
+                constants.push(ClassConst {
+                    name: const_name,
+                    visibility: modifiers.visibility.clone(),
+                    is_final: modifiers.is_final,
+                    type_expr: type_expr.clone(),
+                    value,
+                    span: member_span,
+                    attributes: member_attributes.clone(),
+                });
+                if tokens.get(*pos).map(|(t, _)| t) != Some(&Token::Comma) {
+                    break;
                 }
-                _ => {
-                    return Err(CompileError::new(
-                        member_span,
-                        "Expected class constant name after 'const'",
-                    ))
-                }
-            };
-            if constants.iter().any(|c: &ClassConst| c.name == const_name) {
-                return Err(CompileError::new(
-                    member_span,
-                    &format!("Cannot redeclare interface constant {}", const_name),
-                ));
+                *pos += 1; // consume `,`
             }
-            expect_token(
-                tokens,
-                pos,
-                &Token::Assign,
-                "Expected '=' after interface constant name",
-            )?;
-            let value = parse_expr(tokens, pos)?;
             expect_semicolon(tokens, pos)?;
-            constants.push(ClassConst {
-                name: const_name,
-                visibility: modifiers.visibility,
-                is_final: modifiers.is_final,
-                type_expr,
-                value,
-                span: member_span,
-                attributes: member_attributes,
-            });
             continue;
         }
         let type_expr = parse_optional_property_type(tokens, pos, member_span)?;

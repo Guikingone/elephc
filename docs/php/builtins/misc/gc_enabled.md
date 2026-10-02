@@ -2,7 +2,7 @@
 title: "gc_enabled()"
 description: "Returns whether the circular reference collector is active."
 sidebar:
-  order: 615
+  order: 627
 ---
 
 ## gc_enabled()

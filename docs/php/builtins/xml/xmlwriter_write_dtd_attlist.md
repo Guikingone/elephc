@@ -2,7 +2,7 @@
 title: "xmlwriter_write_dtd_attlist()"
 description: "Writes a complete DTD attribute list declaration."
 sidebar:
-  order: 1016
+  order: 1036
 ---
 
 ## xmlwriter_write_dtd_attlist()

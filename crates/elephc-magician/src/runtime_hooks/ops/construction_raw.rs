@@ -124,6 +124,15 @@ macro_rules! impl_construction_raw_ops {
         })
     }
 
+    /// Stores the live interpreter frames in the trace slot of a Throwable eval just allocated.
+    fn capture_throwable_trace(&mut self, object: RuntimeCellHandle) -> Result<(), EvalStatus> {
+        if crate::context::eval_call_frames_are_empty() {
+            return Ok(());
+        }
+        unsafe { __elephc_eval_value_capture_throwable_trace(object.as_ptr()) };
+        Ok(())
+    }
+
     /// Tests a boxed Mixed object against generated class/interface metadata.
     fn object_is_a(
         &mut self,

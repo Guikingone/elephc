@@ -42,10 +42,32 @@ pub(super) fn method_signature(
                     .get(normalized)
                     .and_then(|interface_info| interface_info.methods.get(&key))
                 {
+                    // A variadic tail on the TABLE's signature -- the hidden `...$__elephc_func_args`
+                    // an implementation's `func_get_args()` adds -- is part of the ABI the table
+                    // dispatches with, so the call must pass its array even when the implementors'
+                    // shared signature has none. `ContainerInterface::get($id)` through a nullable
+                    // Psr receiver passed two operands for three and refused Symfony's
+                    // `ArgumentResolver`, `SessionListener` and console `Application`.
+                    if interface_signature.variadic.is_some()
+                        && signature.variadic.is_none()
+                        && interface_signature.params.len() == signature.params.len() + 1
+                    {
+                        return Some(interface_signature.clone());
+                    }
                     signature.return_type = interface_signature.return_type.clone();
                     signature.by_ref_return = interface_signature.by_ref_return;
                 }
                 return Some(signature);
+            }
+            // Implementors that disagree leave no shared signature; the table's own one still
+            // fixes the ABI when it carries a variadic tail the call has to pack.
+            if let Some(interface_signature) = ctx
+                .interfaces
+                .get(normalized)
+                .and_then(|interface_info| interface_info.methods.get(&key))
+                .filter(|interface_signature| interface_signature.variadic.is_some())
+            {
+                return Some(interface_signature.clone());
             }
         }
         return class_method_signature(ctx, normalized, &key)
@@ -533,11 +555,18 @@ fn method_call_argument_count(expr: &Expr) -> Option<usize> {
 /// Mirrors `Checker::signature_accepts_argument_count`: `defaults` gives the first optional
 /// position, and a variadic tail takes any number beyond the fixed parameters.
 fn signature_accepts_argument_count(signature: &FunctionSig, arg_count: usize) -> bool {
+    // The variadic tail is never required: it collects whatever follows the fixed parameters.
+    let fixed = if signature.variadic.is_some() {
+        signature.params.len().saturating_sub(1)
+    } else {
+        signature.params.len()
+    };
     let required = signature
         .defaults
         .iter()
+        .take(fixed)
         .position(|default| default.is_some())
-        .unwrap_or(signature.params.len());
+        .unwrap_or(fixed);
     if arg_count < required {
         return false;
     }

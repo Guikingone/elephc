@@ -78,7 +78,7 @@ pub(crate) const ARRAY_COMBINE_GRADUAL_NAME: &str = "__elephc_array_combine_grad
 /// Reserved helper used for `array_search()` calls on gradual indexed arrays.
 pub(crate) const ARRAY_SEARCH_MIXED_NAME: &str = "__elephc_array_search_mixed";
 
-/// Reserved helper used for `http_build_query()` calls on arrays.
+/// Reserved helper used for `http_build_query()` calls; built by `crate::http_build_query_prelude`.
 pub(crate) const HTTP_BUILD_QUERY_NAME: &str = "__elephc_http_build_query";
 
 /// Reserved helper used for `escapeshellarg()` calls.
@@ -752,34 +752,6 @@ function __elephc_array_search_mixed(mixed $needle, array $haystack, bool $stric
 }
 "#;
 
-/// Recursive query-string builder covering PHP's RFC 1738 and RFC 3986 array encodings.
-const HTTP_BUILD_QUERY_SRC: &str = r#"<?php
-function __elephc_http_build_query_pairs(array $data, string $prefix, string $numericPrefix, int $encodingType): array {
-    $pairs = [];
-    foreach ($data as $key => $value) {
-        $keyText = is_int($key) ? $numericPrefix.(string) $key : (string) $key;
-        $fullKey = $prefix === '' ? $keyText : $prefix.'['.$keyText.']';
-        if (is_array($value)) {
-            $nested = __elephc_http_build_query_pairs($value, $fullKey, '', $encodingType);
-            foreach ($nested as $pair) {
-                $pairs[] = $pair;
-            }
-        } elseif ($value !== null) {
-            $text = is_bool($value) ? ($value ? '1' : '0') : (string) $value;
-            $encodedKey = $encodingType === 2 ? rawurlencode($fullKey) : urlencode($fullKey);
-            $encodedValue = $encodingType === 2 ? rawurlencode($text) : urlencode($text);
-            $pairs[] = $encodedKey.'='.$encodedValue;
-        }
-    }
-    return $pairs;
-}
-
-function __elephc_http_build_query(array $data, string $numericPrefix = '', mixed $argSeparator = null, int $encodingType = 1): string {
-    $separator = $argSeparator === null ? '&' : (string) $argSeparator;
-    return implode($separator, __elephc_http_build_query_pairs($data, '', $numericPrefix, $encodingType));
-}
-"#;
-
 /// POSIX shell argument quoting compatible with PHP on the supported Unix targets.
 const ESCAPESHELLARG_SRC: &str = r#"<?php
 function __elephc_escapeshellarg(string $argument): string {
@@ -982,13 +954,6 @@ const RANDOM_BYTES_WRAPPER_SRC: &str = r#"<?php
 function random_bytes(int $length): string { return __elephc_random_bytes($length); }
 "#;
 
-/// PHP-visible wrapper for `http_build_query()`.
-const HTTP_BUILD_QUERY_WRAPPER_SRC: &str = r#"<?php
-function http_build_query(array $data, string $numericPrefix = '', mixed $argSeparator = null, int $encodingType = 1): string {
-    return __elephc_http_build_query($data, $numericPrefix, $argSeparator, $encodingType);
-}
-"#;
-
 /// PHP-visible wrapper for `escapeshellarg()`.
 const ESCAPESHELLARG_WRAPPER_SRC: &str = r#"<?php
 function escapeshellarg(string $argument): string { return __elephc_escapeshellarg($argument); }
@@ -1085,10 +1050,6 @@ pub fn inject_if_used(
     if usage.references("array_search") {
         sources.push(ARRAY_SEARCH_MIXED_SRC);
     }
-    if usage.references("http_build_query") {
-        sources.push(HTTP_BUILD_QUERY_SRC);
-        sources.push(HTTP_BUILD_QUERY_WRAPPER_SRC);
-    }
     if usage.references("escapeshellarg") {
         sources.push(ESCAPESHELLARG_SRC);
         sources.push(ESCAPESHELLARG_WRAPPER_SRC);
@@ -1118,6 +1079,16 @@ pub fn inject_if_used(
         usage.references("token_get_all") || usage.references("token_name");
     // So is `array_filter()`'s callback form.
     let needs_array_filter_callback = usage.references("array_filter");
+    // So is `array_map()`'s multi-array form.
+    // `ast_usage` records the helper's name only for a call with two or more arrays: the helper
+    // brings callable invokers of its own, and a program mapping one array must not carry them.
+    let needs_array_map_multi =
+        usage.references(crate::array_map_prelude::ARRAY_MAP_MULTI_NAME);
+    // So is `array_keys()`'s search form, recorded the same way.
+    let needs_array_keys_search =
+        usage.references(crate::array_keys_prelude::ARRAY_KEYS_SEARCH_NAME);
+    let needs_array_map_gradual =
+        usage.references(crate::array_map_prelude::ARRAY_MAP_GRADUAL_NAME);
     // And so is the `array_walk()` family, whose native runtimes answer neither the by-reference
     // callback `array_walk()` is FOR nor a nested array in `array_walk_recursive()`.
     let needs_array_walk =
@@ -1178,16 +1149,28 @@ pub fn inject_if_used(
     // And so is `array_splice()` over a hash or a boxed receiver: the native lowering splices a
     // dense slot array only.
     let needs_array_splice = usage.references("array_splice");
+    // And so is `http_build_query()`, whose helper and PHP-visible wrapper are built.
+    let needs_http_build_query = usage.references("http_build_query");
+    // And so is `version_compare()`, which had no implementation of any kind.
+    let needs_version_compare = usage.references("version_compare");
+    // And so is `hash_pbkdf2()`, built over the backend's raw `hash_hmac()`.
+    let needs_hash_pbkdf2 = usage.references("hash_pbkdf2");
     if sources.is_empty()
         && !needs_array_find
         && !needs_array_splice
         && !needs_addcslashes
         && !needs_htmlspecialchars
+        && !needs_http_build_query
+        && !needs_version_compare
+        && !needs_hash_pbkdf2
         && !inject_randomizer
         && !needs_natural_order
         && !needs_tokenizer
         && !needs_parse_str
         && !needs_array_filter_callback
+        && !needs_array_map_multi
+        && !needs_array_keys_search
+        && !needs_array_map_gradual
         && !needs_array_walk
         && !needs_preg_match_all_flags
         && !needs_preg_array
@@ -1246,6 +1229,21 @@ pub fn inject_if_used(
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);
         combined.extend(declarations);
     }
+    if needs_http_build_query {
+        let declarations = crate::http_build_query_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_version_compare {
+        let declarations = crate::version_compare_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_hash_pbkdf2 {
+        let declarations = crate::hash_pbkdf2_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
     if needs_natural_order {
         let declarations = crate::strnatcmp_prelude::declarations();
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);
@@ -1258,6 +1256,21 @@ pub fn inject_if_used(
     }
     if needs_array_filter_callback {
         let declarations = crate::array_filter_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_array_map_multi {
+        let declarations = crate::array_map_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_array_map_gradual {
+        let declarations = crate::array_map_prelude::gradual_declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_array_keys_search {
+        let declarations = crate::array_keys_prelude::declarations();
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);
         combined.extend(declarations);
     }

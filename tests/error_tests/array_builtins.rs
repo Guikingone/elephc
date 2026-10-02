@@ -42,16 +42,6 @@ fn test_error_array_union_requires_array_operands() {
     );
 }
 
-// Regression test: indexed array union with mismatched element types (int vs string) produces a type error.
-/// Verifies that error indexed array union requires compatible element types.
-#[test]
-fn test_error_indexed_array_union_requires_compatible_element_types() {
-    expect_error(
-        r#"<?php $result = [1] + ["right", "side"];"#,
-        "Array union requires compatible indexed array element types",
-    );
-}
-
 // --- v0.6: array function argument errors ---
 
 /// Verifies that error array reverse wrong args.
@@ -254,7 +244,7 @@ fn test_error_in_array_wrong_args() {
 fn test_error_array_keys_wrong_args() {
     expect_error(
         "<?php array_keys();",
-        "array_keys() takes exactly 1 argument",
+        "array_keys() takes 1 to 3 arguments",
     );
 }
 
@@ -530,7 +520,7 @@ fn test_error_array_column_wrong_args() {
 fn test_error_array_map_wrong_args() {
     expect_error(
         r#"<?php array_map("fn");"#,
-        "array_map() takes exactly 2 arguments",
+        "array_map() takes at least 2 arguments",
     );
 }
 

@@ -2,7 +2,7 @@
 title: "var_export()"
 description: "Renders a parsable string representation of a variable."
 sidebar:
-  order: 399
+  order: 411
 ---
 
 ## var_export()

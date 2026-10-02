@@ -14,6 +14,7 @@ mod class_name_is_a;
 mod dynamic_instanceof;
 mod matches;
 mod rethrow_current;
+mod throwable_trace;
 mod throw_current;
 mod uncaught_report;
 
@@ -25,6 +26,7 @@ pub use matches::emit_exception_matches;
 // The fixed-data emitter defines the string this helper prints; both must agree on its bytes.
 pub(crate) use matches::{ABSENT_MESSAGE, ABSENT_MESSAGE_SYMBOL};
 pub use rethrow_current::emit_rethrow_current;
+pub use throwable_trace::emit_throwable_capture_trace;
 pub use throw_current::emit_throw_current;
 pub use uncaught_report::emit_report_uncaught_exception;
 pub(crate) use uncaught_report::UNCAUGHT_EXIT_STATUS;

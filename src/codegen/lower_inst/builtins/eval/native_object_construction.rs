@@ -23,7 +23,11 @@ pub(in crate::codegen::lower_inst) fn lower_eval_native_object_new(
     let stack_bytes = eval_function_call_stack_bytes(inst.operands.len());
     abi::emit_reserve_temporary_stack(ctx.emitter, stack_bytes);
     let boxed = store_eval_function_call_args(ctx, inst, args_offset)?;
-    ensure_eval_context(ctx)?;
+    // A body with no eval of its own passes a null handle, which the bridge answers from the
+    // request's declared classes. `new \ReflectionObject($evalObject)` written in an ordinary
+    // compiled method is the case that needs it: the method never evaluates anything, yet the
+    // object it reflects was declared by an include the interpreter ran.
+    load_eval_context_or_null(ctx)?;
     load_eval_context_to_arg(ctx, 0);
     let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);

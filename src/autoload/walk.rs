@@ -132,6 +132,110 @@ fn collect_declared_in_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
     }
 }
 
+/// Returns the first class-like one loaded file declares only inside a file-scope conditional.
+///
+/// php declares such a class when the `if` holding it RUNS, which for a class file is the moment
+/// the autoloader includes it:
+///
+/// ```php
+/// if (interface_exists(SimpleCacheInterface::class)) {
+///     class InvalidArgumentException extends \InvalidArgumentException implements Psr6, Simple {}
+/// } else {
+///     class InvalidArgumentException extends \InvalidArgumentException implements Psr6 {}
+/// }
+/// ```
+///
+/// The compiled world has no runtime class declaration, so the branches lose their classes while
+/// the file is still claimed as included, and the autoloader then skips the include: the class is
+/// declared by nobody. A condition the language profile decides has already been folded away by
+/// `fold_file_scope_profile_conditions`, so what is left here genuinely depends on run time.
+/// Transparent wrappers (`namespace { }`, synthetic blocks, include guards) are walked through;
+/// function and method bodies are not file scope and are not visited.
+pub(super) fn first_conditionally_declared_class_like(program: &Program) -> Option<String> {
+    /// Collects every class-like declared at any depth of these conditional statement lists.
+    fn declared_under(stmts: &[Stmt]) -> Option<String> {
+        for stmt in stmts {
+            match &stmt.kind {
+                StmtKind::ClassDecl { name, .. }
+                | StmtKind::InterfaceDecl { name, .. }
+                | StmtKind::TraitDecl { name, .. }
+                | StmtKind::EnumDecl { name, .. } => {
+                    return Some(name.trim_start_matches('\\').to_string());
+                }
+                _ => {
+                    if let Some(name) = conditional_bodies(stmt)
+                        .into_iter()
+                        .chain(transparent_body(stmt))
+                        .find_map(declared_under)
+                    {
+                        return Some(name);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// The statement lists a file-scope statement runs only under a run-time condition.
+    fn conditional_bodies(stmt: &Stmt) -> Vec<&[Stmt]> {
+        let mut bodies: Vec<&[Stmt]> = Vec::new();
+        match &stmt.kind {
+            StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body,
+                ..
+            } => {
+                bodies.push(then_body);
+                bodies.extend(elseif_clauses.iter().map(|(_, body)| body.as_slice()));
+                if let Some(body) = else_body {
+                    bodies.push(body);
+                }
+            }
+            StmtKind::While { body, .. }
+            | StmtKind::DoWhile { body, .. }
+            | StmtKind::For { body, .. }
+            | StmtKind::Foreach { body, .. } => bodies.push(body),
+            StmtKind::Switch { cases, default, .. } => {
+                bodies.extend(cases.iter().map(|(_, body)| body.as_slice()));
+                if let Some(body) = default {
+                    bodies.push(body);
+                }
+            }
+            _ => {}
+        }
+        bodies
+    }
+
+    /// The statement list of a wrapper that runs its body unconditionally.
+    fn transparent_body(stmt: &Stmt) -> Option<&[Stmt]> {
+        match &stmt.kind {
+            StmtKind::NamespaceBlock { body, .. }
+            | StmtKind::Synthetic(body)
+            | StmtKind::IncludeOnceGuard { body, .. } => Some(body),
+            _ => None,
+        }
+    }
+
+    /// Walks file-scope statements, through transparent wrappers, into conditional bodies.
+    fn file_scope(stmts: &[Stmt]) -> Option<String> {
+        for stmt in stmts {
+            if let Some(body) = transparent_body(stmt) {
+                if let Some(name) = file_scope(body) {
+                    return Some(name);
+                }
+                continue;
+            }
+            if let Some(name) = conditional_bodies(stmt).into_iter().find_map(declared_under) {
+                return Some(name);
+            }
+        }
+        None
+    }
+
+    file_scope(program)
+}
+
 /// Collect the class-likes one freshly autoloaded file needs before its own top-level statements
 /// can run: the binding dependencies of every declaration it makes, plus every reference point of
 /// its executable file-scope statements, in source order.

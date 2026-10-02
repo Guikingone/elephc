@@ -2,7 +2,7 @@
 title: "imagetruecolortopalette()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 537
+  order: 549
 ---
 
 ## imagetruecolortopalette()

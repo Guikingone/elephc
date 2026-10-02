@@ -2,7 +2,7 @@
 title: "substr_compare()"
 description: "Binary safe comparison of two strings from an offset, up to length characters."
 sidebar:
-  order: 880
+  order: 899
 ---
 
 ## substr_compare()

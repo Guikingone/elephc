@@ -128,7 +128,15 @@ impl Checker {
                 self.record_break_env(*levels, env);
                 Ok(())
             }
-            StmtKind::Continue(levels) => self.check_loop_exit(stmt.span, "continue", *levels),
+            StmtKind::Continue(levels) => {
+                self.check_loop_exit(stmt.span, "continue", *levels)?;
+                // A `continue` goes back to the loop's condition, which can end the loop: what the
+                // skipped iteration left in its locals reaches the code after the loop exactly as
+                // a `break`'s does. Dropping it typed Doctrine's `InsertBatch::batchByEntityType()`
+                // result as an empty array -- its only push sits in a branch that `continue`s.
+                self.record_break_env(*levels, env);
+                Ok(())
+            }
             StmtKind::ExprStmt(expr) => {
                 // The one position an `unset(...)` may end a local binding from. elephc's parser
                 // accepts `unset` as an expression (PHP's grammar does not), so the kill has to

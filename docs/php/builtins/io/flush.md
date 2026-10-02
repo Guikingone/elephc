@@ -2,7 +2,7 @@
 title: "flush()"
 description: "Flushes the SAPI write buffer, which elephc does not have."
 sidebar:
-  order: 321
+  order: 333
 ---
 
 ## flush()

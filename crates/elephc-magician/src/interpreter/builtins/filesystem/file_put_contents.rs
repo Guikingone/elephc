@@ -81,7 +81,7 @@ pub(in crate::interpreter) fn eval_file_put_contents_result(
     let path = eval_path_string(filename, values)?;
     let data = if values.is_array_like(data)? {
         let separator = values.string("")?;
-        let joined = eval_implode_result(separator, data, values)?;
+        let joined = eval_implode_result(separator, data, context, values)?;
         values.string_bytes(joined)?
     } else {
         values.string_bytes(data)?

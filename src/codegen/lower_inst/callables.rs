@@ -72,6 +72,33 @@ fn emit_runtime_descriptor_owned_flag(ctx: &mut FunctionContext<'_>, owned: bool
     abi::emit_load_int_immediate(ctx.emitter, flag_reg, if owned { 1 } else { 0 });
 }
 
+/// Whether a runtime string callable name that no compiled function answers can still be
+/// resolved by the eval bridge.
+///
+/// A function a runtime-loaded file declares -- `if (!function_exists('f')) { function f() {} }`
+/// in a polyfill bootstrap that Composer includes by a computed path -- exists only in the
+/// interpreter. The compiled candidate tables cannot name it, so without this fallback a
+/// `$name(...)` call aborted with `Call to undefined function <dynamic>()` for a function PHP
+/// calls fine (symfony/string's `UnicodeString::split()` calls `grapheme_strpos` this way).
+fn runtime_string_callable_has_eval_fallback(ctx: &FunctionContext<'_>) -> bool {
+    super::builtins::has_eval_context(ctx) || ctx.module.required_runtime_features.eval_bridge
+}
+
+/// Invokes a runtime string callable name through the eval bridge with a prebuilt argument
+/// container, using the frame's own eval context when it has one.
+fn lower_runtime_string_callable_eval_fallback(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    callable: ValueId,
+    arg_mixed: ValueId,
+) -> Result<()> {
+    if super::builtins::has_eval_context(ctx) {
+        super::builtins::lower_eval_callable_call_array(ctx, inst, callable, arg_mixed)
+    } else {
+        super::builtins::lower_eval_global_callable_call_array(ctx, inst, callable, arg_mixed)
+    }
+}
+
 /// Resolved user function candidate for a runtime string callable.
 struct RuntimeStringFunctionTarget {
     name: String,
@@ -335,12 +362,15 @@ pub(in crate::codegen) fn lower_mixed_callable_descriptor_invoke_inline(
     // payload registers. Move them into the string ABI result pair, spill them onto
     // the temporary stack, and reuse the concrete-string per-candidate dispatch.
     ctx.emitter.label(&string_label);
+    let string_eval_label = runtime_string_callable_has_eval_fallback(ctx)
+        .then(|| ctx.next_label("mixed_callable_string_eval"));
     emit_runtime_string_descriptor_value_from_unboxed(
         ctx,
         callable,
         op_name,
         super::instruction_strict_php_profile(inst),
         None,
+        string_eval_label.as_deref(),
     )?;
     abi::emit_reg_move(
         ctx.emitter,
@@ -349,6 +379,11 @@ pub(in crate::codegen) fn lower_mixed_callable_descriptor_invoke_inline(
     );
     emit_runtime_descriptor_owned_flag(ctx, false);
     abi::emit_jump(ctx.emitter, &invoke_label);
+    if let Some(string_eval_label) = &string_eval_label {
+        ctx.emitter.label(string_eval_label);
+        lower_runtime_string_callable_eval_fallback(ctx, inst, callable, arg_mixed)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
 
     // Boxed indexed array (tag 4): `[$obj, "method"]` or `["Class", "method"]`.
     if let Some(array_label) = &array_label {
@@ -597,15 +632,31 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&string_label);
+    // A name only a runtime-loaded file declared is still callable: the eval bridge captures it
+    // in an owned adapter descriptor, exactly as it does an eval-owned Closure below.
+    let string_eval_label = (has_eval_callback_owner_fallback && string_type_error.is_none())
+        .then(|| ctx.next_label("mixed_callable_value_string_eval"));
     emit_runtime_string_descriptor_value_from_unboxed(
         ctx,
         callable,
         op_name,
         strict_php,
         string_type_error,
+        string_eval_label.as_deref(),
     )?;
     emit_runtime_descriptor_owned_flag(ctx, false);
     abi::emit_jump(ctx.emitter, &done_label);
+    if let Some(string_eval_label) = &string_eval_label {
+        // The eval bridge does not know the name either: PHP's undefined-function fatal, as
+        // before the fallback existed.
+        let undefined_label = ctx.next_label("mixed_callable_value_string_undefined");
+        ctx.emitter.label(string_eval_label);
+        emit_eval_owned_callable_descriptor(ctx, callable, &undefined_label)?;
+        emit_runtime_descriptor_owned_flag(ctx, true);
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&undefined_label);
+        emit_undefined_runtime_string_call_fatal(ctx);
+    }
 
     if let Some(array_label) = &array_label {
         ctx.emitter.label(array_label);
@@ -838,6 +889,9 @@ fn lower_runtime_string_descriptor_invoke(
         super::instruction_strict_php_profile(inst),
     )?;
     if cases.is_empty() {
+        if runtime_string_callable_has_eval_fallback(ctx) {
+            return lower_runtime_string_callable_eval_fallback(ctx, inst, callable, arg_mixed);
+        }
         return Err(CodegenIrError::unsupported(
             "callable_descriptor_invoke for runtime string with no descriptor targets",
         ));
@@ -845,7 +899,7 @@ fn lower_runtime_string_descriptor_invoke(
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     ctx.load_string_value_to_regs(callable, ptr_reg, len_reg)?;
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
-    emit_string_name_descriptor_cases_loop(ctx, inst, arg_mixed, &cases, op_name)
+    emit_string_name_descriptor_cases_loop(ctx, inst, callable, arg_mixed, &cases, op_name)
 }
 
 /// Emits the per-candidate string function-name dispatch loop.
@@ -859,6 +913,7 @@ fn lower_runtime_string_descriptor_invoke(
 fn emit_string_name_descriptor_cases_loop(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
+    callable: ValueId,
     arg_mixed: ValueId,
     cases: &[callable_dispatch::RuntimeCallableCase],
     op_name: &str,
@@ -880,7 +935,7 @@ fn emit_string_name_descriptor_cases_loop(
         )?;
         abi::emit_jump(ctx.emitter, &done_label);
         ctx.emitter.label(&miss_label);
-        emit_undefined_runtime_string_call_fatal(ctx);
+        emit_string_name_descriptor_miss(ctx, inst, callable, arg_mixed, &done_label)?;
         ctx.emitter.label(&done_label);
         abi::emit_release_temporary_stack(ctx.emitter, 16);
         return Ok(());
@@ -908,10 +963,30 @@ fn emit_string_name_descriptor_cases_loop(
     abi::emit_jump(ctx.emitter, &miss_label);
 
     ctx.emitter.label(&miss_label);
-    emit_undefined_runtime_string_call_fatal(ctx);
+    emit_string_name_descriptor_miss(ctx, inst, callable, arg_mixed, &done_label)?;
 
     ctx.emitter.label(&done_label);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
+    Ok(())
+}
+
+/// Emits the miss arm of the string-name descriptor dispatch.
+///
+/// The 16-byte name spill is still pushed here; `done_label` releases it, so the eval arm jumps
+/// there with the spill intact. Without an eval bridge the miss is PHP's undefined-function fatal.
+fn emit_string_name_descriptor_miss(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    callable: ValueId,
+    arg_mixed: ValueId,
+    done_label: &str,
+) -> Result<()> {
+    if runtime_string_callable_has_eval_fallback(ctx) {
+        lower_runtime_string_callable_eval_fallback(ctx, inst, callable, arg_mixed)?;
+        abi::emit_jump(ctx.emitter, done_label);
+    } else {
+        emit_undefined_runtime_string_call_fatal(ctx);
+    }
     Ok(())
 }
 
@@ -1580,12 +1655,16 @@ fn emit_runtime_string_descriptor_value_impl(
 }
 
 /// Selects a callable descriptor from a string payload just returned by `__rt_mixed_unbox`.
+///
+/// With `eval_miss_label`, a name no compiled function answers jumps there with the name spill
+/// already released, so the caller can hand the boxed name to the eval bridge instead.
 fn emit_runtime_string_descriptor_value_from_unboxed(
     ctx: &mut FunctionContext<'_>,
     callable: ValueId,
     op_name: &str,
     strict_php: bool,
     type_error: Option<&'static str>,
+    eval_miss_label: Option<&str>,
 ) -> Result<()> {
     let candidate_names = ctx.runtime_callable_candidates(callable);
     let cases = runtime_string_descriptor_cases(
@@ -1596,6 +1675,10 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
     )?;
     if cases.is_empty() {
         // Nothing is pushed yet, so this miss throws without a stack release.
+        if let Some(label) = eval_miss_label {
+            abi::emit_jump(ctx.emitter, label);
+            return Ok(());
+        }
         match type_error {
             Some(message) => super::exceptions::emit_type_error(ctx, message),
             None => emit_undefined_runtime_string_call_fatal(ctx),
@@ -1616,7 +1699,10 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
         emit_branch_if_lookup_missed(ctx, &miss_label);
         abi::emit_jump(ctx.emitter, &done_label);
         ctx.emitter.label(&miss_label);
-        if let Some(message) = type_error {
+        if let Some(label) = eval_miss_label {
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            abi::emit_jump(ctx.emitter, label);
+        } else if let Some(message) = type_error {
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             super::exceptions::emit_type_error(ctx, message);
         } else {
@@ -1648,7 +1734,10 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
     abi::emit_jump(ctx.emitter, &miss_label);
 
     ctx.emitter.label(&miss_label);
-    if let Some(message) = type_error {
+    if let Some(label) = eval_miss_label {
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        abi::emit_jump(ctx.emitter, label);
+    } else if let Some(message) = type_error {
         abi::emit_release_temporary_stack(ctx.emitter, 16);
         super::exceptions::emit_type_error(ctx, message);
     } else {
@@ -4295,6 +4384,32 @@ fn store_descriptor_invoker_result(
             ctx.store_result_value(result)
         }
         PhpType::TaggedScalar => store_descriptor_invoker_tagged_scalar_result(ctx, result),
+        // An object result (a closure declared `: IndexEditor`, Doctrine DBAL's `edit()` helpers):
+        // the invoker was generated for the callee's declared return type and already hands back
+        // the object payload with its own reference (`coerce_result_to_type`), so it is stored as
+        // it comes.
+        PhpType::Object(_) => {
+            let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+            abi::emit_push_reg(ctx.emitter, &result_reg);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            let payload_reg = super::reference_arguments::mixed_unbox_low_payload_reg(ctx);
+            super::reference_arguments::move_reg_to_int_result(ctx, payload_reg);
+            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Object(String::new()));
+            let scratch = abi::symbol_scratch_reg(ctx.emitter);
+            abi::emit_pop_reg(ctx.emitter, scratch);
+            abi::emit_push_reg(ctx.emitter, &result_reg);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction(&format!("mov x0, {}", scratch)); // the box is released after its object was retained
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction(&format!("mov rax, {}", scratch)); // the box is released after its object was retained
+                }
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+            abi::emit_pop_reg(ctx.emitter, &result_reg);
+            ctx.store_result_value(result)
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "descriptor invoker result for PHP type {:?}",
             other

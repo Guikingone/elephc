@@ -178,6 +178,18 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
             }
         }
     }
+    // A CALLABLE naming `method_exists`/`property_exists` -- `Closure::fromCallable(
+    // 'property_exists')`, a string callback -- gets its builtin wrapper during codegen, after
+    // this scan, and that wrapper probes `__rt_member_exists` like any call with a dynamic
+    // member. Nothing in the instruction stream says so, so the name itself decides: Twig's
+    // `CoreExtension::getPropertyChecker()` returns exactly that closure, and the program did not
+    // link ("Undefined symbols: __rt_member_exists").
+    if module.data.strings.iter().any(|name| {
+        let name = name.trim_start_matches('\\');
+        name.eq_ignore_ascii_case("method_exists") || name.eq_ignore_ascii_case("property_exists")
+    }) {
+        features.class_methods_introspection = true;
+    }
     features
 }
 

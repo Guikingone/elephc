@@ -2,7 +2,7 @@
 title: "cairo_identity_matrix()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 409
+  order: 421
 ---
 
 ## cairo_identity_matrix()

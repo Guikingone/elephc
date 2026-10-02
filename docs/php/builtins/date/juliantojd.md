@@ -2,7 +2,7 @@
 title: "juliantojd()"
 description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
 sidebar:
-  order: 236
+  order: 248
 ---
 
 ## juliantojd()

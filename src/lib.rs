@@ -36,6 +36,9 @@ pub mod autoload;
 mod addcslashes_prelude;
 /// `htmlspecialchars()`'s `$double_encode` parameter as AST-built prelude declarations.
 mod htmlspecialchars_prelude;
+mod hash_pbkdf2_prelude;
+mod http_build_query_prelude;
+mod version_compare_prelude;
 pub mod array_merge_prelude;
 /// Default-initial-value `array_reduce()` compatibility prelude.
 pub mod array_reduce_prelude;
@@ -55,6 +58,8 @@ mod array_filter_prelude;
 /// `array_any()` / `array_all()` as AST-built prelude declarations.
 mod array_find_prelude;
 mod array_splice_prelude;
+mod array_map_prelude;
+mod array_keys_prelude;
 mod array_walk_prelude;
 mod preg_match_all_prelude;
 mod preg_array_prelude;
@@ -78,6 +83,7 @@ pub mod conditional;
 /// Execution-time binding for conditionally declared PHP functions.
 pub mod conditional_functions;
 /// Standard DOM class-surface prelude injection.
+pub mod dom_html_prelude;
 pub mod dom_prelude;
 /// `ext/curl` easy-handle standard-library prelude injection (`CurlHandle` + `curl_*`).
 pub mod curl_prelude;

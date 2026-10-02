@@ -2,7 +2,7 @@
 title: "get_cfg_var() — internals"
 description: "Compiler internals for get_cfg_var(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 617
+  order: 629
 ---
 
 ## `get_cfg_var()` — internals

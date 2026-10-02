@@ -408,7 +408,12 @@ pub(super) fn builtin_reflection_owner_class(
         extends: None,
         implements: vec!["Reflector".to_string()],
         is_abstract: false,
-        is_final: true,
+        // None of the reflection owners php declares is final (`ReflectionProperty`,
+        // `ReflectionClassConstant`, `ReflectionEnum*Case`, ... all report `isFinal() === false`),
+        // and libraries extend them: Doctrine's `RuntimeReflectionProperty extends
+        // \ReflectionProperty` backs every mapped entity field. Declared final, that class could
+        // not be declared at run time and every page reading an entity failed.
+        is_final: false,
         is_readonly_class: false,
         properties,
         methods,

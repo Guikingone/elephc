@@ -199,6 +199,8 @@ struct Analysis<'a> {
     footer_set: FastSet<&'a str>,
     /// Names declared `.globl` anywhere in the body.
     globl: FastSet<&'a str>,
+    /// Per label id, whether some line takes its ADDRESS (`@PAGE`, `@PAGEOFF`, `@GOTPAGE`...).
+    address_taken: Vec<bool>,
 }
 
 impl Analysis<'_> {
@@ -314,9 +316,28 @@ pub(super) fn plan_split<'a>(
     let mut promoted_names: Vec<String> = Vec::new();
     let mut published: Vec<Vec<&'a str>> = vec![Vec::new(); parts];
     let mut published_count = 0usize;
+    // HAZARD 5 — a Mach-O relocation to an assembler temporary is expressed as the section plus
+    // an addend, and ARM64_RELOC_ADDEND holds only 24 bits: `adrp xN, L_x@PAGE` fails with
+    // "addend too big for relocation" once `L_x` sits more than 8 MB into its section. The
+    // Symfony demo's preload build has a 1.7 GB slice no cut can divide (conditional-branch
+    // intervals), and its shared helpers are that far in. Promoting such a label makes the
+    // relocation symbol-based with a zero addend. Only ADDRESS-TAKEN temporaries are promoted: a
+    // branch target inside a function must stay a temporary, because a real symbol starts a new
+    // atom and fallthrough into it would not survive `-dead_strip`.
+    const ADDEND_SAFE_SLICE_BYTES: usize = 6 << 20;
+    let slice_bytes: Vec<usize> = (0..parts)
+        .map(|part| {
+            let start = if part == 0 { 0 } else { cuts[part - 1] };
+            let end = cuts.get(part).copied().unwrap_or(analysis.lines.len());
+            analysis.offset(end) - analysis.offset(start)
+        })
+        .collect();
     for (id, &name) in analysis.names.iter().enumerate() {
         let span = analysis.spans[id];
-        if slice_of(span.lo) == slice_of(span.hi) {
+        let too_far_for_an_addend = analysis.address_taken[id]
+            && name.starts_with(local_prefix)
+            && slice_bytes[slice_of(span.def)] > ADDEND_SAFE_SLICE_BYTES;
+        if slice_of(span.lo) == slice_of(span.hi) && !too_far_for_an_addend {
             continue;
         }
         if name.starts_with(local_prefix) {
@@ -571,7 +592,7 @@ fn analyze<'a>(source: &'a str, local_prefix: &str) -> Analysis<'a> {
         .clamp(1, 32);
     const BLOCK: usize = 1 << 16;
     let next_block = std::sync::atomic::AtomicUsize::new(0);
-    type Partial = (FastMap<u32, (u32, u32)>, Vec<(usize, usize)>);
+    type Partial = (FastMap<u32, (u32, u32)>, Vec<(usize, usize)>, Vec<u32>);
     let partials: Vec<Partial> = std::thread::scope(|scope| {
         let workers: Vec<_> = (0..threads)
             .map(|_| {
@@ -580,6 +601,7 @@ fn analyze<'a>(source: &'a str, local_prefix: &str) -> Analysis<'a> {
                 scope.spawn(move || {
                     let mut touched = FastMap::default();
                     let mut hard = Vec::new();
+                    let mut taken = Vec::new();
                     loop {
                         let first =
                             next_block.fetch_add(BLOCK, std::sync::atomic::Ordering::Relaxed);
@@ -596,9 +618,10 @@ fn analyze<'a>(source: &'a str, local_prefix: &str) -> Analysis<'a> {
                             starts_a_label,
                             &mut touched,
                             &mut hard,
+                            &mut taken,
                         );
                     }
-                    (touched, hard)
+                    (touched, hard, taken)
                 })
             })
             .collect();
@@ -608,7 +631,11 @@ fn analyze<'a>(source: &'a str, local_prefix: &str) -> Analysis<'a> {
             .collect()
     });
     let mut hard: Vec<(usize, usize)> = Vec::new();
-    for (touched, intervals) in partials {
+    let mut address_taken = vec![false; names.len()];
+    for (touched, intervals, taken) in partials {
+        for id in taken {
+            address_taken[id as usize] = true;
+        }
         for (id, (lo, hi)) in touched {
             let span = &mut spans[id as usize];
             span.lo = span.lo.min(lo as usize);
@@ -641,6 +668,7 @@ fn analyze<'a>(source: &'a str, local_prefix: &str) -> Analysis<'a> {
         footer,
         footer_set,
         globl,
+        address_taken,
     }
 }
 
@@ -668,6 +696,7 @@ fn scan_references(
     starts_a_label: &[bool; 256],
     touched: &mut FastMap<u32, (u32, u32)>,
     hard: &mut Vec<(usize, usize)>,
+    address_taken: &mut Vec<u32>,
 ) {
     for index in range {
         let raw = lines.get(index);
@@ -681,11 +710,15 @@ fn scan_references(
             && !line.starts_with(".private_extern ")
             && !line.starts_with(".comm ")
         {
+            let takes_address = line.contains("@PAGE") || line.contains("@GOTPAGE");
             visit_identifiers(raw, |token| {
                 if !starts_a_label[token.as_bytes()[0] as usize] {
                     return;
                 }
                 if let Some(&id) = ids.get(token) {
+                    if takes_address {
+                        address_taken.push(id as u32);
+                    }
                     let line = index as u32;
                     touched
                         .entry(id as u32)
@@ -1684,5 +1717,39 @@ mod tests {
                 .any(|line| line.trim() == format!("{name}:"));
             assert!(opens, "candidate at line {candidate} does not open {name}");
         }
+    }
+
+    /// An address-taken temporary defined deep in a slice too large for a relocation addend is
+    /// promoted to a real symbol; a branch-only temporary in the same slice is not.
+    ///
+    /// ARM64_RELOC_ADDEND holds 24 bits, so `adrp x1, L_x@PAGE` to a temporary more than 8 MB into
+    /// its section failed to assemble ("addend too big for relocation") -- the Symfony demo's
+    /// preload build, whose 1.7 GB slice no cut can divide.
+    #[test]
+    fn address_taken_temporaries_in_an_oversized_slice_are_promoted() {
+        let mut asm = String::new();
+        asm.push_str(".globl _main\n_main:\n    ret\n");
+        asm.push_str(".align 2\n.globl _big\n_big:\n    cmp x0, #0\n    b.eq L_big_end\n");
+        for step in 0..500_000 {
+            asm.push_str(&format!("    mov x0, #{}\n", step % 4096));
+        }
+        asm.push_str("L_loop:\n    adrp x1, L_helper@PAGE\n    add x1, x1, L_helper@PAGEOFF\n");
+        asm.push_str("    b L_loop\nL_big_end:\n    ret\n");
+        asm.push_str(".align 2\nL_helper:\n    mov x0, #7\n    ret\n");
+        for index in 0..8 {
+            asm.push_str(&format!(".align 2\n.globl _fn{index}\n_fn{index}:\n    ret\n"));
+        }
+        let outcome = split_assembly(&asm, 4, MACOS_LOCAL);
+        assert!(outcome.is_split(), "the fixture must split");
+        assert!(
+            outcome.promoted.iter().any(|name| name == &format!("{PROMOTED_PREFIX}L_helper")),
+            "the address-taken temporary was not promoted: {:?}",
+            outcome.promoted
+        );
+        assert!(
+            !outcome.promoted.iter().any(|name| name.ends_with("L_loop")),
+            "a branch-only temporary was promoted: {:?}",
+            outcome.promoted
+        );
     }
 }

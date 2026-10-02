@@ -2,7 +2,7 @@
 title: "extract()"
 description: "Imports array entries as variables in the current scope."
 sidebar:
-  order: 55
+  order: 67
 ---
 
 ## extract()

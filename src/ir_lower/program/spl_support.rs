@@ -342,7 +342,7 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
         ),
         "IteratorIterator" => matches!(
             method_key,
-            "current" | "key" | "next" | "rewind" | "valid" | "getinneriterator"
+            "__construct" | "current" | "key" | "next" | "rewind" | "valid" | "getinneriterator"
         ),
         "LimitIterator" => matches!(
             method_key,

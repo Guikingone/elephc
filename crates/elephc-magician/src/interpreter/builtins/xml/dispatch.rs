@@ -177,7 +177,7 @@ pub(in crate::interpreter) fn eval_builtin_xml_expr_call(
     eval_xml_require_bridge(name, context, values)?;
     let mut evaluated = Vec::with_capacity(args.len());
     for arg in args {
-        let (value, ref_target) = eval_call_arg_value(arg, context, scope, values)?;
+        let (value, ref_target) = eval_direct_ref_arg_value(arg, context, scope, values)?;
         evaluated.push(EvaluatedCallArg {
             name: None,
             value,

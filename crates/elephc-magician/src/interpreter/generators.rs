@@ -23,7 +23,7 @@ mod lowering;
 
 use super::*;
 use crate::context::{
-    EvalGeneratorActivation, EvalGeneratorDelegate, EvalGeneratorFrame, EvalGeneratorMagicScope,
+    EvalCallSite, EvalGeneratorActivation, EvalGeneratorDelegate, EvalGeneratorFrame, EvalGeneratorMagicScope,
     EvalGeneratorRegion, EvalGeneratorState, EvalGeneratorStep,
 };
 
@@ -75,6 +75,7 @@ pub(in crate::interpreter) fn eval_plain_function_activation(
         class_scope: None,
         called_class: None,
         magic: None,
+        site: None,
     }
 }
 
@@ -86,12 +87,14 @@ pub(in crate::interpreter) fn eval_closure_activation(
     function_name: &str,
     class_scope: Option<String>,
     called_class: Option<String>,
+    site: Option<EvalCallSite>,
 ) -> EvalGeneratorActivation {
     EvalGeneratorActivation {
         function_name: function_name.to_string(),
         class_scope,
         called_class,
         magic: None,
+        site,
     }
 }
 
@@ -105,6 +108,7 @@ pub(in crate::interpreter) fn eval_method_activation(
     class_name: &str,
     called_class_name: &str,
     method: &EvalClassMethod,
+    site: Option<EvalCallSite>,
 ) -> EvalGeneratorActivation {
     EvalGeneratorActivation {
         function_name: qualified_method_name,
@@ -118,6 +122,7 @@ pub(in crate::interpreter) fn eval_method_activation(
                 .trait_origin()
                 .map(|trait_name| trait_name.trim_start_matches('\\').to_string()),
         }),
+        site,
     }
 }
 
@@ -136,9 +141,9 @@ pub(in crate::interpreter) fn eval_generator_finalize(
         return Ok(());
     };
     let unwind = if frame.state == EvalGeneratorState::Suspended {
-        eval_generator_enter_activation(&frame, context);
+        let resumer_site = eval_generator_enter_activation(&frame, context);
         let result = eval_generator_unwind_regions(&mut frame, context, values);
-        eval_generator_leave_activation(&frame, context);
+        eval_generator_leave_activation(&mut frame, resumer_site, context);
         result
     } else {
         Ok(())
@@ -256,9 +261,9 @@ fn eval_generator_step(
     let Some(mut frame) = context.take_eval_generator(identity) else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    eval_generator_enter_activation(&frame, context);
+    let resumer_site = eval_generator_enter_activation(&frame, context);
     let result = eval_generator_run(&mut frame, sent, resuming, context, values);
-    eval_generator_leave_activation(&frame, context);
+    eval_generator_leave_activation(&mut frame, resumer_site, context);
     context.restore_eval_generator(identity, frame);
     result
 }
@@ -268,7 +273,13 @@ fn eval_generator_step(
 /// The caller that resumes a generator is arbitrary, so the body must not inherit the resumer's
 /// class scope: `self::`, `static::`, `__CLASS__` and private-member access inside a generator
 /// method all read these stacks.
-fn eval_generator_enter_activation(frame: &EvalGeneratorFrame, context: &mut ElephcEvalContext) {
+///
+/// Returns the resumer's source site when the body has one of its own installed, for
+/// `eval_generator_leave_activation` to put back.
+fn eval_generator_enter_activation(
+    frame: &EvalGeneratorFrame,
+    context: &mut ElephcEvalContext,
+) -> Option<EvalCallSite> {
     let activation = &frame.activation;
     context.push_function(activation.function_name.clone());
     if let Some(class_scope) = &activation.class_scope {
@@ -285,11 +296,64 @@ fn eval_generator_enter_activation(frame: &EvalGeneratorFrame, context: &mut Ele
             magic.trait_name.as_deref(),
         );
     }
+    // The generator's own frame keeps the RESUMER's position, as php does: the call that started
+    // the body is the `file:line` the frame reports, so it is built before the body's site goes in.
+    let call_frame = eval_generator_call_frame(frame, context);
+    context.push_call_frame(call_frame);
+    let (file, dir, line, file_magic) = activation.site.as_ref()?.clone();
+    let resumer_site = context.call_site();
+    context.set_call_site(file, dir, line);
+    context.set_file_magic_override(file_magic);
+    Some(resumer_site)
+}
+
+/// The `debug_backtrace()` frame of a running generator body.
+///
+/// php lists the generator's function while its body runs -- a method with its object, so
+/// `debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT)` can find the instance that is yielding.
+/// Twig 3 renders every template through generator methods (`doDisplay()`, `block_*()`), and
+/// Symfony UX's `DeterministicTwigIdCalculator` walks the backtrace for the template object: with
+/// no frame for the resumed body it found none and every page rendering a live component failed
+/// with "Could not determine template while generating deterministic id".
+fn eval_generator_call_frame(frame: &EvalGeneratorFrame, context: &ElephcEvalContext) -> EvalCallFrame {
+    let activation = &frame.activation;
+    match &activation.magic {
+        Some(magic) => {
+            let class_name = magic
+                .class_name
+                .clone()
+                .or_else(|| activation.class_scope.clone())
+                .unwrap_or_default();
+            EvalCallFrame::method(
+                &class_name,
+                magic.function_name.clone(),
+                frame.scope.visible_cell("this"),
+                None,
+                context,
+            )
+        }
+        None => EvalCallFrame::function(activation.function_name.clone(), None, context),
+    }
 }
 
 /// Undoes `eval_generator_enter_activation` in the reverse order.
-fn eval_generator_leave_activation(frame: &EvalGeneratorFrame, context: &mut ElephcEvalContext) {
+///
+/// A body that installed its own source site records the line it reached -- where a suspended
+/// generator's next resumption continues -- before the resumer's site is put back.
+fn eval_generator_leave_activation(
+    frame: &mut EvalGeneratorFrame,
+    resumer_site: Option<EvalCallSite>,
+    context: &mut ElephcEvalContext,
+) {
+    if let Some((file, dir, line, file_magic)) = resumer_site {
+        if let Some(site) = frame.activation.site.as_mut() {
+            site.2 = context.call_line();
+        }
+        context.set_call_site(file, dir, line);
+        context.set_file_magic_override(file_magic);
+    }
     let activation = &frame.activation;
+    context.pop_call_frame();
     if activation.magic.is_some() {
         context.pop_magic_scope();
     }

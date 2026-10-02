@@ -2,7 +2,7 @@
 title: "headers_sent()"
 description: "Reports whether output has already committed response headers."
 sidebar:
-  order: 621
+  order: 634
 ---
 
 ## headers_sent()

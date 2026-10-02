@@ -2,7 +2,7 @@
 title: "getimagesizefromstring()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 455
+  order: 467
 ---
 
 ## getimagesizefromstring()

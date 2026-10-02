@@ -35,6 +35,39 @@ pub(super) fn lower_new_object(
             return emit_fixed_object_new(ctx, class_name.as_str(), operands, php_type, expr.span);
         }
     }
+    if class_key == "iteratoriterator"
+        && (ctx.has_eval_barrier() || ctx.can_resolve_runtime_dynamic_functions())
+    {
+        // An aggregate may hand back another aggregate (`Form::getIterator()` returns its
+        // `OrderedHashMap`), and php keeps asking until it holds an Iterator. Each round parks
+        // its answer in a hidden local so the next one can test it without evaluating twice.
+        let mut current = args.to_vec();
+        let mut staged = false;
+        for _ in 0..3 {
+            let Some(next) = unwrap_eval_aggregate_iterator_source(ctx, &current) else {
+                break;
+            };
+            let value = lower_expr(ctx, &next[0]);
+            let temp_type = ctx.builder.value_php_type(value.value).clone();
+            let temp = ctx.declare_synthetic_php_local(temp_type.clone());
+            ctx.store_local(&temp, value, temp_type, Some(expr.span));
+            current[0] = Expr::new(ExprKind::Variable(temp), args[0].span);
+            staged = true;
+        }
+        if staged {
+            return lower_new_object_resolved(ctx, class_name, &current, expr);
+        }
+    }
+    lower_new_object_resolved(ctx, class_name, args, expr)
+}
+
+/// Lowers fixed-class object construction once the argument rewrites above have been applied.
+fn lower_new_object_resolved(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &Name,
+    args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
     if ctx.has_eval_barrier()
         && !ctx.classes.contains_key(class_name.as_str())
         && plain_positional_call_args(args)
@@ -111,6 +144,76 @@ fn arg_may_allocate_object(arg: &Expr) -> bool {
     }
 }
 
+
+/// Rewrites `new IteratorIterator($x)` so an interpreter-declared aggregate is unwrapped by the
+/// interpreter.
+///
+/// The compiled constructor recognizes an `IteratorAggregate` by its compiled class id, which a
+/// class that `eval()` or the runtime autoloader declared does not have: such a source reached
+/// "foreach over iterable with unsupported kind". The source variable is asked the way every other
+/// compiled `instanceof` and method call asks, through the bridge:
+/// `new IteratorIterator($x instanceof \\IteratorAggregate ? $x->getIterator() : $x)`. A source
+/// that is already an `Iterator` (or any non-aggregate) is passed through unchanged.
+///
+/// Only a plain variable source is rewritten, because the expression is evaluated more than once.
+fn unwrap_eval_aggregate_iterator_source(
+    ctx: &LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> Option<Vec<Expr>> {
+    let first = args.first()?;
+    let ExprKind::Variable(name) = &first.kind else {
+        return None;
+    };
+    if matches!(args.get(1).map(|arg| &arg.kind), Some(ExprKind::NamedArg { .. })) {
+        return None;
+    }
+    // A source whose static class already is an Iterator needs no unwrapping.
+    if let PhpType::Object(class) = ctx.local_type(name) {
+        if class_implements_interface_for_ir(ctx, &class, "Iterator") {
+            return None;
+        }
+    }
+    let span = first.span;
+    // `is_a()` and `call_user_func()` rather than `instanceof` and a method call: narrowing the
+    // variable by `instanceof` re-types its loads in the arm, and the typed call that follows
+    // released a reference the load never took -- an eval-owned argument was freed under its
+    // caller. The function forms keep the variable boxed and go through the bridge-aware paths.
+    let condition = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("is_a"),
+            args: vec![
+                first.clone(),
+                Expr::new(ExprKind::StringLiteral("IteratorAggregate".to_string()), span),
+            ],
+        },
+        span,
+    );
+    let callable = Expr::new(
+        ExprKind::ArrayLiteral(vec![
+            first.clone(),
+            Expr::new(ExprKind::StringLiteral("getIterator".to_string()), span),
+        ]),
+        span,
+    );
+    let unwrapped = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("call_user_func"),
+            args: vec![callable],
+        },
+        span,
+    );
+    let source = Expr::new(
+        ExprKind::Ternary {
+            condition: Box::new(condition),
+            then_expr: Box::new(unwrapped),
+            else_expr: Box::new(first.clone()),
+        },
+        span,
+    );
+    let mut rewritten = args.to_vec();
+    rewritten[0] = source;
+    Some(rewritten)
+}
 
 /// Appends the source argument count to the hidden tail of an introspecting scope with
 /// optional parameters.

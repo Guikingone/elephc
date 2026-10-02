@@ -2,7 +2,7 @@
 title: "restore_exception_handler() — internals"
 description: "Compiler internals for restore_exception_handler(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 930
+  order: 950
 ---
 
 ## `restore_exception_handler()` — internals

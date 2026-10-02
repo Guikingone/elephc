@@ -470,6 +470,12 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             PhpType::Object(fallback_class.as_str().to_string())
         }
         ExprKind::NewScopedObject { .. } => PhpType::Object(String::new()),
+        // `new $class()` names its class at run time: an object of a class nothing here knows,
+        // which the checker already types `Mixed`. Left to the `int` fallback, a closure whose
+        // body is `fn ($class) => new $class()` was given an `int` return type and converted
+        // every object it built to a number on the way out -- Doctrine DBAL's
+        // `Type::createTypeRegistry()` maps its type classes exactly so.
+        ExprKind::NewDynamic { .. } => PhpType::Mixed,
         ExprKind::ClassConstant { .. }
         | ExprKind::ObjectClassName { .. }
         | ExprKind::ScopedConstantAccess { .. } => PhpType::Str,

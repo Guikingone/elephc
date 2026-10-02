@@ -11,7 +11,8 @@
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
 use crate::parser::ast::{
-    BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind, NESTED_APPEND_TEMP_PREFIX,
+    ARRAY_PROPERTY_REF_TEMP_PREFIX, BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind,
+    NESTED_APPEND_TEMP_PREFIX,
 };
 use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::span::Span;
@@ -311,10 +312,24 @@ fn complex_ref_store(
     };
     if matches!(&target.kind, ExprKind::ArrayAccess { .. }) {
         if source_name.is_none() {
-            return Err(CompileError::new(
+            // `$values[$key] = &$this->cursor`: the element has to share the property's cell, and
+            // the array reference marker only wraps a variable. Bind a hidden local to the
+            // property's cell first (the `$tmp = &$obj->prop` form the backend already lowers),
+            // then store that local's reference into the element.
+            let temp = format!("{}{}_{}", ARRAY_PROPERTY_REF_TEMP_PREFIX, span.line, span.col);
+            let bind = Stmt::new(
+                StmtKind::RefAssign {
+                    target: temp.clone(),
+                    source,
+                },
                 span,
-                "Array reference targets currently require a variable source",
-            ));
+            );
+            let reference = Expr::new(
+                ExprKind::ArrayReference(Box::new(Expr::new(ExprKind::Variable(temp), span))),
+                span,
+            );
+            let store = Stmt::new(assignment_target_store_stmt(target, reference, span)?, span);
+            return Ok(Stmt::new(StmtKind::Synthetic(vec![bind, store]), span));
         }
         let reference = Expr::new(ExprKind::ArrayReference(Box::new(source)), span);
         let kind = assignment_target_store_stmt(target, reference, span)?;

@@ -2,7 +2,7 @@
 title: "count() — internals"
 description: "Compiler internals for count(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 52
+  order: 64
 ---
 
 ## `count()` — internals

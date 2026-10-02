@@ -139,7 +139,19 @@ pub struct EvalGeneratorActivation {
     /// A method pushes one; a plain function and a closure do not, and inventing one for them
     /// here would change `__FUNCTION__` and `__METHOD__` relative to the ordinary call path.
     pub magic: Option<EvalGeneratorMagicScope>,
+    /// The source file, directory, line and `__FILE__` override the body was written in.
+    ///
+    /// The resumer is arbitrary -- compiled code driving a `foreach` over an interpreted Twig
+    /// template runs `doDisplay()` with the AOT caller's file installed -- so a body that reads
+    /// `__FILE__`, or a frame built while it runs, would name the resumer's file. Captured when
+    /// the generator is created, installed on every resumption, and updated with the line the
+    /// body reached when it suspends. `None` keeps the resumer's site, as before.
+    pub site: Option<EvalCallSite>,
 }
+
+/// A source position as `ElephcEvalContext::call_site()` reports it: file, directory, line and
+/// the `__FILE__` override.
+pub type EvalCallSite = (String, String, i64, Option<String>);
 
 /// The `__FUNCTION__` / `__METHOD__` / `__CLASS__` / `__TRAIT__` frame of a generator method.
 pub struct EvalGeneratorMagicScope {

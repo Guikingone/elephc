@@ -52,6 +52,39 @@ enum EvalClassConstantValue {
         enum_name: String,
         case_name: String,
     },
+    /// A constant array of supported values, in declaration order.
+    ///
+    /// Without it an eval fragment could not read ANY array-valued constant of a compiled class:
+    /// `W3CReference::CONTEXTS_MAP[$element] ?? W3CReference::CONTEXT_BODY` in an interpreted
+    /// `HtmlSanitizer` threw "Undefined constant", and every Symfony demo post page with it.
+    Array(Vec<(EvalClassConstantKey, EvalClassConstantValue)>),
+}
+
+/// One key of a constant array, already normalized the way PHP normalizes array keys.
+#[derive(Clone)]
+enum EvalClassConstantKey {
+    Int(i64),
+    Str(String),
+}
+
+impl EvalClassConstantKey {
+    /// Normalizes a constant key: a canonical decimal-integer string is an integer key in PHP.
+    fn from_value(value: EvalClassConstantValue) -> Option<Self> {
+        match value {
+            EvalClassConstantValue::Int(value) => Some(Self::Int(value)),
+            EvalClassConstantValue::Bool(value) => Some(Self::Int(i64::from(value))),
+            EvalClassConstantValue::Str(value) => {
+                if crate::types::is_php_integer_array_key(&value) {
+                    if let Ok(int_key) = value.parse::<i64>() {
+                        return Some(Self::Int(int_key));
+                    }
+                }
+                Some(Self::Str(value))
+            }
+            EvalClassConstantValue::Null => Some(Self::Str(String::new())),
+            _ => None,
+        }
+    }
 }
 
 /// Resolves a supported class-like constant expression into the literal form consumed by direct
@@ -69,7 +102,7 @@ pub(super) fn resolve_class_like_constant_literal(
         EvalClassConstantValue::Float(value) => Some(ExprKind::FloatLiteral(value)),
         EvalClassConstantValue::Str(value) => Some(ExprKind::StringLiteral(value)),
         EvalClassConstantValue::Null => Some(ExprKind::Null),
-        EvalClassConstantValue::EnumCase { .. } => None,
+        EvalClassConstantValue::EnumCase { .. } | EvalClassConstantValue::Array(_) => None,
     }
 }
 
@@ -609,6 +642,31 @@ fn eval_class_constant_value(
                 return eval_class_constant_value(module, current_class, current_info, &value, depth + 1);
             }
             crate::types::predefined_constants::int_constant_value(key).map(EvalClassConstantValue::Int)
+        }
+        ExprKind::ArrayLiteral(items) => {
+            let mut entries = Vec::with_capacity(items.len());
+            for (index, item) in items.iter().enumerate() {
+                let value =
+                    eval_class_constant_value(module, current_class, current_info, item, depth + 1)?;
+                entries.push((EvalClassConstantKey::Int(index as i64), value));
+            }
+            Some(EvalClassConstantValue::Array(entries))
+        }
+        ExprKind::ArrayLiteralAssoc(items) => {
+            let mut entries = Vec::with_capacity(items.len());
+            for (key, value) in items {
+                let key = EvalClassConstantKey::from_value(eval_class_constant_value(
+                    module,
+                    current_class,
+                    current_info,
+                    key,
+                    depth + 1,
+                )?)?;
+                let value =
+                    eval_class_constant_value(module, current_class, current_info, value, depth + 1)?;
+                entries.push((key, value));
+            }
+            Some(EvalClassConstantValue::Array(entries))
         }
         _ => None,
     }
@@ -1164,7 +1222,110 @@ fn emit_aarch64_constant_value(
             abi::emit_incref_if_refcounted(emitter, &PhpType::Object(enum_name.clone()));
             emit_box_current_value_as_mixed(emitter, &PhpType::Object(enum_name.clone()));
         }
+        EvalClassConstantValue::Array(entries) => {
+            emit_aarch64_constant_array(module, emitter, data, entries);
+        }
     }
+}
+
+/// Builds one constant array as a fresh hash of boxed Mixed values and boxes it (ARM64).
+///
+/// Every read materializes its own copy, exactly as the scalar arms box a fresh cell: the eval
+/// caller owns the result. Entries go in with the Mixed tag, each holding the box its value arm
+/// produced, so nested arrays and enum cases need no further case analysis.
+fn emit_aarch64_constant_array(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    entries: &[(EvalClassConstantKey, EvalClassConstantValue)],
+) {
+    let capacity = (entries.len() * 2).max(4) as i64;
+    abi::emit_load_int_immediate(emitter, "x0", capacity);
+    abi::emit_load_int_immediate(emitter, "x1", 7);
+    emitter.instruction("bl __rt_hash_new");                                    // allocate the constant array as a Mixed-valued hash
+    emitter.instruction("sub sp, sp, #16");                                     // hold the hash (and later its box) across entry construction
+    emitter.instruction("str x0, [sp]");                                        // save the hash under construction
+    for (key, value) in entries {
+        emit_aarch64_constant_value(module, emitter, data, value);
+        emitter.instruction("mov x3, x0");                                      // the entry value is the boxed Mixed cell just built
+        emitter.instruction("mov x4, xzr");                                     // a boxed cell has one payload word
+        emitter.instruction("mov x5, #7");                                      // entry tag 7 = boxed Mixed
+        match key {
+            EvalClassConstantKey::Int(key) => {
+                abi::emit_load_int_immediate(emitter, "x1", *key);
+                abi::emit_load_int_immediate(emitter, "x2", -1);
+            }
+            EvalClassConstantKey::Str(key) => {
+                let (label, len) = data.add_string(key.as_bytes());
+                abi::emit_symbol_address(emitter, "x1", &label);
+                abi::emit_load_int_immediate(emitter, "x2", len as i64);
+            }
+        }
+        emitter.instruction("ldr x0, [sp]");                                    // reload the hash under construction
+        emitter.instruction("bl __rt_hash_set");                                // insert the entry, taking ownership of its boxed value
+        emitter.instruction("str x0, [sp]");                                    // keep the possibly-grown hash
+    }
+    emitter.instruction("ldr x0, [sp]");                                        // box the finished hash
+    emit_box_current_value_as_mixed(
+        emitter,
+        &PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        },
+    );
+    emitter.instruction("str x0, [sp, #8]");                                    // hold the box while the construction reference is dropped
+    emitter.instruction("ldr x0, [sp]");                                        // boxing retained the hash; the box is its only owner now
+    emitter.instruction("bl __rt_decref_any");                                  // drop the construction reference
+    emitter.instruction("ldr x0, [sp, #8]");                                    // return the boxed constant array
+    emitter.instruction("add sp, sp, #16");                                     // release the construction slots
+}
+
+/// Builds one constant array as a fresh hash of boxed Mixed values and boxes it (x86_64).
+fn emit_x86_64_constant_array(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    entries: &[(EvalClassConstantKey, EvalClassConstantValue)],
+) {
+    let capacity = (entries.len() * 2).max(4) as i64;
+    abi::emit_load_int_immediate(emitter, "rdi", capacity);
+    abi::emit_load_int_immediate(emitter, "rsi", 7);
+    emitter.instruction("call __rt_hash_new");                                  // allocate the constant array as a Mixed-valued hash
+    emitter.instruction("sub rsp, 16");                                         // hold the hash (and later its box) across entry construction
+    emitter.instruction("mov QWORD PTR [rsp], rax");                            // save the hash under construction
+    for (key, value) in entries {
+        emit_x86_64_constant_value(module, emitter, data, value);
+        emitter.instruction("mov rcx, rax");                                    // the entry value is the boxed Mixed cell just built
+        emitter.instruction("xor r8d, r8d");                                    // a boxed cell has one payload word
+        emitter.instruction("mov r9, 7");                                       // entry tag 7 = boxed Mixed
+        match key {
+            EvalClassConstantKey::Int(key) => {
+                abi::emit_load_int_immediate(emitter, "rsi", *key);
+                abi::emit_load_int_immediate(emitter, "rdx", -1);
+            }
+            EvalClassConstantKey::Str(key) => {
+                let (label, len) = data.add_string(key.as_bytes());
+                abi::emit_symbol_address(emitter, "rsi", &label);
+                abi::emit_load_int_immediate(emitter, "rdx", len as i64);
+            }
+        }
+        emitter.instruction("mov rdi, QWORD PTR [rsp]");                        // reload the hash under construction
+        emitter.instruction("call __rt_hash_set");                              // insert the entry, taking ownership of its boxed value
+        emitter.instruction("mov QWORD PTR [rsp], rax");                        // keep the possibly-grown hash
+    }
+    emitter.instruction("mov rax, QWORD PTR [rsp]");                            // box the finished hash
+    emit_box_current_value_as_mixed(
+        emitter,
+        &PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        },
+    );
+    emitter.instruction("mov QWORD PTR [rsp + 8], rax");                        // hold the box while the construction reference is dropped
+    emitter.instruction("mov rax, QWORD PTR [rsp]");                            // boxing retained the hash; the box is its only owner now
+    emitter.instruction("call __rt_decref_any");                                // drop the construction reference
+    emitter.instruction("mov rax, QWORD PTR [rsp + 8]");                        // return the boxed constant array
+    emitter.instruction("add rsp, 16");                                         // release the construction slots
 }
 
 /// Emits one x86_64 boxed Mixed value for a supported class constant.
@@ -1213,6 +1374,9 @@ fn emit_x86_64_constant_value(
             // reference, as every other case read site hands out (see `enum_singletons`).
             abi::emit_incref_if_refcounted(emitter, &PhpType::Object(enum_name.clone()));
             emit_box_current_value_as_mixed(emitter, &PhpType::Object(enum_name.clone()));
+        }
+        EvalClassConstantValue::Array(entries) => {
+            emit_x86_64_constant_array(module, emitter, data, entries);
         }
     }
 }

@@ -332,6 +332,60 @@ pub(super) fn lower_backend_gap_builtin_shape(
             expr,
         ));
     }
+    // php's multi-array `array_map()` walks the arrays in parallel by position; the native
+    // runtime maps one array, so two or more go to the prelude helper.
+    if builtin == "array_map"
+        && args.len() > 2
+        && !args.iter().any(|arg| {
+            matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_))
+        })
+    {
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(crate::array_map_prelude::ARRAY_MAP_MULTI_NAME),
+            args,
+            expr,
+        ));
+    }
+    // A single-array map whose callback is read from storage and only known at run time (a
+    // `?Closure` property) has no static binding for the native runtime; the prelude helper calls
+    // it the way php does. `ast_usage` injected the helper for exactly these callback shapes.
+    if builtin == "array_map"
+        && args.len() == 2
+        && matches!(
+            args[0].kind,
+            ExprKind::PropertyAccess { .. }
+                | ExprKind::NullsafePropertyAccess { .. }
+                | ExprKind::StaticPropertyAccess { .. }
+                | ExprKind::ArrayAccess { .. }
+        )
+        && matches!(
+            materialized_expr_type_for_merge(ctx, &args[0]).codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        )
+    {
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(crate::array_map_prelude::ARRAY_MAP_GRADUAL_NAME),
+            args,
+            expr,
+        ));
+    }
+    // php's `array_keys($array, $filter_value[, $strict])` lists only the matching keys; the
+    // native runtime lists all of them, so the search form goes to the prelude helper.
+    if builtin == "array_keys"
+        && args.len() > 1
+        && !args.iter().any(|arg| {
+            matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_))
+        })
+    {
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(crate::array_keys_prelude::ARRAY_KEYS_SEARCH_NAME),
+            args,
+            expr,
+        ));
+    }
     // A callback the lowering cannot recover a native pointer for -- a boxed callable in a local,
     // a parameter, a property -- has no static binding for the array runtime, so the whole call
     // goes to the PHP helper, which calls it the way php does. `twig/twig`'s

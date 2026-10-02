@@ -146,7 +146,7 @@ pub(super) fn lower_throwable_standard_method_loaded(
         "getfile" => lower_throwable_get_file(ctx, object_reg),
         "gettraceasstring" => lower_throwable_empty_string(ctx),
         "getline" => lower_throwable_get_line(ctx, object_reg),
-        "gettrace" => lower_throwable_empty_trace_array(ctx),
+        "gettrace" => lower_throwable_get_trace(ctx, object_reg),
         "getprevious" => lower_throwable_get_previous(ctx, object_reg, inst),
         "__tostring" => lower_throwable_get_message(ctx, object_reg),
         _ => Err(CodegenIrError::unsupported(format!(
@@ -216,6 +216,40 @@ pub(super) fn lower_throwable_get_line(ctx: &mut FunctionContext<'_>, object_reg
         crate::codegen_support::sentinels::THROWABLE_CREATION_LINE_OFFSET as usize,
     );
     Ok(PhpType::Int)
+}
+
+/// Returns the trace recorded at creation, retained, or a fresh empty array when none was.
+///
+/// `__rt_throwable_capture_trace` fills the declared `trace` slot when interpreter frames are live
+/// at the `new`. A compact payload that recorded nothing holds zero there; a class-declared
+/// layout holds the default empty array. Both nonzero shapes are an owned array the object keeps,
+/// so the caller gets its own reference.
+pub(super) fn lower_throwable_get_trace(ctx: &mut FunctionContext<'_>, object_reg: &str) -> Result<PhpType> {
+    let fresh_label = ctx.next_label("throwable_trace_fresh");
+    let done_label = ctx.next_label("throwable_trace_done");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    abi::emit_load_from_address(
+        ctx.emitter,
+        result_reg,
+        object_reg,
+        crate::codegen_support::throwable_layout::TRACE_OFFSET,
+    );
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &fresh_label);
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_load_from_address(
+        ctx.emitter,
+        result_reg,
+        object_reg,
+        crate::codegen_support::throwable_layout::TRACE_OFFSET,
+    );
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&fresh_label);
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    lower_throwable_empty_trace_array(ctx)?;
+    ctx.emitter.label(&done_label);
+    Ok(PhpType::Array(Box::new(PhpType::Mixed)))
 }
 
 /// Materializes the synthetic empty indexed array used by `Throwable::getTrace()`.

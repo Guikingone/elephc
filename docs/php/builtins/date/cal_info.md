@@ -2,7 +2,7 @@
 title: "cal_info()"
 description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
 sidebar:
-  order: 186
+  order: 198
 ---
 
 ## cal_info()

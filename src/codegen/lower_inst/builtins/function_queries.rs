@@ -25,8 +25,13 @@ pub(crate) fn lower_function_exists(ctx: &mut FunctionContext<'_>, inst: &Instru
             Some(bare) => {
                 if let Some(group_name) = ctx.function_variant_group_name(bare) {
                     emit_variant_function_exists(ctx, &group_name);
+                } else if literal_function_exists(ctx, bare, strict_php) {
+                    emit_static_bool(ctx, true);
+                } else if ctx.module.required_runtime_features.eval_bridge {
+                    let bare = bare.to_string();
+                    emit_eval_declared_function_exists_literal(ctx, &bare);
                 } else {
-                    emit_static_bool(ctx, literal_function_exists(ctx, bare, strict_php));
+                    emit_static_bool(ctx, false);
                 }
             }
         }
@@ -113,8 +118,17 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_function_exists(
         ));
     }
     let candidates = dynamic_function_exists_candidates(ctx, strict_php);
-    if candidates.is_empty() {
+    let eval_fallback = ctx.module.required_runtime_features.eval_bridge;
+    if candidates.is_empty() && !eval_fallback {
         emit_static_bool(ctx, false);
+        return Ok(());
+    }
+    if candidates.is_empty() {
+        let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+        ctx.load_string_value_to_regs(value, ptr_reg, len_reg)?;
+        abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+        emit_eval_declared_function_exists_from_stack(ctx);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
         return Ok(());
     }
 
@@ -141,8 +155,49 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_function_exists(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_function_exists_lookup");
+    if eval_fallback {
+        let found_label = ctx.next_label("function_exists_compiled_found");
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &found_label);
+        emit_eval_declared_function_exists_from_stack(ctx);
+        ctx.emitter.label(&found_label);
+    }
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     Ok(())
+}
+
+/// Asks the eval bridge whether a runtime-loaded file declared this literal function name.
+///
+/// The compiled set of functions is closed, but a program with an eval bridge also has the
+/// functions its runtime-included files declare -- a polyfill's `if (!function_exists('f'))
+/// { function f() {} }` included by Composer through a computed path is exactly that. Folding
+/// `function_exists('f')` to `false` there disagreed with the very call `f()` that then worked.
+fn emit_eval_declared_function_exists_literal(ctx: &mut FunctionContext<'_>, bare_name: &str) {
+    let (name_label, name_len) = ctx.data.add_string(bare_name.as_bytes());
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        &name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        name_len as i64,
+    );
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_function_exists");
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
+/// Asks the eval bridge about the runtime name spilled at the top of the temporary stack
+/// (pointer at `[sp]`, length at `[sp + 8]`), leaving the answer in the integer result register.
+fn emit_eval_declared_function_exists_from_stack(ctx: &mut FunctionContext<'_>) {
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);
+    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, name_arg, 0);
+    let len_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, len_arg, 8);
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_function_exists");
+    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Emits the shared `.data` candidate table and returns its label.

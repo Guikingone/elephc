@@ -2,7 +2,7 @@
 title: "cairo_create() — internals"
 description: "Compiler internals for cairo_create(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 404
+  order: 416
 ---
 
 ## `cairo_create()` — internals

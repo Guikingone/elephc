@@ -24,7 +24,8 @@ sidebar:
 | [`get_cfg_var()`](./misc/get_cfg_var.md) | `(string $option): mixed` | `mixed` | ✓ | ✓ |
 | [`get_loaded_extensions()`](./misc/get_loaded_extensions.md) | `(bool $zend_extensions = false): array` | `array` | ✓ | ✓ |
 | [`header()`](./misc/header.md) | `(string $header, bool $replace = true, int $response_code = 0): void` | `void` | ✓ | ✓ |
-| [`header_remove()`](./misc/header_remove.md) | `(string $name = null): void` | `void` | ✓ | — |
+| [`header_remove()`](./misc/header_remove.md) | `(string $name = null): void` | `void` | ✓ | ✓ |
+| [`headers_list()`](./misc/headers_list.md) | `(): array` | `array` | ✓ | ✓ |
 | [`headers_sent()`](./misc/headers_sent.md) | `(mixed $filename = null, mixed $line = null): bool` | `bool` | ✓ | ✓ |
 | [`http_response_code()`](./misc/http_response_code.md) | `(int $response_code = 0): int` | `int` | ✓ | ✓ |
 | [`ini_restore()`](./misc/ini_restore.md) | `(string $option): void` | `void` | ✓ | — |
@@ -81,7 +82,7 @@ sidebar:
 | [`preg_grep()`](./misc/preg_grep.md) | `(string $pattern, mixed $array, int $flags = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`preg_last_error()`](./misc/preg_last_error.md) | `(): int` | `int` | ✓ | ✓ |
 | [`preg_last_error_msg()`](./misc/preg_last_error_msg.md) | `(): string` | `string` | ✓ | ✓ |
-| [`preg_replace_callback_array()`](./misc/preg_replace_callback_array.md) | `(mixed $pattern, mixed $subject, int $limit = -1, mixed $count = null, int $flags = 0): mixed` | `mixed` | ✓ | ✓ |
+| [`preg_replace_callback_array()`](./misc/preg_replace_callback_array.md) | `(array $pattern, mixed $subject, int $limit = -1, mixed $count = null, int $flags = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`print_r()`](./misc/print_r.md) | `(mixed $value, bool $return = false): mixed` | `mixed` | ✓ | ✓ |
 | [`register_tick_function()`](./misc/register_tick_function.md) | `(mixed $callback, ...$args): bool` | `bool` | — | ✓ |
 | [`serialize()`](./misc/serialize.md) | `(mixed $value): string` | `string` | ✓ | ✓ |

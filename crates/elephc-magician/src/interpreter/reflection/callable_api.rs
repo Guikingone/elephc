@@ -150,7 +150,7 @@ pub(in crate::interpreter) fn eval_reflection_function_method_metadata_result(
                 }
             }
             let (source_file, source_location) =
-                eval_reflection_function_method_source_location(&target);
+                eval_reflection_function_method_source_location(&target, context);
             eval_reflection_source_location_result(
                 method_key.as_str(),
                 source_file,

@@ -2,7 +2,7 @@
 title: "json_decode()"
 description: "Decodes a JSON string."
 sidebar:
-  order: 543
+  order: 555
 ---
 
 ## json_decode()

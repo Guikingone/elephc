@@ -2,7 +2,7 @@
 title: "fdiv() — internals"
 description: "Compiler internals for fdiv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 578
+  order: 590
 ---
 
 ## `fdiv()` — internals

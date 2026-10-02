@@ -563,11 +563,23 @@ PRELUDE_SOURCES: dict[str, tuple[tuple[tuple[str, ...], ...], str]] = {
             ("parse_str_prelude.rs", "parse_str"),
             ("addcslashes_prelude.rs", "addcslashes"),
             ("sodium_prelude.rs", "sodium"),
+            ("hash_pbkdf2_prelude.rs", "hash_pbkdf2"),
+            ("version_compare_prelude.rs", "version_compare"),
+            ("password_prelude.rs", "password", "crates/elephc-builtin-contract/src/catalog_data.rs"),
         ),
         "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
     ),
     # Prelude-provided contracts seeded from the built prelude declarations live in
     # catalog_data.rs; each area maps to the prelude (or preludes) declaring it.
+    # `array_first` / `array_last` / `array_find_key` / `array_change_key_case`, and the
+    # user-comparator set family (`array_udiff_assoc` and its siblings).
+    "array": (
+        (
+            ("array_edge_prelude.rs", "array-edge"),
+            ("array_ucompare_prelude.rs", "array-ucompare"),
+        ),
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
     "image": (
         (("image_prelude.rs", "image"),),
         "crates/elephc-builtin-contract/src/catalog_data.rs",
@@ -622,8 +634,12 @@ PRELUDE_SOURCES: dict[str, tuple[tuple[tuple[str, ...], ...], str]] = {
         ),
         "crates/elephc-builtin-contract/src/catalog_data.rs",
     ),
+    # `get_class_vars()` is built per program from its own class declarations.
     "callables": (
-        (("preg_array_prelude.rs", "preg-array"),),
+        (
+            ("preg_array_prelude.rs", "preg-array"),
+            ("class_vars_prelude.rs", "class-vars"),
+        ),
         "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
     ),
     "opcache": (
@@ -652,6 +668,10 @@ def find_prelude_declaration(source: str, canonical: str):
       prelude's embedded source. ``curl_prelude.rs`` is the last one shaped this way
       (see its injector for why, and the ROADMAP entry for the conversion).
 
+    A prelude that builds a FAMILY from a table (``array_ucompare_prelude.rs``: one
+    ``("array_diff_uassoc", ...)`` row per function, each fed to ``function(name)``) is
+    anchored on the function's table row, the one line that names it.
+
     Both patterns reject a longer identifier ending in the name, so
     ``__elephc_curl_easy_body`` cannot answer for ``curl_easy_body``. Returns the match, or
     ``None`` when neither form declares it — which the caller turns into a loud failure
@@ -662,7 +682,10 @@ def find_prelude_declaration(source: str, canonical: str):
     )
     if built is not None:
         return built
-    return re.search(rf"^function\s+{re.escape(canonical)}\s*\(", source, re.MULTILINE)
+    php = re.search(rf"^function\s+{re.escape(canonical)}\s*\(", source, re.MULTILINE)
+    if php is not None:
+        return php
+    return re.search(rf"^\s*\(\s*\"{re.escape(canonical)}\"\s*,", source, re.MULTILINE)
 
 
 def resolve_non_registry_lowering(

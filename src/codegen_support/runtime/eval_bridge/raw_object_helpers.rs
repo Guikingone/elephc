@@ -151,6 +151,14 @@ pub(super) fn emit_aarch64_install_serialize_object_hook(emitter: &mut Emitter) 
     emitter.instruction("ret");                                                 // return after installing the optional eval hook
 }
 
+/// Emits the ARM64 wrapper that installs the eval Throwable-trace callback.
+pub(super) fn emit_aarch64_install_throwable_trace_hook(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_install_throwable_trace_hook");
+    abi::emit_symbol_address(emitter, "x9", "_elephc_eval_throwable_trace_fn");
+    emitter.instruction("str x0, [x9]");                                        // store the Rust callback pointer for Throwable traces
+    emitter.instruction("ret");                                                 // return after installing the optional eval hook
+}
+
 /// Emits the x86_64 wrapper that boxes a borrowed raw object pointer for Rust eval.
 pub(super) fn emit_x86_64_object_from_raw_wrapper(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_object_from_raw");
@@ -255,4 +263,50 @@ pub(super) fn emit_x86_64_install_serialize_object_hook(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r10", "_elephc_eval_serialize_object_fn");
     emitter.instruction("mov QWORD PTR [r10], rdi");                            // store the Rust callback pointer for eval object rendering
     emitter.instruction("ret");                                                 // return after installing the optional eval hook
+}
+
+/// Emits the x86_64 wrapper that installs the eval Throwable-trace callback.
+pub(super) fn emit_x86_64_install_throwable_trace_hook(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_install_throwable_trace_hook");
+    abi::emit_symbol_address(emitter, "r10", "_elephc_eval_throwable_trace_fn");
+    emitter.instruction("mov QWORD PTR [r10], rdi");                            // store the Rust callback pointer for Throwable traces
+    emitter.instruction("ret");                                                 // return after installing the optional eval hook
+}
+
+/// Emits the ARM64 wrapper that records the live interpreter frames into a Throwable that eval
+/// created through the generated allocator.
+///
+/// Input is a boxed Mixed object cell (C ABI `x0`). A compiled `new` records the trace itself, but
+/// an interpreted `new Exception(...)` allocates through `__elephc_eval_value_new_object` and
+/// would otherwise keep the declared empty trace. Non-object cells are ignored.
+pub(super) fn emit_aarch64_capture_throwable_trace_wrapper(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_value_capture_throwable_trace");
+    emitter.instruction("sub sp, sp, #16");                                     // reserve the wrapper frame
+    emitter.instruction("stp x29, x30, [sp]");                                  // save the frame pointer and return address
+    emitter.instruction("mov x29, sp");                                         // establish the wrapper frame pointer
+    emitter.instruction("bl __rt_mixed_unbox");                                 // x0 = tag, x1 = object payload
+    emitter.instruction("cmp x0, #6");                                          // only an object cell can be a Throwable
+    emitter.instruction("b.ne __elephc_eval_value_capture_throwable_trace_done"); // ignore every other tag
+    emitter.instruction("mov x0, x1");                                          // the trace helper takes the raw object pointer
+    emitter.instruction("bl __rt_throwable_capture_trace");                     // record the frames live right now into the trace slot
+    emitter.label("__elephc_eval_value_capture_throwable_trace_done");
+    emitter.instruction("ldp x29, x30, [sp]");                                  // restore the frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the wrapper frame
+    emitter.instruction("ret");                                                 // return to Rust
+}
+
+/// Emits the x86_64 wrapper that records the live interpreter frames into an eval-created Throwable.
+pub(super) fn emit_x86_64_capture_throwable_trace_wrapper(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_value_capture_throwable_trace");
+    emitter.instruction("push rbp");                                            // save the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the wrapper frame pointer
+    emitter.instruction("mov rax, rdi");                                        // pass the boxed object cell in the runtime's Mixed register
+    emitter.instruction("call __rt_mixed_unbox");                               // rax = tag, rdi = object payload
+    emitter.instruction("cmp rax, 6");                                          // only an object cell can be a Throwable
+    emitter.instruction("jne __elephc_eval_value_capture_throwable_trace_done"); // ignore every other tag
+    emitter.instruction("mov rax, rdi");                                        // the trace helper takes the raw object pointer in rax
+    emitter.instruction("call __rt_throwable_capture_trace");                   // record the frames live right now into the trace slot
+    emitter.label("__elephc_eval_value_capture_throwable_trace_done");
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return to Rust
 }

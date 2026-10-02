@@ -175,6 +175,23 @@ pub(crate) fn emit_preg_split(emitter: &mut Emitter) {
         mixed_ptr_off,
     );
 
+    // -- count the piece toward the limit only when it was kept --
+    // php (`php_pcre_split_impl`) decrements the limit for a piece it ADDS: one
+    // PREG_SPLIT_NO_EMPTY dropped does not count, and neither does a captured delimiter.
+    // Counting every separator stopped `preg_split('/(\X)/u', "\r\n    a", 5, NO_EMPTY |
+    // DELIM_CAPTURE)` early, so the grapheme polyfill's `grapheme_extract()` lost a character.
+    // The segment's length is still in its save slot: the capture loop below reuses it.
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", preg_flags_off));         // reload preg_split flags for the limit rule
+    emitter.instruction(&format!("tst x9, #{}", PREG_SPLIT_NO_EMPTY));          // is PREG_SPLIT_NO_EMPTY enabled?
+    emitter.instruction("b.eq __rt_preg_split_count_piece");                    // without it every segment was kept and counts
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", piece_len_off));         // length of the segment just offered
+    emitter.instruction("cbz x10, __rt_preg_split_count_done");                 // a dropped empty segment leaves the limit alone
+    emitter.label("__rt_preg_split_count_piece");
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", split_count_off));        // reload kept segment count
+    emitter.instruction("add x9, x9, #1");                                      // account for the segment just kept
+    emitter.instruction(&format!("str x9, [sp, #{}]", split_count_off));        // save updated kept segment count
+    emitter.label("__rt_preg_split_count_done");
+
     emit_preg_split_capture_loop_arm64(
         emitter,
         regmatches_ptr_off,
@@ -191,10 +208,7 @@ pub(crate) fn emit_preg_split(emitter: &mut Emitter) {
         capture_idx_off,
     );
 
-    // -- count this separator and advance past match --
-    emitter.instruction(&format!("ldr x9, [sp, #{}]", split_count_off));        // reload processed separator count
-    emitter.instruction("add x9, x9, #1");                                      // account for the separator just processed
-    emitter.instruction(&format!("str x9, [sp, #{}]", split_count_off));        // save updated separator count
+    // -- advance past match --
     emitter.instruction(&format!("ldr x14, [sp, #{}]", regmatches_ptr_off));    // load dynamic full-match pair for cursor advancement
     emitter.instruction("ldr x9, [x14, #8]");                                   // load full-match signed-64-bit end
     emitter.instruction(&format!("ldr x10, [sp, #{}]", current_elephc_off));    // search cursor ...
@@ -630,6 +644,18 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
         mixed_ptr_off,
     );
 
+    // Count the segment toward the limit only when it was kept: see the ARM64 twin.
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", preg_flags_off)); // reload preg_split flags for the limit rule
+    emitter.instruction(&format!("test r9, {}", PREG_SPLIT_NO_EMPTY));          // is PREG_SPLIT_NO_EMPTY enabled?
+    emitter.instruction("jz __rt_preg_split_count_piece_linux_x86_64");         // without it every segment was kept and counts
+    emitter.instruction(&format!("cmp QWORD PTR [rsp + {}], 0", piece_len_off)); // was the segment just offered empty?
+    emitter.instruction("je __rt_preg_split_count_done_linux_x86_64");          // a dropped empty segment leaves the limit alone
+    emitter.label("__rt_preg_split_count_piece_linux_x86_64");
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", split_count_off)); // reload kept segment count
+    emitter.instruction("add r9, 1");                                           // account for the segment just kept
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", split_count_off)); // save updated kept segment count
+    emitter.label("__rt_preg_split_count_done_linux_x86_64");
+
     emit_preg_split_capture_loop_x86_64(
         emitter,
         regmatches_ptr_off,
@@ -646,9 +672,6 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
         capture_idx_off,
     );
 
-    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", split_count_off)); // reload processed separator count
-    emitter.instruction("add r9, 1");                                           // account for the separator just processed
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", split_count_off)); // save updated separator count
     emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic full-match pair for cursor advancement
     emitter.instruction("mov r9, QWORD PTR [r12 + 8]");                         // load full-match signed-64-bit end
     emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", current_elephc_off)); // search cursor ...

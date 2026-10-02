@@ -2,7 +2,7 @@
 title: "mysqli_execute()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 113
+  order: 125
 ---
 
 ## mysqli_execute()

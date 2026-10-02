@@ -2,7 +2,7 @@
 title: "array_count_values() — internals"
 description: "Compiler internals for array_count_values(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 6
+  order: 7
 ---
 
 ## `array_count_values()` — internals

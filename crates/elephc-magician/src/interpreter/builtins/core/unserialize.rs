@@ -357,6 +357,37 @@ fn eval_unserialize_parse_raw_string(
     Ok(bytes)
 }
 
+/// Parses an `i:<int>;` object-payload key.
+fn eval_unserialize_parse_int_key(
+    cursor: &mut EvalUnserializeCursor<'_>,
+) -> Result<i64, EvalUnserializeFailure> {
+    cursor.take_byte(b'i')?;
+    cursor.take_byte(b':')?;
+    // `take_until` consumes the `;` too.
+    let digits = cursor.take_until(b';')?;
+    std::str::from_utf8(digits)
+        .ok()
+        .and_then(|text| text.parse().ok())
+        .ok_or(EvalUnserializeFailure::Generic)
+}
+
+/// Builds the array a `__unserialize()` hook receives from a payload, turning the decimal
+/// spelling of an integer key back into the integer key php's array has.
+fn eval_unserialize_payload_array(
+    payload: Vec<(String, RuntimeCellHandle)>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut array = values.assoc_new(payload.len())?;
+    for (name, value) in payload {
+        let key = match name.parse::<i64>() {
+            Ok(index) if index.to_string() == name => values.int(index)?,
+            _ => values.string(&name)?,
+        };
+        array = values.array_set(array, key, value)?;
+    }
+    Ok(array)
+}
+
 /// Parses `a:<count>:{<key><value>...}` into a fresh eval array.
 fn eval_unserialize_parse_array(
     cursor: &mut EvalUnserializeCursor<'_>,
@@ -466,8 +497,14 @@ fn eval_unserialize_parse_object(
                 .map_err(|_| EvalUnserializeFailure::Generic)?;
             return Err(EvalUnserializeFailure::AlreadyWarned);
         }
-        let key_bytes = eval_unserialize_parse_raw_string(cursor)?;
-        let key = String::from_utf8_lossy(&key_bytes).into_owned();
+        // A `__serialize()` payload keeps its array's own keys, so an integer key (`i:0;`) is as
+        // valid here as a property name; it travels as its decimal spelling.
+        let key = if cursor.peek() == Some(b'i') {
+            eval_unserialize_parse_int_key(cursor)?.to_string()
+        } else {
+            let key_bytes = eval_unserialize_parse_raw_string(cursor)?;
+            String::from_utf8_lossy(&key_bytes).into_owned()
+        };
         if cursor.peek().is_none() {
             values
                 .warning("unserialize(): Unexpected end of serialized data")
@@ -566,10 +603,28 @@ fn eval_unserialize_hydrate_object(
         let mut scope = ElephcEvalScope::new();
         let object = eval_dynamic_class_allocate_object(&class, context, &mut scope, values)?;
         let identity = values.object_identity(object)?;
-        // Borrows `payload` (not moved yet): a `__unserialize()` hook below needs the RAW,
-        // unmangled payload it was given, not the object's post-write declared-property table
-        // (which would also carry every default `eval_dynamic_class_allocate_object` just
-        // seeded for a property the payload never mentioned).
+        if let Some((declaring_class, method)) = context.class_method(class.name(), "__unserialize") {
+            // php hands a `__unserialize()` class the payload and writes no property itself:
+            // the keys are whatever `__serialize()` chose (`0`, `1`, ...), not property names,
+            // and writing them first left `0`/`1`/`2` dynamic properties on the object.
+            let payload_array = eval_unserialize_payload_array(payload, values)?;
+            let result = eval_dynamic_method_with_values(
+                &declaring_class,
+                class.name(),
+                &method,
+                object,
+                vec![EvaluatedCallArg {
+                    name: None,
+                    value: payload_array,
+                    ref_target: None,
+                    owned: true,
+                }],
+                context,
+                values,
+            )?;
+            values.release(result)?;
+            return Ok(object);
+        }
         for &(ref name, value) in &payload {
             let declared_name = eval_unserialize_declared_property_name(name);
             if let Some((declaring_class, property)) =
@@ -587,34 +642,15 @@ fn eval_unserialize_hydrate_object(
                 context.mark_dynamic_property_initialized(identity, name);
             }
         }
-        if let Some((declaring_class, method)) = context.class_method(class.name(), "__unserialize") {
-            let mut payload_array = values.assoc_new(payload.len())?;
-            for (name, value) in payload {
-                let key = values.string(&name)?;
-                payload_array = values.array_set(payload_array, key, value)?;
-            }
-            let result = eval_dynamic_method_with_values(
-                &declaring_class,
-                class.name(),
-                &method,
-                object,
-                vec![EvaluatedCallArg {
-                    name: None,
-                    value: payload_array,
-                    ref_target: None,
-                    owned: true,
-                }],
-                context,
-                values,
-            )?;
-            values.release(result)?;
-        }
         return Ok(object);
     }
     // A native/AOT class with no eval-declared metadata (e.g. a genuine built-in): there is no
     // declared-property table to consult, so every payload property lands as a plain dynamic
     // one. Known limitation: a native class with real private state would mis-bind here exactly
     // as an undeclared eval property would -- out of scope, no such class is on the 404 path.
+    // A compiled class with `__unserialize()` does not need that table at all: php hands the
+    // hook the payload, which is how Symfony's session reads back the compiled `App\Entity\User`
+    // inside a security token.
     let object = values.new_object(class_name)?;
     // A compiled class that restores itself through `__unserialize()` gets the payload handed to
     // that hook, as php does, instead of having its keys written as properties from outside its

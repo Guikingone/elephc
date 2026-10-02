@@ -2,7 +2,7 @@
 title: "imagealphablending() — internals"
 description: "Compiler internals for imagealphablending(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 460
+  order: 472
 ---
 
 ## `imagealphablending()` — internals

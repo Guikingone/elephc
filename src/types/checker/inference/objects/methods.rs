@@ -601,14 +601,32 @@ impl Checker {
             &format!("Method {}::{}", interface_name, method),
             env,
         )?;
-        self.check_user_declared_call(
-            &sig,
-            &normalized_args,
-            expr.span,
-            env,
-            &format!("Method {}::{}", interface_name, method),
-            interface_name,
-        )?;
+        // An implementation may declare more parameters than the interface -- php dispatches on
+        // the runtime class and binds what it declares -- so an over-supplied call is judged
+        // against the widest implementation, as it already is for a class receiver.
+        // `PasswordHasherInterface::hash($plain)` is called with `$salt` by every Symfony
+        // password-hashing listener, and the legacy hashers declare it.
+        if !is_static
+            && self.subtype_dispatch_max_param_count(interface_name, &method_key) > sig.params.len()
+        {
+            self.check_user_declared_call_with_advisory_arity(
+                &sig,
+                &normalized_args,
+                expr.span,
+                env,
+                &format!("Method {}::{}", interface_name, method),
+                interface_name,
+            )?;
+        } else {
+            self.check_user_declared_call(
+                &sig,
+                &normalized_args,
+                expr.span,
+                env,
+                &format!("Method {}::{}", interface_name, method),
+                interface_name,
+            )?;
+        }
         let late_static_return = if is_static {
             self.static_method_late_static_return(interface_name, &method_key)
         } else {

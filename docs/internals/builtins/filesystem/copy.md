@@ -2,7 +2,7 @@
 title: "copy() — internals"
 description: "Compiler internals for copy(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 260
+  order: 272
 ---
 
 ## `copy()` — internals

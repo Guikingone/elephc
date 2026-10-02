@@ -73,6 +73,9 @@ pub(super) fn lower(
         RuntimeFnId::HeaderRemove => Some({
             crate::codegen::lower_inst::builtins::output_buffering::lower_header_remove(ctx, inst)
         }),
+        RuntimeFnId::HeadersList => Some({
+            crate::codegen::lower_inst::builtins::output_buffering::lower_headers_list(ctx, inst)
+        }),
         RuntimeFnId::HeadersSent => Some({
             crate::codegen::lower_inst::builtins::output_buffering::lower_headers_sent(ctx, inst)
         }),

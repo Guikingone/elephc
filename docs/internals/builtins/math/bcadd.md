@@ -2,7 +2,7 @@
 title: "bcadd() — internals"
 description: "Compiler internals for bcadd(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 554
+  order: 566
 ---
 
 ## `bcadd()` — internals

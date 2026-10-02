@@ -330,7 +330,14 @@ pub(super) fn eval_reflection_owner_object_with_members(
     } else if owner_kind == EVAL_REFLECTION_OWNER_FUNCTION {
         let identity = values.object_identity(object)?;
         context.register_eval_reflection_function(identity, reflected_name);
-    } else if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY {
+    }
+    if matches!(
+        owner_kind,
+        EVAL_REFLECTION_OWNER_METHOD | EVAL_REFLECTION_OWNER_FUNCTION
+    ) {
+        eval_reflection_store_native_source_slots(object, owner_kind, context, values)?;
+    }
+    if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY {
         if let Some(declaring_class) = parent_class_name {
             if flags & EVAL_REFLECTION_MEMBER_FLAG_DYNAMIC != 0 {
                 let identity = values.object_identity(object)?;
@@ -380,6 +387,59 @@ pub(super) fn eval_reflection_owner_object_with_members(
         values.release(backing_value_cell)?;
     }
     Ok(object)
+}
+
+/// Writes a ReflectionFunction/ReflectionMethod's source file and lines into its native slots.
+///
+/// Compiled code calls `getFileName()`, `getStartLine()` and `getEndLine()` as plain slot
+/// getters, and the compiled constructor is what fills those slots. An object built here never
+/// ran that constructor, so compiled code read `""` and `0` for every reflector eval built --
+/// which is every `new ReflectionMethod(...)` a frame with an eval context makes. The eval
+/// dispatcher also defers to these slots for a method an AOT class declares, so a reflector
+/// built in eval for such a method answered from them too. The values are the ones the eval
+/// dispatcher itself answers with (see `eval_reflection_source_location_result`).
+fn eval_reflection_store_native_source_slots(
+    object: RuntimeCellHandle,
+    owner_kind: u64,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let identity = values.object_identity(object)?;
+    let Some(target) = eval_reflection_function_method_target(identity, context, values)? else {
+        return Ok(());
+    };
+    let (source_file, source_location) = eval_reflection_function_method_source_location(&target, context);
+    let Some(source_location) = source_location else {
+        return Ok(());
+    };
+    let file = match source_file {
+        Some(source_file) => source_file.to_string(),
+        None => context.eval_file_magic(),
+    };
+    let owner_class = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+        "ReflectionMethod"
+    } else {
+        "ReflectionFunction"
+    };
+    let file_value = values.string(&file)?;
+    let start_value = values.int(source_location.start_line())?;
+    let end_value = values.int(source_location.end_line())?;
+    let configured = eval_reflection_with_declaring_class_scope(
+        owner_class,
+        context,
+        |_| -> Result<(), EvalStatus> {
+            values.property_set(object, "__file_name", file_value)?;
+            values.property_set(object, "__start_line", start_value)?;
+            values.property_set(object, "__end_line", end_value)
+        },
+    );
+    let file_release = values.release(file_value);
+    let start_release = values.release(start_value);
+    let end_release = values.release(end_value);
+    configured?;
+    file_release?;
+    start_release?;
+    end_release
 }
 
 /// Builds the `ReflectionClass|false` value stored in parent or declaring-class slots.

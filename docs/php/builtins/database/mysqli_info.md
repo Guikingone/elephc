@@ -2,7 +2,7 @@
 title: "mysqli_info()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 136
+  order: 148
 ---
 
 ## mysqli_info()

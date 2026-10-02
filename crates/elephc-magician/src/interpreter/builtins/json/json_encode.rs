@@ -45,6 +45,42 @@ pub(in crate::interpreter) fn eval_builtin_json_encode(
     }
 }
 
+/// What a COMPILED `json_encode()` should encode for an object this interpreter owns.
+///
+/// The compiled encoder walks per-class descriptors, and an object the interpreter declared has
+/// the generic wrapper's: no `jsonSerialize()` and no properties. This answers it the way the
+/// interpreter's own encoder does -- the `jsonSerialize()` result of a `JsonSerializable` (or the
+/// object itself when it hands itself back), otherwise an array of its public properties -- as an
+/// owned value the compiled encoder then encodes.
+pub(crate) fn eval_json_encode_serialized_object(
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if eval_foreach_object_is_a(object, "JsonSerializable", context, values)? {
+        let serialized = eval_method_call_result(object, "jsonSerialize", Vec::new(), context, values)?;
+        let hands_itself_back = values.type_tag(serialized)? == EVAL_TAG_OBJECT
+            && values.object_identity(serialized)? == values.object_identity(object)?;
+        if !hands_itself_back {
+            return Ok(serialized);
+        }
+    }
+    let len = values.object_property_len(object)?;
+    let mut result = values.assoc_new(len)?;
+    for position in 0..len {
+        let key = values.object_property_iter_key(object, position)?;
+        let key_bytes = values.string_bytes(key)?;
+        if key_bytes.contains(&0) {
+            values.release(key)?;
+            continue;
+        }
+        let property = std::str::from_utf8(&key_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
+        let element = values.property_get(object, property)?;
+        result = values.array_set(result, key, element)?;
+    }
+    Ok(result)
+}
+
 /// Dispatches by-value `json_encode()` calls after argument binding.
 pub(in crate::interpreter) fn eval_json_encode_values_result(
     evaluated_args: &[RuntimeCellHandle],
@@ -100,8 +136,8 @@ fn eval_json_encode_result(
     let mut error = None;
     eval_json_encode_append(
         value,
-        values,
         context,
+        values,
         flags,
         depth as usize,
         0,
@@ -126,8 +162,8 @@ fn eval_json_encode_result(
 /// Appends one JSON value to the output buffer.
 fn eval_json_encode_append(
     value: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
     context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
     flags: i64,
     depth_limit: usize,
     depth: usize,
@@ -157,8 +193,8 @@ fn eval_json_encode_append(
         EVAL_TAG_ARRAY => {
             eval_json_encode_append_indexed_array(
                 value,
-                values,
                 context,
+                values,
                 flags,
                 depth_limit,
                 depth,
@@ -170,8 +206,8 @@ fn eval_json_encode_append(
         EVAL_TAG_ASSOC => {
             eval_json_encode_append_assoc(
                 value,
-                values,
                 context,
+                values,
                 flags,
                 depth_limit,
                 depth,
@@ -183,8 +219,8 @@ fn eval_json_encode_append(
         EVAL_TAG_OBJECT => {
             eval_json_encode_append_object(
                 value,
-                values,
                 context,
+                values,
                 flags,
                 depth_limit,
                 depth,
@@ -242,8 +278,8 @@ fn eval_json_encode_append_float(
 /// Appends one indexed eval array as a JSON array or forced JSON object.
 fn eval_json_encode_append_indexed_array(
     value: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
     context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
     flags: i64,
     depth_limit: usize,
     depth: usize,
@@ -283,8 +319,8 @@ fn eval_json_encode_append_indexed_array(
         let element = values.array_get(value, key)?;
         eval_json_encode_append(
             element,
-            values,
             context,
+            values,
             flags,
             depth_limit,
             depth + 1,
@@ -305,8 +341,8 @@ fn eval_json_encode_append_indexed_array(
 /// Appends one associative eval array as a JSON object.
 fn eval_json_encode_append_assoc(
     value: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
     context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
     flags: i64,
     depth_limit: usize,
     depth: usize,
@@ -367,8 +403,8 @@ fn eval_json_encode_append_assoc(
         let element = values.array_get(value, key)?;
         eval_json_encode_append(
             element,
-            values,
             context,
+            values,
             flags,
             depth_limit,
             depth + 1,
@@ -386,21 +422,11 @@ fn eval_json_encode_append_assoc(
     Ok(())
 }
 
-/// Returns whether an object value implements `JsonSerializable`.
-fn eval_json_object_is_serializable(
-    value: RuntimeCellHandle,
-    context: &ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<bool, EvalStatus> {
-    dynamic_object_is_a(value, "JsonSerializable", false, context, values)?
-        .map_or_else(|| values.object_is_a(value, "JsonSerializable", false), Ok)
-}
-
 /// Appends one eval runtime object as a JSON object.
 fn eval_json_encode_append_object(
     value: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
     context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
     flags: i64,
     depth_limit: usize,
     depth: usize,
@@ -408,18 +434,18 @@ fn eval_json_encode_append_object(
     error: &mut Option<EvalJsonEncodeError>,
     output: &mut Vec<u8>,
 ) -> Result<(), EvalStatus> {
-    // `JsonSerializable` objects are encoded as whatever `jsonSerialize()` returns; Laravel's
-    // `Collection`, `JsonResource` and `MessageBag` all rely on it. An object that returns
-    // itself is encoded as a plain object, which is also what php does.
-    if eval_json_object_is_serializable(value, context, values)? {
-        let result = eval_method_call_result(value, "jsonSerialize", Vec::new(), context, values)?;
-        let same_object = values.type_tag(result)? == EVAL_TAG_OBJECT
-            && values.object_identity(result)? == values.object_identity(value)?;
-        if !same_object {
+    // A `JsonSerializable` object encodes as whatever `jsonSerialize()` returns. An object that
+    // hands itself back is encoded as a plain object, as php does, instead of recursing forever.
+    if eval_foreach_object_is_a(value, "JsonSerializable", context, values)? {
+        let serialized = eval_method_call_result(value, "jsonSerialize", Vec::new(), context, values)?;
+        let hands_itself_back = values.type_tag(serialized)? == EVAL_TAG_OBJECT
+            && values.object_identity(serialized)? == values.object_identity(value)?;
+        if !hands_itself_back {
+            // The call handed back a value this frame owns: release it once it is encoded.
             let encoded = eval_json_encode_append(
-                result,
-                values,
+                serialized,
                 context,
+                values,
                 flags,
                 depth_limit,
                 depth,
@@ -427,10 +453,12 @@ fn eval_json_encode_append_object(
                 error,
                 output,
             );
-            let released = eval_release_value(context, values, result);
+            let released = eval_release_value(context, values, serialized);
             encoded?;
             return released;
         }
+        // An object that hands itself back holds the reference the call returned.
+        eval_release_value(context, values, serialized)?;
     }
     eval_json_encode_enter_array(value, depth_limit, depth, arrays_seen)?;
     let pretty = flags & EVAL_JSON_PRETTY_PRINT != 0;
@@ -476,8 +504,8 @@ fn eval_json_encode_append_object(
         let element = values.property_get(value, property)?;
         eval_json_encode_append(
             element,
-            values,
             context,
+            values,
             flags,
             depth_limit,
             depth + 1,

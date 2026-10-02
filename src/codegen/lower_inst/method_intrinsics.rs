@@ -467,28 +467,10 @@ pub(super) fn lower_nullable_receiver_interface_method_call(
             method_name,
         );
     }
-    let callee_sig = ctx
-        .module
-        .interface_infos
-        .get(normalized)
-        .and_then(|interface_info| interface_info.methods.get(&method_key))
-        .ok_or_else(|| {
-            CodegenIrError::unsupported(format!(
-                "interface method call to unknown method {}::{}",
-                normalized, method_name
-            ))
-        })?
-        .clone();
-    let expected_args = callee_sig.params.len() + 1;
-    if inst.operands.len() != expected_args {
-        return Err(CodegenIrError::unsupported(format!(
-            "interface method call to {}::{} with {} operands for {} ABI params",
-            normalized,
-            method_name,
-            inst.operands.len(),
-            expected_args
-        )));
-    }
+    // A site lowered against the implementations' shared signature passes their defaulted extra
+    // parameters too; the non-null receiver takes the same ABI a typed receiver does.
+    let (_, _, callee_sig) =
+        resolve_interface_call_signature(ctx, normalized, method_name, inst.operands.len())?;
     let receiver_ty = PhpType::Object(normalized.to_string());
     let mut param_types = Vec::with_capacity(callee_sig.params.len() + 1);
     param_types.push(receiver_ty.clone());

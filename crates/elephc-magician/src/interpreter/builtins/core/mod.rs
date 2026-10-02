@@ -76,6 +76,8 @@ pub(in crate::interpreter) use unserialize::*;
 pub(crate) use unserialize::eval_unserialize_declared_object_from_hash;
 #[cfg(not(test))]
 pub(crate) use serialize::eval_serialize_object_fragment;
+#[cfg(not(test))]
+pub(crate) use debug_backtrace::eval_throwable_trace_value;
 pub(in crate::interpreter) use var_dump::*;
 
 /// Dispatches direct expression-level calls for core builtins.

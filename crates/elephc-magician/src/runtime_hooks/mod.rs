@@ -31,7 +31,8 @@ use externs::{
     __elephc_eval_install_generator_protocol_hook,
     __elephc_eval_install_array_access_hook, __elephc_eval_install_object_clone_hook,
     __elephc_eval_install_object_relation_hook, __elephc_eval_install_serialize_object_hook,
-    __elephc_eval_install_unserialize_object_hook,
+    __elephc_eval_install_throwable_trace_hook, __elephc_eval_install_unserialize_object_hook,
+    __elephc_eval_value_capture_throwable_trace,
     __elephc_eval_value_array_new,
     __elephc_eval_value_array_set, __elephc_eval_value_int, __elephc_eval_value_object_from_raw,
     __elephc_eval_value_release,
@@ -210,6 +211,19 @@ pub(crate) unsafe fn install_object_relation_hook(callback: usize) {
 pub(crate) unsafe fn install_serialize_object_hook(callback: usize) {
     unsafe {
         __elephc_eval_install_serialize_object_hook(callback);
+    }
+}
+
+/// Installs the eval Throwable-trace callback into the generated runtime.
+///
+/// # Safety
+/// `callback` must be the address of an `extern "C" fn() -> *mut RuntimeCell` following the
+/// throwable-trace ABI; `__rt_throwable_capture_trace` calls through it when a compiled `new`
+/// creates a Throwable.
+#[cfg(not(test))]
+pub(crate) unsafe fn install_throwable_trace_hook(callback: usize) {
+    unsafe {
+        __elephc_eval_install_throwable_trace_hook(callback);
     }
 }
 

@@ -2,7 +2,7 @@
 title: "image_type_to_mime_type()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 457
+  order: 469
 ---
 
 ## image_type_to_mime_type()

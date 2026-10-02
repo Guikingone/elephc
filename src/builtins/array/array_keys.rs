@@ -59,6 +59,23 @@ fn eir_result_type(input: &BuiltinSemanticInput<'_>) -> PhpType {
 /// already inferred it once for side effects, and arity is pre-validated by the registry.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    // The search form (`array_keys($array, $filter_value[, $strict])`) is lowered to
+    // `crate::array_keys_prelude`, whose helper returns a list of the matching keys.
+    if cx.args.len() > 1 {
+        for arg in &cx.args[1..] {
+            cx.checker.infer_type(arg, cx.env)?;
+        }
+        return match ty {
+            PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Mixed
+            | PhpType::Union(_) => Ok(PhpType::Array(Box::new(PhpType::Mixed))),
+            _ => Err(CompileError::new(
+                cx.span,
+                "array_keys() argument must be array",
+            )),
+        };
+    }
     match ty {
         PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed => {
             Ok(PhpType::Array(Box::new(PhpType::Mixed)))

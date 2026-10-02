@@ -451,10 +451,29 @@ pub(super) fn materialize_direct_call_arg_for_param(
         PhpType::Array(param_elem) if param_elem.codegen_repr() == PhpType::Mixed => {
             if let PhpType::AssocArray { .. } = source_ty.codegen_repr() {
                 // A declared PHP `array` parameter accepts both indexed and associative
-                // storage. Keep hash keys intact: the callee's Array(Mixed) paths dispatch on
-                // the runtime heap kind, whereas `array_values()` would silently turn every
+                // storage. Keep hash keys intact: `array_values()` would silently turn every
                 // string key into an integer position before the user function can observe it.
-                return Ok(source_ty.codegen_repr());
+                // A hash whose keys ARE 0..n-1 in order is the same PHP value as a list, though,
+                // and is handed over packed: not every `array<mixed>` consumer dispatches on the
+                // heap kind, and `in_array()`, `max()`, `reset()` and callback `array_filter()`
+                // read a hash's buckets as packed slots. A gradual container parameter
+                // (`kernel.enabled_locales`) reaches Symfony's listeners exactly this way.
+                // The conversion works on a reference of its own, which the planned cleanup
+                // releases after the call (see `direct_call_arg_temp_cleanup_type`).
+                abi::emit_incref_if_refcounted(ctx.emitter, &source_ty.codegen_repr());
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => {
+                        abi::emit_load_int_immediate(ctx.emitter, "x1", 7);
+                        abi::emit_load_int_immediate(ctx.emitter, "x2", 1);
+                    }
+                    Arch::X86_64 => {
+                        ctx.emitter.instruction("mov rdi, rax");                // pass the hash to the list-packing helper
+                        abi::emit_load_int_immediate(ctx.emitter, "rsi", 7);
+                        abi::emit_load_int_immediate(ctx.emitter, "rdx", 1);
+                    }
+                }
+                abi::emit_call_label(ctx.emitter, "__rt_array_unbox_values");
+                return Ok(PhpType::Array(Box::new(PhpType::Mixed)));
             }
             if let PhpType::Array(source_elem) = source_ty.codegen_repr() {
                 let source_elem = source_elem.codegen_repr();

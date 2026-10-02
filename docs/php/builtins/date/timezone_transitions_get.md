@@ -2,7 +2,7 @@
 title: "timezone_transitions_get()"
 description: "Implemented by the compiler-injected tz prelude."
 sidebar:
-  order: 251
+  order: 263
 ---
 
 ## timezone_transitions_get()

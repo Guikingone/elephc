@@ -371,6 +371,11 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // AOT-compiled, so that is what went into its routing cache metadata. Zero without the bridge,
     // where no such object exists and the serializer keeps its own rendering.
     out.push_str(&comm_directive("_elephc_eval_serialize_object_fn", 8, target));
+    // _elephc_eval_throwable_trace_fn: filled by the interpreter at context creation.
+    // `__rt_throwable_capture_trace` calls it right after a compiled `new` allocates a Throwable,
+    // and stores the frames it returns as the object's `trace`. Zero without the bridge, where
+    // there are no interpreter frames to record and `getTrace()` keeps its empty array.
+    out.push_str(&comm_directive("_elephc_eval_throwable_trace_fn", 8, target));
     // elephc_probe_route_fn: a function-pointer slot the sampling probe fills at init
     // (with elephc_probe_set_route) and the --web bridge reads to tag samples by route.
     // Zero unless --probe linked the probe, so route tagging is pay-for-use with no
@@ -470,6 +475,13 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // being flushed; it takes the original write(2) path instead, which is also what php does
     // for a diagnostic raised inside an error handler.
     out.push_str(&comm_directive("_rt_diag_dispatching", 8, target));
+    // The `_exc_handler_top` a dispatch started under. A handler that THROWS longjmps past the
+    // runtime frame that would clear `_rt_diag_dispatching`, which then stayed set for the rest
+    // of the process and sent every later diagnostic past `set_error_handler()` straight to the
+    // output. `__rt_throw_current` clears the flag when the throw it is about to deliver lands in
+    // this handler, i.e. when the exception leaves the dispatch; a throw caught INSIDE the user
+    // handler lands in a handler pushed after this one and leaves the dispatch running.
+    out.push_str(&comm_directive("_rt_diag_dispatch_handler", 8, target));
     // Set by `__rt_diag_message` for a caller that delivers a WHOLE diagnostic in one call and
     // does not terminate it with a newline — the interpreter's warnings, which render
     // "Undefined variable $x" with neither severity word nor newline. Without it the newline

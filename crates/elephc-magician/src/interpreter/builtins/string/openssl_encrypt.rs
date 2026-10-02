@@ -34,7 +34,7 @@ pub(in crate::interpreter) fn eval_builtin_openssl_encrypt(
     let mut tag_target = None;
     for (index, arg) in args.iter().enumerate() {
         if index == 5 {
-            let (value, target) = eval_call_arg_value(arg, context, scope, values)?;
+            let (value, target) = eval_direct_ref_arg_value(arg, context, scope, values)?;
             bound[index] = Some(value);
             tag_target = Some(target.ok_or(EvalStatus::RuntimeFatal)?);
         } else {

@@ -402,6 +402,9 @@ pub(crate) fn compile(config: CliConfig) {
     // php 8.5's `array_first()`/`array_last()`; the late gate below covers autoloaded callers.
     let ast = crate::array_edge_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::array_ucompare_prelude::inject_if_used(ast, &mut prelude_inventory);
+    // php 8.4's `Dom\HTMLDocument` and its node classes; the late gate below covers a program
+    // that only an autoloaded class (symfony/html-sanitizer's `NativeParser`) names it from.
+    let ast = crate::dom_html_prelude::inject_if_used(ast, php_version, false, &mut prelude_inventory);
     timings.record_since("hash-prelude", phase_started);
 
     // Inject the `ext/curl` prelude (the `CurlHandle` class and the `curl_*` wrappers over
@@ -658,6 +661,11 @@ pub(crate) fn compile(config: CliConfig) {
     let ast = crate::password_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::array_edge_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::array_ucompare_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::dom_html_prelude::inject_if_used(ast, php_version, false, &mut prelude_inventory);
+    if prelude_inventory.groups.contains_key(crate::dom_html_prelude::GROUP) {
+        // eval()-interpreted vendor code reaches these classes through the native-class bridge.
+        forced_groups.insert(crate::dom_html_prelude::GROUP.to_string());
+    }
     // `Attribute`'s TARGET_* constants are named by every attribute class declaration, including
     // ones only the interpreter reads at run time.
     let ast = crate::attribute_prelude::inject_if_used(ast, &mut prelude_inventory);
@@ -820,6 +828,12 @@ pub(crate) fn compile(config: CliConfig) {
             deferred_class_files.insert(path);
         }
     }
+    report_by_ref_place_deferrals(crate::autoload::deferral::propagate_by_ref_place_constructions(
+        &ast,
+        &deferral_class_files,
+        &deferrable_class_files,
+        &mut deferred_class_files,
+    ));
     if !deferred_class_files.is_empty() {
         crate::autoload::deferral::propagate_to_subclasses(
             &ast,
@@ -883,6 +897,14 @@ pub(crate) fn compile(config: CliConfig) {
                     ),
                 ));
             }
+            report_by_ref_place_deferrals(
+                crate::autoload::deferral::propagate_by_ref_place_constructions(
+                    &ast,
+                    &deferral_class_files,
+                    &deferrable_class_files,
+                    &mut deferred_class_files,
+                ),
+            );
             ast = crate::autoload::deferral::remove_deferred_declarations(
                 ast,
                 &deferral_class_files,
@@ -1635,6 +1657,21 @@ fn decl_trace_note(label: &str, note: &str) {
         return;
     }
     eprintln!("[elephc-decl-trace] {label:<22} {note}");
+}
+
+/// Warns once per class file the by-reference-place rule handed to the runtime autoloader.
+fn report_by_ref_place_deferrals(files: Vec<PathBuf>) {
+    for path in files {
+        errors::report_warning(&errors::CompileWarning::new(
+            Span::dummy(),
+            &format!(
+                "autoload: '{}' is not compiled (it passes a property or array element to a \
+                 by-reference constructor parameter, which a native call cannot keep \
+                 linked); its classes are loaded at run time by the autoloader instead",
+                path.display()
+            ),
+        ));
+    }
 }
 
 /// Merges the autoloaded and entry-file declaration maps into one name-to-path lookup.

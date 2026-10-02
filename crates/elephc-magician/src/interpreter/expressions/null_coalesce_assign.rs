@@ -59,14 +59,22 @@ impl EvaluatedLocation {
         }
     }
 
-    /// Returns whether the observed value is owned by an existing scope entry.
+    /// Returns whether the observed value is owned by an existing scope entry or class slot.
+    ///
+    /// A static property read hands out the very cell the class slot holds
+    /// (`context.static_property()` does not retain it), exactly like a borrowed scope variable.
+    /// Treating it as owned made `self::$registry ??= self::create()` release the slot's null
+    /// cell before storing into that slot (a double release), and hand the stored object back
+    /// UNRETAINED on every later call, so the caller's release destroyed the object the class
+    /// still held -- Doctrine DBAL's `Type::getTypeRegistry()`, whose registry was destructed after
+    /// its first use and read back as a string.
     const fn current_is_borrowed(&self) -> bool {
         matches!(
             self,
             Self::Variable {
                 current_is_borrowed: true,
                 ..
-            }
+            } | Self::StaticProperty { .. }
         )
     }
 
@@ -225,22 +233,43 @@ pub(in crate::interpreter) fn eval_assign(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let trace = crate::eval_trace::enabled();
+    // php evaluates the right-hand side BEFORE it fetches the container it writes into (the
+    // write fetches are delayed opcodes), so a value that itself writes the same property is
+    // seen. Symfony's generated container is written that way:
+    // `$container->privates['a'] = new A(($container->privates['b'] ?? self::getB($container)))`
+    // stores 'b' while building the value, and fetching 'privates' first then storing the stale
+    // array back lost 'b' -- the next lookup built a second instance of that shared service.
+    // Only a side-effect-free index path is reordered, so no key expression runs out of turn.
+    let value_first = eval_assignment_fetch_is_deferrable(target);
+    let early_value = if value_first {
+        Some(eval_expr(value, context, scope, values).map_err(|status| {
+            if trace {
+                eprintln!("[elephc-eval-trace] phase=assign_error stage=value value={value:?} status={status:?}");
+            }
+            status
+        })?)
+    } else {
+        None
+    };
     let location = evaluate_plain_assignment_location(target, context, scope, values).map_err(|status| {
         if trace {
             eprintln!("[elephc-eval-trace] phase=assign_error stage=location target={target:?} status={status:?}");
         }
         status
     })?;
-    let assigned = eval_expr(value, context, scope, values).map_err(|status| {
-        if trace {
-            eprintln!("[elephc-eval-trace] phase=assign_error stage=value value={value:?} status={status:?}");
-        }
-        status
-    })?;
+    let assigned = match early_value {
+        Some(assigned) => assigned,
+        None => eval_expr(value, context, scope, values).map_err(|status| {
+            if trace {
+                eprintln!("[elephc-eval-trace] phase=assign_error stage=value value={value:?} status={status:?}");
+            }
+            status
+        })?,
+    };
     let assigned = if eval_expr_result_aliases_storage(value) {
         values.copy_value(assigned)?
     } else {
-        assigned
+        eval_detach_property_read(value, assigned, context, values)?
     };
     write_location(location, assigned, true, context, scope, values).map_err(|status| {
         if trace {
@@ -249,6 +278,33 @@ pub(in crate::interpreter) fn eval_assign(
         status
     })?;
     Ok(assigned)
+}
+
+/// Whether an element write into a property may fetch its container after the value is built.
+///
+/// True for `$obj->p[k1][k2] = ...` (and the static-property form) whose receiver and keys are
+/// constants or plain variables, so evaluating them later changes nothing observable.
+fn eval_assignment_fetch_is_deferrable(target: &EvalExpr) -> bool {
+    fn pure_operand(expr: &EvalExpr) -> bool {
+        matches!(expr, EvalExpr::Const(_) | EvalExpr::LoadVar(_) | EvalExpr::ClassConstantFetch { .. })
+    }
+    let EvalExpr::ArrayGet { .. } = target else {
+        return false;
+    };
+    let mut current = target;
+    loop {
+        match current {
+            EvalExpr::ArrayGet { array, index } => {
+                if !pure_operand(index) {
+                    return false;
+                }
+                current = array;
+            }
+            EvalExpr::PropertyGet { object, .. } => return pure_operand(object),
+            EvalExpr::StaticPropertyGet { .. } => return true,
+            _ => return false,
+        }
+    }
 }
 
 /// Binds a variable to a non-variable lvalue's persistent PHP reference target.
@@ -278,21 +334,36 @@ pub(in crate::interpreter) fn eval_var_reference_bind(
     // statement rebinds -- so the write-back at the end of the call then copied the innermost
     // element over the caller's variable. The element is an element of whatever `$array` aliased,
     // so name it through that storage instead.
+    //
+    // Another local referencing the same array (`$cv = &$data; ... $cv = &$cv[$k];`, the key-path
+    // walk of dflydev's `Data::set()` and league/commonmark's configuration) names it best: the
+    // element becomes "element $k of `$data`". Without one, `$array` is a by-reference parameter
+    // and the caller's storage is its reference target.
     let source_target = match (&source_target, source) {
         (
             EvalReferenceTarget::ArrayElement {
-                array_name, index, ..
+                scope: element_scope,
+                array_name,
+                index,
             },
             EvalExpr::ArrayGet { array, .. },
         ) if array_name == name
             && matches!(array.as_ref(), EvalExpr::LoadVar(base) if base == name) =>
         {
-            match scope.reference_target(name).cloned() {
-                Some(outer) => EvalReferenceTarget::NestedArrayElement {
-                    array_target: Box::new(outer),
+            if let Some(peer) = scope.reference_peer(name) {
+                EvalReferenceTarget::ArrayElement {
+                    scope: element_scope.clone(),
+                    array_name: peer,
                     index: index.clone(),
-                },
-                None => source_target,
+                }
+            } else {
+                match scope.reference_target(name).cloned() {
+                    Some(outer) => EvalReferenceTarget::NestedArrayElement {
+                        array_target: Box::new(outer),
+                        index: index.clone(),
+                    },
+                    None => source_target,
+                }
             }
         }
         _ => source_target,
@@ -534,7 +605,7 @@ pub(in crate::interpreter) fn eval_array_append_result(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let location = evaluate_location(target, context, scope, values)?;
+    let location = evaluate_location_with_fetch(target, LocationFetch::ArrayParent, context, scope, values)?;
     let current = location.current();
     if values.type_tag(current)? == EVAL_TAG_OBJECT {
         if !eval_array_access_object_matches(current, context, values)? {
@@ -637,8 +708,33 @@ fn evaluate_plain_assignment_location(
                 current: None,
             })
         }
-        EvalExpr::ArrayGet { .. } => {
-            evaluate_location(target, context, scope, values)
+        EvalExpr::ArrayGet { array, index } => {
+            // A plain `$object[$key] = $value` on an ArrayAccess object is ONE `offsetSet()`
+            // call: php never reads the element first. Observing it through `offsetGet()` ran
+            // user code php does not run, and an `offsetGet()` that throws for an unknown key
+            // made the write itself throw -- Symfony Intl's `RingBuffer`, written by
+            // `BufferedBundleReader::read()` as `$this->buffer[$hash] = ...`, so every locale
+            // bundle read failed with "The index ... does not exist". Only a compound
+            // assignment observes the element, and it goes through `evaluate_location`.
+            let parent =
+                evaluate_location_with_fetch(array, LocationFetch::ArrayParent, context, scope, values)?;
+            let container = parent.current();
+            let index = eval_expr(index, context, scope, values)?;
+            if values.type_tag(container)? == EVAL_TAG_OBJECT
+                && eval_array_access_object_matches(container, context, values)?
+            {
+                return Ok(EvaluatedLocation::ArrayAccessElement {
+                    object: container,
+                    index,
+                    current: None,
+                });
+            }
+            let current = eval_array_get_result(container, index, context, values)?;
+            Ok(EvaluatedLocation::ArrayElement {
+                parent: Box::new(parent),
+                index,
+                current: Some(current),
+            })
         }
         _ => Err(EvalStatus::UnsupportedConstruct),
     }
@@ -764,7 +860,22 @@ fn evaluate_location_with_fetch(
                 evaluate_location_with_fetch(array, LocationFetch::ArrayParent, context, scope, values)?;
             let container = parent.current();
             let index = eval_expr(index, context, scope, values)?;
-            let current = eval_array_get_result(container, index, context, values)?;
+            let mut current = eval_array_get_result(container, index, context, values)?;
+            // An array element about to be written THROUGH is copied first. Its container may be
+            // shared (`clone $o` copies slots, not nested arrays), and the element's own count
+            // only reflects the container, so writing it in place would reach every sharer.
+            // The copy is consumed by the write-back, which stores it over the element.
+            if fetch == LocationFetch::ArrayParent
+                && !matches!(values.type_tag(container)?, EVAL_TAG_OBJECT)
+                && matches!(values.type_tag(current)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)
+            {
+                // An array holding PHP references is written in place: its reference slots are
+                // keyed by this very payload, and a copy would silently unlink every one of them.
+                let original = values.raw_value_word(current)?;
+                if !context.array_has_element_aliases(original) {
+                    current = values.copy_value(current)?;
+                }
+            }
             if values.type_tag(container)? == EVAL_TAG_OBJECT
                 && eval_array_access_object_matches(container, context, values)?
             {

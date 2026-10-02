@@ -76,6 +76,14 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Levenshtein,
     /// Dispatches `addcslashes(...)`.
     AddCSlashes,
+    /// Dispatches `version_compare(...)`.
+    VersionCompare,
+    /// Dispatches `hash_pbkdf2(...)`.
+    HashPbkdf2,
+    /// Dispatches the `password_*` API.
+    PasswordApi,
+    /// Dispatches `array_change_key_case(...)`.
+    ArrayChangeKeyCase,
     /// Dispatches `clamp(...)`.
     Clamp,
     /// Dispatches `count(...)`.
@@ -414,6 +422,12 @@ impl EvalDirectHook {
             Self::ParseStr => eval_builtin_parse_str_direct(args, context, scope, values),
             Self::Levenshtein => eval_builtin_levenshtein(args, context, scope, values),
             Self::AddCSlashes => eval_builtin_addcslashes(args, context, scope, values),
+            Self::VersionCompare => eval_builtin_version_compare(args, context, scope, values),
+            Self::HashPbkdf2 => eval_builtin_hash_pbkdf2(args, context, scope, values),
+            Self::PasswordApi => eval_builtin_password_api(name, args, context, scope, values),
+            Self::ArrayChangeKeyCase => {
+                eval_builtin_array_change_key_case(args, context, scope, values)
+            }
             Self::Clamp => eval_builtin_clamp(args, context, scope, values),
             Self::Core => eval_builtin_core_call(name, args, context, scope, values),
             Self::Cos => eval_builtin_cos(args, context, scope, values),

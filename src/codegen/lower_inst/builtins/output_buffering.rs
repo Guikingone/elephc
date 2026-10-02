@@ -783,6 +783,16 @@ pub(crate) fn lower_header_remove(
     super::store_if_result(ctx, inst)
 }
 
+/// Lowers `headers_list()` into the web-gated runtime helper that builds the owned line array.
+pub(crate) fn lower_headers_list(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count_between(inst, "headers_list", 0, 0)?;
+    abi::emit_call_label(ctx.emitter, "__rt_headers_list");
+    super::store_if_result(ctx, inst)
+}
+
 /// Validates that a lowered builtin call carries an inclusive number of operands.
 fn ensure_arg_count_between(inst: &Instruction, name: &str, min: usize, max: usize) -> Result<()> {
     if (min..=max).contains(&inst.operands.len()) {

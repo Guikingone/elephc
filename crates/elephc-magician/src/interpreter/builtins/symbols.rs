@@ -56,11 +56,14 @@ pub(in crate::interpreter) use dispatch::{eval_builtin_symbols_call, eval_symbol
 pub(in crate::interpreter) use class_attribute_names::{
     eval_class_attribute_args_result, eval_reflection_attribute_array_result,
 };
-pub(in crate::interpreter) use class_implements::eval_class_relation_result;
+pub(in crate::interpreter) use class_implements::{
+    eval_class_relation_eval_class_interface_names, eval_class_relation_result,
+};
 pub(in crate::interpreter) use function_exists::{
     eval_date_procedural_alias_names, eval_function_probe_exists,
 };
 pub(in crate::interpreter) use get_class::eval_get_class_result;
+pub(in crate::interpreter) use isset::eval_isset_arg;
 pub(in crate::interpreter) use get_object_vars::eval_get_object_vars_result;
 pub(in crate::interpreter) use get_parent_class::eval_get_parent_class_result;
 pub(in crate::interpreter) use is_a::{dynamic_object_is_a, eval_class_like_name_is_instance_of};

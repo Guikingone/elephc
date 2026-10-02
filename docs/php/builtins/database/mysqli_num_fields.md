@@ -2,7 +2,7 @@
 title: "mysqli_num_fields()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 142
+  order: 154
 ---
 
 ## mysqli_num_fields()

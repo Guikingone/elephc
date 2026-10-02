@@ -2,7 +2,7 @@
 title: "mysqli_stmt_reset()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 175
+  order: 187
 ---
 
 ## mysqli_stmt_reset()

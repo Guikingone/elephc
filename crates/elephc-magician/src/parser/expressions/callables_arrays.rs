@@ -281,8 +281,9 @@ impl Parser {
             if !self.consume(TokenKind::Comma) {
                 break;
             }
+            // PHP 8.0 accepts a trailing comma after the last capture: `use ($a, $b,)`.
             if matches!(self.current(), TokenKind::RParen) {
-                return Err(EvalParseError::ExpectedVariable);
+                break;
             }
         }
         self.expect(TokenKind::RParen)?;

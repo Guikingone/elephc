@@ -2,7 +2,7 @@
 title: "array_uintersect()"
 description: "Computes the intersection of arrays using a callback comparator."
 sidebar:
-  order: 42
+  order: 52
 ---
 
 ## array_uintersect()
@@ -23,7 +23,7 @@ Computes the intersection of arrays using a callback comparator.
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

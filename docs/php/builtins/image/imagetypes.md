@@ -2,7 +2,7 @@
 title: "imagetypes()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 538
+  order: 550
 ---
 
 ## imagetypes()

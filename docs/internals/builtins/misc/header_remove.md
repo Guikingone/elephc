@@ -2,7 +2,7 @@
 title: "header_remove() — internals"
 description: "Compiler internals for header_remove(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 620
+  order: 632
 ---
 
 ## `header_remove()` — internals
@@ -48,7 +48,9 @@ function header_remove(string $name = null): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/header_remove.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/header_remove.rs) (`eval_builtin!`)
+- **Execution**: shared generated-runtime ABI (`RuntimeBuiltinId(24)`).
+- **Dispatch hooks**: _none_ (shared runtime dispatch)
 
 ## Cross-references
 

@@ -23,6 +23,7 @@ mod filesystem;
 mod formatting;
 mod hooks;
 mod json;
+pub(crate) use json::eval_json_encode_serialized_object;
 mod math;
 mod network_env;
 mod pcntl;
@@ -63,6 +64,8 @@ pub(super) use symbols::*;
 pub(crate) use core::eval_unserialize_declared_object_from_hash;
 #[cfg(not(test))]
 pub(crate) use core::eval_serialize_object_fragment;
+#[cfg(not(test))]
+pub(crate) use core::eval_throwable_trace_value;
 pub(crate) use symbols::eval_class_name_is_a_bridge;
 pub(crate) use symbols::eval_spl_autoload_class;
 pub(crate) use symbols::eval_spl_autoload_classlike_definition;

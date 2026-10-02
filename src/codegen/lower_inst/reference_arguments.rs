@@ -124,7 +124,7 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
     ref_params: &[bool],
     lifetime: RefArgCellLifetime,
 ) -> Result<CallArgMaterialization> {
-    materialize_method_call_args_with_receiver_reg_refs_and_defaults(
+    materialize_method_call_args_with_receiver_reg_refs_defaults_and_tail(
         ctx,
         receiver_reg,
         receiver_ty,
@@ -133,6 +133,7 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
         ref_params,
         lifetime,
         &[],
+        None,
     )
 }
 
@@ -164,7 +165,11 @@ pub(super) fn omitted_default_is_materializable(
 /// [`materialize_method_call_args_with_receiver_reg_and_refs`], staging each omitted
 /// argument from `defaults` (one entry per parameter after the receiver) when it is a literal.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn materialize_method_call_args_with_receiver_reg_refs_and_defaults(
+///
+/// `variadic_tail`, when present, says the LAST parameter is a variadic tail: the call passes a
+/// fresh array holding those operands (boxed), empty when there are none, and releases it after.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn materialize_method_call_args_with_receiver_reg_refs_defaults_and_tail(
     ctx: &mut FunctionContext<'_>,
     receiver_reg: &str,
     receiver_ty: &PhpType,
@@ -173,7 +178,9 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_refs_and_defaults(
     ref_params: &[bool],
     lifetime: RefArgCellLifetime,
     defaults: &[Option<crate::parser::ast::Expr>],
+    variadic_tail: Option<&[ValueId]>,
 ) -> Result<CallArgMaterialization> {
+    let tail_index = variadic_tail.map(|_| param_types.len().saturating_sub(1));
     if operands.len() > param_types.len() {
         return Err(CodegenIrError::invalid_module(format!(
             "method call materialization received {} operands for {} params",
@@ -221,7 +228,21 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_refs_and_defaults(
     }
     let mut no_writebacks: Vec<RefArgWriteback> = Vec::new();
     emit_ref_arg_cell_block(ctx, &mut no_writebacks, &mut ref_temp_cells)?;
-    let cleanup_slots = plan_call_arg_temp_cleanups(ctx, operands, param_types, ref_params, &[])?;
+    let mut cleanup_slots =
+        plan_call_arg_temp_cleanups(ctx, operands, param_types, ref_params, &[])?;
+    // An omitted array parameter with no literal default is a variadic tail (see
+    // `mixed_method_candidates`): the call passes a fresh empty array and releases it afterwards.
+    for param_index in operands.len().max(1)..param_types.len() {
+        if !ref_params[param_index]
+            && Some(param_index) == tail_index
+        {
+            cleanup_slots.push(CallArgTempCleanup {
+                param_index,
+                offset: cleanup_slots.len() * 16,
+                ty: param_types[param_index].codegen_repr(),
+            });
+        }
+    }
     let cleanup_bytes = cleanup_slots.len() * 16;
     if cleanup_bytes > 0 {
         abi::emit_reserve_temporary_stack(ctx.emitter, cleanup_bytes);
@@ -310,6 +331,27 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_refs_and_defaults(
             }
             _ => {}
         }
+        if Some(param_index) == tail_index {
+            let tail = variadic_tail.unwrap_or(&[]);
+            let capacity = tail.len().max(4) as i64;
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), capacity);
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), 8);
+            abi::emit_call_label(ctx.emitter, "__rt_array_new");
+            let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+            crate::codegen::emit_array_value_type_stamp(ctx.emitter, &result_reg, &PhpType::Mixed);
+            for value in tail {
+                emit_push_boxed_onto_array(ctx, *value, &result_reg)?;
+            }
+            if let Some(cleanup) = cleanup_slots
+                .iter()
+                .find(|cleanup| cleanup.param_index == param_index)
+            {
+                save_call_arg_temp_cleanup(ctx, cleanup, arg_temp_bytes);
+            }
+            abi::emit_push_result_value(ctx.emitter, &param_ty);
+            arg_temp_bytes += call_arg_temp_slot_size(&abi_param_types[param_index]);
+            continue;
+        }
         match param_ty {
             PhpType::Mixed => {
                 objects::emit_boxed_null(ctx);
@@ -340,6 +382,46 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_refs_and_defaults(
         cleanup_bytes,
         borrowed_stack_arg_bytes: 0,
     })
+}
+
+/// Appends `value`, boxed as Mixed, to the array in `array_reg` (which the append may move).
+///
+/// The array pointer is parked on the stack while the value is loaded and boxed. A value that is
+/// already a Mixed cell is borrowed, and `__rt_array_push_refcounted` takes its own reference; a
+/// cell boxed here is released once the array holds it.
+fn emit_push_boxed_onto_array(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    array_reg: &str,
+) -> Result<()> {
+    abi::emit_push_reg(ctx.emitter, array_reg);
+    let ty = ctx.load_value_to_result(value)?.codegen_repr();
+    let fresh_box = !matches!(ty, PhpType::Mixed | PhpType::Union(_));
+    if fresh_box {
+        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &ty);
+    }
+    let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+    let value_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let array_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_reg_move(ctx.emitter, value_arg, &result_reg);
+    abi::emit_pop_reg(ctx.emitter, array_arg);
+    if fresh_box {
+        abi::emit_push_reg(ctx.emitter, value_arg);
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_push_refcounted");
+    if fresh_box {
+        // The array retained the fresh box; drop the reference this helper made.
+        abi::emit_reg_move(ctx.emitter, array_arg, &result_reg);
+        abi::emit_pop_reg(ctx.emitter, value_arg);
+        abi::emit_push_reg(ctx.emitter, array_arg);
+        abi::emit_reg_move(ctx.emitter, &result_reg, value_arg);
+        abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+        abi::emit_pop_reg(ctx.emitter, &result_reg);
+    }
+    if result_reg != array_reg {
+        abi::emit_reg_move(ctx.emitter, array_reg, &result_reg);
+    }
+    Ok(())
 }
 
 /// Converts declared parameter types to the ABI-visible shape for by-reference args.
@@ -1133,10 +1215,16 @@ fn emit_mixed_nominal_object_unbox_guard(
         return Ok(());
     }
     let Some((target_id, target_kind)) = objects::classify_named_target(ctx, &expected) else {
-        return Err(CodegenIrError::invalid_module(format!(
-            "missing runtime type metadata for gradual boundary {:?}",
-            expected
-        )));
+        // A class-like the compiled program does not declare (its file is left to the runtime
+        // autoloader, or it is never loaded at all) has no class id to match against, and no
+        // compiled object can be an instance of it. Refusing the whole function sent every class
+        // naming one to the interpreter -- `SymfonyRuntime::resolveType()` names
+        // `Console\Application`, which a web build never compiles. The boundary still requires an
+        // object; the nominal half is left to the object's own class, which only the runtime has.
+        emit_mixed_tag_unbox_guard(ctx, 6, &|given| {
+            format!("Value must be of type {}, {} given", expected, given)
+        });
+        return Ok(());
     };
     let source_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     abi::emit_push_reg(ctx.emitter, source_reg);

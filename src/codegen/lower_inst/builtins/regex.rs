@@ -1297,6 +1297,10 @@ fn optional_local_slot_operand(
 /// Stores the runtime-built string matches array without clobbering the match flag.
 fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Result<()> {
     let target_ty = ctx.local_php_type(slot)?.codegen_repr();
+    let widen_to_mixed_slots = matches!(
+        &target_ty,
+        PhpType::Array(element_ty) if element_ty.codegen_repr() == PhpType::Mixed
+    );
     let box_result = match &target_ty {
         PhpType::Array(element_ty)
             if matches!(element_ty.codegen_repr(), PhpType::Str | PhpType::Mixed) =>
@@ -1326,6 +1330,9 @@ fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Resu
     abi::emit_store_to_sp(ctx.emitter, matches_reg, 8);
     ctx.release_local_before_refcounted_writeback(slot)?;
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 8);
+    if widen_to_mixed_slots {
+        emit_widen_matches_to_mixed_slots(ctx);
+    }
     if box_result {
         // A pattern that declares a capture name makes the runtime return hash storage rather
         // than a list, and only the runtime knows which it built. Stamping the box with the
@@ -1385,6 +1392,50 @@ fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Resu
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     Ok(())
+}
+
+/// Widens the runtime-built matches list in the result register to boxed Mixed slots.
+///
+/// The runtime builds a list of strings: 16-byte `(ptr, len)` slots stamped with value_type 1.
+/// A destination the checker typed `array<mixed>` -- because the program also writes into
+/// `$matches`, as Symfony's `Request::getLanguageComponents()` does with
+/// `$matches[1] = substr($matches[1], 2)` -- is read with 8-byte boxed slots, so storing the
+/// list as it was made `isset($matches[3])` load half of a string slot as a box pointer and the
+/// worker died on every request without an `Accept-Language` header. Hash storage (a pattern
+/// with a capture NAME) and a list that already carries Mixed slots pass through unchanged.
+fn emit_widen_matches_to_mixed_slots(ctx: &mut FunctionContext<'_>) {
+    let done = ctx.next_label("preg_matches_mixed_done");
+    let mixed_tag = crate::codegen_support::runtime_value_tag(&PhpType::Mixed);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {done}"));                // no matches array to widen
+            ctx.emitter.instruction("ldr x9, [x0, #-8]");                       // load the matches array's packed kind word
+            ctx.emitter.instruction("and x10, x9, #0xff");                      // isolate the storage kind
+            ctx.emitter.instruction("cmp x10, #2");                             // only an indexed list has typed slots to widen
+            ctx.emitter.instruction(&format!("b.ne {done}"));                   // hash storage keeps its own per-entry tags
+            ctx.emitter.instruction("ubfx x1, x9, #8, #7");                     // isolate the runtime slot value_type
+            ctx.emitter.instruction(&format!("cmp x1, #{mixed_tag}"));          // are the slots already boxed Mixed cells?
+            ctx.emitter.instruction(&format!("b.eq {done}"));                   // nothing to widen
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // no matches array to widen
+            ctx.emitter.instruction(&format!("jz {done}"));
+            ctx.emitter.instruction("mov r10, QWORD PTR [rax - 8]");            // load the matches array's packed kind word
+            ctx.emitter.instruction("mov r11, r10");                            // keep the kind word for the value_type
+            ctx.emitter.instruction("and r11, 0xff");                           // isolate the storage kind
+            ctx.emitter.instruction("cmp r11, 2");                              // only an indexed list has typed slots to widen
+            ctx.emitter.instruction(&format!("jne {done}"));                    // hash storage keeps its own per-entry tags
+            ctx.emitter.instruction("shr r10, 8");                              // move the slot value_type into the low bits
+            ctx.emitter.instruction("and r10, 0x7f");                           // isolate the runtime slot value_type
+            ctx.emitter.instruction(&format!("cmp r10, {mixed_tag}"));          // are the slots already boxed Mixed cells?
+            ctx.emitter.instruction(&format!("je {done}"));                     // nothing to widen
+            ctx.emitter.instruction("mov rdi, rax");                            // the list to convert
+            ctx.emitter.instruction("mov rsi, r10");                            // its slot value_type
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+        }
+    }
+    ctx.emitter.label(&done);
 }
 
 /// Stores the replacement count returned beside a string result into its caller local.

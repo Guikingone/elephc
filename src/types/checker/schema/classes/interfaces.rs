@@ -38,6 +38,22 @@ pub(super) fn collect_interfaces(
     class_map: &HashMap<String, FlattenedClass>,
     checker: &Checker,
 ) -> Result<(), CompileError> {
+    // php-src links a class that names no interface of its own through
+    // `zend_do_inherit_interfaces`, which walks the parent's list from the END: `class D extends
+    // P {}` reports P's interfaces reversed, and a grandchild reverses them back. A `__toString`
+    // declaration counts as naming `Stringable` (the compiler adds it to the class's own list),
+    // and a class that names any interface copies the parent's list in order, then appends its
+    // own. `class_implements()` and `ReflectionClass::getInterfaceNames()` expose this order,
+    // and frameworks key listener order on it (`[$c => $c] + class_parents($c) +
+    // class_implements($c)`).
+    let declares_own_interface = !class.implements.is_empty()
+        || class
+            .methods
+            .iter()
+            .any(|method| php_symbol_key(&method.name) == php_symbol_key("__toString"));
+    if !declares_own_interface && class.extends.is_some() {
+        state.interfaces.reverse();
+    }
     let mut seen_interfaces: HashSet<String> = state.interfaces.iter().cloned().collect();
     let mut queue = Vec::new();
     for interface_name in class.implements.iter().rev() {
@@ -94,6 +110,32 @@ pub(super) fn collect_interfaces(
         state.interfaces.push(interface_name);
     }
     Ok(())
+}
+
+/// Appends the `Stringable` php-src adds to a class that declares a public `__toString`.
+///
+/// It is appended while the class is BUILT, after the interfaces the class names, so a subclass
+/// copies it in the parent's list like any other interface: `class C extends S implements Z`
+/// with `S::__toString()` reports `Stringable, Z`, where appending it after every class was
+/// built (`apply_implicit_stringable_interfaces`, still the fallback) reported `Z, Stringable`.
+pub(super) fn append_implicit_stringable(state: &mut ClassBuildState, class: &FlattenedClass) {
+    let tostring_key = php_symbol_key("__toString");
+    let declares_tostring = class.methods.iter().any(|method| {
+        php_symbol_key(&method.name) == tostring_key && method.visibility == Visibility::Public
+    });
+    if !declares_tostring
+        || !state
+            .method_sigs
+            .get(&tostring_key)
+            .is_some_and(|sig| sig.return_type == PhpType::Str)
+        || state
+            .interfaces
+            .iter()
+            .any(|iface| php_symbol_key(iface) == php_symbol_key("Stringable"))
+    {
+        return;
+    }
+    state.interfaces.push("Stringable".to_string());
 }
 
 /// Returns `true` when an interface is or extends PHP's enum-only contracts.
@@ -651,7 +693,13 @@ fn validate_interface_method(
             &actual_sig.return_type,
         )
     });
-    if required_sig.declared_return && !return_compatible {
+    // An implementation that declares NO return type has nothing to compare: the missing
+    // declaration was settled above (refused, or accepted as php's tentative-type deprecation),
+    // and `actual_sig.return_type` is only this checker's inference of the body. Comparing that
+    // inference refused `offsetUnset(mixed $offset) { $this->remove($offset); }` against
+    // `ArrayAccess::offsetUnset(): void` -- Doctrine's `ArrayCollection`, which every entity
+    // relation holds, and 20 classes built on it went to the interpreter.
+    if required_sig.declared_return && actual_sig.declared_return && !return_compatible {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)

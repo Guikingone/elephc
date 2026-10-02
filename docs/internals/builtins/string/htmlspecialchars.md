@@ -2,7 +2,7 @@
 title: "htmlspecialchars() — internals"
 description: "Compiler internals for htmlspecialchars(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 804
+  order: 818
 ---
 
 ## `htmlspecialchars()` — internals
@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function htmlspecialchars(string $string, int $flags = 11, string $encoding = 'UTF-8'): string
+function htmlspecialchars(string $string, int $flags = 11, string $encoding = 'UTF-8', bool $double_encode = true): string
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 1–3 arguments (2 optional).
+- **Arity**: takes 1–4 arguments (3 optional).
 
 ## Eval interpreter (magician)
 

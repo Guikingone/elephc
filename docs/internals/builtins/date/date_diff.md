@@ -2,7 +2,7 @@
 title: "date_diff() — internals"
 description: "Compiler internals for date_diff(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 198
+  order: 210
 ---
 
 ## `date_diff()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:870](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L870) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:957](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L957) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

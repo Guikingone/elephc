@@ -152,7 +152,7 @@ pub(super) fn lower_nested_assign_parent(
 /// Generic PHP `array` properties use Mixed element storage but may hold either indexed or hash
 /// runtime storage. The fetch-for-write helper separates and autovivifies the requested child,
 /// then `PropSet` publishes the possibly relocated container back into the property.
-fn lower_property_parent_fetch_for_write(
+pub(super) fn lower_property_parent_fetch_for_write(
     ctx: &mut LoweringContext<'_, '_>,
     object: &Expr,
     property: &str,

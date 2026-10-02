@@ -229,6 +229,25 @@ pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
         }
         PhpType::Mixed | PhpType::Union(_) => {
             emit_count_countable_guard(ctx, value)?;
+            if ctx.module.required_runtime_features.eval_bridge && inst.operands.len() == 1 {
+                // A `Countable` the interpreter declared (a Doctrine `PersistentCollection`
+                // reached through Twig's `|length`) has no compiled class id, so the runtime's
+                // `_class_count_ptrs` table cannot find its `count()` and the call ended in the
+                // TypeError for an object that is countable. Probe for an eval owner first, as a
+                // method call on a boxed receiver does, and fall back to the native count.
+                let native_label = ctx.next_label("count_native");
+                let done_label = ctx.next_label("count_eval_done");
+                super::eval_facade::lower_eval_owned_method_call(
+                    ctx, inst, value, "count", &native_label, &done_label,
+                )?;
+                ctx.emitter.label(&native_label);
+                ctx.load_value_to_result(value)?;
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
+                emit_non_countable_object_type_error(ctx, value)?;
+                store_if_result(ctx, inst)?;
+                ctx.emitter.label(&done_label);
+                return Ok(());
+            }
             ctx.load_value_to_result(value)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
             emit_non_countable_object_type_error(ctx, value)?;
@@ -236,13 +255,41 @@ pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
         }
         PhpType::Iterable => lower_iterable_count(ctx, inst, value),
         PhpType::Object(class_name)
-            if super::class_implements_interface(ctx, &class_name, "Countable") =>
+            if class_name.trim_start_matches('\\').eq_ignore_ascii_case("Countable")
+                || super::class_implements_interface(ctx, &class_name, "Countable") =>
         {
-            if let Some(intrinsic) = super::runtime_backed_instance_intrinsic(&class_name, "count") {
-                super::lower_instance_runtime_intrinsic(ctx, inst, &class_name, "count", intrinsic)
-            } else {
-                super::lower_runtime_object_method_call(ctx, inst, &class_name, "count")
+            // A receiver narrowed to `Countable` (`$x instanceof Countable ? count($x) : ...`) can
+            // hold an object the interpreter declared, which has no compiled class id for the
+            // vtable to dispatch on: probe for an eval owner first, as a method call does.
+            let probe_eval = ctx.module.required_runtime_features.eval_bridge
+                && inst.operands.len() == 1;
+            let native_label = ctx.next_label("count_native");
+            let done_label = ctx.next_label("count_eval_done");
+            if probe_eval {
+                super::eval_facade::lower_eval_owned_method_call(
+                    ctx, inst, value, "count", &native_label, &done_label,
+                )?;
+                ctx.emitter.label(&native_label);
             }
+            if ctx
+                .module
+                .interface_infos
+                .contains_key(class_name.trim_start_matches('\\'))
+            {
+                // `function f(Countable $c) { return count($c); }`: an interface-typed receiver
+                // dispatches through the interface tables like `$c->count()` does.
+                super::super::lower_interface_method_call(ctx, inst, &class_name, "count")?;
+            } else if let Some(intrinsic) =
+                super::runtime_backed_instance_intrinsic(&class_name, "count")
+            {
+                super::lower_instance_runtime_intrinsic(ctx, inst, &class_name, "count", intrinsic)?;
+            } else {
+                super::lower_runtime_object_method_call(ctx, inst, &class_name, "count")?;
+            }
+            if probe_eval {
+                ctx.emitter.label(&done_label);
+            }
+            Ok(())
         }
         // Any other object: PHP raises, naming the class. It is known statically on this path,
         // so the message is a constant — the `Mixed` path has to resolve the name at run time.

@@ -2,7 +2,7 @@
 title: "array_map() — internals"
 description: "Compiler internals for array_map(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 23
+  order: 31
 ---
 
 ## `array_map()` — internals

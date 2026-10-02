@@ -225,6 +225,18 @@ impl Parser {
         if !is_assignment_target(&target) {
             return Err(EvalParseError::ExpectedVariable);
         }
+        // `parse_postfix` stops in front of an empty `[]`, so `foreach ($x as $k => $list[])`
+        // arrives here with the brackets unconsumed: that target APPENDS each value, the way
+        // Symfony's `IsGrantedAttributeListener` collects `$attributes[]` from a generator.
+        if matches!(self.current(), TokenKind::LBracket) && matches!(self.peek(), TokenKind::RBracket)
+        {
+            self.advance();
+            self.advance();
+            return Ok(EvalForeachTarget {
+                slot: EvalForeachSlot::Append(target),
+                by_ref,
+            });
+        }
         Ok(EvalForeachTarget {
             slot: EvalForeachSlot::Lvalue(target),
             by_ref,
@@ -255,6 +267,16 @@ impl Parser {
                     })),
                 )
             }
+            EvalForeachSlot::Append(target) => {
+                let name = next_foreach_binding_name();
+                (
+                    name.clone(),
+                    Some(EvalStmt::Expr(EvalExpr::ArrayAppendAssign {
+                        target: Box::new(target),
+                        value: Box::new(EvalExpr::LoadVar(name)),
+                    })),
+                )
+            }
         }
     }
 }
@@ -273,6 +295,8 @@ pub(in crate::parser) enum EvalForeachSlot {
     Pattern(Vec<Option<EvalDestructureTarget>>),
     /// Any other writable lvalue, such as `$this->k`.
     Lvalue(EvalExpr),
+    /// `$list[]`: each iteration appends its value to the array `$list` names.
+    Append(EvalExpr),
 }
 
 /// Returns a scope name for one hidden foreach binding.

@@ -2,7 +2,7 @@
 title: "key()"
 description: "Returns the key of the element under the array's internal pointer."
 sidebar:
-  order: 57
+  order: 69
 ---
 
 ## key()

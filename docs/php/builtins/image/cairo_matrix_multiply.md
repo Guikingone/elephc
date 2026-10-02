@@ -2,7 +2,7 @@
 title: "cairo_matrix_multiply()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 419
+  order: 431
 ---
 
 ## cairo_matrix_multiply()

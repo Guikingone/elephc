@@ -2,7 +2,7 @@
 title: "imagefill() — internals"
 description: "Compiler internals for imagefill(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 502
+  order: 514
 ---
 
 ## `imagefill()` — internals

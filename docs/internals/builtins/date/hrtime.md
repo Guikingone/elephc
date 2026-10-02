@@ -2,7 +2,7 @@
 title: "hrtime() — internals"
 description: "Compiler internals for hrtime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 226
+  order: 238
 ---
 
 ## `hrtime()` — internals

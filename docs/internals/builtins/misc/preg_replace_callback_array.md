@@ -2,7 +2,7 @@
 title: "preg_replace_callback_array() — internals"
 description: "Compiler internals for preg_replace_callback_array(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 677
+  order: 690
 ---
 
 ## `preg_replace_callback_array()` — internals
@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function preg_replace_callback_array(mixed $pattern, mixed $subject, int $limit = -1, mixed $count = null, int $flags = 0): mixed
+function preg_replace_callback_array(array $pattern, mixed $subject, int $limit = -1, mixed $count = null, int $flags = 0): mixed
 ```
 
 ## What the type checker enforces

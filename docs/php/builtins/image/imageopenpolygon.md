@@ -2,7 +2,7 @@
 title: "imageopenpolygon()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 520
+  order: 532
 ---
 
 ## imageopenpolygon()

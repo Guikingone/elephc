@@ -34,6 +34,30 @@ pub(crate) fn lower_get_class_methods(
     let done = ctx.next_label("get_class_methods_done");
 
     crate::codegen::lower_inst::objects::emit_class_id_of_value(ctx, target)?;
+    // An object the interpreter built carries the generic `stdClass` header, whose rows list
+    // nothing the interpreted class declares: Twig's compiled `getAttribute()` found no getter on
+    // an eval-declared entity. With the bridge linked that id is asked of the bridge, which also
+    // answers a real `stdClass` (no methods).
+    let carrier_class_id = ctx
+        .module
+        .required_runtime_features
+        .eval_bridge
+        .then(|| ctx.module.class_infos.get("stdClass").map(|info| info.class_id))
+        .flatten();
+    if let Some(carrier) = carrier_class_id {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_load_int_immediate(ctx.emitter, "x9", carrier as i64);
+                ctx.emitter.instruction("cmp x0, x9");                          // is this the interpreter's object carrier?
+                ctx.emitter.instruction(&format!("b.eq {}", miss));             // its methods live in the interpreter
+            }
+            Arch::X86_64 => {
+                abi::emit_load_int_immediate(ctx.emitter, "r10", carrier as i64);
+                ctx.emitter.instruction("cmp rax, r10");                        // is this the interpreter's object carrier?
+                ctx.emitter.instruction(&format!("je {}", miss));               // its methods live in the interpreter
+            }
+        }
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmp x0, #0");                              // a negative id names no compiled class

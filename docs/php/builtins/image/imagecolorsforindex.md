@@ -2,7 +2,7 @@
 title: "imagecolorsforindex()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 479
+  order: 491
 ---
 
 ## imagecolorsforindex()

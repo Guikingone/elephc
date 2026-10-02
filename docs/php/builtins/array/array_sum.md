@@ -2,7 +2,7 @@
 title: "array_sum()"
 description: "Calculate the sum of values in an array."
 sidebar:
-  order: 40
+  order: 48
 ---
 
 ## array_sum()

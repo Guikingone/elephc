@@ -67,5 +67,7 @@ pub unsafe extern "C" fn __elephc_eval_object_relation(
     })
     .unwrap_or(0);
     ANSWERING_RELATION.with(|answering| answering.set(false));
-    u64::from(answer != 0)
+    // 1 is the only "yes": `__elephc_eval_object_is_a` answers 2 for an object the interpreter
+    // owns that is definitely NOT an instance, which is a "no" here like any other.
+    u64::from(answer == 1)
 }

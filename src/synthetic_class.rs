@@ -363,7 +363,12 @@ pub fn e_prop(object: Expr, property: &str) -> Expr {
             object: Box::new(object),
             property: property.to_string(),
         },
-        Span::dummy(),
+        // A property read's span is a KEY: `flow_typed_property_accesses` is `(scope, span) ->
+        // type`, filed for a receiver the checker narrowed and read back by lowering for EVERY
+        // property access that carries the span. Under the shared `dummy()` one narrowed
+        // `$target->localName` handed its `string` to `$this->foster` in the same method, and a
+        // `bool` property was read as a string.
+        Span::synthetic(),
     )
 }
 
@@ -515,6 +520,21 @@ pub fn e_index(array: Expr, index: Expr) -> Expr {
 /// `$name++` in expression position.
 pub fn e_post_inc(name: &str) -> Expr {
     Expr::new(ExprKind::PostIncrement(name.to_string()), Span::dummy())
+}
+
+/// `$name--` in expression position.
+pub fn e_post_dec(name: &str) -> Expr {
+    Expr::new(ExprKind::PostDecrement(name.to_string()), Span::dummy())
+}
+
+/// `++$name` in expression position.
+pub fn e_pre_inc(name: &str) -> Expr {
+    Expr::new(ExprKind::PreIncrement(name.to_string()), Span::dummy())
+}
+
+/// `--$name` in expression position.
+pub fn e_pre_dec(name: &str) -> Expr {
+    Expr::new(ExprKind::PreDecrement(name.to_string()), Span::dummy())
 }
 
 /// A list array literal `[a, b, c]`.
@@ -895,7 +915,8 @@ pub fn s_const(name: &str, value: Expr) -> Stmt {
 
 /// `throw <value>;`
 pub fn s_throw(value: Expr) -> Stmt {
-    Stmt::new(StmtKind::Throw(value), Span::dummy())
+    // Keys `throw_access_sites` like a loop keys `loop_storage_types`: one span per throw.
+    Stmt::new(StmtKind::Throw(value), Span::synthetic())
 }
 
 /// An expression evaluated for its effect.

@@ -2,7 +2,7 @@
 title: "error_get_last()"
 description: "Implemented by the compiler-injected error-handling prelude."
 sidebar:
-  order: 922
+  order: 942
 ---
 
 ## error_get_last()

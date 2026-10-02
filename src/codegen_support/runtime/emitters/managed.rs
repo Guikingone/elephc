@@ -71,6 +71,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_hash_union(emitter);
     arrays::emit_hash_spread(emitter);
     arrays::emit_hash_to_mixed(emitter);
+    arrays::emit_array_unbox_values(emitter);
     arrays::emit_hash_sum_mixed(emitter);
     arrays::emit_hash_unshift_mixed(emitter);
     arrays::emit_hash_count(emitter);

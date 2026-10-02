@@ -2033,6 +2033,129 @@ fn web_header_sets_response_header() {
     assert!(resp.ends_with("ok"), "body: {:?}", resp);
 }
 
+/// Verifies PHP's default `Content-Type: text/html; charset=UTF-8` goes out when the script set
+/// none, and that any explicit Content-Type retires it for the request, as measured against
+/// `php -S` 8.5.10: an empty value is sent empty, a set-then-removed one sends no Content-Type at
+/// all, and removing one nobody set keeps the default.
+///
+/// Symfony renders its error pages outside `Response::prepare()`, so a 404 relied on this default
+/// and went out with no Content-Type.
+#[test]
+fn web_response_gets_php_default_content_type() {
+    let dir = make_test_dir("web_default_content_type");
+    let src = "<?php $m = $_GET['m'] ?? ''; \
+        if ($m === 'none') { header('Content-Type:'); } \
+        elseif ($m === 'json') { header('Content-Type: application/json'); } \
+        elseif ($m === 'removed') { header('Content-Type: text/plain'); header_remove('Content-Type'); } \
+        elseif ($m === 'rmonly') { header_remove('Content-Type'); } \
+        elseif ($m === 'rmall') { header('X-A: 1'); header_remove(); } \
+        echo 'ok';";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let content_types = |query: &str| -> Vec<String> {
+        http_request(&addr, "GET", &format!("/?m={}", query), &[], "")
+            .lines()
+            .filter(|line| line.to_ascii_lowercase().starts_with("content-type:"))
+            .map(|line| line["content-type:".len()..].trim().to_string())
+            .collect()
+    };
+    let default = content_types("");
+    let json = content_types("json");
+    let none = content_types("none");
+    let removed = content_types("removed");
+    let rmonly = content_types("rmonly");
+    let rmall = content_types("rmall");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(default, vec!["text/html; charset=UTF-8".to_string()]);
+    assert_eq!(json, vec!["application/json".to_string()]);
+    assert_eq!(none, vec![String::new()]);
+    assert!(removed.is_empty(), "removed: {:?}", removed);
+    assert_eq!(rmonly, vec!["text/html; charset=UTF-8".to_string()]);
+    assert_eq!(rmall, vec!["text/html; charset=UTF-8".to_string()]);
+}
+
+/// Verifies `$_SESSION[$key] = ...` inside a function keeps the session array alive when the
+/// program also puts `&$_SESSION` in an array, which moves the superglobal into a shared reference
+/// cell.
+///
+/// The write-back after an in-place `__rt_hash_set` released the container the cell still held,
+/// so the next element write reused a freed hash and the worker died. Symfony's session storage
+/// takes `&$_SESSION`, and every request after a login crashed decoding the session.
+/// Expected body measured against `php -S` 8.5.10.
+#[test]
+fn web_superglobal_reference_cell_survives_element_writes_in_functions() {
+    let dir = make_test_dir("web_superglobal_ref_cell_writeback");
+    let src = "<?php\n\
+        function put(string $key, string $value): void { $_SESSION[$key] = $value; }\n\
+        function holder(): array { return [&$_SESSION]; }\n\
+        put('a', str_repeat('x', 20));\n\
+        put('b', 'y');\n\
+        $held = holder();\n\
+        put('c', 'z');\n\
+        for ($i = 0; $i < 20; $i++) { put('k' . $i, str_repeat('v', $i)); }\n\
+        echo count($_SESSION), ' ', $_SESSION['a'], ' ', $_SESSION['c'], ' ', $_SESSION['k19'], ' ', count($held);\n";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/");
+    let second = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    let expected = "23 xxxxxxxxxxxxxxxxxxxx z vvvvvvvvvvvvvvvvvvv 1";
+    assert_eq!(raw_response_body(&first), expected, "first: {first:?}");
+    assert_eq!(raw_response_body(&second), expected, "second: {second:?}");
+}
+
+/// Verifies `headers_list()` reports the pending `Name: value` lines in send order, from compiled
+/// code and from `eval()`, and that `header_remove()` in `eval()` edits the same list.
+///
+/// The expected body is `php -d expose_php=0 -S` 8.5.10's (`expose_php` only adds its own
+/// `X-Powered-By` line, which elephc does not send). Symfony's `SessionUtils::popSessionCookie()`
+/// walks this list to find the session cookie, so every route that starts a session died on the
+/// undefined function.
+#[test]
+fn web_headers_list_reports_pending_lines_in_compiled_and_eval_code() {
+    let dir = make_test_dir("web_headers_list");
+    let src = "<?php\n\
+        $empty = headers_list();\n\
+        header('X-A: 1');\n\
+        header('Set-Cookie: s=1; path=/', false);\n\
+        header('Set-Cookie: t=2', false);\n\
+        header('x-b: two');\n\
+        $aot = headers_list();\n\
+        $fromEval = eval('return headers_list();');\n\
+        eval('header_remove(\"x-A\");');\n\
+        $afterEvalRemove = headers_list();\n\
+        eval('header_remove(null);');\n\
+        $afterEvalClear = headers_list();\n\
+        header('X-C: 3');\n\
+        header('X-D: 4');\n\
+        header_remove('x-c');\n\
+        $aotRemove = headers_list();\n\
+        echo json_encode([$empty, $aot, $fromEval, $afterEvalRemove, $afterEvalClear, $aotRemove]);\n";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(
+        raw_response_body(&resp),
+        "[[],[\"X-A: 1\",\"Set-Cookie: s=1; path=\\/\",\"Set-Cookie: t=2\",\"x-b: two\"],\
+         [\"X-A: 1\",\"Set-Cookie: s=1; path=\\/\",\"Set-Cookie: t=2\",\"x-b: two\"],\
+         [\"Set-Cookie: s=1; path=\\/\",\"Set-Cookie: t=2\",\"x-b: two\"],[],[\"X-D: 4\"]]",
+        "response: {resp:?}"
+    );
+    let head = resp.split_once("\r\n\r\n").map_or("", |(head, _)| head).to_lowercase();
+    assert!(head.contains("x-d: 4"), "headers: {resp:?}");
+    assert!(!head.contains("x-b: two"), "headers: {resp:?}");
+}
+
 /// Verifies header/status mutations after the first streamed byte are ignored
 /// with PHP's "headers already sent" diagnostics instead of failing silently.
 #[test]

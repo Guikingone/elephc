@@ -209,7 +209,7 @@ pub(super) fn lower_method_call(
     // see `override_arity`.
     if op == Op::MethodCall && dispatch_method == method {
         if let Some(call) =
-            lower_wider_override_dispatch(ctx, object, method, args, sig.as_ref(), expr)
+            lower_wider_override_dispatch(ctx, object, method, args, sig.as_ref(), expr, false)
         {
             return call;
         }
@@ -629,18 +629,75 @@ pub(super) fn lower_nullable_regular_method_call(
     terminate_method_call_on_null(ctx, method);
 
     ctx.builder.position_at_end(call_block);
-    let call = match narrow_non_null_receiver(ctx, object, expr.span) {
-        Some(narrowed) => {
-            let call =
-                lower_method_call_with_receiver(ctx, narrowed, method, args, Op::MethodCall, expr);
-            release_owning_receiver_temporary(ctx, object, expr.span);
-            call
+    let call = if let Some(object_ty) =
+        super::override_arity::nullable_receiver_ladder_type(ctx, object, method, args)
+    {
+        lower_call_on_unboxed_receiver(ctx, object, object_ty, method, args, expr)
+    } else {
+        match narrow_non_null_receiver(ctx, object, expr.span) {
+            Some(narrowed) => {
+                let call = lower_method_call_with_receiver(
+                    ctx,
+                    narrowed,
+                    method,
+                    args,
+                    Op::MethodCall,
+                    expr,
+                );
+                release_owning_receiver_temporary(ctx, object, expr.span);
+                call
+            }
+            None => {
+                lower_method_call_with_receiver(ctx, object, method, args, Op::MethodCall, expr)
+            }
         }
-        None => lower_method_call_with_receiver(ctx, object, method, args, Op::MethodCall, expr),
     };
     store_value_into_temp(ctx, &temp_name, result_type.clone(), call, expr.span);
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
     take_owned_temp(ctx, &temp_name, expr.span)
+}
+
+/// Calls `method` on a non-null boxed receiver unboxed to `object_ty`.
+///
+/// The unboxed object is parked in a synthetic local and the call borrows it from there, so the
+/// call lowers exactly as it would on a typed local (the override ladder refuses an owning
+/// temporary receiver). The local's reference and the boxed receiver are released after it.
+pub(super) fn lower_call_on_unboxed_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    object_ty: PhpType,
+    method: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
+    let unboxed = ctx.emit_value(
+        Op::MixedUnbox,
+        vec![object.value],
+        None,
+        object_ty.clone(),
+        Op::MixedUnbox.default_effects(),
+        Some(expr.span),
+    );
+    let receiver_temp = ctx.declare_synthetic_php_local(object_ty.clone());
+    // A PHP-local store retains and releases the owned unboxed reference itself.
+    ctx.store_local(&receiver_temp, unboxed, object_ty.clone(), Some(expr.span));
+    let receiver = ctx.load_local(&receiver_temp, Some(expr.span));
+    let sig = method_signature(ctx, receiver.value, method);
+    let call = lower_wider_override_dispatch(ctx, receiver, method, args, sig.as_ref(), expr, true)
+        .unwrap_or_else(|| {
+            lower_method_call_with_receiver(ctx, receiver, method, args, Op::MethodCall, expr)
+        });
+    let slot = ctx.declare_local(&receiver_temp, object_ty);
+    ctx.release_stored_local_value(&receiver_temp, slot, Some(expr.span));
+    ctx.emit_void(
+        Op::UnsetLocal,
+        Vec::new(),
+        Some(Immediate::LocalSlot(slot)),
+        Op::UnsetLocal.default_effects(),
+        Some(expr.span),
+    );
+    release_owning_receiver_temporary(ctx, object, expr.span);
+    call
 }

@@ -2,7 +2,7 @@
 title: "cairo_set_matrix()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 440
+  order: 452
 ---
 
 ## cairo_set_matrix()

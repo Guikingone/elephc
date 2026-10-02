@@ -341,6 +341,27 @@ fn collect_hidden_private_ancestor_method_slots(
     }
 }
 
+/// Gives a consuming SPL runtime helper the reference it will take over.
+///
+/// The `__rt_spl_*` list and fixed-array helpers CONSUME their boxed arguments: `push` stores the
+/// value cell in its storage, and the offset operations release the boxed offset. A compiled
+/// caller hands them a fresh reference. The bridge hands every method the interpreter's own
+/// cell, borrowed, so the helper stored (or freed) a reference the interpreter still owned: an
+/// `SplStack` an interpreted `push()` filled came back as empty arrays, and `count()` stopped
+/// matching. One retain here makes the transfer the helper expects.
+fn emit_retain_mixed_arg_for_consuming_helper(
+    emitter: &mut Emitter,
+    runtime_helper: Option<&'static str>,
+    param_ty: &PhpType,
+) {
+    if !runtime_helper.is_some_and(|helper| helper.starts_with("__rt_spl_"))
+        || param_ty.codegen_repr() != PhpType::Mixed
+    {
+        return;
+    }
+    abi::emit_call_label(emitter, "__rt_incref");
+}
+
 /// Returns a normal-ABI runtime helper for builtin instance methods that eval can bridge.
 fn eval_runtime_backed_instance_method_helper(
     class_name: &str,
@@ -1351,8 +1372,19 @@ fn emit_aarch64_builtin_throwable_method_bodies(
         emitter.label(label);
         emit_aarch64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
         if *method == "gettrace" {
-            // The same empty indexed array `lower_throwable_empty_trace_array` builds: runtime
-            // tag 4, capacity 8, value type Mixed.
+            // A trace recorded at creation lives in the declared `trace` slot and is boxed
+            // borrowed (the box takes its own reference). Otherwise the same empty indexed
+            // array `lower_throwable_empty_trace_array` builds: runtime tag 4, capacity 8,
+            // value type Mixed.
+            let stored_label = format!("{label}_stored");
+            emitter.instruction("ldr x9, [sp, #16]");                           // reload the Throwable receiver before reading its trace slot
+            abi::emit_load_from_address(
+                emitter,
+                "x1",
+                "x9",
+                crate::codegen_support::throwable_layout::TRACE_OFFSET,
+            );
+            emitter.instruction(&format!("cbnz x1, {stored_label}"));           // a recorded trace is returned as it is
             abi::emit_load_int_immediate(emitter, "x0", 4);
             abi::emit_load_int_immediate(emitter, "x1", 8);
             abi::emit_call_label(emitter, "__rt_array_new");
@@ -1362,6 +1394,7 @@ fn emit_aarch64_builtin_throwable_method_bodies(
                 &PhpType::Mixed,
             );
             emitter.instruction("mov x1, x0");                                  // move the fresh array into the Mixed payload word
+            emitter.label(&stored_label);
             abi::emit_load_int_immediate(emitter, "x0", 4);
             abi::emit_load_int_immediate(emitter, "x2", 0);
         } else {
@@ -1450,7 +1483,17 @@ fn emit_x86_64_builtin_throwable_method_bodies(
         emitter.label(label);
         emit_x86_64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
         if *method == "gettrace" {
-            // See the ARM64 body: the same empty indexed array the compiled intrinsic builds.
+            // See the ARM64 body: a recorded trace, or the empty array the intrinsic builds.
+            let stored_label = format!("{label}_stored");
+            emitter.instruction("mov r10, QWORD PTR [rbp - 24]");               // reload the Throwable receiver before reading its trace slot
+            abi::emit_load_from_address(
+                emitter,
+                "rdi",
+                "r10",
+                crate::codegen_support::throwable_layout::TRACE_OFFSET,
+            );
+            emitter.instruction("test rdi, rdi");                               // was a trace recorded at creation?
+            emitter.instruction(&format!("jnz {stored_label}"));                // a recorded trace is returned as it is
             abi::emit_load_int_immediate(emitter, "rdi", 4);
             abi::emit_load_int_immediate(emitter, "rsi", 8);
             abi::emit_call_label(emitter, "__rt_array_new");
@@ -1460,6 +1503,7 @@ fn emit_x86_64_builtin_throwable_method_bodies(
                 &PhpType::Mixed,
             );
             emitter.instruction("mov rdi, rax");                                // move the fresh array into the Mixed payload word
+            emitter.label(&stored_label);
             abi::emit_load_int_immediate(emitter, "rsi", 0);
             abi::emit_load_int_immediate(emitter, "rax", 4);
         } else {
@@ -1906,6 +1950,7 @@ fn emit_aarch64_prepare_method_args(
                 callable_support,
             );
             super::eval_argument_owners::record_conversion(emitter, index, param_ty);
+            emit_retain_mixed_arg_for_consuming_helper(emitter, slot.runtime_helper, param_ty);
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -2014,6 +2059,7 @@ fn emit_x86_64_prepare_method_args(
                 X86_64_METHOD_CONTEXT_FRAME_OFFSET,
             );
             super::eval_argument_owners::record_conversion(emitter, index, param_ty);
+            emit_retain_mixed_arg_for_consuming_helper(emitter, slot.runtime_helper, param_ty);
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);

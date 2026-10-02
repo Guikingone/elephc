@@ -79,6 +79,15 @@ pub(super) fn lower_numeric_binary(
             lhs = convert_gradual_array_union_operand(ctx, lhs, expr.span);
         } else if is_array_union_operand(&lhs_ty) && is_gradual_array_union_operand(&rhs_ty) {
             rhs = convert_gradual_array_union_operand(ctx, rhs, expr.span);
+        } else if let (PhpType::Array(left_elem), PhpType::Array(right_elem)) = (&lhs_ty, &rhs_ty) {
+            if indexed_array_union_element_type(left_elem, right_elem).is_none() {
+                // Lists whose element storages differ have no common indexed representation.
+                // Both are copied into owned hash storage (the operands are left untouched: a
+                // class constant is one of them in Monolog's `Level::NAMES + Level::VALUES`)
+                // and unioned there, which is what php's key rule is written against anyway.
+                lhs = indexed_union_via_hash(ctx, lhs, expr.span);
+                rhs = indexed_union_via_hash(ctx, rhs, expr.span);
+            }
         }
         if let Some((op, result_ty)) = array_union_plan(ctx, lhs.value, rhs.value) {
             let result = ctx.emit_value(
@@ -334,6 +343,24 @@ fn convert_gradual_array_union_operand(
     );
     release_binary_operand_temporary(ctx, source, span);
     converted
+}
+
+/// Copies an indexed-array union operand into independently owned hash storage.
+fn indexed_union_via_hash(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let boxed = ctx.emit_value(
+        Op::MixedBox,
+        vec![source.value],
+        None,
+        PhpType::Mixed,
+        Op::MixedBox.default_effects(),
+        Some(span),
+    );
+    release_binary_operand_temporary(ctx, source, span);
+    convert_gradual_array_union_operand(ctx, boxed, span)
 }
 
 /// Returns the EIR opcode and result type for PHP array union operands.

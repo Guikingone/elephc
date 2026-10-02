@@ -2,7 +2,7 @@
 title: "__elephc_sodium_box() — internals"
 description: "Compiler internals for __elephc_sodium_box(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1107
+  order: 1127
 ---
 
 ## `__elephc_sodium_box()` — internals

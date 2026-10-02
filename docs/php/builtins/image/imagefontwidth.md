@@ -2,7 +2,7 @@
 title: "imagefontwidth()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 511
+  order: 523
 ---
 
 ## imagefontwidth()

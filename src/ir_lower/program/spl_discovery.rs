@@ -108,6 +108,18 @@ fn push_eval_bridge_builtin_spl_methods(methods: &mut Vec<(String, String)>, mod
         }
         push_supported_builtin_spl_method_for_receiver(methods, module, class_name, &construct_key);
         push_builtin_spl_metadata_methods(methods, module, class_name);
+        // Interpreted text calls the rest of the surface by name too (`$heap->insert()`,
+        // `$storage->attach()`), and no EIR instruction names those calls: without their bodies
+        // the bridge had no slot and reported "unsupported MethodCall ->insert()". Only the
+        // classes whose allocation the bridge can reach are widened, so a program that never
+        // opens the bridge pays nothing.
+        if let Some(class_info) = module.class_infos.get(class_name) {
+            let mut keys: Vec<&String> = class_info.methods.keys().collect();
+            keys.sort();
+            for key in keys {
+                push_supported_builtin_spl_method_for_receiver(methods, module, class_name, key);
+            }
+        }
     }
 }
 
@@ -274,6 +286,19 @@ pub(super) fn supported_dynamic_new_builtin_class_name(class_name: &str) -> bool
             | "overflowexception"
             | "rangeexception"
             | "recursivecallbackfilteriterator"
+            | "appenditerator"
+            | "cachingiterator"
+            | "emptyiterator"
+            | "infiniteiterator"
+            | "limititerator"
+            | "multipleiterator"
+            | "norewinditerator"
+            | "recursivearrayiterator"
+            | "recursiveiteratoriterator"
+            | "splmaxheap"
+            | "splminheap"
+            | "splobjectstorage"
+            | "splpriorityqueue"
             | "runtimeexception"
             | "spldoublylinkedlist"
             | "splfixedarray"

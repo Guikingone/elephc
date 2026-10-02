@@ -2,7 +2,7 @@
 title: "get_class_vars() — internals"
 description: "Compiler internals for get_class_vars(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 87
+  order: 99
 ---
 
 ## `get_class_vars()` — internals
@@ -10,17 +10,21 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Lowering**: [`src/class_vars_prelude.rs`:241](https://github.com/illegalstudio/elephc/blob/main/src/class_vars_prelude.rs#L241) (`get_class_vars`)
+- **Function symbol**: `get_class_vars()`
 
+
+### Lowering notes
+
+- Implemented by the compiler-injected class-vars prelude.
 
 ## Semantic descriptor
 
-Shared contract intentionally unsupported by the AOT backend.
+Shared contract implemented by an injected elephc-PHP prelude.
 
 ## EIR and runtime boundary
 
-_No compiled lowering: this surface is intentionally eval-only._
+_Implemented by an injected elephc-PHP prelude._
 
 ## Signature summary
 

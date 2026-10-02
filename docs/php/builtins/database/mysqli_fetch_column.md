@@ -2,7 +2,7 @@
 title: "mysqli_fetch_column()"
 description: "Implemented by the compiler-injected mysqli prelude."
 sidebar:
-  order: 118
+  order: 130
 ---
 
 ## mysqli_fetch_column()

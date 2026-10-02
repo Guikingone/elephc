@@ -73,7 +73,11 @@ pub(in crate::interpreter) fn eval_get_loaded_extensions_result(
     };
     let with_curl = !zend_extensions && cfg!(feature = "curl");
     let with_xml = !zend_extensions && eval_xml_bridge_linked(context);
-    let extra_capacity = usize::from(with_curl) + if with_xml { XML_BRIDGE_EXTENSIONS.len() } else { 0 };
+    let with_session =
+        !zend_extensions && super::extension_loaded::eval_session_bridge_linked(context);
+    let extra_capacity = usize::from(with_curl)
+        + usize::from(with_session)
+        + if with_xml { XML_BRIDGE_EXTENSIONS.len() } else { 0 };
     let mut names = values.string_array_new(set.len().max(1) + extra_capacity)?;
     for name in set {
         names = values.string_array_push(names, name)?;
@@ -85,6 +89,9 @@ pub(in crate::interpreter) fn eval_get_loaded_extensions_result(
         for name in XML_BRIDGE_EXTENSIONS {
             names = values.string_array_push(names, name)?;
         }
+    }
+    if with_session {
+        names = values.string_array_push(names, "session")?;
     }
     // Kept in php's registration order (`Core` first) by construction: the shared set is sorted,
     // and `curl`/`xml`/`xmlwriter` are the only appended names. php would place `curl` earlier;

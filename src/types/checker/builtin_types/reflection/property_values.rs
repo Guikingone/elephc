@@ -10,8 +10,17 @@
 use super::*;
 
 /// Returns `ReflectionProperty::getValue()` for dynamic public instance reflectors.
+///
+/// Declared `?object $object = null` exactly as php declares it: the declaration is the contract
+/// a subclass override is checked against at run time, and Doctrine's
+/// `RuntimeReflectionProperty::getValue(?object $object = null): mixed` was refused as a narrowed
+/// parameter against the `mixed` this used to say.
 pub(super) fn builtin_reflection_property_get_value_method() -> ClassMethod {
-    builtin_reflection_property_get_method("getValue", mixed_type(), null_expr())
+    builtin_reflection_property_get_method(
+        "getValue",
+        TypeExpr::Nullable(Box::new(object_type())),
+        null_expr(),
+    )
 }
 
 /// Returns `ReflectionProperty::getRawValue()` for direct backing-slot reads.

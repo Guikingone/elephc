@@ -11,6 +11,9 @@ use super::super::super::*;
 use super::super::support::*;
 
 /// Verifies class attribute helpers expose eval class-level metadata.
+///
+/// `newInstance()` of an attribute whose class nothing declares throws php's `Attribute class
+/// "X" not found` Error (caught here as `E`); it used to answer null.
 #[test]
 fn execute_program_dispatches_class_attribute_metadata_builtins() {
     let program = parse_fragment(
@@ -38,7 +41,7 @@ echo $attr_args[5]; echo ":";
 echo count($attr_args[6]); echo ":"; echo $attr_args[6][0]; echo ":"; echo $attr_args[6][1]; echo ":";
 $tag_attr_args = $attrs[1]->getArguments();
 echo $attrs[1]->getName(); echo ":"; echo $tag_attr_args[0]; echo ":";
-echo is_null($attrs[0]->newInstance()) ? "N" : "bad"; echo ":";
+try { $attrs[0]->newInstance(); echo "bad"; } catch (\Error $e) { echo "E"; } echo ":";
 $call_names = call_user_func("class_attribute_names", "EvalAttrMeta");
 echo $call_names[0]; echo ":";
 $call_args = call_user_func_array(
@@ -58,7 +61,7 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "3:Route:Tag:Tag:7:/home:-1:1.5:T:N:EvalAttrDep:2:nested:2:first:0:3:Route:7:/home:-1:1.5:T:N:EvalAttrDep:2:nested:2:Tag:first:N:Route:/home:111"
+        "3:Route:Tag:Tag:7:/home:-1:1.5:T:N:EvalAttrDep:2:nested:2:first:0:3:Route:7:/home:-1:1.5:T:N:EvalAttrDep:2:nested:2:Tag:first:E:Route:/home:111"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

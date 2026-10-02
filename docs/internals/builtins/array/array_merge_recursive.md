@@ -2,7 +2,7 @@
 title: "array_merge_recursive() — internals"
 description: "Compiler internals for array_merge_recursive(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 25
+  order: 33
 ---
 
 ## `array_merge_recursive()` — internals
@@ -49,7 +49,11 @@ function array_merge_recursive(...$arrays): array
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_recursive.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_recursive.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `interpreter-specific-value-semantics`.
+- **Dispatch hooks**: `direct`, `values`
+- **Variadic**: collects excess arguments into `$arrays`.
 
 ## Cross-references
 

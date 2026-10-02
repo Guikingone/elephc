@@ -371,3 +371,38 @@ fn checksum_incremental_matches_one_shot() {
     }
     assert_eq!(finalize_hex(ctx), hash_hex("crc32b", b"abc").unwrap());
 }
+
+/// Verifies algorithm names are case-insensitive, as php's `hash('SHA256', ...)` is.
+#[test]
+fn algorithm_names_are_case_insensitive() {
+    assert_eq!(hash_hex("SHA256", b"abc"), hash_hex("sha256", b"abc"));
+    assert_eq!(hash_hex("Sha3-256", b"abc"), hash_hex("sha3-256", b"abc"));
+}
+
+/// Verifies PBKDF2 against RFC 6070's HMAC-SHA1 vectors and rejects checksums.
+#[test]
+fn pbkdf2_matches_rfc6070() {
+    let hex = |bytes: Vec<u8>| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    assert_eq!(
+        hex(pbkdf2("sha1", b"password", b"salt", 1, 20).unwrap()),
+        "0c60c80f961f0e71f3a9b524af6012062fe037a6"
+    );
+    assert_eq!(
+        hex(pbkdf2("SHA1", b"password", b"salt", 2, 20).unwrap()),
+        "ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957"
+    );
+    assert_eq!(
+        hex(pbkdf2(
+            "sha1",
+            b"passwordPASSWORDpassword",
+            b"saltSALTsaltSALTsaltSALTsaltSALTsalt",
+            4096,
+            25
+        )
+        .unwrap()),
+        "3d2eec4fe41c849b80c8d83662c0e44a8b291a964cf2f07038"
+    );
+    assert_eq!(pbkdf2("sha1", b"p", b"s", 1, 0).unwrap().len(), 20);
+    assert!(pbkdf2("crc32b", b"p", b"s", 1, 0).is_none());
+    assert!(pbkdf2("nope", b"p", b"s", 1, 0).is_none());
+}

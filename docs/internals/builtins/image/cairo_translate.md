@@ -2,7 +2,7 @@
 title: "cairo_translate() — internals"
 description: "Compiler internals for cairo_translate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 448
+  order: 460
 ---
 
 ## `cairo_translate()` — internals

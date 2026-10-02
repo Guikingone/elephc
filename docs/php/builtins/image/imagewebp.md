@@ -2,7 +2,7 @@
 title: "imagewebp()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 539
+  order: 551
 ---
 
 ## imagewebp()

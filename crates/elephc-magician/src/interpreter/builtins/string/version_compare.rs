@@ -1,76 +1,140 @@
 //! Purpose:
-//! Implements PHP's `version_compare()` for the eval interpreter, as the fallback it reaches when
-//! no function of that name was declared.
+//! Eval registry entry and implementation for `version_compare`.
 //!
 //! Called from:
-//! - `crate::interpreter::expressions::calls::eval_call`, after every declared and native function
-//!   lookup, so a userland definition (a polyfill) wins.
+//! - `crate::interpreter::builtins::string`.
 //!
 //! Key details:
-//! - A transcription of php-src's `php_version_compare()`: both strings are canonicalized (`-`,
-//!   `_` and `+` become `.`, and a `.` is inserted wherever a digit run meets a non-digit run),
-//!   then compared part by part. Numeric parts compare as integers; the special forms order as
-//!   `dev < alpha = a < beta = b < RC = rc < # < pl = p`, and any unknown form sorts below `dev`.
-//! - Not in the shared builtin catalog: there is no compiled counterpart, so a COMPILED call is
-//!   still refused at compile time. Interpreted library code (Laravel's database layer) calls it
-//!   to gate behaviour on a driver version.
+//! - A transcription of php-src 8.5's `ext/standard/versioning.c`, the same one the compiled
+//!   side's AST prelude (`src/version_compare_prelude.rs`) transcribes: canonicalization (with
+//!   8.5.10's dropped trailing `.`), the special-form prefix table, `strtol` segments and the
+//!   `#N#` sentinel. The arguments are C strings to php, so each one ends at its first NUL.
+//! - The compiled side cannot serve interpreted code: a compiler prelude is injected only where
+//!   the compiled program names the function, and Symfony's password hasher factory calls it
+//!   from interpreted code on every login.
 
 use super::super::super::*;
 
-/// Returns whether `name` is the function this fallback answers.
-pub(in crate::interpreter) fn eval_is_version_compare_fallback(name: &str) -> bool {
-    name.trim_start_matches('\\').eq_ignore_ascii_case("version_compare")
+eval_builtin! {
+    contract: "version_compare",
+    area: String,
+    direct: VersionCompare,
+    values: VersionCompare,
 }
 
-fn is_digit(byte: u8) -> bool {
-    byte.is_ascii_digit()
+/// Evaluates PHP `version_compare(...)` from unevaluated call-site expressions.
+pub(in crate::interpreter) fn eval_builtin_version_compare(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut evaluated = Vec::with_capacity(args.len());
+    for arg in args {
+        evaluated.push(eval_expr(arg, context, scope, values)?);
+    }
+    eval_version_compare_values(&evaluated, context, values)
 }
 
-/// A character that is neither a digit nor a `.`.
-fn is_non_digit(byte: u8) -> bool {
-    !is_digit(byte) && byte != b'.'
-}
-
-fn is_special_separator(byte: u8) -> bool {
-    matches!(byte, b'-' | b'_' | b'+')
-}
-
-/// php-src's `php_canonicalize_version()`.
-fn canonicalize(version: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(version.len() + 4);
-    let Some((&first, rest)) = version.split_first() else {
-        return out;
+/// Evaluates PHP `version_compare(...)` from already-evaluated argument cells.
+pub(in crate::interpreter) fn eval_version_compare_values(
+    evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let (version1, version2, operator) = match evaluated_args {
+        [a, b] => (*a, *b, None),
+        [a, b, op] => (*a, *b, Some(*op)),
+        _ => {
+            let message = if evaluated_args.len() < 2 {
+                format!(
+                    "version_compare() expects at least 2 arguments, {} given",
+                    evaluated_args.len()
+                )
+            } else {
+                format!(
+                    "version_compare() expects at most 3 arguments, {} given",
+                    evaluated_args.len()
+                )
+            };
+            return eval_throw_argument_count_error(&message, context, values);
+        }
     };
+    let version1 = values.string_bytes(version1)?;
+    let version2 = values.string_bytes(version2)?;
+    let compare = php_version_compare(until_nul(&version1), until_nul(&version2));
+    let operator = match operator {
+        Some(operator) if !values.is_null(operator)? => values.string_bytes(operator)?,
+        _ => return values.int(i64::from(compare)),
+    };
+    let answer = match operator.as_slice() {
+        b"<" | b"lt" => compare == -1,
+        b"<=" | b"le" => compare != 1,
+        b">" | b"gt" => compare == 1,
+        b">=" | b"ge" => compare != -1,
+        b"==" | b"=" | b"eq" => compare == 0,
+        b"!=" | b"<>" | b"ne" => compare != 0,
+        _ => {
+            return eval_throw_builtin_value_error(
+                "version_compare(): Argument #3 ($operator) must be a valid comparison operator",
+                context,
+                values,
+            )
+        }
+    };
+    values.bool_value(answer)
+}
+
+/// The bytes before the first NUL, as php's C-string reading sees them.
+fn until_nul(bytes: &[u8]) -> &[u8] {
+    bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .map_or(bytes, |end| &bytes[..end])
+}
+
+/// `php_canonicalize_version`.
+fn canonicalize(version: &[u8]) -> Vec<u8> {
+    let Some((&first, rest)) = version.split_first() else {
+        return Vec::new();
+    };
+    let is_digit = |byte: u8| byte.is_ascii_digit();
+    let is_non_digit = |byte: u8| !byte.is_ascii_digit() && byte != b'.';
+    let mut out = Vec::with_capacity(version.len() * 2);
     out.push(first);
-    let mut last_source = first;
+    let mut previous = first;
     for &byte in rest {
-        let last_out = *out.last().unwrap_or(&b'.');
-        if is_special_separator(byte) {
-            if last_out != b'.' {
+        let last = *out.last().expect("canonical form starts non-empty");
+        if matches!(byte, b'-' | b'_' | b'+') {
+            if last != b'.' {
                 out.push(b'.');
             }
-        } else if (is_non_digit(last_source) && is_digit(byte))
-            || (is_digit(last_source) && is_non_digit(byte))
+        } else if (is_non_digit(previous) && is_digit(byte))
+            || (is_digit(previous) && is_non_digit(byte))
         {
-            if last_out != b'.' {
+            if last != b'.' {
                 out.push(b'.');
             }
             out.push(byte);
         } else if !byte.is_ascii_alphanumeric() {
-            if last_out != b'.' {
+            if last != b'.' {
                 out.push(b'.');
             }
         } else {
             out.push(byte);
         }
-        last_source = byte;
+        previous = byte;
+    }
+    // php 8.5.10 drops an empty last component (a trailing `.`).
+    if out.last() == Some(&b'.') {
+        out.pop();
     }
     out
 }
 
-/// The rank of a special form, or -7 for one php does not know.
-fn special_form_rank(form: &[u8]) -> i32 {
-    const FORMS: &[(&[u8], i32)] = &[
+/// `compare_special_version_forms`'s order for one form: its first matching prefix, or -1.
+fn special_order(form: &[u8]) -> i32 {
+    const FORMS: [(&[u8], i32); 10] = [
         (b"dev", 0),
         (b"alpha", 1),
         (b"a", 1),
@@ -85,133 +149,105 @@ fn special_form_rank(form: &[u8]) -> i32 {
     FORMS
         .iter()
         .find(|(name, _)| form.starts_with(name))
-        .map_or(-7, |(_, rank)| *rank)
+        .map_or(-1, |(_, order)| *order)
 }
 
-fn compare_special_forms(left: &[u8], right: &[u8]) -> i32 {
-    (special_form_rank(left) - special_form_rank(right)).signum()
-}
-
-/// Leading decimal digits of a part, as php's `strtol` reads them.
-fn leading_number(part: &[u8]) -> i64 {
+/// `strtol(segment, NULL, 10)` for a segment that starts with a digit, saturating like it.
+fn leading_number(segment: &[u8]) -> i64 {
     let mut value: i64 = 0;
-    for &byte in part.iter().take_while(|byte| is_digit(**byte)) {
-        value = value.saturating_mul(10).saturating_add(i64::from(byte - b'0'));
+    for &byte in segment.iter().take_while(|byte| byte.is_ascii_digit()) {
+        value = value
+            .checked_mul(10)
+            .and_then(|value| value.checked_add(i64::from(byte - b'0')))
+            .unwrap_or(i64::MAX);
     }
     value
 }
 
-fn first_is_digit(part: &[u8]) -> bool {
-    part.first().is_some_and(|byte| is_digit(*byte))
-}
-
-/// php-src's `php_version_compare()` over two raw version strings: -1, 0 or 1.
-pub(in crate::interpreter) fn compare_versions(left: &[u8], right: &[u8]) -> i32 {
-    if left.is_empty() || right.is_empty() {
-        if left.is_empty() && right.is_empty() {
-            return 0;
-        }
-        return if left.is_empty() { -1 } else { 1 };
+/// `php_version_compare`: -1, 0 or 1.
+fn php_version_compare(original1: &[u8], original2: &[u8]) -> i32 {
+    if original1.is_empty() || original2.is_empty() {
+        return match (original1.is_empty(), original2.is_empty()) {
+            (true, true) => 0,
+            (false, _) => 1,
+            _ => -1,
+        };
     }
-    compare_canonical(&canonicalize(left), &canonicalize(right))
-}
-
-fn compare_canonical(left: &[u8], right: &[u8]) -> i32 {
-    let mut left_parts = left.split(|byte| *byte == b'.');
-    let mut right_parts = right.split(|byte| *byte == b'.');
+    let version1 = if original1[0] == b'#' { original1.to_vec() } else { canonicalize(original1) };
+    let version2 = if original2[0] == b'#' { original2.to_vec() } else { canonicalize(original2) };
+    let digit_at = |bytes: &[u8], index: usize| bytes.get(index).is_some_and(u8::is_ascii_digit);
+    let next_dot = |bytes: &[u8], from: usize| {
+        bytes[from..].iter().position(|byte| *byte == b'.').map(|offset| from + offset)
+    };
+    let (mut p1, mut p2) = (0usize, 0usize);
+    let (mut n1, mut n2) = (Some(0usize), Some(0usize));
     let mut compare = 0;
-    let mut left_part = left_parts.next();
-    let mut right_part = right_parts.next();
-    while let (Some(l), Some(r)) = (left_part, right_part) {
-        compare = if first_is_digit(l) && first_is_digit(r) {
-            (leading_number(l) - leading_number(r)).signum() as i32
-        } else if !first_is_digit(l) && !first_is_digit(r) {
-            compare_special_forms(l, r)
-        } else if first_is_digit(l) {
-            compare_special_forms(b"#N#", r)
-        } else {
-            compare_special_forms(l, b"#N#")
+    while p1 < version1.len() && p2 < version2.len() && n1.is_some() && n2.is_some() {
+        n1 = next_dot(&version1, p1);
+        n2 = next_dot(&version2, p2);
+        let segment1 = &version1[p1..n1.unwrap_or(version1.len())];
+        let segment2 = &version2[p2..n2.unwrap_or(version2.len())];
+        let digit1 = digit_at(segment1, 0);
+        let digit2 = digit_at(segment2, 0);
+        compare = match (digit1, digit2) {
+            (true, true) => leading_number(segment1).cmp(&leading_number(segment2)) as i32,
+            (false, false) => (special_order(segment1) - special_order(segment2)).signum(),
+            (true, false) => (special_order(b"#N#") - special_order(segment2)).signum(),
+            (false, true) => (special_order(segment1) - special_order(b"#N#")).signum(),
         };
         if compare != 0 {
-            return compare;
+            break;
         }
-        left_part = left_parts.next();
-        right_part = right_parts.next();
+        if let Some(dot) = n1 {
+            p1 = dot + 1;
+        }
+        if let Some(dot) = n2 {
+            p2 = dot + 1;
+        }
     }
-    match (left_part, right_part) {
-        (Some(l), None) => {
-            if first_is_digit(l) {
+    if compare == 0 {
+        if n1.is_some() {
+            compare = if digit_at(&version1, p1) {
                 1
             } else {
-                // The rest of `left` against "#N#": compare the remainder as a version.
-                let mut remainder = l.to_vec();
-                for part in left_parts {
-                    remainder.push(b'.');
-                    remainder.extend_from_slice(part);
-                }
-                compare_versions(&remainder, b"#N#")
-            }
-        }
-        (None, Some(r)) => {
-            if first_is_digit(r) {
+                php_version_compare(version1.get(p1..).unwrap_or_default(), b"#N#")
+            };
+        } else if n2.is_some() {
+            compare = if digit_at(&version2, p2) {
                 -1
             } else {
-                let mut remainder = r.to_vec();
-                for part in right_parts {
-                    remainder.push(b'.');
-                    remainder.extend_from_slice(part);
-                }
-                compare_versions(b"#N#", &remainder)
-            }
+                php_version_compare(b"#N#", version2.get(p2..).unwrap_or_default())
+            };
         }
-        _ => compare,
     }
+    compare
 }
 
-/// Evaluates `version_compare($version1, $version2, $operator = null)`.
-pub(in crate::interpreter) fn eval_version_compare_fallback_call(
-    args: &[EvalCallArg],
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let args = positional_call_arg_exprs(args)?;
-    if !(2..=3).contains(&args.len()) {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let left = eval_expr(&args[0], context, scope, values)?;
-    let right = eval_expr(&args[1], context, scope, values)?;
-    let operator = match args.get(2) {
-        Some(operator) => Some(eval_expr(operator, context, scope, values)?),
-        None => None,
-    };
-    let left_bytes = values.string_bytes(left)?;
-    let right_bytes = values.string_bytes(right)?;
-    let compare = compare_versions(&left_bytes, &right_bytes);
-    let Some(operator) = operator else {
-        return values.int(i64::from(compare));
-    };
-    if values.is_null(operator)? {
-        return values.int(i64::from(compare));
-    }
-    let operator_bytes = values.string_bytes(operator)?;
-    let result = match operator_bytes.as_slice() {
-        b"<" | b"lt" => compare < 0,
-        b"<=" | b"le" => compare <= 0,
-        b">" | b"gt" => compare > 0,
-        b">=" | b"ge" => compare >= 0,
-        b"==" | b"eq" => compare == 0,
-        b"!=" | b"<>" | b"ne" => compare != 0,
-        _ => {
-            let exception = values.new_object("ValueError")?;
-            let message = values.string(
-                "version_compare(): Argument #3 ($operator) must be a valid comparison operator",
-            )?;
-            let code = values.int(0)?;
-            values.construct_object(exception, vec![message, code])?;
-            context.set_pending_throw(exception);
-            return Err(EvalStatus::UncaughtThrowable);
+#[cfg(test)]
+mod tests {
+    use super::php_version_compare;
+
+    /// Pins answers php 8.5.10's `version_compare()` gives, trailing-dot rule included.
+    #[test]
+    fn version_compare_matches_php() {
+        for (left, right, expected) in [
+            ("1.0.14", "1.0.22", -1),
+            ("5.10", "5.2", 1),
+            ("1.0", "1.0.0", -1),
+            ("1.0-dev", "1.0", -1),
+            ("1.0alpha", "1.0beta", -1),
+            ("1.0RC1", "1.0", -1),
+            ("1.0pl1", "1.0", 1),
+            ("1", "1.", 0),
+            ("", "1", -1),
+            ("1", "1.a", 1),
+            ("99999999999999999999", "1", 1),
+        ] {
+            assert_eq!(
+                php_version_compare(left.as_bytes(), right.as_bytes()),
+                expected,
+                "{left} vs {right}"
+            );
         }
-    };
-    values.bool_value(result)
+    }
 }

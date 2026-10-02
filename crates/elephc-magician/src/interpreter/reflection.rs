@@ -308,6 +308,11 @@ struct EvalReflectionIntersectionTypeMetadata {
     types: Vec<EvalReflectionNamedTypeMetadata>,
 }
 
+/// Returns whether `class_name` is one of the Reflection owner classes the interpreter builds.
+pub(in crate::interpreter) fn eval_is_reflection_owner_class(class_name: &str) -> bool {
+    reflection_owner_kind(class_name).is_some()
+}
+
 /// Attempts to construct a ReflectionClass/Method/Property object for eval metadata.
 pub(in crate::interpreter) fn eval_reflection_owner_new_object(
     class_name: &str,

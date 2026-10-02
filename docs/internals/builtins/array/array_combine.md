@@ -2,7 +2,7 @@
 title: "array_combine() — internals"
 description: "Compiler internals for array_combine(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 5
+  order: 6
 ---
 
 ## `array_combine()` — internals

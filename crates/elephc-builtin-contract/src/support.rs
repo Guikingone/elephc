@@ -210,9 +210,15 @@ const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] = &[
     "hash_copy",
     "hash_final",
     "hash_init",
+    "hash_pbkdf2",
     "hash_update",
     "levenshtein",
     "parse_str",
+    "password_algos",
+    "password_get_info",
+    "password_hash",
+    "password_needs_rehash",
+    "password_verify",
     "preg_filter",
     "preg_replace_callback_array",
     "sodium_crypto_box_keypair",
@@ -220,6 +226,7 @@ const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] = &[
     "sodium_crypto_box_seal",
     "sodium_crypto_box_seal_open",
     "var_export",
+    "version_compare",
 ];
 
 /// Returns the documented execution route for an eval-supported contract.
@@ -232,9 +239,11 @@ pub fn eval_execution(contract: &BuiltinContract) -> Option<EvalExecution> {
     }
 
     if let Some(runtime_builtin) = runtime_builtin_id(contract.id) {
+        // `headers_sent` joins them for its two by-reference out-parameters, which the boxed-cell
+        // ABI cannot carry: the no-argument form is the shared helper, the others an adapter.
         return Some(if matches!(
             runtime_builtin,
-            RuntimeBuiltinId::Intval | RuntimeBuiltinId::Round
+            RuntimeBuiltinId::Intval | RuntimeBuiltinId::Round | RuntimeBuiltinId::HeadersSent
         ) {
             EvalExecution::Adapter {
                 runtime_builtin: Some(runtime_builtin),
@@ -386,10 +395,10 @@ fn is_eval_only_reflection(id: BuiltinId) -> bool {
 /// path: `array_is_list` (12 sites), `unpack` (11), `array_key_first` (7), `array_key_last` (5),
 /// `header_remove` (2); and on the dev/debug path: `setlocale` (4), `dechex` (2). `join` was on
 /// that list too and is now bound, because it is php's documented alias of `implode` and the
-/// implementation already existed.
+/// implementation already existed. `header_remove` is bound too now, through the shared runtime
+/// builtin that edits the same web bridge list the compiled `header()` fills.
 const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "array_multisort",
-    "header_remove",
     "zval_free",
     "zval_pack",
     "zval_type",
@@ -450,7 +459,10 @@ mod tests {
         // `preg_grep`, out of `EVAL_IMPLEMENTATION_PENDING`. Array builtins: `array_first` /
         // `array_last`, the eight user-comparator set functions, and `array_diff_assoc`,
         // `array_intersect_assoc`, `array_udiff`, `array_uintersect` out of the pending list.
-        assert_eq!(eval_registry, 661 + curl_surface);
+        // Response headers: `headers_list` (new) and `header_remove` (out of the pending list).
+        // Eval homes for `version_compare`, `hash_pbkdf2`, `array_change_key_case` and the
+        // `password_*` family, which the prelude declares for compiled code.
+        assert_eq!(eval_registry, 670 + curl_surface);
         // 82 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use. Sodium: `__elephc_sodium_box` and
         // `__elephc_sodium_status`. Reflection: `__elephc_reflection_materialize` and
@@ -461,7 +473,8 @@ mod tests {
         // left it when its eval home landed. The five `password_*` prelude contracts joined it,
         // and `array_diff_assoc`, `array_intersect_assoc`, `array_udiff`, `array_uintersect` left.
         // Measured when the Laravel branch merged: its own counts here had drifted by five.
-        assert_eq!(eval_pending, 344);
+        // `header_remove` left too.
+        assert_eq!(eval_pending, 338);
         // Main's BCMath registry adds fourteen AOT contracts; this branch also
         // promotes get_object_vars from an external surface into the registry and
         // adds the ten iconv contracts, thirty-five PCNTL contracts, forty-three
@@ -473,7 +486,8 @@ mod tests {
         // `get_class_methods`, out of the eval-only reflection set. Reflection:
         // `__elephc_reflection_materialize`, which builds a declaring class on demand, and
         // `__elephc_reflection_fill_members`, which builds a reflector's members on first use.
-        assert_eq!(aot_registry, 664);
+        // Response headers: `headers_list`.
+        assert_eq!(aot_registry, 665);
         // Constructs, dedicated syntax and hash surfaces, the prelude-provided and
         // name-resolver-rewritten contracts (54 of them the xml prelude, seven the `--web`
         // handler stack this branch contracted), and the curl prelude when published.
@@ -489,7 +503,8 @@ mod tests {
         // five `password_*` functions of `crate::password_prelude`. Arrays: `array_first` /
         // `array_last` (`crate::array_edge_prelude`) and the eight user-comparator set
         // functions (`crate::array_ucompare_prelude`).
-        assert_eq!(aot_external, 442 + curl_surface);
+        // `version_compare` and `hash_pbkdf2` (`crate::*_prelude`).
+        assert_eq!(aot_external, 444 + curl_surface);
         // `get_called_class` from main, plus this branch's `register_tick_function` and
         // `unregister_tick_function`. `get_class_methods` is compiled natively (per-class method
         // rows filtered by the calling scope) and `get_class_vars` moved to `aot_external`.
@@ -538,15 +553,18 @@ mod tests {
         }
 
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
-        assert_eq!(shared_runtime, 20);
-        assert_eq!(hybrid_adapter, 2);
+        // `headers_list` and `header_remove` read and edit the compiled side's header list.
+        assert_eq!(shared_runtime, 21);
+        assert_eq!(hybrid_adapter, 3);
         // Moves in step with `eval_registry` above: every newly bound eval home is an adapter.
-        assert_eq!(interpreter_adapter, 639 + curl_surface);
+        assert_eq!(interpreter_adapter, 646 + curl_surface);
         // Drifted with the counts in `every_contract_has_a_backend_support_record`; sodium's
         // share is its two internal builtins, which eval never exposes. `preg_grep` left it;
         // the internal `__elephc_reflection_materialize` and `__elephc_reflection_fill_members`
         // joined it. Password: five in; array builtins with new eval homes: four out.
-        assert_eq!(unsupported, 448);
+        // `header_remove` out. The eval homes of the prelude surfaces above left it, and so did
+        // `array_replace_recursive`, which now has an interpreter home.
+        assert_eq!(unsupported, 442);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

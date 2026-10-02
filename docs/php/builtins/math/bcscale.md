@@ -2,7 +2,7 @@
 title: "bcscale()"
 description: "Gets or sets the process-wide default BCMath scale."
 sidebar:
-  order: 565
+  order: 577
 ---
 
 ## bcscale()

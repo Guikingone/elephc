@@ -2,7 +2,7 @@
 title: "exif_tagname()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 451
+  order: 463
 ---
 
 ## exif_tagname()

@@ -2,7 +2,7 @@
 title: "cairo_pattern_create_rgb()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 429
+  order: 441
 ---
 
 ## cairo_pattern_create_rgb()

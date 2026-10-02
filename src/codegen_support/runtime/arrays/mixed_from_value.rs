@@ -89,6 +89,27 @@ pub fn emit_mixed_from_value(emitter: &mut Emitter) {
         "x9",
         "__rt_mixed_from_value_null_container",
     );
+    // -- an array's tag follows its HEAP KIND, not the caller's static claim --
+    // `Op::ArraySetMixedKey` promotes an `Array(Mixed)` local to a hash in place, and the static
+    // type keeps saying "list". Once such a value sits in a container whose element tag is 4, every
+    // reader boxed the hash as a list and walked indices that do not exist: a `PREG_SET_ORDER`
+    // row with a named group came back as `[0, 5, 1]`, and Symfony's `HeaderUtils::split()`
+    // glued a whole Cache-Control header into one directive.
+    emitter.instruction("cmp x0, #6");                                          // objects keep their tag
+    emitter.instruction("b.eq __rt_mixed_from_value_dispatch");                 // only the two array tags can disagree with the heap
+    emitter.instruction("mov x0, x1");                                          // probe the container's own heap kind
+    emitter.instruction("bl __rt_heap_kind");                                   // x0 = 2 for an indexed array, 3 for a hash
+    emitter.instruction("cmp x0, #3");                                          // is the container really a hash?
+    emitter.instruction("mov x9, #5");                                          // tag 5 = associative array
+    emitter.instruction("b.eq __rt_mixed_from_value_kind_tag");                 // box a hash under the hash tag
+    emitter.instruction("cmp x0, #2");                                          // is the container really an indexed array?
+    emitter.instruction("mov x9, #4");                                          // tag 4 = indexed array
+    emitter.instruction("b.eq __rt_mixed_from_value_kind_tag");                 // box a list under the list tag
+    emitter.instruction("ldr x9, [sp, #0]");                                    // anything else keeps the caller's tag
+    emitter.label("__rt_mixed_from_value_kind_tag");
+    emitter.instruction("str x9, [sp, #0]");                                    // the normalized tag is the one boxed
+    emitter.instruction("mov x0, x9");                                          // restore the tag register for dispatch
+    emitter.instruction("ldp x1, x2, [sp, #8]");                                // restore the payload words the probe clobbered
     emitter.label("__rt_mixed_from_value_dispatch");
     emitter.instruction("cmp x0, #1");                                          // does this mixed payload hold a string?
     emitter.instruction("b.eq __rt_mixed_from_value_string");                   // strings must be persisted for the boxed owner
@@ -179,6 +200,23 @@ fn emit_mixed_from_value_linux_x86_64(emitter: &mut Emitter) {
         "r10",
         "__rt_mixed_from_value_null_container",
     );
+    // An array's tag follows its heap kind, not the caller's static claim: see the ARM64 twin.
+    emitter.instruction("cmp rax, 6");                                          // objects keep their tag
+    emitter.instruction("je __rt_mixed_from_value_dispatch");                   // only the two array tags can disagree with the heap
+    emitter.instruction("mov rax, rdi");                                        // probe the container's own heap kind
+    emitter.instruction("call __rt_heap_kind");                                 // eax = 2 for an indexed array, 3 for a hash
+    emitter.instruction("mov r10, 5");                                          // tag 5 = associative array
+    emitter.instruction("cmp rax, 3");                                          // is the container really a hash?
+    emitter.instruction("je __rt_mixed_from_value_kind_tag");                   // box a hash under the hash tag
+    emitter.instruction("mov r10, 4");                                          // tag 4 = indexed array
+    emitter.instruction("cmp rax, 2");                                          // is the container really an indexed array?
+    emitter.instruction("je __rt_mixed_from_value_kind_tag");                   // box a list under the list tag
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // anything else keeps the caller's tag
+    emitter.label("__rt_mixed_from_value_kind_tag");
+    emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // the normalized tag is the one boxed
+    emitter.instruction("mov rax, r10");                                        // restore the tag register for dispatch
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // restore the low payload word the probe clobbered
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // restore the high payload word the probe clobbered
     emitter.label("__rt_mixed_from_value_dispatch");
     emitter.instruction("cmp rax, 1");                                          // detect string payloads that need their own owned copy inside the mixed box
     emitter.instruction("je __rt_mixed_from_value_string");                     // strings must be persisted so the mixed cell owns a stable payload

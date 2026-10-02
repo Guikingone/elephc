@@ -2,7 +2,7 @@
 title: "easter_date()"
 description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
 sidebar:
-  order: 217
+  order: 229
 ---
 
 ## easter_date()

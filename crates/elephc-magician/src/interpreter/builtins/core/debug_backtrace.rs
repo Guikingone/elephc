@@ -85,6 +85,53 @@ fn eval_debug_backtrace_result(
     Ok(result)
 }
 
+/// Builds the `getTrace()` array a Throwable created by COMPILED code records at its `new`.
+///
+/// PHP captures a Throwable's trace when the object is created, from the frames live at that
+/// moment, with the `file`, `line`, `function`, `class` and `type` keys `debug_backtrace()` uses
+/// and never an `object`. The interpreter's frames are the only ones elephc keeps, so this is
+/// the eval-visible part of that stack; compiled frames are missing from it exactly as they are
+/// from `debug_backtrace()`. `args` is left out, which is PHP's own shape under
+/// `zend.exception_ignore_args`, and which keeps a stored trace from retaining every argument of
+/// every frame for as long as the exception lives.
+///
+/// Returns `None` when no interpreter frame is live, so the caller keeps the Throwable's
+/// declared empty trace without building anything.
+#[cfg(not(test))]
+pub(crate) fn eval_throwable_trace_value(
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let frames = eval_backtrace_frames(context, 0);
+    if frames.is_empty() {
+        return Ok(None);
+    }
+    if crate::eval_trace::enabled() {
+        let listing = frames
+            .iter()
+            .map(|frame| {
+                format!(
+                    "{}{}{}@{}:{}",
+                    frame.class.as_deref().unwrap_or(""),
+                    if frame.class.is_some() { "::" } else { "" },
+                    frame.function,
+                    frame.file,
+                    frame.line
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" | ");
+        eprintln!("[elephc-eval-trace] phase=throwable_trace frames={listing}");
+    }
+    let mut result = values.array_new(frames.len())?;
+    for (index, frame) in frames.iter().enumerate() {
+        let entry = eval_backtrace_frame_array(frame, EVAL_BACKTRACE_IGNORE_ARGS, values)?;
+        let key = values.int(index as i64)?;
+        result = values.array_set(result, key, entry)?;
+    }
+    Ok(Some(result))
+}
+
 /// Prints PHP's `debug_print_backtrace()` listing and returns null.
 fn eval_debug_print_backtrace_result(
     evaluated_args: &[RuntimeCellHandle],

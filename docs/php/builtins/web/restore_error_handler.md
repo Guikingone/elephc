@@ -2,7 +2,7 @@
 title: "restore_error_handler()"
 description: "Restores the previous user-defined error handler."
 sidebar:
-  order: 929
+  order: 949
 ---
 
 ## restore_error_handler()

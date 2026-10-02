@@ -2,7 +2,7 @@
 title: "imagesx()"
 description: "Implemented by the compiler-injected image prelude."
 sidebar:
-  order: 535
+  order: 547
 ---
 
 ## imagesx()

@@ -170,9 +170,11 @@ mod tests {
         // four: `preg_last_error`, `preg_last_error_msg`, `preg_filter` and
         // `preg_replace_callback_array`. Reflection adds `__elephc_reflection_materialize` and
         // `__elephc_reflection_fill_members`. The password API adds five (`password_*`), php 8.5
-        // adds `array_first` / `array_last`, `array_change_key_case` adds one, and the user-comparator
-        // set family adds eight (`array_udiff_assoc` and its siblings).
-        assert_eq!(contracts().len(), 1109 + curl_surface);
+        // adds `array_first` / `array_last`, `array_change_key_case` and `array_find_key` add
+        // one each, and the user-comparator set family adds eight (`array_udiff_assoc` and its
+        // siblings). `headers_list` adds one, and the prelude surfaces of `version_compare` and
+        // `hash_pbkdf2` add two.
+        assert_eq!(contracts().len(), 1112 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

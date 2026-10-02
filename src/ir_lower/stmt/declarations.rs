@@ -152,12 +152,28 @@ pub(super) fn lower_global(ctx: &mut LoweringContext<'_, '_>, vars: &[String], s
 
 /// Lowers a static local variable initialization.
 pub(super) fn lower_static_var(ctx: &mut LoweringContext<'_, '_>, name: &str, init: &Expr, span: Span) {
-    let value = lower_expr(ctx, init);
+    let mut value = lower_expr(ctx, init);
     let slot = ctx.declare_local_with_kind(
         name,
         ctx.builder.value_php_type(value.value),
         LocalKind::StaticLocal,
     );
+    // A string-keyed `static $m = [];` is declared as a hash (see
+    // `required_static_local_storage_type`); the empty initializer becomes one to match. The
+    // literal is an owned temporary, which the conversion consumes.
+    let slot_ty = ctx.builder.local_php_type(slot);
+    if matches!(slot_ty.codegen_repr(), PhpType::AssocArray { .. })
+        && matches!(ctx.builder.value_php_type(value.value).codegen_repr(), PhpType::Array(_))
+    {
+        value = ctx.emit_value(
+            Op::ArrayToHash,
+            vec![value.value],
+            None,
+            slot_ty,
+            Op::ArrayToHash.default_effects(),
+            Some(span),
+        );
+    }
     ctx.builder.emit_with_effects(
         Op::InitStaticLocal,
         vec![value.value],

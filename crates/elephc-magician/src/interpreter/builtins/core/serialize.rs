@@ -164,18 +164,35 @@ fn eval_serialize_append_value(
             }
             objects_seen.push(object_key);
             let class_name = eval_debug_object_class_name(value, identity, context, values)?;
-            let properties =
-                eval_debug_object_properties(value, identity, &class_name, context, values)?;
+            if eval_serialize_object_has_method(identity, &class_name, "__serialize", context, values)? {
+                eval_serialize_append_magic_serialize(
+                    value, &class_name, context, values, objects_seen, buf,
+                )?;
+                objects_seen.pop();
+                return Ok(());
+            }
+            let mut entries = eval_serialize_object_entries(value, identity, &class_name, context, values)?;
+            if eval_serialize_object_has_method(identity, &class_name, "__sleep", context, values)? {
+                match eval_serialize_sleep_names(value, &class_name, context, values)? {
+                    Some(names) => {
+                        entries = eval_serialize_sleep_entries(entries, &names, &class_name, values)?;
+                    }
+                    None => {
+                        buf.extend_from_slice(b"N;");
+                        objects_seen.pop();
+                        return Ok(());
+                    }
+                }
+            }
             buf.extend_from_slice(
-                format!("O:{}:\"{}\":{}:{{", class_name.len(), class_name, properties.len())
+                format!("O:{}:\"{}\":{}:{{", class_name.len(), class_name, entries.len())
                     .as_bytes(),
             );
-            for property in &properties {
-                let key = eval_serialize_mangled_property_key(property);
+            for (key, element) in &entries {
                 buf.extend_from_slice(format!("s:{}:\"", key.len()).as_bytes());
-                buf.extend_from_slice(key.as_bytes());
+                buf.extend_from_slice(key);
                 buf.extend_from_slice(b"\";");
-                eval_serialize_append_value(property.value, context, values, objects_seen, buf)?;
+                eval_serialize_append_value(*element, context, values, objects_seen, buf)?;
             }
             buf.push(b'}');
             objects_seen.pop();
@@ -187,10 +204,177 @@ fn eval_serialize_append_value(
     Ok(())
 }
 
+/// Whether the object's class declares `method`, in the interpreter or in the compiled program.
+fn eval_serialize_object_has_method(
+    identity: Option<u64>,
+    class_name: &str,
+    method: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if let Some(class) = identity.and_then(|identity| context.dynamic_object_class(identity)) {
+        let name = class.name().to_string();
+        if context.class_method(&name, method).is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(eval_aot_method_dispatch_metadata_in_hierarchy(class_name, method, context, values)?.is_some())
+}
+
+/// Appends an object whose class defines `__serialize()`: its returned array becomes the body,
+/// with the array's own keys, as php's `php_var_serialize_intern` writes it.
+fn eval_serialize_append_magic_serialize(
+    object: RuntimeCellHandle,
+    class_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+    objects_seen: &mut Vec<usize>,
+    buf: &mut Vec<u8>,
+) -> Result<(), EvalStatus> {
+    let data = eval_method_call_result_with_evaluated_args(
+        object,
+        "__serialize",
+        Vec::new(),
+        context,
+        values,
+    )?;
+    if !matches!(values.type_tag(data)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        values.release(data)?;
+        return eval_throw_type_error(
+            &format!("{class_name}::__serialize() must return an array"),
+            context,
+            values,
+        );
+    }
+    let len = values.array_len(data)?;
+    buf.extend_from_slice(format!("O:{}:\"{}\":{}:{{", class_name.len(), class_name, len).as_bytes());
+    for position in 0..len {
+        let key = values.array_iter_key(data, position)?;
+        let element = values.array_get(data, key)?;
+        eval_serialize_append_value(key, context, values, objects_seen, buf)?;
+        eval_serialize_append_value(element, context, values, objects_seen, buf)?;
+    }
+    buf.push(b'}');
+    values.release(data)
+}
+
+/// The object's properties as `(serialized key, value)` pairs, private and protected names
+/// mangled the way php's wire format writes them.
+///
+/// An interpreter-declared object reads its overlay; a compiled object reads the compiled
+/// program's `(array)` cast, which already carries php's mangled keys. Without that cast a
+/// compiled object's private and protected state was invisible here, and it serialized as
+/// `O:5:"Token":0:{}`.
+fn eval_serialize_object_entries(
+    object: RuntimeCellHandle,
+    identity: Option<u64>,
+    class_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<(Vec<u8>, RuntimeCellHandle)>, EvalStatus> {
+    let eval_owned =
+        identity.is_some_and(|identity| context.dynamic_object_declaring_class(identity).is_some());
+    if !eval_owned {
+        if let Some(array) = values.compiled_object_to_array(object)? {
+            let len = values.array_len(array)?;
+            let mut entries = Vec::with_capacity(len);
+            for position in 0..len {
+                let key = values.array_iter_key(array, position)?;
+                let element = values.array_get(array, key)?;
+                let key_bytes = values.string_bytes(key)?;
+                values.release(key)?;
+                entries.push((key_bytes, element));
+            }
+            return Ok(entries);
+        }
+    }
+    Ok(eval_debug_object_properties(object, identity, class_name, context, values)?
+        .iter()
+        .map(|property| (eval_serialize_mangled_property_key(property).into_bytes(), property.value))
+        .collect())
+}
+
+/// Calls `__sleep()` and returns the property names it lists, or None when it did not return
+/// an array (php warns and serializes the object as `N;`).
+fn eval_serialize_sleep_names(
+    object: RuntimeCellHandle,
+    class_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<Vec<Vec<u8>>>, EvalStatus> {
+    let names = eval_method_call_result_with_evaluated_args(
+        object,
+        "__sleep",
+        Vec::new(),
+        context,
+        values,
+    )?;
+    let warning = format!(
+        "Warning: serialize(): {class_name}::__sleep() should return an array only containing the names of instance-variables to serialize\n"
+    );
+    if !matches!(values.type_tag(names)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        values.release(names)?;
+        values.warning(&warning)?;
+        return Ok(None);
+    }
+    let len = values.array_len(names)?;
+    let mut listed = Vec::with_capacity(len);
+    for position in 0..len {
+        let key = values.array_iter_key(names, position)?;
+        let name = values.array_get(names, key)?;
+        values.release(key)?;
+        if values.type_tag(name)? != EVAL_TAG_STRING {
+            values.warning(&warning)?;
+        }
+        listed.push(values.string_bytes(name)?);
+    }
+    values.release(names)?;
+    Ok(Some(listed))
+}
+
+/// Keeps the properties `__sleep()` named, in its order, trying each name as php does: as a
+/// public name, then private to the object's class, then protected.
+fn eval_serialize_sleep_entries(
+    entries: Vec<(Vec<u8>, RuntimeCellHandle)>,
+    names: &[Vec<u8>],
+    class_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<(Vec<u8>, RuntimeCellHandle)>, EvalStatus> {
+    let mut kept: Vec<(Vec<u8>, RuntimeCellHandle)> = Vec::with_capacity(names.len());
+    for name in names {
+        let mut private = vec![0u8];
+        private.extend_from_slice(class_name.as_bytes());
+        private.push(0);
+        private.extend_from_slice(name);
+        let mut protected = b"\0*\0".to_vec();
+        protected.extend_from_slice(name);
+        let found = [name.clone(), private, protected].into_iter().find_map(|candidate| {
+            entries
+                .iter()
+                .find(|(key, _)| *key == candidate)
+                .map(|(key, value)| (key.clone(), *value))
+        });
+        match found {
+            Some(entry) if kept.iter().any(|(key, _)| *key == entry.0) => {
+                values.warning(&format!(
+                    "Warning: serialize(): \"{}\" is returned from __sleep() multiple times\n",
+                    String::from_utf8_lossy(name)
+                ))?;
+            }
+            Some(entry) => kept.push(entry),
+            None => values.warning(&format!(
+                "Warning: serialize(): \"{}\" returned as member variable from __sleep() but does not exist\n",
+                String::from_utf8_lossy(name)
+            ))?,
+        }
+    }
+    Ok(kept)
+}
+
 /// Computes one object property's serialized key, NUL-mangling it for protected/private the
 /// same way php's own wire format does: `"\0*\0name"` for protected, `"\0Class\0name"` for
 /// private, and the plain name for public.
-fn eval_serialize_mangled_property_key(property: &EvalDebugObjectProperty) -> String {
+pub(in crate::interpreter) fn eval_serialize_mangled_property_key(property: &EvalDebugObjectProperty) -> String {
     match &property.visibility.kind {
         EvalDebugPropertyVisibilityKind::Public => property.name.clone(),
         EvalDebugPropertyVisibilityKind::Protected => format!("\0*\0{}", property.name),

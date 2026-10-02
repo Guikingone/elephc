@@ -293,6 +293,14 @@ pub(in crate::ir_lower) fn array_access_expr_value_type_for_ir(
         ExprKind::ArrayAccess { array: inner, .. } => {
             array_access_expr_value_type_for_ir(ctx, inner)
         }
+        // A static property's DECLARED type, as for an instance property above. Without it a
+        // nested read through one (`static::$formats[$format][0]`) fell back to the syntactic
+        // guess, whose unknown is `int`: a ternary merging that read with `null` then stored the
+        // inner string's POINTER in a `null|int` slot, and Symfony's `Request::getMimeType()`
+        // answered `"4396328192"` -- every cached response went out with that as its Content-Type.
+        ExprKind::StaticPropertyAccess { receiver, property } => Some(
+            super::property_access::static_property_result_type(ctx, receiver, property, array),
+        ),
         _ => None,
     }?
     .codegen_repr();
