@@ -8,9 +8,11 @@
 //! - Literal defaults and constructor argument ownership preserve their established layout.
 
 use super::*;
+use crate::codegen::literal_defaults::fold_global_constant_default;
 
 /// Collects literal defaults that can be copied directly into object property slots.
 pub(super) fn collect_property_defaults(
+    ctx: &FunctionContext<'_>,
     class_info: &ClassInfo,
     inst: &Instruction,
 ) -> Result<Vec<PropertyDefault>> {
@@ -28,12 +30,18 @@ pub(super) fn collect_property_defaults(
             continue;
         }
         let offset = 8 + index * 16;
+        // `literal_default_value` materializes a default straight from the AST, so a bare
+        // global-constant default must be folded to the constant's value first; the module's
+        // `global_constants` is the same table `lower_const_ref` reads (review follow-up for
+        // #1308). Without this the non-promoted `public array $items = ITEMS;` died in codegen.
+        let folded = fold_global_constant_default(&default_expr.kind, &ctx.module.global_constants)
+            .unwrap_or_else(|| default_expr.kind.clone());
         defaults.push(PropertyDefault {
             offset,
             value: literal_default_value(
                 &format!("property ${}", property),
                 php_type,
-                &default_expr.kind,
+                &folded,
                 inst.op.name(),
             )?,
             is_reference: class_info.owned_reference_properties.contains(property),

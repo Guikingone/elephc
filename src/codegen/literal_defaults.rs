@@ -1105,6 +1105,30 @@ fn array_element_size(elem_type: &PhpType) -> Result<i64> {
     }
 }
 
+/// Resolves a bare global-constant default to the literal value it names.
+///
+/// `literal_default_value` has no `ConstRef` arm, so a default naming a global constant is folded
+/// to the constant's value before materialization. `global_constants` is the module table
+/// `lower_const_ref` reads; a leading `\` is stripped. The fold follows a constant that names
+/// another constant, bounded by `const_default_values::MAX_CONST_DEFAULT_DEPTH`, and returns
+/// `None` when the chain does not end at a value this path can materialize.
+pub(crate) fn fold_global_constant_default(
+    expr: &ExprKind,
+    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+) -> Option<ExprKind> {
+    let mut current = expr.clone();
+    for _ in 0..crate::codegen::const_default_values::MAX_CONST_DEFAULT_DEPTH {
+        let ExprKind::ConstRef(name) = &current else {
+            return Some(current);
+        };
+        let (value, _) = constants
+            .get(name.as_str())
+            .or_else(|| constants.get(name.as_str().trim_start_matches('\\')))?;
+        current = value.clone();
+    }
+    None
+}
+
 /// Folds `Foo::class` with a named receiver into the string literal it always is: the name
 /// as written, already resolved against the file's namespace and imports, with no leading
 /// `\`. `self::class`, `parent::class` and `static::class` depend on the class they appear in
