@@ -186,8 +186,65 @@ pub(crate) fn build_attribute_new_instance_body_with_extra(
         cases.push((factory.id, then_body));
     }
     let mut body: Vec<Stmt> = factory_switch(cases).into_iter().collect();
+    body.push(missing_attribute_class_guard(span));
     body.push(runtime_attribute_new_instance_fallback(span));
     body
+}
+
+/// Throws php's `Error: Attribute class "X" not found` when the attribute names no class.
+///
+/// `class_exists()` autoloads, as php's `newInstance()` does before giving up. Without this the
+/// dynamic `new` below raised `Class "X" not found` instead.
+fn missing_attribute_class_guard(span: crate::span::Span) -> Stmt {
+    let name = || {
+        Expr::new(
+            ExprKind::PropertyAccess {
+                object: Box::new(Expr::new(ExprKind::This, span)),
+                property: "__name".to_string(),
+            },
+            span,
+        )
+    };
+    let concat = |left: Expr, right: Expr| {
+        Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(left),
+                op: crate::parser::ast::BinOp::Concat,
+                right: Box::new(right),
+            },
+            span,
+        )
+    };
+    let message = concat(
+        concat(
+            Expr::new(ExprKind::StringLiteral("Attribute class \"".to_string()), span),
+            name(),
+        ),
+        Expr::new(ExprKind::StringLiteral("\" not found".to_string()), span),
+    );
+    let class_exists = Expr::new(
+        ExprKind::FunctionCall {
+            name: crate::names::Name::unqualified("class_exists"),
+            args: vec![name()],
+        },
+        span,
+    );
+    let error = Expr::new(
+        ExprKind::NewObject {
+            class_name: name_from_canonical("Error"),
+            args: vec![message],
+        },
+        span,
+    );
+    Stmt::new(
+        StmtKind::If {
+            condition: Expr::new(ExprKind::Not(Box::new(class_exists)), span),
+            then_body: vec![Stmt::new(StmtKind::Throw(error), span)],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        span,
+    )
 }
 
 /// Builds the metadata-driven fallback for ReflectionAttribute objects created by eval.

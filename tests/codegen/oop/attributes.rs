@@ -5145,3 +5145,25 @@ echo "ok";
     );
     assert_eq!(out, "ok");
 }
+
+/// `newInstance()` of an attribute naming no class throws php's catchable
+/// `Error: Attribute class "X" not found`; the native fallback raised `Class "X" not found` from its
+/// dynamic `new` instead.
+#[test]
+fn test_attribute_new_instance_of_a_missing_class_throws_attribute_error() {
+    let out = compile_and_run(
+        r#"<?php
+final class Comp {
+    #[\Nope\Missing]
+    public int $page = 1;
+}
+try {
+    (new ReflectionProperty("Comp", "page"))->getAttributes()[0]->newInstance();
+    echo "no error\n";
+} catch (Error $e) {
+    echo get_class($e), ": ", $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(out, "Error: Attribute class \"Nope\\Missing\" not found\n");
+}
