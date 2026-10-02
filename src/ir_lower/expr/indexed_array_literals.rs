@@ -227,6 +227,22 @@ pub(super) fn lower_hash_spread_into_hash_from_value(
         lower_iterable_spread_into_hash(ctx, hash, source, span);
         return;
     }
+    // A source that already IS a hash needs no promotion, and must not be promoted: `ArrayToHash`
+    // hands an existing hash back without taking a reference, so releasing its "owned" result
+    // dropped the reference of a local (`...$p`) that the caller still holds.
+    if matches!(source_ty, PhpType::AssocArray { .. }) {
+        ctx.emit_void(
+            Op::HashSpread,
+            vec![hash.value, source.value],
+            None,
+            Op::HashSpread.default_effects(),
+            Some(span),
+        );
+        if ctx.value_is_owning_temporary(source) {
+            crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+        }
+        return;
+    }
     let promoted = ctx.emit_value(
         Op::ArrayToHash,
         vec![source.value],
@@ -363,7 +379,11 @@ pub(crate) fn lower_indexed_array_spread_into_array(
     span: crate::span::Span,
 ) {
     let source_elem_ty = match ctx.builder.value_php_type(source.value).codegen_repr() {
-        PhpType::Array(elem_ty) => elem_ty.codegen_repr(),
+        // An empty literal (`$w = [];`) has no element type yet; nothing is read from it, but the
+        // read still needs a pushable one.
+        PhpType::Array(elem_ty) if !matches!(elem_ty.codegen_repr(), PhpType::Void | PhpType::Never) => {
+            elem_ty.codegen_repr()
+        }
         _ => PhpType::Mixed,
     };
     let source = narrow_gradual_indexed_spread_source(ctx, source, span);

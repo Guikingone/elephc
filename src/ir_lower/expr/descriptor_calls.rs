@@ -78,7 +78,55 @@ pub(super) fn lower_untyped_descriptor_invoker_arg_container(
     if crate::types::call_args::has_named_args(args) {
         return Some(lower_untyped_descriptor_invoker_hash_container(ctx, args, span));
     }
+    if args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
+        return Some(lower_untyped_descriptor_invoker_spread_container(ctx, args, span));
+    }
     Some(lower_untyped_descriptor_invoker_indexed_container(ctx, args, span))
+}
+
+/// Builds the container for positional arguments mixed with spreads (`f($a, ...$rest)`).
+///
+/// A spread source decides the container: a list keeps the indexed shape, but a hash (or an
+/// `iterable`) carries string keys that bind by name, so the container must become a hash with
+/// PHP's unpacking rule (string keys kept, integer keys renumbered). That is exactly what an
+/// array literal `[$a, ...$rest]` does, so a keyed source is lowered as one. The source's type is
+/// read before anything is lowered (a local's storage type, a literal's shape), so the indexed
+/// path keeps its by-reference argument markers.
+fn lower_untyped_descriptor_invoker_spread_container(
+    ctx: &mut LoweringContext<'_, '_>,
+    args: &[Expr],
+    span: Span,
+) -> LoweredValue {
+    let keyed_source = args.iter().any(|arg| {
+        matches!(
+            &arg.kind,
+            ExprKind::Spread(inner)
+                if matches!(
+                    spread_source_static_type(ctx, inner),
+                    PhpType::AssocArray { .. } | PhpType::Iterable
+                )
+        )
+    });
+    if !keyed_source {
+        return lower_untyped_descriptor_invoker_indexed_container(ctx, args, span);
+    }
+    let literal = Expr::new(ExprKind::ArrayLiteral(args.to_vec()), span);
+    // The container travels bare, like the lone-spread container (`f(...$p)`): the invoker reads
+    // a list or a hash from it directly.
+    lower_expr(ctx, &literal)
+}
+
+/// Returns a spread source's storage type without lowering it: a local's own type, otherwise what
+/// the expression's shape says.
+fn spread_source_static_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> PhpType {
+    match &expr.kind {
+        ExprKind::Variable(name) => ctx.local_type(name).codegen_repr(),
+        ExprKind::ArrayLiteralAssoc(_) => PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        },
+        _ => infer_expr_type_syntactic(expr).codegen_repr(),
+    }
 }
 
 /// Builds an indexed descriptor-invoker container for signature-unknown calls.

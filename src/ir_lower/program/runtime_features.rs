@@ -97,7 +97,7 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                             .operands
                             .first()
                             .copied()
-                            .is_some_and(|operand| !value_is_const_string(function, operand));
+                            .is_some_and(|operand| !value_is_const_string(module, function, operand));
                         features.class_relation_introspection |= matches!(
                             target,
                             crate::ir::RuntimeFnId::ClassImplements
@@ -107,12 +107,12 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                             .operands
                             .first()
                             .copied()
-                            .is_some_and(|operand| !value_is_const_string(function, operand));
+                            .is_some_and(|operand| !value_is_const_string(module, function, operand));
                         features.class_methods_introspection |= matches!(
                             target,
                             crate::ir::RuntimeFnId::MethodExists
                                 | crate::ir::RuntimeFnId::PropertyExists
-                        ) && member_exists_call_requires_runtime_registry(function, inst);
+                        ) && member_exists_call_requires_runtime_registry(module, function, inst);
                         // The resource a builtin boxes is the ONLY way its cleanup kind reaches
                         // `__rt_mixed_free_deep`: eval boxes its own handles as kind 0, and a
                         // callable named by a runtime-unknown string is a fatal, not a dispatch.
@@ -223,7 +223,7 @@ fn object_new_requires_runtime_reflection(
             matches!(
                 ty,
                 PhpType::Callable | PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)
-            ) || (ty == PhpType::Str && !value_is_const_string(function, *operand))
+            ) || (ty == PhpType::Str && !value_is_const_string(module, function, *operand))
         })
     })
 }
@@ -246,20 +246,33 @@ fn object_new_requires_class_introspection(
     inst.operands
         .iter()
         .take(2)
-        .any(|&operand| !value_is_const_string(function, operand))
+        .any(|&operand| !value_is_const_string(module, function, operand))
 }
 
 /// Returns whether a lowered value is produced by a literal string instruction.
-fn value_is_const_string(function: &Function, value: crate::ir::ValueId) -> bool {
+fn value_is_const_string(module: &Module, function: &Function, value: crate::ir::ValueId) -> bool {
     function
         .instructions
         .iter()
         .find(|inst| inst.result == Some(value))
-        .is_some_and(|inst| matches!(inst.op, Op::ConstStr | Op::ConstClassName))
+        .is_some_and(|inst| match inst.op {
+            Op::ConstStr => true,
+            // `static::class` is the late-static class of the running call, not a literal: the
+            // backend resolves its name at run time, so it needs the same registry as any other
+            // computed string.
+            Op::ConstClassName => !matches!(
+                inst.immediate,
+                Some(Immediate::Data(data))
+                    if module.data.class_names.get(data.as_raw() as usize).map(String::as_str)
+                        == Some("static")
+            ),
+            _ => false,
+        })
 }
 
 /// Returns whether member-existence lowering needs the closed-world runtime registry.
 fn member_exists_call_requires_runtime_registry(
+    module: &Module,
     function: &Function,
     inst: &crate::ir::Instruction,
 ) -> bool {
@@ -267,7 +280,7 @@ fn member_exists_call_requires_runtime_registry(
         .operands
         .get(1)
         .copied()
-        .is_some_and(|operand| !value_is_const_string(function, operand));
+        .is_some_and(|operand| !value_is_const_string(module, function, operand));
     let gradual_target = inst
         .operands
         .first()
@@ -288,7 +301,7 @@ fn member_exists_call_requires_runtime_registry(
             matches!(
                 function.value(operand).map(|value| value.php_type.codegen_repr()),
                 Some(crate::types::PhpType::Str)
-            ) && !value_is_const_string(function, operand)
+            ) && !value_is_const_string(module, function, operand)
         });
     dynamic_member || gradual_target || dynamic_string_target
 }

@@ -375,6 +375,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// Statement spans whose boxed-container offset write is being lowered as the array arm of the
     /// run-time tag dispatch, so the statement does not dispatch on the tag a second time.
     pub offset_dispatch_bypass: HashSet<Span>,
+    /// `static::method()` calls whose late-static dispatch ladder is already built: the copy that
+    /// ends the ladder (the `__callStatic` fallback) must lower as an ordinary call. One-shot.
+    pub late_static_ladder_fallbacks: HashSet<Span>,
     pub constants: ConstantScope<'m>,
     pub top_level_env: TypeEnv,
     pub current_class: Option<String>,
@@ -544,6 +547,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             mixed_storage_store_sites,
             loop_storage_scope,
             offset_dispatch_bypass: HashSet::new(),
+            late_static_ladder_fallbacks: HashSet::new(),
             constants: ConstantScope::new(constants),
             top_level_env,
             current_class,
