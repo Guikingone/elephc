@@ -168,7 +168,8 @@ pub(super) fn lower_foreach(
     let source = if value_by_ref {
         source
     } else {
-        normalize_plain_object_foreach_source(ctx, source, array.span)
+        let source = normalize_plain_object_foreach_source(ctx, source, array.span);
+        materialize_aggregate_iterator(ctx, source, array.span)
     };
     let source_php_ty = ctx.builder.value_php_type(source.value);
     let source_ty = source_php_ty.codegen_repr();
@@ -367,6 +368,42 @@ pub(super) fn lower_foreach(
     if let Some(pin) = source_pin {
         crate::ir_lower::ownership::release_if_owned(ctx, pin.value, Some(pin.span));
     }
+}
+
+/// Iterates an `IteratorAggregate` through the iterator its `getIterator()` returns.
+///
+/// The backend used to call `getIterator()` inside `IterStart` and keep the result in the iterator
+/// state, where no exit path ever released it: every `foreach` over an aggregate leaked the
+/// iterator object and everything it held (an `ArrayIterator` with its array, 7-9 blocks), and
+/// Laravel collections are aggregates. Asking here makes the iterator an owning temporary that
+/// the loop's ordinary source pin and exit release already balance. A temporary aggregate is
+/// released at once, as php does: `FE_RESET` frees its operand once the iterator exists.
+fn materialize_aggregate_iterator(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let PhpType::Object(class_name) = ctx.builder.value_php_type(source.value).codegen_repr() else {
+        return source;
+    };
+    let implements = |ctx: &LoweringContext<'_, '_>, interface: &str| {
+        crate::ir_lower::expr::array_access_types::class_implements_interface_for_ir(
+            ctx,
+            &class_name,
+            interface,
+        )
+    };
+    // An `IteratorAggregate`-typed parameter names the interface itself, which no lookup reports
+    // as implementing itself.
+    let is_aggregate = class_name
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case("IteratorAggregate")
+        || implements(ctx, "IteratorAggregate");
+    if !is_aggregate || implements(ctx, "Iterator") {
+        return source;
+    }
+    // The call releases an owning receiver temporary itself (`release_owning_receiver_temporary`).
+    crate::ir_lower::expr::lower_zero_arg_method_call(ctx, source, "getIterator", span)
 }
 
 /// Casts an ordinary concrete object to its visible property hash before `foreach` iteration.

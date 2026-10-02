@@ -93,6 +93,11 @@ struct InvokerEmitContext {
     label_counter: usize,
     string_cleanup_offsets: Vec<Option<usize>>,
     array_cleanup_offsets: Vec<Option<usize>>,
+    /// Slots for the owned Mixed box a by-value `mixed` parameter receives when its argument
+    /// arrives as an invoker reference-cell marker (see `push_loaded_invoker_ref_cell_value_arg`).
+    mixed_cleanup_offsets: Vec<Option<usize>>,
+    /// The visible parameter whose argument is being pushed, for slot lookups in shared helpers.
+    current_arg: Option<usize>,
 }
 
 impl InvokerEmitContext {
@@ -124,11 +129,26 @@ impl InvokerEmitContext {
                 _ => None,
             })
             .collect();
+        let mixed_cleanup_offsets = sig
+            .params
+            .iter()
+            .map(|(_, ty)| {
+                if matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+                    let offset = INVOKER_SAVED_REGS_END + cleanup_slot_count * 16;
+                    cleanup_slot_count += 1;
+                    Some(offset)
+                } else {
+                    None
+                }
+            })
+            .collect();
         Self {
             label_prefix: local_label_prefix(invoker_label),
             label_counter: 0,
             string_cleanup_offsets,
             array_cleanup_offsets,
+            mixed_cleanup_offsets,
+            current_arg: None,
         }
     }
 
@@ -167,6 +187,21 @@ impl InvokerEmitContext {
     /// Returns every frame slot that may hold an owned normalized indexed array.
     fn active_array_cleanup_offsets(&self) -> Vec<usize> {
         self.array_cleanup_offsets
+            .iter()
+            .copied()
+            .flatten()
+            .collect()
+    }
+
+    /// Returns the Mixed-box cleanup slot of the parameter currently being pushed, if any.
+    fn current_mixed_cleanup_offset(&self) -> Option<usize> {
+        self.current_arg
+            .and_then(|index| self.mixed_cleanup_offsets.get(index).copied().flatten())
+    }
+
+    /// Returns every frame slot that may hold an owned Mixed box built from a reference cell.
+    fn active_mixed_cleanup_offsets(&self) -> Vec<usize> {
+        self.mixed_cleanup_offsets
             .iter()
             .copied()
             .flatten()
@@ -217,7 +252,8 @@ fn emit_runtime_callable_invoker_impl(
     let call_reg = abi::nested_call_reg(emitter);
     let escape_label = format!("{}_eval_escape", invoker.label);
     let cleanup_slot_count = ctx.active_string_cleanup_offsets().len()
-        + ctx.active_array_cleanup_offsets().len();
+        + ctx.active_array_cleanup_offsets().len()
+        + ctx.active_mixed_cleanup_offsets().len();
     let base_frame_size = INVOKER_FRAME_SIZE + cleanup_slot_count * 16;
     let frame_size = if catch_native_throws {
         base_frame_size + (INVOKER_BOUNDARY_FRAME_SIZE - INVOKER_FRAME_SIZE)
@@ -237,6 +273,7 @@ fn emit_runtime_callable_invoker_impl(
     emit_invoker_callee_saved_saves(emitter);
     emit_initialize_invoker_string_cleanup_slots(emitter, &ctx.active_string_cleanup_offsets());
     emit_initialize_invoker_string_cleanup_slots(emitter, &ctx.active_array_cleanup_offsets());
+    emit_initialize_invoker_string_cleanup_slots(emitter, &ctx.active_mixed_cleanup_offsets());
     abi::store_at_offset(
         emitter,
         abi::int_arg_reg_name(emitter.target, 0),
@@ -310,6 +347,10 @@ fn emit_runtime_callable_invoker_impl(
         emit_release_invoker_array_conversions_preserving_result(
             emitter,
             &ctx.active_array_cleanup_offsets(),
+        );
+        emit_release_invoker_mixed_boxes_preserving_result(
+            emitter,
+            &ctx.active_mixed_cleanup_offsets(),
         );
         emit_null_invoker_result(emitter);
         emit_invoker_callee_saved_restores(emitter);
@@ -761,6 +802,7 @@ fn emit_loaded_indexed_array_callback_call(
             .unwrap_or_else(|| elem_ty.codegen_repr());
         let string_cleanup_offset = ctx.string_cleanup_offset(index);
         let array_cleanup_offset = ctx.array_cleanup_offset(index);
+        ctx.current_arg = Some(index);
         if let Some(default_expr) = sig.defaults.get(index).and_then(Option::as_ref) {
             let load_label = ctx.next_label("invoker_load_arg");
             let done_label = ctx.next_label("invoker_arg_done");
@@ -793,6 +835,7 @@ fn emit_loaded_indexed_array_callback_call(
         }
         arg_types.push(pushed_ty);
     }
+    ctx.current_arg = None;
 
     if sig.variadic.is_some() {
         let variadic_elem_ty = sig
@@ -879,6 +922,7 @@ fn emit_loaded_indexed_array_callback_call(
         &arg_types,
         &ctx.active_string_cleanup_offsets(),
         &ctx.active_array_cleanup_offsets(),
+        &ctx.active_mixed_cleanup_offsets(),
         emitter,
     );
     sig.return_type.clone()
@@ -1012,6 +1056,7 @@ fn emit_loaded_assoc_array_callback_call(
         &arg_types,
         &ctx.active_string_cleanup_offsets(),
         &ctx.active_array_cleanup_offsets(),
+        &ctx.active_mixed_cleanup_offsets(),
         emitter,
     );
     sig.return_type.clone()
@@ -1437,6 +1482,12 @@ fn push_loaded_invoker_ref_cell_value_arg(
         coerce_current_value_to_target(emitter, ctx, data, &PhpType::Mixed, target_ty);
     if release_mixed_after_coerce {
         release_preserved_mixed_after_arg_coercion(emitter, &pushed_ty);
+    } else if matches!(pushed_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        // The box goes to the callee as-is; the invoker owns it and releases it after the call.
+        // Left unrecorded, every `$cb($var)` through a descriptor leaked one box.
+        if let Some(offset) = ctx.current_mixed_cleanup_offset() {
+            abi::store_at_offset(emitter, abi::int_result_reg(emitter), offset);
+        }
     }
     store_owned_invoker_string_conversion(
         emitter,
@@ -2651,6 +2702,7 @@ fn call_target_with_pushed_args(
     arg_types: &[PhpType],
     string_cleanup_offsets: &[usize],
     array_cleanup_offsets: &[usize],
+    mixed_cleanup_offsets: &[usize],
     emitter: &mut Emitter,
 ) {
     let assignments = abi::build_outgoing_arg_assignments_for_target(emitter.target, arg_types, 0);
@@ -2661,6 +2713,42 @@ fn call_target_with_pushed_args(
     abi::emit_release_temporary_stack(emitter, overflow_bytes);
     emit_release_invoker_string_conversions_preserving_result(emitter, string_cleanup_offsets);
     emit_release_invoker_array_conversions_preserving_result(emitter, array_cleanup_offsets);
+    emit_release_invoker_mixed_boxes_preserving_result(emitter, mixed_cleanup_offsets);
+}
+
+/// Releases the Mixed boxes built from reference-cell markers for `mixed` parameters, preserving
+/// every callback result register. A slot left at zero (the argument arrived as an ordinary
+/// borrowed cell) is a no-op for the null-safe `__rt_decref_mixed`. A callee that hands the parameter back acquired it for its result,
+/// so the release leaves that reference standing.
+fn emit_release_invoker_mixed_boxes_preserving_result(emitter: &mut Emitter, offsets: &[usize]) {
+    if offsets.is_empty() {
+        return;
+    }
+    let mixed_ty = PhpType::Mixed;
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg_pair(emitter, "x0", "x1");
+            abi::emit_push_reg(emitter, "x2");
+            abi::emit_push_float_reg(emitter, "d0");
+            for offset in offsets {
+                abi::load_at_offset(emitter, "x0", *offset);
+                abi::emit_decref_if_refcounted(emitter, &mixed_ty);             // `__rt_decref_mixed` ignores the zero of an unused slot
+            }
+            abi::emit_pop_float_reg(emitter, "d0");
+            abi::emit_pop_reg(emitter, "x2");
+            abi::emit_pop_reg_pair(emitter, "x0", "x1");
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg_pair(emitter, "rax", "rdx");
+            abi::emit_push_float_reg(emitter, "xmm0");
+            for offset in offsets {
+                abi::load_at_offset(emitter, "rax", *offset);
+                abi::emit_decref_if_refcounted(emitter, &mixed_ty);             // `__rt_decref_mixed` ignores the zero of an unused slot
+            }
+            abi::emit_pop_float_reg(emitter, "xmm0");
+            abi::emit_pop_reg_pair(emitter, "rax", "rdx");
+        }
+    }
 }
 
 /// Initializes optional string-conversion cleanup slots before runtime argument-shape branches.

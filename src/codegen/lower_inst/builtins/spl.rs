@@ -1358,33 +1358,47 @@ fn emit_append_current_to_saved_array(ctx: &mut FunctionContext<'_>) -> Result<(
 fn emit_insert_current_with_iterator_key(ctx: &mut FunctionContext<'_>) -> Result<()> {
     reload_saved_iterator_receiver(ctx);
     let key_ty = iterators::emit_interface_dispatch_call(ctx, "Iterator", "key", None)?;
+    // A `mixed` key() hands back an owned box; the normalized key only VIEWS its payload and
+    // `__rt_hash_set` persists its own copy, so the box is kept beneath the key pair and released
+    // after the insert. It used to be dropped: `iterator_to_array(new ArrayIterator([...]))` leaked
+    // every key box and its string.
+    let owns_key_box = matches!(key_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_));
+    let shift = if owns_key_box { 16 } else { 0 };
+    if owns_key_box {
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    }
     emit_normalized_key_from_result(ctx, &key_ty.codegen_repr())?;
     let (key_lo, key_hi) = normalized_key_regs(ctx);
     abi::emit_push_reg_pair(ctx.emitter, key_lo, key_hi);
 
-    reload_saved_iterator_receiver_at_offset(ctx, 16);
+    reload_saved_iterator_receiver_at_offset(ctx, 16 + shift);
     let current_ty = iterators::emit_interface_dispatch_call(ctx, "Iterator", "current", None)?;
     emit_box_current_value_as_mixed(ctx.emitter, &current_ty.codegen_repr());
 
+    let hash_offset = 16 + shift;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x3, x0");                              // pass boxed current() as hash value_lo
             ctx.emitter.instruction("mov x4, xzr");                             // boxed Mixed hash values do not use value_hi
             ctx.emitter.instruction("mov x5, #7");                              // value tag 7 marks an owned boxed Mixed cell
             abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
-            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // load iterator_to_array()'s hash result beneath the receiver
+            ctx.emitter.instruction(&format!("ldr x0, [sp, #{}]", hash_offset)); // load iterator_to_array()'s hash result beneath the receiver
             abi::emit_call_label(ctx.emitter, "__rt_hash_set");
-            ctx.emitter.instruction("str x0, [sp, #16]");                       // save the possibly-grown hash result beneath the receiver
+            ctx.emitter.instruction(&format!("str x0, [sp, #{}]", hash_offset)); // save the possibly-grown hash result beneath the receiver
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rcx, rax");                            // pass boxed current() as hash value_lo
             ctx.emitter.instruction("xor r8, r8");                              // boxed Mixed hash values do not use value_hi
             ctx.emitter.instruction("mov r9, 7");                               // value tag 7 marks an owned boxed Mixed cell
             abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
-            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");           // load iterator_to_array()'s hash result beneath the receiver
+            ctx.emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", hash_offset)); // load iterator_to_array()'s hash result beneath the receiver
             abi::emit_call_label(ctx.emitter, "__rt_hash_set");
-            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // save the possibly-grown hash result beneath the receiver
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", hash_offset)); // save the possibly-grown hash result beneath the receiver
         }
+    }
+    if owns_key_box {
+        abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
     }
     Ok(())
 }

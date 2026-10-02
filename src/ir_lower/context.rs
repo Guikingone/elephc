@@ -3737,6 +3737,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             // argument's storage. A prelude helper returning its `string $subject` parameter in
             // a `mixed` result kept the caller from releasing the `(string)` copy it passed.
             (PhpType::Str, PhpType::Mixed | PhpType::Union(_)) => false,
+            // Nor is a boxed result ever a callable's or an object's storage: a box is its own
+            // cell and boxing RETAINS a descriptor or an object (`__rt_mixed_from_value`), so a
+            // result that wraps the argument already holds its own reference. Answering "may
+            // alias" kept every closure passed to a function that returns a callback's result
+            // alive: `function f(callable $c) { return $c(1); } f(fn($k) => $k);` leaked the
+            // closure object per call.
+            (PhpType::Callable | PhpType::Object(_), PhpType::Mixed | PhpType::Union(_)) => false,
             (PhpType::Mixed | PhpType::Union(_), _)
             | (_, PhpType::Mixed | PhpType::Union(_)) => true,
             (PhpType::Object(_), PhpType::Object(_)) => true,

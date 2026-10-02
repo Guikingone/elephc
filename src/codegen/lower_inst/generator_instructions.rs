@@ -122,11 +122,31 @@ pub(super) fn lower_generator_yield_from(ctx: &mut FunctionContext<'_>, inst: &I
 /// is increfed to give the callee its own reference (the generator stores the
 /// cell into a persistent slot).
 pub(super) fn emit_value_as_owned_mixed(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    // A fresh temporary (`yield [7]`, `yield new C()`) is consumed here: nothing after the yield
+    // releases it, and a generator destroyed while suspended never runs that code anyway. Boxing
+    // retains an array, hash or object for the box, so its own reference is dropped once boxed,
+    // and an owned Mixed cell IS the generator's reference. Both leaked once per yield before.
+    let transfers = ctx.value_can_transfer_ownership_to_consumer(value)?;
     let ty = ctx.load_value_to_result(value)?;
     let repr = ty.codegen_repr();
+    let transfers_payload = transfers
+        && matches!(repr, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_));
+    if transfers_payload {
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    }
     emit_box_current_value_as_mixed(ctx.emitter, &ty);
     if matches!(repr, PhpType::Mixed | PhpType::Union(_)) {
-        abi::emit_call_label(ctx.emitter, "__rt_incref"); // own the borrowed Mixed cell handed to the generator
+        if !transfers {
+            abi::emit_call_label(ctx.emitter, "__rt_incref"); // own the borrowed Mixed cell handed to the generator
+        }
+    } else if transfers_payload {
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        let scratch = abi::temp_int_reg(ctx.emitter.target);
+        abi::emit_pop_reg(ctx.emitter, scratch);
+        abi::emit_push_reg(ctx.emitter, result_reg);
+        ctx.emitter.instruction(&format!("mov {}, {}", result_reg, scratch));    // the consumed temporary, now also held by its box
+        abi::emit_decref_if_refcounted(ctx.emitter, &repr);
+        abi::emit_pop_reg(ctx.emitter, result_reg);
     }
     Ok(())
 }

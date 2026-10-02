@@ -294,6 +294,50 @@ pub(super) fn emit_call_arg_temp_cleanups(
     Ok(())
 }
 
+/// Whether some `return` of `callee` hands back a parameter cell WITHOUT acquiring it.
+///
+/// Only then can the caller's boxed argument temporary BE the returned value with a single
+/// reference, which is what the result-alias skip in [`emit_call_arg_temp_cleanups`] protects. An
+/// ordinary PHP body never does that: returning a parameter goes through
+/// `acquire_borrowed_return_value`, so the returned cell carries its own reference and the skip
+/// left the caller's temporary unreleased -- `$c = fn($k) => $k; $c(1);` leaked the boxed `1`
+/// on every call. A shape this walk cannot see through answers "may", which keeps the skip.
+pub(super) fn callee_may_return_unacquired_param(callee: &Function) -> bool {
+    fn returns_param(callee: &Function, value: ValueId, depth: usize) -> bool {
+        if depth > 8 {
+            return true;
+        }
+        let Some(value_ref) = callee.value(value) else {
+            return true;
+        };
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return true;
+        };
+        let Some(inst) = callee.instruction(inst) else {
+            return true;
+        };
+        match inst.op {
+            Op::LoadLocal => match inst.immediate {
+                Some(Immediate::LocalSlot(slot)) => (slot.as_raw() as usize) < callee.params.len(),
+                _ => true,
+            },
+            Op::Move | Op::Borrow => inst
+                .operands
+                .first()
+                .is_none_or(|operand| returns_param(callee, *operand, depth + 1)),
+            _ => false,
+        }
+    }
+    callee
+        .blocks
+        .iter()
+        .filter_map(|block| block.terminator.as_ref())
+        .any(|terminator| match terminator {
+            Terminator::Return { value: Some(value) } => returns_param(callee, *value, 0),
+            _ => false,
+        })
+}
+
 /// Returns the result value when it can alias a caller-owned temporary Mixed argument.
 pub(super) fn call_result_can_alias_mixed_temp(
     ctx: &FunctionContext<'_>,

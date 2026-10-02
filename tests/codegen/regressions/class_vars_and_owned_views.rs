@@ -132,6 +132,28 @@ echo json_encode($c), "\n";
     assert_eq!(out, "array(2) {\n  [0]=>\n  array(2) {\n    [0]=>\n    int(1)\n    [1]=>\n    int(2)\n  }\n  [1]=>\n  array(2) {\n    [0]=>\n    int(3)\n    [1]=>\n    int(7)\n  }\n}\n[[1,2,8],[3,7]]\n[[\"x\",\"z\"],[\"y\"]]\n");
 }
 
+/// A yielded temporary (`yield new D()`, `yield [new D()]`) is owned by the generator alone, so its
+/// destructor runs when the generator moves past it or is destroyed, as in php.
+#[test]
+fn test_yielded_temporaries_are_destroyed_when_the_generator_lets_go() {
+    let out = compile_and_run(
+        r#"<?php
+class D { public function __construct(public string $n) {} public function __destruct() { echo "[~", $this->n, "]"; } }
+function g() { yield new D("a"); yield "k" => new D("b"); yield [new D("c")]; echo "<end>"; }
+foreach (g() as $k => $v) { echo is_array($v) ? "arr " : $v->n . " "; }
+echo "\n";
+$gen = g();
+echo $gen->current()->n, "\n";
+unset($gen);
+echo "\nafter\n";
+function h() { $x = new D("x"); yield $x; yield $x; }
+foreach (h() as $v) { echo $v->n; }
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "a [~a]b [~b]arr <end>\na\n[~a]\nafter\n[~c]xx\n[~x]");
+}
+
 /// `$v = []; $v['k'] = null;` types the hash's values as null, which the backend refused to
 /// store (`hash_set value PHP type Void`).
 #[test]
@@ -216,6 +238,108 @@ run();
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "x<v4>|2|{\"k\":1,\"kk\":2}|Ab Cd|ab\ncd\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Callable invocations release what they own: the boxed argument of a directly called closure
+/// that returns its parameter, a closure passed to a function that returns the callback's result,
+/// and the box a descriptor invoker builds for a `mixed` parameter from a variable argument.
+#[test]
+fn test_closure_and_descriptor_invocations_are_leak_free() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function apply(callable $c, $v) { return $c($v); }
+function each_key(array $items, callable $cb): string {
+    $out = "";
+    foreach ($items as $k => $v) { $out .= $cb($v, $k); }
+    return $out;
+}
+function direct(): int { $c = fn($k) => $k; return $c(1) + $c(2); }
+function run(): void {
+    $r = "";
+    for ($i = 0; $i < 5; $i++) {
+        $n = $i;
+        $r = apply(fn($k) => $k, $n) . "|" . direct() . "|"
+            . each_key(["a" => 1, "b" => 2], fn($v, $k) => $k . $v) . "|"
+            . apply("strtoupper", "x" . $i);
+    }
+    echo $r, "\n";
+}
+run();
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "4|3|a1b2|X4\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// `foreach` over an `IteratorAggregate` (a concrete class, a temporary, an interface-typed
+/// parameter, a generator-returning `getIterator()`, a `break`) releases the iterator it asked for,
+/// and a temporary aggregate is destroyed before the loop as in php.
+#[test]
+fn test_foreach_over_iterator_aggregates_releases_the_iterator() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Coll implements IteratorAggregate, Countable {
+    public function __construct(private array $items) {}
+    public function getIterator(): Iterator { return new ArrayIterator($this->items); }
+    public function count(): int { return count($this->items); }
+    public function __destruct() { echo "[d", count($this->items), "]"; }
+}
+class Gen implements IteratorAggregate {
+    public function getIterator(): Generator { yield "x" => 1; yield "y" => 2; }
+}
+function sum(IteratorAggregate $a): int { $s = 0; foreach ($a as $v) { $s += $v; } return $s; }
+function run(): void {
+    foreach (new Coll(["a" => 1, "b" => 2]) as $k => $v) { echo "$k=$v "; }
+    echo "\n";
+    $c = new Coll([3, 4]);
+    foreach ($c as $v) { echo $v, " "; }
+    foreach ($c as $k => $v) { if ($k === 0) { break; } }
+    echo count($c), "\n";
+    for ($i = 0; $i < 3; $i++) { foreach (new Gen() as $k => $v) { echo "$k$v "; } }
+    echo "\n", sum(new Coll([5, 6])), "\n";
+}
+run();
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "[d2]a=1 b=2 \n3 4 2\nx1 y2 x1 y2 x1 y2 \n[d2]11\n[d2]");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// `iterator_to_array()` releases each `key()` box after the insert copies the key, and generator
+/// yields of fresh arrays hand their reference to the generator.
+#[test]
+fn test_iterator_to_array_and_yielded_arrays_are_leak_free() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function g() { yield "a" => 1; yield 5 => "five"; yield "07" => [7]; }
+function run(): void {
+    $out = "";
+    for ($i = 0; $i < 5; $i++) {
+        $out = json_encode(iterator_to_array(new ArrayIterator(["x" . $i => 1, "y" => [2], 3 => "z"])))
+            . json_encode(iterator_to_array(g())) . json_encode(iterator_to_array(g(), false));
+    }
+    echo $out, "\n";
+}
+run();
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "{\"x4\":1,\"y\":[2],\"3\":\"z\"}{\"a\":1,\"5\":\"five\",\"07\":[7]}[1,\"five\",[7]]\n");
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected a clean heap, got: {}",

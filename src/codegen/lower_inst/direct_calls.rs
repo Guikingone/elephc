@@ -41,6 +41,9 @@ pub(super) fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
         .collect::<Vec<_>>();
     let borrowed_stack_mixed_args =
         plan_borrowed_stack_mixed_args(ctx, callee, &inst.operands, &param_types, &ref_params)?;
+    // The result can only BE an argument temporary when the callee returns a parameter without
+    // acquiring it; otherwise every temporary is released after the call.
+    let result_may_alias_arg_temp = super::call_cleanup::callee_may_return_unacquired_param(callee);
     let call_args = materialize_direct_call_args_with_refs_and_borrowed_options(
         ctx,
         &inst.operands,
@@ -69,7 +72,11 @@ pub(super) fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
             ctx.store_result_value(result)?;
         }
     }
-    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
+    emit_call_arg_temp_cleanups(
+        ctx,
+        &call_args,
+        if result_may_alias_arg_temp { inst.result } else { None },
+    )?;
     emit_borrowed_stack_mixed_arg_release(ctx, &call_args);
     emit_ref_arg_writebacks(ctx, &call_args)
 }
