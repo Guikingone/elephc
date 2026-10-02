@@ -64,5 +64,7 @@ mod release_local_slot;
 mod inline;
 #[path = "optimizer/memory_model_propagation.rs"]
 mod memory_model_propagation;
+#[path = "optimizer/mem2reg.rs"]
+mod mem2reg;
 #[path = "optimizer/warning_globals.rs"]
 mod warning_globals;

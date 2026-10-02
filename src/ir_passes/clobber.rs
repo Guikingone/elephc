@@ -19,8 +19,10 @@
 //!   `r9`, `xmm2`–`xmm7`) are disjoint from every register the allowlisted
 //!   lowerings touch, a value that lives only across allowlisted ops keeps its
 //!   caller-saved register intact with no prologue save/restore.
+//! - Branch edges with lifetime-tracked parameters are excluded because retaining
+//!   a borrowed argument can call the runtime after other parameters are stored.
 
-use crate::ir::{Op, Terminator};
+use crate::ir::{BlockId, Function, Op, Ownership, Terminator};
 
 /// Returns true when `op`'s lowering neither emits a call nor touches a
 /// caller-saved register outside the fixed result/scratch set.
@@ -50,22 +52,45 @@ pub(super) fn op_is_volatile_safe(op: Op) -> bool {
         | ICmp | FCmp
         // Int-to-float promotion is still a single inline scvtf / cvtsi2sd.
         | IToF
-        | Nop
+        // A statement-boundary concat reset uses reserved x9/x10 or r10 scratch
+        // registers and stores its value to `_concat_off`. PIC x86_64 preserves
+        // its additional r11 symbol-address scratch around the store.
+        | ConcatReset | Nop
     )
 }
 
 /// Returns true when `term`'s lowering neither emits a call nor clobbers a
 /// caller-saved register holding another live value.
 ///
-/// Branches, multi-way switches, and returns only materialize their already
-/// computed condition/scrutinee/return value through the standard chokepoints;
-/// throws, generator suspends, fatals, and unreachable are conservatively unsafe.
-pub(super) fn terminator_is_volatile_safe(term: &Terminator) -> bool {
-    matches!(
-        term,
-        Terminator::Br { .. }
-            | Terminator::CondBr { .. }
-            | Terminator::Switch { .. }
-            | Terminator::Return { .. }
-    )
+/// An incoming lifetime-tracked parameter may need a runtime retain during
+/// parallel edge-copy materialization, even when its source is only borrowed.
+pub(super) fn edge_materialization_may_call(function: &Function, target: BlockId) -> bool {
+    function.block(target).is_some_and(|block| {
+        block.params.iter().any(|param| {
+            function.value(*param).is_some_and(|value| {
+                value.ownership == Ownership::MaybeOwned
+                    && Ownership::php_type_needs_lifetime_tracking(&value.php_type)
+            })
+        })
+    })
+}
+
+/// Returns true when lowering this terminator cannot clobber caller-saved homes.
+///
+/// Edge copies may retain a heap value after writing an earlier scalar parameter.
+/// Throws, generator suspends, fatals, and unreachable are conservatively unsafe.
+pub(super) fn terminator_is_volatile_safe(function: &Function, term: &Terminator) -> bool {
+    match term {
+        Terminator::Br { target, .. } => !edge_materialization_may_call(function, *target),
+        Terminator::CondBr { then_target, else_target, .. } => {
+            !edge_materialization_may_call(function, *then_target)
+                && !edge_materialization_may_call(function, *else_target)
+        }
+        Terminator::Switch { cases, default, .. } => {
+            !edge_materialization_may_call(function, *default)
+                && cases.iter().all(|case| !edge_materialization_may_call(function, case.target))
+        }
+        Terminator::Return { .. } => true,
+        _ => false,
+    }
 }

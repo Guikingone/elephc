@@ -1,7 +1,7 @@
 //! Purpose:
 //! IR-level analyses and transformations over EIR functions. Phase 06 starts
 //! here with liveness analysis, the foundation for the linear-scan register
-//! allocator. Later phases (peephole, CSE, LICM) live alongside it.
+//! allocator. Scalar promotion, peephole, CSE, and LICM live alongside it.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` after AST-to-EIR lowering, before codegen.
@@ -30,8 +30,10 @@ mod inline;
 mod immutable_local_loads;
 mod intervals;
 mod licm;
+mod local_scope;
 mod liveness;
 mod loops;
+mod mem2reg;
 mod peephole;
 mod regalloc;
 mod rewrite;

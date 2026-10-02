@@ -1272,7 +1272,7 @@ definitions (block parameters and instruction results) untouched.
 
 ### Identity Arithmetic Folding
 
-The first registered transform (`src/ir_passes/identity_arith.rs`) folds
+The identity arithmetic transform (`src/ir_passes/identity_arith.rs`) folds
 algebraic identities on integer and float arithmetic/bitwise operations using
 two dominance-safe, validator-clean rewrites:
 
@@ -1292,7 +1292,7 @@ dead value is never used as a replacement target.
 
 ### Peephole Patterns
 
-The second registered transform (`src/ir_passes/peephole/`) applies local
+The peephole transform (`src/ir_passes/peephole/`) applies local
 rewrites to the shape of lowered EIR. Each pattern collects rewrite intents into
 a shared accumulator (a fold-to-operand RAUW map, instructions to neutralize, and
 `str_concat` instructions to convert to interned `const_str`), and a single apply
@@ -1326,9 +1326,17 @@ phase commits them, sharing `replace_all_uses`, `resolve_chains`, and
   `persistent` so cleanup never frees the literal. Nested concats converge across
   driver sweeps.
 
+### Scalar Promotion Pass
+
+After the peephole pass, `src/ir_passes/mem2reg.rs` promotes eligible scalar
+PHP locals into SSA values. It replaces their loads and stores, and passes
+loop-carried or joined values through block parameters and incoming branch
+arguments. The eligibility and register-allocation boundaries are described in
+[Scalar Local Promotion](#scalar-local-promotion).
+
 ### Immutable Integer-Local Loads
 
-The third registered transform (`src/ir_passes/immutable_local_loads.rs`) refines
+The immutable-local transform (`src/ir_passes/immutable_local_loads.rs`) refines
 the effect of a concrete integer `load_local` from a frame read to `pure` only
 when the slot cannot change for the lifetime of the function. It accepts two
 closed-world cases:
@@ -1352,9 +1360,10 @@ out of both the analysis and its debug-build validation.
 
 ### Checked Integer Sink Specialization
 
-The fourth registered transform (`src/ir_passes/checked_int_sink.rs`) removes the
-transient Mixed allocation from checked integer add, subtract, and multiply when
-the producer's complete use graph observes only a PHP integer. It rewrites
+The checked integer sink transform (`src/ir_passes/checked_int_sink.rs`)
+removes the transient Mixed allocation from checked integer add, subtract,
+and multiply when the producer's complete use graph observes only a PHP
+integer. It rewrites
 `ichecked_add`/`ichecked_sub`/`ichecked_mul` to the corresponding
 `ichecked_*_to_int` operation, changes the result to non-owning `I64`, redirects
 integer casts to that value, and removes the now-redundant acquire/release
@@ -1374,9 +1383,15 @@ recomputes the operation as a double and applies the shared PHP float-to-int
 conversion, so removing the box does not change PHP's overflow semantics. The
 typed opcode is implemented for macOS AArch64, Linux AArch64, and Linux x86_64.
 
+### Boxed Numeric Chain Fusion
+
+`src/ir_passes/checked_numeric_chain.rs` fuses compatible checked arithmetic
+chains that are consumed only as integers, avoiding intermediate Mixed boxes.
+It runs after checked integer sink specialization and before constant folding.
+
 ### Constant Folding
 
-The fifth registered transform (`src/ir_passes/const_fold.rs`) folds operations
+The constant folding transform (`src/ir_passes/const_fold.rs`) folds operations
 whose operands are all compile-time constants into a single `const_*`
 instruction, rewriting the instruction in place and keeping its result value id
 (no use-rewrite needed). A single forward scan over the instruction table tracks
@@ -1405,9 +1420,10 @@ instruction elimination.
 
 ### Common Subexpression Elimination
 
-The sixth registered transform (`src/ir_passes/cse.rs`) removes a pure
-computation whose identical predecessor already dominates it, redirecting the
-redundant result to the earlier value (RAUW) and neutralizing it to `nop`. It
+The common subexpression elimination transform (`src/ir_passes/cse.rs`)
+removes a pure computation whose identical predecessor already dominates it,
+redirecting the redundant result to the earlier value (RAUW) and neutralizing
+it to `nop`. It
 covers per-block and cross-block redundancy in one dominator-tree value-numbering
 traversal: a scoped hash table maps each pure instruction's key
 `(op, result type, immediate, canonicalized operands)` to the value that first
@@ -1435,9 +1451,9 @@ redirect unsound — the same restriction branch simplification uses. CSE uses t
 
 ### Loop-Invariant Code Motion
 
-The seventh registered transform (`src/ir_passes/licm.rs`) moves a pure computation
-whose operands do not change across a loop out of the loop body into the loop
-preheader, so it runs once instead of per iteration. It builds the
+The loop-invariant code motion transform (`src/ir_passes/licm.rs`) moves a pure
+computation whose operands do not change across a loop out of the loop body into
+the loop preheader, so it runs once instead of per iteration. It builds the
 [loop forest](#loop-analysis) on the [dominator tree](#dominance-analysis), then
 for each loop grows the invariant set to a fixed point: an instruction is
 invariant when each operand is defined by another instruction being hoisted from
@@ -1455,13 +1471,13 @@ in several nested loops reaches the outermost preheader in one run. Instructions
 are relocated between blocks' instruction lists and their result `ValueDef`s
 (block + index) are recomputed once at the end so the value table matches the new
 layout. Loops without a detected preheader, and functions with exception
-handlers, are skipped. (PHP loop variables live in local slots reloaded through
-impure `load_local`, so an invariant source expression is not yet hoistable; the
-pass's reach grows as more values flow as SSA across loops.)
+handlers, are skipped. Scalar locals promoted to SSA can now expose invariant
+expressions across loop back edges; remaining slot-backed values retain their
+memory-read restrictions.
 
 ### Dead Instruction Elimination
 
-The eighth registered transform (`src/ir_passes/dead_inst.rs`) removes
+The dead instruction elimination transform (`src/ir_passes/dead_inst.rs`) removes
 result-producing instructions whose values are not live over the CFG and whose
 effect metadata says they are pure. It computes liveness with successor live-in
 sets, initializes each block's backward walk with those live-out values plus
@@ -1477,7 +1493,7 @@ through the fixed-point pass driver after liveness is recomputed.
 
 ### Dead Store Elimination
 
-The ninth registered transform (`src/ir_passes/dead_store.rs`) removes
+The dead store elimination transform (`src/ir_passes/dead_store.rs`) removes
 `store_local` instructions whose stored value is never read on any path before
 the slot is overwritten or the function exits. Unlike dead instruction
 elimination, which works at SSA-value granularity, this pass reasons about local
@@ -1522,7 +1538,7 @@ instruction elimination on a later driver sweep.
 
 ### Branch Simplification
 
-The tenth registered transform (`src/ir_passes/branch_simplify.rs`) prunes the
+The branch simplification transform (`src/ir_passes/branch_simplify.rs`) prunes the
 CFG in three ways:
 
 - **Constant-condition folding** — a `cond_br` whose condition resolves to a
@@ -1635,11 +1651,11 @@ disjoint. `LoopInfo` additionally answers `innermost_loop`, `loop_depth`,
 `is_loop_header`, and `back_edges` per block/function.
 
 A **preheader** is detected as the unique reachable out-of-loop predecessor of
-the header whose only successor is the header. PHP loops lower to slot-based CFGs
-(the loop variable lives in a local slot, not a block parameter), so the init
-block that branches into the header is a natural preheader; when entry into the
-loop is shared between blocks or conditional, no preheader exists and an
-optimization that needs one inserts it.
+the header whose only successor is the header. PHP loops initially lower to
+slot-based CFGs, and scalar promotion may later add header parameters and
+back-edge arguments. The init block that branches into the header is a natural
+preheader; when entry into the loop is shared between blocks or conditional, no
+preheader exists, so passes either skip the loop or create one when needed.
 
 ## AST Lowering Catalogue
 
@@ -1857,6 +1873,23 @@ Then it materializes:
 - source-map comments
 - instruction comments at the repository-required column
 
+## Scalar Local Promotion
+
+`src/ir_passes/mem2reg.rs` replaces repeated `load_local` and `store_local`
+instructions on eligible PHP scalar locals with SSA values. It adds block
+parameters where values live into a CFG join or loop header, and each incoming
+edge supplies its predecessor's current value. Loads that can run before any
+explicit store remain in memory. Definite-store analysis starts from the
+greatest fixed point, so a value written before a loop remains eligible when
+the back edge only reads it.
+
+Promotion requires ordinary integer, boolean, or float local storage with only
+plain load/store accesses. Address escapes, by-reference uses, global and static
+slots, refcounted values, nonstandard slot operations, eval scope access, and
+functions with implicit exception-handler edges stay slot-backed. This pass runs
+in the fixed-point EIR optimizer before register allocation. Both `--ir-opt=off`
+and `--regalloc=stack` remain available for comparison.
+
 ## Register Allocation
 
 The `src/ir_passes/` module runs a linear-scan register allocator
@@ -1879,7 +1912,8 @@ The pass has four stages:
 4. **Frame integration** (`codegen/frame.rs`): the allocation is stored in
    the frame layout, each used callee-saved register gets a save slot, and the
    value-access chokepoints (`load_value_to_result`, `load_value_to_reg`,
-   `store_result_value`) read and write registers instead of slots.
+   `store_result_value`) read and write registers instead of slots. Scalar
+   block parameters and their branch arguments can also receive register homes.
 
 ### Caller-saved reuse for non-call-crossing intervals
 
@@ -1889,7 +1923,8 @@ emits a call or touches a caller-saved register — is *call-free* and prefers a
 **caller-saved** register, which needs no prologue save/restore. A value that
 does live across a clobber point uses a **callee-saved** register, which survives
 calls. `src/ir_passes/clobber.rs` holds the audited allowlist of volatile-safe
-opcodes (constants, integer/float arithmetic, comparisons, scalar conversions);
+opcodes (constants, integer/float arithmetic, comparisons, scalar conversions,
+and statement-boundary concat resets);
 it is safe-by-default, so an unlisted opcode merely forgoes the caller-saved
 optimization rather than risking a clobbered value. The caller-saved pools are
 disjoint from every register those volatile-safe lowerings touch:
@@ -1898,6 +1933,11 @@ disjoint from every register those volatile-safe lowerings touch:
 |---|---|---|---|---|
 | Caller-saved | `x12`–`x15` | `d16`–`d23` | `rsi`,`rdi`,`r8`,`r9` | `xmm2`–`xmm7` |
 | Callee-saved | `x21`–`x28` | `d8`–`d14` | `rbx` | (none) |
+
+An edge carrying a lifetime-tracked block parameter may call a runtime retain
+while copying its arguments. The predecessor terminator and destination entry
+therefore count as clobber points. Scalar values carried alongside that heap
+parameter use callee-saved registers or spill slots until the copy completes.
 
 This is especially valuable on x86_64, where the callee-saved integer pool is
 just `rbx` and there are no callee-saved XMM registers at all: call-free integer
@@ -1915,10 +1955,17 @@ registers.
 The prologue saves and the epilogue restores exactly the callee-saved registers
 the allocator used; caller-saved registers need neither.
 
-The first cut register-allocates only single-word `NonHeap` scalars (`I64`,
-`F64`) that are neither block parameters nor branch arguments, keeping the
-slot-based block-parameter moves and the ownership/GC cleanup paths unchanged.
+Only single-word `NonHeap` scalars (`I64`, `F64`) are register-eligible,
+including live block parameters and branch arguments. Unused block parameters
+stay spilled: edge copies still write them, and their zero-length intervals
+would otherwise allow them to share and overwrite a live parameter's register
+at the same block entry.
+
 Generators and functions containing exception handlers fall back to all-spilled.
+The allocator's reachability and liveness use explicit terminator edges, so they
+can omit a scalar's uses after a catch or finally block. Stack homes preserve
+those values until the analyses account for implicit exception edges, including
+parameters introduced by inlining rather than local promotion.
 
 ## Phase 02 Implementation Contract
 

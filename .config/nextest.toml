@@ -419,8 +419,8 @@ slow-timeout = { period = "300s", terminate-after = 1 }
 # runs that were otherwise green, and a different fixture crossed the line on each run —
 # `xml::clone`, `xml::eval`, `nested_property_defaults`, `instanceof_operand_owners`. The per-test
 # entries below and above are the ones that crossed it first; on macOS the whole binary gets the
-# eval family's budget instead of a new exact-name entry per run. Linux keeps the strict guard,
-# and a real hang still terminates at 180s there too.
+# eval family's budget instead of a new exact-name entry per run. Linux x86_64 keeps the strict
+# guard, and a real hang still terminates at 180s on macOS.
 [[profile.default.overrides]]
 platform = 'cfg(target_os = "macos")'
 filter = 'binary(codegen_tests)'
@@ -429,6 +429,19 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 [[profile.ci.overrides]]
 platform = 'cfg(target_os = "macos")'
 filter = 'binary(codegen_tests)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+# These multi-compile mbstring, eval, and ownership families reached 60s on both
+# attempts in Linux AArch64 shards. Limit the larger outer budget to the observed
+# families; unrelated codegen tests retain the strict 60s guard.
+[[profile.default.overrides]]
+platform = 'cfg(all(target_os = "linux", target_arch = "aarch64"))'
+filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(=codegen::io::output_handler_exceptions::test_output_handler_exceptions_false_disables_handler))'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+platform = 'cfg(all(target_os = "linux", target_arch = "aarch64"))'
+filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(=codegen::io::output_handler_exceptions::test_output_handler_exceptions_false_disables_handler))'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 # Two more Core eval GC fixtures outside the `test_core_eval_` naming family. Each compiles,

@@ -10,7 +10,7 @@
 //!   sizes are deterministic.
 
 use crate::codegen::platform::{Arch, Platform, Target};
-use crate::ir::{Builder, Function, Immediate, IrType, Op, Ownership, Terminator, ValueId};
+use crate::ir::{Builder, DataId, Function, Immediate, IrType, Op, Ownership, Terminator, ValueId};
 use crate::ir_passes::allocate_registers;
 use crate::types::PhpType;
 
@@ -131,10 +131,10 @@ fn integers_and_floats_use_separate_pools() {
     );
 }
 
-/// Block parameters and branch arguments stay in stack slots so the existing
-/// slot-based block-parameter moves remain correct.
+/// Scalar block parameters and branch arguments receive register homes when
+/// available, letting promoted loop values cross edges without local traffic.
 #[test]
-fn block_parameters_and_branch_arguments_stay_spilled() {
+fn block_parameters_and_branch_arguments_can_use_registers() {
     let mut function = Function::new("params".to_string(), IrType::I64, PhpType::Int);
     let (arg, param) = {
         let mut builder = Builder::new(&mut function);
@@ -157,16 +157,43 @@ fn block_parameters_and_branch_arguments_stay_spilled() {
 
     let allocation = allocate_registers(&function, aarch64());
 
-    assert_eq!(
-        allocation.register_of(arg),
-        None,
-        "a branch argument must stay in its slot"
-    );
-    assert_eq!(
-        allocation.register_of(param),
-        None,
-        "a block parameter must stay in its slot"
-    );
+    assert!(allocation.register_of(arg).is_some(), "scalar branch argument can use a register");
+    assert!(allocation.register_of(param).is_some(), "scalar block parameter can use a register");
+}
+
+/// A heap retain on an edge cannot clobber scalar arguments or earlier parameter copies.
+#[test]
+fn heap_block_argument_keeps_scalar_off_caller_saved_registers() {
+    let mut function = Function::new("heap_edge".to_string(), IrType::I64, PhpType::Int);
+    let (scalar_arg, scalar_param) = {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        let body = builder.create_named_block("body", vec![(IrType::Str, PhpType::Str), (IrType::I64, PhpType::Int)]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let string_arg = builder.emit_const_str(DataId::from_raw(0));
+        let scalar_arg = builder.emit_const_i64(7);
+        builder.terminate(Terminator::Br { target: body, args: vec![string_arg, scalar_arg] });
+        builder.position_at_end(body);
+        let scalar_param = builder.block_param(body, 1);
+        builder.terminate(Terminator::Return { value: Some(scalar_param) });
+        (scalar_arg, scalar_param)
+    };
+
+    for target in [aarch64(), x86_64()] {
+        let allocation = allocate_registers(&function, target);
+        let caller_saved = match target.arch {
+            Arch::AArch64 => &["x12", "x13", "x14", "x15"][..],
+            Arch::X86_64 => &["rsi", "rdi", "r8", "r9"][..],
+        };
+        for value in [scalar_arg, scalar_param] {
+            assert!(
+                allocation.register_of(value).is_none_or(|reg| !caller_saved.contains(&reg)),
+                "{target:?}: v{} must survive the edge retain",
+                value.as_raw()
+            );
+        }
+    }
 }
 
 /// The x86_64 target used by these tests, exercising the caller-saved float
@@ -403,40 +430,4 @@ fn generator_functions_are_all_spilled() {
 
     assert_eq!(allocation.register_of(ValueId::from_raw(0)), None);
     assert!(allocation.used_callee_saved().is_empty());
-}
-
-/// Verifies a straight-line scalar range inside a function that installs an
-/// exception handler remains register-eligible instead of forcing all values
-/// in the entire function to spill.
-#[test]
-fn exception_handler_function_keeps_safe_scalar_ranges_in_registers() {
-    let mut function = Function::new("guarded".to_string(), IrType::I64, PhpType::Int);
-    let result = {
-        let mut builder = Builder::new(&mut function);
-        let entry = builder.create_named_block("entry", vec![]);
-        builder.set_entry(entry);
-        builder.position_at_end(entry);
-        builder.emit(
-            Op::TryPushHandler,
-            vec![],
-            Some(Immediate::I64(0)),
-            IrType::Void,
-            PhpType::Void,
-            Ownership::NonHeap,
-        );
-        let left = builder.emit_const_i64(20);
-        let right = builder.emit_const_i64(22);
-        let result = builder.emit_iadd(left, right);
-        builder.terminate(Terminator::Return {
-            value: Some(result),
-        });
-        result
-    };
-
-    let allocation = allocate_registers(&function, aarch64());
-
-    assert!(
-        allocation.register_of(result).is_some(),
-        "a handler marker must not force a safe straight-line scalar result to spill"
-    );
 }

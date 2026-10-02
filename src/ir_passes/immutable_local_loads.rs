@@ -16,6 +16,8 @@
 //!   that check made every `do { f($x); … } while ($n > 0);` whose `$n` is a by-reference
 //!   out-parameter run its body exactly once: the load was called pure, so LICM hoisted the
 //!   loop condition into the preheader.
+//! - Dynamic eval can read or rewrite later-declared locals through the frame, so
+//!   those functions cannot mark scalar loads immutable.
 
 use std::collections::HashSet;
 
@@ -112,6 +114,9 @@ fn immutable_integer_slots(
     function: &Function,
     candidates: &HashSet<LocalSlotId>,
 ) -> HashSet<LocalSlotId> {
+    if super::local_scope::has_dynamic_eval(function) {
+        return HashSet::new();
+    }
     let mut eligible = candidates.clone();
 
     // A SLOT PASSED BY REFERENCE IS NOT IMMUTABLE, and nothing else here can tell:

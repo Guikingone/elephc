@@ -155,14 +155,13 @@ PHP source (.php)
 │ EIR passes  │  src/ir_passes/
 │             │  Module-level fixed-point pipeline: a cross-function
 │             │  small-function inliner interleaved with the per-function
-│             │  pass driver (identity folding, peephole rewrites, immutable
-│             │  local classification, checked-integer sinking, boxed numeric-
-│             │  chain fusion, constant folding, common-subexpression
-│             │  elimination, loop-invariant code motion, dead-instruction
-│             │  elimination, dead-store elimination, branch simplification)
-│             │  plus dominance and loop
-│             │  analysis and linear-scan register allocation (liveness,
-│             │  intervals, pools) before codegen.
+│             │  pass driver (identity folding, peephole rewrites, scalar
+│             │  local promotion, immutable local classification, checked-
+│             │  integer sinking, boxed numeric-chain fusion, constant folding,
+│             │  common-subexpression elimination, loop-invariant code motion,
+│             │  dead-instruction elimination, dead-store elimination, branch
+│             │  simplification) plus dominance and loop analysis and linear-
+│             │  scan register allocation (liveness, intervals, pools).
 └──────┬──────┘
        │
        ▼

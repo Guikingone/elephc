@@ -343,6 +343,10 @@ elephc --regalloc=stack hot.php
 exists mainly for comparison and debugging; linear scan is substantially faster
 on compute-heavy code.
 
+Functions containing exception handlers and generators automatically use stack
+placement even in linear mode. The allocator's current liveness analysis does
+not model implicit exception edges or values preserved across generator suspension.
+
 ## Null representation
 
 `--null-repr` selects how null-capable scalar slots are stored:

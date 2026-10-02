@@ -94,7 +94,7 @@ Each function has a stack frame. The [code generator](the-codegen.md) calculates
 - Strings take **two slots** (16 bytes): pointer at `[x29, #-offset]`, length at `[x29, #-(offset-8)]`
 - The total frame size is always 16-byte aligned (ARM64 ABI requirement)
 
-On the EIR backend the frame also reserves one save slot per callee-saved register that the linear-scan register allocator uses, and short-lived scalar SSA temporaries may live in registers instead of a stack slot. PHP local variables themselves are still slot-backed as shown above. See [The IR](the-ir.md) for the register allocation pass.
+On the EIR backend the frame also reserves one save slot per callee-saved register that the linear-scan register allocator uses. Eligible scalar PHP locals are promoted to SSA values, so their repeated loads and stores can disappear and loop-carried values can live in registers. The frame still reserves local slots, and address-taken, by-reference, global/static, refcounted, and volatile locals continue to use them. See [The IR](the-ir.md) for scalar promotion and register allocation.
 
 ### Variable allocation
 
