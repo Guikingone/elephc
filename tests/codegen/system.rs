@@ -4301,3 +4301,74 @@ foreach ([
         "9am => 1699952400\n9:30am => 1699954200\n9 am => 1699952400\n9:30 pm => 1699997400\n12am => 1699920000\n12pm => 1699963200\n12:30 PM => 1699965000\n1PM => 1699966800\n11:59:59 pm => 1700006399\ntomorrow 9am => 1700038800\ntomorrow 14:30:15 => 1700058615\ntomorrow 12AM => 1700006400\nTomorrow NOON => 1700049600\nTODAY 9AM => 1699952400\nnoon tomorrow => 1700006400\ntomorrow noon => 1700049600\nmidnight tomorrow => 1700006400\ntomorrow midnight => 1700006400\nyesterday noon => 1699876800\nnoon yesterday => 1699833600\nmidnight yesterday => 1699833600\nyesterday 6pm => 1699898400\ntoday 5:15pm => 1699982100\nnow noon => 1699963200\nnoon now => 1699963200\ntoday noon => 1699963200\nnoon today => 1699920000\nnoon tomorrow +1 day => 1700092800\ntomorrow noon +1 hour => 1700053200\nnoon + 1 hour => 1699966800\nmonday noon => 1700481600\nnext monday noon => 1700481600\nfriday noon => 1700222400\nnext friday 6pm => 1700244000\nlast friday 3pm => 1699628400\nthis friday 9:15am => 1700212500\n tomorrow  noon  => 1700049600\nnoon  tomorrow => 1700006400\n13pm => false\n0am => false\n9:61am => false\n9:30:61pm => false\ntomorrow 13pm => false\n9amx => false\n9 amm => false\ntomorrow junk => false\nnoon junk => false\nAM => false\n"
     );
 }
+
+/// Verifies `strtotime()` composes the longer sentences php accepts: a keyword followed by a second
+/// keyword (`tomorrow tomorrow` is one day, the later relative day replaces the earlier), a time of
+/// day with a trailing signed offset (`tomorrow 14:30 +2 days`, `14:30 +2 days`), the `first/last day
+/// of ...` phrases with `noon`/`midnight`, a weekday after `noon`/`midnight`/`tomorrow`, a keyword
+/// followed by an unsigned offset (`tomorrow 2 days`) or by an absolute date (`tomorrow 1 april`,
+/// where php adds the relative day to the date), and the year-less textual dates `1 april` and
+/// `april 1`, which take the clock's own year. Every expected value is php 8.5's answer from the
+/// same base (a Tuesday); text php refuses (`10:00 11:00`, `14:30 junk`) stays `false`.
+#[test]
+fn test_strtotime_longer_keyword_time_offset_and_date_sentences_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set('UTC');
+$base = 1700000000;
+foreach ([
+    'tomorrow tomorrow',
+    'yesterday yesterday',
+    'tomorrow yesterday',
+    'tomorrow 14:30 +2 days',
+    'tomorrow 14:30 -1 hour',
+    'yesterday 14:30 +2 days',
+    'today 14:30 +90 minutes',
+    '14:30 +2 days',
+    '14:30:15 +1 hour',
+    'friday 14:30 +1 week',
+    'first day of next month noon',
+    'last day of this month noon',
+    'last day of next month noon',
+    'first day of next month midnight',
+    'first day of next month 10:00',
+    'last monday of next month noon',
+    'noon friday',
+    'midnight friday',
+    'now friday',
+    'tomorrow friday',
+    'yesterday friday',
+    'tomorrow 1 april',
+    'yesterday 1 april',
+    'tomorrow april 1',
+    'tomorrow 1 april 2024',
+    'tomorrow 2023-04-01',
+    'tomorrow 4/1/2023',
+    'tomorrow 2 days',
+    'tomorrow 1 hour',
+    'yesterday 3 weeks',
+    '1 april',
+    'april 1',
+    'april 1 2024',
+    '5 august',
+    'august 5',
+    '1 apr 2024',
+    '14:30 junk',
+    '10:00 11:00',
+    'first day of next month junk',
+    'tomorrow 2 apples',
+    'tomorrow nothing',
+    'noon tomorrow',
+    'tomorrow noon',
+    'tomorrow 9am',
+] as $s) {
+    $t = strtotime($s, $base);
+    echo $s, ' => ', $t === false ? 'false' : $t, "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "tomorrow tomorrow => 1700006400\nyesterday yesterday => 1699833600\ntomorrow yesterday => 1699833600\ntomorrow 14:30 +2 days => 1700231400\ntomorrow 14:30 -1 hour => 1700055000\nyesterday 14:30 +2 days => 1700058600\ntoday 14:30 +90 minutes => 1699977600\n14:30 +2 days => 1700145000\n14:30:15 +1 hour => 1699975815\nfriday 14:30 +1 week => 1700836200\nfirst day of next month noon => 1701432000\nlast day of this month noon => 1701345600\nlast day of next month noon => 1704024000\nfirst day of next month midnight => 1701388800\nfirst day of next month 10:00 => 1701424800\nlast monday of next month noon => 1703505600\nnoon friday => 1700179200\nmidnight friday => 1700179200\nnow friday => 1700179200\ntomorrow friday => 1700265600\nyesterday friday => 1700092800\ntomorrow 1 april => 1680393600\nyesterday 1 april => 1680220800\ntomorrow april 1 => 1680393600\ntomorrow 1 april 2024 => 1712016000\ntomorrow 2023-04-01 => 1680393600\ntomorrow 4/1/2023 => 1680393600\ntomorrow 2 days => 1700179200\ntomorrow 1 hour => 1700010000\nyesterday 3 weeks => 1701648000\n1 april => 1680307200\napril 1 => 1680307200\napril 1 2024 => 1711929600\n5 august => 1691193600\naugust 5 => 1691193600\n1 apr 2024 => 1711929600\n14:30 junk => false\n10:00 11:00 => false\nfirst day of next month junk => false\ntomorrow 2 apples => false\ntomorrow nothing => false\nnoon tomorrow => 1700006400\ntomorrow noon => 1700049600\ntomorrow 9am => 1700038800\n"
+    );
+}

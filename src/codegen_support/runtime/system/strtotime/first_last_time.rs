@@ -13,7 +13,8 @@
 //! - The parsed time of day travels as seconds in the dispatcher scratch slot `[sp+96]`
 //!   (`[rsp+96]` on x86_64), `-1` meaning "none". The slot is free by then: the phrase is fully
 //!   consumed, x86_64 no longer needs its parked cursor, and `now_tm` only fills `[sp+0..36]`.
-//! - Accepted shapes: `H:MM`, `HH:MM`, `H:MM:SS`, `HH:MM:SS`, hour 0..23, minutes/seconds 0..59.
+//! - Accepted shapes: `H:MM`, `HH:MM`, `H:MM:SS`, `HH:MM:SS`, hour 0..23, minutes/seconds 0..59, and the
+//!   keywords `noon` (12:00:00) and `midnight` (00:00:00).
 //!   Anything else after the phrase still fails through `__rt_strtotime_fail`.
 
 use crate::codegen_support::emit::Emitter;
@@ -25,6 +26,21 @@ pub(super) fn emit_fl_trailing_time_arm64(emitter: &mut Emitter) {
     emitter.instruction("str w13, [sp, #96]");                                  // record the absence before parsing
     emitter.instruction("cmp x3, x4");                                          // anything left after "month" ?
     emitter.instruction("b.ge __rt_strtotime_fl_time_done");                    // no: the phrase stands alone
+    emitter.instruction("bl __rt_strtotime_fl_kw_token");                         // x9 = keyword kind (-1 = none), x10 = consumed
+    emitter.instruction("cmp x9, #5");                                            // noon ?
+    emitter.instruction("b.eq __rt_strtotime_fl_time_noon");                      // 12:00:00
+    emitter.instruction("cmp x9, #4");                                            // midnight ?
+    emitter.instruction("b.eq __rt_strtotime_fl_time_midnight");                  // 00:00:00
+    emitter.instruction("b __rt_strtotime_fl_time_digits");                       // a numeric time of day
+    emitter.label("__rt_strtotime_fl_time_noon");
+    emitter.instruction("mov w13, #43200");                                       // twelve hours of seconds
+    emitter.instruction("add x3, x3, x10");                                       // consume the word
+    emitter.instruction("b __rt_strtotime_fl_time_store");                        // keep the time of day and require the end of the input
+    emitter.label("__rt_strtotime_fl_time_midnight");
+    emitter.instruction("mov w13, #0");                                           // no seconds past midnight
+    emitter.instruction("add x3, x3, x10");                                       // consume the word
+    emitter.instruction("b __rt_strtotime_fl_time_store");                        // keep the time of day and require the end of the input
+    emitter.label("__rt_strtotime_fl_time_digits");
     emitter.instruction("ldrb w9, [x3]");                                       // first hour digit
     emitter.instruction("sub w9, w9, #48");                                     // ASCII digit → value
     emitter.instruction("cmp w9, #9");                                          // must be 0..9
@@ -120,6 +136,26 @@ pub(super) fn emit_fl_trailing_time_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov DWORD PTR [rsp + 96], -1");                        // no time of day unless one follows
     emitter.instruction("cmp rdi, r10");                                        // anything left after "month" ?
     emitter.instruction("jae __rt_strtotime_fl_time_done_linux_x86_64");        // no: the phrase stands alone
+    emitter.instruction("mov QWORD PTR [rsp + 96], rdi");                         // park the cursor for the keyword helper (it reads [rbp-32])
+    emitter.instruction("call __rt_strtotime_fl_kw_token_linux_x86_64");          // rax = consumed, rdx = keyword kind (-1 = none); clobbers rdi/r10
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 96]");                         // restore the cursor
+    emitter.instruction("mov r10, QWORD PTR [rbp - 80]");                         // recompute end = base ...
+    emitter.instruction("add r10, QWORD PTR [rbp - 72]");                         // ... + length
+    emitter.instruction("mov DWORD PTR [rsp + 96], -1");                          // no time of day unless one follows
+    emitter.instruction("cmp rdx, 5");                                            // noon ?
+    emitter.instruction("je __rt_strtotime_fl_time_noon_linux_x86_64");           // 12:00:00
+    emitter.instruction("cmp rdx, 4");                                            // midnight ?
+    emitter.instruction("je __rt_strtotime_fl_time_midnight_linux_x86_64");       // 00:00:00
+    emitter.instruction("jmp __rt_strtotime_fl_time_digits_linux_x86_64");        // a numeric time of day
+    emitter.label("__rt_strtotime_fl_time_noon_linux_x86_64");
+    emitter.instruction("mov r11d, 43200");                                       // twelve hours of seconds
+    emitter.instruction("add rdi, rax");                                          // consume the word
+    emitter.instruction("jmp __rt_strtotime_fl_time_store_linux_x86_64");         // keep the time of day and require the end of the input
+    emitter.label("__rt_strtotime_fl_time_midnight_linux_x86_64");
+    emitter.instruction("xor r11d, r11d");                                        // no seconds past midnight
+    emitter.instruction("add rdi, rax");                                          // consume the word
+    emitter.instruction("jmp __rt_strtotime_fl_time_store_linux_x86_64");         // keep the time of day and require the end of the input
+    emitter.label("__rt_strtotime_fl_time_digits_linux_x86_64");
     emitter.instruction("movzx eax, BYTE PTR [rdi]");                           // first hour digit
     emitter.instruction("sub eax, 48");                                         // ASCII digit → value
     emitter.instruction("cmp eax, 9");                                          // must be 0..9

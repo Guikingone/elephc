@@ -100,29 +100,50 @@ fn emit_time_only_arm64(emitter: &mut Emitter) {
     emitter.instruction("str w9, [sp, #80]");                                   // save hour
     emitter.instruction("str w10, [sp, #84]");                                  // save min
 
-    // -- optional :SS suffix --
-    emitter.instruction("sub x15, x14, x1");                                    // remaining bytes
-    emitter.instruction("cbz x15, __rt_strtotime_time_no_secs");                // no suffix → second = 0
-    emitter.instruction("cmp x15, #3");                                         // suffix must be exactly ":SS"
-    emitter.instruction("b.ne __rt_strtotime_fail");                            // reject partial or trailing suffix junk
-    emitter.instruction("ldrb w11, [x1, #0]");                                  // expect ':'
-    emitter.instruction("cmp w11, #58");                                        // ':' ?
-    emitter.instruction("b.ne __rt_strtotime_fail");                            // trailing junk without seconds → fail
-    emitter.instruction("ldrb w11, [x1, #1]");                                  // first second digit
-    emitter.instruction("sub w11, w11, #48");                                   // numeric value
-    emitter.instruction("cmp w11, #9");                                         // digit ?
-    emitter.instruction("b.hi __rt_strtotime_fail");                            // not a digit
-    emitter.instruction("ldrb w12, [x1, #2]");                                  // second second digit
-    emitter.instruction("sub w12, w12, #48");                                   // numeric value
-    emitter.instruction("cmp w12, #9");                                         // digit ?
-    emitter.instruction("b.hi __rt_strtotime_fail");                            // not a digit
-    emitter.instruction("mov w13, #10");                                        // tens multiplier
-    emitter.instruction("mul w11, w11, w13");                                   // first second digit * 10
-    emitter.instruction("add w11, w11, w12");                                   // second
-    emitter.instruction("cmp w11, #60");                                        // second in PHP's accepted 0..60 range ?
-    emitter.instruction("b.hi __rt_strtotime_fail");                            // reject invalid second
-    emitter.instruction("str w11, [sp, #88]");                                  // save second
-    emitter.instruction("b __rt_strtotime_time_apply");                         // continue
+    // -- optional :SS suffix, then an optional signed offset ("14:30 +2 days") --
+    emitter.instruction("sub x15, x14, x1");                                      // remaining bytes
+    emitter.instruction("cbz x15, __rt_strtotime_time_no_secs");                  // no suffix → second = 0
+    emitter.instruction("ldrb w11, [x1, #0]");                                    // next byte
+    emitter.instruction("cmp w11, #58");                                          // ':' opens the seconds ?
+    emitter.instruction("b.ne __rt_strtotime_time_trailing_offset");              // no seconds: only a signed offset may follow
+    emitter.instruction("cmp x15, #3");                                           // ':SS' needs three bytes
+    emitter.instruction("b.lt __rt_strtotime_fail");                              // reject a truncated suffix
+    emitter.instruction("ldrb w11, [x1, #1]");                                    // first second digit
+    emitter.instruction("sub w11, w11, #48");                                     // numeric value
+    emitter.instruction("cmp w11, #9");                                           // digit ?
+    emitter.instruction("b.hi __rt_strtotime_fail");                              // not a digit
+    emitter.instruction("ldrb w12, [x1, #2]");                                    // second second digit
+    emitter.instruction("sub w12, w12, #48");                                     // numeric value
+    emitter.instruction("cmp w12, #9");                                           // digit ?
+    emitter.instruction("b.hi __rt_strtotime_fail");                              // not a digit
+    emitter.instruction("mov w13, #10");                                          // tens multiplier
+    emitter.instruction("mul w11, w11, w13");                                     // first second digit * 10
+    emitter.instruction("add w11, w11, w12");                                     // second
+    emitter.instruction("cmp w11, #60");                                          // second in PHP's accepted 0..60 range ?
+    emitter.instruction("b.hi __rt_strtotime_fail");                              // reject invalid second
+    emitter.instruction("str w11, [sp, #88]");                                    // save second
+    emitter.instruction("add x1, x1, #3");                                        // consume ':SS'
+    emitter.instruction("cmp x1, x14");                                           // anything after the seconds ?
+    emitter.instruction("b.ne __rt_strtotime_time_trailing_offset");              // only a signed offset may follow
+    emitter.instruction("b __rt_strtotime_time_apply");                           // continue
+    emitter.label("__rt_strtotime_time_trailing_offset");
+    emitter.label("__rt_strtotime_time_trailing_skip");
+    emitter.instruction("cmp x1, x14");                                           // cursor reached the end ?
+    emitter.instruction("b.ge __rt_strtotime_fail");                              // nothing follows the separator
+    emitter.instruction("ldrb w11, [x1, #0]");                                    // byte under the cursor
+    emitter.instruction("cmp w11, #32");                                          // space ?
+    emitter.instruction("b.ne __rt_strtotime_time_trailing_check");               // no: classify it
+    emitter.instruction("add x1, x1, #1");                                        // skip one separator byte
+    emitter.instruction("b __rt_strtotime_time_trailing_skip");                   // keep skipping
+    emitter.label("__rt_strtotime_time_trailing_check");
+    emitter.instruction("cmp w11, #43");                                          // '+' starts a signed offset ?
+    emitter.instruction("b.eq __rt_strtotime_time_trailing_split");               // evaluate the time, then the offset
+    emitter.instruction("cmp w11, #45");                                          // '-' starts a signed offset ?
+    emitter.instruction("b.ne __rt_strtotime_fail");                              // any other trailing text is not a form we parse
+    emitter.label("__rt_strtotime_time_trailing_split");
+    emitter.instruction("ldr x3, [sp, #48]");                                     // trimmed input pointer
+    emitter.instruction("sub x10, x1, x3");                                       // length of the time-of-day prefix
+    emitter.instruction("b __rt_strtotime_kw_trailing_go");                       // the shared two-step evaluation: prefix first, then the offset against its result
 
     emitter.label("__rt_strtotime_time_no_secs");
     emitter.instruction("str wzr, [sp, #88]");                                  // tm_sec = 0
@@ -214,30 +235,52 @@ fn emit_time_only_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov DWORD PTR [rbp - 48], eax");                       // save hour
     emitter.instruction("mov DWORD PTR [rbp - 44], ecx");                       // save min
 
-    // -- optional :SS --
-    emitter.instruction("mov r11, r10");                                        // end ptr again
-    emitter.instruction("sub r11, rdi");                                        // remaining bytes
-    emitter.instruction("test r11, r11");                                       // no suffix ?
-    emitter.instruction("jz __rt_strtotime_time_no_secs_linux_x86_64");         // yes → second = 0
-    emitter.instruction("cmp r11, 3");                                          // suffix must be exactly ":SS"
-    emitter.instruction("jne __rt_strtotime_fail_linux_x86_64");                // reject partial or trailing suffix junk
-    emitter.instruction("movzx r8d, BYTE PTR [rdi + 0]");                       // expect ':'
-    emitter.instruction("cmp r8b, 58");                                         // ':' ?
-    emitter.instruction("jne __rt_strtotime_fail_linux_x86_64");                // trailing junk without seconds → fail
-    emitter.instruction("movzx r8d, BYTE PTR [rdi + 1]");                       // first second digit
-    emitter.instruction("sub r8d, 48");                                         // numeric value
-    emitter.instruction("cmp r8d, 9");                                          // digit ?
-    emitter.instruction("ja __rt_strtotime_fail_linux_x86_64");                 // not a digit
-    emitter.instruction("movzx r9d, BYTE PTR [rdi + 2]");                       // second second digit
-    emitter.instruction("sub r9d, 48");                                         // numeric value
-    emitter.instruction("cmp r9d, 9");                                          // digit ?
-    emitter.instruction("ja __rt_strtotime_fail_linux_x86_64");                 // not a digit
-    emitter.instruction("imul r8d, r8d, 10");                                   // first second digit * 10
-    emitter.instruction("add r8d, r9d");                                        // second
-    emitter.instruction("cmp r8d, 60");                                         // second in PHP's accepted 0..60 range ?
-    emitter.instruction("ja __rt_strtotime_fail_linux_x86_64");                 // reject invalid second
-    emitter.instruction("mov DWORD PTR [rbp - 40], r8d");                       // save second ([rsp+88])
-    emitter.instruction("jmp __rt_strtotime_time_apply_linux_x86_64");          // continue
+    // -- optional :SS, then an optional signed offset ("14:30 +2 days") --
+    emitter.instruction("mov r11, r10");                                          // end ptr again
+    emitter.instruction("sub r11, rdi");                                          // remaining bytes
+    emitter.instruction("test r11, r11");                                         // no suffix ?
+    emitter.instruction("jz __rt_strtotime_time_no_secs_linux_x86_64");           // yes → second = 0
+    emitter.instruction("movzx r8d, BYTE PTR [rdi + 0]");                         // next byte
+    emitter.instruction("cmp r8b, 58");                                           // ':' opens the seconds ?
+    emitter.instruction("jne __rt_strtotime_time_trailing_offset_linux_x86_64");  // no seconds: only a signed offset may follow
+    emitter.instruction("cmp r11, 3");                                            // ':SS' needs three bytes
+    emitter.instruction("jl __rt_strtotime_fail_linux_x86_64");                   // reject a truncated suffix
+    emitter.instruction("movzx r8d, BYTE PTR [rdi + 1]");                         // first second digit
+    emitter.instruction("sub r8d, 48");                                           // numeric value
+    emitter.instruction("cmp r8d, 9");                                            // digit ?
+    emitter.instruction("ja __rt_strtotime_fail_linux_x86_64");                   // not a digit
+    emitter.instruction("movzx r9d, BYTE PTR [rdi + 2]");                         // second second digit
+    emitter.instruction("sub r9d, 48");                                           // numeric value
+    emitter.instruction("cmp r9d, 9");                                            // digit ?
+    emitter.instruction("ja __rt_strtotime_fail_linux_x86_64");                   // not a digit
+    emitter.instruction("imul r8d, r8d, 10");                                     // first second digit * 10
+    emitter.instruction("add r8d, r9d");                                          // second
+    emitter.instruction("cmp r8d, 60");                                           // second in PHP's accepted 0..60 range ?
+    emitter.instruction("ja __rt_strtotime_fail_linux_x86_64");                   // reject invalid second
+    emitter.instruction("mov DWORD PTR [rbp - 40], r8d");                         // save second ([rsp+88])
+    emitter.instruction("add rdi, 3");                                            // consume ':SS'
+    emitter.instruction("cmp rdi, r10");                                          // anything after the seconds ?
+    emitter.instruction("jne __rt_strtotime_time_trailing_offset_linux_x86_64");  // only a signed offset may follow
+    emitter.instruction("jmp __rt_strtotime_time_apply_linux_x86_64");            // continue
+    emitter.label("__rt_strtotime_time_trailing_offset_linux_x86_64");
+    emitter.label("__rt_strtotime_time_trailing_skip_linux_x86_64");
+    emitter.instruction("cmp rdi, r10");                                          // cursor reached the end ?
+    emitter.instruction("jae __rt_strtotime_fail_linux_x86_64");                  // nothing follows the separator
+    emitter.instruction("movzx r8d, BYTE PTR [rdi + 0]");                         // byte under the cursor
+    emitter.instruction("cmp r8b, 32");                                           // space ?
+    emitter.instruction("jne __rt_strtotime_time_trailing_check_linux_x86_64");   // no: classify it
+    emitter.instruction("add rdi, 1");                                            // skip one separator byte
+    emitter.instruction("jmp __rt_strtotime_time_trailing_skip_linux_x86_64");    // keep skipping
+    emitter.label("__rt_strtotime_time_trailing_check_linux_x86_64");
+    emitter.instruction("cmp r8b, 43");                                           // '+' starts a signed offset ?
+    emitter.instruction("je __rt_strtotime_time_trailing_split_linux_x86_64");    // evaluate the time, then the offset
+    emitter.instruction("cmp r8b, 45");                                           // '-' starts a signed offset ?
+    emitter.instruction("jne __rt_strtotime_fail_linux_x86_64");                  // any other trailing text is not a form we parse
+    emitter.label("__rt_strtotime_time_trailing_split_linux_x86_64");
+    emitter.instruction("mov rax, rdi");                                          // cursor
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                         // trimmed input pointer
+    emitter.instruction("sub rax, rdi");                                          // length of the time-of-day prefix
+    emitter.instruction("jmp __rt_strtotime_kw_trailing_go_linux_x86_64");        // the shared two-step evaluation: prefix first, then the offset against its result
 
     emitter.label("__rt_strtotime_time_no_secs_linux_x86_64");
     emitter.instruction("mov DWORD PTR [rbp - 40], 0");                         // tm_sec = 0
