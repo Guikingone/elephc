@@ -251,6 +251,10 @@ The type checker computes the type of every expression:
 | `["a" => 1]` | `AssocArray { key: Str, value: Int }` |
 | `["a" => 1, "b" => "two"]` | `AssocArray { key: Str, value: Mixed }` |
 
+A literal that mixes spreads and explicit keys uses `AssocArray` with `Mixed`
+keys. Each spread contributes its source's element type once, so spreading an
+array of arrays preserves the nested array type in the resulting value slots.
+
 ### Binary operations
 
 | Operation | Types | Result |
