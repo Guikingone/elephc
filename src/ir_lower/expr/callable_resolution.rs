@@ -218,6 +218,13 @@ pub(super) fn resolve_static_string_callable(
     if let Some(function_name) = lookup_folded_name(ctx.functions.keys(), callback) {
         return Some(StaticCallableBinding::UserFunction(function_name));
     }
+    // A PHP function alias held in a string (`$f = "sizeof"`) names its canonical builtin, as the
+    // name resolver already rewrites a direct `sizeof(...)` call.
+    if let Some(function_name) = crate::name_resolver::canonical_function_alias(callback)
+        .and_then(canonical_builtin_function_name)
+    {
+        return Some(StaticCallableBinding::Builtin(function_name));
+    }
     None
 }
 

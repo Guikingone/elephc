@@ -53,3 +53,5 @@ mod function_aliases;
 mod mixed_receiver_call_results;
 #[path = "regressions/reference_captures.rs"]
 mod reference_captures;
+#[path = "regressions/callback_elements_and_results.rs"]
+mod callback_elements_and_results;

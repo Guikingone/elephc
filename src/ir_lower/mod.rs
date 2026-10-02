@@ -35,6 +35,7 @@ pub(crate) use expr::body_contains_eval_call;
 /// Codegen's synthetic builtin callable wrappers ask the same question return lowering does,
 /// so they persist a scratch-backed result instead of handing the arena pointer to a caller.
 pub(crate) use expr::body_writes_local;
+pub(crate) use expr::cast_string_needs_owned_persist;
 pub(crate) use expr::string_op_uses_scratch_storage;
 
 use std::fmt;

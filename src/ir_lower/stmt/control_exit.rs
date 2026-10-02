@@ -144,6 +144,18 @@ pub(super) fn persist_scratch_return_string(
     if value.ir_type != IrType::Str {
         return value;
     }
+    if crate::ir_lower::cast_string_needs_owned_persist(&ctx.builder, value.value) {
+        let persisted = ctx.emit_value(
+            Op::StrPersist,
+            vec![value.value],
+            None,
+            PhpType::Str,
+            Op::StrPersist.default_effects(),
+            Some(span),
+        );
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        return persisted;
+    }
     // Asking the CONTEXT, not just this value's defining opcode: `return $v;` loads a slot, so
     // the load is what defines the returned value. A slot that received `$v .= ...` still holds
     // bytes in the shared concat scratch buffer, and handing that pointer to the caller lets the

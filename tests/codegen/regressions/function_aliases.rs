@@ -31,3 +31,18 @@ echo "\n";
     );
     assert_eq!(out, "31\nbool(true)\nint(7)\nstring(3) \"llo\"\nfloat(2.5)\nfputs\n1,2 bc\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nsizeof=1 doubleval=1 nope=0 \n");
 }
+
+/// An alias held in a string variable calls the function it names.
+#[test]
+fn test_php_function_alias_called_through_a_string_variable() {
+    let out = compile_and_run(
+        r#"<?php
+function a2() { $f = "sizeof"; return $f([1, 2, 3]); }
+function a4() { $f = "key_exists"; return var_export($f("a", ["a" => 1]), true); }
+function a6() { $f = "strchr"; return $f("abc", "b"); }
+function a7() { $f = "doubleval"; return $f("1.5"); }
+echo a2(), "|", a4(), "|", a6(), "|", a7(), "\n";
+"#,
+    );
+    assert_eq!(out, "3|true|bc|1.5\n");
+}

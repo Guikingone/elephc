@@ -50,6 +50,8 @@ pub(crate) struct Usage {
     /// Whether a `define()` names its constant with anything but a string literal, which needs
     /// the run-time constant table (`crate::dynamic_define_prelude`).
     pub(crate) dynamic_define: bool,
+    /// Variables some closure captures by reference (`use (&$x)`) and writes through.
+    pub(crate) ref_capture_writes: HashSet<String>,
 }
 
 impl Usage {
@@ -64,6 +66,7 @@ impl Usage {
         self.array_reference_sources
             .extend(other.array_reference_sources);
         self.dynamic_define |= other.dynamic_define;
+        self.ref_capture_writes.extend(other.ref_capture_writes);
     }
 
     /// Returns true when a PHP function is referenced case-insensitively.
@@ -91,6 +94,17 @@ pub(crate) fn collect_stmt(stmt: &Stmt) -> Usage {
     let mut usage = Usage::default();
     scan_stmt(stmt, &mut usage);
     usage
+}
+
+/// Returns the variables a closure in this statement list captures by reference and writes.
+///
+/// A by-reference capture's cell takes ONE representation for the whole body, and a closure that
+/// writes through it widens the name to `Mixed`. A reader captured BEFORE the writer was lowered
+/// with the old type and read the box as a string, so the decision is made for the body up front.
+pub(crate) fn ref_capture_writes(statements: &[Stmt]) -> HashSet<String> {
+    let mut usage = Usage::default();
+    scan_program(statements, &mut usage);
+    usage.ref_capture_writes
 }
 
 /// Returns the variables a statement list stores into arrays as references.
@@ -637,7 +651,12 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             scan_expr(then_expr, usage);
             scan_expr(else_expr, usage);
         }
-        ExprKind::Closure { params, body, .. } => {
+        ExprKind::Closure { params, body, capture_refs, .. } => {
+            for name in capture_refs {
+                if crate::ir_lower::body_writes_local(body, name) {
+                    usage.ref_capture_writes.insert(name.clone());
+                }
+            }
             scan_params(params, usage);
             scan_program(body, usage);
         }

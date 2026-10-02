@@ -378,14 +378,23 @@ fn emit_runtime_callable_invoker_impl(
 /// before and owns exactly one now — the only change is WHICH copy it owns — so the number of
 /// frees `__rt_mixed_free_deep` performs is unchanged and no double free can be introduced.
 ///
-/// Only `Str` is routed through the owning boxer ON PURPOSE. For a container or object return
-/// `emit_box_current_owned_value_as_mixed` would emit a decref of the original reference, and the
-/// invoker never took one — nothing persisted or retained a container on the way in, so releasing
-/// one here would free a reference the caller still holds.
+/// Containers, objects and callable descriptors follow the same contract: return lowering hands
+/// the caller its own reference (`acquire_borrowed_return_value` retains a borrowed load), so the
+/// cell takes that reference too. The retaining boxer added a second one nobody dropped: every
+/// closure returning an array through `array_map()` leaked it, and a returned object was never
+/// destroyed.
 fn emit_boxed_invoker_return(emitter: &mut Emitter, ret_ty: &PhpType) {
     let repr = ret_ty.codegen_repr();
-    if repr == PhpType::Str {
-        emit_box_current_owned_value_as_mixed(emitter, &PhpType::Str);
+    if matches!(
+        repr,
+        PhpType::Str
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Object(_)
+            | PhpType::Iterable
+            | PhpType::Callable
+    ) {
+        emit_box_current_owned_value_as_mixed(emitter, &repr);
         return;
     }
     emit_box_current_value_as_mixed(emitter, &repr);

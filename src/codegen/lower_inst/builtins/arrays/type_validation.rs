@@ -238,12 +238,18 @@ pub(super) fn array_map_callback_array_element_type(ty: PhpType) -> Result<PhpTy
     match ty.codegen_repr() {
         PhpType::Array(elem) => {
             let elem = elem.codegen_repr();
+            // Arrays, hashes and callable descriptors are one heap pointer each, handed to the
+            // callback exactly as an object is: `array_map(fn($row) => count($row), $rows)` over
+            // a list of lists was refused.
             if matches!(
                 elem,
                 PhpType::Int
                     | PhpType::Bool
                     | PhpType::Str
                     | PhpType::Object(_)
+                    | PhpType::Array(_)
+                    | PhpType::AssocArray { .. }
+                    | PhpType::Callable
                     | PhpType::Void
                     | PhpType::Never
                     | PhpType::Mixed

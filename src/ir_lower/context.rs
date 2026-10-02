@@ -468,6 +468,7 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// empty-array `static` that is really a hash. Empty for a body with no such write, which is
     /// the overwhelming majority.
     non_integer_keyed_locals: HashSet<String>,
+    ref_capture_written_locals: HashSet<String>,
     /// Class of the object temporarily installed as `$this` while lowering a bound closure body.
     bound_closure_this_class: Option<String>,
     bound_closure_this_gradual: bool,
@@ -607,6 +608,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             owner_name,
             closures: Vec::new(),
             non_integer_keyed_locals: HashSet::new(),
+            ref_capture_written_locals: HashSet::new(),
             bound_closure_this_class: None,
             bound_closure_this_gradual: false,
             pending_static_callable_result: None,
@@ -1675,6 +1677,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     pub(crate) fn record_non_integer_keyed_locals(&mut self, body: &[crate::parser::ast::Stmt]) {
         self.non_integer_keyed_locals =
             crate::append_vivify::locals_written_with_non_integer_keys(body);
+        self.ref_capture_written_locals = crate::ast_usage::ref_capture_writes(body);
+    }
+
+    /// Returns whether some closure in this body captures `name` by reference and writes it.
+    pub(crate) fn is_ref_capture_written_local(&self, name: &str) -> bool {
+        self.ref_capture_written_locals.contains(name)
     }
 
     /// Records that a bound closure's `$this` is a receiver this build cannot name.

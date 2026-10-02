@@ -311,6 +311,27 @@ fn persist_scratch_backed_wrapper_string(
     if return_php_type.codegen_repr() != PhpType::Str {
         return result;
     }
+    if crate::ir_lower::cast_string_needs_owned_persist(builder, value) {
+        let persisted = builder.emit(
+            Op::StrPersist,
+            vec![value],
+            None,
+            IrType::Str,
+            PhpType::Str,
+            Ownership::for_php_type(&PhpType::Str),
+        );
+        builder.emit_with_effects(
+            Op::Release,
+            vec![value],
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+            Op::Release.default_effects(),
+            None,
+        );
+        return persisted;
+    }
     let scratch_backed = builder
         .value_defining_instruction(value)
         .is_some_and(|inst| crate::ir_lower::string_op_uses_scratch_storage(inst.op));

@@ -231,7 +231,7 @@ pub(crate) use property_access::{
     lower_ref_assign_property,
 };
 pub(crate) use property_fetch_for_write::lower_by_ref_foreach_property_source;
-pub(crate) use string_concat::string_op_uses_scratch_storage;
+pub(crate) use string_concat::{cast_string_needs_owned_persist, string_op_uses_scratch_storage};
 pub(in crate::ir_lower) use assoc_array_literals::{
     array_access_expr_value_type_for_ir, lower_array_reference_or_value,
     method_call_expr_type_for_ir,

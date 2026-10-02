@@ -14,6 +14,8 @@
 //! - A value returned through a reference takes its own reference before the frame releases the
 //!   cell, and a statically bound closure call stops reading a captured variable's slot once that
 //!   variable is unset.
+//! - Closures held in arrays, read back out of them, or copied by `Closure::bind` are released
+//!   with their last holder, together with what they captured.
 
 use crate::support::*;
 
@@ -37,11 +39,12 @@ function c13() { $s = "k"; $f = function () use (&$s) { $s .= "m"; }; $f(); $g =
 function c14() { $n = 0; $f = function () use (&$n) { $n++; }; array_map(function () use ($f) { $f(); }, [1, 2, 3]); return $n; }
 function c18() { $s = "p"; $mk = function () use (&$s) { return function () use (&$s) { $s .= "q"; }; }; $g = $mk(); $g(); $g(); return $s; }
 function c21() { $s = "a"; $w = function () use (&$s) { $s = 5; }; $r = function () use (&$s) { return $s; }; $w(); return $r(); }
+function c24() { $s = "a"; $r = function () use (&$s) { return $s; }; $w = function () use (&$s) { $s = 5; }; $w(); return $r(); }
 function run(): void {
     $out = "";
     for ($i = 0; $i < 4; $i++) {
         $out = c1() . "|" . c2() . "|" . c3() . "|" . c4() . "|" . c5() . "|" . c6() . "|" . c7()
-            . "|" . c12() . "|" . c13() . "|" . c14() . "|" . c18() . "|" . c21();
+            . "|" . c12() . "|" . c13() . "|" . c14() . "|" . c18() . "|" . c21() . "|" . c24();
     }
     echo $out, "\n";
 }
@@ -49,7 +52,7 @@ run();
 "#,
     );
     assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "31|abb|1,2,3|7|3|y|z|3|kmm|3|pqq|5\n");
+    assert_eq!(out.stdout, "31|abb|1,2,3|7|3|y|z|3|kmm|3|pqq|5|5\n");
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected a clean heap, got: {}",
@@ -117,4 +120,22 @@ echo c16(), "\n", c16b(), "\n", c16c(), "\n";
 "#,
     );
     assert_eq!(out, "5\nstringintegerdoublearray\na2\n");
+}
+
+/// A closure held in an array, called through an element, copied by `Closure::bind`, or shared
+/// between array slots is destroyed with its last holder, and so is the object it captured.
+#[test]
+fn test_closures_in_arrays_and_bound_copies_release_their_captures() {
+    let out = compile_and_run(
+        r#"<?php
+class D { public function __construct(public string $n) {} public function __destruct() { echo "[~", $this->n, "]"; } }
+function a() { $fs = []; $o = new D("a"); $fs[] = function () use ($o) { return $o->n; }; unset($o); echo $fs[0](); $fs = null; echo "|"; }
+function b() { $o = new D("b"); $f = function () use ($o) { return $o->n; }; unset($o); $g = Closure::bind($f, null, null); unset($f); echo $g(); unset($g); echo "|"; }
+function c() { $o = new D("c"); $fs = [function () use ($o) { return $o->n; }]; unset($o); echo $fs[0](); unset($fs); echo "|"; }
+function d() { $o = new D("d"); $f = function () use ($o) { return $o->n; }; unset($o); $fs = [$f, $f]; unset($f); $fs[1] = null; echo $fs[0](); $fs = []; echo "|"; }
+function e() { $o = new D("e"); $fs = []; $fs[] = function () use ($o) { return $o->n; }; unset($o); $copy = $fs; $fs = null; echo $copy[0](); unset($copy); echo "|"; }
+a(); b(); c(); d(); e(); echo "\n";
+"#,
+    );
+    assert_eq!(out, "a[~a]|b[~b]|c[~c]|d[~d]|e[~e]|\n");
 }

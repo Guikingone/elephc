@@ -92,6 +92,30 @@ pub(crate) fn string_op_uses_scratch_storage(op: Op) -> bool {
     )
 }
 
+/// Returns whether a string is a `Cast` of a non-string value, whose result is either scratch or
+/// a fresh heap copy depending on the run-time tag.
+///
+/// `__rt_mixed_cast_string` formats an int, float or bool into the shared concat buffer and hands
+/// back a fresh owned copy for a boxed string. Either way the value must be persisted before it
+/// crosses a function boundary, and the source released afterwards: the release frees the owned
+/// copy and ignores scratch (`__rt_heap_free_safe`). `strval($mixed)` returned the arena pointer,
+/// so `array_map('strval', $list)` printed `["[","["]` once json_encode() reused the buffer.
+/// A cast FROM a string may return the source itself and is not included.
+pub(crate) fn cast_string_needs_owned_persist(
+    builder: &crate::ir::Builder<'_>,
+    value: crate::ir::ValueId,
+) -> bool {
+    let Some(inst) = builder.value_defining_instruction(value) else {
+        return false;
+    };
+    if inst.op != Op::Cast || inst.result_php_type.codegen_repr() != crate::types::PhpType::Str {
+        return false;
+    }
+    inst.operands.first().is_some_and(|operand| {
+        builder.value_php_type(*operand).codegen_repr() != crate::types::PhpType::Str
+    })
+}
+
 /// Returns whether evaluating an expression can reset the caller's concat scratch storage.
 pub(super) fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
     match &expr.kind {

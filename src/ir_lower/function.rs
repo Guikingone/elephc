@@ -2193,6 +2193,30 @@ fn direct_closure_return_expr_type(
     ) {
         return PhpType::Mixed;
     }
+    // An element read is typed by its container when the signature knows it, and read at run
+    // time otherwise. The syntactic default answers `int` here too: `fn ($r) => $r["n"]` over an
+    // untyped `$r` cast every string element to `0`.
+    if let ExprKind::ArrayAccess { array, .. } = &expr.kind {
+        if let ExprKind::Variable(name) = &array.kind {
+            let receiver_ty = captures
+                .iter()
+                .find(|(capture_name, _, _)| capture_name == name)
+                .map(|(_, ty, _)| ty)
+                .or_else(|| {
+                    params
+                        .iter()
+                        .find(|(param_name, _)| param_name == name)
+                        .map(|(_, ty)| ty)
+                });
+            match receiver_ty.map(PhpType::codegen_repr) {
+                Some(PhpType::Array(elem)) => return elem.codegen_repr(),
+                Some(PhpType::AssocArray { value, .. }) => return value.codegen_repr(),
+                Some(PhpType::Str) => return PhpType::Str,
+                _ => {}
+            }
+        }
+        return PhpType::Mixed;
+    }
     crate::types::checker::infer_expr_type_syntactic(expr)
 }
 

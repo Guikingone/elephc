@@ -1331,7 +1331,18 @@ fn runtime_builtin_descriptor_cases(
     for name in crate::types::checker::builtins::supported_builtin_function_names_for_profile(
         strict_php,
     ) {
-        if !runtime_callable_name_is_reachable(name, candidate_names)
+        // PHP's function aliases (`sizeof`, `key_exists`, `pos`, ...) name the same function, so a
+        // runtime string holding one dispatches to the canonical builtin's descriptor.
+        // `$f = "sizeof"; $f($a);` died with "Call to undefined function".
+        let reachable_aliases = crate::name_resolver::function_alias_names()
+            .filter(|alias| {
+                crate::name_resolver::canonical_function_alias(alias)
+                    .is_some_and(|canonical| php_symbol_key(canonical) == php_symbol_key(name))
+                    && runtime_callable_name_is_reachable(alias, candidate_names)
+            })
+            .collect::<Vec<_>>();
+        if !(runtime_callable_name_is_reachable(name, candidate_names)
+            || !reachable_aliases.is_empty())
             || !callable_dispatch::runtime_builtin_wrapper_supported(name, source_arg_ty)
             || ctx
                 .module
@@ -1364,6 +1375,12 @@ fn runtime_builtin_descriptor_cases(
             ),
             Some(&invoker_label),
         );
+        for alias in reachable_aliases {
+            cases.push(callable_dispatch::RuntimeCallableCase {
+                descriptor_label: descriptor_label.clone(),
+                php_name: Some(alias.to_string()),
+            });
+        }
         cases.push(callable_dispatch::RuntimeCallableCase {
             descriptor_label,
             php_name: Some(name.to_string()),
