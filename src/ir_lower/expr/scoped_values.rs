@@ -161,6 +161,21 @@ pub(super) fn lower_scoped_constant(ctx: &mut LoweringContext<'_, '_>, receiver:
     if let Some(value) = ctx.scoped_constant_value(&class_name, name) {
         return lower_expr(ctx, &value);
     }
+    // A class the closed-world compilation never saw (a runtime-autoloaded one) has its
+    // constants read through the eval bridge, which needs this function's eval context. Without
+    // the local the read lowered to "Class not found" -- including the property default
+    // `private int $jsonEncodeOptions = Utils::DEFAULT_JSON_FLAGS;` of a compiled Monolog
+    // formatter, whose `Utils` is declared by the interpreter. Only a program that can load PHP
+    // at run time can meet such a class; anywhere else the read keeps php's `Class not found`
+    // without linking the interpreter.
+    if matches!(receiver, StaticReceiver::Named(_))
+        && (ctx.program_loads_code_at_run_time() || ctx.has_eval_barrier())
+        && !ctx.classes.contains_key(normalized_class_name)
+        && !ctx.interfaces.contains_key(normalized_class_name)
+        && !ctx.enums.contains_key(normalized_class_name)
+    {
+        ctx.declare_eval_context_local();
+    }
     let key = format!("{}::{}", class_name, name);
     let data = ctx.intern_string(&key);
     ctx.emit_value(

@@ -229,6 +229,32 @@ impl Parser {
         }
         let class_name = self.parse_class_reference_name(true)?;
         let class_name = self.resolve_static_class_name(class_name);
+        // `new static::$builder($query)` / `new self::$class(...)`: the class named is the VALUE
+        // of a static property, not the class the `::` is applied to. Read as plain `new static`
+        // the `$builder` was taken for an undefined variable, so Eloquent could never build a
+        // query builder.
+        if matches!(self.current(), TokenKind::DoubleColon)
+            && matches!(self.peek(), TokenKind::DollarIdent(_))
+        {
+            self.advance();
+            let TokenKind::DollarIdent(property) = self.current() else {
+                return Err(EvalParseError::UnexpectedToken);
+            };
+            let property = property.clone();
+            self.advance();
+            let class_expr = self.parse_class_name_target_chain(
+                EvalExpr::StaticPropertyGet {
+                    class_name,
+                    property,
+                },
+                true,
+            )?;
+            let args = self.parse_optional_constructor_args()?;
+            return Ok(EvalExpr::DynamicNewObject {
+                class_name: Box::new(class_expr),
+                args,
+            });
+        }
         let args = self.parse_optional_constructor_args()?;
         Ok(EvalExpr::NewObject { class_name, args })
     }

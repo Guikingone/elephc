@@ -160,7 +160,9 @@ pub(super) fn execute_property_stmt(
             property,
             value,
         } => {
-            let value = eval_expr(value, context, scope, values)?;
+            // The static slot owns what it stores: a variable read (`static::$d = $d`) must hand
+            // it its own reference, or the slot and the variable free one cell twice.
+            let value = eval_expr_value_for_consuming_store(value, context, scope, values)?;
             eval_static_property_set_result(class_name, property, value, context, values)?;
             Ok(EvalControl::None)
         }
@@ -213,7 +215,7 @@ pub(super) fn execute_property_stmt(
         } => {
             let class_name = eval_expr(class_name, context, scope, values)?;
             let class_name = eval_dynamic_class_name(class_name, context, values)?;
-            let value = eval_expr(value, context, scope, values)?;
+            let value = eval_expr_value_for_consuming_store(value, context, scope, values)?;
             eval_static_property_set_result(&class_name, property, value, context, values)?;
             Ok(EvalControl::None)
         }
@@ -296,7 +298,7 @@ pub(super) fn execute_property_stmt(
             let class_name = eval_expr(class_name, context, scope, values)?;
             let class_name = eval_dynamic_class_name(class_name, context, values)?;
             let property = eval_dynamic_member_name(property, context, scope, values)?;
-            let value = eval_expr(value, context, scope, values)?;
+            let value = eval_expr_value_for_consuming_store(value, context, scope, values)?;
             eval_static_property_set_result(&class_name, &property, value, context, values)?;
             Ok(EvalControl::None)
         }

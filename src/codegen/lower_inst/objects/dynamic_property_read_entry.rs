@@ -194,6 +194,7 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
     let done_label = ctx.next_label("mixed_dyn_prop_get_done");
     let miss_label = ctx.next_label("mixed_dyn_prop_get_miss");
     let miss_no_stack_label = ctx.next_label("mixed_dyn_prop_get_miss_no_stack");
+    let eval_done_label = ctx.next_label("mixed_dyn_prop_get_eval_done");
     let stdclass_label = ctx.next_label("mixed_dyn_prop_get_stdclass");
     let match_labels = candidates
         .iter()
@@ -230,19 +231,65 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
         abi::emit_jump(ctx.emitter, &done_label);
     }
 
+    // An object of an eval-declared class is carried by a stdClass runtime object (or matches no
+    // compiled class at all), so both arrival points ask the owning eval context before the native
+    // hash answers null: `$object->{$name}` on an eval model reaches its attributes and `__get()`.
+    let eval_fallback = super::mixed_property_reads::eval_owner_fallback_available(ctx);
+
     ctx.emitter.label(&stdclass_label);
+    if eval_fallback {
+        let native_stdclass_label = ctx.next_label("mixed_dyn_prop_get_stdclass_native");
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+        builtins::lower_eval_owner_mixed_dynamic_property_get(
+            ctx,
+            object,
+            property_value,
+            &native_stdclass_label,
+            &eval_done_label,
+        )?;
+        ctx.emitter.label(&native_stdclass_label);
+        ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        push_mixed_unboxed_object_payload(ctx);
+        let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+        ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
+        abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    }
     emit_runtime_stdclass_get_for_stacked_name(ctx, inst, 16, 0)?;
     abi::emit_release_temporary_stack(ctx.emitter, 32);
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&miss_label);
     abi::emit_release_temporary_stack(ctx.emitter, 32);
+    if eval_fallback {
+        let native_miss_label = ctx.next_label("mixed_dyn_prop_get_miss_native");
+        builtins::lower_eval_owner_mixed_dynamic_property_get(
+            ctx,
+            object,
+            property_value,
+            &native_miss_label,
+            &eval_done_label,
+        )?;
+        ctx.emitter.label(&native_miss_label);
+    }
     emit_dynamic_property_miss_result(ctx, inst);
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&miss_no_stack_label);
+    if eval_fallback {
+        let native_no_stack_label = ctx.next_label("mixed_dyn_prop_get_miss_no_stack_native");
+        builtins::lower_eval_owner_mixed_dynamic_property_get(
+            ctx,
+            object,
+            property_value,
+            &native_no_stack_label,
+            &eval_done_label,
+        )?;
+        ctx.emitter.label(&native_no_stack_label);
+    }
     emit_dynamic_property_miss_result(ctx, inst);
 
     ctx.emitter.label(&done_label);
+    ctx.emitter.label(&eval_done_label);
     store_if_result(ctx, inst)
 }

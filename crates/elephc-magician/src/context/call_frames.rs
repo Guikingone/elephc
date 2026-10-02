@@ -164,6 +164,14 @@ thread_local! {
     /// Parallel to `EVAL_CALL_FRAMES` and pushed and popped with it, so the caller's mode is
     /// restored exactly when its callee returns.
     static EVAL_QUIET_FETCH_BARRIERS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+
+    /// Compile-time-constant depths suspended by the calls currently on the stack.
+    ///
+    /// A function or method BODY is never a compile-time constant position, even when the call
+    /// happens while a constant or property default is being evaluated (an autoloader that runs
+    /// to resolve a class named in the default). Without this the loader's `static::` was refused
+    /// as "not allowed in compile-time constants".
+    static EVAL_CONSTANT_CONTEXT_BARRIERS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
 }
 
 impl ElephcEvalContext {
@@ -178,6 +186,8 @@ impl ElephcEvalContext {
         let saved = self.enter_call_barrier();
         EVAL_CALL_FRAMES.with(|frames| frames.borrow_mut().push(frame));
         EVAL_QUIET_FETCH_BARRIERS.with(|saved_depths| saved_depths.borrow_mut().push(saved));
+        let constant_depth = std::mem::take(&mut self.compile_time_constant_depth);
+        EVAL_CONSTANT_CONTEXT_BARRIERS.with(|depths| depths.borrow_mut().push(constant_depth));
     }
 
     /// Records one call as left, restoring the caller's quiet-fetch mode.
@@ -189,6 +199,10 @@ impl ElephcEvalContext {
             .with(|saved_depths| saved_depths.borrow_mut().pop())
             .unwrap_or(0);
         self.leave_call_barrier(saved);
+        let constant_depth = EVAL_CONSTANT_CONTEXT_BARRIERS
+            .with(|depths| depths.borrow_mut().pop())
+            .unwrap_or(0);
+        self.compile_time_constant_depth = constant_depth;
     }
 
     /// Reads the live frames, innermost last, for the backtrace builder to reverse.

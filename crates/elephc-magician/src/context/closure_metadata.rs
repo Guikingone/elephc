@@ -81,6 +81,13 @@ pub struct EvalClosureCaptureBinding {
     pub(super) name: String,
     pub(super) value: RuntimeCellHandle,
     pub(super) by_ref_target: Option<EvalReferenceTarget>,
+    /// The defining scope's own variable, when `by_ref_target` resolved past it.
+    ///
+    /// `use (&$p)` over a by-reference PARAMETER resolves `by_ref_target` straight to the
+    /// caller's variable, which leaves the defining function's own `$p` entry holding the cell
+    /// the closure just replaced. Writes go through `by_ref_target`; this is the second holder
+    /// that must follow them, or the defining function reads freed storage afterwards.
+    pub(super) defining_target: Option<EvalReferenceTarget>,
 }
 
 impl EvalClosureCaptureBinding {
@@ -94,7 +101,19 @@ impl EvalClosureCaptureBinding {
             name: name.into(),
             value,
             by_ref_target,
+            defining_target: None,
         }
+    }
+
+    /// Records the defining scope's own variable for a by-reference capture that aliases another.
+    pub fn with_defining_target(mut self, defining_target: Option<EvalReferenceTarget>) -> Self {
+        self.defining_target = defining_target;
+        self
+    }
+
+    /// Returns the defining scope's own variable, when it differs from the write-back target.
+    pub fn defining_target(&self) -> Option<&EvalReferenceTarget> {
+        self.defining_target.as_ref()
     }
 
     /// Returns the captured variable name without the leading `$`.

@@ -867,7 +867,8 @@ fn refine_declared_array_type_from_default(declared_ty: PhpType, default: Option
 /// A constant in the default (`self::K`, `GREETING`) is first replaced by its value: the
 /// syntactic guess types a class constant `string` and a global one `int` whatever they hold, and
 /// propinit then stored `9` into a `string` slot -- `public $c = self::K;` failed the build. A
-/// constant resolved nowhere here (an enum case, a runtime `define()`) types the slot `mixed`.
+/// constant resolved nowhere here (an enum case, a runtime `define()`) is read as `mixed` in
+/// place, so an array of enum cases stays an array.
 fn infer_untyped_property_default_type(
     checker: &Checker,
     class: &FlattenedClass,
@@ -875,7 +876,9 @@ fn infer_untyped_property_default_type(
 ) -> PhpType {
     let ty = match resolve_default_constants(checker, ConstantScope::Declaring(class), default, 0) {
         Some(resolved) => infer_expr_type_syntactic(&resolved),
-        None => PhpType::Mixed,
+        // A constant no schema resolves (an enum case, a runtime `define()`) keeps the default's
+        // container shape with that element read as `mixed`.
+        None => infer_property_default_syntactic(default),
     };
     widen_false_literal_storage_type(ty)
 }
@@ -1019,6 +1022,48 @@ fn type_placeholder(ty: &PhpType, span: Span) -> Option<Expr> {
         _ => return None,
     };
     Some(Expr::new(kind, span))
+}
+
+/// Syntactic type of an untyped property default, with every constant (`Class::NAME`, `NAME`)
+/// read as `mixed`.
+///
+/// `infer_expr_type_syntactic` has no class tables, so it answers `string` for ANY scoped
+/// constant. For an enum case, or a constant of another type, that is a fabricated type: an
+/// untyped `protected $levels = ['debug' => Level::Debug, ...]` became `array<string, string>`,
+/// and `return $this->levels[$key]` cast the enum object to a string -- "Object of class
+/// Monolog\Level could not be converted to string" in Laravel's `LogManager`. The element (or the
+/// property itself, for a bare constant) is `mixed`; the container shape is unchanged.
+fn infer_property_default_syntactic(default: &Expr) -> PhpType {
+    if matches!(
+        default.kind,
+        ExprKind::ScopedConstantAccess { .. } | ExprKind::ConstRef(_)
+    ) {
+        return PhpType::Mixed;
+    }
+    let inferred = infer_expr_type_syntactic(default);
+    if !default_array_holds_scoped_constant(default) {
+        return inferred;
+    }
+    match inferred {
+        PhpType::Array(_) => PhpType::Array(Box::new(PhpType::Mixed)),
+        PhpType::AssocArray { key, .. } => PhpType::AssocArray {
+            key,
+            value: Box::new(PhpType::Mixed),
+        },
+        other => other,
+    }
+}
+
+/// Whether an array-literal default holds a scoped constant (`Class::NAME`) at any depth.
+fn default_array_holds_scoped_constant(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::ScopedConstantAccess { .. } | ExprKind::ConstRef(_) => true,
+        ExprKind::ArrayLiteral(items) => items.iter().any(default_array_holds_scoped_constant),
+        ExprKind::ArrayLiteralAssoc(pairs) => pairs
+            .iter()
+            .any(|(_, value)| default_array_holds_scoped_constant(value)),
+        _ => false,
+    }
 }
 
 /// PHP treats a plain untyped property with no explicit default as `= null`: the slot

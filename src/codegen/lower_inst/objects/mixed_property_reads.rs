@@ -293,6 +293,26 @@ pub(super) fn lower_declared_mixed_prop_get(
     }
 
     ctx.emitter.label(&stdclass_label);
+    if eval_owner_fallback_available(ctx) {
+        // An object of an eval-declared class is CARRIED by a stdClass runtime object, so it
+        // reaches this label too -- and the hash behind it knows none of the class's own
+        // properties or its `__get()`. Ask the owning eval context first, exactly as the
+        // no-candidate path does; only a genuine stdClass falls through to its hash. A name some
+        // compiled class happens to declare (`name`, `type`...) is what sent a magic-property
+        // read like `$column->name` here and made it answer null.
+        let native_stdclass_label = ctx.next_label("mixed_prop_stdclass_native");
+        builtins::lower_eval_owner_mixed_property_get(
+            ctx,
+            object,
+            property,
+            &native_stdclass_label,
+            &done_label,
+        )?;
+        ctx.emitter.label(&native_stdclass_label);
+        ctx.load_value_to_result(object)?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        emit_mixed_object_payload_or_null(ctx, &null_label);
+    }
     emit_stdclass_get_from_loaded_object(ctx, property);
     abi::emit_jump(ctx.emitter, &done_label);
 
@@ -327,7 +347,7 @@ pub(super) fn lower_declared_mixed_prop_get(
 
 /// Returns whether a frame without its own eval context can still ask the eval bridge for an
 /// eval-owned object's property: the bridge is linked, and the frame has no context to ask with.
-fn eval_owner_fallback_available(ctx: &FunctionContext<'_>) -> bool {
+pub(super) fn eval_owner_fallback_available(ctx: &FunctionContext<'_>) -> bool {
     ctx.module.required_runtime_features.eval_bridge && !builtins::has_eval_context(ctx)
 }
 

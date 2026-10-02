@@ -167,6 +167,12 @@ struct EvalNativeMethodRegistration {
     method_name: String,
     is_static: bool,
     signature: FunctionSig,
+    /// The return type exactly as written when it names PHP's late-bound `static`.
+    ///
+    /// `signature.return_type` holds `static` already resolved to one concrete class, which is a
+    /// fabricated contract: an eval class overriding `negated(): static` was refused against
+    /// `negated(): Int1` (brick/math's `BigNumber`).
+    late_static_return: Option<TypeExpr>,
     bridge_supported: bool,
 }
 
@@ -403,7 +409,7 @@ pub(super) use dynamic_calls::{
 };
 pub(in crate::codegen::lower_inst) use dynamic_calls::{
     lower_eval_owned_method_call, lower_eval_owned_property_get,
-    lower_eval_owner_mixed_property_get,
+    lower_eval_owner_mixed_dynamic_property_get, lower_eval_owner_mixed_property_get,
 };
 pub(in crate::codegen::lower_inst) use interface_miss::{
     emit_branch_if_eval_saved_object_is_a, emit_eval_interface_method_on_miss,
@@ -412,7 +418,9 @@ pub(super) use native_object_construction::{
     lower_eval_native_object_new, lower_eval_native_object_new_fallback,
 };
 pub(super) use introspection::{
-    emit_eval_object_is_a_named_fallback, lower_eval_callable_call_array, lower_eval_class_relation, lower_eval_is_callable,
+    emit_eval_object_is_a_dynamic_name_fallback, emit_eval_object_is_a_named_fallback,
+    lower_eval_callable_call_array, lower_eval_class_relation,
+    lower_eval_global_class_relation_to_result, lower_eval_is_callable,
     lower_eval_member_exists, lower_eval_object_class_name, lower_eval_object_is_a,
     lower_eval_object_is_a_dynamic,
 };

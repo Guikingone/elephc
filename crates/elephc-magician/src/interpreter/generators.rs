@@ -513,7 +513,14 @@ fn eval_generator_execute_value_step(
             let owned = eval_foreach_owns_subject(&subject);
             let subject = eval_expr(&subject, context, &mut frame.scope, values)?;
             let subject = if owned { subject } else { values.retain(subject)? };
-            frame.foreach_slots[slot] = Some((subject, 0));
+            // An OBJECT subject is walked the way a plain `foreach` walks it: an `Iterator`
+            // through its five methods, an `IteratorAggregate` through `getIterator()` (asked
+            // again while it answers another aggregate), anything else through its visible
+            // properties. Laravel's `LazyCollection` is one `foreach ($this as ...)` inside a
+            // generator closure; the array-only walk ended that loop before its first element,
+            // so every lazy pipeline answered an empty array.
+            let (subject, position) = eval_generator_foreach_subject(subject, context, values)?;
+            frame.foreach_slots[slot] = Some((subject, position));
             EvalGeneratorFlow::Continue
         }
         EvalGeneratorStep::ForeachNext {
@@ -525,13 +532,39 @@ fn eval_generator_execute_value_step(
             let Some((array, position)) = frame.foreach_slots[slot] else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            if position >= values.array_len(array)? {
-                frame.step = exit;
-                return Ok(EvalGeneratorFlow::Continue);
-            }
+            let (key, value) = if position >= EVAL_GENERATOR_FOREACH_ITERATOR_RUNNING {
+                // An `Iterator` subject: rewind on the first visit, `next()` on every later one.
+                let step = if position == EVAL_GENERATOR_FOREACH_ITERATOR_FRESH {
+                    eval_method_call_result(array, "rewind", Vec::new(), context, values)?
+                } else {
+                    eval_method_call_result(array, "next", Vec::new(), context, values)?
+                };
+                values.release(step)?;
+                let valid = eval_method_call_result(array, "valid", Vec::new(), context, values)?;
+                let is_valid = values.truthy(valid)?;
+                values.release(valid)?;
+                frame.foreach_slots[slot] = Some((array, EVAL_GENERATOR_FOREACH_ITERATOR_RUNNING));
+                if !is_valid {
+                    frame.step = exit;
+                    return Ok(EvalGeneratorFlow::Continue);
+                }
+                let value = eval_method_call_result(array, "current", Vec::new(), context, values)?;
+                let key = if key_name.is_some() {
+                    eval_method_call_result(array, "key", Vec::new(), context, values)?
+                } else {
+                    values.null()?
+                };
+                (key, value)
+            } else {
+                if position >= values.array_len(array)? {
+                    frame.step = exit;
+                    return Ok(EvalGeneratorFlow::Continue);
+                }
                 let key = values.array_iter_key(array, position)?;
                 let value = values.array_get(array, key)?;
-            frame.foreach_slots[slot] = Some((array, position + 1));
+                frame.foreach_slots[slot] = Some((array, position + 1));
+                (key, value)
+            };
             match key_name {
                 Some(key_name) => {
                     if let Some(replaced) =
@@ -554,6 +587,46 @@ fn eval_generator_execute_value_step(
         | EvalGeneratorStep::LeaveTry
         | EvalGeneratorStep::Rethrow { .. } => return Err(EvalStatus::RuntimeFatal),
     })
+}
+
+/// Marks a generator `foreach` slot that holds an `Iterator` object not yet rewound.
+const EVAL_GENERATOR_FOREACH_ITERATOR_FRESH: usize = usize::MAX;
+/// Marks a generator `foreach` slot that holds an `Iterator` object already walking.
+const EVAL_GENERATOR_FOREACH_ITERATOR_RUNNING: usize = usize::MAX - 1;
+
+/// Resolves a generator `foreach` subject to what the step machine walks: an array at position
+/// zero, or an `Iterator` object in its "fresh" state. The returned cell is owned by the slot.
+fn eval_generator_foreach_subject(
+    subject: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, usize), EvalStatus> {
+    let mut subject = subject;
+    loop {
+        match values.type_tag(subject)? {
+            EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => return Ok((subject, 0)),
+            EVAL_TAG_OBJECT => {
+                if eval_foreach_object_is_a(subject, "Iterator", context, values)? {
+                    return Ok((subject, EVAL_GENERATOR_FOREACH_ITERATOR_FRESH));
+                }
+                let identity = values.object_identity(subject)?;
+                if context.has_eval_generator(identity) {
+                    return Ok((subject, EVAL_GENERATOR_FOREACH_ITERATOR_FRESH));
+                }
+                if eval_foreach_object_is_a(subject, "IteratorAggregate", context, values)? {
+                    let iterator =
+                        eval_method_call_result(subject, "getIterator", Vec::new(), context, values)?;
+                    eval_release_value(context, values, subject)?;
+                    subject = iterator;
+                    continue;
+                }
+                let properties = eval_get_object_vars_result(&[subject], context, values)?;
+                eval_release_value(context, values, subject)?;
+                return Ok((properties, 0));
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        }
+    }
 }
 
 /// Stores what `send()` passed in under the slot the suspended yield named.

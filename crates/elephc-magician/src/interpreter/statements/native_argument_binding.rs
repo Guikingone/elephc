@@ -288,7 +288,52 @@ pub(super) fn apply_native_callable_variadic_arg_type(
         let value = eval_method_parameter_value(param_type, value, context, values)?;
         bound_arg.value = values.array_set(bound_arg.value, key, value)?;
     }
-    pack_native_string_variadic(param_type, bound_arg, values)
+    pack_native_string_variadic(param_type, bound_arg, values)?;
+    pack_native_object_variadic(param_type, bound_arg, values)
+}
+
+/// Rebuilds a positional `Class ...$x` tail in the raw object-pointer layout the compiled callee reads.
+///
+/// A compiled `Pattern ...$patterns` is an `array<Pattern>`: one object pointer per slot, and its
+/// body calls methods on each element straight from the slot. The boxed tail the binder builds
+/// holds Mixed cells, so every `$pattern->getPattern()` read garbage and Doctrine's inflector
+/// compiled an empty regex -- `Str::plural()` and every Eloquent table name died there. Only the
+/// plain non-nullable single-class shape is packed; unions, nullable and `object` tails keep the
+/// boxed layout, as do tails with string keys.
+fn pack_native_object_variadic(
+    param_type: &EvalParameterType,
+    bound_arg: &mut BoundMethodArg,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if param_type.allows_null()
+        || param_type.is_intersection()
+        || !matches!(param_type.variants(), [EvalParameterTypeVariant::Class(_)])
+    {
+        return Ok(());
+    }
+    let len = values.array_len(bound_arg.value)?;
+    let mut keys = Vec::with_capacity(len);
+    for position in 0..len {
+        let key = values.array_iter_key(bound_arg.value, position)?;
+        if values.type_tag(key)? != EVAL_TAG_INT {
+            return Ok(());
+        }
+        keys.push(key);
+    }
+    let mut packed = values.object_array_new(len)?;
+    for key in keys {
+        // `array_get` hands back an owned cell; the packed array retains its own reference.
+        let value = values.array_get(bound_arg.value, key)?;
+        let pushed = values.object_array_push(packed, value);
+        values.release(value)?;
+        packed = pushed?;
+    }
+    // Nothing else references the boxed tail built by the binder, and the packed one is this
+    // call's to release once the callee has been handed it.
+    let previous = std::mem::replace(&mut bound_arg.value, packed);
+    bound_arg.owned = true;
+    values.release(previous)?;
+    Ok(())
 }
 
 /// Rebuilds a positional `string ...$x` tail in the packed layout the compiled callee reads.

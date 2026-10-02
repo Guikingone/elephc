@@ -147,6 +147,23 @@ pub(in crate::codegen::lower_inst) fn lower_eval_owner_mixed_property_get(
     eval::lower_eval_owner_mixed_property_get(ctx, object, property, miss_label, done_label)
 }
 
+/// Reads a runtime-named property of an eval-owned object reached through a `Mixed` receiver.
+pub(in crate::codegen::lower_inst) fn lower_eval_owner_mixed_dynamic_property_get(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    property_value: ValueId,
+    miss_label: &str,
+    done_label: &str,
+) -> Result<()> {
+    eval::lower_eval_owner_mixed_dynamic_property_get(
+        ctx,
+        object,
+        property_value,
+        miss_label,
+        done_label,
+    )
+}
+
 /// Probes a typed receiver for an eval-owned dynamic override before native dispatch.
 pub(in crate::codegen::lower_inst) fn lower_eval_owned_method_call(
     ctx: &mut FunctionContext<'_>,
@@ -289,6 +306,16 @@ pub(in crate::codegen::lower_inst) fn lower_eval_class_relation(
     eval::lower_eval_class_relation(ctx, inst, target, name)
 }
 
+/// Lowers a class-relation probe from a frame without an eval context, against the process-global
+/// eval class metadata. The boxed answer is left in the result register.
+pub(in crate::codegen::lower_inst) fn lower_eval_global_class_relation_to_result(
+    ctx: &mut FunctionContext<'_>,
+    target: ValueId,
+    name: &str,
+) -> Result<()> {
+    eval::lower_eval_global_class_relation_to_result(ctx, target, name)
+}
+
 /// Lowers post-eval object class-name introspection against eval dynamic metadata.
 pub(in crate::codegen::lower_inst) fn lower_eval_object_class_name(
     ctx: &mut FunctionContext<'_>,
@@ -322,6 +349,25 @@ pub(in crate::codegen::lower_inst) fn emit_eval_object_is_a_named_fallback(
         ctx,
         object,
         target_class,
+        matched_label,
+        native_fallback_label,
+    )
+}
+
+/// Emits a null-context eval ownership probe against a runtime class-name string.
+pub(in crate::codegen::lower_inst) fn emit_eval_object_is_a_dynamic_name_fallback(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    target: ValueId,
+    target_ty: &crate::types::PhpType,
+    matched_label: &str,
+    native_fallback_label: &str,
+) -> Result<()> {
+    eval::emit_eval_object_is_a_dynamic_name_fallback(
+        ctx,
+        object,
+        target,
+        target_ty,
         matched_label,
         native_fallback_label,
     )

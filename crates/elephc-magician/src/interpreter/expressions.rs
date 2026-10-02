@@ -23,6 +23,7 @@ pub(in crate::interpreter) use evaluation::{
     eval_new_object_result,
 };
 pub(in crate::interpreter) use evaluation::eval_object_array_cast_value;
+pub(in crate::interpreter) use evaluation::eval_values_loosely_equal;
 use evaluation::*;
 pub(in crate::interpreter) use null_coalesce_assign::{
     eval_assign,

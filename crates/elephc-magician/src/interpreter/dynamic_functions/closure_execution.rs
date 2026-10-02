@@ -461,7 +461,212 @@ fn function_ref_flags(closure: &EvalClosure) -> &[bool] {
 }
 
 /// Evaluates one runtime eval closure with optional class and `$this` binding metadata.
+///
+/// Closures that capture a variable by reference keep a COPY of its cell for the length of the
+/// activation and write it back on the way out. A recursive closure (`$walk = function ($n) use
+/// (&$results, &$walk) { ... $walk($child); ... }`) therefore ran its inner activations against
+/// the target variable while the outer one kept writing a stale cell over their work -- Laravel's
+/// `Arr::dot()` returned only the top level. Before this activation starts, every activation
+/// still waiting on a by-reference capture publishes its cell to the target; once this one has
+/// finished, those that did not change theirs pick up what it left.
 fn eval_closure_with_optional_binding(
+    closure: &EvalClosure,
+    parameter_is_by_ref: &[bool],
+    by_ref_mode: EvalByRefBindingMode<'_>,
+    binding: Option<EvalClosureBinding>,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let published = publish_active_capture_frames(context, values)?;
+    let result = eval_closure_with_optional_binding_inner(
+        closure,
+        parameter_is_by_ref,
+        by_ref_mode,
+        binding,
+        evaluated_args,
+        context,
+        values,
+    );
+    let refreshed = refresh_active_capture_frames(&published, context, values);
+    match (result, refreshed) {
+        (Err(status), _) | (Ok(_), Err(status)) => Err(status),
+        (Ok(value), Ok(())) => Ok(value),
+    }
+}
+
+/// One by-reference capture of a live activation.
+struct ActiveCapture {
+    name: String,
+    target: EvalReferenceTarget,
+    /// The cell this activation's entry held when it last agreed with the target. An entry that
+    /// still holds it has not been written by the activation since, so it may adopt what a
+    /// nested activation left in the target.
+    synced: Option<RuntimeCellHandle>,
+}
+
+/// One live closure activation holding by-reference captures, innermost last.
+struct ActiveCaptureFrame {
+    scope: *mut ElephcEvalScope,
+    captures: Vec<ActiveCapture>,
+}
+
+/// Which capture of which frame a nested activation published: frame index, scope, capture index.
+type PublishedCapture = (usize, *mut ElephcEvalScope, usize);
+
+thread_local! {
+    /// Activations currently running a closure with by-reference captures.
+    static ACTIVE_CAPTURE_FRAMES: std::cell::RefCell<Vec<ActiveCaptureFrame>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Removes an activation from the live capture frames when it ends, however it ends.
+struct ActiveCaptureFrameGuard {
+    registered: bool,
+}
+
+impl Drop for ActiveCaptureFrameGuard {
+    fn drop(&mut self) {
+        if self.registered {
+            ACTIVE_CAPTURE_FRAMES.with(|frames| {
+                frames.borrow_mut().pop();
+            });
+        }
+    }
+}
+
+/// Registers an activation's by-reference captures and returns the guard that unregisters them.
+fn register_active_capture_frame(
+    scope: &mut ElephcEvalScope,
+    captures: &[EvalClosureCaptureBinding],
+) -> ActiveCaptureFrameGuard {
+    let by_ref: Vec<ActiveCapture> = captures
+        .iter()
+        .filter_map(|capture| {
+            capture.by_ref_target().map(|target| ActiveCapture {
+                name: capture.name().to_string(),
+                target: target.clone(),
+                synced: scope.visible_cell(capture.name()),
+            })
+        })
+        .collect();
+    if by_ref.is_empty() {
+        return ActiveCaptureFrameGuard { registered: false };
+    }
+    ACTIVE_CAPTURE_FRAMES.with(|frames| {
+        frames.borrow_mut().push(ActiveCaptureFrame {
+            scope: scope as *mut ElephcEvalScope,
+            captures: by_ref,
+        });
+    });
+    ActiveCaptureFrameGuard { registered: true }
+}
+
+/// Writes every waiting activation's by-reference capture cells to their targets.
+///
+/// Returns what was published so `refresh_active_capture_frames` can revisit exactly those.
+fn publish_active_capture_frames(
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<PublishedCapture>, EvalStatus> {
+    let snapshot: Vec<(*mut ElephcEvalScope, Vec<(String, EvalReferenceTarget)>)> =
+        ACTIVE_CAPTURE_FRAMES.with(|frames| {
+            frames
+                .borrow()
+                .iter()
+                .map(|frame| {
+                    (
+                        frame.scope,
+                        frame
+                            .captures
+                            .iter()
+                            .map(|capture| (capture.name.clone(), capture.target.clone()))
+                            .collect(),
+                    )
+                })
+                .collect()
+        });
+    let mut published = Vec::new();
+    for (index, (scope_ptr, captures)) in snapshot.into_iter().enumerate() {
+        let Some(scope) = (unsafe { scope_ptr.as_ref() }) else {
+            continue;
+        };
+        for (capture_index, (name, target)) in captures.into_iter().enumerate() {
+            let Some(cell) = scope
+                .entry(&name)
+                .filter(|entry| entry.flags().is_visible() && entry.flags().by_ref)
+                .map(|entry| entry.cell())
+            else {
+                continue;
+            };
+            write_back_method_ref_target(&target, cell, context, values)?;
+            ACTIVE_CAPTURE_FRAMES.with(|frames| {
+                if let Some(capture) = frames
+                    .borrow_mut()
+                    .get_mut(index)
+                    .filter(|frame| frame.scope == scope_ptr)
+                    .and_then(|frame| frame.captures.get_mut(capture_index))
+                {
+                    capture.synced = Some(cell);
+                }
+            });
+            published.push((index, scope_ptr, capture_index));
+        }
+    }
+    Ok(published)
+}
+
+/// Points activations that did not touch a capture since publishing it at what the target holds.
+fn refresh_active_capture_frames(
+    published: &[PublishedCapture],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for (index, scope_ptr, capture_index) in published {
+        let capture = ACTIVE_CAPTURE_FRAMES.with(|frames| {
+            frames
+                .borrow()
+                .get(*index)
+                .filter(|frame| frame.scope == *scope_ptr)
+                .and_then(|frame| frame.captures.get(*capture_index))
+                .map(|capture| (capture.name.clone(), capture.target.clone(), capture.synced))
+        });
+        let Some((name, target, synced)) = capture else {
+            continue;
+        };
+        let Some(scope) = (unsafe { scope_ptr.as_mut() }) else {
+            continue;
+        };
+        if visible_scope_cell(context, scope, &name) != synced {
+            continue;
+        }
+        let Some(current) = live_variable_capture_cell(&target, context) else {
+            continue;
+        };
+        if Some(current) == synced {
+            continue;
+        }
+        for replaced in
+            scope.set_respecting_references(name.clone(), current, ScopeCellOwnership::Borrowed)
+        {
+            eval_release_value(context, values, replaced)?;
+        }
+        ACTIVE_CAPTURE_FRAMES.with(|frames| {
+            if let Some(capture) = frames
+                .borrow_mut()
+                .get_mut(*index)
+                .filter(|frame| frame.scope == *scope_ptr)
+                .and_then(|frame| frame.captures.get_mut(*capture_index))
+            {
+                capture.synced = Some(current);
+            }
+        });
+    }
+    Ok(())
+}
+
+/// Runs one runtime eval closure activation; see `eval_closure_with_optional_binding`.
+fn eval_closure_with_optional_binding_inner(
     closure: &EvalClosure,
     parameter_is_by_ref: &[bool],
     by_ref_mode: EvalByRefBindingMode<'_>,
@@ -516,7 +721,7 @@ fn eval_closure_with_optional_binding(
         }
     };
     let mut function_scope = ElephcEvalScope::new();
-    bind_closure_captures(&mut function_scope, closure.captures(), context);
+    let bound_capture_cells = bind_closure_captures(&mut function_scope, closure.captures(), context);
     if let Some(object) = binding.and_then(|binding| binding.this_object) {
         function_scope.set("this", object, ScopeCellOwnership::Borrowed);
     }
@@ -529,6 +734,11 @@ fn eval_closure_with_optional_binding(
         &evaluated_args,
     );
     separate_array_scope_args(&mut function_scope, function.params(), &scope_parameter_is_by_ref, values)?;
+    let _capture_frame = if eval_body_is_generator(function.body()) {
+        ActiveCaptureFrameGuard { registered: false }
+    } else {
+        register_active_capture_frame(&mut function_scope, closure.captures())
+    };
     // A closure whose body contains `yield` is a generator function too: calling it produces the
     // Generator object and runs nothing, and the scope built above — captures, `$this` and the
     // bound arguments — becomes the generator's own.
@@ -576,7 +786,13 @@ fn eval_closure_with_optional_binding(
         values,
     );
     let capture_writeback_result =
-        write_back_closure_ref_captures(closure.captures(), &function_scope, context, values)
+        write_back_closure_ref_captures(
+            closure.captures(),
+            &bound_capture_cells,
+            &function_scope,
+            context,
+            values,
+        )
             .and_then(|()| keep_closure_ref_capture_cells(closure, &function_scope, context, values));
     let arg_writeback_result = write_back_method_ref_args(
         function.params(),
@@ -680,10 +896,12 @@ fn bind_closure_captures(
     function_scope: &mut ElephcEvalScope,
     captures: &[EvalClosureCaptureBinding],
     context: &ElephcEvalContext,
-) {
+) -> Vec<(String, RuntimeCellHandle)> {
+    let mut bound_cells = Vec::new();
     for capture in captures {
         if let Some(target) = capture.by_ref_target().cloned() {
             let cell = live_variable_capture_cell(&target, context).unwrap_or(capture.value());
+            bound_cells.push((capture.name().to_string(), cell));
             function_scope.set_reference(
                 capture.name().to_string(),
                 capture.name().to_string(),
@@ -699,6 +917,7 @@ fn bind_closure_captures(
             );
         }
     }
+    bound_cells
 }
 
 /// Returns the cell a by-reference capture's variable holds, while its activation is alive.
@@ -743,6 +962,7 @@ fn keep_closure_ref_capture_cells(
 /// Writes modified by-reference closure captures back to their defining caller targets.
 fn write_back_closure_ref_captures(
     captures: &[EvalClosureCaptureBinding],
+    bound_cells: &[(String, RuntimeCellHandle)],
     function_scope: &ElephcEvalScope,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -757,7 +977,49 @@ fn write_back_closure_ref_captures(
         else {
             continue;
         };
-        write_back_method_ref_target(target, entry.cell(), context, values)?;
+        let final_cell = entry.cell();
+        // The cell the closure started from: a plain assignment inside the body already wrote
+        // through to the target, so the target no longer holds it by now.
+        let bound_cell = bound_cells
+            .iter()
+            .find(|(name, _)| name == capture.name())
+            .map(|(_, cell)| *cell);
+        write_back_method_ref_target(target, final_cell, context, values)?;
+        if let Some(defining) = capture.defining_target() {
+            sync_defining_variable(defining, bound_cell, final_cell, context, values)?;
+        }
+    }
+    Ok(())
+}
+
+/// Moves the defining scope's own entry for a by-reference capture to the closure's final cell.
+///
+/// `function f(&$p) { $g = function () use (&$p) { $p = 5; }; $g(); return $p; }`: the capture's
+/// write-back target is the CALLER's variable, so `$p` in `f`'s scope kept the cell the closure
+/// replaced -- freed by then -- and read back garbage. The entry is only moved while it still
+/// holds the cell the closure bound, which keeps a loop variable rebound since the capture
+/// (`foreach (... as &$item)`) pointing at its new element.
+fn sync_defining_variable(
+    defining: &EvalReferenceTarget,
+    bound_cell: Option<RuntimeCellHandle>,
+    final_cell: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let EvalReferenceTarget::Variable { scope, name } = defining else {
+        return Ok(());
+    };
+    let Some(scope) = (unsafe { scope.live_mut() }) else {
+        return Ok(());
+    };
+    let Some(current) = visible_scope_cell(context, scope, name) else {
+        return Ok(());
+    };
+    if Some(current) != bound_cell || current == final_cell {
+        return Ok(());
+    }
+    for replaced in scope.set_respecting_references(name.clone(), final_cell, ScopeCellOwnership::Borrowed) {
+        eval_release_value(context, values, replaced)?;
     }
     Ok(())
 }
@@ -925,6 +1187,7 @@ fn visit_static_var_declarations(
             | EvalStmt::UnsetDynamicStaticPropertyName { .. }
             | EvalStmt::UnsetProperty { .. }
             | EvalStmt::UnsetStaticProperty { .. }
+            | EvalStmt::UnsetDynamicVar { .. }
             | EvalStmt::UnsetVar { .. } => {}
         }
     }

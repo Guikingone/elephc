@@ -128,6 +128,7 @@ pub(super) fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str)
                 || eval_expr_uses_this_property(object, property_name)
                 || eval_expr_uses_this_property(property, property_name)
         }
+        EvalStmt::UnsetDynamicVar { name } => eval_expr_uses_this_property(name, property_name),
         EvalStmt::UnsetDynamicStaticProperty { class_name, .. } => {
             eval_expr_uses_this_property(class_name, property_name)
         }

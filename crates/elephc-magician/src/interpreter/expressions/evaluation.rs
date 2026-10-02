@@ -57,6 +57,14 @@ pub(in crate::interpreter) fn eval_binary_result(
             let right_truthy = values.truthy(right)?;
             values.bool_value(left_truthy ^ right_truthy)
         }
+        EvalBinOp::LooseEq | EvalBinOp::LooseNotEq
+            if values.is_array_like(left)? && values.is_array_like(right)? =>
+        {
+            // The runtime's loose comparison only compares scalar payloads, so two ARRAYS were
+            // equal only when they were the same storage. `[1] == [1]` is true in php.
+            let equal = eval_values_loosely_equal(left, right, values)?;
+            values.bool_value(equal == (op == EvalBinOp::LooseEq))
+        }
         EvalBinOp::LooseEq
         | EvalBinOp::LooseNotEq
         | EvalBinOp::StrictEq
@@ -68,6 +76,52 @@ pub(in crate::interpreter) fn eval_binary_result(
         EvalBinOp::Spaceship => values.spaceship(left, right),
         EvalBinOp::LogicalAnd | EvalBinOp::LogicalOr => Err(EvalStatus::UnsupportedConstruct),
     }
+}
+
+/// PHP's `==` between two values, comparing arrays element by element.
+///
+/// Arrays are equal when they hold the same key/value pairs, in any order, each pair compared
+/// with `==` itself. Everything else goes through the runtime's loose comparison.
+pub(in crate::interpreter) fn eval_values_loosely_equal(
+    left: RuntimeCellHandle,
+    right: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let left_is_array = values.is_array_like(left)?;
+    let right_is_array = values.is_array_like(right)?;
+    if left_is_array && right_is_array {
+        let len = values.array_len(left)?;
+        if len != values.array_len(right)? {
+            return Ok(false);
+        }
+        for position in 0..len {
+            let key = values.array_iter_key(left, position)?;
+            let present = values.array_key_exists(key, right)?;
+            if !values.truthy(present)? {
+                return Ok(false);
+            }
+            let left_item = values.array_get(left, key)?;
+            let right_item = values.array_get(right, key)?;
+            if !eval_values_loosely_equal(left_item, right_item, values)? {
+                return Ok(false);
+            }
+        }
+        return Ok(true);
+    }
+    if left_is_array || right_is_array {
+        // An array against a scalar: only `[] == false` / `[] == null` style truthiness matches.
+        let other = if left_is_array { right } else { left };
+        let array = if left_is_array { left } else { right };
+        let tag = values.type_tag(other)?;
+        if tag == EVAL_TAG_NULL || tag == EVAL_TAG_BOOL {
+            let other_truthy = values.truthy(other)?;
+            let array_truthy = values.truthy(array)?;
+            return Ok(other_truthy == array_truthy);
+        }
+        return Ok(false);
+    }
+    let equal = values.compare(EvalBinOp::LooseEq, left, right)?;
+    values.truthy(equal)
 }
 
 /// PHP's `&`, `|` and `^` on two STRINGS: byte by byte, never through integers.
@@ -738,11 +792,18 @@ fn eval_closure_capture(
             status
         })?;
         let value = if defined { values.retain(value)? } else { value };
-        return Ok(EvalClosureCaptureBinding::new(
-            capture.name(),
-            value,
-            target,
-        ));
+        // The variable may itself be a reference (a by-reference parameter): `target` is then
+        // the variable it aliases, so keep this scope's own entry as a second holder.
+        let defining_target = (scope.reference_target(capture.name()).is_some() && defined).then(
+            || EvalReferenceTarget::Variable {
+                scope: crate::scope::EvalScopeRef::new(scope),
+                name: capture.name().to_string(),
+            },
+        );
+        return Ok(
+            EvalClosureCaptureBinding::new(capture.name(), value, target)
+                .with_defining_target(defining_target),
+        );
     }
     let value = if let Some(value) = visible_scope_cell(context, scope, capture.name()) {
         values.retain(value)?

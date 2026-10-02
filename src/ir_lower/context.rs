@@ -245,6 +245,9 @@ const EVAL_ARGV_LOCAL_NAME: &str = "argv";
 
 thread_local! {
     static RUNTIME_DYNAMIC_FUNCTION_RESOLUTION: Cell<bool> = const { Cell::new(false) };
+    /// Whether the program being lowered can load PHP at run time: an include the resolver could
+    /// not expand, or an `eval()`.
+    static PROGRAM_LOADS_CODE_AT_RUN_TIME: Cell<bool> = const { Cell::new(false) };
     /// `CheckResult::ref_param_escaping_callees` for the program being lowered.
     static REF_PARAM_ESCAPING_CALLEES: std::cell::RefCell<HashSet<String>> =
         std::cell::RefCell::new(HashSet::new());
@@ -323,6 +326,24 @@ impl Drop for RuntimeDynamicFunctionResolutionGuard {
     fn drop(&mut self) {
         RUNTIME_DYNAMIC_FUNCTION_RESOLUTION.with(|enabled| enabled.set(self.previous));
     }
+}
+
+/// Restores the enclosing lowering invocation's run-time code loading answer on drop.
+pub(crate) struct ProgramLoadsCodeGuard {
+    previous: bool,
+}
+
+impl Drop for ProgramLoadsCodeGuard {
+    fn drop(&mut self) {
+        PROGRAM_LOADS_CODE_AT_RUN_TIME.with(|loads| loads.set(self.previous));
+    }
+}
+
+/// Records, for one complete program-lowering invocation, whether the program can load PHP at
+/// run time; see [`LoweringContext::program_loads_code_at_run_time`].
+pub(crate) fn set_program_loads_code_at_run_time(loads: bool) -> ProgramLoadsCodeGuard {
+    let previous = PROGRAM_LOADS_CODE_AT_RUN_TIME.with(|current| current.replace(loads));
+    ProgramLoadsCodeGuard { previous }
 }
 
 /// Enables dynamic function-owner fallback for one complete program-lowering invocation.
@@ -1568,6 +1589,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Returns whether another dynamic include/eval frame may declare a callable function.
     pub(crate) fn can_resolve_runtime_dynamic_functions(&self) -> bool {
         RUNTIME_DYNAMIC_FUNCTION_RESOLUTION.with(Cell::get)
+    }
+
+    /// Whether the program can load PHP at run time (an unexpanded include, an `eval()`), and so
+    /// meet a class or constant the closed world never saw. Code that asks the eval bridge about
+    /// such names links the interpreter; a program that cannot load any keeps php's plain answer.
+    pub(crate) fn program_loads_code_at_run_time(&self) -> bool {
+        PROGRAM_LOADS_CODE_AT_RUN_TIME.with(Cell::get)
     }
 
     /// Records that an `eval()` call was lowered, even when its fragment

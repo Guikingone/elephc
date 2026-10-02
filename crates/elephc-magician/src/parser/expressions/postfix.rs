@@ -72,8 +72,20 @@ impl Parser {
         let TokenKind::DollarIdent(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
         };
-        let mut expr = EvalExpr::LoadVar(name.clone());
+        let expr = EvalExpr::LoadVar(name.clone());
         self.advance();
+        self.parse_class_name_target_chain(expr, ctor_position)
+    }
+
+    /// Continues a dynamic class-name target with its `[index]`, `::$static` and `->member` chain.
+    ///
+    /// Shared by `new $var...` and `new Name::$static...`: the latter is how Laravel writes
+    /// `new static::$resolvedCollectionClasses[static::class]($models)`.
+    pub(in crate::parser) fn parse_class_name_target_chain(
+        &mut self,
+        mut expr: EvalExpr,
+        ctor_position: bool,
+    ) -> Result<EvalExpr, EvalParseError> {
         loop {
             if matches!(self.current(), TokenKind::LBracket)
                 && matches!(self.tokens.get(self.pos + 1), Some(TokenKind::RBracket))

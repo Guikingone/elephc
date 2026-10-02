@@ -273,6 +273,30 @@ pub(in crate::interpreter) fn eval_var_reference_bind(
             }
             status
         })?;
+    // `$array = &$array[$key]` over a by-reference PARAMETER (Laravel's `Arr::set()` walks a dotted
+    // key this way): the element target would name the function's own `$array`, which this very
+    // statement rebinds -- so the write-back at the end of the call then copied the innermost
+    // element over the caller's variable. The element is an element of whatever `$array` aliased,
+    // so name it through that storage instead.
+    let source_target = match (&source_target, source) {
+        (
+            EvalReferenceTarget::ArrayElement {
+                array_name, index, ..
+            },
+            EvalExpr::ArrayGet { array, .. },
+        ) if array_name == name
+            && matches!(array.as_ref(), EvalExpr::LoadVar(base) if base == name) =>
+        {
+            match scope.reference_target(name).cloned() {
+                Some(outer) => EvalReferenceTarget::NestedArrayElement {
+                    array_target: Box::new(outer),
+                    index: index.clone(),
+                },
+                None => source_target,
+            }
+        }
+        _ => source_target,
+    };
     let replaced = scope.rebind_reference(
         name.to_string(),
         source_value,

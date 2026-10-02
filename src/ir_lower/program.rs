@@ -78,8 +78,12 @@ pub(crate) fn lower(
     web: bool,
     source_catalog: Option<crate::ir::SourceCatalog>,
 ) -> Result<Module, LoweringError> {
+    let contains_eval_call = body_contains_eval_call(program);
     let _dynamic_function_resolution =
-        super::context::enable_runtime_dynamic_function_resolution(body_contains_eval_call(program));
+        super::context::enable_runtime_dynamic_function_resolution(contains_eval_call);
+    let _program_loads_code = super::context::set_program_loads_code_at_run_time(
+        contains_eval_call || crate::ast_usage::collect(program).dynamic_code_load,
+    );
     let mut module = match source_catalog {
         Some(catalog) => Module::with_source_catalog(target, catalog),
         None => Module::new(target),

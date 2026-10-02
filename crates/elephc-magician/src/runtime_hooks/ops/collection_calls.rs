@@ -44,6 +44,65 @@ macro_rules! impl_collection_call_ops {
         })
     }
 
+    /// Reads the RAW boxed slot of an indexed Mixed array and reports an invoker by-reference
+    /// marker. The layout read here is the runtime's own: a 24-byte header whose first word is the
+    /// length, element slots after it, and the element value type in bits 8..15 of the heap kind
+    /// word just before the header. Anything that is not boxed-Mixed indexed storage, and any slot
+    /// holding something other than a marker, answers `None`.
+    fn array_invoker_marker_at(
+        &mut self,
+        array: RuntimeCellHandle,
+        position: usize,
+    ) -> Result<Option<(usize, u64)>, EvalStatus> {
+        const BOXED_MIXED_VALUE_TYPE: u64 = 7;
+        const ARRAY_HEADER_BYTES: usize = 24;
+        const TAG_INDEXED_ARRAY: u64 = 4;
+        const TAG_INVOKER_REF_CELL: u64 = 11;
+        if self.type_tag(array)? != TAG_INDEXED_ARRAY {
+            return Ok(None);
+        }
+        let base = self.raw_value_word(array)? as usize;
+        if base == 0 {
+            return Ok(None);
+        }
+        let kind = unsafe { *((base - 8) as *const u64) };
+        if (kind >> 8) & 0x7f != BOXED_MIXED_VALUE_TYPE {
+            return Ok(None);
+        }
+        let len = unsafe { *(base as *const u64) } as usize;
+        if position >= len {
+            return Ok(None);
+        }
+        let cell = unsafe { *((base + ARRAY_HEADER_BYTES + position * 8) as *const usize) };
+        if cell == 0 {
+            return Ok(None);
+        }
+        let cell = RuntimeCellHandle::from_raw(cell as *mut RuntimeCell);
+        if self.type_tag(cell)? != TAG_INVOKER_REF_CELL {
+            return Ok(None);
+        }
+        Ok(Some((
+            self.raw_value_word(cell)? as usize,
+            self.raw_value_high_word(cell)?,
+        )))
+    }
+
+    /// Creates a boxed indexed array whose payload uses raw object-pointer slots.
+    fn object_array_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_object_array_new(capacity as u64) })
+    }
+
+    /// Appends one boxed object to a raw object-pointer array, retaining it for the array.
+    fn object_array_push(
+        &mut self,
+        array: RuntimeCellHandle,
+        object: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe {
+            __elephc_eval_value_object_array_push(array.as_ptr(), object.as_ptr())
+        })
+    }
+
     /// Creates a boxed Mixed associative array through the generated runtime wrapper.
     fn assoc_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_assoc_new(capacity as u64) })

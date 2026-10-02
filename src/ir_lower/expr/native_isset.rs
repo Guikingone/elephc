@@ -227,6 +227,7 @@ fn program_may_hold_array_access_objects(ctx: &LoweringContext<'_, '_>) -> bool 
     ctx.has_eval_barrier()
         || ctx.eval_executed()
         || ctx.can_resolve_runtime_dynamic_functions()
+        || ctx.program_loads_code_at_run_time()
         || ctx.classes.keys().any(|class| {
             elephc_builtin_contract::lookup_class(class).is_none()
                 && !class.trim_start_matches('\\').to_ascii_lowercase().starts_with("__elephc")

@@ -32,3 +32,12 @@ pub(in crate::interpreter) fn eval_htmlentities_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     super::htmlspecialchars::eval_htmlspecialchars_result(value, values)
 }
+
+/// Applies PHP `htmlentities(...)` with an explicit `$flags` bit set.
+pub(in crate::interpreter) fn eval_htmlentities_result_with_flags(
+    value: RuntimeCellHandle,
+    flags: i64,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    super::htmlspecialchars::eval_htmlspecialchars_with_flags(value, flags, values)
+}

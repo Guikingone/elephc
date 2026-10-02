@@ -24,6 +24,25 @@ pub(crate) fn lower_html_escape(
     let ptr_reg = string_ptr_reg(ctx);
     let len_reg = string_len_reg(ctx);
     load_string_arg_to_regs(ctx, inst, 0, name, ptr_reg, len_reg)?;
+    // The `$flags` bit set rides in a spare argument register: php's default (`ENT_QUOTES |
+    // ENT_SUBSTITUTE | ENT_HTML401`) when absent, the operand's value when it is statically an
+    // int. Symfony's error renderer escapes with `ENT_COMPAT`, which must leave `'` alone, and
+    // `ENT_HTML5` wants `&apos;`.
+    let flags_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x3",
+        Arch::X86_64 => "rdi",
+    };
+    let flags_operand = inst
+        .operands
+        .get(1)
+        .copied()
+        .filter(|operand| matches!(ctx.value_php_type(*operand), Ok(PhpType::Int)));
+    match flags_operand {
+        Some(operand) => {
+            ctx.load_value_to_reg(operand, flags_reg)?;
+        }
+        None => abi::emit_load_int_immediate(ctx.emitter, flags_reg, 3),
+    }
     abi::emit_call_label(ctx.emitter, "__rt_htmlspecialchars");
     store_if_result(ctx, inst)
 }

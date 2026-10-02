@@ -198,6 +198,33 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof_dynamic(
     }
     let value_ty = ctx.value_php_type(value)?;
     let target_ty = ctx.value_php_type(target)?;
+    // A class the interpreter declared is unknown to the compile-time class table, so a string
+    // target naming one never resolves below. Ask the bridge's identity table first, with no
+    // local context, exactly as the named `instanceof` does; a miss falls through to the native
+    // matcher for ordinary compiled objects.
+    let eval_fallback_done = if ctx.module.required_runtime_features.eval_bridge
+        && matches!(value_ty, PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_))
+        && matches!(target_ty, PhpType::Str | PhpType::Mixed | PhpType::Union(_))
+    {
+        let eval_matched = ctx.next_label("instanceof_dynamic_eval_owner_matched");
+        let native_fallback = ctx.next_label("instanceof_dynamic_eval_owner_native");
+        let eval_done = ctx.next_label("instanceof_dynamic_eval_owner_done");
+        builtins::emit_eval_object_is_a_dynamic_name_fallback(
+            ctx,
+            value,
+            target,
+            &target_ty,
+            &eval_matched,
+            &native_fallback,
+        )?;
+        ctx.emitter.label(&eval_matched);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+        abi::emit_jump(ctx.emitter, &eval_done);
+        ctx.emitter.label(&native_fallback);
+        Some(eval_done)
+    } else {
+        None
+    };
     let target_false = ctx.next_label("instanceof_dynamic_target_false");
     let done = ctx.next_label("instanceof_dynamic_done");
     emit_normalized_dynamic_instanceof_value(ctx, value, &value_ty)?;
@@ -209,6 +236,10 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof_dynamic(
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     emit_false(ctx);
     ctx.emitter.label(&done);
+    if let Some(eval_done) = &eval_fallback_done {
+        abi::emit_jump(ctx.emitter, eval_done);
+        ctx.emitter.label(eval_done);
+    }
     store_if_result(ctx, inst)
 }
 

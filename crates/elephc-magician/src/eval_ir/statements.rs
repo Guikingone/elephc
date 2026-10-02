@@ -333,6 +333,10 @@ pub enum EvalStmt {
     UnsetVar {
         name: String,
     },
+    /// `unset($$name)` / `unset(${expr})`: the name is evaluated, then that variable is removed.
+    UnsetDynamicVar {
+        name: EvalExpr,
+    },
     While {
         condition: EvalExpr,
         body: Vec<EvalStmt>,

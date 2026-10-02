@@ -561,7 +561,9 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     let mark_len_off = mark_ptr_off + 8;
     // `MARK` is built in this slot rather than interned: this emitter is handed no data section.
     let mark_key_off = mark_len_off + 8;
-    let stack_size = (mark_key_off + 8 + 48 + 15) & !15;
+    // Runtime value tag of the capture being inserted: 1 = string, 8 = null (PREG_UNMATCHED_AS_NULL).
+    let value_tag_off = mark_key_off + 8;
+    let stack_size = (value_tag_off + 8 + 48 + 15) & !15;
     let save_off = stack_size - 16;
 
     emitter.blank();
@@ -652,6 +654,13 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_preg_match_capture_scan");                      // continue searching for the highest populated capture
     emitter.label("__rt_preg_match_capture_scan_found");
     emitter.instruction(&format!("str x12, [sp, #{}]", max_group_off));         // save highest capture index to materialize
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", php_flags_off));          // reload PHP's preg_match() flags
+    emitter.instruction("tst x9, #512");                                        // PHP's PREG_UNMATCHED_AS_NULL is bit 512
+    emitter.instruction("b.eq __rt_preg_match_capture_scan_trimmed");           // without the flag trailing unmatched groups stay omitted
+    emitter.instruction(&format!("ldr x12, [sp, #{}]", nmatch_off));            // the flag reports every compiled group, matched or not
+    emitter.instruction("sub x12, x12, #1");                                    // highest group index = slot count - 1
+    emitter.instruction(&format!("str x12, [sp, #{}]", max_group_off));         // materialize every group
+    emitter.label("__rt_preg_match_capture_scan_trimmed");
 
     // -- PREG_OFFSET_CAPTURE replaces every capture string with a [text, offset] pair --
     emitter.instruction(&format!("ldr x9, [sp, #{}]", php_flags_off));          // reload PHP's preg_match() flags
@@ -682,6 +691,9 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction("cbnz x0, __rt_preg_match_capture_named");              // any named group forces the hash-backed matches array
     emitter.instruction(&format!("ldr x0, [sp, #{}]", mark_ptr_off));           // a pattern with no name can still carry a mark
     emitter.instruction("cbnz x0, __rt_preg_match_capture_named");              // a mark alone forces the hash-backed matches array
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", php_flags_off));          // reload PHP's preg_match() flags
+    emitter.instruction("tst x9, #512");                                        // PREG_UNMATCHED_AS_NULL needs per-entry null tags
+    emitter.instruction("b.ne __rt_preg_match_capture_named");                  // a list of string slots cannot hold null
 
     // -- allocate and fill matches array --
     emitter.instruction(&format!("ldr x0, [sp, #{}]", nmatch_off));             // allocate enough slots for every compiled capture
@@ -727,6 +739,8 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x0, [sp, #{}]", matches_array_off));      // save matches hash pointer across inserts
     emitter.instruction(&format!("str xzr, [sp, #{}]", group_idx_off));         // start with capture index zero
     emitter.label("__rt_preg_match_capture_named_loop");
+    emitter.instruction("mov x9, #1");                                          // captures are strings unless the group did not participate
+    emitter.instruction(&format!("str x9, [sp, #{}]", value_tag_off));          // reset the entry tag for this capture
     emitter.instruction(&format!("ldr x12, [sp, #{}]", group_idx_off));         // reload current capture index
     emitter.instruction(&format!("ldr x13, [sp, #{}]", max_group_off));         // reload highest capture index
     emitter.instruction("cmp x12, x13");                                        // have all required captures been materialized?
@@ -745,6 +759,12 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.label("__rt_preg_match_capture_named_empty");
     emitter.instruction("mov x1, #0");                                          // empty unmatched capture has a null pointer
     emitter.instruction("mov x2, #0");                                          // empty unmatched capture has zero length
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", php_flags_off));          // reload PHP's preg_match() flags
+    emitter.instruction("tst x9, #512");                                        // PREG_UNMATCHED_AS_NULL turns the empty string into null
+    emitter.instruction("mov x10, #8");                                         // runtime value tag 8 = null
+    emitter.instruction("mov x11, #1");                                         // runtime value tag 1 = string
+    emitter.instruction("csel x10, x10, x11, ne");                              // pick null under the flag, the empty string otherwise
+    emitter.instruction(&format!("str x10, [sp, #{}]", value_tag_off));         // remember the tag for both inserts of this capture
     emitter.label("__rt_preg_match_capture_named_value");
     emitter.instruction(&format!("str x1, [sp, #{}]", value_ptr_off));          // hold the capture pointer across helper calls
     emitter.instruction(&format!("str x2, [sp, #{}]", value_len_off));          // hold the capture length across helper calls
@@ -761,25 +781,33 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x2, [sp, #{}]", key_hi_off));             // hold the key discriminant across the value persist
     emitter.instruction(&format!("ldr x1, [sp, #{}]", value_ptr_off));          // reload the capture pointer to persist
     emitter.instruction(&format!("ldr x2, [sp, #{}]", value_len_off));          // reload the capture length to persist
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", value_tag_off));          // reload this capture's entry tag
+    emitter.instruction("cmp x9, #8");                                          // a null capture owns no string bytes
+    emitter.instruction("b.eq __rt_preg_match_capture_named_key_null");         // skip the persist for null entries
     emitter.instruction("bl __rt_str_persist");                                 // the named entry owns its own copy of the capture bytes
+    emitter.label("__rt_preg_match_capture_named_key_null");
     emitter.instruction("mov x3, x1");                                          // pass the persisted capture as the entry value payload
     emitter.instruction("mov x4, x2");                                          // pass the persisted capture length
     emitter.instruction(&format!("ldr x1, [sp, #{}]", key_lo_off));             // reload the normalized key
     emitter.instruction(&format!("ldr x2, [sp, #{}]", key_hi_off));             // reload the key discriminant
     emitter.instruction(&format!("ldr x0, [sp, #{}]", matches_array_off));      // reload matches hash pointer
-    emitter.instruction("mov x5, #1");                                          // runtime value tag 1 = string
+    emitter.instruction(&format!("ldr x5, [sp, #{}]", value_tag_off));          // runtime value tag: string, or null for an unmatched group under the flag
     emitter.instruction("bl __rt_hash_set");                                    // insert the named key ahead of its numeric twin
     emitter.instruction(&format!("str x0, [sp, #{}]", matches_array_off));      // save possibly-grown matches hash pointer
     emitter.label("__rt_preg_match_capture_named_int");
     emitter.instruction(&format!("ldr x1, [sp, #{}]", value_ptr_off));          // reload the capture pointer to persist
     emitter.instruction(&format!("ldr x2, [sp, #{}]", value_len_off));          // reload the capture length to persist
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", value_tag_off));          // reload this capture's entry tag
+    emitter.instruction("cmp x9, #8");                                          // a null capture owns no string bytes
+    emitter.instruction("b.eq __rt_preg_match_capture_named_int_null");         // skip the persist for null entries
     emitter.instruction("bl __rt_str_persist");                                 // the numeric entry owns its own copy of the capture bytes
+    emitter.label("__rt_preg_match_capture_named_int_null");
     emitter.instruction("mov x3, x1");                                          // pass the persisted capture as the entry value payload
     emitter.instruction("mov x4, x2");                                          // pass the persisted capture length
     emitter.instruction(&format!("ldr x1, [sp, #{}]", group_idx_off));          // the capture index is the numeric key
     emitter.instruction("mov x2, #-1");                                         // a key discriminant of -1 marks an integer key
     emitter.instruction(&format!("ldr x0, [sp, #{}]", matches_array_off));      // reload matches hash pointer
-    emitter.instruction("mov x5, #1");                                          // runtime value tag 1 = string
+    emitter.instruction(&format!("ldr x5, [sp, #{}]", value_tag_off));          // runtime value tag: string, or null for an unmatched group under the flag
     emitter.instruction("bl __rt_hash_set");                                    // insert this capture under its numeric key
     emitter.instruction(&format!("str x0, [sp, #{}]", matches_array_off));      // save possibly-grown matches hash pointer
     emitter.instruction(&format!("ldr x12, [sp, #{}]", group_idx_off));         // reload capture index after helper calls
@@ -967,7 +995,9 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     let mark_ptr_off = php_flags_off + 8;
     let mark_len_off = mark_ptr_off + 8;
     let mark_key_off = mark_len_off + 8;
-    let stack_size = (mark_key_off + 8 + 32 + 15) & !15;
+    // Runtime value tag of the capture being inserted: 1 = string, 8 = null (PREG_UNMATCHED_AS_NULL).
+    let value_tag_off = mark_key_off + 8;
+    let stack_size = (value_tag_off + 8 + 32 + 15) & !15;
 
     emitter.blank();
     emitter.comment("--- runtime: preg_match_capture ---");
@@ -1051,6 +1081,13 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_preg_match_capture_scan_linux_x86_64");       // continue searching for the highest populated capture
     emitter.label("__rt_preg_match_capture_scan_found_linux_x86_64");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", max_group_off)); // save highest capture index to materialize
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", php_flags_off)); // reload PHP's preg_match() flags
+    emitter.instruction("test r9, 512");                                        // PHP's PREG_UNMATCHED_AS_NULL is bit 512
+    emitter.instruction("jz __rt_preg_match_capture_scan_trimmed_linux_x86_64"); // without the flag trailing unmatched groups stay omitted
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", nmatch_off));  // the flag reports every compiled group, matched or not
+    emitter.instruction("sub r9, 1");                                           // highest group index = slot count - 1
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", max_group_off)); // materialize every group
+    emitter.label("__rt_preg_match_capture_scan_trimmed_linux_x86_64");
 
     // -- PREG_OFFSET_CAPTURE replaces every capture string with a [text, offset] pair --
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", php_flags_off)); // reload PHP's preg_match() flags
@@ -1081,6 +1118,9 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", mark_ptr_off)); // a pattern with no name can still carry a mark
     emitter.instruction("test rax, rax");                                       // did the match pass a MARK verb?
     emitter.instruction("jnz __rt_preg_match_capture_named_linux_x86_64");      // a mark alone forces the hash-backed matches array
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", php_flags_off)); // reload PHP's preg_match() flags
+    emitter.instruction("test r9, 512");                                        // PREG_UNMATCHED_AS_NULL needs per-entry null tags
+    emitter.instruction("jnz __rt_preg_match_capture_named_linux_x86_64");      // a list of string slots cannot hold null
 
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", nmatch_off)); // allocate enough slots for every compiled capture
     emitter.instruction("mov rsi, 16");                                         // string arrays use pointer/length payload slots
@@ -1127,6 +1167,7 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off)); // save matches hash pointer across inserts
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", group_idx_off)); // start with capture index zero
     emitter.label("__rt_preg_match_capture_named_loop_linux_x86_64");
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 1", value_tag_off)); // captures are strings unless the group did not participate
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", group_idx_off)); // reload current capture index
     emitter.instruction(&format!("mov r8, QWORD PTR [rsp + {}]", max_group_off)); // reload highest capture index
     emitter.instruction("cmp r9, r8");                                          // have all required captures been materialized?
@@ -1146,6 +1187,12 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_preg_match_capture_named_empty_linux_x86_64");
     emitter.instruction("xor esi, esi");                                        // empty unmatched capture has a null pointer
     emitter.instruction("xor edx, edx");                                        // empty unmatched capture has zero length
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", php_flags_off)); // reload PHP's preg_match() flags
+    emitter.instruction("test r9, 512");                                        // PREG_UNMATCHED_AS_NULL turns the empty string into null
+    emitter.instruction("mov r10d, 1");                                         // runtime value tag 1 = string
+    emitter.instruction("mov r11d, 8");                                         // runtime value tag 8 = null
+    emitter.instruction("cmovnz r10, r11");                                     // pick null under the flag, the empty string otherwise
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", value_tag_off)); // remember the tag for both inserts of this capture
     emitter.label("__rt_preg_match_capture_named_value_linux_x86_64");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rsi", value_ptr_off)); // hold the capture pointer across calls
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", value_len_off)); // hold the capture length across calls
@@ -1161,27 +1208,37 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_normalize_key");                        // apply PHP's numeric-string key normalization
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", key_lo_off)); // hold the normalized key across the persist
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", key_hi_off)); // hold the key discriminant across the persist
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", value_ptr_off)); // capture pointer, kept as-is for a null entry
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", value_len_off)); // capture length, kept as-is for a null entry
+    emitter.instruction(&format!("cmp QWORD PTR [rsp + {}], 8", value_tag_off)); // a null capture owns no string bytes
+    emitter.instruction("je __rt_preg_match_capture_named_key_null_linux_x86_64"); // skip the persist for null entries
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", value_ptr_off)); // reload the capture pointer to persist
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", value_len_off)); // reload the capture length to persist
     emitter.instruction("call __rt_str_persist");                               // the named entry owns its own copy of the capture bytes
+    emitter.label("__rt_preg_match_capture_named_key_null_linux_x86_64");
     emitter.instruction("mov rcx, rax");                                        // pass the persisted capture as the entry value payload
     emitter.instruction("mov r8, rdx");                                         // pass the persisted capture length
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", key_lo_off)); // reload the normalized key
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", key_hi_off)); // reload the key discriminant
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", matches_array_off)); // reload matches hash pointer
-    emitter.instruction("mov r9d, 1");                                          // runtime value tag 1 = string
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", value_tag_off)); // runtime value tag: string, or null for an unmatched group under the flag
     emitter.instruction("call __rt_hash_set");                                  // insert the named key ahead of its numeric twin
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off)); // save possibly-grown hash pointer
     emitter.label("__rt_preg_match_capture_named_int_linux_x86_64");
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", value_ptr_off)); // capture pointer, kept as-is for a null entry
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", value_len_off)); // capture length, kept as-is for a null entry
+    emitter.instruction(&format!("cmp QWORD PTR [rsp + {}], 8", value_tag_off)); // a null capture owns no string bytes
+    emitter.instruction("je __rt_preg_match_capture_named_int_null_linux_x86_64"); // skip the persist for null entries
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", value_ptr_off)); // reload the capture pointer to persist
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", value_len_off)); // reload the capture length to persist
     emitter.instruction("call __rt_str_persist");                               // the numeric entry owns its own copy of the capture bytes
+    emitter.label("__rt_preg_match_capture_named_int_null_linux_x86_64");
     emitter.instruction("mov rcx, rax");                                        // pass the persisted capture as the entry value payload
     emitter.instruction("mov r8, rdx");                                         // pass the persisted capture length
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", group_idx_off)); // the capture index is the numeric key
     emitter.instruction("mov rdx, -1");                                         // a key discriminant of -1 marks an integer key
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", matches_array_off)); // reload matches hash pointer
-    emitter.instruction("mov r9d, 1");                                          // runtime value tag 1 = string
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", value_tag_off)); // runtime value tag: string, or null for an unmatched group under the flag
     emitter.instruction("call __rt_hash_set");                                  // insert this capture under its numeric key
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off)); // save possibly-grown hash pointer
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", group_idx_off)); // reload capture index after helper calls

@@ -1344,6 +1344,7 @@ fn runtime_builtin_descriptor_cases(
         if !(runtime_callable_name_is_reachable(name, candidate_names)
             || !reachable_aliases.is_empty())
             || !callable_dispatch::runtime_builtin_wrapper_supported(name, source_arg_ty)
+            || runtime_builtin_needs_unlinked_bridge(ctx, name)
             || ctx
                 .module
                 .extern_decls
@@ -1387,6 +1388,33 @@ fn runtime_builtin_descriptor_cases(
         });
     }
     Ok(cases)
+}
+
+/// Returns whether a runtime-selectable builtin needs a native bridge this program does not link.
+///
+/// A wrapper for `mb_strtolower` calls through the iconv bridge, and a program only links a bridge
+/// its own code calls (`-lelephc_iconv` follows the first static iconv-backed call). Putting such a
+/// wrapper in the shared string-callable ladder of every program left `_elephc_iconv_call` undefined
+/// at link time. The eval bridge (Magician) embeds the crypto, iconv and phar bridges, so a program
+/// that has it can always offer them -- which is what lets Laravel's `$function($value)` with
+/// `mb_strtolower` reach the builtin.
+fn runtime_builtin_needs_unlinked_bridge(ctx: &FunctionContext<'_>, name: &str) -> bool {
+    const EMBEDDED_BY_EVAL_BRIDGE: &[&str] = &["elephc_crypto", "elephc_iconv", "elephc_phar"];
+    let key = php_symbol_key(name.trim_start_matches('\\'));
+    let Some(def) = crate::builtins::registry::lookup(&key) else {
+        return false;
+    };
+    let requirements = match def.spec.semantics.requirements {
+        crate::builtins::semantics::BuiltinRequirements::Static(requirements) => requirements,
+        crate::builtins::semantics::BuiltinRequirements::Shared(_) => return false,
+    };
+    requirements.iter().any(|requirement| match requirement {
+        crate::builtins::semantics::BuiltinRequirement::Bridge(library) => {
+            !(ctx.module.required_runtime_features.eval_bridge
+                && EMBEDDED_BY_EVAL_BRIDGE.contains(library))
+        }
+        _ => false,
+    })
 }
 
 /// Builds runtime descriptor cases for user functions emitted in the EIR module.
