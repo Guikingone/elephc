@@ -128,6 +128,9 @@ pub(crate) enum ArgFilter<'a> {
     /// question is whether the source it carries mentions a watched name anywhere, not
     /// whether the argument as a whole equals one.
     Substrings(&'a [&'a str]),
+    /// Matches eval fragments that the shared AOT planner cannot keep out of the interpreter.
+    /// Opaque source and unsupported static calls remain conservative matches.
+    EvalBridge,
 }
 
 /// A named PHP symbol to search for, carrying the matching rules its kind implies.
@@ -245,6 +248,12 @@ fn args_select_subject(args: &[Expr], target: Symbol<'_>) -> bool {
                 .iter()
                 .any(|needle| haystack.contains(&needle.to_ascii_lowercase()))
         }
+        ArgFilter::EvalBridge => crate::eval_aot::plan_literal_fragment_with_static_calls(
+            value,
+            crate::strict_php::is_enabled(),
+            |_, _| false,
+        )
+        .requires_runtime_eval_bridge(),
         ArgFilter::Any => true,
     }
 }
@@ -293,7 +302,7 @@ fn fragment_mentions(name: &Name, args: &[Expr], target: Symbol<'_>) -> bool {
     // `eval()` on a computed string paid that, which is most of them.
     //
     // An unreadable fragment is not a reference to any one name. Instead, `injection` supplies
-    // all eight declarations for any eval in a non-default OPcache binary (`program_has_eval`).
+    // all eight declarations for bridge-capable eval in a configured binary.
     // Literal fragments need the same protection when they compute their callable names.
     // CLI-default binaries can keep the interpreter's fallback without extra declarations.
     args.iter().any(|arg| match &arg.kind {
@@ -349,10 +358,14 @@ pub(crate) fn first_reference(program: &[Stmt], target: Symbol<'_>) -> Option<Sp
     program.iter().find_map(|stmt| stmt_refs(stmt, target))
 }
 
-/// Returns whether the program can run an eval fragment.
-/// Even a literal fragment can choose an OPcache callable from a computed name or runtime input.
-pub(crate) fn program_has_eval(program: &[Stmt]) -> bool {
-    first_reference(program, Symbol::function("eval")).is_some()
+/// Returns whether eval can reach the interpreter and select an OPcache callable at runtime.
+/// Native or scope-only literal fragments do not require extra declarations, whose cache
+/// operations would otherwise link Magician and activate file-cache startup validation.
+pub(crate) fn program_has_bridge_eval(program: &[Stmt]) -> bool {
+    first_reference(program, Symbol {
+        args: ArgFilter::EvalBridge,
+        ..Symbol::call_site("eval")
+    }).is_some()
 }
 
 /// Returns whether the program already declares its own `target` function (at top level

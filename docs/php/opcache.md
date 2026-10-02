@@ -692,8 +692,10 @@ A call the compiler cannot see at all — `eval(getenv('CODE'))`, or a fragment
 that assembles the name at run time — gets the same answer. The interpreter's
 handlers know only the CLI default (no `--web`, no `--ini opcache.*`), so a
 binary with any other OPcache configuration carries every OPcache declaration
-as soon as it contains an `eval()`, including literal fragments that compute a
-callable name or read one from runtime input. A CLI-default binary needs no
+when `eval()` may reach the interpreter, including literal fragments that compute a
+callable name or read one from runtime input. Literals proven native or scope-only
+by the shared AOT planner keep the dynamic cache dormant and do not gain extra
+declarations or file-cache startup validation. A CLI-default binary needs no
 additional declarations for eval: its handlers' answers are
 already that configuration's, plus whatever `ini_set()` changed at run time.
 

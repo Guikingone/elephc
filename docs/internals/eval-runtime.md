@@ -373,6 +373,11 @@ native code and `eval()` give the same answers. With no eval bridge linked,
 each call folds to `0` at lowering time; `opcache_compile_file()`, whose job is
 to create an entry, links the interpreter by itself.
 
+Configured binaries supply every OPcache declaration for interpreter-capable eval,
+including literal fragments with runtime-selected callable names. The shared AOT
+planner excludes native and scope-only literals from this broad injection, so those
+fragments do not acquire a dynamic cache or file-cache startup validation.
+
 Free-function registration carries the declaration's compiler-internal origin
 in bit 2 of the existing signature flags word. AST source mode sets the EIR
 function flag, and the target-aware registration preserves it for Magician.

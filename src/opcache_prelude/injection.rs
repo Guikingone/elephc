@@ -137,12 +137,12 @@ fn inject_if_used_on_compiler_stack(
             || (detect::program_references(&program, "ini_set")
                 && !detect::program_declares(&program, "ini_set"));
 
-        // Any eval fragment can select an OPcache callable at runtime, even when its source
-        // is a literal. A non-default binary must supply native declarations so those calls
-        // read its configured cache instead of the interpreter's CLI-default fallback.
-        // CLI-default binaries can keep that fallback without additional declarations.
+        // Interpreter-backed eval can select an OPcache callable at runtime, including
+        // literal fragments with computed names. Supply declarations in configured binaries,
+        // while native and scope-only literals keep their no-interpreter startup behavior.
         let eval_reads_opcache =
-            !opcache_configuration_is_cli_default(web, overrides) && detect::program_has_eval(&program);
+            !opcache_configuration_is_cli_default(web, overrides)
+                && detect::program_has_bridge_eval(&program);
         let wanted = |name: &str| {
             (detect::program_references(&program, name) || eval_reads_opcache)
                 && !detect::program_declares(&program, name)

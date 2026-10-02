@@ -93,12 +93,18 @@ pub(super) fn skips_injection_when_unused() {
         assert_eq!(injected.len(), program.len());
     }
 
-/// Eval can compute every OPcache target, but only configured binaries need extra declarations.
+/// Bridge-capable eval supplies every target; native literals keep unused declarations absent.
 #[test]
 fn configured_eval_injects_all_opcache_targets() {
     for (source, has_eval) in [
         (r#"<?php eval('$f = getenv("TARGET"); return $f();');"#, true),
         ("<?php eval(getenv('CODE'));", true),
+        (r#"<?php eval('$f = "opcache_get" . "_status"; return $f();');"#, true),
+        (r#"<?php eval('include getenv("FILE");');"#, true),
+        (r#"<?php eval('$x = 1;');"#, false),
+        (r#"<?php eval('echo 1;');"#, false),
+        (r#"<?php $x = 1; eval('echo $x;');"#, false),
+        ("<?php echo 'eval';", false),
         ("<?php echo 1;", false),
     ] {
         for (web, overrides, configured) in [

@@ -72,6 +72,11 @@ fn write_fixture(dir: &Path) {
 
 /// Compiles `<dir>/main.php` with the supplied `--ini` assignments and returns the executable.
 fn compile(dir: &Path, ini: &[&str]) -> PathBuf {
+    compile_with_flags(dir, ini, &[])
+}
+
+/// Compiles a fixture with additional mode flags, preserving the ordinary INI setup.
+fn compile_with_flags(dir: &Path, ini: &[&str], flags: &[&str]) -> PathBuf {
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.current_dir(dir);
@@ -79,6 +84,7 @@ fn compile(dir: &Path, ini: &[&str]) -> PathBuf {
     for assignment in ini {
         cmd.arg("--ini").arg(assignment);
     }
+    cmd.args(flags);
     let output = cmd.output().expect("failed to spawn elephc");
     assert!(
         output.status.success(),
@@ -374,23 +380,37 @@ fn the_bad_directory_fatal_precedes_the_program() {
 /// that never reaches the bridge at run time", which is a strictly wider set.
 #[test]
 fn a_const_folded_eval_never_reaches_the_validation() {
+    assert_native_literal_eval_skips_validation("--ir-opt=on");
+}
+
+/// Native literal eval keeps the dynamic cache dormant with EIR optimization disabled too.
+#[test]
+fn a_const_folded_eval_never_reaches_the_validation_without_ir_optimization() {
+    assert_native_literal_eval_skips_validation("--ir-opt=off");
+}
+
+/// Exercises the invalid-directory gate and the native literal's observable scope write.
+fn assert_native_literal_eval_skips_validation(mode: &str) {
     let dir = make_test_dir("opcache_fc_folded");
     fs::write(
         dir.join("main.php"),
-        "<?php\neval('$x = 1;');\necho \"RAN\\n\";\n",
+        "<?php\neval('$x = 1;');\necho \"RAN:\", $x, \"\\n\";\n",
     )
     .unwrap();
-    let bin = compile(
+    let bin = compile_with_flags(
         &dir,
         &[
             "opcache.enable_cli=1",
             "opcache.file_cache=/no/such/directory",
         ],
+        &[mode],
     );
 
     let output = Command::new(&bin).output().expect("failed to run binary");
 
     assert_ran_cleanly(&output);
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "RAN:1\n");
+    fs::remove_dir_all(dir).unwrap();
 }
 
 /// Verifies `opcache.error_log` redirects the accelerator channel away from stderr.
