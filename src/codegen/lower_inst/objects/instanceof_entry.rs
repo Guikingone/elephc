@@ -66,7 +66,13 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext
         emit_receiver_is_non_null(ctx, value)?;
         return store_if_result(ctx, inst);
     }
-    if builtins::has_eval_context(ctx) {
+    // Not for `Closure`: the bridge answers from objects it can see, and a native closure is a
+    // callable descriptor (runtime tag 10), not an object, so the bridge-only answer was `false`
+    // for every compiled closure in a function that happens to own an eval context. Laravel's
+    // `Container::build()` owns one (`new ReflectionClass($concrete)`), read its own resolver
+    // closure as a class name, and every binding failed with "Target class [] does not exist".
+    // The path below asks the bridge first and then the native closure test.
+    if builtins::has_eval_context(ctx) && !closure_probe {
         return builtins::lower_eval_object_is_a(ctx, inst, value, &class_name, false);
     }
     // An AOT method can receive an object that was created by a request-global eval context.

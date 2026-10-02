@@ -161,11 +161,25 @@ impl Checker {
                 {
                     self.require_builtin_library("elephc_pcntl");
                 }
-                if let Some(ty) = self.constants.get(name.as_str()) {
+                // php's fallback for an unqualified name in a namespace is the global constant.
+                if let Some(ty) = self.constants.get(name.as_str()).or_else(|| {
+                    name.function_fallback()
+                        .and_then(|global| self.constants.get(global))
+                }) {
                     return Ok(ty.clone());
                 }
+                // A name nothing in the closed world defines is not a compile error: php looks it
+                // up when the expression executes. A file the program loads at run time may define
+                // it (a Composer `files` polyfill handed to the runtime defines `IDNA_DEFAULT`
+                // behind `if (!defined(...))`), and otherwise the read throws `Error: Undefined
+                // constant`. Lowering picks the runtime fetch or the throwing lookup, by the
+                // global form it looks the name up under.
                 if !self.eval_barrier_active {
-                    self.record_undefined_constant_read(constant_name, expr.span);
+                    let looked_up = name
+                        .function_fallback()
+                        .map(|global| global.trim_start_matches('\\'))
+                        .unwrap_or(constant_name);
+                    self.record_undefined_constant_read(looked_up, expr.span);
                 }
                 Ok(PhpType::Mixed)
             }

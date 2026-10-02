@@ -70,6 +70,11 @@ pub(in crate::interpreter) fn eval_member_exists_result(
     let [target, member] = evaluated_args else {
         return Err(EvalStatus::RuntimeFatal);
     };
+    // A class another context declared (an autoloaded file) is known to this one only after a
+    // sync. Laravel's pipeline closure asked `method_exists($pipe, 'handle')` of a middleware its
+    // container had just autoloaded elsewhere, got false, and called the object as a closure.
+    #[cfg(not(test))]
+    context.sync_global_eval_classes();
     let member = eval_class_metadata_name(*member, values)?;
     eval_autoload_member_exists_target(*target, context, values)?;
     let exists = match name {
@@ -126,7 +131,14 @@ fn eval_method_exists_target(
         }
         EVAL_TAG_OBJECT => {
             let class_name = eval_object_class_metadata_name(target, context, values)?;
-            eval_method_exists_on_class(&class_name, method_name, true, context, values)
+            let exists = eval_method_exists_on_class(&class_name, method_name, true, context, values);
+            if crate::eval_trace::enabled() {
+                eprintln!(
+                    "[elephc-eval-trace] phase=method_exists class={class_name:?} method={method_name:?} has_class={} result={exists:?}",
+                    context.has_class(&class_name),
+                );
+            }
+            exists
         }
         EVAL_TAG_STRING => {
             let class_name = eval_resolved_class_metadata_name(target, context, values)?;

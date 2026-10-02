@@ -8,8 +8,9 @@
 //!
 //! Key details:
 //! - The reconstruction reads regular parameter variables at the call point and appends
-//!   the variadic tail. For defaulted parameters this is conservative when callers omit a
-//!   trailing optional argument; constructor argc uses a precise caller marker.
+//!   the variadic tail. A scope with optional parameters reads the count its caller recorded
+//!   at the end of the tail (`super::ARGC_MARKER_PREFIX`); a call that could not record it
+//!   gets the conservative reconstruction, which counts every declared parameter.
 //! - `func_get_args()` reports the *current* values of the parameter variables, not the
 //!   values originally passed (verified against PHP 8.4: reassigning a parameter, or
 //!   writing through a by-reference parameter, changes what `func_get_args()` returns).
@@ -20,10 +21,10 @@
 //!   messages.
 
 use crate::names::{Name, NameKind};
-use crate::parser::ast::{BinOp, Expr, ExprKind};
+use crate::parser::ast::{BinOp, CastType, Expr, ExprKind};
 use crate::span::Span;
 
-use super::{IntrospectionCall, HIDDEN_ARGS_PARAM, POSITION_TEMP};
+use super::{IntrospectionCall, ARGC_MARKER_PREFIX, POSITION_TEMP};
 
 /// php-src's message when `func_get_arg()` is given a negative position.
 const NEGATIVE_POSITION_MESSAGE: &str =
@@ -38,62 +39,192 @@ const OUT_OF_RANGE_POSITION_MESSAGE: &str =
 ///
 /// `param_names` lists the scope's declared regular parameters in order; `args` is the
 /// (already rewritten) call-site argument list, which is empty except for
-/// `func_get_arg($position)`.
+/// `func_get_arg($position)`. `argc_marker` is set for a scope with optional parameters, whose
+/// callers record the count they really passed at the end of the hidden tail.
 pub(super) fn replacement(
     call: IntrospectionCall,
     param_names: &[String],
     variadic_name: &str,
     args: &[Expr],
     span: Span,
+    argc_marker: bool,
 ) -> ExprKind {
     match call {
-        IntrospectionCall::NumArgs => argc_expr(param_names, variadic_name, span).kind,
-        IntrospectionCall::GetArgs => args_array_expr(param_names, variadic_name, span).kind,
+        IntrospectionCall::NumArgs => {
+            count_expr(param_names, variadic_name, span, argc_marker).kind
+        }
+        IntrospectionCall::GetArgs => {
+            list_expr(param_names, variadic_name, span, argc_marker).kind
+        }
         IntrospectionCall::GetArg => {
-            get_arg_expr(param_names, variadic_name, &args[0], span)
+            get_arg_expr(param_names, variadic_name, &args[0], span, argc_marker)
         }
     }
 }
 
-/// Builds the actual caller argument count stored as the last hidden variadic entry.
-///
-/// Constructors with optional parameters cannot reconstruct this count from defaulted
-/// regular slots, so object-call lowering appends the source arity after the real surplus tail.
-///
-/// A construction path that reaches the constructor without that marker -- a runtime-selected
-/// class, the eval bridge -- leaves the hidden array empty, and reading `[count - 1]` raised
-/// `Undefined array key -1` on every Twig node built that way. An empty tail answers the
-/// declared regular count instead: the same conservative answer a plain function gives.
-pub(super) fn optional_constructor_argc(declared: usize, span: Span) -> ExprKind {
-    let hidden = hidden_args_var(span);
-    let last_index = Expr::new(
-        ExprKind::BinaryOp {
-            left: Box::new(count_call(hidden.clone(), span)),
-            op: BinOp::Sub,
-            right: Box::new(Expr::new(ExprKind::IntLiteral(1), span)),
-        },
-        span,
-    );
-    let marker = Expr::new(
-        ExprKind::ArrayAccess {
-            array: Box::new(hidden.clone()),
-            index: Box::new(last_index),
-        },
-        span,
-    );
-    let empty = Expr::new(
-        ExprKind::BinaryOp {
-            left: Box::new(count_call(hidden, span)),
-            op: BinOp::StrictEq,
-            right: Box::new(Expr::new(ExprKind::IntLiteral(0), span)),
-        },
-        span,
-    );
-    ExprKind::Ternary {
-        condition: Box::new(empty),
-        then_expr: Box::new(Expr::new(ExprKind::IntLiteral(declared as i64), span)),
-        else_expr: Box::new(marker),
+/// The argument count, read from the caller's marker when the scope has one.
+fn count_expr(param_names: &[String], variadic_name: &str, span: Span, argc_marker: bool) -> Expr {
+    if !argc_marker {
+        return argc_expr(param_names, variadic_name, span);
     }
+    ternary(
+        marker_present(variadic_name, span),
+        marker_count(variadic_name, span),
+        argc_expr(param_names, variadic_name, span),
+        span,
+    )
+}
+
+/// The argument list, cut to what the caller passed when the scope has a marker.
+///
+/// A caller only records its count when it passed FEWER arguments than the scope declares
+/// regular parameters -- with all of them passed, the conservative reconstruction is exact --
+/// so a marked tail holds nothing else and the list is a prefix of the parameters:
+///
+/// ```text
+/// <marker present>
+///     ? (<count> === 0 ? [] : (<count> === 1 ? [$p0] : … [$p0, …, $pN-2]))
+///     : [$p0, …, ...$tail]
+/// ```
+///
+/// An omitted optional parameter still holds its default, which is not an argument PHP
+/// reports. The prefixes are spelled out rather than sliced because `array_slice` of a mixed
+/// array is a prelude-backed builtin this late pass cannot pull in.
+fn list_expr(param_names: &[String], variadic_name: &str, span: Span, argc_marker: bool) -> Expr {
+    if !argc_marker || param_names.is_empty() {
+        return args_array_expr(param_names, variadic_name, span);
+    }
+    let prefix = |len: usize| {
+        Expr::new(
+            ExprKind::ArrayLiteral(
+                param_names[..len]
+                    .iter()
+                    .map(|name| Expr::new(ExprKind::Variable(name.clone()), span))
+                    .collect(),
+            ),
+            span,
+        )
+    };
+    let last = param_names.len() - 1;
+    let mut prefixes = prefix(last);
+    for len in (0..last).rev() {
+        prefixes = ternary(
+            Expr::new(
+                ExprKind::BinaryOp {
+                    left: Box::new(marker_count(variadic_name, span)),
+                    op: BinOp::StrictEq,
+                    right: Box::new(int_literal(len as i64, span)),
+                },
+                span,
+            ),
+            prefix(len),
+            prefixes,
+            span,
+        );
+    }
+    ternary(
+        marker_present(variadic_name, span),
+        prefixes,
+        args_array_expr(param_names, variadic_name, span),
+        span,
+    )
+}
+
+/// Builds `$tail[0]`, where a marked tail keeps its marker.
+fn tail_marker(variadic_name: &str, span: Span) -> Expr {
+    Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(args_var(variadic_name, span)),
+            index: Box::new(int_literal(0, span)),
+        },
+        span,
+    )
+}
+
+/// Builds `count($tail) === 1 && is_string($tail[0]) && str_starts_with($tail[0], <prefix>)`.
+fn marker_present(variadic_name: &str, span: Span) -> Expr {
+    let single = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(count_call(args_var(variadic_name, span), span)),
+            op: BinOp::StrictEq,
+            right: Box::new(int_literal(1, span)),
+        },
+        span,
+    );
+    let is_string = builtin_call("is_string", vec![tail_marker(variadic_name, span)], span);
+    let has_prefix = builtin_call(
+        "str_starts_with",
+        vec![
+            tail_marker(variadic_name, span),
+            Expr::new(ExprKind::StringLiteral(ARGC_MARKER_PREFIX.to_string()), span),
+        ],
+        span,
+    );
+    and(and(single, is_string, span), has_prefix, span)
+}
+
+/// Builds `(int) substr($tail[0], <prefix length>)`, the count the caller recorded.
+fn marker_count(variadic_name: &str, span: Span) -> Expr {
+    Expr::new(
+        ExprKind::Cast {
+            target: CastType::Int,
+            expr: Box::new(builtin_call(
+                "substr",
+                vec![
+                    tail_marker(variadic_name, span),
+                    int_literal(ARGC_MARKER_PREFIX.len() as i64, span),
+                ],
+                span,
+            )),
+        },
+        span,
+    )
+}
+
+/// Builds `<left> && <right>`.
+fn and(left: Expr, right: Expr, span: Span) -> Expr {
+    Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(left),
+            op: BinOp::And,
+            right: Box::new(right),
+        },
+        span,
+    )
+}
+
+/// Builds `<condition> ? <then> : <otherwise>`.
+fn ternary(condition: Expr, then_expr: Expr, otherwise: Expr, span: Span) -> Expr {
+    Expr::new(
+        ExprKind::Ternary {
+            condition: Box::new(condition),
+            then_expr: Box::new(then_expr),
+            else_expr: Box::new(otherwise),
+        },
+        span,
+    )
+}
+
+/// Builds an integer literal.
+fn int_literal(value: i64, span: Span) -> Expr {
+    Expr::new(ExprKind::IntLiteral(value), span)
+}
+
+/// Builds a call to a global builtin, named fully qualified because this AST is synthesized
+/// after name resolution.
+///
+/// The call node itself gets the dummy span, never the introspection call's: builtin result
+/// types are looked up by span, and several synthesized calls on one span each overwrote the
+/// others' entry -- `count()` inside `func_get_args()` came back typed as the `array` the
+/// whole expression has, and its integer was released as a heap pointer.
+fn builtin_call(name: &str, args: Vec<Expr>, _span: Span) -> Expr {
+    Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::from_parts(NameKind::FullyQualified, vec![name.to_string()]),
+            args,
+        },
+        Span::dummy(),
+    )
 }
 
 /// Builds `<declared count> + count($__elephc_func_args)`, or just the `count()` call when
@@ -147,6 +278,7 @@ fn get_arg_expr(
     variadic_name: &str,
     position: &Expr,
     span: Span,
+    argc_marker: bool,
 ) -> ExprKind {
     let (first_read, later_read) = position_reads(position, span);
     ExprKind::Ternary {
@@ -160,12 +292,12 @@ fn get_arg_expr(
             ExprKind::Ternary {
                 condition: Box::new(less_than(
                     later_read.clone(),
-                    argc_expr(param_names, variadic_name, span),
+                    count_expr(param_names, variadic_name, span, argc_marker),
                     span,
                 )),
                 then_expr: Box::new(Expr::new(
                     ExprKind::ArrayAccess {
-                        array: Box::new(args_array_expr(param_names, variadic_name, span)),
+                        array: Box::new(list_expr(param_names, variadic_name, span, argc_marker)),
                         index: Box::new(later_read),
                     },
                     span,
@@ -205,12 +337,6 @@ fn position_reads(position: &Expr, span: Span) -> (Expr, Expr) {
     (bind, temp)
 }
 
-/// Builds `$__elephc_func_args`, the hidden variadic parameter holding the surplus
-/// positional arguments.
-fn hidden_args_var(span: Span) -> Expr {
-    args_var(HIDDEN_ARGS_PARAM, span)
-}
-
 /// Builds a read of the variadic array that backs argument introspection in this scope.
 fn args_var(name: &str, span: Span) -> Expr {
     Expr::new(ExprKind::Variable(name.to_string()), span)
@@ -218,15 +344,9 @@ fn args_var(name: &str, span: Span) -> Expr {
 
 /// Builds `count(<value>)`.
 fn count_call(value: Expr, span: Span) -> Expr {
-    Expr::new(
-        ExprKind::FunctionCall {
-            // This AST is synthesized after name resolution, so identify the global builtin
-            // explicitly instead of leaving a fresh unqualified call unresolved.
-            name: Name::from_parts(NameKind::FullyQualified, vec!["count".to_string()]),
-            args: vec![value],
-        },
-        span,
-    )
+    // This AST is synthesized after name resolution, so identify the global builtin explicitly
+    // instead of leaving a fresh unqualified call unresolved.
+    builtin_call("count", vec![value], span)
 }
 
 /// Builds `<left> < <right>`.

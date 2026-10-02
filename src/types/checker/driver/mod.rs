@@ -126,6 +126,8 @@ pub(super) fn check_types_impl(
         // is still an autoloader as far as the runtime is concerned: it reaches the interpreter's
         // SPL callback chain instead of the compile-time rule list. Both forms have to count.
         || program_usage.references("spl_autoload_register");
+    checker.program_has_interpreted_callers =
+        checker.program_defers_unknown_classes || program_usage.references("eval");
     let mut errors = Vec::new();
 
     errors.extend(validate_yield_contexts(program));
@@ -343,7 +345,7 @@ pub(super) fn check_types_impl(
         );
         building_interfaces.clear();
         if let Err(error) = result {
-            errors.extend(error.flatten());
+            errors.extend(error.within_declaration(interface_name.as_str()).flatten());
         }
     }
 

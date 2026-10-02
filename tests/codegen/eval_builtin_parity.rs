@@ -198,6 +198,54 @@ echo preg_match("/(?<=foo)bar/", "foobar");');
     assert_eq!(out, "1:1");
 }
 
+/// Verifies eval's sort family takes php's `$flags` argument. Laravel's `LoadConfiguration` sorts
+/// its config file map with `ksort($files, SORT_NATURAL)`, which eval refused outright.
+#[test]
+fn test_eval_sort_family_honours_sort_flags() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$files = ["view10" => 1, "app" => 2, "view2" => 3, "App" => 4];
+ksort($files, SORT_NATURAL);
+echo implode(",", array_keys($files)), "\n";
+krsort($files, SORT_STRING);
+echo implode(",", array_keys($files)), "\n";
+$v = ["10", "9", "2", "1"];
+sort($v, SORT_STRING);
+echo implode(",", $v), "\n";
+rsort($v, SORT_NUMERIC);
+echo implode(",", $v), "\n";
+$a = ["x" => "b10", "y" => "B2", "z" => "a1"];
+asort($a, SORT_NATURAL | SORT_FLAG_CASE);
+echo json_encode($a), "\n";
+arsort($a, SORT_STRING);
+echo json_encode($a), "\n";');
+"#,
+    );
+    assert_eq!(
+        out,
+        "App,app,view2,view10\nview2,view10,app,App\n1,10,2,9\n10,9,2,1\n{\"z\":\"a1\",\"y\":\"B2\",\"x\":\"b10\"}\n{\"x\":\"b10\",\"z\":\"a1\",\"y\":\"B2\"}\n"
+    );
+}
+
+/// Verifies eval hands a delimited pattern's body to PCRE2 verbatim, as php and compiled code do.
+///
+/// The interpreter used to strip the backslash from every escaped delimiter, which changes what an
+/// escaped METACHARACTER means: `\(` inside a `(...)`-delimited pattern opened a group (the
+/// phpdotenv lexer pattern stopped compiling) and `\+` inside `+...+` became a quantifier.
+#[test]
+fn test_eval_preg_keeps_escaped_delimiters_in_the_pattern() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+$regex = '(([^(\s)]|\(|\)){1,10})A';
+$plus = '+a\+b+';
+echo preg_match($regex, 'f(x) y', $m), $m[0], ":", preg_match($plus, 'xa+b'), preg_match($plus, 'aab'), "\n";
+eval('echo preg_match($regex, "f(x) y", $m), $m[0], ":", preg_match($plus, "xa+b"), preg_match($plus, "aab"), "\n";');
+"#,
+    );
+
+    assert_eq!(out, "1f(x):10\n1f(x):10\n");
+}
+
 /// Verifies eval named builtin calls can skip optional parameters with defaults.
 #[test]
 fn test_eval_named_builtin_arguments_fill_default_gaps() {
@@ -835,4 +883,29 @@ echo eval('return function_exists("mb_strtoupper") && function_exists("MB_STRTOL
 ValueError: mb_strtoupper(): Argument #2 ($encoding) must be a valid encoding, \"nope\" given\n\
 visible"
     );
+}
+
+/// Verifies interpreted `preg_*` accepts NUL bytes in the pattern and in the subject.
+///
+/// php hands PCRE2 both with their lengths. The interpreter built C strings from them, so a
+/// pattern holding `"\0"` -- Laravel's `Str::trim()` puts one in its whitespace class -- failed as
+/// an interpreter error, and a subject holding one silently never matched.
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_eval_preg_takes_nul_bytes_in_pattern_and_subject() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+$code = 'return json_encode([
+    preg_replace("~[\\s\0]+~u", "", " x\0y "),
+    preg_match("~a\0b~", "a\0b"),
+    preg_match("~a\\\\\0b~", "a\0b"),
+    preg_split("~\0~", "a\0b\0c"),
+    preg_match("~c~", "a\0b\0c"),
+]);';
+echo eval($code), "\n";
+echo preg_match("/x/", "x"), "\n";
+"#,
+    );
+    assert_eq!(out, "[\"xy\",1,1,[\"a\",\"b\",\"c\"],1]\n1\n");
 }

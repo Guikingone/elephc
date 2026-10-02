@@ -1013,6 +1013,7 @@ impl Checker {
         for arg in &normalized_args {
             arg_types.push(self.infer_type(arg, env)?);
         }
+        let tail_spread_keeps_keys = self.variadic_tail_spread_keeps_keys(&normalized_args, 0, env);
 
         let impl_class_name = self
             .classes
@@ -1057,6 +1058,7 @@ impl Checker {
                         sig,
                         regular_param_count,
                         env,
+                        tail_spread_keeps_keys,
                     )
                     && !method_variadic_param_is_by_ref(sig)
                 {
@@ -1169,6 +1171,13 @@ impl Checker {
             let arg_ty = self.infer_type(arg, env)?;
             elem_ty = Self::merge_magic_call_arg_type(elem_ty, arg_ty);
         }
+        // Interpreted code reaches the same magic method with whatever arguments it has, packed
+        // as boxed values: the compiled call sites alone do not describe `$args`. Typed from them,
+        // Laravel's `Facade::__callStatic($method, $args)` read an interpreted
+        // `Log::debug("b")`'s argument array as raw strings and crashed in `implode()`.
+        if self.program_has_interpreted_callers {
+            elem_ty = PhpType::Mixed;
+        }
         let args_array_ty = PhpType::Array(Box::new(elem_ty.clone()));
         let impl_class_name = self
             .classes
@@ -1214,6 +1223,40 @@ impl Checker {
                     PhpType::Int => args_array_ty,
                     _ => sig.params[1].1.clone(),
                 };
+            }
+        }
+        // A class that inherits the magic method carries its own copy of the signature, and the
+        // generated dispatch for `Sub::missing()` binds its arguments with THAT copy: a stale
+        // `$args` element type there handed the implementation an array in the wrong shape.
+        let implemented = self.classes.get(&impl_class_name).and_then(|class_info| {
+            if is_static {
+                class_info.static_methods.get(method_key).cloned()
+            } else {
+                class_info.methods.get(method_key).cloned()
+            }
+        });
+        if let Some(implemented) = implemented {
+            for (inheriting_name, class_info) in self.classes.iter_mut() {
+                if inheriting_name == &impl_class_name {
+                    continue;
+                }
+                let inherits = if is_static {
+                    class_info.static_method_impl_classes.get(method_key)
+                } else {
+                    class_info.method_impl_classes.get(method_key)
+                }
+                .is_some_and(|owner| owner == &impl_class_name);
+                if !inherits {
+                    continue;
+                }
+                let copy = if is_static {
+                    class_info.static_methods.get_mut(method_key)
+                } else {
+                    class_info.methods.get_mut(method_key)
+                };
+                if let Some(copy) = copy {
+                    copy.params = implemented.params.clone();
+                }
             }
         }
         Ok(())
@@ -1283,7 +1326,72 @@ impl Checker {
     }
 
     /// Shared implementation for static method call inference.
+    ///
+    /// A `static::method()` whose method only DESCENDANTS of the current class declare is checked
+    /// against each of them, exactly as the `Child::method()` call the late-static dispatch ends
+    /// in. PHP picks the target when the call runs and allows a protected method there, so the
+    /// result is gradual.
     fn infer_static_method_call_type_with_options(
+        &mut self,
+        receiver: &StaticReceiver,
+        method: &str,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+        allow_by_ref_spread: bool,
+    ) -> Result<PhpType, CompileError> {
+        if matches!(receiver, StaticReceiver::Static) {
+            if let Some(current) = self.current_class.clone() {
+                let targets = crate::types::late_static_dispatch::child_only_static_targets(
+                    &self.classes,
+                    &current,
+                    &php_symbol_key(method),
+                );
+                if !targets.is_empty() {
+                    for target in &targets {
+                        let named = StaticReceiver::Named(crate::names::Name::from_parts(
+                            crate::names::NameKind::FullyQualified,
+                            target.split('\\').map(str::to_string).collect(),
+                        ));
+                        self.infer_static_method_call_type_core(
+                            &named,
+                            method,
+                            args,
+                            expr,
+                            env,
+                            allow_by_ref_spread,
+                        )?;
+                    }
+                    if self
+                        .classes
+                        .get(&current)
+                        .is_some_and(|info| info.static_methods.contains_key("__callstatic"))
+                    {
+                        self.infer_static_method_call_type_core(
+                            receiver,
+                            method,
+                            args,
+                            expr,
+                            env,
+                            allow_by_ref_spread,
+                        )?;
+                    }
+                    return Ok(PhpType::Mixed);
+                }
+            }
+        }
+        self.infer_static_method_call_type_core(
+            receiver,
+            method,
+            args,
+            expr,
+            env,
+            allow_by_ref_spread,
+        )
+    }
+
+    /// Static method call inference proper, for one concrete receiver.
+    fn infer_static_method_call_type_core(
         &mut self,
         receiver: &StaticReceiver,
         method: &str,
@@ -1668,6 +1776,7 @@ impl Checker {
         for arg in &normalized_args {
             arg_types.push(self.infer_type(arg, env)?);
         }
+        let tail_spread_keeps_keys = self.variadic_tail_spread_keeps_keys(&normalized_args, 0, env);
 
         let direct_impl_class_name = if parent_call || self_call {
             self.classes
@@ -1715,6 +1824,7 @@ impl Checker {
                         sig,
                         regular_param_count,
                         env,
+                        tail_spread_keeps_keys,
                     )
                     && !method_variadic_param_is_by_ref(sig)
                 {
@@ -2003,9 +2113,13 @@ fn method_variadic_tail_needs_iterable(
     sig: &FunctionSig,
     regular_param_count: usize,
     env: &TypeEnv,
+    tail_spread_keeps_keys: bool,
 ) -> bool {
     if sig.variadic.is_none() {
         return false;
+    }
+    if tail_spread_keeps_keys {
+        return true;
     }
 
     if args.iter().any(|arg| {

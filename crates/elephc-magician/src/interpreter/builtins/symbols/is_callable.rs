@@ -181,6 +181,11 @@ fn eval_is_callable_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    // A class another context declared (an autoloaded file) is known to this one only after a
+    // sync. Laravel's pipeline closure asked `method_exists($pipe, 'handle')` of a middleware its
+    // container had just autoloaded elsewhere, got false, and called the object as a closure.
+    #[cfg(not(test))]
+    context.sync_global_eval_classes();
     let callable_name = callable_name_target
         .map(|_| eval_callable_display_name(value, context, values))
         .transpose()?;
@@ -313,6 +318,7 @@ pub(in crate::interpreter) fn eval_callable_probe_exists(
         EvaluatedCallable::InvokableObject { object } => {
             eval_object_method_callable_probe(*object, "__invoke", context, values)
         }
+        EvaluatedCallable::NativeDescriptor { .. } => Ok(true),
         EvaluatedCallable::ObjectMethod {
             object,
             method,

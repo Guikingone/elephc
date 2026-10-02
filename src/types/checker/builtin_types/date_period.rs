@@ -470,14 +470,18 @@ fn date_period_get_start_date() -> ClassMethod {
     )
 }
 
-/// `DatePeriod::getEndDate(): ?DateTime` — returns the end bound for the end-date form, or `null`
-/// when the period was constructed with a recurrence count.
+/// `DatePeriod::getEndDate(): ?DateTimeInterface` — returns the end bound for the end-date form, or
+/// `null` when the period was constructed with a recurrence count. The declared type is php's own:
+/// it is the contract an overriding subclass is checked against, and `?DateTime` refused Carbon's
+/// `CarbonPeriod::getEndDate(): ?CarbonInterface`, which php accepts.
 fn date_period_get_end_date() -> ClassMethod {
     let body = bodies::get_end_date();
     method(
         "getEndDate",
         Vec::new(),
-        Some(TypeExpr::Nullable(Box::new(TypeExpr::Named(Name::unqualified("DateTime"))))),
+        Some(TypeExpr::Nullable(Box::new(TypeExpr::Named(Name::unqualified(
+            "DateTimeInterface",
+        ))))),
         body,
     )
 }

@@ -106,6 +106,8 @@ pub enum EvalExpr {
         target: EvalInstanceOfTarget,
     },
     LoadVar(String),
+    /// A variable named at run time: `$$name` or `${expr}`. The expression yields the name.
+    DynamicVar(Box<EvalExpr>),
     Match {
         subject: Box<EvalExpr>,
         arms: Vec<EvalMatchArm>,

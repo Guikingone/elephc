@@ -84,6 +84,28 @@ pub unsafe extern "C" fn __elephc_eval_register_native_function_bridge_support(
     .unwrap_or(0)
 }
 
+/// Makes a registered native PHP function exist only while the word at `slot` is nonzero.
+///
+/// Generated code passes the "active variant" slot of a conditionally declared function
+/// (`if (!function_exists('f')) { function f() {} }`), which its declaration fills when it runs.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. The function name must be readable for its
+/// declared byte length, and `slot` must point at a process-lifetime 8-byte word.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_function_active_slot(
+    ctx: *mut ElephcEvalContext,
+    function_name_ptr: *const u8,
+    function_name_len: u64,
+    slot: *const u64,
+) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_native_function_active_slot");
+    std::panic::catch_unwind(|| unsafe {
+        register_native_function_active_slot_inner(ctx, function_name_ptr, function_name_len, slot)
+    })
+    .unwrap_or(0)
+}
+
 /// Registers one generated native PHP function parameter's by-ref and variadic flags.
 ///
 /// # Safety

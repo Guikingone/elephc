@@ -77,17 +77,22 @@ fn lower_boxed_closure_method_call(
 /// on a reflector kept in an array, or any user `m(...$xs)`. The callable path resolves the class
 /// at run time and binds positional, variadic and named arguments as a direct call would.
 /// By-reference parameters are left to the direct dispatch: an argument array carries values.
-fn lower_boxed_receiver_variadic_method_call(
+pub(super) fn lower_boxed_receiver_variadic_method_call(
     ctx: &mut LoweringContext<'_, '_>,
     object: LoweredValue,
     method: &str,
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    if !matches!(
-        ctx.builder.value_php_type(object.value).codegen_repr(),
-        PhpType::Mixed | PhpType::Union(_)
-    ) {
+    let receiver_ty = ctx.builder.value_php_type(object.value).codegen_repr();
+    let boxed = matches!(receiver_ty, PhpType::Mixed | PhpType::Union(_));
+    // A receiver typed only `object` is as open as a boxed one: any class with this method,
+    // compiled or interpreted, may answer. Only named arguments need the runtime path there.
+    let generic_object = matches!(
+        &receiver_ty,
+        PhpType::Object(name) if name.trim_start_matches('\\').is_empty()
+    );
+    if !boxed && !(generic_object && crate::types::call_args::has_named_args(args)) {
         return None;
     }
     let key = php_symbol_key(method);
@@ -101,7 +106,12 @@ fn lower_boxed_receiver_variadic_method_call(
         }
         declares_variadic |= sig.variadic.is_some();
     }
-    if !declares_variadic {
+    // Named arguments against a boxed receiver cannot be matched to positions at compile time
+    // either: the object may be an instance of any class with this method, or of one only the
+    // interpreter knows, and the positional ABI dropped the names — `$builder->withRouting(web:
+    // $w)` on an interpreted builder handed `$w` to the FIRST parameter. `call_user_func_array`
+    // with the names as keys is php's own spelling of the same call.
+    if !declares_variadic && !crate::types::call_args::has_named_args(args) {
         return None;
     }
     let span = expr.span;
@@ -110,9 +120,9 @@ fn lower_boxed_receiver_variadic_method_call(
     // one-shot OWNED temp was read twice -- the callable array's element load moved it out, and
     // the explicit take after the call released it again -- which only balanced while that array
     // leaked the element it had retained.
-    let receiver = ctx.declare_hidden_temp(PhpType::Mixed);
+    let receiver = ctx.declare_hidden_temp(receiver_ty.clone());
     let object = acquire_borrowed_for_hidden_temp(ctx, object, span);
-    ctx.store_local(&receiver, object, PhpType::Mixed, Some(span));
+    ctx.store_local(&receiver, object, receiver_ty, Some(span));
     let call = Expr::new(
         ExprKind::FunctionCall {
             name: crate::names::Name::unqualified("call_user_func_array"),

@@ -615,3 +615,51 @@ echo (new RedirectableCompiled())->match('/x');
     );
     assert_eq!(out, "/x/2:H:2");
 }
+
+/// `instanceof` on a local that holds a scalar leaves its type alone on the (dead) true edge.
+///
+/// Twig compiles `{{ ... ? ' has-error' : '' }}` over a boolean to
+/// `($tmp = !$x) && $tmp instanceof Markup ? (string) $tmp : $tmp`; narrowing the `bool` slot to
+/// `Markup` made the backend refuse the read ("local load from PHP type Bool as Object"), which
+/// failed every Twig form theme block. Expected output is php 8.5's.
+#[test]
+fn test_instanceof_on_a_scalar_local_keeps_its_storage_type() {
+    let out = compile_and_run(
+        r#"<?php
+class Markup { public function __toString(): string { return "m"; } }
+function f($c) { return ((($tmp = !($c["valid"] ?? null)) && $tmp instanceof Markup ? (string) $tmp : $tmp)) ? " has-error" : ""; }
+var_dump(f(["valid" => $argc > 5]), f(["valid" => true]));
+function g($n) { $t = $n + 1; return $t instanceof Markup ? (string) $t : $t; }
+var_dump(g($argc));
+"#,
+    );
+    assert_eq!(out, "string(10) \" has-error\"\nstring(0) \"\"\nint(2)\n");
+}
+
+/// `instanceof Closure` recognizes a compiled closure inside a function that owns an eval-bridge
+/// context (here through `new ReflectionClass()` over a runtime class name), where the bridge
+/// alone sees no object and used to answer false.
+#[test]
+fn test_instanceof_closure_in_function_with_eval_context() {
+    let out = compile_and_run(
+        r#"<?php
+function build($concrete) {
+    if ($concrete instanceof Closure) {
+        try {
+            return $concrete();
+        } finally {
+            echo "F";
+        }
+    }
+    try {
+        $reflector = new ReflectionClass($concrete);
+    } catch (ReflectionException $e) {
+        return 'missing';
+    }
+    return $reflector->getName();
+}
+echo build(fn () => 'closure'), "|", build('stdClass'), "|", build('NoSuchClassHere'), "\n";
+"#,
+    );
+    assert_eq!(out, "Fclosure|stdClass|missing\n");
+}

@@ -156,6 +156,9 @@ struct EvalNativeFunctionRegistration {
     name: String,
     signature: FunctionSig,
     bridge_supported: bool,
+    /// For a conditionally declared function registered under its public name: the module
+    /// symbol of its "active variant" slot, which says whether php would see it declared yet.
+    active_slot_symbol: Option<String>,
 }
 
 /// A module-local method signature that can be registered with the eval context.
@@ -257,6 +260,19 @@ struct EvalNativePropertyDefaultRegistration {
     default: EvalNativeCallableDefault,
 }
 
+/// An array-valued class constant registered with the eval context.
+///
+/// The generated scalar constant helper (`eval_class_constant_helpers`) boxes scalars and enum
+/// cases only; an array constant is handed over as a native default description instead, under
+/// every class that can read it.
+struct EvalNativeClassConstantDefaultRegistration {
+    class_name: String,
+    constant_name: String,
+    declaring_class: String,
+    visibility: Visibility,
+    default: EvalNativeCallableDefault,
+}
+
 /// A module-local member attribute that can be registered with the eval context.
 struct EvalNativeMemberAttributeRegistration {
     owner_kind: u8,
@@ -328,6 +344,7 @@ mod scope_reload;
 mod native_scope;
 use native_scope::*;
 mod status;
+mod interface_miss;
 
 #[allow(unused_imports)]
 use calls::*;
@@ -386,6 +403,10 @@ pub(super) use dynamic_calls::{
 };
 pub(in crate::codegen::lower_inst) use dynamic_calls::{
     lower_eval_owned_method_call, lower_eval_owned_property_get,
+    lower_eval_owner_mixed_property_get,
+};
+pub(in crate::codegen::lower_inst) use interface_miss::{
+    emit_branch_if_eval_saved_object_is_a, emit_eval_interface_method_on_miss,
 };
 pub(super) use native_object_construction::{
     lower_eval_native_object_new, lower_eval_native_object_new_fallback,

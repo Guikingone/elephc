@@ -17,7 +17,9 @@ use crate::parser::ast::{BinOp, CatchClause, ClassMethod, Expr, ExprKind, Stmt, 
 
 use super::discovery::FunctionVariantRegistry;
 use super::engine_includes::{expand_value_include, resolve_include_stmt, IncludeValueCapture};
-use super::include_path::{fold_include_path, is_runtime_dynamic_include_path};
+use super::include_path::{
+    fold_include_path, is_runtime_dynamic_include_path, stays_runtime_include,
+};
 use super::state::{
     is_define_call_name, namespace_string, normalize_defined_constant_name,
     register_const_imports, ResolveState,
@@ -80,7 +82,7 @@ fn try_expand_value_include(
         StmtKind::Assign { name, .. } => IncludeValueCapture::Assign(name.clone()),
         _ => IncludeValueCapture::Return,
     };
-    if is_runtime_dynamic_include_path(path) {
+    if stays_runtime_include(path, state) {
         let value = Expr::new(
             dynamic_include_call_kind((**path).clone(), *once, *required, stmt.span),
             stmt.span,
@@ -243,7 +245,7 @@ pub(super) fn resolve_stmts(
         )?;
         match &stmt.kind {
             StmtKind::Include { path, once, required } => {
-                if is_runtime_dynamic_include_path(path) {
+                if stays_runtime_include(path, state) {
                     result.push(stmt);
                     continue;
                 }

@@ -69,6 +69,18 @@ impl EvaluatedLocation {
             }
         )
     }
+
+    /// Returns whether the observed value is a cell some storage still holds, so this
+    /// evaluation must not release it.
+    ///
+    /// A static property fetch hands out the slot's own cell, like a scope variable read (see
+    /// `eval_expr_result_aliases_storage`). Releasing it as a temporary freed the slot's null
+    /// cell before `self::$instance ??= new self()` stored into it, and the next read of the
+    /// property found whatever reused that cell -- Carbon's `FactoryImmutable::getDefaultInstance()`
+    /// returned an int, then an `InputBag`.
+    const fn current_is_held_by_storage(&self) -> bool {
+        self.current_is_borrowed() || matches!(self, Self::StaticProperty { .. })
+    }
 }
 
 /// Evaluates `target ??= default`, preserving PHP's lazy RHS and single target evaluation.
@@ -94,7 +106,7 @@ pub(super) fn eval_null_coalesce_assign(
             Ok(current)
         };
     }
-    if !location.current_is_borrowed() {
+    if !location.current_is_held_by_storage() {
         eval_release_value(context, values, current)?;
         if let EvaluatedLocation::GlobalVariable { current, .. } = &mut location {
             *current = None;
@@ -546,6 +558,11 @@ fn evaluate_plain_assignment_location(
                 ownership: entry.map_or(ScopeCellOwnership::Owned, |entry| entry.flags().ownership),
             })
         }
+        // `$$name = v`: the name is evaluated once, then the write is an ordinary variable write.
+        EvalExpr::DynamicVar(name) => {
+            let name = eval_dynamic_member_name(name, context, scope, values)?;
+            evaluate_plain_assignment_location(&EvalExpr::LoadVar(name), context, scope, values)
+        }
         EvalExpr::PropertyGet { object, property } => {
             let object = eval_expr(object, context, scope, values)?;
             Ok(EvaluatedLocation::Property {
@@ -816,7 +833,14 @@ fn write_location(
             class_name,
             property,
             ..
-        } => eval_static_property_set_result(&class_name, &property, value, context, values),
+        } => {
+            // The setter takes the reference it is handed. An assignment whose VALUE is used
+            // (`return static::$validators = [...];`) also hands `value` back to its caller, so
+            // without a reference of its own the static and the caller shared one: the caller's
+            // release after a `foreach` freed the array the static still held.
+            let stored = if preserve_value_for_result { values.retain(value)? } else { value };
+            eval_static_property_set_result(&class_name, &property, stored, context, values)
+        }
         EvaluatedLocation::ArrayElement { parent, index, .. } => {
             let container = if values.is_null(parent.current())? {
                 values.array_new(1)?

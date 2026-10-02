@@ -29,6 +29,12 @@ pub(in crate::interpreter) fn eval_builtin_array_declared_call(
         "array_fill" => super::array_fill::eval_array_fill_declared_call(args, context, scope, values),
         "array_fill_keys" => super::array_fill_keys::eval_array_fill_keys_declared_call(args, context, scope, values),
         "array_filter" => super::array_filter::eval_array_filter_declared_call(args, context, scope, values),
+        "array_replace_recursive" => super::array_recursive::eval_array_recursive_declared_call(super::array_recursive::ArrayRecursiveCombine::Replace, args, context, scope, values),
+        "array_merge_recursive" => super::array_recursive::eval_array_recursive_declared_call(super::array_recursive::ArrayRecursiveCombine::Merge, args, context, scope, values),
+        "array_find" => super::array_find::eval_array_predicate_walk_declared_call(super::array_find::ArrayPredicateWalk::FindValue, args, context, scope, values),
+        "array_find_key" => super::array_find::eval_array_predicate_walk_declared_call(super::array_find::ArrayPredicateWalk::FindKey, args, context, scope, values),
+        "array_any" => super::array_find::eval_array_predicate_walk_declared_call(super::array_find::ArrayPredicateWalk::Any, args, context, scope, values),
+        "array_all" => super::array_find::eval_array_predicate_walk_declared_call(super::array_find::ArrayPredicateWalk::All, args, context, scope, values),
         "array_intersect" => super::array_intersect::eval_array_intersect_declared_call(args, context, scope, values),
         "array_intersect_key" => super::array_intersect_key::eval_array_intersect_key_declared_call(args, context, scope, values),
         "array_map" => super::array_map::eval_array_map_declared_call(args, context, scope, values),
@@ -50,11 +56,17 @@ pub(in crate::interpreter) fn eval_builtin_array_declared_call(
         "array_values" => super::array_values::eval_array_values_declared_call(args, context, scope, values),
         "array_is_list" => super::array_is_list::eval_array_is_list_declared_call(args, context, scope, values),
         "array_key_first" => super::array_key_first::eval_array_key_first_declared_call(args, context, scope, values),
+        "array_change_key_case" => super::array_change_key_case::eval_array_change_key_case_declared_call(args, context, scope, values),
+        "array_first" => super::array_first::eval_array_edge_declared_call(super::array_first::ArrayEdge::First, args, context, scope, values),
+        "array_last" => super::array_first::eval_array_edge_declared_call(super::array_first::ArrayEdge::Last, args, context, scope, values),
         "array_key_last" => super::array_key_last::eval_array_key_last_declared_call(args, context, scope, values),
         "count" => super::count::eval_count_declared_call(args, context, scope, values),
         "current" => super::current::eval_current_declared_call(args, context, scope, values),
         "key" => super::key::eval_key_declared_call(args, context, scope, values),
         "range" => super::range::eval_range_declared_call(args, context, scope, values),
+        name if super::array_ucompare::is_array_ucompare_builtin(name) => {
+            super::array_ucompare::eval_array_ucompare_declared_call(name, args, context, scope, values)
+        }
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }

@@ -43,13 +43,62 @@ pub(in crate::interpreter) fn eval_builtin_html_entity_named(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let value = match args {
         [value] | [value, _] | [value, _, _] => value,
+        // `htmlspecialchars()` takes php's fourth parameter, `$double_encode`, exactly as the
+        // AOT contract does: the two backends must accept the same arities.
+        [value, _, _, _] if name == "htmlspecialchars" => value,
         _ => return Err(EvalStatus::RuntimeFatal),
     };
     let value = eval_expr(value, context, scope, values)?;
+    let mut extras = Vec::with_capacity(args.len() - 1);
     for extra in &args[1..] {
-        eval_expr(extra, context, scope, values)?;
+        extras.push(eval_expr(extra, context, scope, values)?);
+    }
+    if let [flags, _, double_encode] = extras.as_slice() {
+        if !values.truthy(*double_encode)? {
+            let flags = eval_int_value(*flags, values)?;
+            return eval_htmlspecialchars_keeping_entities(value, flags, values);
+        }
     }
     eval_html_entity_named_result(name, value, values)
+}
+
+/// `htmlspecialchars($value, $flags, $encoding, false)`: encodes like
+/// [`eval_htmlspecialchars_result`] but leaves every character reference the doctype considers
+/// valid untouched, per `elephc_builtin_contract::html_entities::html_entity_is_kept` — the rule
+/// the compiled program's prelude transcribes.
+pub(in crate::interpreter) fn eval_htmlspecialchars_keeping_entities(
+    value: RuntimeCellHandle,
+    flags: i64,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bytes = values.string_bytes(value)?;
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte == b'&' {
+            if let Some(semi) = bytes[index + 1..].iter().position(|next| *next == b';') {
+                let body = &bytes[index + 1..index + 1 + semi];
+                if elephc_builtin_contract::html_entities::html_entity_is_kept(body, flags) {
+                    output.extend_from_slice(&bytes[index..index + semi + 2]);
+                    index += semi + 2;
+                    continue;
+                }
+            }
+            output.extend_from_slice(b"&amp;");
+            index += 1;
+            continue;
+        }
+        match byte {
+            b'<' => output.extend_from_slice(b"&lt;"),
+            b'>' => output.extend_from_slice(b"&gt;"),
+            b'"' => output.extend_from_slice(b"&quot;"),
+            b'\'' => output.extend_from_slice(b"&#039;"),
+            _ => output.push(byte),
+        }
+        index += 1;
+    }
+    values.string_bytes_value(&output)
 }
 
 /// Applies the eval-supported HTML entity transform for one PHP string value.

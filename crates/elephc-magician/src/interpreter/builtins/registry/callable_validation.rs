@@ -150,9 +150,9 @@ fn eval_validate_callback(
                 values,
             ),
         },
-        EvaluatedCallable::BoundClosure { .. } | EvaluatedCallable::InvokableObject { .. } => {
-            Ok(())
-        }
+        EvaluatedCallable::BoundClosure { .. }
+        | EvaluatedCallable::InvokableObject { .. }
+        | EvaluatedCallable::NativeDescriptor { .. } => Ok(()),
     }
 }
 

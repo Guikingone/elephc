@@ -1399,3 +1399,124 @@ echo count($parameters), ":", $parameters["a"], ":", $parameters["b"], "|",
     );
     assert_eq!(out, "EvalHydrated|2:1:2|kept");
 }
+
+/// Verifies an interpreted `unserialize()` restores a COMPILED class through its
+/// `__unserialize()` hook, handing it the payload -- here an interpreted object.
+///
+/// The interpreter wrote the payload keys as properties from outside the class instead, which
+/// lands nowhere for a protected property: Laravel's `UnsignedSerializableClosure` came back
+/// with a null `$serializable`, and every cached closure route died with "Call to a member
+/// function getClosure() on null".
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_eval_unserialize_calls_a_compiled_unserialize_hook() {
+    let out = compile_and_run(
+        r#"<?php
+class Wrapper {
+    protected $serializable;
+    public function __construct($s) { $this->serializable = $s; }
+    public function get() { return $this->serializable->get(); }
+    public function __serialize() { return ['serializable' => $this->serializable]; }
+    public function __unserialize($data) { $this->serializable = $data['serializable']; }
+}
+$code = 'class Inner { public $code; public function get() { return $this->code; }
+    public function __serialize() { return ["code" => $this->code]; }
+    public function __unserialize($data) { $this->code = $data["code"] . "?"; } }';
+eval($code);
+$payload = 'O:7:"Wrapper":1:{s:12:"serializable";O:5:"Inner":1:{s:4:"code";s:1:"x";}}';
+$read = 'return unserialize($payload)->get();';
+echo eval($read), "\n";
+"#,
+    );
+    assert_eq!(out, "x?\n");
+}
+
+/// `__unserialize($data)` declared WITHOUT a parameter type receives the parsed array: nested
+/// objects arrive as objects and `$data['key']` reads work. The runtime hands the user hook the bare
+/// hash it parsed, but an undeclared first parameter was boxed as `mixed` by the callee prologue,
+/// so the body read the hash header as a Mixed cell -- `gettype($data)` answered "string" and the
+/// nested `Inner` object reached `Wrapper::__unserialize` as null ("Cannot assign null to
+/// property of type Inner"). Laravel's `SerializableClosure` wrappers hit exactly this. Output is
+/// php 8.5's.
+#[test]
+fn test_unserialize_hook_without_a_parameter_type_gets_the_parsed_array() {
+    let out = compile_and_run(r#"<?php
+class Wrapper {
+    protected $serializable;
+    public function __construct($s) { $this->serializable = $s; }
+    public function get() { return $this->serializable->get(); }
+    public function __serialize() { return ['serializable' => $this->serializable]; }
+    public function __unserialize($data) { $this->serializable = $data['serializable']; }
+}
+class Inner {
+    public $code;
+    public function get() { return $this->code; }
+    public function __serialize() { return ['code' => $this->code]; }
+    public function __unserialize($data) { $this->code = $data['code'] . '!'; }
+}
+class Plain {
+    public $a = 1;
+    public $b = [1, 2];
+    public function __unserialize(array $data): void { $this->a = $data['a'] + 10; $this->b = $data['b']; }
+    public function __serialize(): array { return ['a' => $this->a, 'b' => $this->b]; }
+}
+$i = new Inner();
+$i->code = 'x';
+$s = serialize(new Wrapper($i));
+echo $s, "\n";
+echo unserialize($s)->get(), "\n";
+echo gettype(unserialize(serialize(new Inner()))->code), "\n";
+$p = unserialize(serialize(new Plain()));
+echo $p->a, json_encode($p->b), "\n";
+"#);
+    assert_eq!(
+        out,
+        "O:7:\"Wrapper\":1:{s:12:\"serializable\";O:5:\"Inner\":1:{s:4:\"code\";s:1:\"x\";}}\nx!\nstring\n11[1,2]\n"
+    );
+}
+
+/// Verifies handing an eval-declared object to a compiled property whose type was inferred from
+/// the compiled call sites no longer faults the process.
+///
+/// `unserialize()` of a wire naming an eval-declared class hydrates that class in the interpreter
+/// and gives the compiled `__unserialize($data)` a boxed object it did not construct. Writing it
+/// into `Wrapper::$serializable` -- inferred as `Inner` from `new Wrapper($inner)` -- runs the
+/// nominal property guard, whose native fallback read the object from a register the interpreter
+/// bridge call had just clobbered: a segfault in `__rt_exception_matches`. The guard reloads
+/// the payload, and the object is admitted as php admits it (the property is untyped): the eval
+/// class's own `__unserialize()` runs, so the foreign wire answers `x?`.
+#[test]
+fn test_unserialize_eval_class_into_inferred_property_runs_its_hook() {
+    let out = compile_and_run(
+        r##"<?php
+class Wrapper {
+    protected $serializable;
+    public function __construct($s) { $this->serializable = $s; }
+    public function get() { return $this->serializable->get(); }
+    public function __serialize() { return ['serializable' => $this->serializable]; }
+    public function __unserialize($data) { $this->serializable = $data['serializable']; }
+}
+class Inner {
+    public $code;
+    public function get() { return $this->code; }
+    public function __serialize() { return ['code' => $this->code]; }
+    public function __unserialize($data) { $this->code = $data['code'] . '!'; }
+}
+$i = new Inner();
+$i->code = 'x';
+$s = serialize(new Wrapper($i));
+echo unserialize($s)->get(), "\n";
+$code = 'class EInner { public $code; public function get() { return $this->code; } public function __serialize() { return ["code" => $this->code]; } public function __unserialize($data) { $this->code = $data["code"] . "?"; } }';
+eval($code);
+$foreign = str_replace('O:5:"Inner"', 'O:6:"EInner"', $s);
+try {
+    echo unserialize($foreign)->get(), "\n";
+} catch (TypeError $e) {
+    echo "refused\n";
+}
+echo "alive\n";
+"##,
+    );
+    assert_eq!(out, "x!\nx?\nalive\n");
+}

@@ -45,8 +45,12 @@ impl Checker {
         span: Span,
         env: &mut TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        // The prelude is whatever had to run before the assignment, and an include in value
+        // position contributes its own bookkeeping statements (`IncludeOnceMark`): the static
+        // property write `self::$data ?? self::$data = require 'data.php'` panicked the checker
+        // when only assignment-shaped statements were accepted here.
         for stmt in prelude {
-            self.check_assignment_like_stmt(stmt, env)?;
+            self.check_stmt(stmt, env)?;
         }
 
         if let (

@@ -136,6 +136,13 @@ impl Checker {
             .map(|arg| self.infer_type(arg, caller_env))
             .collect::<Result<Vec<_>, CompileError>>()?;
         let mut pending_variadic = None;
+        let stored_regular_count = self
+            .functions
+            .get(name)
+            .map(crate::types::call_args::regular_param_count)
+            .unwrap_or(0);
+        let tail_spread_keeps_keys =
+            self.variadic_tail_spread_keeps_keys(args, stored_regular_count, caller_env);
         if let Some(stored_sig) = self.functions.get_mut(name) {
             let regular_param_count = crate::types::call_args::regular_param_count(stored_sig);
             let mut seen_idx = 0usize;
@@ -165,7 +172,7 @@ impl Checker {
                     .iter()
                     .map(|(name, _)| name.clone())
                     .collect();
-                if Self::has_unknown_named_variadic_arg(args, &regular_names) {
+                if Self::has_unknown_named_variadic_arg(args, &regular_names) || tail_spread_keeps_keys {
                     if let Some((_, variadic_ty)) = stored_sig.params.last_mut() {
                         *variadic_ty = PhpType::Iterable;
                     }

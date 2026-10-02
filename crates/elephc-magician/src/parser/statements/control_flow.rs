@@ -252,6 +252,10 @@ impl Parser {
             if !self.consume(TokenKind::Comma) {
                 break;
             }
+            // php 7.3 allows a trailing comma: `unset($a, $b,);` (Carbon's `CarbonPeriod`).
+            if matches!(self.current(), TokenKind::RParen) {
+                break;
+            }
         }
         self.expect(TokenKind::RParen)?;
         self.expect_semicolon()?;

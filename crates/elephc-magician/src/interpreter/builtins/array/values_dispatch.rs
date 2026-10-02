@@ -20,6 +20,9 @@ pub(in crate::interpreter) fn eval_array_declared_values_result(
         "array_sum" => super::array_sum::eval_array_sum_declared_values_result(evaluated_args, context, values),
         "array_is_list" => super::array_is_list::eval_array_is_list_declared_values_result(evaluated_args, context, values),
         "array_key_first" => super::array_key_first::eval_array_key_first_declared_values_result(evaluated_args, context, values),
+        "array_change_key_case" => super::array_change_key_case::eval_array_change_key_case_declared_values_result(evaluated_args, context, values),
+        "array_first" => super::array_first::eval_array_edge_declared_values_result(super::array_first::ArrayEdge::First, evaluated_args, context, values),
+        "array_last" => super::array_first::eval_array_edge_declared_values_result(super::array_first::ArrayEdge::Last, evaluated_args, context, values),
         "array_key_last" => super::array_key_last::eval_array_key_last_declared_values_result(evaluated_args, context, values),
         "array_product" => super::array_product::eval_array_product_declared_values_result(evaluated_args, context, values),
         "array_chunk" => super::array_chunk::eval_array_chunk_declared_values_result(evaluated_args, context, values),
@@ -31,6 +34,12 @@ pub(in crate::interpreter) fn eval_array_declared_values_result(
         "array_fill" => super::array_fill::eval_array_fill_declared_values_result(evaluated_args, context, values),
         "array_fill_keys" => super::array_fill_keys::eval_array_fill_keys_declared_values_result(evaluated_args, context, values),
         "array_filter" => super::array_filter::eval_array_filter_declared_values_result(evaluated_args, context, values),
+        "array_replace_recursive" => super::array_recursive::eval_array_recursive_declared_values_result(super::array_recursive::ArrayRecursiveCombine::Replace, evaluated_args, context, values),
+        "array_merge_recursive" => super::array_recursive::eval_array_recursive_declared_values_result(super::array_recursive::ArrayRecursiveCombine::Merge, evaluated_args, context, values),
+        "array_find" => super::array_find::eval_array_predicate_walk_declared_values_result(super::array_find::ArrayPredicateWalk::FindValue, evaluated_args, context, values),
+        "array_find_key" => super::array_find::eval_array_predicate_walk_declared_values_result(super::array_find::ArrayPredicateWalk::FindKey, evaluated_args, context, values),
+        "array_any" => super::array_find::eval_array_predicate_walk_declared_values_result(super::array_find::ArrayPredicateWalk::Any, evaluated_args, context, values),
+        "array_all" => super::array_find::eval_array_predicate_walk_declared_values_result(super::array_find::ArrayPredicateWalk::All, evaluated_args, context, values),
         "array_intersect" => super::array_intersect::eval_array_intersect_declared_values_result(evaluated_args, context, values),
         "array_intersect_key" => super::array_intersect_key::eval_array_intersect_key_declared_values_result(evaluated_args, context, values),
         "array_map" => super::array_map::eval_array_map_declared_values_result(evaluated_args, context, values),
@@ -79,6 +88,9 @@ pub(in crate::interpreter) fn eval_array_declared_values_result(
         "uasort" => super::uasort::eval_uasort_declared_values_result(evaluated_args, context, values),
         "uksort" => super::uksort::eval_uksort_declared_values_result(evaluated_args, context, values),
         "usort" => super::usort::eval_usort_declared_values_result(evaluated_args, context, values),
+        name if super::array_ucompare::is_array_ucompare_builtin(name) => {
+            super::array_ucompare::eval_array_ucompare_declared_values_result(name, evaluated_args, context, values)
+        }
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }

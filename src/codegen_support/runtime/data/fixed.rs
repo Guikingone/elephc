@@ -353,6 +353,17 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // Zero in a program that never links the bridge, where no such object exists and the helper
     // keeps its metadata-only answer.
     out.push_str(&comm_directive("_elephc_eval_object_relation_fn", 8, target));
+    // _elephc_eval_array_access_fn: filled by the interpreter at context creation.
+    // `__rt_mixed_array_get` finds `offsetGet` through the object's runtime class id, and an
+    // object the INTERPRETER built carries `stdClass` there, so `$repository['key']` over an
+    // eval-declared `ArrayAccess` class raised "Cannot use object of type stdClass as array".
+    // Zero without the bridge, where no such object exists and the read keeps raising.
+    out.push_str(&comm_directive("_elephc_eval_array_access_fn", 8, target));
+    // _elephc_eval_object_clone_fn: filled by the interpreter at context creation. A compiled
+    // `clone` of an eval-declared object copies its compiled ancestor's layout; generated code
+    // calls this right after, so the clone is registered as the source's own class. Zero
+    // without the bridge, where every object's class is compiled.
+    out.push_str(&comm_directive("_elephc_eval_object_clone_fn", 8, target));
     // _elephc_eval_serialize_object_fn: filled by the interpreter at context creation.
     // `__rt_serialize_object` reads an object's class from its header and its properties from the
     // runtime hash; an object the INTERPRETER built carries `stdClass` in the first and nothing in

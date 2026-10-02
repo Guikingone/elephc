@@ -906,3 +906,159 @@ echo Base::make(new Child(), 'a'), "|", Base::make(new GrandChild(), 'b'), "|", 
     );
     assert_eq!(out, "child:a:true:7:NULL|child:b:true:7:NULL|base:c");
 }
+
+/// A child may redeclare a PRIVATE parent property with the other staticness: a private member
+/// is not inherited, so `B::$enc` (instance) and `A::$enc` (static) are two properties, and the
+/// same holds the other way round for `$inst`. `symfony/mime`'s `ParameterizedHeader` is this
+/// shape. Expected output is php 8.5's; the build used to fail with "Cannot redeclare static
+/// property as instance property".
+#[test]
+fn test_private_parent_property_may_be_redeclared_with_other_staticness() {
+    let out = compile_and_run(
+        r#"<?php
+class A {
+    private static $enc = "s";
+    private $inst = "i";
+    static function g() { return self::$enc; }
+    function h() { return $this->inst; }
+}
+class B extends A {
+    private $enc = "b";
+    private static $inst = "t";
+    function f() { return $this->enc . self::$inst; }
+}
+$b = new B;
+echo A::g(), $b->h(), $b->f(), "\n";
+"#,
+    );
+    assert_eq!(out, "sibt\n");
+}
+
+/// A child that shadows a private parent property with a CLASS-CONSTANT default is validated
+/// like every other property default: the constant is typed once class constants exist. The
+/// shadowing path used the plain validator and read `K::NONE` as a string ("default expects Int,
+/// got Str"), which dropped `symfony/validator`'s `ClassMetadata` from the build. Expected output
+/// is php 8.5's.
+#[test]
+fn test_private_parent_property_shadow_accepts_class_constant_default() {
+    let out = compile_and_run(
+        r#"<?php
+class G { private int $s = K::NONE; function g() { return $this->s; } }
+class C extends G { private int $s = K::CASCADE; function f() { return $this->s; } }
+class K { public const NONE = 1; public const CASCADE = 2; }
+$c = new C;
+echo $c->f(), $c->g(), "\n";
+"#,
+    );
+    assert_eq!(out, "21\n");
+}
+
+/// Verifies that converting an object to string calls the RUNTIME class's `__toString`: the
+/// declared parameter type named a parent whose own `__toString` was called directly, so a
+/// subclass override was silently skipped (`[plain]` for a `Fancy`).
+#[test]
+fn test_string_conversion_calls_the_subclass_tostring_override() {
+    let out = compile_and_run(
+        r#"<?php
+class Plain {
+    public function __toString(): string { return "plain"; }
+}
+class Fancy extends Plain {
+    public function __toString(): string { return "fancy"; }
+}
+function show(Plain $p): string { return "[" . $p . "]"; }
+function cast(Plain $p): string { return (string) $p; }
+echo show(new Plain()), show(new Fancy()), cast(new Fancy());
+"#,
+    );
+    assert_eq!(out, "[plain][fancy]fancy");
+}
+
+/// Verifies that an abstract class whose `__toString` comes only from `\Stringable` converts
+/// through its subclass: the direct call named a method body the abstract class never has, and
+/// the program failed to link.
+#[test]
+fn test_string_conversion_through_an_abstract_stringable_class() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class Shape implements \Stringable {
+    abstract public function area(): int;
+}
+class Square extends Shape {
+    public function __construct(private int $side) {}
+    public function area(): int { return $this->side * $this->side; }
+    public function __toString(): string { return "square " . $this->side; }
+}
+function describe(Shape $s): string { return (string) $s . "/" . $s->area(); }
+echo describe(new Square(3));
+"#,
+    );
+    assert_eq!(out, "square 3/9");
+}
+
+/// Verifies an undeclared `__toString()` return type is php's implicit `string`: it satisfies
+/// `Stringable`, a user interface declaring `: string`, and a parent's declared override, and a
+/// returned int is coerced like any `: string` function.
+///
+/// The checker refused all three shapes ("without declaring a compatible return type"), which
+/// is how Laravel's `HtmlString`, `MessageBag`, `ViewErrorBag` and `Stringable` are written, and
+/// each refusal left the class to the interpreter.
+///
+/// Reference value captured from php 8.5.10.
+#[test]
+fn test_undeclared_tostring_return_type_is_implicitly_string() {
+    let out = compile_and_run(
+        r#"<?php
+interface Htmlable { public function toHtml(); }
+interface Renderable { public function __toString(): string; }
+class HtmlString implements Htmlable, Stringable {
+    public function __construct(protected $html = '') {}
+    public function toHtml() { return $this->html; }
+    public function __toString() { return $this->toHtml(); }
+}
+class Bag implements Renderable {
+    public function __toString() { return 'bag'; }
+}
+class Base { public function __toString(): string { return 'base'; } }
+class Child extends Base { public function __toString() { return 'child'; } }
+class Number { public function __toString() { return 5; } }
+echo new HtmlString('<b>x</b>'), "|", new Bag(), "|", new Child(), "|", new Number(), "\n";
+echo (new HtmlString('s')) instanceof Stringable ? "stringable" : "plain", "|";
+echo (new ReflectionMethod('Number', '__toString'))->getReturnType(), "\n";
+"#,
+    );
+    assert_eq!(out, "<b>x</b>|bag|child|5\nstringable|string\n");
+}
+
+/// Untyped members of an override family return in one storage, so a call typed by the base
+/// reads what the override actually returned. A base that only throws was typed `void` while the
+/// override returned a string (Laravel's `Facade::getFacadeAccessor()`), and a base returning a
+/// string with an override returning an int read garbage.
+#[test]
+fn test_untyped_override_family_returns_share_one_storage() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class Base {
+    protected static function accessor() { throw new RuntimeException('no accessor'); }
+    protected function name() { throw new RuntimeException('no name'); }
+    protected function v() { return "base"; }
+    protected static function s() { return "base"; }
+    public static function viaStatic() { return 'static:' . static::accessor() . ':' . var_export(static::s(), true); }
+    public function viaThis() { return 'this:' . $this->name() . ':' . var_export($this->v(), true); }
+}
+class Impl extends Base {
+    protected static function accessor() { return 'log'; }
+    protected function name() { return 'impl'; }
+    protected function v() { return 5; }
+    protected static function s() { return 6; }
+}
+class Plain extends Base {
+    protected static function accessor() { return 'plain'; }
+    protected function name() { return 'p'; }
+}
+echo Impl::viaStatic(), " ", (new Impl)->viaThis(), "\n";
+echo Plain::viaStatic(), " ", (new Plain)->viaThis(), "\n";
+"#,
+    );
+    assert_eq!(out, "static:log:6 this:impl:5\nstatic:plain:'base' this:p:'base'\n");
+}

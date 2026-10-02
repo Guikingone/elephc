@@ -43,6 +43,22 @@ use crate::types::FunctionSig;
 /// source declaration has been parsed.
 pub(crate) const HIDDEN_ARGS_PARAM: &str = "__elephc_func_args";
 
+/// Prefix of the caller-supplied argument-count marker a call appends to the hidden variadic
+/// tail of a scope with optional parameters.
+///
+/// Default materialization erases whether an optional parameter was passed, so the caller
+/// records the count it really passed as the tail's LAST entry: `"\0elephc-argc:" . <count>`.
+/// A string no PHP program passes is what lets a call that cannot add the marker -- a spread,
+/// named arguments, a callable invoker -- still be told apart from one that did. The eval
+/// bridge appends the same marker (`elephc-magician`'s native function binding) and must agree
+/// on the spelling.
+pub(crate) const ARGC_MARKER_PREFIX: &str = "\0elephc-argc:";
+
+/// Returns the argc marker for `count` actually passed arguments.
+pub(crate) fn argc_marker(count: usize) -> String {
+    format!("{ARGC_MARKER_PREFIX}{count}")
+}
+
 /// Name of the hidden local that holds the evaluated `func_get_arg()` position when the
 /// position expression is not already side-effect free, so it is evaluated exactly once
 /// across the range checks and the indexed read.
@@ -131,6 +147,36 @@ pub fn desugar(program: Program) -> Result<Program, CompileError> {
 /// is exactly what a scope carrying only the hidden parameter still is.
 pub(crate) fn sig_collects_surplus_args(sig: &FunctionSig) -> bool {
     sig.variadic.as_deref() == Some(HIDDEN_ARGS_PARAM)
+}
+
+/// Returns `sig` as PHP declares it: without the hidden variadic this pass appends.
+///
+/// The hidden parameter is an ABI detail, and `method_families::propagate` spreads it across a
+/// whole interface family so every implementation shares one call shape. A PHP-visible contract
+/// must not carry it: handed to the interpreter as an interface requirement, it demanded a
+/// variadic parameter from every class implementing the interface there, and refused
+/// `class Dispatcher implements DispatcherContract` because another implementation of that
+/// interface happened to call `func_get_args()`.
+pub(crate) fn php_visible_signature(sig: &FunctionSig) -> FunctionSig {
+    if !sig_collects_surplus_args(sig) {
+        return sig.clone();
+    }
+    let mut visible = sig.clone();
+    if visible
+        .params
+        .last()
+        .is_some_and(|(name, _)| name == HIDDEN_ARGS_PARAM)
+    {
+        let keep = visible.params.len() - 1;
+        visible.params.truncate(keep);
+        visible.param_type_exprs.truncate(keep);
+        visible.param_attributes.truncate(keep);
+        visible.defaults.truncate(keep);
+        visible.ref_params.truncate(keep);
+        visible.declared_params.truncate(keep);
+    }
+    visible.variadic = None;
+    visible
 }
 
 /// Returns whether the program declares a function or method named after one of the three

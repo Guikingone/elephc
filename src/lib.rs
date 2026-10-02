@@ -34,6 +34,8 @@ pub use cli_entry::run as run_cli;
 pub mod autoload;
 /// Gradual and associative `array_merge()` compatibility prelude.
 mod addcslashes_prelude;
+/// `htmlspecialchars()`'s `$double_encode` parameter as AST-built prelude declarations.
+mod htmlspecialchars_prelude;
 pub mod array_merge_prelude;
 /// Default-initial-value `array_reduce()` compatibility prelude.
 pub mod array_reduce_prelude;
@@ -41,12 +43,18 @@ pub mod array_reduce_prelude;
 pub mod assert_prelude;
 /// PHP's builtin `ErrorException`, declared as an AST-built class.
 pub mod error_exception_prelude;
+pub mod password_prelude;
+pub mod array_edge_prelude;
+pub mod array_ucompare_prelude;
 pub mod sodium_prelude;
 pub mod attribute_prelude;
 /// Whole-program PHP symbol usage collection for conditional prelude injection.
 pub(crate) mod append_vivify;
 pub mod ast_usage;
 mod array_filter_prelude;
+/// `array_any()` / `array_all()` as AST-built prelude declarations.
+mod array_find_prelude;
+mod array_splice_prelude;
 mod array_walk_prelude;
 mod preg_match_all_prelude;
 mod preg_array_prelude;

@@ -681,3 +681,449 @@ echo eval('InterpreterGhostFactory::makeConsumer($container); return "ok";');
     );
     assert_eq!(out, "ok");
 }
+
+/// A compiled parameter typed with a class only the interpreter declares accepts that class's
+/// instances (and an interface only the interpreted subclass implements), and still throws
+/// `TypeError` for an object that is not one.
+#[test]
+fn test_compiled_parameter_typed_with_interpreted_class_accepts_its_instances() {
+    let out = compile_and_run(
+        r#"<?php
+interface Marker {}
+class Base { public function kind() { return 'base'; } }
+eval('class Req extends Base implements Marker { public function kind() { return "req"; } }');
+function handle(Req $r) { return $r->kind(); }
+function marked(Marker $m) { return 'marked'; }
+function make(): Base { $c = $GLOBALS['argc'] > 5 ? 'Base' : 'Req'; return new $c(); }
+echo handle(make()), "\n";
+echo marked(make()), "\n";
+try { echo handle(new Base()), "\n"; } catch (TypeError $e) { echo "TypeError\n"; }
+try { echo marked(new Base()), "\n"; } catch (TypeError $e) { echo "TypeError\n"; }
+"#,
+    );
+    assert_eq!(out, "req\nmarked\nTypeError\nTypeError\n");
+}
+
+/// An interpreted class implements a compiled interface whose OTHER implementation calls
+/// `func_get_args()`: the hidden variadic that call adds to the whole method family is ABI only
+/// and is not part of the contract the interpreter checks.
+#[test]
+fn test_eval_class_implements_interface_whose_compiled_implementation_reads_func_get_args() {
+    let out = compile_and_run(
+        r#"<?php
+interface Dispatcher { public function dispatch($event, $payload = [], $halt = false); }
+class Fake implements Dispatcher {
+    public function dispatch($event, $payload = [], $halt = false) { return 'fake:' . count(func_get_args()); }
+}
+eval('class Real implements Dispatcher { public function dispatch($event, $payload = [], $halt = false) { return "real:" . $event; } }');
+$cls = 'Real';
+$d = new $cls();
+echo $d->dispatch('boot'), "|", $d instanceof Dispatcher ? 'yes' : 'no', "\n";
+function fire(Dispatcher $d) { return $d->dispatch('x', [], true); }
+echo fire($d), "|", fire(new Fake()), "\n";
+"#,
+    );
+    assert_eq!(out, "real:boot|yes\nreal:x|fake:3\n");
+}
+
+/// A property that an eval-declared subclass of a COMPILED class declares must be readable from
+/// compiled code through an untyped receiver.
+///
+/// The object is a native object of its compiled ancestor; the subclass's own properties live in
+/// the eval context that declared it. A compiled frame with no eval context of its own read the
+/// name through the native paths only (the declared-slot dispatch, then the stdClass helper) and
+/// got null, and one with a context of its own asked THAT context, which does not know the class.
+/// Laravel's `Application::register()` reads `$provider->singletons` exactly so on a service
+/// provider loaded at run time, and warned "foreach() argument must be of type array|object,
+/// null given" on every boot. The read now goes to the object's owning context.
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_compiled_code_reads_properties_declared_by_an_eval_subclass() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class Provider {
+    public $app = "app";
+    public function register() {}
+}
+class Aggregate extends Provider {
+    protected $providers = [];
+}
+function register_it($provider) {
+    $provider->register();
+    if (property_exists($provider, 'singletons')) {
+        echo gettype($provider->singletons), ":";
+        foreach ($provider->singletons as $key => $value) {
+            echo $key, "=", $value, ",";
+        }
+    }
+    echo $provider->app, "\n";
+}
+function with_context($provider) {
+    eval(chr(36) . 'unused = 1;');
+    echo count($provider->singletons), "\n";
+}
+eval('class Foundation extends Aggregate { public $singletons = ["a" => "A", "b" => "B"]; }');
+$name = "Found" . "ation";
+$provider = new $name();
+register_it($provider);
+with_context($provider);
+"#,
+    );
+    assert_eq!(out, "array:a=A,b=B,app\n2\n");
+}
+
+/// A compiled object's `__get()` answers a property read made through the eval bridge, which a
+/// frame owning an eval context uses for every read it cannot resolve to a declared slot.
+///
+/// The bridge only knew declared slots and read every other name as an undeclared null, and in
+/// quiet mode (`isset`/`empty`/`??`) it answered null for ANY name the object lacked. Laravel's
+/// `loadViewsFrom()` closure reads `$this->app->config['view']['paths']`, where the container
+/// answers `config` from `__get()`: the read came back null and every view namespace was lost.
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_bridge_property_read_calls_a_compiled_magic_get() {
+    let out = compile_and_run(
+        r#"<?php
+class Settings implements ArrayAccess {
+    public function __construct(private array $items) {}
+    public function offsetExists($key): bool { return isset($this->items[$key]); }
+    public function offsetGet($key): mixed { return $this->items[$key] ?? null; }
+    public function offsetSet($key, $value): void { $this->items[$key] = $value; }
+    public function offsetUnset($key): void { unset($this->items[$key]); }
+}
+class Container implements ArrayAccess {
+    protected $instances = [];
+    public function instance($key, $value) { $this->instances[$key] = $value; }
+    public function offsetExists($key): bool { return isset($this->instances[$key]); }
+    public function offsetGet($key): mixed { return $this->instances[$key]; }
+    public function offsetSet($key, $value): void { $this->instances[$key] = $value; }
+    public function offsetUnset($key): void { unset($this->instances[$key]); }
+    public function __get($key) { return $this[$key]; }
+}
+class App extends Container {}
+class Guarded {
+    public function __isset($key) { return $key === 'open'; }
+    public function __get($key) { return ['k' => $key]; }
+}
+class Provider {
+    protected $app;
+    protected $guarded;
+    public function __construct($app, $guarded) { $this->app = $app; $this->guarded = $guarded; }
+    public function load($namespace) {
+        $show = function ($view) use ($namespace) {
+            echo get_class($this->app->config), "|";
+            echo isset($this->app->config['view']['paths']) ? "y" : "n", "|";
+            echo implode(",", $this->app->config['view']['paths']), "|";
+            echo isset($this->guarded->open['k']) ? "y" : "n";
+            echo isset($this->guarded->shut['k']) ? "y" : "n", "|", $namespace, $view, "\n";
+            eval(chr(36) . 'unused = 1;');
+        };
+        $show("!");
+    }
+}
+$app = new App();
+$app->instance('config', new Settings(['view' => ['paths' => ['/a', '/b']]]));
+(new Provider($app, new Guarded()))->load("ns");
+"#,
+    );
+    assert_eq!(out, "Settings|y|/a,/b|yn|ns!\n");
+}
+
+/// Compiled `$object[$key]` reads an eval-declared `ArrayAccess` class through its own
+/// `offsetGet()`, and an exception that method throws reaches the compiled `catch`.
+///
+/// The runtime finds `offsetGet` through the object's class id, and an object the interpreter
+/// built carries `stdClass`'s id whatever class declared it, so every such read raised "Cannot
+/// use object of type stdClass as array" -- Laravel's config repository, loaded at run time, is
+/// read that way by every `$app['config']['view']`. The runtime now asks the eval bridge before
+/// raising.
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_compiled_index_reads_an_eval_declared_array_access_object() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class Repo implements ArrayAccess {
+    private $items = ["view" => ["paths" => ["/a", "/b"]], 7 => "seven"];
+    public function offsetExists($key): bool { return isset($this->items[$key]); }
+    public function offsetGet($key): mixed {
+        if ($key === "boom") { throw new RuntimeException("no " . $key); }
+        return $this->items[$key] ?? null;
+    }
+    public function offsetSet($key, $value): void {}
+    public function offsetUnset($key): void {}
+}');
+function read($repo) { return implode(",", $repo['view']['paths']); }
+function read_int($repo) { return $repo[7]; }
+function boom($repo) { return $repo['boom']; }
+$name = 'Re' . 'po';
+$repo = new $name();
+echo read($repo), "|", read_int($repo), "|", $repo['missing'] ?? 'dflt', "\n";
+try {
+    boom($repo);
+} catch (RuntimeException $e) {
+    echo "caught ", $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(out, "/a,/b|seven|dflt\ncaught no boom\n");
+}
+
+/// A property written by interpreted code running in ANOTHER eval context than the one that
+/// built the object is the object's property, visible to every later reader.
+///
+/// The write went into the writing context's overlay, where only that context looked, while the
+/// owner kept its old value. Laravel's cached routes file is included from a closure with a
+/// context of its own and calls `app('router')->setCompiledRoutes(...)`; the router kept
+/// answering the empty collection it was built with and every route 404ed.
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_eval_object_property_written_from_another_context_is_seen_by_its_owner() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class Router {
+    protected $routes = "old";
+    public $open;
+    public function set($value) { $this->routes = $value; }
+    public function get() { return $this->routes; }
+    public function drop() { unset($this->open); }
+}');
+$name = 'Rou' . 'ter';
+$router = new $name();
+$router->open = "o";
+function elsewhere($router) {
+    $code = 'return function ($r) { $r->set("new"); $r->open = "p"; };';
+    $setter = eval($code);
+    $setter($router);
+}
+elsewhere($router);
+echo $router->get(), "|", $router->open, "\n";
+function drop_elsewhere($router) {
+    $code = 'return function ($r) { $r->drop(); };';
+    $dropper = eval($code);
+    $dropper($router);
+}
+drop_elsewhere($router);
+echo isset($router->open) ? "set" : "unset", "\n";
+"#,
+    );
+    assert_eq!(out, "new|p\nunset\n");
+}
+
+/// A class declared in eval reads the constants of the COMPILED interfaces it implements --
+/// directly, through a compiled parent, or through an interface's own parents.
+///
+/// Nothing consulted a compiled interface's constants for an eval class: Carbon's
+/// `static::YEARS_PER_MILLENNIUM` (declared by the compiled `CarbonInterface`) failed as an
+/// "unsupported ClassConstantFetch" inside `addUnit()`.
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_eval_class_reads_constants_of_compiled_interfaces() {
+    let out = compile_and_run(
+        r#"<?php
+interface Units {
+    public const YEARS_PER_MILLENNIUM = 1000;
+    public const NAME = 'units';
+}
+interface MoreUnits extends Units {
+    public const DAYS = 7;
+}
+class Base implements MoreUnits {
+    public function base() { return static::YEARS_PER_MILLENNIUM; }
+}
+eval('class Stamp extends Base {
+    public function meta() {
+        return [static::YEARS_PER_MILLENNIUM, self::NAME, static::DAYS, Stamp::DAYS];
+    }
+}
+class Loose implements MoreUnits {
+    public function meta() { return [static::YEARS_PER_MILLENNIUM, self::DAYS]; }
+}');
+$name = 'Sta' . 'mp';
+echo json_encode((new $name())->meta()), (new $name())->base(), "\n";
+$loose = 'Lo' . 'ose';
+echo json_encode((new $loose())->meta()), "\n";
+"#,
+    );
+    assert_eq!(out, "[1000,\"units\",7,7]1000\n[1000,7]\n");
+}
+
+/// A compiled late-static call reaches an interpreted override of a placeholder that only
+/// throws, and keeps the value that override returns.
+///
+/// A method whose body never returns normally infers `void`, so every compiled call through it
+/// discarded what an eval subclass's override returned: every runtime-loaded Laravel facade
+/// resolved an empty accessor name and `Date::now()` failed with "Target class [date] does not
+/// exist".
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_compiled_late_static_call_keeps_an_eval_override_result() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class Facade {
+    public static function root() {
+        return static::resolve(static::accessor());
+    }
+    protected static function resolve($name) {
+        return "base:" . $name;
+    }
+    protected static function accessor() {
+        throw new RuntimeException("no accessor");
+    }
+    public static function __callStatic($method, $args) {
+        return $method . "->" . static::root();
+    }
+}
+eval('class DateFacade extends Facade {
+    protected static function accessor() { return "date"; }
+    protected static function resolve($name) { return "override(" . parent::resolve($name) . ")"; }
+}');
+$class = 'Date' . 'Facade';
+echo $class::root(), "|", $class::now(), "\n";
+"#,
+    );
+    assert_eq!(out, "override(base:date)|now->override(base:date)\n");
+}
+
+/// A compiled `clone` of an eval-declared object is an object of the same class, with the
+/// properties that class keeps in its context.
+///
+/// The compiled clone copies the native layout, which for an eval subclass is its compiled
+/// ancestor's: the copy came back as that ancestor. Symfony's `Request::duplicate()` clones
+/// `$this`, and Laravel's `Request::duplicate(): static` then failed its own return type.
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_compiled_clone_of_an_eval_object_keeps_its_class() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public $a = 1;
+    public function duplicate(): static {
+        $copy = clone $this;
+        $copy->a = 2;
+        return $copy;
+    }
+}
+eval('class Sub extends Base {
+    public $extra = "x";
+    public function setExtra($value) { $this->extra = $value; return $this; }
+    public function extra() { return $this->extra; }
+    public function duplicate(): static { return parent::duplicate(); }
+}');
+$name = 'Su' . 'b';
+$sub = (new $name())->setExtra("y");
+$copy = $sub->duplicate();
+echo get_class($copy), " ", $copy->extra(), " ", $copy->a, " ", $sub->a, " ";
+$copy->setExtra("z");
+echo $sub->extra(), " ", $copy->extra(), " ", $copy instanceof Sub ? "sub" : "base", "\n";
+"#,
+    );
+    assert_eq!(out, "Sub y 2 1 y z sub\n");
+}
+
+/// A clone made in another eval context than the one that built the source keeps the source's
+/// typed-property initialization.
+///
+/// The clone copied the property values and none of the initialization marks, which the source
+/// keeps in its owning context: every typed property of the clone read as uninitialized. Carbon's
+/// `instance()` clones like that, and the clone failed on its own `?WrapperClock $clock = null`.
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_eval_clone_keeps_typed_property_initialization() {
+    let out = compile_and_run(
+        r#"<?php
+eval('trait LocalFactory { private ?string $clock = null; public function getClock() { return $this->clock; } }
+class Stamp extends DateTime {
+    use LocalFactory;
+    public static function instance(DateTimeInterface $date): static {
+        if ($date instanceof static) { return clone $date; }
+        return new static($date->format("Y-m-d"));
+    }
+    public function __clone() { }
+}');
+$name = 'Sta' . 'mp';
+$a = new $name('2024-01-02');
+var_dump($a->getClock());
+$b = $name::instance($a);
+var_dump($b->getClock());
+$c = $name::instance(new DateTime('2024-03-04'));
+var_dump($c->getClock(), $c->format('Y-m-d'));
+"#,
+    );
+    assert_eq!(out, "NULL\nNULL\nNULL\nstring(10) \"2024-03-04\"\n");
+}
+
+/// Member probes (`method_exists`, `is_callable`, `get_class_methods`) run in one eval context
+/// see a class another context autoloaded after this one last synced its class table.
+///
+/// The probing context never looked again, so it answered from what it already knew: Laravel's
+/// pipeline closure asked `method_exists($pipe, 'handle')` of a middleware its container had just
+/// autoloaded elsewhere, got false, and called the object as a closure ("Object of type stdClass
+/// is not callable").
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_member_probes_see_a_class_another_context_autoloaded() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "Guard.php",
+                r#"<?php
+class Guard
+{
+    public function handle($request, $next)
+    {
+        return 'guard(' . $next($request) . ')';
+    }
+}
+"#,
+            ),
+            (
+                "Pipe3.php",
+                r#"<?php
+class Pipe3
+{
+    public function run($container, $name)
+    {
+        $probe = function () use ($container, $name) {
+            $pipe = $container->make($name);
+            return [
+                method_exists($pipe, 'handle'),
+                is_callable([$pipe, 'handle']),
+                in_array('handle', get_class_methods($pipe)),
+            ];
+        };
+        return json_encode($probe());
+    }
+}
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+spl_autoload_register(function ($class) {
+    $file = __DIR__ . '/' . $class . '.php';
+    if (is_file($file)) {
+        require $file;
+    }
+});
+class Container {
+    public function make($class) { return new $class(); }
+}
+$container = new Container();
+$pipe = $container->make('Pi' . 'pe3');
+echo $pipe->run($container, 'Gu' . 'ard'), "\n";
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "[true,true,true]\n");
+}

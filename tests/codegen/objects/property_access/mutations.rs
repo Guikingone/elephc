@@ -1736,20 +1736,13 @@ echo implode(",", $shared->a);
     assert_eq!(out, "1,2,5,owned");
 }
 
-/// The bound on that accept set: an element write through a call result the compiler cannot
-/// place is refused, where PHP accepts it and prints nothing but `unreachable` (verified against
-/// `php -n` 8.5.6). An over-rejection, not a wrong answer — but it is the reason the shapes above
-/// are the whole of what the borrowed-write scope sees.
-///
-/// The refusal moved from the CHECKER to the BACKEND in the `origin/main` merge: this branch
-/// widened `check_nested_array_assign` to accept a concrete array base (it needs that for
-/// `$this->map[$k][$j] = …`), so the checker no longer says
-/// "Nested array assignment requires a Mixed or ArrayAccess target" and the EIR backend declines
-/// the unplaceable receiver instead. The BOUND still holds, which is what this test exists to
-/// pin; the message is worse, and that is recorded here rather than hidden.
+/// The bound on that accept set, lifted: an element write through a call result writes a
+/// temporary copy and is otherwise a no-op, which `php -n` 8.5.6 accepts and prints nothing but
+/// `unreachable` for. It used to be refused by the EIR backend ("array set with receiver PHP
+/// type"); the merged Laravel work places the receiver, so the program now runs as php does.
 #[test]
-fn test_coalesce_assign_on_a_returned_array_is_refused() {
-    let error = compile_source_expect_backend_error(
+fn test_coalesce_assign_on_a_returned_array_runs_as_php_does() {
+    let out = compile_and_run(
         r#"<?php
 function mkArr(): array {
     return [1, 2];
@@ -1758,12 +1751,7 @@ mkArr()[2] ??= 5;
 echo "unreachable";
 "#,
     );
-    assert!(
-        error.contains("unsupported EIR backend feature")
-            && error.contains("array set with receiver PHP type"),
-        "expected the unplaceable-receiver refusal, got: {}",
-        error
-    );
+    assert_eq!(out, "unreachable");
 }
 
 /// An indexed write auto-initializes an uninitialized typed property, nullable and nested too.

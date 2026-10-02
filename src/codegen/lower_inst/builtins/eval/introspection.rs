@@ -260,6 +260,45 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_member_exists(
     store_if_result(ctx, inst)
 }
 
+/// Emits a null-context `method_exists()` / `property_exists()` probe for an object an eval
+/// context may own, branching to `matched_label` when it answers yes.
+///
+/// For a frame with no eval context of its own: the bridge resolves the object's owner context
+/// and answers 0 for an object no eval context made, so falling through to the native class
+/// tables stays correct for every compiled object.
+pub(in crate::codegen::lower_inst::builtins) fn emit_eval_member_exists_owner_probe(
+    ctx: &mut FunctionContext<'_>,
+    target: ValueId,
+    member: ValueId,
+    name: &str,
+    matched_label: &str,
+) -> Result<()> {
+    let lookup_kind = eval_member_lookup_kind(name)?;
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    let mut boxed = EvalBoxedOperands::new();
+    boxed.extend(store_eval_mixed_operand_at(ctx, target, EVAL_TEMP_CELL_OFFSET)?);
+    boxed.extend(store_eval_mixed_operand_at(ctx, member, EVAL_CODE_PTR_OFFSET)?);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);
+    let target_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, target_arg, EVAL_TEMP_CELL_OFFSET);
+    let member_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, member_arg, EVAL_CODE_PTR_OFFSET);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        lookup_kind,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_member_exists");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_release_eval_boxed_operands_keeping_int_answer(ctx, &boxed);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, matched_label);
+    Ok(())
+}
+
 /// Lowers class/interface/trait relation introspection through eval dynamic metadata.
 ///
 /// The bridge borrows the target cell rather than taking it, so the box this frame made is still

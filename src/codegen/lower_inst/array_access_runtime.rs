@@ -523,10 +523,34 @@ fn lower_generic_object_nominal_guard(
         )
         .map(Some);
     }
+    let eval_bridge = ctx.module.required_runtime_features.eval_bridge;
     let Some((target_id, target_kind)) = target_metadata else {
-        // An unresolved nominal declaration can name an optional runtime type that is not part
-        // of the compiled program. The exact-name case was accepted above; any other statically
-        // known object cannot be proven compatible without inventing hierarchy metadata.
+        // An unresolved nominal declaration can name a class the RUNTIME declares: a class file
+        // handed to the autoloader, whose instances the interpreter builds. The bridge knows its
+        // hierarchy, so it answers; `$app->handleRequest(Request::capture())` refused every
+        // request while the request class was interpreted.
+        if eval_bridge {
+            let accepted = ctx.next_label("generic_object_boundary_eval_accepted");
+            let rejected = ctx.next_label("generic_object_boundary_eval_rejected");
+            super::builtins::emit_eval_object_is_a_named_fallback(
+                ctx,
+                value,
+                &target_name,
+                &accepted,
+                &rejected,
+            )?;
+            ctx.emitter.label(&rejected);
+            let message =
+                nominal_object_type_error_message(boundary, &target_name, false, "object");
+            exceptions::emit_type_error(ctx, &message);
+            ctx.emitter.label(&accepted);
+            ctx.load_value_to_result(value)?;
+            store_nominal_object_result(ctx, inst, &source_ty)?;
+            return Ok(Some(()));
+        }
+        // Without the bridge nothing can declare it later. The exact-name case was accepted
+        // above; any other statically known object cannot be proven compatible without inventing
+        // hierarchy metadata.
         let message = nominal_object_type_error_message(
             boundary,
             &target_name,
@@ -551,6 +575,24 @@ fn lower_generic_object_nominal_guard(
         }
     }
     abi::emit_pop_reg(ctx.emitter, source_reg);
+    // An interpreted subclass may implement an interface its compiled ancestor does not, which
+    // only the bridge can see.
+    if eval_bridge {
+        let eval_accepted = ctx.next_label("generic_object_boundary_eval_match");
+        let rejected = ctx.next_label("generic_object_boundary_rejected");
+        super::builtins::emit_eval_object_is_a_named_fallback(
+            ctx,
+            value,
+            &target_name,
+            &eval_accepted,
+            &rejected,
+        )?;
+        ctx.emitter.label(&eval_accepted);
+        ctx.load_value_to_result(value)?;
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        ctx.emit_branch(&accepted);
+        ctx.emitter.label(&rejected);
+    }
     let message = match boundary {
         NominalObjectBoundary::Parameter => {
             format!("Argument must be of type {}, object given", target_name)
@@ -652,6 +694,14 @@ fn lower_gradual_object_nominal_guard(
             &native_fallback_label,
         )?;
         ctx.emitter.label(&native_fallback_label);
+        // The bridge call clobbered every caller-saved register, the unboxed payload with them:
+        // reload and unbox the cell again so the native matcher reads the object, not whatever
+        // the bridge left in the payload register. An interpreted object the bridge said is not
+        // a `target` (an `EInner` handed to a property inferred as `Inner`) used to fall through
+        // here with garbage in the register and fault in `__rt_exception_matches`; it is now
+        // matched by its class id like any object and rejected with a TypeError.
+        ctx.load_value_to_result(value)?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     }
     if let Some((target_id, target_kind)) = target_metadata {
         match ctx.emitter.target.arch {
@@ -926,10 +976,19 @@ pub(in crate::codegen) fn lower_runtime_object_method_call(
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    abi::emit_call_label(
-        ctx.emitter,
-        &method_symbol(&target.impl_class, &target.method_key),
-    );
+    // The receiver's class is only its DECLARED type: the object is often a subclass that
+    // overrides the method, and when the declared class is abstract (`abstract class T implements
+    // \Stringable` with no `__toString` of its own) there is no body under its name at all, so a
+    // direct call to it did not even link. Late-bound methods go through the vtable, exactly as an
+    // ordinary `$o->m()` does.
+    if let Some(slot) = target.dynamic_slot {
+        super::method_resolution::emit_dynamic_instance_method_call(ctx, slot);
+    } else {
+        abi::emit_call_label(
+            ctx.emitter,
+            &method_symbol(&target.impl_class, &target.method_key),
+        );
+    }
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_runtime_object_call_result(ctx, inst, &target.return_ty)?;

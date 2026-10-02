@@ -110,7 +110,9 @@ impl Checker {
             // class at run time", which is the conservative answer for the handful of tests that
             // build a `Checker` directly: it keeps the compile-time diagnostic.
             program_defers_unknown_classes: false,
+            program_has_interpreted_callers: false,
             flow_typed_returns: HashMap::new(),
+            family_return_widenings: HashMap::new(),
             method_exists_guards: std::collections::HashSet::new(),
             flow_typed_property_accesses: HashMap::new(),
             null_probe_scope_is_top_level: false,

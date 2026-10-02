@@ -156,6 +156,16 @@ where
     F: Fn(&str, &[Expr]) -> bool,
     M: Fn(&StaticReceiver, &str, &[Expr]) -> bool,
 {
+    // A fragment with an include in VALUE position runs through the bridge. The resolver never
+    // expanded it -- the fragment is parsed here, long after resolution -- and the optimizer
+    // passes the AOT plan runs over it treat an unexpanded value include as unreachable, so
+    // `eval('function f($p) { return include $p; }')` crashed the compiler.
+    if crate::ast_usage::collect(&program).value_include {
+        return EvalAotPlan {
+            fallback_reason: Some(EvalAotFallbackReason::IncludeOrRequire),
+            ..parse_error_plan()
+        };
+    }
     let mut scope_access = collect_scope_accesses(&program);
     scope_access.reads = collect_scope_reads_before_writes(&program);
     let quiet_reads = scope_access

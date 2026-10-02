@@ -54,7 +54,7 @@ impl ElephcEvalContext {
         function: EvalFunction,
     ) -> Result<(), EvalFunction> {
         let name = name.into();
-        if self.functions.contains_key(&name) || self.native_functions.contains_key(&name) {
+        if self.functions.contains_key(&name) || self.has_active_native_function(&name) {
             return Err(function);
         }
         #[cfg(not(test))]
@@ -259,7 +259,7 @@ impl ElephcEvalContext {
     /// context as the owner, and re-registering would report a redeclaration.
     #[cfg(not(test))]
     pub(crate) fn adopt_global_function(&mut self, name: &str) -> bool {
-        if self.functions.contains_key(name) || self.native_functions.contains_key(name) {
+        if self.functions.contains_key(name) || self.has_active_native_function(name) {
             return true;
         }
         let Some(function) = crate::context::global_eval_function_declaration(name) else {
@@ -281,8 +281,31 @@ impl ElephcEvalContext {
     }
 
     /// Returns a native AOT function callback by its lowercase PHP function name.
+    ///
+    /// A conditionally declared function whose declaration has not run is not there, exactly as
+    /// in php (see `NativeFunction::active_slot`).
     pub fn native_function(&self, name: &str) -> Option<NativeFunction> {
-        self.native_functions.get(name).cloned()
+        self.native_functions
+            .get(name)
+            .filter(|function| function.is_active())
+            .cloned()
+    }
+
+    /// Returns whether a native AOT function of this lowercase name is declared right now.
+    pub(crate) fn has_active_native_function(&self, name: &str) -> bool {
+        self.native_functions
+            .get(name)
+            .is_some_and(NativeFunction::is_active)
+    }
+
+    /// Records the slot a conditionally declared native AOT callback's existence is read from.
+    pub fn define_native_function_active_slot(&mut self, function_name: &str, slot: usize) -> bool {
+        Arc::make_mut(&mut self.native_functions)
+            .get_mut(function_name)
+            .is_some_and(|function| {
+                function.set_active_slot(slot);
+                true
+            })
     }
 
     /// Records one parameter name for an already registered native AOT callback.

@@ -463,6 +463,21 @@ impl ElephcEvalScope {
             .collect()
     }
 
+    /// Returns every visible variable with its cell, oldest binding first (ties by name).
+    pub fn visible_entries_in_binding_order(&self) -> Vec<(String, RuntimeCellHandle)> {
+        let mut entries: Vec<(u64, &String, RuntimeCellHandle)> = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| entry.flags().is_visible())
+            .map(|(name, entry)| (entry.generation(), name, entry.cell()))
+            .collect();
+        entries.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
+        entries
+            .into_iter()
+            .map(|(_, name, cell)| (name.clone(), cell))
+            .collect()
+    }
+
     /// Returns true when the scope contains a visible value for the named variable.
     pub fn contains_visible(&self, name: &str) -> bool {
         self.visible_cell(name).is_some()

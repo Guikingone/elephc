@@ -9,6 +9,48 @@
 
 use super::*;
 
+/// Emits one array-valued class-constant registration call into the eval context.
+pub(super) fn register_eval_native_class_constant_default(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    registration: &EvalNativeClassConstantDefaultRegistration,
+) {
+    let EvalNativeCallableDefault::Array(_) = &registration.default else {
+        return;
+    };
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    let visibility = match registration.visibility {
+        Visibility::Public => 0,
+        Visibility::Protected => 1,
+        Visibility::Private => 2,
+    };
+    // One `V|Declaring|Class::CONSTANT` record: see the magician entry point.
+    let record = format!(
+        "{}|{}|{}::{}",
+        visibility, registration.declaring_class, registration.class_name, registration.constant_name
+    );
+    let (record_label, record_len) = ctx.data.add_string(record.as_bytes());
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), &record_label);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        record_len as i64,
+    );
+    let spec = encode_eval_native_array_default(&registration.default);
+    let (spec_label, spec_len) = ctx.data.add_string(&spec);
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 3), &spec_label);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        spec_len as i64,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_register_native_class_constant_default_array");
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
 /// Emits one native property-default metadata registration call into the eval context.
 pub(super) fn register_eval_native_property_default(
     ctx: &mut FunctionContext<'_>,

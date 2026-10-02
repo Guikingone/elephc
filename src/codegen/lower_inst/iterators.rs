@@ -1347,6 +1347,16 @@ pub(super) fn emit_interface_dispatch_call_with_miss(
         .get(method_key)
         .map(|sig| sig.return_type.clone())
         .unwrap_or(PhpType::Mixed);
+    // An eval-created object carries the generic `stdClass` header, so the scan below never finds
+    // the interfaces its declaring class implements. Ask the bridge before answering zero. Only a
+    // method without parameters qualifies: the arguments of the others are already in the ABI
+    // argument registers, which the bridge call does not forward.
+    let eval_miss = ctx.module.required_runtime_features.eval_bridge
+        && matches!(miss, InterfaceDispatchMiss::ZeroResult)
+        && interface_info
+            .methods
+            .get(method_key)
+            .is_some_and(|sig| sig.params.is_empty());
     let scan_loop = ctx.next_label("interface_dispatch_scan");
     let found = ctx.next_label("interface_dispatch_found");
     let missing = ctx.next_label("interface_dispatch_missing");
@@ -1381,6 +1391,9 @@ pub(super) fn emit_interface_dispatch_call_with_miss(
             ctx.emitter.instruction("blr x11");                                 // call resolved interface method implementation
             ctx.emitter.instruction(&format!("b {}", local_done));              // skip defensive missing-interface fallback
             ctx.emitter.label(&missing);
+            if eval_miss {
+                emit_eval_interface_dispatch_miss(ctx, normalized, method_key, &return_ty, &local_done)?;
+            }
             if let InterfaceDispatchMiss::DynamicToString(value) = miss {
                 super::output_values::emit_value_dynamic_object_to_string(ctx, value)?;
             } else {
@@ -1415,6 +1428,9 @@ pub(super) fn emit_interface_dispatch_call_with_miss(
             ctx.emitter.instruction("call r11");                                // call resolved interface method implementation
             ctx.emitter.instruction(&format!("jmp {}", local_done));            // skip defensive missing-interface fallback
             ctx.emitter.label(&missing);
+            if eval_miss {
+                emit_eval_interface_dispatch_miss(ctx, normalized, method_key, &return_ty, &local_done)?;
+            }
             if let InterfaceDispatchMiss::DynamicToString(value) = miss {
                 super::output_values::emit_value_dynamic_object_to_string(ctx, value)?;
             } else {
@@ -1426,6 +1442,31 @@ pub(super) fn emit_interface_dispatch_call_with_miss(
         ctx.emitter.label(&local_done);
     }
     Ok(return_ty)
+}
+
+/// Calls the interface method through the eval bridge for an eval-owned receiver, jumping to
+/// `done` with the result; any other receiver falls through to the native zero answer.
+///
+/// `foreach` over an eval-declared `Iterator` used to see `valid()` answer zero and iterate
+/// nothing, and an eval-declared `IteratorAggregate` kept its own object as the iterator.
+fn emit_eval_interface_dispatch_miss(
+    ctx: &mut FunctionContext<'_>,
+    interface_name: &str,
+    method_key: &str,
+    return_ty: &PhpType,
+    done: &str,
+) -> Result<()> {
+    let native_zero = ctx.next_label("interface_dispatch_native_zero");
+    super::builtins::eval::emit_eval_interface_method_on_miss(
+        ctx,
+        interface_name,
+        method_key,
+        return_ty,
+        &native_zero,
+    )?;
+    abi::emit_jump(ctx.emitter, done);
+    ctx.emitter.label(&native_zero);
+    Ok(())
 }
 
 /// Returns the PHP type produced by a `Generator` iterator runtime helper.

@@ -29,6 +29,8 @@ mod misc;
 mod openssl;
 #[path = "strings/sodium.rs"]
 mod sodium;
+#[path = "strings/password.rs"]
+mod password;
 #[path = "strings/parse_url.rs"]
 mod parse_url;
 #[path = "strings/implode_conversions.rs"]

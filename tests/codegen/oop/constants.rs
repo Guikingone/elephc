@@ -622,3 +622,87 @@ echo NarrowedConstantReceiver::readTernary(new NarrowedConstantChild());
     );
     assert_eq!(out, "child:child");
 }
+
+/// Property defaults that are constant EXPRESSIONS or ENUM CASES initialize a `new` object.
+///
+/// `self::A | self::B` (`symfony/validator`'s `NoSuspiciousCharacters::$checks`), a class
+/// constant built from global flags (`monolog`'s `Utils::DEFAULT_JSON_FLAGS`), `~self::A`, and an
+/// enum case (`doctrine/dbal`'s `QueryBuilder::$type = QueryType::SELECT`) all failed the backend
+/// with "object_new for default value of property". The enum case must also be the very same
+/// singleton `QueryType::SELECT` reads. Expected output is php 8.5's.
+#[test]
+fn test_constant_expression_and_enum_case_property_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+enum QueryType { case SELECT; case DELETE; }
+enum Level: int { case Debug = 100; case Info = 200; }
+class Utils { const FLAGS = JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE; }
+class Q {
+    const A = 1; const B = 4;
+    private QueryType $type = QueryType::SELECT;
+    public int $flags = self::A | self::B | 16;
+    protected Level $level = Level::Debug;
+    public int $json = Utils::FLAGS;
+    public int $neg = ~self::A;
+    public function show() { var_dump($this->type === QueryType::SELECT, $this->flags, $this->level->value, $this->json, $this->neg); }
+}
+$q = new Q; $q->show(); $r = new Q; var_dump($r == $q, QueryType::SELECT === (fn() => $this->type)->call($r));
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nint(21)\nint(100)\nint(320)\nint(-2)\nbool(true)\nbool(true)\n"
+    );
+}
+
+/// A property default with no literal form — an array whose values are enum cases, keyed by
+/// interface constants (`symfony/monolog-bridge`'s `ConsoleHandler::$verbosityLevelMap`) — is
+/// assigned by the class's property-initializer thunk after allocation, on the static `new`, the
+/// dynamic `new $c` and the constructor-less paths alike. The backend used to refuse every body
+/// that could allocate such a class, including the generated `ReflectionClass::newLazyGhost`, so
+/// the whole build failed. Expected output is php 8.5's.
+#[test]
+fn test_non_literal_property_default_is_assigned_by_the_init_thunk() {
+    let out = compile_and_run(
+        r#"<?php
+enum Level: int { case Error = 400; case Debug = 100; }
+interface Out { const VERBOSITY_QUIET = 16; const VERBOSITY_NORMAL = 32; }
+class Handler {
+    private array $map = [Out::VERBOSITY_QUIET => Level::Error, Out::VERBOSITY_NORMAL => Level::Debug];
+    public $label = "h";
+    public function show() { foreach ($this->map as $k => $v) { echo $k, "=", $v->name, ";"; } echo $this->label, "\n"; }
+}
+(new Handler)->show();
+$c = $argc > 0 ? "Handler" : "X"; $h = new $c(); $h->show();
+$r = (new ReflectionClass("Handler"))->newInstanceWithoutConstructor(); $r->show();
+"#,
+    );
+    assert_eq!(out, "16=Error;32=Debug;h\n16=Error;32=Debug;h\n16=Error;32=Debug;h\n");
+}
+
+/// Verifies `Enum::Case->value` inside an array literal keeps the enum's backing type.
+///
+/// The element type was guessed syntactically as int, so a string-backed value was stored as
+/// its string POINTER: Symfony's `ReflectionExtractor::MAP_TYPES = ['integer' =>
+/// TypeIdentifier::INT->value, ...]` printed `4321534512`. Expected output is php 8.5.10's.
+#[test]
+fn test_enum_case_value_in_an_array_constant_keeps_its_backing_type() {
+    let out = compile_and_run(
+        r#"<?php
+enum Kind: string { case Int = 'int'; case Bool = 'bool'; }
+enum Num: int { case One = 1; }
+class Map {
+    const TYPES = ['integer' => Kind::Int->value, 'one' => Num::One->value];
+    const LIST = [Kind::Int->value, Kind::Bool->name];
+}
+var_dump(Map::TYPES, Map::LIST);
+$x = [Kind::Bool->value, 'k' => Num::One->value];
+echo $x[0], $x['k'], Map::TYPES['integer'], "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(2) {\n  [\"integer\"]=>\n  string(3) \"int\"\n  [\"one\"]=>\n  int(1)\n}\n\
+         array(2) {\n  [0]=>\n  string(3) \"int\"\n  [1]=>\n  string(4) \"Bool\"\n}\nbool1int\n"
+    );
+}

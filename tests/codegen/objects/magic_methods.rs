@@ -525,3 +525,57 @@ fn test_example_magic_methods_compiles_and_runs() {
 // =============================================================================
 // Non-class regression edge cases
 // =============================================================================
+
+/// Verifies `static::method()` resolves against the late-static class when only DESCENDANTS of the
+/// calling class declare the method: a protected child-only static method is reachable from the
+/// parent's scope, the lexical class that lacks it keeps `__callStatic`, `method_exists()` stays
+/// false for it, and an instance without any fallback raises PHP's own undefined-method `Error`.
+#[test]
+fn test_static_call_reaches_protected_method_only_a_child_declares() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class Base {
+    public static function run() { return static::hook() . "|" . static::name(); }
+    public static function check() { return method_exists(static::class, 'hook') ? 'yes' : 'no'; }
+    public static function withArgs($a, $b) { return static::combine($a, $b); }
+    public static function __callStatic($m, $a) { return "callStatic:" . $m . count($a); }
+    public static function name() { return "base"; }
+}
+class Child extends Base {
+    protected static function hook() { return "child-hook"; }
+    protected static function combine($a, $b) { return $a . "+" . $b . "@" . static::name(); }
+    public static function name() { return "child"; }
+}
+class GrandChild extends Child {
+    public static function name() { return "grand"; }
+}
+class Other extends Base {
+}
+echo Child::run(), "\n";
+echo GrandChild::run(), "\n";
+echo Other::run(), "\n";
+echo Child::check(), " ", Other::check(), "\n";
+echo Child::withArgs("x", "y"), "\n";
+echo GrandChild::withArgs(1, 2), "\n";
+echo Other::withArgs("p", "q"), "\n";
+
+abstract class Plain {
+    public static function go() { return static::missing(); }
+}
+class Impl extends Plain {
+    protected static function missing() { return "impl"; }
+}
+class Empty_ extends Plain {}
+echo Impl::go(), "\n";
+try {
+    echo Empty_::go(), "\n";
+} catch (Error $e) {
+    echo get_class($e), ": ", $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "child-hook|child\nchild-hook|grand\ncallStatic:hook0|base\nyes no\nx+y@child\n1+2@grand\ncallStatic:combine2\nimpl\nError: Call to undefined method Empty_::missing()\n"
+    );
+}

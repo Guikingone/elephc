@@ -211,6 +211,24 @@ pub struct CodegenIrError {
     /// Set only by the codegen worker's deferral watch: not a fault, a request to re-emit this
     /// body on the serial pass. It survives `at()` because the abort happens inside a block.
     deferred: bool,
+    /// Every body the backend inventory could not lower, by EIR function name. Empty unless the
+    /// inventory ran (`ELEPHC_BACKEND_INVENTORY=1` or [`collect_backend_refusals`]).
+    failed_bodies: Vec<(String, String)>,
+}
+
+/// Whether the backend scans every body and reports all refusals together, set by the pipeline
+/// when refused bodies can be handed to the runtime (see `pipeline::backend`).
+static COLLECT_BACKEND_REFUSALS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Makes the backend collect every refused body instead of stopping at the first one.
+pub(crate) fn collect_backend_refusals(enabled: bool) {
+    COLLECT_BACKEND_REFUSALS.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Returns whether the pipeline asked the backend to collect every refused body.
+pub(crate) fn collects_backend_refusals() -> bool {
+    COLLECT_BACKEND_REFUSALS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 impl CodegenIrError {
@@ -220,6 +238,7 @@ impl CodegenIrError {
             message: format!("{context}: {error}"),
             location: None,
             deferred: false,
+            failed_bodies: Vec::new(),
         }
     }
 
@@ -229,6 +248,7 @@ impl CodegenIrError {
             message: message.into(),
             location: None,
             deferred: false,
+            failed_bodies: Vec::new(),
         }
     }
 
@@ -238,6 +258,7 @@ impl CodegenIrError {
             message: format!("unsupported EIR backend feature: {}", message.into()),
             location: None,
             deferred: false,
+            failed_bodies: Vec::new(),
         }
     }
 
@@ -247,6 +268,7 @@ impl CodegenIrError {
             message: format!("EIR backend missing {} with id {}", kind, raw),
             location: None,
             deferred: false,
+            failed_bodies: Vec::new(),
         }
     }
 
@@ -275,12 +297,18 @@ impl CodegenIrError {
             message: "codegen body deferred to the serial pass".to_string(),
             location: None,
             deferred: true,
+            failed_bodies: Vec::new(),
         }
     }
 
     /// Returns whether this is the deferral signal rather than a backend fault.
     pub(super) fn is_deferred_body(&self) -> bool {
         self.deferred
+    }
+
+    /// Returns the EIR function names the backend inventory could not lower.
+    pub(crate) fn failed_bodies(&self) -> &[(String, String)] {
+        &self.failed_bodies
     }
 }
 
@@ -424,6 +452,12 @@ fn finalize_user_asm(
         &mut data,
         eval_callable_support_needed,
         eval_bridge,
+    );
+    eval_callable_helpers::emit_invoker_callable_arg_helper(
+        module,
+        &mut emitter,
+        &mut data,
+        &eval_callable_support,
     );
     if eval_bridge {
         // After the callable support: a `\Closure`-typed property slot converts the boxed eval

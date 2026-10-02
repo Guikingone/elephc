@@ -38,6 +38,36 @@ const ELEPHC_PCRE2_CFLAG_DUPNAMES: c_int = 0x10000;
 const ELEPHC_PCRE2_CFLAG_NO_AUTO_CAPTURE: c_int = 0x20000;
 const REG_NOMATCH: c_int = 17;
 
+/// Spells every NUL byte of a pattern body as the PCRE escape `\x00`.
+///
+/// php hands PCRE2 the pattern with its length, so a raw NUL is just a character to match --
+/// Laravel's `Str::trim()` puts `"\0"` inside a character class. The provider takes a C string,
+/// which cannot hold one: the build of that string failed and the whole call became an
+/// interpreter error. The escape means the same thing to PCRE2 in and out of a class. A NUL that
+/// an odd run of backslashes already escapes gets only `x00`, so the backslash in front of it
+/// becomes the escape's own.
+pub(in crate::interpreter) fn pattern_with_escaped_nul_bytes(body: &[u8]) -> Vec<u8> {
+    if !body.contains(&0) {
+        return body.to_vec();
+    }
+    let mut escaped = Vec::with_capacity(body.len() + 8);
+    let mut pending_backslash = false;
+    for &byte in body {
+        if byte == 0 {
+            if pending_backslash {
+                escaped.extend_from_slice(b"x00");
+            } else {
+                escaped.extend_from_slice(b"\\x00");
+            }
+            pending_backslash = false;
+            continue;
+        }
+        escaped.push(byte);
+        pending_backslash = byte == b'\\' && !pending_backslash;
+    }
+    escaped
+}
+
 /// Supported PHP regex modifiers after delimiter stripping.
 #[derive(Default)]
 pub(in crate::interpreter) struct EvalPregModifiers {
@@ -76,7 +106,8 @@ impl Regex {
         modifiers: EvalPregModifiers,
     ) -> Result<Self, EvalStatus> {
         let provider = regex_provider().ok_or(EvalStatus::RuntimeFatal)?;
-        let pattern = CString::new(body).map_err(|_| EvalStatus::RuntimeFatal)?;
+        let pattern =
+            CString::new(pattern_with_escaped_nul_bytes(body)).map_err(|_| EvalStatus::RuntimeFatal)?;
         let mut handle = std::ptr::null_mut();
         let mut capture_slots = 0_u64;
         let status = unsafe {
@@ -233,14 +264,19 @@ impl Regex {
 
     /// Executes this regex from a byte offset, returning capture offsets on match.
     fn exec_at<'a>(&self, subject: &'a [u8], start: usize) -> Option<Captures<'a>> {
-        let subject_c = CString::new(subject).ok()?;
+        // REG_STARTEND bounds the search by the offsets below, not by a terminator, so a subject
+        // holding NUL bytes is searched whole; only the trailing terminator is added. A CString
+        // refused such a subject, and the call answered "no match".
+        let mut subject_c = Vec::with_capacity(subject.len() + 1);
+        subject_c.extend_from_slice(subject);
+        subject_c.push(0);
         let mut offset_pairs = vec![-1_i64; self.captures_len().checked_mul(2)?];
         offset_pairs[0] = i64::try_from(start).ok()?;
         offset_pairs[1] = i64::try_from(subject.len()).ok()?;
         let status = unsafe {
             (self.provider.exec)(
                 self.handle,
-                subject_c.as_ptr(),
+                subject_c.as_ptr().cast::<c_char>(),
                 u64::try_from(self.captures_len()).ok()?,
                 offset_pairs.as_mut_ptr(),
                 REG_STARTEND as u32,

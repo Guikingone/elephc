@@ -248,6 +248,22 @@ pub(super) fn acquire_borrowed_return_value(
     // frame's owner slot releases it in the epilogue: `$a = &$s; return $a;` returned a string
     // the epilogue had just freed, and so did a closure's `use (&$s) { return $s; }` once its
     // creator released the cell.
+    // A by-reference parameter's value belongs to the caller's variable; the caller releases
+    // the result like a fresh one (`types::return_alias` never summarizes it as an alias), so
+    // the return takes its own reference.
+    if let Some(inst) = ctx.builder.value_defining_instruction(source) {
+        if inst.op == Op::LoadRefCell {
+            if let Some(Immediate::LocalSlot(slot)) = inst.immediate {
+                if ctx.builder.local_is_by_ref_parameter(slot) {
+                    return crate::ir_lower::ownership::acquire_if_refcounted(
+                        ctx,
+                        value,
+                        Some(span),
+                    );
+                }
+            }
+        }
+    }
     if !matches!(
         ctx.builder.value_defining_op(source),
         Some(
@@ -263,6 +279,10 @@ pub(super) fn acquire_borrowed_return_value(
                 | Op::LoadStaticProperty
                 | Op::LoadDynamicStaticProperty
                 | Op::LoadReflectionStaticProperty
+                // `return eval($code);` hands back the fragment's value cell, which the eval
+                // scope still owns and tears down on the way out; `$r = eval($code)` retains it
+                // in the store, a bare return has to do the same.
+                | Op::LanguageConstructCall
         )
     ) {
         return value;

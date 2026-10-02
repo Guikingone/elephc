@@ -1042,35 +1042,15 @@ fn decl_stmt_bootstrap_20() -> Stmt {
     s_assign("__elephc_qs", e_call("elephc_web_query_string", vec![]))
 }
 
-/// `bootstrap 21` — transcribed from the PHP form.
+/// `bootstrap 21` — `$_GET` is the query string parsed the way php parses it: `parse_str()`'s
+/// rules, which php's own request-variable parser shares (`c[]=x&c[]=y` nests into `['c' => [...]]`,
+/// `+` is a space, a key's dots and spaces become underscores). The hand-rolled split this
+/// replaced kept `c[]` as a literal key and left `+` alone, so every array-shaped query
+/// parameter reached the application as a different request than `php -S` served.
 fn decl_stmt_bootstrap_21() -> Stmt {
     s_if(
         e_binop(e_var("__elephc_qs"), BinOp::StrictNotEq, e_str("")),
-        vec![
-            s_assign("__elephc_pairs", e_call("explode", vec![e_str("&"), e_var("__elephc_qs")])),
-            s_foreach(e_var("__elephc_pairs"), None, "__elephc_pair", vec![
-                s_assign("__elephc_eq", e_call("strpos", vec![e_var("__elephc_pair"), e_str("=")])),
-                s_if(
-                    e_binop(e_var("__elephc_eq"), BinOp::StrictEq, e_bool(false)),
-                    vec![
-                        s_if(
-                            e_binop(e_var("__elephc_pair"), BinOp::StrictNotEq, e_str("")),
-                            vec![
-                                s_array_assign("_GET", e_call("rawurldecode", vec![e_var("__elephc_pair")]), e_str("")),
-                            ],
-                            vec![],
-                            None,
-                        ),
-                    ],
-                    vec![],
-                    Some(vec![
-                    s_assign("__elephc_gk", e_call("rawurldecode", vec![e_call("substr", vec![e_var("__elephc_pair"), e_int(0), e_var("__elephc_eq")])])),
-                    s_assign("__elephc_gv", e_call("rawurldecode", vec![e_call("substr", vec![e_var("__elephc_pair"), e_binop(e_var("__elephc_eq"), BinOp::Add, e_int(1))])])),
-                    s_array_assign("_GET", e_var("__elephc_gk"), e_var("__elephc_gv")),
-                ]),
-                ),
-            ]),
-        ],
+        vec![s_expr(e_call("parse_str", vec![e_var("__elephc_qs"), e_var("__elephc_get_parsed")])), s_foreach(e_var("__elephc_get_parsed"), Some("__elephc_gpk"), "__elephc_gpv", vec![s_array_assign("_GET", e_var("__elephc_gpk"), e_var("__elephc_gpv"))])],
         vec![],
         None,
     )
@@ -1086,7 +1066,8 @@ fn decl_stmt_bootstrap_23() -> Stmt {
     s_assign("__elephc_ct", e_ternary(e_call("isset", vec![e_index(e_var("_SERVER"), e_str("CONTENT_TYPE"))]), e_index(e_var("_SERVER"), e_str("CONTENT_TYPE")), e_str("")))
 }
 
-/// `bootstrap 24` — transcribed from the PHP form.
+/// `bootstrap 24` — an urlencoded request body fills `$_POST` with the same rules as `$_GET`
+/// (see `bootstrap 21`).
 fn decl_stmt_bootstrap_24() -> Stmt {
     s_if(
         e_binop(e_call("strpos", vec![e_call("strtoupper", vec![e_var("__elephc_ct")]), e_str("APPLICATION/X-WWW-FORM-URLENCODED")]), BinOp::StrictNotEq, e_bool(false)),
@@ -1103,31 +1084,7 @@ fn decl_stmt_bootstrap_24() -> Stmt {
             ),
             s_if(
                 e_binop(e_var("__elephc_body"), BinOp::StrictNotEq, e_str("")),
-                vec![
-                    s_assign("__elephc_ppairs", e_call("explode", vec![e_str("&"), e_var("__elephc_body")])),
-                    s_foreach(e_var("__elephc_ppairs"), None, "__elephc_ppair", vec![
-                        s_assign("__elephc_peq", e_call("strpos", vec![e_var("__elephc_ppair"), e_str("=")])),
-                        s_if(
-                            e_binop(e_var("__elephc_peq"), BinOp::StrictEq, e_bool(false)),
-                            vec![
-                                s_if(
-                                    e_binop(e_var("__elephc_ppair"), BinOp::StrictNotEq, e_str("")),
-                                    vec![
-                                        s_array_assign("_POST", e_call("rawurldecode", vec![e_var("__elephc_ppair")]), e_str("")),
-                                    ],
-                                    vec![],
-                                    None,
-                                ),
-                            ],
-                            vec![],
-                            Some(vec![
-                            s_assign("__elephc_pk", e_call("rawurldecode", vec![e_call("substr", vec![e_var("__elephc_ppair"), e_int(0), e_var("__elephc_peq")])])),
-                            s_assign("__elephc_pv", e_call("rawurldecode", vec![e_call("substr", vec![e_var("__elephc_ppair"), e_binop(e_var("__elephc_peq"), BinOp::Add, e_int(1))])])),
-                            s_array_assign("_POST", e_var("__elephc_pk"), e_var("__elephc_pv")),
-                        ]),
-                        ),
-                    ]),
-                ],
+                vec![s_expr(e_call("parse_str", vec![e_var("__elephc_body"), e_var("__elephc_post_parsed")])), s_foreach(e_var("__elephc_post_parsed"), Some("__elephc_ppk"), "__elephc_ppv", vec![s_array_assign("_POST", e_var("__elephc_ppk"), e_var("__elephc_ppv"))])],
                 vec![],
                 None,
             ),

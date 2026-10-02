@@ -143,8 +143,46 @@ pub(crate) fn lower(
     );
     include_lowered_runtime_features(&mut module);
     super::effect_refinement::refine_module(&mut module);
+    if COLLECT_INVALID_BODIES.load(std::sync::atomic::Ordering::Relaxed) {
+        let failures = invalid_bodies(&module);
+        if let Some((_, first)) = failures.first() {
+            let first = first.clone();
+            return Err(LoweringError::InvalidBodies {
+                first,
+                failures: failures
+                    .into_iter()
+                    .map(|(name, error)| (name, format!("{error:?}")))
+                    .collect(),
+                module: Box::new(module),
+            });
+        }
+    }
     validate_lowered_module(&module)?;
     Ok(module)
+}
+
+/// Whether validation collects every failing body instead of stopping at the first; set through
+/// `crate::ir_lower::collect_invalid_bodies` by a build that can hand class files to the runtime.
+pub(super) static COLLECT_INVALID_BODIES: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Returns every body of `module` that fails EIR validation, with its first validator error.
+fn invalid_bodies(module: &Module) -> Vec<(String, ValidationError)> {
+    module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+        .filter_map(|function| {
+            validate_function(function)
+                .err()
+                .map(|error| (function.name.clone(), error))
+        })
+        .collect()
 }
 
 /// Validates the lowered module, reporting every malformed body when backend inventory is active.
@@ -172,6 +210,11 @@ fn validate_lowered_module(module: &Module) -> Result<(), ValidationError> {
             eprintln!("EIR validation failure in {}: {:?}", function.name, error);
             if let Some(context) = validation_error_context(function, &error) {
                 eprintln!("  {context}");
+            }
+            // The whole refused body, for the refusals the one-line context cannot explain:
+            // a dominance violation names two ids and says nothing about how the blocks relate.
+            if std::env::var("ELEPHC_EIR_DUMP_INVALID").as_deref() == Ok("1") {
+                eprintln!("{}", crate::ir::print_function(function));
             }
             first_error.get_or_insert(error);
         }

@@ -194,12 +194,22 @@ impl ElephcEvalContext {
         let enum_name = self
             .resolve_enum_name(enum_name)
             .unwrap_or_else(|| enum_name.trim_start_matches('\\').to_string());
-        self.enum_cases
-            .get(&(
-                normalize_class_name(&enum_name),
-                normalize_enum_case_name(case_name),
-            ))
-            .copied()
+        let key = (
+            normalize_class_name(&enum_name),
+            normalize_enum_case_name(case_name),
+        );
+        if let Some(case) = self.enum_cases.get(&key).copied() {
+            return Some(case);
+        }
+        // An enum declared by ANOTHER context (a class file the autoloader included from a
+        // compiled frame gets a context of its own) is imported by `sync_global_eval_classes`,
+        // but its case singletons were made over there. Symfony's `ReflectionExtractor::MAP_TYPES`
+        // reads `TypeIdentifier::INT->value` right after the autoloader declared the enum.
+        #[cfg(not(test))]
+        if self.enums.contains_key(&key.0) {
+            return global_eval_enum_case(&key.0, &key.1).map(|(case, _)| case);
+        }
+        None
     }
 
     /// Stores a materialized singleton case object and returns any replaced distinct cell.
@@ -209,13 +219,13 @@ impl ElephcEvalContext {
         case_name: &str,
         cell: RuntimeCellHandle,
     ) -> Option<RuntimeCellHandle> {
-        let previous = self.enum_cases.insert(
-            (
-                normalize_class_name(enum_name),
-                normalize_enum_case_name(case_name),
-            ),
-            cell,
+        let key = (
+            normalize_class_name(enum_name),
+            normalize_enum_case_name(case_name),
         );
+        #[cfg(not(test))]
+        register_global_eval_enum_case(key.0.clone(), key.1.clone(), cell);
+        let previous = self.enum_cases.insert(key, cell);
         previous.filter(|previous| *previous != cell)
     }
 
@@ -224,12 +234,18 @@ impl ElephcEvalContext {
         let enum_name = self
             .resolve_enum_name(enum_name)
             .unwrap_or_else(|| enum_name.trim_start_matches('\\').to_string());
-        self.enum_case_values
-            .get(&(
-                normalize_class_name(&enum_name),
-                normalize_enum_case_name(case_name),
-            ))
-            .copied()
+        let key = (
+            normalize_class_name(&enum_name),
+            normalize_enum_case_name(case_name),
+        );
+        if let Some(value) = self.enum_case_values.get(&key).copied() {
+            return Some(value);
+        }
+        #[cfg(not(test))]
+        if self.enums.contains_key(&key.0) {
+            return global_eval_enum_case(&key.0, &key.1).and_then(|(_, value)| value);
+        }
+        None
     }
 
     /// Stores a materialized backing value and returns any replaced distinct cell.
@@ -239,13 +255,13 @@ impl ElephcEvalContext {
         case_name: &str,
         cell: RuntimeCellHandle,
     ) -> Option<RuntimeCellHandle> {
-        let previous = self.enum_case_values.insert(
-            (
-                normalize_class_name(enum_name),
-                normalize_enum_case_name(case_name),
-            ),
-            cell,
+        let key = (
+            normalize_class_name(enum_name),
+            normalize_enum_case_name(case_name),
         );
+        #[cfg(not(test))]
+        register_global_eval_enum_case_value(key.0.clone(), key.1.clone(), cell);
+        let previous = self.enum_case_values.insert(key, cell);
         previous.filter(|previous| *previous != cell)
     }
 
@@ -401,6 +417,21 @@ impl ElephcEvalContext {
         storage_property_name: &str,
         value: RuntimeCellHandle,
     ) -> Option<RuntimeCellHandle> {
+        // An object another context built keeps its state in THAT context. Writing it here made
+        // a shadow only this context could see: Laravel's routes file, included from a closure
+        // with its own context, set the router's compiled routes through `setCompiledRoutes()`,
+        // and the router itself kept reading the empty collection it was built with -- every
+        // request 404ed. A slot this context already shadows keeps being written here, so its
+        // own later reads stay consistent.
+        #[cfg(not(test))]
+        if !self
+            .dynamic_property_values
+            .contains_key(&(identity, storage_property_name.to_string()))
+        {
+            if let Some(owner) = dynamic_object_foreign_owner_mut(self, identity) {
+                return owner.set_dynamic_property_value(identity, storage_property_name, value);
+            }
+        }
         let previous = self
             .dynamic_property_values
             .insert((identity, storage_property_name.to_string()), value);
@@ -421,6 +452,15 @@ impl ElephcEvalContext {
         identity: u64,
         storage_property_name: &str,
     ) -> Option<RuntimeCellHandle> {
+        #[cfg(not(test))]
+        if !self
+            .dynamic_property_values
+            .contains_key(&(identity, storage_property_name.to_string()))
+        {
+            if let Some(owner) = dynamic_object_foreign_owner_mut(self, identity) {
+                return owner.remove_dynamic_property_value(identity, storage_property_name);
+            }
+        }
         let removed = self
             .dynamic_property_values
             .remove(&(identity, storage_property_name.to_string()));
@@ -705,6 +745,11 @@ impl ElephcEvalContext {
         identity: u64,
         storage_property_name: &str,
     ) {
+        #[cfg(not(test))]
+        if let Some(owner) = dynamic_object_foreign_owner_mut(self, identity) {
+            owner.mark_dynamic_property_initialized(identity, storage_property_name);
+            return;
+        }
         self.dynamic_initialized_properties
             .insert((identity, storage_property_name.to_string()));
     }
@@ -715,6 +760,10 @@ impl ElephcEvalContext {
         identity: u64,
         storage_property_name: &str,
     ) {
+        #[cfg(not(test))]
+        if let Some(owner) = dynamic_object_foreign_owner_mut(self, identity) {
+            owner.mark_dynamic_property_uninitialized(identity, storage_property_name);
+        }
         self.dynamic_initialized_properties
             .remove(&(identity, storage_property_name.to_string()));
     }
@@ -757,13 +806,23 @@ impl ElephcEvalContext {
         for (property, target) in aliases {
             self.bind_dynamic_property_alias(clone_identity, &property, target);
         }
-        let initialized = self
+        let mut initialized = self
             .dynamic_initialized_properties
             .iter()
             .filter_map(|(identity, property)| {
                 (*identity == source_identity).then(|| property.clone())
             })
             .collect::<Vec<_>>();
+        // A source another context built keeps its initialization marks THERE, as its property
+        // values are: cloning it from here copied the values and no marks, so every typed property
+        // of the clone read as uninitialized. Carbon's `instance()` clones like that, and the clone
+        // failed on its own `?WrapperClock $clock = null`.
+        #[cfg(not(test))]
+        if let Some(owner) = dynamic_object_foreign_owner(self, source_identity) {
+            initialized.extend(owner.dynamic_initialized_properties.iter().filter_map(
+                |(identity, property)| (*identity == source_identity).then(|| property.clone()),
+            ));
+        }
         for property in initialized {
             self.mark_dynamic_property_initialized(clone_identity, &property);
         }
@@ -796,6 +855,103 @@ mod tests {
 pub struct EvalArrayIteratorState {
     pub(super) storage: RuntimeCellHandle,
     pub(super) position: usize,
+}
+
+/// Returns PHP's own parent and interfaces for one builtin iterator or container class.
+///
+/// The interfaces are listed TRANSITIVELY (`Iterator` brings `Traversable`) but the parent's are
+/// not: `eval_builtin_class_is_a` walks the parent chain. These are fixed facts of PHP 8, not
+/// of any program, and they matter to a declaration: `getIterator(): \EmptyIterator` is php's
+/// covariant narrowing of `IteratorAggregate::getIterator(): Traversable`, and a class the
+/// interpreter could not relate to `Traversable` was refused at declaration.
+fn eval_builtin_class_hierarchy(class_name: &str) -> Option<(Option<&'static str>, &'static [&'static str])> {
+    const ITERATOR: &[&str] = &["Iterator", "Traversable"];
+    const OUTER: &[&str] = &["OuterIterator", "Iterator", "Traversable"];
+    const RECURSIVE_OUTER: &[&str] = &["RecursiveIterator", "OuterIterator", "Iterator", "Traversable"];
+    const AGGREGATE: &[&str] = &["IteratorAggregate", "Traversable"];
+    let entry: (Option<&'static str>, &'static [&'static str]) =
+        match class_name.trim_start_matches('\\').to_ascii_lowercase().as_str() {
+            "arrayiterator" => (
+                None,
+                &["SeekableIterator", "Iterator", "Traversable", "ArrayAccess", "Serializable", "Countable"],
+            ),
+            "recursivearrayiterator" => (Some("ArrayIterator"), &["RecursiveIterator"]),
+            "arrayobject" => (
+                None,
+                &["IteratorAggregate", "Traversable", "ArrayAccess", "Serializable", "Countable"],
+            ),
+            "emptyiterator" | "generator" | "multipleiterator" => (None, ITERATOR),
+            "iteratoriterator" | "recursiveiteratoriterator" => (None, OUTER),
+            "filteriterator" | "limititerator" | "norewinditerator" | "infiniteiterator"
+            | "appenditerator" => (Some("IteratorIterator"), &[]),
+            "cachingiterator" => (
+                Some("IteratorIterator"),
+                &["ArrayAccess", "Countable", "Stringable"],
+            ),
+            "recursivecachingiterator" => (Some("CachingIterator"), RECURSIVE_OUTER),
+            "callbackfilteriterator" | "regexiterator" => (Some("FilterIterator"), &[]),
+            "recursivecallbackfilteriterator" => (Some("CallbackFilterIterator"), RECURSIVE_OUTER),
+            "recursivefilteriterator" => (Some("FilterIterator"), RECURSIVE_OUTER),
+            "parentiterator" => (Some("RecursiveFilterIterator"), &[]),
+            "recursiveregexiterator" => (Some("RegexIterator"), RECURSIVE_OUTER),
+            "recursivetreeiterator" => (Some("RecursiveIteratorIterator"), &[]),
+            "spldoublylinkedlist" => (
+                None,
+                &["Iterator", "Traversable", "Countable", "ArrayAccess", "Serializable"],
+            ),
+            "splqueue" | "splstack" => (Some("SplDoublyLinkedList"), &[]),
+            "splobjectstorage" => (
+                None,
+                &["Countable", "Iterator", "Traversable", "Serializable", "ArrayAccess"],
+            ),
+            "splfixedarray" => (
+                None,
+                &["IteratorAggregate", "Traversable", "ArrayAccess", "Countable", "JsonSerializable"],
+            ),
+            "splheap" | "splpriorityqueue" => (None, &["Iterator", "Traversable", "Countable"]),
+            "splminheap" | "splmaxheap" => (Some("SplHeap"), &[]),
+            "splfileinfo" => (None, &["Stringable"]),
+            "directoryiterator" => (
+                Some("SplFileInfo"),
+                &["SeekableIterator", "Iterator", "Traversable"],
+            ),
+            "filesystemiterator" => (Some("DirectoryIterator"), &[]),
+            "recursivedirectoryiterator" => (Some("FilesystemIterator"), &["RecursiveIterator"]),
+            "globiterator" => (Some("FilesystemIterator"), &["Countable"]),
+            "splfileobject" => (
+                Some("SplFileInfo"),
+                &["RecursiveIterator", "SeekableIterator", "Iterator", "Traversable"],
+            ),
+            "spltempfileobject" => (Some("SplFileObject"), &[]),
+            "dateperiod" => (None, AGGREGATE),
+            "weakmap" => (None, &["ArrayAccess", "Countable", "IteratorAggregate", "Traversable"]),
+            _ => return None,
+        };
+    Some(entry)
+}
+
+/// Answers whether one PHP builtin class is, or descends from, a class-like name.
+///
+/// `None` means the class is not in the builtin table, so the caller keeps its own answer.
+pub fn eval_builtin_class_is_a(class_name: &str, target_class: &str) -> Option<bool> {
+    let target = target_class.trim_start_matches('\\');
+    let mut current = class_name.trim_start_matches('\\').to_string();
+    eval_builtin_class_hierarchy(&current)?;
+    loop {
+        if current.eq_ignore_ascii_case(target) {
+            return Some(true);
+        }
+        let Some((parent, interfaces)) = eval_builtin_class_hierarchy(&current) else {
+            return Some(false);
+        };
+        if interfaces.iter().any(|name| name.eq_ignore_ascii_case(target)) {
+            return Some(true);
+        }
+        let Some(parent) = parent else {
+            return Some(false);
+        };
+        current = parent.to_string();
+    }
 }
 
 /// Returns whether `ArrayIterator` is, or descends from, one class-like name.
@@ -838,5 +994,22 @@ pub(super) fn dynamic_object_foreign_owner<'asking>(
         return None;
     }
     let owner = unsafe { owner.as_ref()? };
+    (owner.abi_version() == ABI_VERSION).then_some(owner)
+}
+
+/// Returns the owning context of an object another context built, for writing its state.
+///
+/// The owner is a DIFFERENT context than `asking` (the same one answers `None`), so the returned
+/// reference never aliases the caller's own `&mut self`.
+#[cfg(not(test))]
+pub(super) fn dynamic_object_foreign_owner_mut<'owner>(
+    asking: &ElephcEvalContext,
+    identity: u64,
+) -> Option<&'owner mut ElephcEvalContext> {
+    let owner = crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)?;
+    if std::ptr::eq(owner.cast_const(), std::ptr::from_ref(asking)) {
+        return None;
+    }
+    let owner = unsafe { owner.as_mut()? };
     (owner.abi_version() == ABI_VERSION).then_some(owner)
 }

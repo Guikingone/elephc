@@ -195,6 +195,7 @@ const EVAL_DATE_ALIAS_METHOD_NAMES: &[&str] = &[
     "createFromImmutable",
     "createFromMutable",
     "getLastErrors",
+        "__elephc_date_create",
         "__elephc_date_parse_from_format",
         "__elephc_date_parse",
         "__elephc_date_sun_info",

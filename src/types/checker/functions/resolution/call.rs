@@ -41,6 +41,31 @@ impl Checker {
         })
     }
 
+    /// Returns true when a spread argument that lands in the variadic tail can carry string keys.
+    ///
+    /// `collect(...$hash)` into `function collect(...$args)` binds each string key as a named
+    /// extra, so the variadic slot must be able to hold a hash, exactly like the unknown named
+    /// argument case of [`Self::has_unknown_named_variadic_arg`]. Only a source typed as a hash or
+    /// as `iterable` is treated as keyed; a list-typed source stays a plain `array<T>` tail.
+    pub(crate) fn variadic_tail_spread_keeps_keys(
+        &mut self,
+        args: &[Expr],
+        regular_param_count: usize,
+        env: &TypeEnv,
+    ) -> bool {
+        args.iter().enumerate().any(|(index, arg)| {
+            index >= regular_param_count
+                && matches!(
+                    &arg.kind,
+                    ExprKind::Spread(inner)
+                        if matches!(
+                            self.infer_type(inner, env).map(|ty| ty.codegen_repr()),
+                            Ok(PhpType::AssocArray { .. } | PhpType::Iterable)
+                        )
+                )
+        })
+    }
+
     /// Resolves a function call by name, normalizes arguments (named, spread),
     /// validates arity and types, applies specialization if needed, and returns
     /// the function's return type.
@@ -479,7 +504,9 @@ impl Checker {
                     &format!("Variadic parameter ${}", vp),
                 )?;
                 param_types.push((vp.clone(), PhpType::Array(Box::new(elem_ty))));
-            } else if Self::has_unknown_named_variadic_arg(args, &decl.params) {
+            } else if Self::has_unknown_named_variadic_arg(args, &decl.params)
+                || self.variadic_tail_spread_keeps_keys(args, decl.params.len(), caller_env)
+            {
                 param_types.push((vp.clone(), PhpType::Iterable));
             } else {
                 let variadic_elem_ty = if args.len() > decl.params.len() {

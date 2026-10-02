@@ -1406,6 +1406,59 @@ echo array_all([1, -2, 3], "pos") ? "y" : "n";
     assert_eq!(out, "yn");
 }
 
+/// Verifies array_any() / array_all() walk keyed arrays and gradual values holding an array, and
+/// hand the predicate the key as its second argument, as php does.
+#[test]
+fn test_array_any_all_keyed_and_gradual_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+$list = [3, 5, 8];
+var_dump(array_any($list, fn ($v, $k) => $k === 2), array_all($list, fn ($v, $k) => $k < 3));
+$map = ['a' => 'x', 'b' => 'yy'];
+var_dump(array_any($map, fn ($v, $k) => $k === 'b' && strlen($v) === 2), array_all($map, fn ($v) => is_string($v)));
+function files($key) { return $key === 'none' ? null : ($key === 'one' ? 'f' : ['f', 'g']); }
+function hasFile($key) {
+    if (! is_array($files = files($key))) {
+        $files = [$files];
+    }
+    return array_any($files, fn ($file) => $file === 'g');
+}
+var_dump(hasFile('none'), hasFile('one'), hasFile('many'));
+var_dump(array_any([], fn () => true), array_all([], fn () => false));
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nbool(false)\nbool(true)\nbool(false)\nbool(true)\n"
+    );
+}
+
+/// Verifies php 8.4's array_find() / array_find_key() over keyed arrays, compiled and inside
+/// eval(), and array_any() / array_all() inside eval(): the predicate sees the value and the key.
+/// Laravel's interpreted `Arr::first()` calls array_find_key(), which eval did not know at all.
+#[test]
+fn test_array_find_and_find_key_compiled_and_interpreted() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ['x' => 1, 'y' => 20, 'z' => 30];
+var_dump(array_find_key($a, fn ($v) => $v > 10));
+var_dump(array_find($a, fn ($v, $k) => $k === 'z'));
+var_dump(array_find_key([1, 2], fn ($v) => $v > 5));
+var_dump(array_find([3, 4], fn ($v) => $v % 2 === 0));
+eval('var_dump(array_find_key(["a" => 1, "b" => 2], fn ($v, $k) => $v === 2));
+var_dump(array_find(["a" => 1, "b" => 2], fn ($v) => $v > 5));
+var_dump(array_find(["a" => 1, "b" => 2], fn ($v, $k) => $k === "b"));
+var_dump(array_any(["a" => 1, "b" => 2], fn ($v, $k) => $k === "b"));
+var_dump(array_all([2, 4], fn ($v) => $v % 2 === 0), array_all([], fn () => false));
+var_dump(array_any([], fn () => true));');
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(1) \"y\"\nint(30)\nNULL\nint(4)\nstring(1) \"b\"\nNULL\nint(2)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\n"
+    );
+}
+
 /// Verifies array_find / array_any / array_all are callable case-insensitively.
 /// Fixture: mixed-case spellings over a small numeric array.
 #[test]
@@ -2131,4 +2184,64 @@ echo json_encode(run(['k' => 'v', 'o' => new Holder()]));
 "#,
     );
     assert_eq!(out, r#"["v","x",2,{"a":"x","b":2}]"#);
+}
+
+/// Verifies php's user-comparator set functions in compiled code and in eval().
+///
+/// `array_udiff_assoc()` and its seven siblings did not exist at all, and the interpreter had
+/// none of the family (nor `array_diff_assoc()`/`array_intersect_assoc()`). Symfony's
+/// `UrlGenerator::doGenerate()` calls `array_udiff_assoc()` for every generated URL, so every
+/// Twig page of the Symfony demo died on its first `path()`. Expected output is php 8.5.10's.
+#[test]
+fn test_user_comparator_set_functions_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ['a' => 'green', 'b' => 'brown', 'c' => 'blue', 'red', 10 => 'x'];
+$b = ['a' => 'GREEN', 'B' => 'brown', 'yellow', 'red', 11 => 'x'];
+$c = ['A' => 'green', 'c' => 'Blue'];
+$vcmp = fn ($x, $y) => strcasecmp((string) $x, (string) $y);
+$kcmp = fn ($x, $y) => strcasecmp((string) $x, (string) $y);
+echo json_encode(array_udiff_assoc($a, $b, $vcmp)), "\n";
+echo json_encode(array_udiff_uassoc($a, $b, $vcmp, $kcmp)), "\n";
+echo json_encode(array_diff_ukey($a, $b, $kcmp)), "\n";
+echo json_encode(array_diff_uassoc($a, $b, $c, $kcmp)), "\n";
+echo json_encode(array_uintersect_assoc($a, $b, $vcmp)), "\n";
+echo json_encode(array_uintersect_uassoc($a, $b, $vcmp, $kcmp)), "\n";
+echo json_encode(array_intersect_ukey($a, $b, $c, $kcmp)), "\n";
+echo json_encode(array_intersect_uassoc($a, $b, $kcmp)), "\n";
+eval('
+$a = ["a" => "green", "b" => "brown", "c" => "blue", "red", 10 => "x"];
+$b = ["a" => "GREEN", "B" => "brown", "yellow", "red", 11 => "x"];
+$c = ["A" => "green", "c" => "Blue"];
+$vcmp = fn ($x, $y) => strcasecmp((string) $x, (string) $y);
+echo json_encode(array_udiff_assoc($a, $b, $vcmp)), "\n";
+echo json_encode(array_udiff_uassoc($a, $b, $vcmp, "strcasecmp")), "\n";
+echo json_encode(array_diff_ukey($a, $b, "strcasecmp")), "\n";
+echo json_encode(array_intersect_ukey($a, $b, $c, "strcasecmp")), "\n";
+echo json_encode(array_diff_assoc($a, $b)), json_encode(array_intersect_assoc($a, $b)), "\n";
+echo json_encode(array_udiff([1, 5, 3], [3], fn ($x, $y) => $x <=> $y)), "\n";
+echo json_encode(array_uintersect([1, 5, 3], [3, 1], fn ($x, $y) => $x <=> $y)), "\n";
+');
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "{\"b\":\"brown\",\"c\":\"blue\",\"0\":\"red\",\"10\":\"x\"}\n",
+            "{\"c\":\"blue\",\"0\":\"red\",\"10\":\"x\"}\n",
+            "{\"c\":\"blue\",\"10\":\"x\"}\n",
+            "{\"c\":\"blue\",\"0\":\"red\",\"10\":\"x\"}\n",
+            "{\"a\":\"green\"}\n",
+            "{\"a\":\"green\",\"b\":\"brown\"}\n",
+            "{\"a\":\"green\"}\n",
+            "{\"b\":\"brown\"}\n",
+            "{\"b\":\"brown\",\"c\":\"blue\",\"0\":\"red\",\"10\":\"x\"}\n",
+            "{\"c\":\"blue\",\"0\":\"red\",\"10\":\"x\"}\n",
+            "{\"c\":\"blue\",\"10\":\"x\"}\n",
+            "{\"a\":\"green\"}\n",
+            "{\"a\":\"green\",\"b\":\"brown\",\"c\":\"blue\",\"0\":\"red\",\"10\":\"x\"}[]\n",
+            "[1,5]\n",
+            "{\"0\":1,\"2\":3}\n",
+        )
+    );
 }

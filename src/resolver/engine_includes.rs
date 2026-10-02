@@ -91,7 +91,11 @@ pub(super) fn resolve_include_stmt(
     }
 
     let (included_stmts, source_unit) =
-        parse_file_with_source(&resolved, stmt.span, &state.conditional_defines)?;
+        match parse_file_with_source(&resolved, stmt.span, &state.conditional_defines) {
+            Ok(parsed) => parsed,
+            Err(error) if super::skips_unparseable_include(&resolved, &error) => return Ok(None),
+            Err(error) => return Err(error),
+        };
     state.source_units.record(source_unit, stmt.span)?;
     record_declaration_sources(&included_stmts, &canonical, state)?;
 
@@ -511,6 +515,21 @@ fn collect_declared_names(stmts: &[Stmt], file: &str, state: &mut ResolveState) 
                 );
             }
             StmtKind::NamespaceBlock { body, .. } => collect_declared_names(body, file, state),
+            // A conditional declaration is still declared by this file.
+            StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body,
+                ..
+            } => {
+                collect_declared_names(then_body, file, state);
+                for (_, body) in elseif_clauses {
+                    collect_declared_names(body, file, state);
+                }
+                if let Some(body) = else_body {
+                    collect_declared_names(body, file, state);
+                }
+            }
             _ => {}
         }
     }

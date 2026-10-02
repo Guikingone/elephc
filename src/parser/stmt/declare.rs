@@ -41,7 +41,14 @@ pub(super) fn parse_declare(
         "Expected ')' after declare directives",
     )?;
 
-    if strict_types.is_some() && declare_pos != 1 {
+    // A doc comment is not a statement: `/** License */ declare(strict_types=1);` is how many
+    // libraries open a file, and php accepts it. The lexer keeps doc comments as tokens so a
+    // declaration can carry one, so only those may sit between the open tag and the directive.
+    let first_statement = tokens[..declare_pos]
+        .iter()
+        .skip(1)
+        .all(|(token, _)| matches!(token, Token::DocComment(_)));
+    if strict_types.is_some() && (declare_pos == 0 || !first_statement) {
         return Err(CompileError::new(
             span,
             "strict_types declaration must be the very first statement in the script",

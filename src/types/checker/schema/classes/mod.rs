@@ -39,6 +39,24 @@ pub(crate) fn build_class_info_recursive(
     next_class_id: &mut u64,
     building: &mut HashSet<String>,
 ) -> Result<(), CompileError> {
+    // Name the class an error was raised for. The recursion into a parent goes back through
+    // this wrapper, so the innermost class wins (`within_declaration` keeps a name already set)
+    // and a parent's schema error is attributed to the parent, not to the child that asked.
+    // A class absent from the map is not the one at fault: the error belongs to whoever named
+    // it (a child whose parent is missing), and that caller's own wrapper tags it.
+    let known = class_map.contains_key(class_name);
+    build_class_info_recursive_untagged(class_name, class_map, checker, next_class_id, building)
+        .map_err(|error| if known { error.within_declaration(class_name) } else { error })
+}
+
+/// The body of [`build_class_info_recursive`], before its errors are attributed to the class.
+fn build_class_info_recursive_untagged(
+    class_name: &str,
+    class_map: &HashMap<String, FlattenedClass>,
+    checker: &mut Checker,
+    next_class_id: &mut u64,
+    building: &mut HashSet<String>,
+) -> Result<(), CompileError> {
     if checker.classes.contains_key(class_name) {
         return Ok(());
     }

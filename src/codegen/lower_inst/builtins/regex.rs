@@ -15,7 +15,7 @@ use crate::codegen::platform::Arch;
 use crate::codegen::{abi, callable_descriptor};
 use crate::codegen::{CodegenIrError, Result};
 use crate::codegen_support::DeferredCallbackWrapper;
-use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
+use crate::ir::{Function, Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::names::function_symbol;
 use crate::types::PhpType;
 
@@ -904,13 +904,30 @@ fn static_string_callback_entry(
     let Some(callback_name) = maybe_const_string_operand(ctx, callback)? else {
         return Ok(None);
     };
-    let Some(function_name) = ctx
-        .callable_function_by_name(&callback_name)
-        .map(|function| function.name.to_string())
-    else {
+    let Some(function) = ctx.callable_function_by_name(&callback_name) else {
         return Ok(None);
     };
-    Ok(Some(function_symbol(&function_name)))
+    if !function_takes_raw_match_array(function) {
+        return Ok(None);
+    }
+    Ok(Some(function_symbol(&function.name)))
+}
+
+/// Returns whether a function's entry can receive the runtime's raw `array<string>` match array
+/// and hand back a raw string, which is what a direct entry call means.
+///
+/// Any other shape is called through the descriptor wrapper instead, which boxes the argument
+/// and unboxes the result the way every other callable call does: an untyped `function up($m)`
+/// keeps its parameter as a boxed `mixed`, and jumping to it with the bare array pointer read
+/// that pointer as a box and crashed.
+fn function_takes_raw_match_array(function: &Function) -> bool {
+    let [param] = function.params.as_slice() else {
+        return false;
+    };
+    !param.by_ref
+        && !param.variadic
+        && param.php_type.codegen_repr() == preg_matches_type()
+        && function.return_php_type.codegen_repr() == PhpType::Str
 }
 
 /// Emits a descriptor callback wrapper that adapts regex matches to callable descriptors.

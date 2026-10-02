@@ -784,6 +784,37 @@ var_dump(defined('Other\THING'), defined('THING'));
     assert_eq!(out, "5\nbool(true)\nbool(false)\n");
 }
 
+/// A constant only a RUNTIME-included file defines is looked up when the expression runs,
+/// through php's global fallback when the use is unqualified inside a namespace.
+///
+/// `symfony/polyfill-intl-idn` defines `IDNA_DEFAULT` behind `if (!defined(...))` in a file the
+/// compiled program includes at run time; namespaced callers (`egulias/email-validator`,
+/// `symfony/http-client`) name it unqualified. The build refused every such use with
+/// "Undefined constant". Expected output is php 8.5's.
+#[test]
+fn test_constant_defined_by_a_runtime_include_resolves_at_run_time() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "defs.php",
+                "<?php\nif (!defined('RUNTIME_ONLY_X')) { define('RUNTIME_ONLY_X', 41); }\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+namespace App;
+$file = __DIR__ . ($argc > 5 ? '/none.php' : '/defs.php');
+require $file;
+function show() { return RUNTIME_ONLY_X + 1; }
+echo show(), "|", \RUNTIME_ONLY_X, "|", RUNTIME_ONLY_X, "\n";
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "42|41|41\n");
+}
+
 /// A constant declared with `const` inside the namespace still WINS over a same-named global.
 ///
 /// The fallback is a fallback, not a preference: php looks in the namespace first, and this is

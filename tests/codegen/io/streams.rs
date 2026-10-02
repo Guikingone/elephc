@@ -1669,6 +1669,38 @@ fn test_fopen_php_output_is_stdout_alias() {
     assert_eq!(out, "aliased");
 }
 
+/// Verifies a `php://` URL held in a variable opens like a literal one, on a DUPLICATE of the
+/// standard descriptor so releasing the stream leaves stdout open. Symfony's `AbstractDumper`
+/// opens `static::$defaultOutput`, which only a literal used to reach.
+#[test]
+fn test_fopen_php_stream_urls_from_runtime_strings() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["php://stdout", "php://output", "php://stderr", "php://memory", "php://temp", "php://temp/maxmemory:64"] as $url) {
+    foreach (["w", "wb", "a"] as $mode) {
+        $h = fopen($url, $mode);
+        echo is_resource($h) ? "y" : "n";
+    }
+}
+echo "\n";
+class Dumper {
+    protected static $defaultOutput = "php://output";
+    private $out;
+    public function __construct() { $this->out = fopen(static::$defaultOutput, "wb"); }
+    public function write($s) { fwrite($this->out, $s); }
+}
+(new Dumper)->write("first\n");
+(new Dumper)->write("second\n");
+$m = "php://memory";
+$h = fopen($m, "w+");
+fwrite($h, "mem");
+rewind($h);
+echo fread($h, 10), "\n";
+"#,
+    );
+    assert_eq!(out, "yyyyyyyyyyyyyyyyyy\nfirst\nsecond\nmem\n");
+}
+
 /// Verifies compiled PHP output for fopen php stream yields resource.
 #[test]
 fn test_fopen_php_stream_yields_resource() {

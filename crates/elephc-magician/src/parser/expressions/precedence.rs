@@ -143,7 +143,6 @@ impl Parser {
         if let Some(append) = self.parse_array_append_assignment(&target)? {
             return Ok(append);
         }
-        let negated_assignment_target = negated_assignment_target(&target);
         let nested_assignment_target = nested_assignment_target(&target);
         let null_coalescing = self.consume(TokenKind::QuestionQuestionEqual);
         let assignment = if null_coalescing {
@@ -155,7 +154,6 @@ impl Parser {
             return Ok(target);
         }
         if !is_assignment_target(&target)
-            && negated_assignment_target.is_none()
             && !nested_assignment_target
         {
             return Err(EvalParseError::UnexpectedToken);
@@ -223,15 +221,6 @@ impl Parser {
         }
         self.advance();
         let value = self.parse_assignment()?;
-        if let Some(target) = negated_assignment_target {
-            return Ok(EvalExpr::Unary {
-                op: EvalUnaryOp::LogicalNot,
-                expr: Box::new(EvalExpr::Assign {
-                    target: Box::new(target),
-                    value: Box::new(value),
-                }),
-            });
-        }
         if nested_assignment_target {
             return nested_assignment_expr(&target, false, assignment, value)
                 .ok_or(EvalParseError::UnexpectedToken);
@@ -648,6 +637,7 @@ pub(in crate::parser) fn is_assignment_target(target: &EvalExpr) -> bool {
     matches!(
         target,
         EvalExpr::LoadVar(_)
+            | EvalExpr::DynamicVar(_)
             | EvalExpr::ArrayGet { .. }
             | EvalExpr::PropertyGet { .. }
             | EvalExpr::DynamicPropertyGet { .. }
@@ -655,18 +645,6 @@ pub(in crate::parser) fn is_assignment_target(target: &EvalExpr) -> bool {
             | EvalExpr::DynamicStaticPropertyGet { .. }
             | EvalExpr::DynamicStaticPropertyNameGet { .. }
     )
-}
-
-/// Extracts the lvalue assigned before PHP applies a leading logical negation.
-fn negated_assignment_target(target: &EvalExpr) -> Option<EvalExpr> {
-    let EvalExpr::Unary {
-        op: EvalUnaryOp::LogicalNot,
-        expr,
-    } = target
-    else {
-        return None;
-    };
-    is_assignment_target(expr).then(|| expr.as_ref().clone())
 }
 
 /// Returns the scope name a `= &` binding writes to when the assignment is used as a value.
@@ -683,28 +661,77 @@ fn reference_bind_assign_name(target: &EvalExpr, nested: bool) -> Option<String>
     }
 }
 
+/// The parent of an expression's right-edge child, kept so the parent can be rebuilt around a
+/// replacement for that child.
+///
+/// PHP's grammar requires a variable on the left of `=`, so wherever a completed expression is
+/// followed by an assignment operator the assignment really belongs to the expression's
+/// RIGHTMOST operand: `$a . $b ??= v` is `$a . ($b ??= v)`, `$x ?? $x = 5` is `$x ?? ($x = 5)`,
+/// and a prefix operator applies to the whole assignment -- `!$x = 0`, `-$z = 3`, `@$h = f()`,
+/// and `(int) $pos = strpos($name, ':')`, which Symfony's `IconRenderer::renderIcon()` writes.
+enum AssignmentEdge<'a> {
+    /// `left OP <edge>`.
+    Binary { op: EvalBinOp, left: &'a EvalExpr },
+    /// `value ?? <edge>`.
+    Coalesce { value: &'a EvalExpr },
+    /// A prefix operator: `!`, `-`, `+`, `~`, `@`.
+    Unary { op: EvalUnaryOp },
+    /// A cast: `(int) <edge>`.
+    Cast { target: EvalCastType },
+}
+
+impl AssignmentEdge<'_> {
+    /// Rebuilds the parent around a new right-edge child.
+    fn rebuild(&self, child: EvalExpr) -> EvalExpr {
+        match self {
+            AssignmentEdge::Binary { op, left } => EvalExpr::Binary {
+                op: *op,
+                left: Box::new((*left).clone()),
+                right: Box::new(child),
+            },
+            AssignmentEdge::Coalesce { value } => EvalExpr::NullCoalesce {
+                value: Box::new((*value).clone()),
+                default: Box::new(child),
+            },
+            AssignmentEdge::Unary { op } => EvalExpr::Unary {
+                op: *op,
+                expr: Box::new(child),
+            },
+            AssignmentEdge::Cast { target } => EvalExpr::Cast {
+                target: *target,
+                expr: Box::new(child),
+            },
+        }
+    }
+}
+
+/// Splits an expression into its right-edge child and the parent that holds it.
+fn assignment_edge(expr: &EvalExpr) -> Option<(AssignmentEdge<'_>, &EvalExpr)> {
+    match expr {
+        EvalExpr::Binary { op, left, right } => {
+            Some((AssignmentEdge::Binary { op: *op, left }, right.as_ref()))
+        }
+        EvalExpr::NullCoalesce { value, default } => {
+            Some((AssignmentEdge::Coalesce { value }, default.as_ref()))
+        }
+        EvalExpr::Unary { op, expr } => Some((AssignmentEdge::Unary { op: *op }, expr.as_ref())),
+        EvalExpr::Cast { target, expr } => {
+            Some((AssignmentEdge::Cast { target: *target }, expr.as_ref()))
+        }
+        _ => None,
+    }
+}
+
 /// Returns the assignable expression a nested assignment actually writes to.
 fn rightmost_assignment_target(target: &EvalExpr, nested: bool) -> Option<&EvalExpr> {
     if !nested {
         return is_assignment_target(target).then_some(target);
     }
-    if let EvalExpr::Unary {
-        op: EvalUnaryOp::LogicalNot,
-        expr,
-    } = target
-    {
-        if is_assignment_target(expr) {
-            return Some(expr.as_ref());
-        }
+    let (_, child) = assignment_edge(target)?;
+    if is_assignment_target(child) {
+        return Some(child);
     }
-    let right = match target {
-        EvalExpr::Binary { right, .. } | EvalExpr::NullCoalesce { default: right, .. } => right,
-        _ => return None,
-    };
-    if is_assignment_target(right) {
-        return Some(right.as_ref());
-    }
-    rightmost_assignment_target(right, true)
+    rightmost_assignment_target(child, true)
 }
 
 /// Rebuilds a nested-assignment target with its rightmost writable child replaced outright.
@@ -712,48 +739,18 @@ fn rightmost_assignment_target(target: &EvalExpr, nested: bool) -> Option<&EvalE
 /// `nested_assignment_expr()` builds the replacement itself from an operator and a value; a
 /// reference binding is neither, so it is handed in already built.
 fn nested_assignment_replacement(target: &EvalExpr, replacement: EvalExpr) -> Option<EvalExpr> {
-    if negated_assignment_target(target).is_some() {
-        return Some(EvalExpr::Unary {
-            op: EvalUnaryOp::LogicalNot,
-            expr: Box::new(replacement),
-        });
+    let (edge, child) = assignment_edge(target)?;
+    if is_assignment_target(child) {
+        return Some(edge.rebuild(replacement));
     }
-    if let EvalExpr::NullCoalesce { value, default } = target {
-        if is_assignment_target(default) {
-            return Some(EvalExpr::NullCoalesce {
-                value: Box::new(value.as_ref().clone()),
-                default: Box::new(replacement),
-            });
-        }
-        return nested_assignment_replacement(default, replacement).map(|default| {
-            EvalExpr::NullCoalesce {
-                value: Box::new(value.as_ref().clone()),
-                default: Box::new(default),
-            }
-        });
-    }
-    let EvalExpr::Binary { op, left, right } = target else {
-        return None;
-    };
-    if is_assignment_target(right) {
-        return Some(EvalExpr::Binary {
-            op: *op,
-            left: Box::new(left.as_ref().clone()),
-            right: Box::new(replacement),
-        });
-    }
-    nested_assignment_replacement(right, replacement).map(|right| EvalExpr::Binary {
-        op: *op,
-        left: Box::new(left.as_ref().clone()),
-        right: Box::new(right),
-    })
+    nested_assignment_replacement(child, replacement).map(|child| edge.rebuild(child))
 }
 
-/// Returns whether an assignment belongs to a nested lvalue on a binary expression's right edge.
+/// Returns whether an assignment belongs to a nested lvalue on an expression's right edge.
 ///
 /// PHP parses `$prefix.$suffix ??= value` as `$prefix.($suffix ??= value)`, even though the
-/// completed concatenation itself is not writable. Apply the same right-edge recovery to every
-/// binary operator so compound assignments retain PHP's lvalue association consistently.
+/// completed concatenation itself is not writable. The same right-edge recovery applies to every
+/// binary operator, to `??`, to every prefix operator and to casts (see [`AssignmentEdge`]).
 ///
 /// `??` IS THAT SAME RIGHT EDGE, and it is not a `Binary`. PHP's assignment binds looser than
 /// `??`, so `$a ?? $a = 5` could only mean `($a ?? $a) = 5`, which is not derivable because the
@@ -761,14 +758,10 @@ fn nested_assignment_replacement(target: &EvalExpr, replacement: EvalExpr) -> Op
 /// `55`. Five Symfony files depend on it, four as `$x ?? $x = …` and Container.php as
 /// `$this->factories[$id] ?? self::$make ??= self::make(...)`.
 fn nested_assignment_target(target: &EvalExpr) -> bool {
-    if negated_assignment_target(target).is_some() {
-        return true;
-    }
-    let right = match target {
-        EvalExpr::Binary { right, .. } | EvalExpr::NullCoalesce { default: right, .. } => right,
-        _ => return false,
+    let Some((_, child)) = assignment_edge(target) else {
+        return false;
     };
-    is_assignment_target(right) || nested_assignment_target(right)
+    is_assignment_target(child) || nested_assignment_target(child)
 }
 
 /// Rebuilds an expression with its rightmost writable child replaced by a REFERENCE bind.
@@ -777,31 +770,16 @@ fn nested_assignment_target(target: &EvalExpr) -> bool {
 /// `null !== $e = &$src` binds `$e` and compares the result, and a condition written that way is
 /// the whole reason the bind has to be an expression.
 fn nested_reference_bind_expr(target: &EvalExpr, source: EvalExpr) -> Option<EvalExpr> {
-    if let Some(inner) = negated_assignment_target(target) {
-        return Some(EvalExpr::Unary {
-            op: EvalUnaryOp::LogicalNot,
-            expr: Box::new(EvalExpr::ReferenceBind {
-                target: Box::new(inner),
-                source: Box::new(source),
-            }),
-        });
-    }
-    let EvalExpr::Binary { op, left, right } = target else {
-        return None;
-    };
-    let bound = if is_assignment_target(right) {
+    let (edge, child) = assignment_edge(target)?;
+    let bound = if is_assignment_target(child) {
         EvalExpr::ReferenceBind {
-            target: Box::new(right.as_ref().clone()),
+            target: Box::new(child.clone()),
             source: Box::new(source),
         }
     } else {
-        nested_reference_bind_expr(right, source)?
+        nested_reference_bind_expr(child, source)?
     };
-    Some(EvalExpr::Binary {
-        op: *op,
-        left: Box::new(left.as_ref().clone()),
-        right: Box::new(bound),
-    })
+    Some(edge.rebuild(bound))
 }
 
 /// Rebuilds an expression with its rightmost writable child replaced by an assignment.
@@ -811,62 +789,16 @@ fn nested_assignment_expr(
     assignment: Option<Option<EvalBinOp>>,
     value: EvalExpr,
 ) -> Option<EvalExpr> {
-    if let Some(target) = negated_assignment_target(target) {
-        return Some(EvalExpr::Unary {
-            op: EvalUnaryOp::LogicalNot,
-            expr: Box::new(nested_assignment_value(
-                target,
-                null_coalescing,
-                assignment,
-                value,
-            )),
-        });
+    let (edge, child) = assignment_edge(target)?;
+    if is_assignment_target(child) {
+        return Some(edge.rebuild(nested_assignment_value(
+            child.clone(),
+            null_coalescing,
+            assignment,
+            value,
+        )));
     }
-    if let EvalExpr::NullCoalesce {
-        value: probed,
-        default,
-    } = target
-    {
-        if is_assignment_target(default) {
-            return Some(EvalExpr::NullCoalesce {
-                value: Box::new(probed.as_ref().clone()),
-                default: Box::new(nested_assignment_value(
-                    default.as_ref().clone(),
-                    null_coalescing,
-                    assignment,
-                    value,
-                )),
-            });
-        }
-        return nested_assignment_expr(default, null_coalescing, assignment, value).map(|default| {
-            EvalExpr::NullCoalesce {
-                value: Box::new(probed.as_ref().clone()),
-                default: Box::new(default),
-            }
-        });
-    }
-    let EvalExpr::Binary { op, left, right } = target else {
-        return None;
-    };
-    if is_assignment_target(right) {
-        return Some(EvalExpr::Binary {
-            op: *op,
-            left: Box::new(left.as_ref().clone()),
-            right: Box::new(nested_assignment_value(
-                right.as_ref().clone(),
-                null_coalescing,
-                assignment,
-                value,
-            )),
-        });
-    }
-    nested_assignment_expr(right, null_coalescing, assignment, value).map(|right| {
-        EvalExpr::Binary {
-            op: *op,
-            left: Box::new(left.as_ref().clone()),
-            right: Box::new(right),
-        }
-    })
+    nested_assignment_expr(child, null_coalescing, assignment, value).map(|child| edge.rebuild(child))
 }
 
 /// Builds the value expression stored in one recovered assignment target.

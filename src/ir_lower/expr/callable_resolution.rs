@@ -458,6 +458,22 @@ pub(super) fn instance_callable_object_class_and_nullability(
         ExprKind::StaticMethodCall {
             receiver, method, ..
         } => static_method_call_expr_type_for_ir(ctx, receiver, method)?,
+        // `Enum::Case` is the enum's singleton, exactly as `lower_scoped_constant` lowers it.
+        // Without this arm the syntactic fallback guessed `int`, so `Kind::Int->value` in an
+        // array literal typed a string-backed value as int and stored its string POINTER
+        // (`['integer' => Kind::Int->value]` printed `4321534512`).
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            let class_name = super::scoped_values::scoped_constant_receiver_name(ctx, receiver);
+            let class_name = class_name.trim_start_matches('\\');
+            let is_case = ctx
+                .enums
+                .get(class_name)
+                .is_some_and(|enum_info| enum_info.cases.iter().any(|case| &case.name == name));
+            if !is_case {
+                return None;
+            }
+            PhpType::Object(class_name.to_string())
+        }
         _ => infer_expr_type_syntactic(object),
     };
     let (class_name, nullable) = singular_object_class(&object_type)?;

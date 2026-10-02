@@ -439,3 +439,27 @@ echo $value;
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "ret");
 }
+
+/// Verifies `Fiber::getCurrent()` from interpreted code: null on the main thread, the running
+/// fiber inside one.
+///
+/// The compiled call is an intrinsic with no method body, so the interpreter's static-call
+/// bridge had nothing to call and fataled. Monolog's `Logger::addRecord()` asks it on every log
+/// call, which killed every request of the Symfony demo once its logger was interpreted.
+/// Expected output is php 8.5.10's.
+#[test]
+fn test_fiber_get_current_from_eval_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+eval('
+var_dump(\Fiber::getCurrent());
+if (null !== ($fiber = \Fiber::getCurrent())) { echo "in fiber\n"; } else { echo "main\n"; }
+');
+$f = new Fiber(function () {
+    eval('var_dump(\Fiber::getCurrent() instanceof \Fiber);');
+});
+$f->start();
+"#,
+    );
+    assert_eq!(out, "NULL\nmain\nbool(true)\n");
+}

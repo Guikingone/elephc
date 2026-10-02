@@ -49,10 +49,12 @@ pub(super) fn eval_native_static_syntax_method_result(
         eval_aot_method_dispatch_metadata_in_hierarchy(class_name, method_name, context, values)?
     else {
         if eval_native_static_magic_method_available(class_name, context, values)? {
-            return eval_native_static_method_with_evaluated_args(
+            return eval_native_static_method_with_evaluated_args_bridge_scope(
                 class_name,
                 method_name,
                 evaluated_args,
+                None,
+                called_class_scope,
                 context,
                 values,
             )
@@ -70,8 +72,9 @@ pub(super) fn eval_native_static_syntax_method_result(
     }
     if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
         if eval_native_static_magic_method_available(class_name, context, values)? {
-            return eval_native_magic_static_method_call(
+            return eval_native_magic_static_method_call_as(
                 class_name,
+                called_class_scope,
                 method_name,
                 evaluated_args,
                 context,

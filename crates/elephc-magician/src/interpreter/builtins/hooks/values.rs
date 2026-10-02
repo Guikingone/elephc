@@ -530,6 +530,14 @@ impl EvalValuesHook {
                 // uncatchable eval fatal while the compiled backend accepted it.
                 let value = match evaluated_args {
                     [value] | [value, _] | [value, _, _] => *value,
+                    // php's fourth `$double_encode`, which the AOT contract also accepts.
+                    [value, flags, _, double_encode] if name == "htmlspecialchars" => {
+                        if !values.truthy(*double_encode)? {
+                            let flags = eval_int_value(*flags, values)?;
+                            return eval_htmlspecialchars_keeping_entities(*value, flags, values);
+                        }
+                        *value
+                    }
                     _ => return Err(EvalStatus::RuntimeFatal),
                 };
                 match name {

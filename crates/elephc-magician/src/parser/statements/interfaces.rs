@@ -201,7 +201,10 @@ impl Parser {
         if !promoted_properties.is_empty() || !promoted_assignments.is_empty() {
             return Err(EvalParseError::UnsupportedConstruct);
         }
-        let return_type = self.parse_optional_return_type(EvalTypePosition::MethodReturn)?;
+        let return_type = super::parameters_types::eval_method_return_type_with_implicit(
+            &name,
+            self.parse_optional_return_type(EvalTypePosition::MethodReturn)?,
+        );
         let source_end_line = self.current_line();
         self.expect_semicolon()?;
         Ok(EvalInterfaceMethod::new(name, params)

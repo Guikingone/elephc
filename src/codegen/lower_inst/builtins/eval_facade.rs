@@ -135,6 +135,18 @@ pub(in crate::codegen::lower_inst) fn lower_eval_owned_property_get(
     eval::lower_eval_owned_property_get(ctx, inst, object, property, miss_label, done_label)
 }
 
+/// Reads a `Mixed` receiver's property through its owning eval context when one owns it, from a
+/// frame without an eval context; other receivers branch to `miss_label`.
+pub(in crate::codegen::lower_inst) fn lower_eval_owner_mixed_property_get(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    property: &str,
+    miss_label: &str,
+    done_label: &str,
+) -> Result<()> {
+    eval::lower_eval_owner_mixed_property_get(ctx, object, property, miss_label, done_label)
+}
+
 /// Probes a typed receiver for an eval-owned dynamic override before native dispatch.
 pub(in crate::codegen::lower_inst) fn lower_eval_owned_method_call(
     ctx: &mut FunctionContext<'_>,
@@ -254,6 +266,17 @@ pub(in crate::codegen::lower_inst) fn lower_eval_member_exists(
     name: &str,
 ) -> Result<()> {
     eval::lower_eval_member_exists(ctx, inst, target, member, name)
+}
+
+/// Emits a null-context member-existence probe for an object an eval context may own.
+pub(in crate::codegen::lower_inst) fn emit_eval_member_exists_owner_probe(
+    ctx: &mut FunctionContext<'_>,
+    target: ValueId,
+    member: ValueId,
+    name: &str,
+    matched_label: &str,
+) -> Result<()> {
+    eval::emit_eval_member_exists_owner_probe(ctx, target, member, name, matched_label)
 }
 
 /// Lowers post-eval class-relation probes against eval dynamic metadata.

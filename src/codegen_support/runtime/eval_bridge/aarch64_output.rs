@@ -274,6 +274,10 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     emitter.label("__elephc_eval_diag_suppression_leave");
     emitter.instruction("b __rt_diag_pop_suppression");                         // restore the enclosing suppression depth
 
+    label_c_global(emitter, "__elephc_eval_user_wrapper_table");
+    abi::emit_symbol_address(emitter, "x0", "_user_wrappers");
+    emitter.instruction("ret");                                                 // hand the compiled stream-wrapper table to the interpreter
+
     label_c_global(emitter, "__elephc_eval_request_invoker_boundary");
     abi::emit_symbol_address(emitter, "x9", "__rt_eval_invoker_bounded");
     emitter.instruction("mov x10, #1");                                         // the next descriptor invoker is called by the interpreter

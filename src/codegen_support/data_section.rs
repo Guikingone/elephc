@@ -458,6 +458,18 @@ impl DataSection {
         self.comm_dedup.contains_key(label)
     }
 
+    /// Returns the declared common-symbol labels that start with `prefix`, in a stable order.
+    pub fn comm_labels_with_prefix(&self, prefix: &str) -> Vec<String> {
+        let mut labels: Vec<String> = self
+            .comm_entries
+            .iter()
+            .filter(|(label, _)| label.starts_with(prefix))
+            .map(|(label, _)| label.clone())
+            .collect();
+        labels.sort();
+        labels
+    }
+
     /// Adds words to the current runtime or metadata collection.
     pub fn add_words(&mut self, words: Vec<DataWord>) -> String {
         if let Some(label) = self.word_dedup.get(&words) {

@@ -126,13 +126,23 @@ pub(super) fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, 
     if let Some(value) = lower_bound_closure_immediate_call(ctx, callee, args, expr) {
         return value;
     }
+    // Only the binding THIS callee registers may be taken below. The slot is shared: any closure
+    // literal lowered earlier leaves its binding behind unless a consumer takes it, and an arrow
+    // function passed as an ARGUMENT (`$db->transaction(fn () => $pipeline($x))`) is never taken.
+    // Laravel's `Pipeline::then()` then lowered `($this->finally)($this->passable)` in its
+    // `finally` as a direct call to that arrow function with the other branch's captures — a
+    // wrong callee, caught only because its operands did not dominate the call.
+    ctx.clear_pending_static_callable_result();
+    let callee_is_closure_literal = matches!(callee.kind, ExprKind::Closure { .. });
     let lowered_callee = lower_expr(ctx, callee);
     // An immediately-invoked closure literal (`(fn &() => …)()`) registers its static
     // callable binding while lowering. Call it directly through the static-callable path
     // (as `$f()` does) so the closure body's signature — including a by-reference return —
     // drives the call instead of the generic descriptor-invoke path, which cannot return
-    // every result type.
-    if let Some(target) = ctx.take_pending_static_callable_result() {
+    // every result type. A closure nested INSIDE another callee (`(make(fn () => 1))()`) also
+    // registers one, and is not the value being called.
+    let pending = ctx.take_pending_static_callable_result();
+    if let Some(target) = pending.filter(|_| callee_is_closure_literal) {
         if let Some(value) = lower_static_callable_call(ctx, target, args, expr) {
             // The direct call never reads the closure object it bypassed.
             if ctx.value_is_owning_temporary(lowered_callee) {

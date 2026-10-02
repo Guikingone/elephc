@@ -137,6 +137,7 @@ pub(super) fn lower_array_pop_dynamic(
 ) -> Result<()> {
     require_array_pop_result_type(&inst.result_php_type.codegen_repr())?;
     let source_local = source_load_local_slot(ctx, array)?;
+    let ref_cell_slot = by_ref_receiver_slot(ctx, array)?;
 
     ctx.load_value_to_result(array)?;                                          // load $array's current boxed Mixed cell pointer
     let old_cell_reg = abi::int_result_reg(ctx.emitter);
@@ -183,7 +184,7 @@ pub(super) fn lower_array_pop_dynamic(
         "__rt_indexed_pop",
         4,
         &finish_label,
-        source_local.is_some(),
+        source_local.is_some() || ref_cell_slot.is_some(),
     );
     ctx.emitter.label(&hash_label);
     emit_array_pop_dyn_kind(
@@ -191,7 +192,7 @@ pub(super) fn lower_array_pop_dynamic(
         "__rt_hash_pop",
         5,
         &finish_label,
-        source_local.is_some(),
+        source_local.is_some() || ref_cell_slot.is_some(),
     );
 
     ctx.emitter.label(&finish_label);
@@ -204,10 +205,38 @@ pub(super) fn lower_array_pop_dynamic(
     if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, array)?;
     }
+    if let Some(slot) = ref_cell_slot {
+        publish_cell_through_by_ref_slot(ctx, slot, array)?;
+    }
     // Load the removed element (boxed Mixed) as the PHP-visible result.
     abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 40);
     abi::emit_release_temporary_stack(ctx.emitter, 48);
     store_if_result(ctx, inst)
+}
+
+/// Returns the by-reference parameter slot a receiver was read from (`load_ref_cell`), if any.
+///
+/// The fresh diverged cell the SHARED-cell branch builds has to be published into the caller's
+/// storage, and a bare SSA store reaches nothing: `array_shift($p)` on an `array &$p` parameter
+/// whose box was shared with a sibling (a `$params` copy, an argument held by a caller) answered
+/// the right element and left the caller's array untouched.
+fn by_ref_receiver_slot(ctx: &FunctionContext<'_>, array: ValueId) -> Result<Option<LocalSlotId>> {
+    Ok(match ReceiverPlace::resolve(ctx, array)? {
+        ReceiverPlace::RefCell(slot) => Some(slot),
+        _ => None,
+    })
+}
+
+/// Stores the Mixed cell now in `array`'s SSA home through the by-reference parameter's slot.
+///
+/// The branch that diverged into a fresh cell already released the old cell's share; the in-place
+/// branch republishes the very same pointer, which is harmless.
+fn publish_cell_through_by_ref_slot(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+    array: ValueId,
+) -> Result<()> {
+    crate::codegen::lower_inst::store_value_through_ref_cell_slot(ctx, slot, array, &PhpType::Mixed)
 }
 
 /// Emits one runtime-kind branch of `array_pop`'s dynamic path.
@@ -326,6 +355,7 @@ pub(super) fn lower_array_shift_dynamic(
 ) -> Result<()> {
     require_array_pop_result_type(&inst.result_php_type.codegen_repr())?;
     let source_local = source_load_local_slot(ctx, array)?;
+    let ref_cell_slot = by_ref_receiver_slot(ctx, array)?;
 
     ctx.load_value_to_result(array)?;                                          // load $array's current boxed Mixed cell pointer
     let old_cell_reg = abi::int_result_reg(ctx.emitter);
@@ -371,7 +401,7 @@ pub(super) fn lower_array_shift_dynamic(
         "__rt_indexed_shift",
         4,
         &finish_label,
-        source_local.is_some(),
+        source_local.is_some() || ref_cell_slot.is_some(),
     );
     ctx.emitter.label(&hash_label);
     emit_array_pop_dyn_kind(
@@ -379,7 +409,7 @@ pub(super) fn lower_array_shift_dynamic(
         "__rt_hash_shift",
         5,
         &finish_label,
-        source_local.is_some(),
+        source_local.is_some() || ref_cell_slot.is_some(),
     );
 
     ctx.emitter.label(&finish_label);
@@ -391,6 +421,9 @@ pub(super) fn lower_array_shift_dynamic(
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, array)?;
+    }
+    if let Some(slot) = ref_cell_slot {
+        publish_cell_through_by_ref_slot(ctx, slot, array)?;
     }
     // Load the removed element (boxed Mixed) as the PHP-visible result.
     abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 40);

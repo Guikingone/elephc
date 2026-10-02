@@ -101,15 +101,34 @@ pub fn lower_program_with_source_catalog(
 #[derive(Debug)]
 pub enum LoweringError {
     Validation(ValidationError),
+    /// Some bodies failed validation while [`collect_invalid_bodies`] was on: the lowered module
+    /// comes back with every failing body, so the caller can hand the class files those bodies
+    /// belong to back to the runtime autoloader, exactly as it does for backend refusals.
+    InvalidBodies {
+        /// The first validator error, reported when nothing can be handed back.
+        first: ValidationError,
+        /// Every refused body and its validator error.
+        failures: Vec<(String, String)>,
+        /// The lowered module the failures were found in.
+        module: Box<crate::ir::Module>,
+    },
 }
 
 impl fmt::Display for LoweringError {
     /// Formats the lowering error for CLI diagnostics.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LoweringError::Validation(err) => write!(f, "EIR validation failed: {:?}", err),
+            LoweringError::Validation(err) | LoweringError::InvalidBodies { first: err, .. } => {
+                write!(f, "EIR validation failed: {:?}", err)
+            }
         }
     }
+}
+
+/// Turns on collection of every body that fails EIR validation (see
+/// [`LoweringError::InvalidBodies`]); off by default, which keeps fail-fast validation.
+pub fn collect_invalid_bodies(enabled: bool) {
+    program::COLLECT_INVALID_BODIES.store(enabled, std::sync::atomic::Ordering::Relaxed);
 }
 
 impl From<ValidationError> for LoweringError {

@@ -668,12 +668,15 @@ pub(super) fn refined_untyped_property_assignment_type(
                 Some(PhpType::Mixed)
             }
         }
-        // A scalar slot written a value of another representation holds both kinds of value --
-        // the default until the write, the written value after -- so it widens to `Mixed`, the
-        // top of this lattice. Rebinding an `int` slot to the written type made propinit store
-        // the `9` of `public $k = 9;` into a `string` slot, which failed the build.
-        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str
-            if current.codegen_repr() != val_ty.codegen_repr() =>
+        // An untyped slot holds whatever is written to it; a scalar default (`= 9`, `= false`,
+        // `= ''`, `= 1.5`) is only its FIRST value, so a write of another kind widens it to
+        // `Mixed`, the top of this lattice. Keeping the default's type made every other write a
+        // silent coercion: Laravel-style `protected $withinTransaction = false;` assigned `'db'`
+        // by a method read back as `true`. Rebinding the slot to the written type instead made
+        // propinit store the `9` of `public $k = 9;` into a `string` slot, which failed the
+        // build. Only the same scalar kind stays in place.
+        PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Float | PhpType::Str
+            if !untyped_scalar_slot_holds(current, val_ty) =>
         {
             Some(PhpType::Mixed)
         }
@@ -687,6 +690,13 @@ pub(super) fn refined_untyped_property_assignment_type(
                 // the element type stays `Never` and codegen mis-emits later reads.
                 return Some(val_ty.clone());
             }
+            if is_empty_array_placeholder(val_ty) && Checker::is_generic_array_hint(current) {
+                // The converse: an `[]` written into an `array<mixed>` slot carries no element
+                // evidence. Specializing toward it turned a `[1, 2]`-defaulted `static $cache`
+                // into `array<never>`, and its default could no longer be stored. (Any other
+                // element type still reaches the merge below, which widens it to mixed.)
+                return None;
+            }
             if let Some(widened) = untyped_array_storage_after_gradual_assignment(current, val_ty) {
                 return Some(widened);
             }
@@ -696,6 +706,19 @@ pub(super) fn refined_untyped_property_assignment_type(
             }
             merge_untyped_property_array_storage(current, val_ty)
         }
+    }
+}
+
+/// Returns whether an untyped property slot of scalar storage `slot` represents every value of
+/// `value` without conversion: the same scalar kind, or `false` into a `bool` slot.
+fn untyped_scalar_slot_holds(slot: &PhpType, value: &PhpType) -> bool {
+    match (slot, value) {
+        (PhpType::Int, PhpType::Int) => true,
+        (PhpType::Bool, PhpType::Bool | PhpType::False) => true,
+        (PhpType::False, PhpType::False) => true,
+        (PhpType::Float, PhpType::Float) => true,
+        (PhpType::Str, PhpType::Str) => true,
+        _ => false,
     }
 }
 

@@ -224,6 +224,136 @@ fn signature_has_callable_param(signature: &crate::types::FunctionSig) -> bool {
         .any(|(_, ty)| ty.codegen_repr() == PhpType::Callable)
 }
 
+/// Emits `runtime_callable_invoker::INVOKER_CALLABLE_ARG_HELPER`, which every runtime callable
+/// invoker calls to hand a boxed argument to a `callable`/`Closure` parameter.
+///
+/// Input and output are the integer result register: a boxed Mixed in, a callable descriptor
+/// out. A box already holding a descriptor (tag 10) yields its payload. Anything else goes through
+/// the same cast an eval method bridge applies to its `callable` parameters, with the callback's
+/// owning eval context (a Closure object), or failing that the context whose interpreted call is
+/// running (`__elephc_eval_native_call_context`, for a function name or an array callable).
+/// Without the eval bridge nothing else can be callable, and the helper raises php's TypeError
+/// text as a fatal instead of letting the callee jump through a box.
+pub(super) fn emit_invoker_callable_arg_helper(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    support: &EvalCallableDescriptorSupport,
+) {
+    let label = crate::codegen::runtime_callable_invoker::INVOKER_CALLABLE_ARG_HELPER;
+    let prefix = "__elephc_invoker_callable_arg";
+    let not_descriptor = format!("{prefix}_not_descriptor");
+    let fail_label = format!("{prefix}_fail");
+    let done_label = format!("{prefix}_done");
+    let (message_label, message_len) = data.add_string(
+        b"Fatal error: Uncaught TypeError: a callable parameter received a value that is not callable\n",
+    );
+    let bridge = support.has_dynamic_descriptor();
+    emitter.blank();
+    emitter.comment("--- runtime callable invoker: boxed argument to callable descriptor ---");
+    emitter.raw(".align 2");
+    emitter.label_global(label);
+    match module.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            emitter.instruction("sub sp, sp, #64");                             // reserve the boxed-value and context slots plus the frame record
+            emitter.instruction("stp x29, x30, [sp, #48]");                     // preserve the caller frame around the conversion
+            emitter.instruction("add x29, sp, #48");                            // frame pointer: the boxed value lives at [x29, #-16]
+            emitter.instruction("str x0, [x29, #-16]");                         // keep the boxed argument where the callable cast reads it
+            emitter.instruction("str xzr, [x29, #-32]");                        // no eval context yet
+            emitter.instruction("bl __rt_mixed_unbox");                         // expose the boxed argument's tag and payload
+            emitter.instruction("cmp x0, #10");                                 // runtime tag 10 already holds a callable descriptor
+            emitter.instruction(&format!("b.ne {}", not_descriptor));           // anything else needs a conversion
+            emitter.instruction("mov x0, x1");                                  // return the existing descriptor payload
+            abi::emit_jump(emitter, &done_label);
+            emitter.label(&not_descriptor);
+            if bridge {
+                let owner = module.target.extern_symbol("__elephc_eval_callable_owner_context");
+                let current = module.target.extern_symbol("__elephc_eval_native_call_context");
+                let have_context = format!("{prefix}_have_context");
+                emitter.instruction("ldr x0, [x29, #-16]");                     // pass the boxed callback to the owner lookup
+                abi::emit_call_label(emitter, &owner);
+                emitter.instruction(&format!("cbnz x0, {}", have_context));     // a Closure object names the context that owns it
+                abi::emit_call_label(emitter, &current);
+                emitter.label(&have_context);
+                emitter.instruction("str x0, [x29, #-32]");                     // keep the resolving eval context for the callable cast
+                emit_aarch64_cast_eval_callable_arg(
+                    module,
+                    emitter,
+                    data,
+                    support,
+                    prefix,
+                    &fail_label,
+                    -32,
+                    -16,
+                );
+                emitter.instruction(&format!("cbz x0, {}", fail_label));        // a null descriptor means the value is not callable
+                abi::emit_jump(emitter, &done_label);
+            }
+            emitter.label(&fail_label);
+            emitter.instruction("mov x0, #2");                                  // write the TypeError diagnostic to stderr
+            emitter.adrp("x1", &message_label);                                 // load the diagnostic string page
+            emitter.add_lo12("x1", "x1", &message_label);                       // resolve the diagnostic string address
+            emitter.instruction(&format!("mov x2, #{}", message_len));          // pass the diagnostic byte length
+            emitter.syscall(4);
+            abi::emit_exit(emitter, 255);
+            emitter.label(&done_label);
+            emitter.instruction("sub sp, x29, #48");                            // drop any scratch the conversion left below the frame
+            emitter.instruction("ldp x29, x30, [sp, #48]");                     // restore the caller frame
+            emitter.instruction("add sp, sp, #64");                             // release the helper frame
+            emitter.instruction("ret");                                         // return the descriptor in x0
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            emitter.instruction("push rbp");                                    // preserve the caller frame pointer
+            emitter.instruction("mov rbp, rsp");                                // frame pointer: the boxed value lives at [rbp - 40]
+            emitter.instruction("sub rsp, 48");                                 // reserve the boxed-value and context slots
+            emitter.instruction("mov QWORD PTR [rbp - 40], rax");               // keep the boxed argument where the callable cast reads it
+            emitter.instruction("mov QWORD PTR [rbp - 48], 0");                 // no eval context yet
+            emitter.instruction("call __rt_mixed_unbox");                       // expose the boxed argument's tag and payload
+            emitter.instruction("cmp rax, 10");                                 // runtime tag 10 already holds a callable descriptor
+            emitter.instruction(&format!("jne {}", not_descriptor));            // anything else needs a conversion
+            emitter.instruction("mov rax, rdi");                                // return the existing descriptor payload
+            abi::emit_jump(emitter, &done_label);
+            emitter.label(&not_descriptor);
+            if bridge {
+                let owner = module.target.extern_symbol("__elephc_eval_callable_owner_context");
+                let current = module.target.extern_symbol("__elephc_eval_native_call_context");
+                let have_context = format!("{prefix}_have_context");
+                emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");           // pass the boxed callback to the owner lookup
+                abi::emit_call_label(emitter, &owner);
+                emitter.instruction("test rax, rax");                           // a Closure object names the context that owns it
+                emitter.instruction(&format!("jnz {}", have_context));          // use the owner when there is one
+                abi::emit_call_label(emitter, &current);
+                emitter.label(&have_context);
+                emitter.instruction("mov QWORD PTR [rbp - 48], rax");           // keep the resolving eval context for the callable cast
+                emit_x86_64_cast_eval_callable_arg(
+                    module,
+                    emitter,
+                    data,
+                    support,
+                    prefix,
+                    &fail_label,
+                    48,
+                    40,
+                );
+                emitter.instruction("test rax, rax");                           // a null descriptor means the value is not callable
+                emitter.instruction(&format!("jz {}", fail_label));             // report a value that cannot be called
+                abi::emit_jump(emitter, &done_label);
+            }
+            emitter.label(&fail_label);
+            emitter.instruction("mov edi, 2");                                  // write the TypeError diagnostic to stderr
+            abi::emit_symbol_address(emitter, "rsi", &message_label);
+            emitter.instruction(&format!("mov edx, {}", message_len));          // pass the diagnostic byte length
+            emitter.instruction("mov eax, 1");                                  // Linux x86_64 syscall 1 = write
+            emitter.instruction("syscall");                                     // emit the fatal diagnostic before terminating
+            abi::emit_exit(emitter, 255);
+            emitter.label(&done_label);
+            emitter.instruction("mov rsp, rbp");                                // release the helper frame
+            emitter.instruction("pop rbp");                                     // restore the caller frame pointer
+            emitter.instruction("ret");                                         // return the descriptor in rax
+        }
+    }
+}
+
 /// Emits shared runtime callable wrappers/invokers and returns descriptor cases.
 pub(super) fn emit_eval_callable_descriptor_support(
     module: &Module,

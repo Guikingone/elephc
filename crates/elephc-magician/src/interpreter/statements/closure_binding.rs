@@ -122,6 +122,9 @@ pub(in crate::interpreter) fn eval_closure_object_target_from_callable(
         EvaluatedCallable::InvokableObject { object } => {
             EvalClosureObjectTarget::InvokableObject { object }
         }
+        // Both callers hand a compiled descriptor back unchanged before converting (it already
+        // IS the Closure php returns), so this arm only keeps the match exhaustive.
+        EvaluatedCallable::NativeDescriptor { .. } => EvalClosureObjectTarget::Named(String::new()),
         EvaluatedCallable::ObjectMethod {
             object,
             method,

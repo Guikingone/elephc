@@ -259,12 +259,24 @@ pub(super) fn resolve_expr(
                 .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
                 .collect(),
         },
-        ExprKind::ConstRef(name) => ExprKind::ConstRef(resolved_name(resolve_constant_name(
-            name,
-            current_namespace,
-            imports,
-            symbols,
-        ))),
+        ExprKind::ConstRef(name) => {
+            let resolved = resolve_constant_name(name, current_namespace, imports, symbols);
+            // An unqualified name this file cannot bind keeps php's global fallback: the
+            // namespaced constant is tried first and the global one after it, so a constant only
+            // another file (or the runtime) defines still resolves. See `Name::function_fallback`.
+            let keeps_global_fallback = name.is_unqualified()
+                && resolved.contains('\\')
+                && !symbols.has_constant(&resolved)
+                && name
+                    .last_segment()
+                    .is_none_or(|segment| !imports.constants.contains_key(segment));
+            let resolved = resolved_name(resolved);
+            ExprKind::ConstRef(if keeps_global_fallback {
+                resolved.with_function_fallback()
+            } else {
+                resolved
+            })
+        }
         ExprKind::NewObject { class_name, args } => ExprKind::NewObject {
             class_name: resolved_name(resolve_special_or_class_name(
                 class_name,
@@ -758,8 +770,11 @@ fn rewrite_date_procedural_alias(
                 args: full,
             })
         }
-        "date_create" if args.len() <= 2 => Some(new_object("DateTime")),
-        "date_create_immutable" if args.len() <= 2 => Some(new_object("DateTimeImmutable")),
+        // `date_create()` answers `false` for a string it cannot parse, where `new DateTime` throws.
+        "date_create" if args.len() <= 2 => Some(static_call("DateTime", "__elephc_date_create")),
+        "date_create_immutable" if args.len() <= 2 => {
+            Some(static_call("DateTimeImmutable", "__elephc_date_create"))
+        }
         "date_create_from_format" if args.len() == 2 || args.len() == 3 => {
             Some(static_call("DateTime", "createFromFormat"))
         }

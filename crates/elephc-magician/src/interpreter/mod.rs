@@ -78,6 +78,7 @@ use return_type_compat::*;
 use return_values::*;
 pub use runtime_ops::{aot_member_names_uncached, AotMemberNameKind, RuntimeValueOps};
 pub(crate) use builtins::eval_class_name_is_a_bridge;
+pub(crate) use dynamic_functions::current_native_call_context;
 pub(crate) use builtins::eval_spl_autoload_class as eval_spl_autoload_class_bridge;
 pub(crate) use builtins::eval_spl_autoload_classlike_definition;
 use runtime_ops::*;
@@ -519,6 +520,15 @@ pub fn execute_context_try_new_object_named_outcome(
     }
     if !context.has_class(class_name) {
         if let Err(status) = eval_spl_autoload_classlike_definition(class_name, context, values) {
+            // Loading the class file can itself THROW: a file guarded by
+            // `if (!interface_exists(X::class)) { throw new \LogicException(...); }` does, when X
+            // is not installed. php hands that exception to the `new` expression's caller, which
+            // may catch it; returning the bare status made it an uncatchable fatal.
+            if status == EvalStatus::UncaughtThrowable {
+                if let Some(thrown) = context.take_pending_throw() {
+                    return Ok(Some(EvalOutcome::Throwable(thrown)));
+                }
+            }
             if crate::eval_trace::enabled() {
                 eprintln!(
                     "[elephc-eval-trace] phase=try_new_object_error stage=autoload class={class_name:?} status={status:?}",
@@ -572,6 +582,40 @@ pub fn execute_context_method_call_outcome(
             .ok_or(EvalStatus::UncaughtThrowable),
         Err(status) => Err(status),
     }
+}
+
+/// Makes a clone COMPILED code made of an eval-declared object an object of the same class.
+///
+/// Compiled `clone` copies the object's native layout, which for an eval-declared class is its
+/// compiled ancestor's: the copy came back as that ancestor, with none of the properties the
+/// eval class keeps in its context. Symfony's `Request::duplicate()` does `clone $this`, so the
+/// Laravel subclass's `duplicate(): static` failed its own return type. Returns whether the source
+/// belonged to this context's class table.
+pub fn adopt_compiled_object_clone(
+    source_identity: u64,
+    clone: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let Some(class_name) = context
+        .dynamic_object_class(source_identity)
+        .map(|class| class.name().to_string())
+    else {
+        return Ok(false);
+    };
+    let clone_identity = values.object_identity(clone)?;
+    context.register_dynamic_object(clone_identity, &class_name);
+    for (property, value) in context.dynamic_property_values_for_clone(source_identity) {
+        statements::eval_store_dynamic_property_value(
+            clone_identity,
+            &property,
+            value,
+            context,
+            values,
+        )?;
+    }
+    context.clone_dynamic_property_aliases(source_identity, clone_identity);
+    Ok(true)
 }
 
 /// Reads an instance property through the active eval context.

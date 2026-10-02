@@ -59,6 +59,9 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         ctx.apply_eval_barrier();
         return call;
     }
+    let scoped_callback_args =
+        invoke_only_callback_args_with_static_method_callables(ctx, canonical, args);
+    let args = scoped_callback_args.as_deref().unwrap_or(args);
     if let Some(value) = lower_lazy_isset(ctx, canonical, args, expr) {
         return value;
     }

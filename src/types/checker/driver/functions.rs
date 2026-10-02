@@ -172,24 +172,36 @@ impl Checker {
             .cloned()
             .collect();
         for name in unchecked {
-            if let Some(decl) = self.fn_decls.get(&name).cloned() {
-                match self.initial_function_param_types(&name, &decl) {
-                    Ok(mut param_types) => {
-                        Self::widen_unrefined_params_of_an_uncalled_function(
-                            &decl,
-                            &mut param_types,
-                        );
-                        if let Err(error) =
-                            self.resolve_function_signature(&name, &decl, param_types)
-                        {
-                            errors.extend(error.flatten());
-                        }
-                    }
-                    Err(error) => errors.extend(error.flatten()),
-                }
+            if let Err(error) = self.resolve_uncalled_function(&name) {
+                errors.extend(error.flatten());
             }
         }
         self.resolve_function_variant_groups(errors);
+    }
+
+    /// Resolves the signature of a declared function no call site has reached, reading its
+    /// undeclared parameters as `mixed` (see `widen_unrefined_params_of_an_uncalled_function`).
+    ///
+    /// Shared by the end-of-pass resolution and by `function_exists('name')`, which resolves the
+    /// function it names without being a call.
+    pub(crate) fn resolve_uncalled_function(&mut self, name: &str) -> Result<(), CompileError> {
+        let Some(decl) = self.fn_decls.get(name).cloned() else {
+            return Ok(());
+        };
+        let mut param_types = self.initial_function_param_types(name, &decl)?;
+        Self::widen_unrefined_params_of_an_uncalled_function(&decl, &mut param_types);
+        self.resolve_function_signature(name, &decl, param_types)
+            .map(|_| ())
+    }
+
+    /// Resolves a function-variant group no call site has reached, with the same `mixed` reading
+    /// of undeclared parameters as [`Self::resolve_uncalled_function`].
+    pub(crate) fn resolve_uncalled_function_variant_group(
+        &mut self,
+        name: &str,
+        span: crate::span::Span,
+    ) -> Result<(), CompileError> {
+        self.resolve_function_variant_group_signature(name, span, true)
     }
 
     /// Makes an UNCALLED function's undeclared parameters `mixed` instead of the `Int` seed.
@@ -235,8 +247,10 @@ impl Checker {
             if self.functions.contains_key(&name) {
                 continue;
             }
+            // Nothing called this group, so its variants are resolved the way an uncalled plain
+            // function is: see `widen_unrefined_params_of_an_uncalled_function`.
             if let Err(error) =
-                self.ensure_function_variant_group_signature(&name, crate::span::Span::dummy())
+                self.resolve_uncalled_function_variant_group(&name, crate::span::Span::dummy())
             {
                 errors.extend(error.flatten());
             }
@@ -253,6 +267,23 @@ impl Checker {
         name: &str,
         span: crate::span::Span,
     ) -> Result<(), CompileError> {
+        self.resolve_function_variant_group_signature(name, span, false)
+    }
+
+    /// Resolves a variant group's unified signature; `uncalled` widens every undeclared
+    /// parameter's `int` inference seed to `mixed`, because no call site will ever refine it.
+    ///
+    /// A conditionally declared function (`if (!function_exists('f')) { function f($x) {…} }`)
+    /// becomes a variant group, and the group reached this point with the raw seed: the plain
+    /// function path already widened it, this one did not. So Laravel's never-called `lazy($class,
+    /// …)` exported `int` for `$class` into `typeFromParameter($class)`, and from there into a
+    /// trait method declared `Closure $closure` — a refused build on code php runs.
+    fn resolve_function_variant_group_signature(
+        &mut self,
+        name: &str,
+        span: crate::span::Span,
+        uncalled: bool,
+    ) -> Result<(), CompileError> {
         if self.functions.contains_key(name) {
             return Ok(());
         }
@@ -266,7 +297,7 @@ impl Checker {
             .ok_or_else(|| CompileError::new(span, &format!("Function '{}' has no variants", name)))?
             .clone();
 
-        if let Some(provisional) = self.provisional_variant_group_sig(&first_variant)? {
+        if let Some(provisional) = self.provisional_variant_group_sig(&first_variant, uncalled)? {
             self.functions.insert(name.to_string(), provisional);
         }
 
@@ -283,7 +314,10 @@ impl Checker {
                     ),
                 )
             })?;
-            let param_types = self.initial_function_param_types(variant, &decl)?;
+            let mut param_types = self.initial_function_param_types(variant, &decl)?;
+            if uncalled {
+                Self::widen_unrefined_params_of_an_uncalled_function(&decl, &mut param_types);
+            }
             self.resolve_function_signature(variant, &decl, param_types)?;
         }
 
@@ -321,15 +355,20 @@ impl Checker {
     /// Builds a provisional `FunctionSig` for the first variant in a group using its declaration and
     /// initial param types. Used as a placeholder when a unified variant-group signature is needed
     /// before individual variants are fully resolved. Returns `Ok(None)` if no declaration exists
-    /// for the variant.
+    /// for the variant. `uncalled` widens the undeclared parameters' seeds exactly as the variants
+    /// themselves are widened, so the placeholder never advertises a type they will not have.
     fn provisional_variant_group_sig(
         &mut self,
         first_variant: &str,
+        uncalled: bool,
     ) -> Result<Option<FunctionSig>, CompileError> {
         let Some(decl) = self.fn_decls.get(first_variant).cloned() else {
             return Ok(None);
         };
-        let param_types = self.initial_function_param_types(first_variant, &decl)?;
+        let mut param_types = self.initial_function_param_types(first_variant, &decl)?;
+        if uncalled {
+            Self::widen_unrefined_params_of_an_uncalled_function(&decl, &mut param_types);
+        }
         Ok(Some(FunctionSig {
             params: param_types,
             param_type_exprs: decl

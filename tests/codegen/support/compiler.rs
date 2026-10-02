@@ -291,6 +291,9 @@ fn try_compile_source_to_asm_with_defines_repr(
         elephc::image_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::hash_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::sodium_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::password_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::array_edge_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::array_ucompare_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::curl_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::xml_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
@@ -314,6 +317,9 @@ fn try_compile_source_to_asm_with_defines_repr(
     let resolved = elephc::assert_prelude::inject_if_used(resolved);
     let resolved = elephc::error_exception_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::sodium_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::password_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::array_edge_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::array_ucompare_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::attribute_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::array_merge_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::array_reduce_prelude::inject_if_used(resolved);
@@ -337,6 +343,12 @@ fn try_compile_source_to_asm_with_defines_repr(
     // before the optimizer, so the checker and the backend only ever see ordinary PHP.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
     let resolved = elephc::optimize::fold_constants_for_target(resolved, target());
+    // Mirrors `pipeline::compile`'s `conditional-functions` phase: a function declared inside
+    // `if (!function_exists(...))` binds when the statement runs, through a variant group.
+    // Without it the harness compiled such a declaration as absent, and a program the CLI
+    // runs failed here with "Call to undefined function".
+    let resolved =
+        elephc::conditional_functions::bind_conditional_declarations(resolved, target());
     let mut check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     set_fixture_linked_extensions(&check_result.required_libraries);

@@ -2267,6 +2267,49 @@ echo $d->format("H:i"), " ", $d->getTimezone()->getName(), " ", $d->getTimestamp
     assert_eq!(out, "12:00 Europe/Paris 1718445600|08:00 America/New_York");
 }
 
+/// `date_create()` / `date_create_immutable()` answer `false` for a string they cannot parse,
+/// where the class constructor throws `DateMalformedStringException`. The alias was desugared to
+/// `new DateTime(...)`, so `date_create('bogus')` threw. A parseable string still yields an object
+/// the result of which methods can be called on, and the timezone argument is honoured. php 8.5.
+#[test]
+fn test_date_create_returns_false_for_an_unparseable_string() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+var_dump(date_create('bogus'));
+var_dump(date_create_immutable('not a date at all'));
+$d = date_create('2020-01-02 03:04:05');
+$p = date_create('2020-01-02', new DateTimeZone('Europe/Paris'));
+$i = date_create_immutable('2021-02-03 04:05:06');
+echo $d->format('c'), "|", $p->format('c'), "|", $i->format('c'), "|", get_class($i), "\n";
+try {
+    new DateTime('bogus');
+} catch (Exception $e) {
+    echo get_class($e), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nbool(false)\n2020-01-02T03:04:05+00:00|2020-01-02T00:00:00+01:00|2021-02-03T04:05:06+00:00|DateTimeImmutable\nDateMalformedStringException\n"
+    );
+}
+
+/// `date_create()` reached through a computed name in interpreted code answers `false` for an
+/// unparseable string exactly like the compiled alias: the eval alias table dispatches to the same
+/// `__elephc_date_create` factory, so the two worlds agree. php 8.5.
+#[test]
+fn test_eval_date_create_returns_false_for_an_unparseable_string() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$code = 'var_dump(date_create("bogus")); $d = date_create("2020-01-02 03:04:05"); echo $d->format("c"), "\n";';
+eval($code);
+"#,
+    );
+    assert_eq!(out, "bool(false)\n2020-01-02T03:04:05+00:00\n");
+}
+
 /// `date_time_set($datetime, $hour, $minute, $second, $microsecond)` now accepts the optional fifth
 /// `$microsecond` argument, desugaring to `setTime(hour, minute, second, microsecond)` which already
 /// supported it. The 3- and 4-arg forms remain valid.

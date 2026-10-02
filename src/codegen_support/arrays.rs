@@ -28,9 +28,10 @@ pub(crate) fn emit_array_value_type_stamp(
         PhpType::Mixed => 7,
         PhpType::Union(_) => 7,
         PhpType::Void => 8,
-        // Callable descriptors: `__rt_array_free_deep` and `__rt_array_clone_shallow` already
-        // release and retain tag-10 slots. Nothing stamped it, so an array of closures released
-        // none of them.
+        // Without this arm an array of closures kept tag 0 and every `mixed` reader boxed each
+        // closure as an INT: `foreach ($pipes as $pipe)` behind a `mixed` parameter handed back
+        // values that fatal "mixed value is not callable". Tag 10 is the one `array_values()`,
+        // the hash buckets and `__rt_array_free_deep` already use for callable descriptors.
         PhpType::Callable => 10,
         _ => return,
     };

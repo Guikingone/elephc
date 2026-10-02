@@ -390,7 +390,7 @@ fn eval_reflection_function_callable_target_arg(
         EVAL_TAG_OBJECT => {
             let identity = values.object_identity(value)?;
             let Some(target) = context.closure_object_target(identity).cloned() else {
-                return Ok(None);
+                return eval_reflection_foreign_closure_target_arg(identity, context);
             };
             let lookup_name = eval_reflection_function_closure_target_name(&target);
             Ok(Some(EvalReflectionFunctionCallableArg {
@@ -496,6 +496,46 @@ fn eval_reflection_function_callable_target_arg(
         }
         _ => Ok(None),
     }
+}
+
+/// Resolves a closure object that ANOTHER eval context created, through its owner.
+///
+/// A closure an interpreted file made -- a service provider's `static function () {...}` stored
+/// in a compiled container -- is registered only with the context that evaluated it. Compiled
+/// `new ReflectionFunction($callback)` runs in a context of its own, found no target, and fell
+/// through to the function-NAME reading of its argument, which an object is not: "eval()
+/// fragment uses an unsupported construct". The owner still knows the closure, so its target
+/// and metadata are borrowed from there, under a lease that keeps the owner alive.
+fn eval_reflection_foreign_closure_target_arg(
+    identity: u64,
+    context: &ElephcEvalContext,
+) -> Result<Option<EvalReflectionFunctionCallableArg>, EvalStatus> {
+    let Some(owner) = crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity) else {
+        return Ok(None);
+    };
+    if std::ptr::eq(owner as *const ElephcEvalContext, context as *const ElephcEvalContext) {
+        return Ok(None);
+    }
+    let Some(owner_context) = (unsafe { owner.as_ref() }) else {
+        return Ok(None);
+    };
+    let Some(owner_target) = owner_context.closure_object_target(identity).cloned() else {
+        return Ok(None);
+    };
+    let lookup_name = eval_reflection_function_closure_target_name(&owner_target);
+    let metadata_closure = owner_context.closure(&lookup_name).cloned();
+    let Some(lease) = crate::context::pcntl_runtime::begin_foreign_context_use(owner) else {
+        return Ok(None);
+    };
+    Ok(Some(EvalReflectionFunctionCallableArg {
+        display_name: lookup_name.clone(),
+        lookup_name,
+        target: EvalClosureObjectTarget::ForeignContext {
+            target: Box::new(owner_target),
+            owner: lease,
+        },
+        metadata_closure,
+    }))
 }
 
 /// Materializes a descriptor's `$this` capture only when it contains an object receiver.

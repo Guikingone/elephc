@@ -520,6 +520,12 @@ pub(crate) fn compile_and_run_files_with_defines(
     // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
     let resolved = elephc::optimize::fold_constants_for_target(resolved, target());
+    // Mirrors `pipeline::compile`'s `conditional-functions` phase: a function declared inside
+    // `if (!function_exists(...))` binds when the statement runs, through a variant group.
+    // Without it the harness compiled such a declaration as absent, and a program the CLI
+    // runs failed here with "Call to undefined function".
+    let resolved =
+        elephc::conditional_functions::bind_conditional_declarations(resolved, target());
     // ALSO mirrors `pipeline::compile`, and it has to. `Registry::build` above CONSUMED every
     // `spl_autoload_register` call it could collect and stripped it from the AST, so the checker
     // cannot rediscover that this program registers a loader — the pipeline hands the answer in,

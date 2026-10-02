@@ -151,12 +151,12 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
     trace_class_decl_result(
         class,
         "validate_interface_members",
-        validate_declared_class_interface_members(class, context),
+        validate_declared_class_interface_members(class, context, values),
     )?;
     trace_class_decl_result(
         class,
         "validate_builtin_interface_members",
-        validate_declared_class_builtin_interface_members(class, context),
+        validate_declared_class_builtin_interface_members(class, context, values),
     )?;
     trace_class_decl_result(
         class,

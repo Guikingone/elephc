@@ -42,7 +42,10 @@ impl Parser {
         if !promoted_properties.is_empty() && (is_abstract || is_static) {
             return Err(EvalParseError::UnsupportedConstruct);
         }
-        let return_type = self.parse_optional_return_type(EvalTypePosition::MethodReturn)?;
+        let return_type = super::parameters_types::eval_method_return_type_with_implicit(
+            &name,
+            self.parse_optional_return_type(EvalTypePosition::MethodReturn)?,
+        );
         let (body, source_end_line) = if is_abstract {
             let source_end_line = self.current_line();
             self.expect_semicolon()?;

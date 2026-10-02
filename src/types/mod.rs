@@ -32,6 +32,8 @@ mod ffi;
 pub(crate) mod param_binding;
 /// Target-aware `ext/pcntl` integer constants shared by checker and codegen.
 pub(crate) mod pcntl_constants;
+/// Late-static `static::method()` targets that only descendants declare.
+pub(crate) mod late_static_dispatch;
 /// PHP type model and type environment for tracking variable types.
 mod model;
 /// Return-to-argument storage alias summaries used by ownership lowering.

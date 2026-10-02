@@ -33245,6 +33245,111 @@ echo (closureSrcFree())();');
     );
 }
 
+/// Returns into eval'd code from a compiled method that ran `iterator_to_array()` over an object.
+///
+/// The object path of `iterator_to_array` keeps the iterator in x19/r12, the callee-saved
+/// nested-call register, across its `valid`/`current`/`next` calls. The frame only reserved a
+/// save slot for that register when the function contained one of a few listed opcodes, and a
+/// builtin call was not one of them, so the method returned with its caller's x19/r12 replaced
+/// by the iterator. A compiled caller survived it; the eval bridge's Rust caller did not, and the
+/// interpreter crashed unboxing a value through the clobbered register. Laravel's Dotenv
+/// `RepositoryBuilder::createWithDefaultAdapters()` is this shape, and it failed every request.
+#[test]
+fn test_compiled_iterator_to_array_returns_into_eval_intact() {
+    let out = compile_and_run(
+        r#"<?php
+final class Collector
+{
+    private static function items()
+    {
+        foreach (['a', 'b'] as $item) {
+            yield $item;
+        }
+    }
+
+    public static function fromGenerator()
+    {
+        $items = \iterator_to_array(self::items());
+        return count($items) . ':' . implode(',', $items);
+    }
+
+    public static function fromAggregate()
+    {
+        return count(\iterator_to_array(new \ArrayObject([1, 2, 3])));
+    }
+}
+
+eval('$first = Collector::fromGenerator();
+$second = Collector::fromAggregate();
+echo $first, "|", $second, "|", Collector::fromGenerator();');
+"#,
+    );
+    assert_eq!(out, "2:a,b|3|2:a,b");
+}
+
+/// Iterates eval-declared `Iterator` and `IteratorAggregate` objects from COMPILED code.
+///
+/// An object the interpreter built carries the generic `stdClass` header whatever class declared
+/// it, so the native interface-table scan found no `Iterator` entry: a compiled `foreach` over
+/// such an object iterated nothing, and `iterator_to_array()` / `iterator_count()` fataled with
+/// "foreach over iterable with unsupported kind". Laravel's Dotenv hands a runtime-loaded
+/// `PhpOption\Some` (an `IteratorAggregate`) to `iterator_to_array()` on every request.
+#[test]
+fn test_compiled_iteration_over_eval_declared_iterables() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalBox implements IteratorAggregate {
+    private $v;
+    public function __construct($v) { $this->v = $v; }
+    public function getIterator(): Traversable { return new ArrayIterator(["k" => $this->v]); }
+}
+class EvalWalker implements Iterator {
+    private $i = 0;
+    public function current(): mixed { return $this->i * 10; }
+    public function key(): mixed { return $this->i; }
+    public function next(): void { $this->i++; }
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 3; }
+}');
+
+function collect($o) { return iterator_to_array($o); }
+function collectList($o) { return iterator_to_array($o, false); }
+function counted(\Traversable $o) { return iterator_count($o); }
+function walk($o) { foreach ($o as $k => $v) { echo $k, '=', $v, ','; } echo '|'; }
+
+$box = 'EvalBox';
+$walker = 'EvalWalker';
+echo json_encode(collect(new $box(5))), json_encode(collectList(new $box(6))), json_encode(collect(new $walker())), '|';
+echo counted(new $box(7)), counted(new $walker()), '|';
+walk(new $box(8));
+walk(new $walker());
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"{"k":5}[6][0,10,20]|13|k=8,|0=0,1=10,2=20,|"#
+    );
+}
+
+/// Hands an `ArrayIterator` built by interpreted code to a compiled `foreach`.
+///
+/// The interpreter keeps its own `ArrayIterator` state on the eval context, and allocated the
+/// program's COMPILED class without running its constructor, so compiled iteration read an
+/// uninitialized typed property and died on "must not be accessed before initialization".
+#[test]
+fn test_eval_built_array_iterator_iterates_in_compiled_code() {
+    let out = compile_and_run(
+        r#"<?php
+function make() { return eval('return new ArrayIterator(["k" => 1, "j" => 2]);'); }
+$it = make();
+echo get_class($it), '|';
+foreach ($it as $k => $v) { echo $k, '=', $v, ','; }
+echo '|', json_encode(iterator_to_array(make())), '|', count(make());
+"#,
+    );
+    assert_eq!(out, r#"ArrayIterator|k=1,j=2,|{"k":1,"j":2}|2"#);
+}
+
 /// Answers `instanceof` from COMPILED code about a class declared at runtime.
 ///
 /// The closed-world fold that erases an `instanceof` whose target has no compiled metadata was
@@ -33513,4 +33618,587 @@ echo function_exists("sodium_crypto_box_seal") ? "y" : "n";');
             "y",
         )
     );
+}
+
+/// Verifies eval code calling a compiled static method with a `string ...$paths` variadic.
+///
+/// The compiled body stores that tail as a packed string array and is specialized on it, but the
+/// interpreter handed it boxed Mixed slots: Symfony's `Path::join()`, called from an interpreted
+/// class, ran `array_filter()` over them and asked the allocator for 8 GB ("heap memory
+/// exhausted"). Expected output is php 8.5.10's.
+#[test]
+fn test_eval_call_to_compiled_string_variadic_static_method() {
+    let out = compile_and_run(
+        r#"<?php
+final class Path {
+    public static function join(string ...$paths): string {
+        return implode('/', array_filter($paths, fn ($p) => $p !== ''));
+    }
+    public static function first(string $a, string ...$rest): string {
+        return $a . '+' . count($rest) . ':' . implode(',', $rest);
+    }
+}
+echo Path::join('a', '', 'c'), "\n";
+eval('
+echo Path::join("/var", "", "assets.json"), "\n";
+echo Path::join("x"), "|", Path::join(), "\n";
+echo Path::first("q", "w", "e"), "\n";
+$parts = ["m", "n"];
+echo Path::join(...$parts), "\n";
+');
+"#,
+    );
+    assert_eq!(out, "a/c\n/var/assets.json\nx|\nq+2:w,e\nm/n\n");
+}
+
+/// Verifies eval code can open `php://stdout` and `php://stderr` in any write mode.
+///
+/// The interpreter's `fopen()` knew no `php://std*` stream, so Monolog's `StreamHandler`
+/// (`fopen('php://stderr', 'a')`, the Symfony demo's production log target) threw "could not be
+/// opened in append mode" on every request. Closing one must not close the process descriptor.
+/// Expected output is php 8.5.10's.
+#[test]
+fn test_eval_opens_php_std_streams() {
+    let out = compile_and_run(
+        r#"<?php
+eval('
+foreach (["a", "ab", "w", "wb"] as $m) {
+    $h = fopen("php://stderr", $m);
+    echo $m, "=", is_resource($h) ? "ok" : "no", "\n";
+    fclose($h);
+}
+$o = fopen("php://stdout", "a");
+fwrite($o, "through-stdout\n");
+fclose($o);
+$o = fopen("PHP://STDOUT", "w");
+fwrite($o, "again\n");
+');
+echo "end\n";
+"#,
+    );
+    assert_eq!(out, "a=ok\nab=ok\nw=ok\nwb=ok\nthrough-stdout\nagain\nend\n");
+}
+
+/// Verifies compiled `method_exists()` / `property_exists()` see the members of an object whose
+/// class the interpreter declared.
+///
+/// A compiled frame with no eval context of its own answered from the native class tables, which
+/// only know the compiled parent. Twig's compiled `Template::getTemplateForMacro()` asks
+/// `method_exists($this, 'macro_render_language_selector')` of a template class loaded at run
+/// time, so every page using a macro failed with "Macro ... is not defined". Expected output is
+/// php 8.5.10's.
+#[test]
+fn test_compiled_member_exists_sees_an_interpreted_subclass() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class Template {
+    public function has(string $name): bool { return method_exists($this, $name); }
+    public function has2(string $name): bool { eval('$x = 1;'); return method_exists($this, $name); }
+    abstract public function name(): string;
+}
+function probe(object $o, string $m): string { return method_exists($o, $m) ? "y" : "n"; }
+function prop(object $o, string $p): string { return property_exists($o, $p) ? "y" : "n"; }
+$code = 'class Tpl_abc extends Template {
+    public $shown = 1;
+    public function name(): string { return "tpl"; }
+    public function macro_render(): string { return "macro!"; }
+    private function secret(): void {}
+}
+return new Tpl_abc();' . ($argc > 5 ? '' : '');
+$t = eval($code);
+echo $t->name(), " ", $t->has('macro_render') ? "has" : "missing", " ", $t->has('nope') ? "has" : "missing", "\n";
+echo probe($t, 'macro_render'), probe($t, 'name'), probe($t, 'secret'), probe($t, 'has'), probe($t, 'zzz'), "\n";
+echo prop($t, 'shown'), prop($t, 'hidden'), "\n";
+class Plain { public $p; public function m() {} }
+echo probe(new Plain(), 'm'), probe(new Plain(), 'x'), prop(new Plain(), 'p'), "\n";
+echo $t->has2('macro_render') ? "has2" : "missing2", "\n";
+"#,
+    );
+    assert_eq!(out, "tpl has missing\nyyyyn\nyn\nyny\nhas2\n");
+}
+
+/// Variable-variables parse and run in evaluated code: `$$name` and `${expr}` read and write
+/// the variable the value names, inside a function too. Carbon's `Date::set()` writes
+/// `$$name = self::monthToInt($value, $name);` and the whole trait used to be a parse error.
+#[test]
+fn test_eval_variable_variables_read_and_write() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$name = "x"; ${"y"} = 4; echo $y, "\n";');
+eval('$n = "x"; $x = 1; echo $$n, "\n";');
+eval('$name = "x"; $$name = 5; echo $x, "\n";');
+eval('function vv($name, $value) { $x = 0; $$name = $value; return $x; } echo vv("x", 7), "\n";');
+eval('$a = "b"; $b = "c"; $c = "deep"; echo $$$a, "\n";');
+"#,
+    );
+    assert_eq!(out, "4\n1\n5\n7\ndeep\n");
+}
+
+/// An interpreted subclass of a compiled builtin overrides a method whose return type php only
+/// treats as tentative, under `#[\ReturnTypeWillChange]` (Carbon's `createFromFormat(): ?static`
+/// over `DateTime::createFromFormat(): DateTime|false`); the class used to be refused.
+#[test]
+fn test_eval_override_with_return_type_will_change_over_compiled_parent() {
+    let out = compile_and_run(
+        r#"<?php
+$d = DateTime::createFromFormat('Y-m-d', '2020-01-02');
+echo $d->format('Y'), "\n";
+eval('namespace Lib; use DateTime; use ReturnTypeWillChange;
+class MyDate extends DateTime {
+    #[ReturnTypeWillChange]
+    public static function createFromFormat($format, $time, $timezone = null): ?static
+    {
+        $d = parent::createFromFormat($format, $time);
+        return $d === false ? null : new static($d->format("Y-m-d"));
+    }
+}');
+$cls = 'Lib\MyDate';
+$x = $cls::createFromFormat('Y-m-d', '2021-03-04');
+echo get_class($x), " ", $x->format('Y-m-d'), "\n";
+"#,
+    );
+    assert_eq!(out, "2020\nLib\\MyDate 2021-03-04\n");
+}
+
+/// An override's narrower return class that nobody has loaded yet is autoloaded to decide
+/// covariance, over a compiled builtin parent (`DateTime::diff(): DateInterval`) and over an eval
+/// parent alike. The check used to read "not declared" as "not a subtype" and refuse the class.
+#[test]
+fn test_eval_override_autoloads_its_narrower_return_class() {
+    let out = compile_and_run(
+        r#"<?php
+class Loader {
+    public function load($c) {
+        echo "autoload $c\n";
+        if ($c === 'Lib\MyInterval') {
+            eval('namespace Lib; class MyInterval extends \DateInterval {}');
+        }
+        if ($c === 'Lib\Circle') {
+            eval('namespace Lib; class Circle extends Shape {}');
+        }
+    }
+}
+spl_autoload_register([new Loader, 'load']);
+$i = (new DateTime('2020-01-01'))->diff(new DateTime('2020-01-03'));
+echo $i->days, "\n";
+eval('namespace Lib; class MyDate extends \DateTime {
+    public function diff($date = null, bool $absolute = false, array $skip = []): MyInterval {
+        $d = parent::diff($date ?? new \DateTime(), $absolute);
+        return new MyInterval("P" . $d->days . "D");
+    }
+}');
+$cls = 'Lib\MyDate';
+$x = new $cls('2020-01-01');
+$r = $x->diff(new DateTime('2020-01-05'));
+echo get_class($r), " ", $r->d, "\n";
+eval('namespace Lib; class Shape {} class Maker { public function make(): Shape { return new Shape; } }');
+eval('namespace Lib; class CircleMaker extends Maker { public function make(): Circle { return new Circle; } }');
+$m = 'Lib\CircleMaker';
+echo get_class((new $m)->make()), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "2\nautoload Lib\\MyInterval\nLib\\MyInterval 4\nautoload Lib\\Circle\nLib\\Circle\n"
+    );
+}
+
+/// An interface implementation's narrower return class is autoloaded the same way, against a
+/// compiled interface, an eval interface, and a builtin one -- and an eval class whose native
+/// ancestor is `ArrayIterator` is a `Traversable` for that check.
+#[test]
+fn test_eval_interface_implementation_autoloads_its_narrower_return_class() {
+    let out = compile_and_run(
+        r#"<?php
+interface Clock {
+    public function now(): DateTimeImmutable;
+}
+class SystemClock implements Clock {
+    public function now(): DateTimeImmutable { return new DateTimeImmutable('2020-01-01'); }
+}
+echo (new SystemClock)->now()->format('Y'), "\n";
+class Loader {
+    public function load($c) {
+        echo "autoload $c\n";
+        $defs = [
+            'Lib\MyImm' => 'namespace Lib; class MyImm extends \DateTimeImmutable {}',
+            'Lib\Square' => 'namespace Lib; class Square implements Shape {}',
+            'Lib\MyIter' => 'namespace Lib; class MyIter extends \ArrayIterator {}',
+        ];
+        if (isset($defs[$c])) {
+            eval($defs[$c]);
+        }
+    }
+}
+spl_autoload_register([new Loader, 'load']);
+eval('namespace Lib; class Frozen implements \Clock { public function now(): MyImm { return new MyImm("2021-02-03"); } }');
+$f = 'Lib\Frozen';
+echo get_class((new $f)->now()), "\n";
+eval('namespace Lib; interface Shape {} interface Factory { public function make(): Shape; }');
+eval('namespace Lib; class SquareFactory implements Factory { public function make(): Square { return new Square; } }');
+$s = 'Lib\SquareFactory';
+echo get_class((new $s)->make()), "\n";
+eval('namespace Lib; class Bag implements \IteratorAggregate { public function getIterator(): MyIter { return new MyIter([1, 2]); } }');
+$b = 'Lib\Bag';
+foreach (new $b as $v) {
+    echo $v, "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "2020\nautoload Lib\\MyImm\nLib\\MyImm\nautoload Lib\\Square\nLib\\Square\nautoload Lib\\MyIter\n1\n2\n"
+    );
+}
+
+/// A subclass may override a builtin date method with php's own signature. The compiled builtins
+/// declared wider parameters (`mixed`, `DateTimeInterface`) and a narrower return (`?DateTime`)
+/// than php does, and the eval override check compares against exactly those declarations.
+#[test]
+fn test_eval_overrides_builtin_date_methods_with_php_signatures() {
+    let out = compile_and_run(
+        r#"<?php
+echo DateTime::createFromTimestamp(86400)->format('Y-m-d'), "\n";
+echo DateTimeImmutable::createFromMutable(new DateTime('2020-01-02'))->format('Y-m-d'), "\n";
+echo DateTime::createFromImmutable(new DateTimeImmutable('2021-03-04'))->format('Y-m-d'), "\n";
+$p = new DatePeriod(new DateTime('2020-01-01'), new DateInterval('P1D'), new DateTime('2020-01-03'));
+echo $p->getEndDate()->format('Y-m-d'), "\n";
+eval('class Stamp extends DateTime { public static function createFromTimestamp(int|float|string $timestamp): static { return new static("@" . (int) $timestamp); } }');
+eval('class Mut extends DateTime { public static function createFromImmutable(DateTimeImmutable $object): static { return new static($object->format("Y-m-d")); } }');
+eval('class Imm extends DateTimeImmutable { public static function createFromMutable(DateTime $object): static { return new static($object->format("Y-m-d")); } }');
+eval('class Period extends DatePeriod { public function getEndDate(): ?DateTimeInterface { return null; } }');
+echo "declared\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "1970-01-02\n2020-01-02\n2021-03-04\n2020-01-03\ndeclared\n"
+    );
+}
+
+/// An internal class's return types are tentative to php, so an eval override with a different
+/// return type is declared (php deprecates, it does not refuse): php's own
+/// `DateTime::getTimezone(): DateTimeZone|false` over elephc's narrower builtin, and Carbon's
+/// `CarbonPeriod::key(): ?int` over the `key()` elephc's iterator-shaped `DatePeriod` carries.
+#[test]
+fn test_eval_override_of_an_internal_method_has_a_tentative_return_type() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new DatePeriod(new DateTime('2020-01-01'), new DateInterval('P1D'), 1);
+echo (new DateTime('2020-01-01', new DateTimeZone('UTC')))->getTimezone()->getName(), "\n";
+eval('class Zoned extends DateTime { public function getTimezone(): DateTimeZone|false { return false; } }
+class Period extends DatePeriod { public function key(): ?int { return null; } }');
+var_dump((new Zoned('2020-01-01'))->getTimezone());
+echo (new ReflectionMethod('Period', 'key'))->getReturnType(), "\n";
+"#,
+    );
+    assert_eq!(out, "UTC\nbool(false)\n?int\n");
+}
+
+/// `Closure` narrows `callable` in a return type. A compiled interface's `Closure|self|null`
+/// reaches eval as `callable|self|null`, and an eval'd class taking the method from a trait that
+/// spells it `Closure|Clock|null` (Carbon's `getTestNow()`) was refused at declaration.
+#[test]
+fn test_eval_trait_method_narrows_compiled_callable_return_to_closure() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Lib;
+
+use Closure;
+
+interface Clock {
+    public static function getTestNow(): Closure|self|null;
+}
+class Fixed implements Clock {
+    public static function getTestNow(): Closure|Clock|null { return null; }
+}
+var_dump(Fixed::getTestNow());
+eval('namespace Lib; use Closure; trait Test {
+    public static function getTestNow(): Closure|Clock|null { return fn () => "now"; }
+}
+class Live extends \DateTime implements Clock { use Test; }');
+$c = 'Lib\Live';
+echo ($c::getTestNow())(), "\n";
+"#,
+    );
+    assert_eq!(out, "NULL\nnow\n");
+}
+
+/// A class satisfies an interface's `static` return with a method it INHERITS from a parent that
+/// does not implement the interface: `static` is the class being declared (Carbon's
+/// `FactoryImmutable implements ClockInterface` taking `withTimeZone(): static` from `Factory`).
+#[test]
+fn test_eval_inherited_static_return_satisfies_a_compiled_interface() {
+    let out = compile_and_run(
+        r#"<?php
+interface Clock {
+    public function withZone(string $zone): static;
+}
+class Base {
+    public string $zone = 'UTC';
+    public function withZone(string $zone): static { $c = clone $this; $c->zone = $zone; return $c; }
+}
+class Zoned extends Base implements Clock {}
+echo (new Zoned)->withZone('Europe/Paris')->zone, "\n";
+eval('class EvalBase { public $zone = "UTC"; public function withZone(string|int $zone): static { $c = clone $this; $c->zone = $zone; return $c; } }
+class EvalZoned extends EvalBase implements Clock {}');
+$z = 'EvalZoned';
+$w = (new $z)->withZone('Asia/Tokyo');
+echo get_class($w), " ", $w->zone, "\n";
+"#,
+    );
+    assert_eq!(out, "Europe/Paris\nEvalZoned Asia/Tokyo\n");
+}
+
+/// An eval override may narrow a return to a COMPILED class-like whose ancestry only the compiled
+/// program knows: Carbon's `CarbonPeriod::getStartDate(): CarbonInterface` (a compiled interface
+/// extending `DateTimeInterface`) over `DatePeriod::getStartDate()`.
+#[test]
+fn test_eval_override_narrows_return_to_compiled_class_likes() {
+    let out = compile_and_run(
+        r#"<?php
+interface Moment extends DateTimeInterface {}
+class Instant extends DateTimeImmutable implements Moment {}
+abstract class Shape {}
+class Square extends Shape {}
+echo get_class(new Instant('2020-01-01')), " ", (new Square) instanceof Shape ? "y" : "n", "\n";
+eval('class Period extends DatePeriod {
+    public function getStartDate(): Moment { return new Instant("2020-01-01"); }
+}
+abstract class Maker { abstract public function make(): Shape; }
+class SquareMaker extends Maker { public function make(): Square { return new Square; } }
+interface Source { public function start(): DateTimeInterface; }
+class Clock implements Source { public function start(): Instant { return new Instant("2021-01-01"); } }');
+echo (new ReflectionMethod('Period', 'getStartDate'))->getReturnType(), " ", get_class((new SquareMaker)->make()), " ", (new Clock)->start()->format('Y'), "\n";
+"#,
+    );
+    assert_eq!(out, "Instant y\nMoment Square 2021\n");
+}
+
+/// `return self::$instance ??= new self();` keeps the instance in the static slot when the result
+/// is only used as a temporary receiver. The null the slot held was released as though the fetch
+/// had produced a temporary, so the slot pointed at a freed cell and the next call returned
+/// whatever reused it (Carbon's `FactoryImmutable::getDefaultInstance()`).
+#[test]
+fn test_eval_static_null_coalesce_assign_keeps_the_slot_value() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class F { private static ?self $d = null; public $n = 1; public static function get(): self { return self::$d ??= new self(); } public function m() { return $this->n++; } }');
+eval('echo F::get()->m(), F::get()->m(), F::get()->m(), "\n"; var_dump(F::get() === F::get());');
+"#,
+    );
+    assert_eq!(out, "123\nbool(true)\n");
+}
+
+/// Eval implements `array_replace_recursive()` and `array_merge_recursive()`; Carbon's
+/// `Carbon::setLocale()` merges its translation messages with the first, and eval refused both.
+#[test]
+fn test_eval_array_replace_and_merge_recursive() {
+    let out = compile_and_run(
+        r#"<?php
+$base = ['a' => ['x' => 1, 'y' => [1, 2]], 'b' => 2, 5 => 'five'];
+$over = ['a' => ['y' => [9], 'z' => 3], 'b' => ['nested'], 7 => 'seven'];
+eval('echo json_encode(array_replace_recursive($base, $over)), "\n";
+echo json_encode(array_merge_recursive($base, $over)), "\n";
+echo json_encode(array_merge_recursive(["k" => null], ["k" => 1], ["k" => [2, 3]], [4])), "\n";
+echo json_encode(array_replace_recursive(["m" => ["en" => ["a" => "A"]]], ["m" => ["en" => ["b" => "B"], "fr" => []]])), "\n";
+echo count(array_merge_recursive()), "\n";');
+echo json_encode($base), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"a\":{\"x\":1,\"y\":[9,2],\"z\":3},\"b\":[\"nested\"],\"5\":\"five\",\"7\":\"seven\"}\n{\"a\":{\"x\":1,\"y\":[1,2,9],\"z\":3},\"b\":[2,\"nested\"],\"0\":\"five\",\"1\":\"seven\"}\n{\"k\":[null,1,2,3],\"0\":4}\n{\"m\":{\"en\":{\"a\":\"A\",\"b\":\"B\"},\"fr\":[]}}\n0\n{\"a\":{\"x\":1,\"y\":[1,2]},\"b\":2,\"5\":\"five\"}\n"
+    );
+}
+
+/// Laravel's facade shape across the boundary: a compiled base answers every static call through
+/// `__callStatic()`, which asks `static::getFacadeAccessor()`. An interpreted facade must run it
+/// with `static` = itself, and a compiled facade called from interpreted code must receive its
+/// argument array in the shape the compiled body reads.
+#[test]
+fn test_eval_facades_reach_the_compiled_call_static_with_their_own_static() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class Facade {
+    protected static function getFacadeAccessor() { throw new RuntimeException('Facade does not implement getFacadeAccessor method.'); }
+    public static function __callStatic($method, $args) {
+        return static::getFacadeAccessor() . '->' . $method . '(' . implode(',', $args) . ') via ' . static::class;
+    }
+}
+class Log extends Facade { protected static function getFacadeAccessor() { return 'log'; } }
+echo Log::info('a'), "\n";
+eval('class View extends Facade { protected static function getFacadeAccessor() { return "view"; } }');
+eval('echo View::replaceNamespace("errors", "x"), "\n"; echo \Log::debug("b"), "\n";');
+"#,
+    );
+    assert_eq!(
+        out,
+        "log->info(a) via Log\nview->replaceNamespace(errors,x) via View\nlog->debug(b) via Log\n"
+    );
+}
+
+/// Eval parses php 7.3's trailing comma in `unset(...)`, which Carbon's `CarbonPeriod` uses.
+#[test]
+fn test_eval_unset_accepts_a_trailing_comma() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$b = [1, 2, 3]; unset($b[0], $b[1],); echo json_encode($b), "\n";');
+"#,
+    );
+    assert_eq!(out, "{\"2\":3}\n");
+}
+
+/// An untyped `__toString()` has php 8's implicit `string` return type, so an eval class taking
+/// it from a trait satisfies a compiled interface that spells `: string` (Laravel's `Collection`
+/// against `Enumerable`), and reflection reports the type.
+#[test]
+fn test_eval_untyped_tostring_has_the_implicit_string_return_type() {
+    let out = compile_and_run(
+        r#"<?php
+interface Showable {
+    public function __toString(): string;
+}
+class Shown implements Showable {
+    public function __toString(): string { return 'compiled'; }
+}
+echo new Shown, "\n";
+eval('trait Renders { public function __toString() { return "from trait"; } }
+class Bag implements Showable { use Renders; }
+class Plain implements Showable { public function __toString() { return "plain"; } }
+echo new Bag, " ", new Plain, "\n";
+echo (new ReflectionMethod("Plain", "__toString"))->getReturnType(), "\n";');
+"#,
+    );
+    assert_eq!(out, "compiled\nfrom trait plain\nstring\n");
+}
+
+/// Eval code reads a compiled class's ARRAY constants -- own, inherited, from an interface, from
+/// an interpreted subclass -- with visibility enforced. The generated constant helper boxes
+/// scalars only, so `ReflectionCaster::UNSET_CLOSURE_FILE_INFO` was "Undefined constant".
+#[test]
+fn test_eval_reads_compiled_array_class_constants() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Lib;
+interface HasList { const LIST = [1, 2]; }
+class Base { public const U = ["Closure" => __CLASS__ . "::unset"]; protected const P = ["p" => true]; }
+class RC extends Base implements HasList { public const W = ["a" => 1, "n" => ["x" => null, 3.5]]; }
+echo json_encode(RC::W), "\n";
+eval('echo json_encode([\Lib\RC::W, \Lib\RC::U, \Lib\Base::U, \Lib\RC::LIST, \Lib\HasList::LIST]), "\n";');
+eval('namespace Lib; class Sub extends RC { static function q() { return static::P; } } echo json_encode([Sub::q(), Sub::W]), "\n";');
+eval('try { var_dump(\Lib\RC::P); } catch (\Error $e) { echo $e->getMessage(), "\n"; }');
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"a\":1,\"n\":{\"x\":null,\"0\":3.5}}\n[{\"a\":1,\"n\":{\"x\":null,\"0\":3.5}},{\"Closure\":\"Lib\\\\Base::unset\"},{\"Closure\":\"Lib\\\\Base::unset\"},[1,2],[1,2]]\n[{\"p\":true},{\"a\":1,\"n\":{\"x\":null,\"0\":3.5}}]\nCannot access protected constant Lib\\RC::P\n"
+    );
+}
+
+/// Eval code calls a compiled STATIC method through an instance, as php allows
+/// (`$request->enableHttpMethodParameterOverride()`); `static::` inside is the object's class.
+#[test]
+fn test_eval_calls_compiled_static_method_through_an_instance() {
+    let out = compile_and_run(
+        r#"<?php
+class Req {
+    protected static bool $override = false;
+    public static function enableOverride(): void { self::$override = true; }
+    public static function overrides(): bool { return self::$override; }
+    public static function make(string $x): string { return "made $x"; }
+    public static function who(): string { return static::class; }
+}
+class Child extends Req {}
+$ch = new Child();
+eval('echo $ch->who(), " ", Child::who(), "\\n";');
+$r = new Req();
+var_dump(Req::overrides());
+eval('$r->enableOverride(); var_dump($r->overrides()); echo $r->make("a"), "\n";');
+eval('class Sub extends Req { public static function twice(int $n): int { return $n * 2; } }');
+$s = new Sub();
+eval('echo $s->twice(21), " ", $s->make("b"), "\n";');
+"#,
+    );
+    assert_eq!(out, "Child Child\nbool(false)\nbool(true)\nmade a\n42 made b\n");
+}
+
+/// An interpreted `return static::$x = [...];` hands its caller a value of the caller's own: a
+/// `foreach` over the result leaves the static intact.
+///
+/// The static-property setter takes the reference it is given, and the assignment handed the
+/// same reference back as its value, so the caller's release after the loop freed the array
+/// the static still held. A `return static::$x ?? static::$x = [...];` returned the static's own
+/// cell unretained on every later call, which freed it the same way. Laravel's
+/// `Route::getValidators()` is that shape; the third route matched read freed validators
+/// ("unsupported Foreach statement").
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_eval_static_assignment_value_is_independent_of_the_static() {
+    let out = compile_and_run(
+        r#"<?php
+$code = <<<'PHP'
+class Validators {
+    public static $all;
+    public $mine;
+    public static function get() {
+        if (isset(static::$all)) {
+            return static::$all;
+        }
+        return static::$all = ['uri', 'method'];
+    }
+    public function own() { return $this->mine = [7, 8]; }
+    public static $lazy;
+    public static function lazy() { return static::$lazy ?? static::$lazy = ['a', 'b']; }
+}
+for ($i = 0; $i < 2; $i++) {
+    foreach (Validators::get() as $v) { echo $v, " "; }
+    echo "| ", json_encode(Validators::$all), "\n";
+}
+for ($i = 0; $i < 3; $i++) {
+    foreach (Validators::lazy() as $v) { echo $v; }
+}
+echo " | ", json_encode(Validators::$lazy), "\n";
+$o = new Validators();
+foreach ($o->own() as $v) { echo $v, " "; }
+echo "| ", json_encode($o->mine), "\n";
+PHP;
+eval($code);
+"#,
+    );
+    assert_eq!(
+        out,
+        "uri method | [\"uri\",\"method\"]\nuri method | [\"uri\",\"method\"]\nababab | [\"a\",\"b\"]\n7 8 | [7,8]\n"
+    );
+}
+
+/// Verifies `return eval($code);` hands the caller the fragment's value, not a cell the eval scope
+/// has already torn down. `$r = eval($code); return $r;` retained the fragment's cell in the
+/// store, but a bare `return eval(...)` returned it unretained, so a fragment that returned one
+/// of its own locals gave back null or garbage (php returns the value). Oracle: php 8.5.
+#[test]
+fn test_return_eval_of_a_fragment_local_yields_the_value() {
+    let out = compile_and_run(
+        r##"<?php
+function viaArrayLocal($x) {
+    $code = '$v = [1,2]; $w = $v; return $w;';
+    return eval($code);
+}
+function viaArray($x) {
+    $code = '$v = [1,2]; return $v;';
+    return eval($code);
+}
+function viaString($x) {
+    $code = '$v = "abc" . $x; return $v;';
+    return eval($code);
+}
+class Runner {
+    public function run($code) { return eval($code); }
+}
+echo json_encode(viaArrayLocal('p')), json_encode(viaArray('p')), json_encode(viaString('p')), "\n";
+echo json_encode((new Runner)->run('$n = ["k" => 5]; return $n;')), "\n";
+"##,
+    );
+    assert_eq!(out, "[1,2][1,2]\"abcp\"\n{\"k\":5}\n");
 }

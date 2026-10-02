@@ -2236,6 +2236,39 @@ foreach (StaticUnsetBox::$nullable as $k => $v) { echo "$k=$v "; }
     assert_eq!(out, "0=a 2=c |keep=1 |left=3 ");
 }
 
+/// Verifies unsetting an element of an untyped local or static that still holds null is a silent
+/// no-op, as in PHP, instead of the gradual array boundary's "must be of type array" TypeError.
+/// An untyped `protected static $cache;` cleared before anything was stored is the usual shape.
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_unset_element_of_a_null_gradual_value_is_a_no_op() {
+    let out = compile_and_run(
+        r#"<?php
+function drop($a, $k) {
+    unset($a[$k]);
+    return $a;
+}
+echo json_encode(drop(null, 'k')), "\n";
+echo json_encode(drop(['k' => 1, 'j' => 2], 'k')), "\n";
+echo json_encode(drop([1, 2, 3], 1)), "\n";
+class Resolved {
+    protected static $instances;
+    public static function forget($k) { unset(static::$instances[$k]); }
+    public static function put($k) { static::$instances[$k] = 1; }
+    public static function dump() { return json_encode(static::$instances); }
+}
+Resolved::forget('x');
+echo Resolved::dump(), "\n";
+Resolved::put('x');
+Resolved::put('y');
+Resolved::forget('x');
+echo Resolved::dump(), "\n";
+"#,
+    );
+    assert_eq!(out, "null\n{\"j\":2}\n{\"0\":1,\"2\":3}\nnull\n{\"y\":1}\n");
+}
+
 /// Verifies a boxed `Mixed` needle compares against concrete integer-array elements with PHP's
 /// loose and strict rules by boxing each element at the comparison boundary.
 #[test]
@@ -2314,3 +2347,41 @@ echo json_encode(resolve_placeholders($args)), " ", json_encode($args), "\n";
 }
 
 // --- Long-form `array(...)` literal ---
+
+/// Verifies `isset($mixed[$k])` on an `ArrayAccess` object whose class is known only at run time
+/// asks `offsetExists()`, never `offsetGet()`.
+///
+/// The quiet read behind a boxed receiver called `offsetGet()`, which a container implements by
+/// RESOLVING the key: Laravel's `isset(static::$app[$name])` answered true for a binding that
+/// does not exist, so `Date` never installed its default factory.
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_isset_on_a_boxed_array_access_receiver_asks_offset_exists() {
+    let out = compile_and_run(
+        r#"<?php
+class Box implements ArrayAccess {
+    public function offsetExists($key): bool { echo "[exists $key]"; return $key === 'yes'; }
+    public function offsetGet($key): mixed { return "got $key"; }
+    public function offsetSet($key, $value): void {}
+    public function offsetUnset($key): void {}
+}
+abstract class Facade {
+    protected static $app;
+    protected static $resolved = [];
+    public static function setApp($app) { static::$app = $app; }
+    protected static function probe($name) {
+        return (isset(static::$resolved[$name]) ? "r" : "-")
+            . (isset(static::$app, static::$app[$name]) ? "A" : "a")
+            . (isset(static::$app[$name]) ? "B" : "b");
+    }
+}
+class DateF extends Facade {
+    public static function run($name) { return static::probe($name); }
+}
+DateF::setApp(new Box());
+echo DateF::run('date'), " ", DateF::run('yes'), "\n";
+"#,
+    );
+    assert_eq!(out, "[exists date][exists date]-ab [exists yes][exists yes]-AB\n");
+}

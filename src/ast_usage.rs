@@ -35,6 +35,9 @@ pub(crate) struct Usage {
     /// Prelude pruning runs before include/autoload resolution, so includes must be treated as
     /// an unknown-code boundary until the resolver has expanded them.
     pub(crate) dynamic_code_load: bool,
+    /// Whether an include sits in VALUE position (`return include $p;`). Only the resolver
+    /// expands that node, so a subtree parsed after resolution still carries it.
+    pub(crate) value_include: bool,
     /// Whether this subtree reads the runtime called class through a `static::` receiver.
     pub(crate) uses_late_static: bool,
     /// Global names the program reaches through `$GLOBALS['name']`, without the
@@ -65,6 +68,7 @@ impl Usage {
         self.classes.extend(other.classes);
         self.dynamic_function_call |= other.dynamic_function_call;
         self.dynamic_code_load |= other.dynamic_code_load;
+        self.value_include |= other.value_include;
         self.uses_late_static |= other.uses_late_static;
         self.globals_keys.extend(other.globals_keys);
         self.array_reference_sources
@@ -514,6 +518,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
     match &expr.kind {
         ExprKind::IncludeValue { path, .. } => {
             usage.dynamic_code_load = true;
+            usage.value_include = true;
             scan_expr(path, usage);
         }
         ExprKind::FunctionCall { name, args } => {

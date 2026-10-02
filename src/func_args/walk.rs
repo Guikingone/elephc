@@ -34,8 +34,6 @@ struct Scope {
     param_names: Vec<String>,
     /// The first declared parameter that carries a default value, if any.
     optional_param: Option<String>,
-    /// Whether an optional-parameter constructor may read a caller-provided argc marker.
-    optional_constructor_argc: bool,
     /// The variadic parameter the source function declares itself, if any. Its original
     /// tail can reconstruct surplus arguments without adding a second ABI parameter.
     source_variadic: Option<String>,
@@ -250,7 +248,6 @@ impl Rewriter {
                     variadic,
                     variadic_type,
                     body,
-                    false,
                 );
             }
             StmtKind::ClassDecl {
@@ -286,7 +283,6 @@ impl Rewriter {
     fn walk_methods(&mut self, owner: &str, methods: &mut [ClassMethod]) {
         for method in methods.iter_mut() {
             let label = format!("method '{}::{}'", owner, method.name);
-            let optional_constructor_argc = method.name.eq_ignore_ascii_case("__construct");
             let ClassMethod {
                 params,
                 param_attributes,
@@ -302,7 +298,6 @@ impl Rewriter {
                 variadic,
                 variadic_type,
                 body,
-                optional_constructor_argc,
             );
         }
     }
@@ -322,7 +317,6 @@ impl Rewriter {
         variadic: &mut Option<String>,
         variadic_type: &mut Option<TypeExpr>,
         body: &mut Vec<Stmt>,
-        optional_constructor_argc: bool,
     ) {
         let scope = Scope {
             param_names: params.iter().map(|(name, ..)| name.clone()).collect(),
@@ -330,7 +324,6 @@ impl Rewriter {
                 .iter()
                 .find(|(_, _, default, _)| default.is_some())
                 .map(|(name, ..)| name.clone()),
-            optional_constructor_argc,
             source_variadic: variadic.clone(),
             used: false,
         };
@@ -546,7 +539,6 @@ impl Rewriter {
                     variadic,
                     variadic_type,
                     body,
-                    false,
                 );
                 return;
             }
@@ -617,15 +609,8 @@ impl Rewriter {
                 ),
             ));
         };
-        if scope.optional_param.is_some() {
-            if scope.source_variadic.is_none()
-                && scope.optional_constructor_argc
-                && call == IntrospectionCall::NumArgs
-            {
-                scope.used = true;
-                return Ok(build::optional_constructor_argc(scope.param_names.len(), span));
-            }
-        }
+        // An optional parameter hides whether it was passed; the caller's argc marker says.
+        let argc_marker = scope.optional_param.is_some() && scope.source_variadic.is_none();
         scope.used = true;
         let param_names = scope.param_names.clone();
         let variadic_name = scope
@@ -639,6 +624,7 @@ impl Rewriter {
             &variadic_name,
             args,
             span,
+            argc_marker,
         ))
     }
 }

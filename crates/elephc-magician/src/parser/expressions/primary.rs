@@ -30,6 +30,27 @@ impl Parser {
                 self.advance();
                 Ok(EvalExpr::Const(eval_string_constant(value)))
             }
+            // `$$name` / `$${expr}`: the inner variable (itself possibly variable) names this one.
+            TokenKind::Dollar => {
+                self.advance();
+                let inner = match self.current() {
+                    TokenKind::DollarIdent(name) => {
+                        let name = name.clone();
+                        self.advance();
+                        EvalExpr::LoadVar(name)
+                    }
+                    TokenKind::Dollar | TokenKind::DollarLBrace => self.parse_primary()?,
+                    _ => return Err(EvalParseError::ExpectedVariable),
+                };
+                Ok(EvalExpr::DynamicVar(Box::new(inner)))
+            }
+            // `${expr}` outside a string: the expression names the variable.
+            TokenKind::DollarLBrace => {
+                self.advance();
+                let name = self.parse_expr()?;
+                self.expect(TokenKind::RBrace)?;
+                Ok(EvalExpr::DynamicVar(Box::new(name)))
+            }
             TokenKind::DollarIdent(name) => {
                 let name = name.clone();
                 self.advance();

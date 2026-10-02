@@ -95,6 +95,10 @@ pub struct ElephcEvalContext {
     pub(super) native_property_types: Arc<HashMap<(String, String), EvalParameterType>>,
     pub(super) native_property_defaults: Arc<HashMap<(String, String), NativeCallableDefault>>,
     pub(super) native_property_attributes: Arc<HashMap<(String, String), Vec<EvalAttribute>>>,
+    /// Array-valued compiled class constants, which the generated scalar constant helper cannot
+    /// box. Keyed like `native_constant_key`; see `define_native_class_constant_default`.
+    pub(super) native_class_constant_defaults:
+        Arc<HashMap<(String, String), NativeClassConstantDefault>>,
     /// Overrides the key `static` slots hang from, for callables the function name cannot name.
     ///
     /// Only closures need it: `__FUNCTION__` and a backtrace must keep saying `{closure}`, which
@@ -242,6 +246,7 @@ impl ElephcEvalContext {
             native_property_types: shared_empty!(HashMap<(String, String), EvalParameterType>),
             native_property_defaults: shared_empty!(HashMap<(String, String), NativeCallableDefault>),
             native_property_attributes: shared_empty!(HashMap<(String, String), Vec<EvalAttribute>>),
+            native_class_constant_defaults: shared_empty!(HashMap<(String, String), NativeClassConstantDefault>),
             static_slot_keys: Vec::new(),
             class_constants: HashMap::new(),
             include_state: super::request_includes::current_include_state(),
@@ -347,6 +352,7 @@ impl ElephcEvalContext {
             native_property_types: Arc::default(),
             native_property_defaults: Arc::default(),
             native_property_attributes: Arc::default(),
+            native_class_constant_defaults: Arc::default(),
             static_slot_keys: Vec::new(),
             class_constants: HashMap::new(),
             include_state: super::request_includes::current_include_state(),

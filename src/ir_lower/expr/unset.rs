@@ -283,6 +283,38 @@ fn lower_unset_static_property_array_element(
         return false;
     }
     let property_value = lower_static_property_get(ctx, receiver, property, &property_expr);
+    // A gradual static that still holds null -- the default of an untyped `static $cache;` --
+    // makes this unset a silent no-op in PHP, where `MixedToHash` would raise the array TypeError.
+    // The dimension is evaluated either way, as PHP does.
+    let gradual = matches!(property_ty, PhpType::Mixed | PhpType::Union(_));
+    let null_guard = if gradual {
+        let key = lower_expr(ctx, index);
+        let is_null = ctx.emit_value(
+            Op::IsNull,
+            vec![property_value.value],
+            None,
+            PhpType::Bool,
+            Op::IsNull.default_effects(),
+            Some(expr.span),
+        );
+        let delete = ctx
+            .builder
+            .create_named_block("unset.static_element.delete", Vec::new());
+        let merge = ctx
+            .builder
+            .create_named_block("unset.static_element.merge", Vec::new());
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: is_null.value,
+            then_target: merge,
+            then_args: Vec::new(),
+            else_target: delete,
+            else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(delete);
+        Some((key, merge))
+    } else {
+        None
+    };
     let hash_ty = match &property_ty {
         PhpType::Array(element) => PhpType::AssocArray {
             key: Box::new(PhpType::Mixed),
@@ -315,7 +347,10 @@ fn lower_unset_static_property_array_element(
         PhpType::AssocArray { .. } => property_value,
         _ => return false,
     };
-    let key = lower_expr(ctx, index);
+    let key = match &null_guard {
+        Some((key, _)) => *key,
+        None => lower_expr(ctx, index),
+    };
     ctx.emit_void(
         Op::HashUnset,
         vec![hash.value, key.value],
@@ -323,7 +358,7 @@ fn lower_unset_static_property_array_element(
         Op::HashUnset.default_effects(),
         Some(expr.span),
     );
-    let stored = if matches!(property_ty, PhpType::Mixed | PhpType::Union(_)) {
+    let stored = if gradual {
         ctx.box_value_as_mixed(hash, PhpType::Mixed, Some(expr.span))
     } else {
         hash
@@ -337,6 +372,10 @@ fn lower_unset_static_property_array_element(
         Op::StoreStaticProperty.default_effects(),
         Some(expr.span),
     );
+    if let Some((_, merge)) = null_guard {
+        branch_to(ctx, merge);
+        ctx.builder.position_at_end(merge);
+    }
     if ctx.value_is_owning_temporary(key) {
         crate::ir_lower::ownership::release_if_owned(ctx, key, Some(expr.span));
     } else {
@@ -650,6 +689,31 @@ fn lower_unset_mixed_array_element(
         key: Box::new(PhpType::Mixed),
         value: Box::new(PhpType::Mixed),
     };
+    let key = lower_expr(ctx, index);
+    // Unsetting an element of null is a silent no-op in PHP; `MixedToHash` would raise the
+    // array TypeError instead, so a null local skips the delete and keeps its value.
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![source.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(array_span),
+    );
+    let delete = ctx
+        .builder
+        .create_named_block("unset.mixed_element.delete", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("unset.mixed_element.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: merge,
+        then_args: Vec::new(),
+        else_target: delete,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(delete);
     let hash = ctx.emit_value(
         Op::MixedToHash,
         vec![source.value],
@@ -658,7 +722,6 @@ fn lower_unset_mixed_array_element(
         Op::MixedToHash.default_effects(),
         Some(array_span),
     );
-    let key = lower_expr(ctx, index);
     ctx.emit_void(
         Op::HashUnset,
         vec![hash.value, key.value],
@@ -666,11 +729,13 @@ fn lower_unset_mixed_array_element(
         Op::HashUnset.default_effects(),
         Some(expr.span),
     );
-    crate::ir_lower::stmt::release_persisted_string_operand(ctx, key, expr.span);
     let boxed = ctx.box_value_as_mixed(hash, PhpType::Mixed, Some(expr.span));
     let slot = ctx.declare_local(name, PhpType::Mixed);
     ctx.release_stored_local_value(name, slot, Some(expr.span));
     ctx.store_prepared_mutated_local(name, boxed, PhpType::Mixed, Some(expr.span));
+    branch_to(ctx, merge);
+    ctx.builder.position_at_end(merge);
+    crate::ir_lower::stmt::release_persisted_string_operand(ctx, key, expr.span);
     ctx.set_local_type(name, PhpType::Mixed);
 }
 

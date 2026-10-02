@@ -248,6 +248,15 @@ pub(in crate::interpreter) fn execute_stmt(
             if context.returns_by_ref() {
                 return eval_by_ref_return(expr, context, scope, values);
             }
+            if let EvalExpr::NullCoalesce { value, default } = expr {
+                if !expr_returns_shared_member_cell(expr)
+                    && (expr_returns_shared_member_cell(value)
+                        || expr_returns_shared_member_cell(default))
+                {
+                    return eval_mixed_coalesce_return(value, default, context, scope, values)
+                        .map(EvalControl::Return);
+                }
+            }
             let value = eval_expr(expr, context, scope, values)?;
             // A return transfers ownership by `release_activation_scope` SKIPPING the returned
             // cell -- which only gives the caller a reference when the activation scope actually
@@ -452,6 +461,39 @@ pub(in crate::interpreter) fn execute_stmt(
     }
 }
 
+/// Returns a `??` whose two sides differ in ownership, deciding by the side actually taken.
+///
+/// `return static::$validators ?? static::$validators = [...];` answers with the cell the static
+/// holds on every call after the first, and with the assignment's own fresh value on the first.
+/// Only the first is a member cell that needs a reference of the caller's own; judged as a whole
+/// the expression is "mixed" and was returned unretained, so the caller's release after a
+/// `foreach` freed the array the static still held and the next route match read freed memory.
+/// The left side is evaluated exactly as `??` evaluates it: quietly, without warnings.
+fn eval_mixed_coalesce_return(
+    value: &EvalExpr,
+    default: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    context.push_error_suppression();
+    context.push_quiet_property_fetch();
+    let left = eval_expr(value, context, scope, values);
+    context.pop_quiet_property_fetch();
+    context.pop_error_suppression();
+    let left = left?;
+    let (taken, result) = if values.is_null(left)? {
+        (default, eval_expr(default, context, scope, values)?)
+    } else {
+        (value, left)
+    };
+    if expr_returns_shared_member_cell(taken) {
+        values.retain(result)
+    } else {
+        Ok(result)
+    }
+}
+
 /// Runs a `declare(ticks=N)` body, or turns ticking on for the rest of the enclosing scope.
 ///
 /// The interval is saved and restored around a BLOCK body, because php scopes a block-form
@@ -472,6 +514,9 @@ fn expr_returns_shared_member_cell(expr: &EvalExpr) -> bool {
         EvalExpr::Unary { op: EvalUnaryOp::ErrorSuppress, expr } => {
             expr_returns_shared_member_cell(expr)
         }
+        // `return self::$instance ??= new self();` answers with the cell the static slot holds:
+        // the existing one, or the new value the slot just took over.
+        EvalExpr::NullCoalesceAssign { target, .. } => expr_returns_shared_member_cell(target),
         EvalExpr::Ternary {
             condition,
             then_branch,

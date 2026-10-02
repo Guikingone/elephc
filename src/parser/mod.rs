@@ -65,8 +65,17 @@ pub(crate) fn register_anonymous_class(decl: Stmt) {
 }
 
 /// Removes and returns every anonymous-class declaration collected so far in this thread.
-fn take_anonymous_classes() -> Vec<Stmt> {
+pub(crate) fn take_anonymous_classes() -> Vec<Stmt> {
     ANONYMOUS_CLASSES.with(|classes| std::mem::take(&mut *classes.borrow_mut()))
+}
+
+/// Puts back declarations taken with [`take_anonymous_classes`], ahead of any collected since.
+pub(crate) fn restore_anonymous_classes(mut earlier: Vec<Stmt>) {
+    ANONYMOUS_CLASSES.with(|classes| {
+        let mut classes = classes.borrow_mut();
+        earlier.append(&mut classes);
+        *classes = earlier;
+    });
 }
 
 /// Parses tokens into an AST program, returning the first error if any.
@@ -156,7 +165,15 @@ fn parse_with_recovery_inner(tokens: &[SpannedToken]) -> Result<Program, Vec<Com
             }
         } else {
             match stmt::parse_stmt(tokens, &mut pos) {
-                Ok(stmt) => stmts.push(stmt),
+                Ok(stmt) => {
+                    // A `namespace X;` ends the previous namespace's scope, so the anonymous
+                    // classes hoisted out of it are emitted before it: appended at the end of
+                    // the file they would be resolved in the LAST namespace, with its imports.
+                    if matches!(stmt.kind, crate::parser::ast::StmtKind::NamespaceDecl { .. }) {
+                        stmts.append(&mut take_anonymous_classes());
+                    }
+                    stmts.push(stmt)
+                }
                 Err(error) => {
                     errors.extend(error.flatten());
                     stmt::recover_to_statement_boundary(tokens, &mut pos);

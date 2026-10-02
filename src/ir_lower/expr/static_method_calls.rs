@@ -35,6 +35,9 @@ pub(super) fn lower_static_method_call(
             expr.span,
         );
     }
+    if let Some(value) = lower_late_static_dispatch_ladder(ctx, receiver, method, args, expr) {
+        return value;
+    }
     if matches!(receiver, StaticReceiver::Named(name) if name.trim_start_matches('\\') == "ReflectionReference")
         && php_symbol_key(method) == "fromarrayelement"
     {
@@ -172,21 +175,8 @@ pub(super) fn lower_static_method_call(
     let operands = lower_user_args_with_signature(ctx, sig.as_ref(), call_args);
     let operands =
         coerce_int_backed_enum_string_argument(ctx, receiver, dispatch_method, operands, expr);
-    // `parent::__construct(...)` enters a constructor exactly like `new` does, so it carries the
-    // same source-arity marker an introspecting optional-parameter constructor reads back.
-    // Without it `func_num_args()` read the hidden tail at index -1: Symfony's
-    // `UninitializedStub` calls `parent::__construct($name, 'Uninitialized property')` into
-    // `ConstStub`, which warned "Undefined array key -1" and kept the wrong value -- and under
-    // `--web` the error handler turned that warning into the 404 page's fatal.
-    if php_symbol_key(dispatch_method) == "__construct" {
-        super::object_construction::append_optional_constructor_argc_marker(
-            ctx,
-            sig.as_ref(),
-            call_args,
-            &operands,
-            expr,
-        );
-    }
+    // `parent::__construct(...)` enters a constructor exactly like `new` does, and carries the
+    // same source-arity marker: `lower_user_args_with_signature` appends it to every user call.
     let name = format!("{}::{}", receiver_name(receiver), dispatch_method);
     let data = ctx.intern_string(&name);
     let result_type = sig
@@ -230,6 +220,116 @@ pub(super) fn lower_static_method_call(
         ref_place_args::write_back_ref_place_args(ctx, plans);
     }
     call
+}
+
+/// Lowers `static::method()` for a method only DESCENDANTS of the current class declare.
+///
+/// PHP resolves the call against the late-static class when it runs, and a protected method of a
+/// subclass is reachable from the parent's scope. The call becomes a ladder over the late-static
+/// class name: one `Class::method()` call per descendant that has the method (each carries that
+/// exact class as the called class, so `static::` inside the target still resolves right), ending
+/// in the ordinary `__callStatic` fallback when the class has one and in PHP's own
+/// "Call to undefined method" error otherwise. No stub is added to the parent, so visibility,
+/// `method_exists()` and `__callStatic` keep their PHP meaning. The checker types the call
+/// `mixed`, and the ladder's value is boxed to match.
+fn lower_late_static_dispatch_ladder(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    method: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if !matches!(receiver, StaticReceiver::Static) {
+        return None;
+    }
+    if ctx.late_static_ladder_fallbacks.remove(&expr.span) {
+        return None;
+    }
+    let current = ctx.current_class.clone()?;
+    let targets = crate::types::late_static_dispatch::child_only_static_targets(
+        ctx.classes,
+        &current,
+        &php_symbol_key(method),
+    );
+    if targets.is_empty() {
+        return None;
+    }
+    let span = expr.span;
+    let static_class = || Expr::new(ExprKind::ClassConstant { receiver: StaticReceiver::Static }, span);
+    let has_call_static = ctx
+        .classes
+        .get(&current)
+        .is_some_and(|info| info.static_methods.contains_key("__callstatic"));
+    let mut ladder = if has_call_static {
+        ctx.late_static_ladder_fallbacks.insert(span);
+        expr.clone()
+    } else {
+        let message = Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(Expr::new(
+                    ExprKind::BinaryOp {
+                        left: Box::new(Expr::new(
+                            ExprKind::StringLiteral("Call to undefined method ".to_string()),
+                            span,
+                        )),
+                        op: crate::parser::ast::BinOp::Concat,
+                        right: Box::new(static_class()),
+                    },
+                    span,
+                )),
+                op: crate::parser::ast::BinOp::Concat,
+                right: Box::new(Expr::new(
+                    ExprKind::StringLiteral(format!("::{}()", method)),
+                    span,
+                )),
+            },
+            span,
+        );
+        let error = Expr::new(
+            ExprKind::NewObject {
+                class_name: crate::names::Name::unqualified("Error"),
+                args: vec![message],
+            },
+            span,
+        );
+        Expr::new(ExprKind::Throw(Box::new(error)), span)
+    };
+    for target in targets.iter().rev() {
+        let named = StaticReceiver::Named(crate::names::Name::from_parts(
+            crate::names::NameKind::FullyQualified,
+            target.split('\\').map(str::to_string).collect(),
+        ));
+        let condition = Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(static_class()),
+                op: crate::parser::ast::BinOp::StrictEq,
+                right: Box::new(Expr::new(ExprKind::StringLiteral(target.clone()), span)),
+            },
+            span,
+        );
+        let call = Expr::new(
+            ExprKind::StaticMethodCall {
+                receiver: named,
+                method: method.to_string(),
+                args: args.to_vec(),
+            },
+            span,
+        );
+        ladder = Expr::new(
+            ExprKind::Ternary {
+                condition: Box::new(condition),
+                then_expr: Box::new(call),
+                else_expr: Box::new(ladder),
+            },
+            span,
+        );
+    }
+    let value = lower_expr(ctx, &ladder);
+    let value_ty = ctx.builder.value_php_type(value.value);
+    if matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return Some(value);
+    }
+    Some(ctx.box_value_as_mixed(value, value_ty, Some(span)))
 }
 
 /// Resolves a statically knowable `Closure::bind()` visibility scope for closure lowering.

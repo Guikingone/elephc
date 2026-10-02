@@ -150,6 +150,27 @@ pub(super) fn resolve_class_like_constants_in_literal(
                 })
                 .collect(),
         ),
+        // An operator over constants (`self::CHECK_A | self::CHECK_B`) is resolved operand by
+        // operand; `literal_defaults` folds the arithmetic once every operand is a literal.
+        ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
+            left: Box::new(Expr::new(
+                resolve_class_like_constants_in_literal(module, current_class, &left.kind),
+                left.span,
+            )),
+            op: op.clone(),
+            right: Box::new(Expr::new(
+                resolve_class_like_constants_in_literal(module, current_class, &right.kind),
+                right.span,
+            )),
+        },
+        ExprKind::Negate(inner) => ExprKind::Negate(Box::new(Expr::new(
+            resolve_class_like_constants_in_literal(module, current_class, &inner.kind),
+            inner.span,
+        ))),
+        ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(Expr::new(
+            resolve_class_like_constants_in_literal(module, current_class, &inner.kind),
+            inner.span,
+        ))),
         _ => expr.clone(),
     }
 }
@@ -574,6 +595,21 @@ fn eval_class_constant_value(
             let class_name = static_receiver_name(current_class, current_info, receiver)?;
             eval_scoped_class_constant_value(module, &class_name, name, depth + 1)
         }
+        // A global constant inside a class constant: `monolog`'s
+        // `const DEFAULT_JSON_FLAGS = JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | …`.
+        // The program's own constants come first; a predefined one has a fixed catalogue value.
+        ExprKind::ConstRef(name) => {
+            let key = name.as_str().trim_start_matches('\\');
+            if let Some((value, _)) = module
+                .global_constants
+                .get(name.as_str())
+                .or_else(|| module.global_constants.get(key))
+            {
+                let value = Expr::new(value.clone(), expr.span);
+                return eval_class_constant_value(module, current_class, current_info, &value, depth + 1);
+            }
+            crate::types::predefined_constants::int_constant_value(key).map(EvalClassConstantValue::Int)
+        }
         _ => None,
     }
 }
@@ -602,6 +638,27 @@ fn eval_binary_class_constant_value(
         }
         (EvalClassConstantValue::Int(left), BinOp::Mod, EvalClassConstantValue::Int(right)) => {
             (*left).checked_rem(*right).map(EvalClassConstantValue::Int)
+        }
+        // Bit flags are the commonest integer constant expression there is
+        // (`const FLAGS = JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE;`).
+        (EvalClassConstantValue::Int(left), BinOp::BitOr, EvalClassConstantValue::Int(right)) => {
+            Some(EvalClassConstantValue::Int(left | right))
+        }
+        (EvalClassConstantValue::Int(left), BinOp::BitAnd, EvalClassConstantValue::Int(right)) => {
+            Some(EvalClassConstantValue::Int(left & right))
+        }
+        (EvalClassConstantValue::Int(left), BinOp::BitXor, EvalClassConstantValue::Int(right)) => {
+            Some(EvalClassConstantValue::Int(left ^ right))
+        }
+        (EvalClassConstantValue::Int(left), BinOp::ShiftLeft, EvalClassConstantValue::Int(right))
+            if (0..64).contains(right) =>
+        {
+            Some(EvalClassConstantValue::Int(left << right))
+        }
+        (EvalClassConstantValue::Int(left), BinOp::ShiftRight, EvalClassConstantValue::Int(right))
+            if (0..64).contains(right) =>
+        {
+            Some(EvalClassConstantValue::Int(left >> right))
         }
         (EvalClassConstantValue::Int(left), BinOp::Pow, EvalClassConstantValue::Int(right))
             if *right >= 0 =>

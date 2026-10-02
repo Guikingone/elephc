@@ -459,3 +459,84 @@ array(1) {
 "#, "stderr: {}", out.stderr);
     assert!(!out.stderr.contains("Warning:"), "stderr: {}", out.stderr);
 }
+
+/// A NUL byte inside a pattern is an ordinary character to match, compiled and interpreted. The
+/// compiled helper that hands the pattern to PCRE2 as a C string truncated it at the NUL, so
+/// `"~[\s\0]+~"` (Laravel's `Str::trim()`) lost its closing bracket and failed to compile.
+/// Output is php 8.5's.
+#[test]
+fn test_preg_pattern_with_a_nul_byte_matches_php() {
+    let out = compile_and_run(r#"<?php
+var_dump(preg_replace("~[\\s\0]+~", "", " x\0y "));
+var_dump(preg_match("~a\0b~", "a\0b"));
+var_dump(preg_match("~a\\\0b~", "a\0b"));
+echo json_encode(preg_split("~\0~", "a\0b\0c")), "\n";
+$code = 'return [preg_replace("~[\\\\s\0]+~", "", " x\0y "), preg_match("~a\0b~", "a\0b")];';
+echo json_encode(eval($code)), "\n";
+"#);
+    assert_eq!(out, "string(2) \"xy\"\nint(1)\nint(1)\n[\"a\",\"b\",\"c\"]\n[\"xy\",1]\n");
+}
+
+/// `preg_match_all(..., PREG_SET_ORDER)` drops, per match, the trailing groups that did not
+/// participate, as php does (`["ab","ab"]`, then `["cd=5","cd","5"]`); PATTERN_ORDER still fills
+/// every column and UNMATCHED_AS_NULL keeps every group. The interpreter padded every row with
+/// `""`, so Symfony's `HeaderBag::parseCacheControl()` read an empty string where php had `true`
+/// and answered `Cache-Control: no-cache0private, private`. The same body runs compiled and
+/// inside eval() (where it is declared by the fragment, so the interpreter's engine runs it).
+/// Output is php 8.5's.
+#[test]
+fn test_preg_match_all_set_order_drops_trailing_unmatched_groups() {
+    let out = compile_and_run(r##"<?php
+function probe() {
+    preg_match_all("#([a-z]+)(?:=([0-9]+))?#", "ab, cd=5", $m, PREG_SET_ORDER);
+    echo json_encode($m), "\n";
+    preg_match_all("#([a-z]+)(?:=([0-9]+))?#", "ab, cd=5", $m);
+    echo json_encode($m), "\n";
+    preg_match_all("#([a-z]+)(?:=([0-9]+))?#", "ab, cd=5", $m, PREG_SET_ORDER | PREG_UNMATCHED_AS_NULL);
+    echo json_encode($m), "\n";
+}
+probe();
+$code = 'function probe_eval() {
+    preg_match_all("#([a-z]+)(?:=([0-9]+))?#", "ab, cd=5", $m, PREG_SET_ORDER);
+    echo json_encode($m), "\n";
+    preg_match_all("#([a-z]+)(?:=([0-9]+))?#", "ab, cd=5", $m);
+    echo json_encode($m), "\n";
+    preg_match_all("#([a-z]+)(?:=([0-9]+))?#", "ab, cd=5", $m, PREG_SET_ORDER | PREG_UNMATCHED_AS_NULL);
+    echo json_encode($m), "\n";
+}
+probe_eval();';
+eval($code);
+"##);
+    let expected = "[[\"ab\",\"ab\"],[\"cd=5\",\"cd\",\"5\"]]\n[[\"ab\",\"cd=5\"],[\"ab\",\"cd\"],[\"\",\"5\"]]\n[[\"ab\",\"ab\",null],[\"cd=5\",\"cd\",\"5\"]]\n";
+    assert_eq!(out, format!("{expected}{expected}"));
+}
+
+/// `preg_match_all(..., PREG_SET_ORDER)` with a named group that only SOME matches use returns rows
+/// of different shapes: a plain list for the first match (`["x","x"]`) and a keyed row for the next
+/// (`{"0":",","1":"","s":",","2":","}`). Rows reached the result typed as lists whatever they held,
+/// so the first read of a keyed row after a list row took a bus error. Symfony's
+/// `HeaderUtils::split()` is exactly this call (named group `separator`), and every response that
+/// built a `Cache-Control` header through it died or came out as `no-cache0private`. Output is
+/// php 8.5's.
+#[test]
+fn test_preg_match_all_set_order_rows_may_mix_lists_and_keyed_rows() {
+    let out = compile_and_run(r##"<?php
+function probe() {
+    preg_match_all('/(x)|(?<s>,)/', 'x,', $m, PREG_SET_ORDER);
+    echo json_encode($m), "\n";
+    var_dump($m[1]);
+    preg_match_all('/(?<s>,)|(x)/', 'x,', $m, PREG_SET_ORDER);
+    echo json_encode($m), "\n";
+    $n = preg_match_all('/(?<k>\d)(?<v>[a-z])?/', '1a2', $mm, PREG_SET_ORDER);
+    echo $n, json_encode($mm), "\n";
+}
+probe();
+"##);
+    assert_eq!(
+        out,
+        "[[\"x\",\"x\"],{\"0\":\",\",\"1\":\"\",\"s\":\",\",\"2\":\",\"}]\n\
+         array(4) {\n  [0]=>\n  string(1) \",\"\n  [1]=>\n  string(0) \"\"\n  [\"s\"]=>\n  string(1) \",\"\n  [2]=>\n  string(1) \",\"\n}\n\
+         [{\"0\":\"x\",\"s\":\"\",\"1\":\"\",\"2\":\"x\"},{\"0\":\",\",\"s\":\",\",\"1\":\",\"}]\n\
+         2[{\"0\":\"1a\",\"k\":\"1\",\"1\":\"1\",\"v\":\"a\",\"2\":\"a\"},{\"0\":\"2\",\"k\":\"2\",\"1\":\"2\"}]\n"
+    );
+}

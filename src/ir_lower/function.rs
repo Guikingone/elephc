@@ -1638,7 +1638,11 @@ fn terminate_open_block(ctx: &mut LoweringContext<'_, '_>, is_generator: bool) {
     }
     if matches!(ctx.return_php_type, PhpType::Mixed) {
         ctx.emit_eval_scope_finalizer(None);
-        if is_generator {
+        // Only a DECLARED `: mixed` refuses to fall off the end. A function with no return type
+        // whose paths the checker merged into `mixed` returns null there, as php does: Laravel's
+        // `Container::getContextualConcrete()` ends in a `foreach` and threw this TypeError out
+        // of every `make()`.
+        if is_generator || !ctx.return_type_is_declared {
             let value = emit_default_return_value(ctx);
             ctx.builder
                 .terminate(Terminator::Return { value: Some(value) });
@@ -1870,6 +1874,14 @@ fn magic_method_param_keeps_eir_contract(
         }
         "__set" => {
             param_index == 0 && matches!(php_type.codegen_repr(), PhpType::Str)
+        }
+        // The unserialize runtime calls a user `__unserialize($data)` with the bare hash it
+        // parsed, whatever the declaration says: the checker types the first parameter as that
+        // hash (`build_method_sig`), and boxing an UNDECLARED one as `mixed` here made the body
+        // read the hash header as a Mixed cell -- `gettype($data)` answered "string" and every
+        // `$data['key']` was null. A declared `array $data` already kept its contract.
+        "__unserialize" => {
+            param_index == 0 && matches!(php_type.codegen_repr(), PhpType::AssocArray { .. })
         }
         "__call" | "__callstatic" => {
             // The $args array keeps its contract only once call sites have
@@ -2151,6 +2163,46 @@ fn direct_closure_return_expr_type(
         }
         if let Some((_, php_type)) = params.iter().find(|(param_name, _)| param_name == name) {
             return php_type.clone();
+        }
+        // Neither a capture nor a parameter: a local the return expression assigns itself
+        // (`is_dir($d = path()) ? $d : ...`), which this signature cannot type. The syntactic
+        // default answers `int`, and the body then converted the string it returned to `0` --
+        // Laravel's bootstrap path became "0".
+        return PhpType::Mixed;
+    }
+    // A conditional's arms are typed the way a whole return is, so a local assigned in the
+    // condition reaches the arm as the `Mixed` above rather than as the syntactic `int`.
+    let arms = match &expr.kind {
+        ExprKind::Ternary {
+            then_expr,
+            else_expr,
+            ..
+        } => Some((then_expr, else_expr)),
+        ExprKind::ShortTernary { value, default } => Some((value, default)),
+        _ => None,
+    };
+    if let Some((first, second)) = arms {
+        let first = direct_closure_return_expr_type(
+            first,
+            captures,
+            params,
+            classes,
+            builtin_call_types,
+            loop_storage_scope,
+        );
+        let second = direct_closure_return_expr_type(
+            second,
+            captures,
+            params,
+            classes,
+            builtin_call_types,
+            loop_storage_scope,
+        );
+        if first == second {
+            return first;
+        }
+        if first == PhpType::Mixed || second == PhpType::Mixed {
+            return PhpType::Mixed;
         }
     }
     if let ExprKind::PropertyAccess { object, property } = &expr.kind {

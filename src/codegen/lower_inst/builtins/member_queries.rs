@@ -386,6 +386,39 @@ pub(in crate::codegen::lower_inst) fn lower_member_exists(
     if has_eval_context(ctx) {
         return lower_eval_member_exists(ctx, inst, target, member, name);
     }
+    // An object an eval context made carries methods and properties the native class tables
+    // never saw (an interpreted subclass of a compiled class). Its owner context answers first.
+    if ctx.module.required_runtime_features.eval_bridge
+        && matches!(
+            ctx.value_php_type(target)?.codegen_repr(),
+            PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)
+        )
+    {
+        let matched = ctx.next_label("member_exists_eval_owner");
+        let done = ctx.next_label("member_exists_done");
+        emit_eval_member_exists_owner_probe(ctx, target, member, name, &matched)?;
+        lower_native_member_exists(ctx, inst, target, member, name)?;
+        abi::emit_jump(ctx.emitter, &done);
+        ctx.emitter.label(&matched);
+        emit_static_bool(ctx, true);
+        if inst.result.is_some() && inst.result_php_type.codegen_repr() == PhpType::Mixed {
+            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+        }
+        store_if_result(ctx, inst)?;
+        ctx.emitter.label(&done);
+        return Ok(());
+    }
+    lower_native_member_exists(ctx, inst, target, member, name)
+}
+
+/// Answers `method_exists()` / `property_exists()` from the native class tables.
+fn lower_native_member_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    target: ValueId,
+    member: ValueId,
+    name: &str,
+) -> Result<()> {
     let Some(member_name) = maybe_const_string_operand(ctx, member)? else {
         return super::member_exists::lower_dynamic_member_exists(
             ctx, inst, target, member, name,

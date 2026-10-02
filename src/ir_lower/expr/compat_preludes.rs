@@ -316,6 +316,22 @@ pub(super) fn lower_backend_gap_builtin_shape(
             expr,
         ));
     }
+    // `array_any()` / `array_all()` go to the PHP helpers wholesale: php hands the predicate the
+    // value AND the key, over any array, and the native runtime walks a dense list passing only the
+    // value. `src/array_find_prelude.rs` has the helpers.
+    if matches!(builtin.as_str(), "array_any" | "array_all" | "array_find") && args.len() == 2 {
+        let helper = match builtin.as_str() {
+            "array_any" => crate::array_find_prelude::ARRAY_ANY_NAME,
+            "array_all" => crate::array_find_prelude::ARRAY_ALL_NAME,
+            _ => crate::array_find_prelude::ARRAY_FIND_NAME,
+        };
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(helper),
+            args,
+            expr,
+        ));
+    }
     // A callback the lowering cannot recover a native pointer for -- a boxed callable in a local,
     // a parameter, a property -- has no static binding for the array runtime, so the whole call
     // goes to the PHP helper, which calls it the way php does. `twig/twig`'s
@@ -456,6 +472,35 @@ pub(super) fn lower_backend_gap_builtin_shape(
         ));
     }
     if builtin == "array_splice" && !args.iter().any(is_spread_arg) {
+        // A hash or a boxed receiver is spliced by the prelude walk: the native path splices a
+        // dense slot array, refusing a hash at compile time and dropping a boxed one silently.
+        let receiver = args.iter().enumerate().find_map(|(index, arg)| match &arg.kind {
+            ExprKind::NamedArg { name, value } if php_symbol_key(name) == "array" => {
+                Some(value.as_ref())
+            }
+            ExprKind::NamedArg { .. } => None,
+            _ if index == 0 => Some(arg),
+            _ => None,
+        });
+        // Only a plain variable: the helper binds its receiver as `mixed &$array`, and a variable
+        // is the one place the checker has boxed (`widen_hash_splice_receiver`) so the result
+        // can be published back. A property or element keeps the native path.
+        if receiver.is_some_and(|receiver| {
+            matches!(receiver.kind, ExprKind::Variable(_))
+                && matches!(
+                    materialized_expr_type_for_merge(ctx, receiver).codegen_repr(),
+                    PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_)
+                )
+        }) {
+            return Some(lower_function_call(
+                ctx,
+                &crate::names::Name::unqualified(
+                    crate::array_splice_prelude::ARRAY_SPLICE_GRADUAL_NAME,
+                ),
+                args,
+                expr,
+            ));
+        }
         let replacement = args.iter().enumerate().find_map(|(index, arg)| match &arg.kind {
             ExprKind::NamedArg { name, value } if php_symbol_key(name) == "replacement" => {
                 Some(value.as_ref())
@@ -636,17 +681,50 @@ pub(super) fn lower_backend_gap_builtin_shape(
             expr,
         ));
     }
+    // The native reducer carries an 8-byte INTEGER accumulator, so only an `int` initial carry
+    // may take it. Any other carry — a closure, a string, an array, an object — goes to the
+    // boxed-carry helper, which is php's own definition of `array_reduce()`. Laravel's middleware
+    // `Pipeline::then()` reduces with a CLOSURE carry, and that value came back boxed as an int.
+    // The same holds for the SOURCE: the native reducer walks a packed array of 8-byte or string
+    // slots, so a hash, a gradual value or `mixed` elements take the helper too.
+    let native_reduce_source = |ctx: &LoweringContext<'_, '_>| {
+        matches!(
+            materialized_expr_type_for_merge(ctx, &args[0]).codegen_repr(),
+            PhpType::Array(element)
+                if !matches!(element.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        )
+    };
     if builtin == "array_reduce"
         && args.len() == 3
-        && matches!(
-            materialized_expr_type_for_merge(ctx, &args[0]).codegen_repr(),
-            PhpType::Mixed | PhpType::Union(_)
-        )
+        && (!native_reduce_source(&*ctx)
+            || !matches!(
+                materialized_expr_type_for_merge(ctx, &args[2]).codegen_repr(),
+                PhpType::Int
+            ))
     {
         return Some(lower_function_call(
             ctx,
             &crate::names::Name::unqualified(
                 crate::array_reduce_prelude::ARRAY_REDUCE_DEFAULT_NAME,
+            ),
+            args,
+            expr,
+        ));
+    }
+    // `htmlspecialchars()`'s fourth argument, `$double_encode`: the native helper always
+    // double-encodes, which is php's answer for `true`, so only a flag that may be false goes to
+    // the prelude loop that keeps valid character references. Laravel's `e()` passes it on every
+    // Blade `{{ }}`, and the four-operand call stopped EIR lowering.
+    if builtin == "htmlspecialchars"
+        && args.len() == 4
+        && !crate::types::call_args::has_named_args(args)
+        && !args.iter().any(is_spread_arg)
+        && !matches!(args[3].kind, ExprKind::BoolLiteral(true))
+    {
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(
+                crate::htmlspecialchars_prelude::HTMLSPECIALCHARS_DOUBLE_ENCODE_NAME,
             ),
             args,
             expr,

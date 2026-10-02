@@ -987,6 +987,35 @@ pub unsafe extern "C" fn __elephc_eval_register_native_property_default_array(
     .unwrap_or(0)
 }
 
+/// Registers one generated array-valued class constant in an eval context.
+///
+/// `record` is `V|Declaring|Class::CONSTANT`: the visibility digit (0 public, 1 protected,
+/// 2 private), the class or interface that declares the constant, and the class it is READ
+/// through -- every class that inherits it gets its own registration. One record keeps the
+/// call within the six integer registers x86_64 passes arguments in.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. The record and encoded default pointers must be
+/// readable for their declared byte lengths.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_class_constant_default_array(
+    ctx: *mut ElephcEvalContext,
+    record_ptr: *const u8,
+    record_len: u64,
+    spec_ptr: *const u8,
+    spec_len: u64,
+) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry(
+        "__elephc_eval_register_native_class_constant_default_array",
+    );
+    std::panic::catch_unwind(|| unsafe {
+        register_native_class_constant_default_array_inner(
+            ctx, record_ptr, record_len, spec_ptr, spec_len,
+        )
+    })
+    .unwrap_or(0)
+}
+
 /// Registers one generated native PHP class/member attribute in an eval context.
 ///
 /// # Safety

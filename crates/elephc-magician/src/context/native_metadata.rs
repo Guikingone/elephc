@@ -9,7 +9,50 @@
 
 use super::*;
 
+/// One array-valued compiled class constant, as registered by the generated program.
+#[derive(Clone, Debug)]
+pub struct NativeClassConstantDefault {
+    /// The class (or interface) that declares the constant, for visibility checks.
+    pub declaring_class: String,
+    /// The constant's declared visibility.
+    pub visibility: EvalVisibility,
+    /// The constant's value, materialized afresh on every read.
+    pub default: NativeCallableDefault,
+}
+
 impl ElephcEvalContext {
+    /// Registers an array-valued compiled class constant under one class that can read it.
+    ///
+    /// The generated `__elephc_eval_value_class_constant_get` helper boxes scalar and enum-case
+    /// constants only, so `ReflectionCaster::UNSET_CLOSURE_FILE_INFO` -- an array built with
+    /// `__CLASS__` -- read from interpreted code was "Undefined constant". The generated program
+    /// registers each such constant here, under every class that inherits it.
+    pub fn define_native_class_constant_default(
+        &mut self,
+        class_name: &str,
+        constant_name: &str,
+        constant: NativeClassConstantDefault,
+    ) -> bool {
+        let key = native_constant_key(class_name, constant_name);
+        if key.0.is_empty() || key.1.is_empty() {
+            return false;
+        }
+        Arc::make_mut(&mut self.native_class_constant_defaults)
+            .insert(key, constant)
+            .is_none()
+    }
+
+    /// Returns an array-valued compiled class constant registered for one class.
+    pub fn native_class_constant_default(
+        &self,
+        class_name: &str,
+        constant_name: &str,
+    ) -> Option<NativeClassConstantDefault> {
+        self.native_class_constant_defaults
+            .get(&native_constant_key(class_name, constant_name))
+            .cloned()
+    }
+
     /// Registers generated AOT parent metadata without replacing an existing hierarchy edge.
     pub fn define_native_class_parent(&mut self, class_name: &str, parent_name: &str) -> bool {
         let class_key = normalize_class_name(class_name);

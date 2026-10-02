@@ -11,7 +11,7 @@ use super::*;
 use crate::codegen::generate_user_asm_from_ir;
 use crate::codegen::platform::{Arch, Platform, Target};
 use crate::ir::{
-    Builder, FunctionParam, Instruction, IrHeapKind, IrType, Module, Op, Ownership, Terminator,
+    Builder, FunctionParam, IrHeapKind, IrType, Module, Op, Ownership, Terminator,
 };
 
 /// Verifies AArch64 saves a later Mixed argument before retaining an earlier string.
@@ -71,27 +71,46 @@ fn owned_string_parameter_is_persisted_once() {
     }
 }
 
-/// Verifies descriptor invocation reserves the hand-managed nested-call register.
+/// Verifies every frame reserves a save slot for the hand-managed nested-call register.
+///
+/// The fixture contains no dispatch of any kind, on purpose: the reservation used to hang on a
+/// list of opcodes known to borrow the register, and each borrower the list did not name (the
+/// `__toString` ladder, `closure_new`, `iterator_to_array` over an object) clobbered its caller's
+/// x19/r12. A frame without a single call must still carry the slot.
 #[test]
-fn callable_descriptor_invoke_reserves_nested_call_register() {
-    let mut function = Function::new(
-        "callable_descriptor_frame_fixture".to_string(),
-        IrType::Void,
-        PhpType::Void,
-    );
-    function.instructions.push(Instruction::new(
-        Op::CallableDescriptorInvoke,
-        Vec::new(),
-        None,
-        None,
-        IrType::Heap(IrHeapKind::Mixed),
-        PhpType::Mixed,
-        Ownership::Owned,
-        Op::CallableDescriptorInvoke.default_effects(),
-        None,
-    ));
-
-    assert!(function_uses_nested_call_reg(&function));
+fn every_frame_reserves_the_nested_call_register() {
+    for (arch, register) in [(Arch::AArch64, "x19"), (Arch::X86_64, "r12")] {
+        let mut function = Function::new(
+            "nested_call_register_frame_fixture".to_string(),
+            IrType::Void,
+            PhpType::Void,
+        );
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        for regalloc_linear in [false, true] {
+            let layout = layout_for_function(
+                &function,
+                Target::new(Platform::Linux, arch),
+                regalloc_linear,
+                false,
+            );
+            assert_eq!(
+                layout
+                    .callee_saved_offsets
+                    .iter()
+                    .filter(|(saved, _)| *saved == register)
+                    .count(),
+                1,
+                "{arch:?} (linear={regalloc_linear}) must save {register} exactly once: {:?}",
+                layout.callee_saved_offsets
+            );
+        }
+    }
 }
 
 /// Verifies callable prologues use only the stack-pointer guard and do not add

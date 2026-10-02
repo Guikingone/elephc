@@ -213,6 +213,9 @@ pub(in crate::interpreter) fn eval_call(
     if eval_is_func_args_intrinsic(name) {
         return eval_func_args_intrinsic(name, args, context, scope, values);
     }
+    if eval_is_get_defined_vars_intrinsic(name) {
+        return eval_get_defined_vars_intrinsic(args, scope, values);
+    }
     if let Some(function) = context.function(name).cloned() {
         return eval_dynamic_function(&function, args, context, scope, values);
     }

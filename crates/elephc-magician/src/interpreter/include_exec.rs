@@ -130,6 +130,11 @@ pub(super) fn eval_include_value_with_use(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(path, values)?;
+    if let Some(result) =
+        eval_include_through_user_wrapper(&path, required, once, context, scope, values)?
+    {
+        return Ok(result);
+    }
     let resolved_path = eval_resolve_include_path(&path, context);
     let outcome = eval_resolved_include(
         &path,
@@ -160,6 +165,14 @@ thread_local! {
     /// anyway.
     static REINCLUDE_COMPILER_INCLUDED_SOURCES: std::cell::Cell<bool> =
         const { std::cell::Cell::new(false) };
+    /// How many includes this thread skipped on the compiler's mark, so a caller can tell whether
+    /// a skip happened while it ran.
+    static COMPILER_INCLUDE_SKIPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Returns how many includes this thread has skipped on the compiler's inclusion mark.
+pub(crate) fn compiler_include_skip_count() -> u64 {
+    COMPILER_INCLUDE_SKIPS.with(std::cell::Cell::get)
 }
 
 /// Runs `body` with the compiler's inclusion marks ignored, then restores the previous mode.
@@ -178,7 +191,7 @@ pub(crate) fn with_compiler_included_sources_reincluded<T>(body: impl FnOnce() -
 }
 
 /// Whether includes currently ignore the compiler's inclusion marks.
-fn reincluding_compiler_included_sources() -> bool {
+pub(crate) fn reincluding_compiler_included_sources() -> bool {
     REINCLUDE_COMPILER_INCLUDED_SOURCES.with(|flag| flag.get())
 }
 
@@ -234,6 +247,7 @@ fn eval_resolved_include(
         && context.compiler_included_file(&include_key)
     {
         trace_compiler_included_skip(resolved_path, context);
+        COMPILER_INCLUDE_SKIPS.with(|skips| skips.set(skips.get().wrapping_add(1)));
         // Skipping the body is right -- the program already ran it -- but the inclusion is also
         // the moment php DECLARES the file's symbols, and the compiled program only activates
         // them where it first names one. An autoloader reaching the file earlier than that must
@@ -290,6 +304,119 @@ fn trace_cached_include(path: &std::path::Path, context: &ElephcEvalContext) {
         "[elephc-eval-trace] kind=include phase=input_cached path={path:?} caller_file={:?} caller_line={}",
         caller.0, caller.2,
     );
+}
+
+/// Includes a URL whose scheme a userspace stream wrapper owns, or answers `None` for any other
+/// path.
+///
+/// php opens the URL through the wrapper object -- `stream_open()`, then `stream_read()` until
+/// `stream_eof()`, then `stream_close()` when the class has one -- and compiles what it read as a
+/// file whose `__FILE__` is the URL. Serialized-closure libraries rely on exactly this: they
+/// register a wrapper whose `stream_open()` wraps the path in `<?php return ...;` and `include` it
+/// to get the closure back. The wrapper may have been registered by interpreted code (this
+/// context's registry) or by compiled code (the generated runtime's table), and its class may be
+/// either kind; the generic object and method paths below serve all four combinations.
+fn eval_include_through_user_wrapper(
+    path: &str,
+    required: bool,
+    once: bool,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let Some(scheme) = crate::stream_wrappers::stream_scheme(path) else {
+        return Ok(None);
+    };
+    let Some(class_name) = context
+        .stream_resources()
+        .user_stream_wrapper_class_for_path(path)
+        .or_else(|| crate::runtime_hooks::compiled_stream_wrapper_class(&scheme))
+    else {
+        return Ok(None);
+    };
+    let include_path = std::path::Path::new(path);
+    let include_key = eval_include_key(include_path);
+    if once && context.has_included_file(&include_key) {
+        return values.bool_value(true).map(Some);
+    }
+    let Some(bytes) = eval_user_wrapper_include_bytes(path, &class_name, context, scope, values)?
+    else {
+        return eval_include_missing_file(path, required, values).map(Some);
+    };
+    context.mark_included_file(include_key);
+    eval_execute_include_bytes(&bytes, include_path, context, scope, values).map(Some)
+}
+
+/// Reads a whole userspace-wrapper URL the way php's include does, or `None` when
+/// `stream_open()` refuses it.
+fn eval_user_wrapper_include_bytes(
+    path: &str,
+    class_name: &str,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<Vec<u8>>, EvalStatus> {
+    let object = eval_new_object_result(class_name, Vec::new(), context, scope, values)?;
+    let open_args = eval_user_wrapper_stream_open_args(path, "rb", values)?;
+    let opened = eval_method_call_result_with_evaluated_args(
+        object,
+        "stream_open",
+        open_args,
+        context,
+        values,
+    )?;
+    let accepted = values.truthy(opened)?;
+    values.release(opened)?;
+    if !accepted {
+        values.release(object)?;
+        return Ok(None);
+    }
+    let has_eof = eval_user_wrapper_include_has_method(object, "stream_eof", context, values)?;
+    let mut bytes = Vec::new();
+    loop {
+        if has_eof {
+            let eof = eval_method_call_result(object, "stream_eof", Vec::new(), context, values)?;
+            let at_end = values.truthy(eof)?;
+            values.release(eof)?;
+            if at_end {
+                break;
+            }
+        }
+        let count = values.int(8192)?;
+        let chunk = eval_method_call_result(object, "stream_read", vec![count], context, values)?;
+        values.release(count)?;
+        let chunk_bytes = if values.type_tag(chunk)? == EVAL_TAG_STRING {
+            values.string_bytes(chunk)?
+        } else {
+            Vec::new()
+        };
+        values.release(chunk)?;
+        if chunk_bytes.is_empty() {
+            break;
+        }
+        bytes.extend_from_slice(&chunk_bytes);
+    }
+    if eval_user_wrapper_include_has_method(object, "stream_close", context, values)? {
+        let closed = eval_method_call_result(object, "stream_close", Vec::new(), context, values)?;
+        values.release(closed)?;
+    }
+    values.release(object)?;
+    Ok(Some(bytes))
+}
+
+/// Whether a wrapper object has the optional method, asked the way `method_exists()` asks.
+fn eval_user_wrapper_include_has_method(
+    object: RuntimeCellHandle,
+    method: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let name = values.string(method)?;
+    let exists = eval_member_exists_result("method_exists", &[object, name], context, values)?;
+    values.release(name)?;
+    let exists_bool = values.truthy(exists)?;
+    values.release(exists)?;
+    Ok(exists_bool)
 }
 
 /// Returns the include/require result for a file that cannot be opened.

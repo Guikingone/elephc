@@ -9,6 +9,23 @@
 
 use super::*;
 
+/// Returns a method's return type with php 8's implicit one filled in.
+///
+/// php declares `__toString()` as returning `string` when the source names no return type, so an
+/// untyped `__toString()` satisfies every contract that spells `: string` -- `Stringable`, or a
+/// compiled interface such as Laravel's `Enumerable`, whose `Collection` takes its untyped
+/// `__toString()` from the `EnumeratesValues` trait and was refused at declaration.
+pub(in crate::parser) fn eval_method_return_type_with_implicit(
+    method_name: &str,
+    declared: Option<EvalParameterType>,
+) -> Option<EvalParameterType> {
+    declared.or_else(|| {
+        method_name.eq_ignore_ascii_case("__toString").then(|| {
+            EvalParameterType::new(vec![EvalParameterTypeVariant::String], false)
+        })
+    })
+}
+
 impl Parser {
     /// Parses a method parameter list and records metadata plus promotion side effects.
     pub(in crate::parser) fn parse_method_params(

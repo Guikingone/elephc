@@ -225,6 +225,57 @@ fn test_parse_new_dynamic_object_from_this_property_offset() {
     }
 }
 
+/// Verifies `new static::$builder(...)` parses as a dynamic `new` whose class name is the static
+/// property, and that a named receiver keeps dereferencing: `new Foo::$map['k']()`.
+///
+/// PHP's `new_variable` production includes `class_name '::' simple_variable`. The parser used to
+/// read `new static`, meet `::`, and refuse Laravel's `Application::configure()` with
+/// "Parentheses are required before accessing a parenthesis-free new expression".
+#[test]
+fn test_parse_new_dynamic_object_from_static_property() {
+    let stmts = parse_source("<?php $a = new static::$builder(new static($base));");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::NewDynamic { name_expr, args } => {
+                assert_eq!(
+                    name_expr.kind,
+                    ExprKind::StaticPropertyAccess {
+                        receiver: StaticReceiver::Static,
+                        property: "builder".to_string(),
+                    }
+                );
+                assert_eq!(args.len(), 1);
+            }
+            other => panic!("Expected NewDynamic, got {:?}", other),
+        },
+        other => panic!("Expected Assign, got {:?}", other),
+    }
+
+    let stmts = parse_source("<?php $b = new Foo::$map['k']();");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::NewDynamic { name_expr, args } => {
+                match &name_expr.kind {
+                    ExprKind::ArrayAccess { array, index } => {
+                        assert!(matches!(
+                            &array.kind,
+                            ExprKind::StaticPropertyAccess {
+                                receiver: StaticReceiver::Named(name),
+                                property,
+                            } if name == "Foo" && property == "map"
+                        ));
+                        assert_eq!(index.kind, ExprKind::StringLiteral("k".to_string()));
+                    }
+                    other => panic!("Expected ArrayAccess class name, got {:?}", other),
+                }
+                assert!(args.is_empty());
+            }
+            other => panic!("Expected NewDynamic, got {:?}", other),
+        },
+        other => panic!("Expected Assign, got {:?}", other),
+    }
+}
+
 /// Verifies that `<?php new Point(1, 2);` parses as an expression statement.
 #[test]
 fn test_parse_new_object_expression_statement() {

@@ -197,6 +197,11 @@ fn lower_non_native_isset_offset_probe(
             expr,
         );
     }
+    if matches!(receiver_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        && program_may_hold_array_access_objects(ctx)
+    {
+        return lower_mixed_isset_dim_probe(ctx, array_value, index, expr);
+    }
     let read_value = lower_array_access_from_value(ctx, array_value, index, expr, false);
     emit_builtin_call_value(
         ctx,
@@ -206,6 +211,95 @@ fn lower_non_native_isset_offset_probe(
         expr.span,
         None,
     )
+}
+
+/// Returns whether a `mixed` value in this program can be an `ArrayAccess` object whose
+/// `offsetExists()` and `offsetGet()` may disagree: a class the PROGRAM declares implements the
+/// interface, or PHP loaded at run time can declare one.
+///
+/// The `offsetExists()` arm is a method call on an unknown receiver, which links the eval bridge.
+/// Emitting it unconditionally put the interpreter into EVERY program, because the always-present
+/// session prelude probes `isset($options[$key])` on a mixed array: a two-line script grew from
+/// 5.8 MB to 28 MB of assembly, and its runtime errors went through the bridge's throw path. The
+/// built-in SPL containers (and the compiler's own `__Elephc*` subclasses of them) are always
+/// declared and answer the quiet read the way `offsetExists()` does, so they do not count.
+fn program_may_hold_array_access_objects(ctx: &LoweringContext<'_, '_>) -> bool {
+    ctx.has_eval_barrier()
+        || ctx.eval_executed()
+        || ctx.can_resolve_runtime_dynamic_functions()
+        || ctx.classes.keys().any(|class| {
+            elephc_builtin_contract::lookup_class(class).is_none()
+                && !class.trim_start_matches('\\').to_ascii_lowercase().starts_with("__elephc")
+                && class_implements_interface_for_ir(ctx, class, "ArrayAccess")
+        })
+}
+
+/// Lowers `isset($mixed[$k])` for a receiver whose kind is known only at run time.
+///
+/// php answers `isset()` on an `ArrayAccess` object with `offsetExists()` alone. The quiet read
+/// this used to take calls `offsetGet()` instead, and a container's `offsetGet` RESOLVES the
+/// key: Laravel's `isset(static::$app[$name])` answered true for a binding that does not exist,
+/// so `Date` skipped installing its default factory and the next read failed with "Target class
+/// [date] does not exist". Every other receiver keeps the quiet read.
+fn lower_mixed_isset_dim_probe(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_value: LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    let data = ctx.intern_class_name("ArrayAccess");
+    let is_array_access = ctx.emit_value(
+        Op::InstanceOf,
+        vec![array_value.value],
+        Some(Immediate::Data(data)),
+        PhpType::Bool,
+        Op::InstanceOf.default_effects(),
+        Some(expr.span),
+    );
+    let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
+    let access_block = ctx
+        .builder
+        .create_named_block("isset.array_access", Vec::new());
+    let read_block = ctx.builder.create_named_block("isset.mixed_read", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("isset.array_access.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_array_access.value,
+        then_target: access_block,
+        then_args: Vec::new(),
+        else_target: read_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(access_block);
+    let exists = lower_method_call_with_receiver(
+        ctx,
+        array_value,
+        "offsetExists",
+        &[index.clone()],
+        Op::MethodCall,
+        expr,
+    );
+    let exists = ctx.truthy_consuming(exists, Some(expr.span));
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, exists, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(read_block);
+    let read_value = lower_array_access_from_value(ctx, array_value, index, expr, false);
+    let isset = emit_builtin_call_value(
+        ctx,
+        "isset",
+        vec![read_value.value],
+        PhpType::Int,
+        expr.span,
+        None,
+    );
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, isset, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    take_owned_temp(ctx, &temp_name, expr.span)
 }
 
 /// Lowers `isset($object->property)` without performing a normal property read first.

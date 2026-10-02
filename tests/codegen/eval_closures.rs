@@ -1698,3 +1698,74 @@ echo $fn->__invoke($fourth, 9) . ":" . gettype($fourth) . ":" . $fourth;');
         "C:5:integer:5|9:integer:9|13:integer:13|17:integer:17"
     );
 }
+
+/// Verifies `call_user_func()` on an interpreted closure keeps the `$this` and class scope the
+/// closure was declared with, exactly as a direct `$closure()` call does.
+///
+/// The callable path ran a closure with no binding at all when none was explicitly given, so
+/// Laravel's `call_user_func($default, ...)` over `fn () => ImplicitRouteBinding::
+/// resolveForRoute($this->container, $route)` warned "Undefined variable $this".
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_eval_call_user_func_keeps_a_closure_declaring_this() {
+    let out = compile_and_run(
+        r#"<?php
+class Holder {
+    public static function make($container, $route) { return "made " . $container . $route; }
+}
+eval('class R {
+    public $c = "C";
+    public $cb = null;
+    public function f($route) {
+        $default = fn () => Holder::make($this->c, $route);
+        return call_user_func($default, 1) . "|" . call_user_func($this->cb ?? $default) . "|"
+            . ($this->cb ?? $default)() . "|" . $default(1, 2);
+    }
+}');
+$name = 'R';
+$r = new $name();
+echo $r->f("/x"), "\n";
+"#,
+    );
+    assert_eq!(out, "made C/x|made C/x|made C/x|made C/x\n");
+}
+
+/// Compiled `new ReflectionFunction($closure)` reflects a closure an eval'd function created and
+/// handed over, then the closure still runs.
+///
+/// The closure is registered only with the eval context that made it; the reflection ran in a
+/// context of its own, found no closure there, and read the object as a function NAME: "eval()
+/// fragment uses an unsupported construct". Laravel reaches this at the end of every request,
+/// when the container reflects each `terminating()` callback a provider registered.
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_compiled_reflection_of_a_closure_another_context_created() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public $callbacks = [];
+    public function describe($i) {
+        $callback = $this->callbacks[$i];
+        $reflector = new ReflectionFunction($callback);
+        $names = [];
+        foreach ($reflector->getParameters() as $parameter) {
+            $names[] = $parameter->getName();
+        }
+        echo count($names), ':', implode(',', $names), ' => ', $callback(...array_fill(0, count($names), 3)), "\n";
+    }
+}
+$code = 'function register_callbacks($box) {
+    $box->callbacks[] = static function () { return "none"; };
+    $box->callbacks[] = function ($x, $y) { return $x * $y; };
+}';
+eval($code);
+$box = new Box();
+register_callbacks($box);
+$box->describe(0);
+$box->describe(1);
+"#,
+    );
+    assert_eq!(out, "0: => none\n2:x,y => 9\n");
+}

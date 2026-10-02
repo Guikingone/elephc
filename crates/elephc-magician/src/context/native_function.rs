@@ -28,6 +28,15 @@ pub struct NativeFunction {
     pub(super) return_type: Option<EvalParameterType>,
     pub(super) required_param_count: Option<usize>,
     pub(super) bridge_supported: bool,
+    /// Address of the word that says whether a CONDITIONALLY declared function exists yet, or 0
+    /// for an unconditional one.
+    ///
+    /// `if (!function_exists('f')) { function f() {} }` compiles to a variant whose public name
+    /// dispatches through a module-global "active variant" slot, which the declaration statement
+    /// fills when it runs. php has no `f` until then, and never one when the guard is false, so
+    /// eval must answer from that same slot, at every lookup: the registration snapshot is built
+    /// once per process, long before most declarations run.
+    pub(super) active_slot: usize,
 }
 
 impl NativeFunction {
@@ -49,6 +58,7 @@ impl NativeFunction {
             return_type: None,
             required_param_count: None,
             bridge_supported: true,
+            active_slot: 0,
         }
     }
 
@@ -151,6 +161,21 @@ impl NativeFunction {
     /// Records whether eval may dispatch this callback through the generated bridge.
     pub fn set_bridge_supported(&mut self, supported: bool) {
         self.bridge_supported = supported;
+    }
+
+    /// Makes this callback exist only while the word at `slot` is nonzero (see `active_slot`).
+    pub fn set_active_slot(&mut self, slot: usize) {
+        self.active_slot = slot;
+    }
+
+    /// Returns whether php would see this function declared right now.
+    pub fn is_active(&self) -> bool {
+        if self.active_slot == 0 {
+            return true;
+        }
+        // SAFETY: the slot is a module-global, 8-byte `.comm` word of the generated program,
+        // registered by generated code and live for the whole process.
+        unsafe { std::ptr::read_volatile(self.active_slot as *const u64) != 0 }
     }
 
     /// Returns whether one registered parameter is by-reference.

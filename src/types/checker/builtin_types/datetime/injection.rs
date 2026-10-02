@@ -141,6 +141,7 @@ pub(crate) fn inject_builtin_datetime(
                     m.push(datetime_create_from_object("createFromInterface", "DateTimeImmutable"));
                     m.push(datetime_create_from_object("createFromMutable", "DateTimeImmutable"));
                     m.push(datetime_set_isodate("DateTimeImmutable"));
+                    m.push(datetime_date_create("DateTimeImmutable"));
                     m
                 },
                 attributes: Vec::new(),
@@ -160,6 +161,7 @@ pub(crate) fn inject_builtin_datetime(
         methods.push(datetime_create_from_object("createFromInterface", "DateTime"));
         methods.push(datetime_create_from_object("createFromImmutable", "DateTime"));
         methods.push(datetime_set_isodate("DateTime"));
+        methods.push(datetime_date_create("DateTime"));
         methods.push(datetime_date_parse_from_format());
         methods.push(datetime_date_parse());
         methods.push(datetime_gettimeofday());

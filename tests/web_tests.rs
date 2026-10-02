@@ -3543,3 +3543,96 @@ echo inspectRuntimeConstructor(makeRuntimeReflection());
         "the ReflectionMethod ownership diverged on a later request: {second:?}"
     );
 }
+
+/// Verifies `$_GET` and `$_POST` follow php's request-variable grammar, the one `parse_str()`
+/// shares: `a[]=1&a[]=2` nests into an array, `+` is a space, and a key's dot or space becomes an
+/// underscore. The hand-rolled split kept `c[]` as a literal key, so every array-shaped parameter
+/// reached the application as a different request than `php -S` served.
+#[test]
+fn web_superglobals_nest_bracketed_keys_like_php() {
+    let dir = make_test_dir("web_sg_nested");
+    let src = "<?php echo json_encode(['get' => $_GET, 'post' => $_POST]);";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_request(
+        &addr,
+        "POST",
+        "/?q[]=1&q[]=2&x+y=a+b&n[k][]=v",
+        &[("Content-Type", "application/x-www-form-urlencoded")],
+        "a=1&c[]=x&c[]=y&d.e=f",
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        resp.ends_with(
+            r#"{"get":{"q":["1","2"],"x_y":"a b","n":{"k":["v"]}},"post":{"a":"1","c":["x","y"],"d_e":"f"}}"#
+        ),
+        "body: {:?}",
+        resp
+    );
+}
+
+/// Verifies a top-level `define()` is request state in a `--web` worker: every request defines its
+/// own value, the compiled program reads that value, and interpreted code sees it too. The
+/// "already defined" guard of `define()` was a BSS flag nothing cleared, so request two kept
+/// request one's value and never published it to the eval bridge (Laravel's `defined('LARAVEL_START')`
+/// timing line vanished from every response after the first).
+#[test]
+fn web_define_is_per_request_and_visible_to_eval() {
+    let dir = make_test_dir("web_define_per_request");
+    let src = "<?php define('REQ_STAMP', $_GET['n']); $code = 'echo REQ_STAMP, defined(\"REQ_STAMP\") ? \"y\" : \"n\";'; eval($code); echo '|', REQ_STAMP;";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_request(&addr, "GET", "/?n=a", &[], "");
+    let second = http_request(&addr, "GET", "/?n=b", &[], "");
+    let third = http_request(&addr, "GET", "/?n=c", &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(first.ends_with("ay|a"), "first: {:?}", first);
+    assert!(second.ends_with("by|b"), "second: {:?}", second);
+    assert!(third.ends_with("cy|c"), "third: {:?}", third);
+}
+
+/// Verifies a long C-string conversion in one request cannot free a live block of the next.
+///
+/// `__rt_cstr` keeps the buffer of its last conversion longer than 4 KiB in a static slot so the
+/// next long conversion can free it. A `--web` request ends by wiping the heap arena, which left
+/// that slot pointing at an address the next request reuses: the next request's own long
+/// conversion freed whatever block began there. Here request 1 converts a 5000-byte path (the
+/// path argument of `file_exists()`) as the first heap allocation of the request; request 2
+/// allocates a 5000-byte string at the same arena address, then converts a second long path,
+/// whose stale free released that string for the conversion buffer to overwrite. Laravel's
+/// `mb_ucfirst()` title-case regex pattern (6 KiB) hit the same stale free as an intermittent
+/// "heap debug detected double free" worker crash.
+#[test]
+fn web_long_cstr_buffer_does_not_outlive_the_request_arena() {
+    let dir = make_test_dir("web_cstr_stale_slot");
+    let src = r#"<?php
+if (($_GET['r'] ?? '1') === '1') {
+    $m = file_exists(str_repeat('a', 5000));
+    echo 'first:', var_export($m, true);
+} else {
+    $s = str_repeat('Z', 5000);
+    $m = file_exists(str_repeat('b', 5000));
+    echo $s[0], $s[4999], var_export($m, true);
+}
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_request(&addr, "GET", "/?r=1", &[], "");
+    let second = http_request(&addr, "GET", "/?r=2", &[], "");
+    let third = http_request(&addr, "GET", "/?r=1", &[], "");
+    let fourth = http_request(&addr, "GET", "/?r=2", &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(first.ends_with("first:false"), "first: {:?}", first);
+    assert!(second.ends_with("ZZfalse"), "second: {:?}", second);
+    assert!(third.ends_with("first:false"), "third: {:?}", third);
+    assert!(fourth.ends_with("ZZfalse"), "fourth: {:?}", fourth);
+}

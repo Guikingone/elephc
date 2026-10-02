@@ -319,6 +319,29 @@ var_dump($m);
     );
 }
 
+/// A `?int` value handed to an UNTYPED parameter is boxed on the way in. Its php type is the
+/// `int|null` union, whose registers are TaggedScalar's two words, and the boxing helper treated
+/// every union as already boxed: the callee read the payload as a box pointer and crashed
+/// (symfony/polyfill-mbstring's `mb_substr()` wrapper forwarding `?int $length`).
+#[test]
+fn test_tagged_nullable_int_passed_to_untyped_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+class Mb {
+    public static function sub($s, $start, $length = null) { return var_export([$s, $start, $length], true); }
+}
+function show($value) { var_dump($value); }
+function forward(?int $length = null) { show($length); return Mb::sub('abc', 1, $length); }
+echo forward(11), "\n";
+echo forward(), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(11)\narray (\n  0 => 'abc',\n  1 => 1,\n  2 => 11,\n)\nNULL\narray (\n  0 => 'abc',\n  1 => 1,\n  2 => NULL,\n)\n"
+    );
+}
+
 /// The legacy in-band behavior is preserved under the explicit sentinel opt-out:
 /// the same fixture still misreads PHP_INT_MAX-1 as null when --null-repr=sentinel.
 #[test]

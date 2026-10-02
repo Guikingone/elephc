@@ -117,16 +117,23 @@ pub(super) fn layout_for_function(
         offset += 8;
         callee_saved_offsets.push((*reg, offset));
     }
-    // Method/callable dispatch hand-uses the reserved nested-call register
-    // (x19/r12) to hold a receiver across argument-lowering calls; it is
-    // callee-saved but outside the allocator's tracking, so reserve a save slot
-    // when the function needs it (issue #511).
-    if function_uses_nested_call_reg(function) {
-        let reg = nested_call_reg_name(target.arch);
-        if !callee_saved_offsets.iter().any(|(saved, _)| *saved == reg) {
-            offset += 8;
-            callee_saved_offsets.push((reg, offset));
-        }
+    // Lowering hand-uses the reserved nested-call register (x19/r12) to hold a receiver,
+    // descriptor or iterator across calls. It is callee-saved but outside the allocator's
+    // tracking, so EVERY frame reserves a save slot for it.
+    //
+    // This used to be conditional on a predicate listing the opcodes that borrow the register,
+    // and each new borrower slipped past it in turn: issue #511 (a Mixed-receiver method call),
+    // the `__toString` ladder, `closure_new`, and `iterator_to_array`, whose inline object path
+    // keeps the iterator there across the `valid`/`current`/`next` calls. The borrowers are
+    // spread over some twenty lowering files. A compiled caller rarely notices a clobbered
+    // x19/r12, because it seldom keeps anything there across a call; the eval bridge's Rust
+    // caller does, so a compiled static method that ran `iterator_to_array()` over an object and
+    // returned to interpreted code corrupted the interpreter. One store and one load per call is
+    // cheaper than finding the next borrower from a crash.
+    let nested_call_reg = nested_call_reg_name(target.arch);
+    if !callee_saved_offsets.iter().any(|(saved, _)| *saved == nested_call_reg) {
+        offset += 8;
+        callee_saved_offsets.push((nested_call_reg, offset));
     }
     offset += 8;
     let concat_base_offset = offset;
@@ -197,53 +204,14 @@ fn try_handler_tokens(function: &Function) -> Vec<i64> {
 /// Returns the reserved "nested call" scratch register for `arch` — the
 /// callee-saved register (`x19` / `r12`) that method- and callable-dispatch
 /// lowering hand-uses to hold a receiver or descriptor across argument-lowering
-/// calls. It lives outside the register allocator's pools, so a function that
-/// uses it must reserve its own save slot (see `layout_for_function`). Mirrors
+/// calls. It lives outside the register allocator's pools, so the frame layout
+/// reserves its own save slot in every frame (see `layout_for_function`). Mirrors
 /// `abi::nested_call_reg`, which resolves the same register from an `Emitter`.
 fn nested_call_reg_name(arch: Arch) -> &'static str {
     match arch {
         Arch::AArch64 => "x19",
         Arch::X86_64 => "r12",
     }
-}
-
-/// Returns true when the function contains callable or method dispatch that
-/// hand-uses the reserved nested-call register. Descriptor invocation keeps the
-/// selected descriptor there, while union/Mixed method calls keep an unboxed
-/// receiver there across argument lowering. The register is callee-saved and
-/// outside allocator tracking — without a reserved save slot the function can
-/// silently clobber the caller's value and later release an invalid pointer.
-/// A plain single non-nullable object receiver uses direct dispatch and is
-/// excluded. Over-detection is harmless — an unused save/restore pair costs one
-/// store and one load — so the receiver test errs toward inclusion.
-fn function_uses_nested_call_reg(function: &Function) -> bool {
-    function.instructions.iter().any(|inst| {
-        // A boxed-Mixed STRING context holds its `__toString` receiver in the same register
-        // and is neither of the method-call opcodes below, so it used to slip through: a
-        // function whose only use was `echo $mixed` wrote `mov x19, x1` under a prologue that
-        // saved nothing. No caller shape was found that turns that into a wrong answer — the
-        // receiver is established AFTER argument lowering, which closes the obvious window —
-        // so this restores the callee-saved discipline rather than fixing a reproduced
-        // failure; per the note above, over-detection costs one store and one load.
-        if crate::codegen::shared_mixed_string::instruction_uses_mixed_string_ladder(function, inst)
-        {
-            return true;
-        }
-        if inst.op == Op::CallableDescriptorInvoke {
-            return true;
-        }
-        if !matches!(inst.op, Op::MethodCall | Op::NullsafeMethodCall) {
-            return false;
-        }
-        let Some(receiver) = inst.operands.first() else {
-            return false;
-        };
-        let Some(value) = function.value(*receiver) else {
-            return false;
-        };
-        matches!(value.php_type, PhpType::Union(_))
-            || matches!(value.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-    })
 }
 
 /// Emits the process-entry prologue for the EIR main function.

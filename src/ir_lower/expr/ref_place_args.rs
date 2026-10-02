@@ -118,7 +118,29 @@ pub(super) fn prepare_ref_place_args(
         let arg = &args[index];
         let (param_index, place_arg) = ref_param_binding(sig, index, arg)?;
         let place = stabilize_place(ctx, place_arg);
-        let read = lower_expr(ctx, &place);
+        // php reads a by-reference element or property WITHOUT a warning: a missing one is
+        // created as null by the binding itself. `??` is the quiet read with that same answer.
+        // Only for the shapes whose element may not exist yet in a way the typed path never
+        // meets: an element of a GRADUAL container and a property named at run time. A typed
+        // container keeps its plain read, whose ownership the heap-debug suite pins.
+        let quiet_read = match &place.kind {
+            ExprKind::DynamicPropertyAccess { .. } => true,
+            ExprKind::ArrayAccess { array, .. } => static_place_type(ctx, array)
+                .is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))),
+            _ => false,
+        };
+        let read = if quiet_read {
+            let quiet = Expr::new(
+                ExprKind::NullCoalesce {
+                    value: Box::new(place.clone()),
+                    default: Box::new(Expr::new(ExprKind::Null, place.span)),
+                },
+                place.span,
+            );
+            lower_expr(ctx, &quiet)
+        } else {
+            lower_expr(ctx, &place)
+        };
         let needs_adapter = declared_local_ref_needs_adapter(ctx, sig, param_index, place_arg);
         let value_type = if needs_adapter {
             normalize_value_php_type(sig.params.get(param_index)?.1.codegen_repr())
@@ -318,6 +340,7 @@ fn is_candidate_place_shape(arg: &Expr) -> bool {
     matches!(
         arg.kind,
         ExprKind::PropertyAccess { .. }
+            | ExprKind::DynamicPropertyAccess { .. }
             | ExprKind::StaticPropertyAccess { .. }
             | ExprKind::ArrayAccess { .. }
     )
@@ -353,10 +376,21 @@ fn static_place_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<PhpTy
         ExprKind::StaticPropertyAccess { receiver, property } => Some(
             static_property_result_type(ctx, receiver, property, expr),
         ),
+        // A property named at run time has no declared type to read; it is whatever the object
+        // holds. Only a receiver this module can re-read qualifies.
+        ExprKind::DynamicPropertyAccess { object, .. } => {
+            static_place_type(ctx, object).map(|_| PhpType::Mixed)
+        }
         ExprKind::ArrayAccess { array, .. } => {
             match static_place_type(ctx, array)?.codegen_repr() {
                 PhpType::Array(elem_ty) => Some(normalize_value_php_type(*elem_ty)),
                 PhpType::AssocArray { value, .. } => Some(normalize_value_php_type(*value)),
+                // A gradual container -- an untyped `&$target` parameter, say -- holds an array
+                // at run time or becomes one: `f($target[$k])` passes that element by reference,
+                // and the element is whatever the array holds. Without this the call took the
+                // plain path and the callee's write never reached `$target`, so Laravel's
+                // recursive `data_set($target[$segment], ...)` returned an empty result.
+                PhpType::Mixed | PhpType::Union(_) => Some(PhpType::Mixed),
                 _ => None,
             }
         }
@@ -394,6 +428,18 @@ fn stabilize_place(ctx: &mut LoweringContext<'_, '_>, place: &Expr) -> Expr {
                 ExprKind::PropertyAccess {
                     object: Box::new(object),
                     property: property.clone(),
+                },
+                place.span,
+            )
+        }
+        // The name is evaluated once, like an index: `f($o->{next_name()})` names one property.
+        ExprKind::DynamicPropertyAccess { object, property } => {
+            let object = stabilize_place(ctx, object);
+            let property = stabilize_index(ctx, property);
+            Expr::new(
+                ExprKind::DynamicPropertyAccess {
+                    object: Box::new(object),
+                    property: Box::new(property),
                 },
                 place.span,
             )

@@ -256,6 +256,53 @@ echo implode(',', iterator_to_array($wrap(['a', 'b']))), "\n";
     assert_eq!(out, "2,4\na,b\n");
 }
 
+/// A CONDITIONALLY declared function nothing calls must not export a fabricated `int` either.
+///
+/// The fix above covered a plain declaration. `if (!function_exists('f')) { function f($x) {…} }`
+/// takes two other routes, and both still fabricated the type:
+///
+/// - `function_exists('f')` with a literal name force-resolved `f` by checking a call that passed
+///   `0` for every parameter, so the guard itself typed `$x` as `int`;
+/// - the declaration is a function-variant group, and the end-of-pass resolution of an uncalled
+///   group kept the `int` seed the plain-function path widens to `mixed`.
+///
+/// This is Laravel's `Illuminate/Reflection/helpers.php`: `lazy($class, …)` is guarded, called by
+/// nothing, and hands `$class` to an anonymous class whose trait method is declared
+/// `Closure $closure` — "parameter $closure expects Callable, got Int" refused the build. The
+/// called polyfill beside it shows a guarded function still binds and runs with a string.
+///
+/// Oracle: php 8.5.10 prints the asserted lines.
+#[test]
+fn test_an_uncalled_conditional_function_does_not_freeze_its_callees_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+trait ReflectsClosures {
+    protected function firstParameterType(Closure $closure): string {
+        $params = (new ReflectionFunction($closure))->getParameters();
+        return $params === [] ? 'none' : (string) $params[0]->getType();
+    }
+}
+if (!function_exists('lazy_type')) {
+    function lazy_type($class, $callback = 0) {
+        static $reflector;
+        $reflector ??= new class {
+            use ReflectsClosures;
+            public function typeOf($callback) { return $this->firstParameterType($callback); }
+        };
+        [$class, $callback] = is_string($class) ? [$class, $callback] : [$reflector->typeOf($class), $class];
+        return $class;
+    }
+}
+if (!function_exists('shout')) {
+    function shout($s) { return strtoupper($s) . '!'; }
+}
+echo function_exists('lazy_type') ? "declared\n" : "missing\n";
+echo shout('hi'), "\n";
+"#,
+    );
+    assert_eq!(out, "declared\nHI!\n");
+}
+
 
 /// A call may OMIT a by-reference parameter that has a default.
 ///
@@ -431,4 +478,34 @@ string(5) "AppLE"
 string(5) "A##LE"
 "#, "stderr: {}", out.stderr);
     assert!(!out.stderr.contains("Warning:"), "stderr: {}", out.stderr);
+}
+
+/// A recursive untyped function called first with an array and then, from its own body, with the
+/// array's elements (strings, ints, nested arrays) must receive those elements as they are. The
+/// inferred parameter type was a container, and the recursive call narrowed its `mixed` argument
+/// to that container at the call site, so the first string element threw "Value must be of type
+/// array, string given" (a `var_dump`-style walker over `preg_match_all()`'s matches). Oracle: php.
+#[test]
+fn test_recursive_untyped_walker_receives_mixed_elements_unnarrowed() {
+    let out = compile_and_run(
+        r#"<?php
+function walk($v) {
+    if (is_array($v)) {
+        $parts = [];
+        foreach ($v as $k => $item) {
+            $parts[] = $k . '=' . walk($item);
+        }
+        return '[' . implode(',', $parts) . ']';
+    }
+    return (string)$v;
+}
+echo walk(['a' => [1, 'x', [2.5, 'deep']], 'b' => 's', 3 => true]), "\n";
+$n = preg_match_all('/([0-9]+)([a-z])/', 'a1b22c333d', $m);
+echo $n, ':', walk($m), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "[a=[0=1,1=x,2=[0=2.5,1=deep]],b=s,3=1]\n3:[0=[0=1b,1=22c,2=333d],1=[0=1,1=22,2=333],2=[0=b,1=c,2=d]]\n"
+    );
 }

@@ -108,6 +108,8 @@ pub(super) fn reject_ambiguous_local_binding_decisions(
             .collect(),
         assigns: HashMap::new(),
         unset_args: HashMap::new(),
+        current_declaration: None,
+        site_declarations: HashMap::new(),
     };
     count_block(program, &mut tally);
     // Counted BY ROLE, matching how lowering consults each map: `lower_assign` reads the retype
@@ -145,12 +147,19 @@ pub(super) fn reject_ambiguous_local_binding_decisions(
     for (span, name, sites) in decisions {
         let count = sites.get(&(*span, name.clone())).copied().unwrap_or(0);
         if count > 1 {
+            // Name one declaration the colliding sites sit in — the LAST one, which the autoload
+            // pass spliced in latest — so the pipeline can map the error to a file and, when that
+            // file is an autoloaded class php would load lazily, leave it to the runtime.
+            let declaration = tally
+                .site_declarations
+                .get(&(*span, name.clone()))
+                .and_then(|declarations| declarations.iter().rev().flatten().next().cloned());
             // ONE message for both shapes, deliberately. Structural equality of the sites would
             // hint at "same file included twice", but it does not PROVE it — two different files
             // can hold identical code at identical positions — so a message that guessed would be
             // wrong exactly where it sounded most confident. Naming both causes is accurate in
             // every case and tells the reader what to look for.
-            return Err(CompileError::new(
+            let mut error = CompileError::new(
                 *span,
                 &format!(
                     "Cannot re-bind ${} here: {} statements in this program sit at line {} \
@@ -168,7 +177,9 @@ pub(super) fn reject_ambiguous_local_binding_decisions(
                     span.col,
                     name,
                 ),
-            ));
+            );
+            error.declaration = declaration;
+            return Err(error);
         }
     }
     Ok(())
@@ -325,22 +336,28 @@ fn count_stmt(stmt: &Stmt, tally: &mut Tally) {
         // is derived from the `StmtKind` definition rather than from memory, and the match stays
         // exhaustive so a new declaration variant has to be classified here rather than defaulting
         // to "contains nothing".
-        StmtKind::FunctionDecl { params, body, .. } => {
-            count_param_defaults(params, tally);
-            count_block(body, tally);
+        StmtKind::FunctionDecl { name, params, body, .. } => {
+            within_declaration(tally, name, |tally| {
+                count_param_defaults(params, tally);
+                count_block(body, tally);
+            });
         }
-        StmtKind::ClassDecl { properties, methods, constants, .. }
-        | StmtKind::InterfaceDecl { properties, methods, constants, .. }
-        | StmtKind::TraitDecl { properties, methods, constants, .. } => {
-            count_class_members(properties, methods, constants, tally);
+        StmtKind::ClassDecl { name, properties, methods, constants, .. }
+        | StmtKind::InterfaceDecl { name, properties, methods, constants, .. }
+        | StmtKind::TraitDecl { name, properties, methods, constants, .. } => {
+            within_declaration(tally, name, |tally| {
+                count_class_members(properties, methods, constants, tally);
+            });
         }
-        StmtKind::EnumDecl { cases, methods, constants, .. } => {
-            for case in cases {
-                if let Some(value) = &case.value {
-                    count_expr(value, tally);
+        StmtKind::EnumDecl { name, cases, methods, constants, .. } => {
+            within_declaration(tally, name, |tally| {
+                for case in cases {
+                    if let Some(value) = &case.value {
+                        count_expr(value, tally);
+                    }
                 }
-            }
-            count_class_members(&[], methods, constants, tally);
+                count_class_members(&[], methods, constants, tally);
+            });
         }
         // A packed class declares typed FIELDS only — no defaults, no bodies, no expressions.
         StmtKind::PackedClassDecl { name: _, fields: _ }
@@ -573,6 +590,12 @@ fn bump_assign(tally: &mut Tally, span: Span, name: &str) {
         return;
     }
     *tally.assigns.entry((span, name.to_string())).or_insert(0) += 1;
+    let declaration = tally.current_declaration.clone();
+    tally
+        .site_declarations
+        .entry((span, name.to_string()))
+        .or_default()
+        .push(declaration);
 }
 
 /// Records one more `unset` argument naming `name` at `span`.
@@ -581,6 +604,19 @@ fn bump_unset_arg(tally: &mut Tally, span: Span, name: &str) {
         return;
     }
     *tally.unset_args.entry((span, name.to_string())).or_insert(0) += 1;
+    let declaration = tally.current_declaration.clone();
+    tally
+        .site_declarations
+        .entry((span, name.to_string()))
+        .or_default()
+        .push(declaration);
+}
+
+/// Walks `walk` with `name` as the enclosing declaration, restoring the outer one afterwards.
+fn within_declaration(tally: &mut Tally, name: &str, walk: impl FnOnce(&mut Tally)) {
+    let outer = tally.current_declaration.replace(name.to_string());
+    walk(tally);
+    tally.current_declaration = outer;
 }
 
 /// The watched spans plus the per-ROLE `(span, name)` node counts collected for them.
@@ -591,4 +627,8 @@ struct Tally {
     assigns: HashMap<(Span, String), usize>,
     /// `unset` arguments, the only nodes a KILL decision can name.
     unset_args: HashMap<(Span, String), usize>,
+    /// The class-like or function the walk is currently inside, if any.
+    current_declaration: Option<String>,
+    /// For every counted site, the declarations its nodes sit in, so a collision can name one.
+    site_declarations: HashMap<(Span, String), Vec<Option<String>>>,
 }

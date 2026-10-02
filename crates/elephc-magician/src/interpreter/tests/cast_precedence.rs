@@ -122,3 +122,27 @@ echo (int) "";"#
 fn a_float_cast_takes_the_leading_numeric_prefix_with_its_fraction() {
     assert_eq!(out(br#"echo (float) "3.5rest";"#), "3.5");
 }
+
+/// Verifies a cast or prefix operator before an assignment applies to the whole assignment.
+///
+/// PHP's grammar needs a variable on the left of `=`, so `(int) $pos = strpos($s, ":")` is
+/// `(int) ($pos = strpos($s, ":"))`, and the same holds for `-`, `!`, `~`, `@`. The parser
+/// refused every one but `!` with "unexpected token `=`"; Symfony's `IconRenderer::renderIcon()`
+/// writes `if (0 < (int) $pos = strpos($name, ':'))`, which killed every page rendering an
+/// icon. The last case is a compound assignment under a cast. `php -n` 8.5.10 prints
+/// `2:2;5:5;-3:3;1:0;-8:7;a:ab`.
+#[test]
+fn a_prefix_operator_applies_to_the_whole_assignment() {
+    assert_eq!(
+        out(
+            br#"$name = "fa:home";
+if (0 < (int) $pos = strpos($name, ":")) { echo $pos, ":", $pos, ";"; }
+$s = (string) $y = 5; echo $s, ":", $y, ";";
+$n = -$z = 3; echo $n, ":", $z, ";";
+$b = !$x = 0; echo (int) $b, ":", $x, ";";
+$t = ~$w = 7; echo $t, ":", $w, ";";
+$c = "a"; $d = (string) $c .= "b"; echo "a:", $d;"#
+        ),
+        "2:2;5:5;-3:3;1:0;-8:7;a:ab",
+    );
+}

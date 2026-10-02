@@ -244,6 +244,128 @@ pub(super) fn static_callable_class_name(
     }
 }
 
+/// Builtins that only INVOKE their callback before returning, with the callback's position.
+///
+/// `usize::MAX` names the last positional argument (`array_udiff(..., $callback)`). A builtin
+/// that stores its callback (`spl_autoload_register`, `ob_start`, `set_error_handler`...) is
+/// absent on purpose: the stored value is observable again, and it must stay the array.
+const INVOKE_ONLY_CALLBACK_BUILTINS: &[(&str, usize)] = &[
+    ("array_all", 1),
+    ("array_any", 1),
+    ("array_filter", 1),
+    ("array_find", 1),
+    ("array_find_key", 1),
+    ("array_map", 0),
+    ("array_reduce", 1),
+    ("array_udiff", usize::MAX),
+    ("array_uintersect", usize::MAX),
+    ("array_walk", 1),
+    ("array_walk_recursive", 1),
+    ("iterator_apply", 1),
+    ("preg_replace_callback", 1),
+    ("uasort", 1),
+    ("uksort", 1),
+    ("usort", 1),
+];
+
+/// Rewrites a literal `[Class::class, 'method']` callback of an invoke-only builtin into the
+/// equivalent `Class::method(...)`, when the class and static method are known at compile time
+/// and the method is visible from the calling class.
+///
+/// php resolves a callable array against the CALLING scope, so `[__CLASS__, 'helper']` reaches a
+/// private static `helper()` from inside its class. The array form reached the runtime callable
+/// table instead, which only lists public methods and knows no caller scope, so every such call
+/// failed ("callable array did not resolve to an invokable target"), and the sort builtins
+/// refused the array at compile time even for a public method. A first-class callable is bound
+/// where it is written and already carries that scope. The builtin never hands the callback back,
+/// so nothing can observe that it was not an array.
+///
+/// `static::class` keeps its array form: its class is the runtime called class.
+pub(super) fn invoke_only_callback_args_with_static_method_callables(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+) -> Option<Vec<Expr>> {
+    if ctx.functions.contains_key(name) {
+        return None;
+    }
+    let key = php_symbol_key(name.trim_start_matches('\\'));
+    let &(_, position) = INVOKE_ONLY_CALLBACK_BUILTINS
+        .iter()
+        .find(|(builtin, _)| *builtin == key)?;
+    if args.is_empty()
+        || crate::types::call_args::has_named_args(args)
+        || args.iter().any(is_spread_arg)
+    {
+        return None;
+    }
+    let index = if position == usize::MAX {
+        args.len() - 1
+    } else {
+        position
+    };
+    let callback = args.get(index)?;
+    let rewritten = visible_static_method_callable_for_array(ctx, callback)?;
+    let mut args = args.to_vec();
+    args[index] = rewritten;
+    Some(args)
+}
+
+/// Returns `Class::method(...)` for a literal `[<class>, 'method']` naming a static method the
+/// current class may call.
+fn visible_static_method_callable_for_array(
+    ctx: &LoweringContext<'_, '_>,
+    callback: &Expr,
+) -> Option<Expr> {
+    let ExprKind::ArrayLiteral(items) = &callback.kind else {
+        return None;
+    };
+    let [class_expr, method_expr] = items.as_slice() else {
+        return None;
+    };
+    let ExprKind::StringLiteral(method) = &method_expr.kind else {
+        return None;
+    };
+    let class_name = match &class_expr.kind {
+        ExprKind::StringLiteral(name) => name.clone(),
+        ExprKind::ClassConstant { receiver } if !matches!(receiver, StaticReceiver::Static) => {
+            static_receiver_class_name(ctx, receiver)?
+        }
+        _ => return None,
+    };
+    let class_name = lookup_folded_name(ctx.classes.keys(), class_name.trim_start_matches('\\'))?;
+    let class_info = ctx.classes.get(&class_name)?;
+    let method_key = php_symbol_key(method);
+    let receiver = StaticReceiver::Named(Name::from(class_name.clone()));
+    static_method_implementation_signature(ctx, &receiver, method)?;
+    let declaring_class = class_info
+        .static_method_declaring_classes
+        .get(&method_key)
+        .cloned()
+        .unwrap_or_else(|| class_name.clone());
+    let visible = match class_info.static_method_visibilities.get(&method_key)? {
+        Visibility::Public => true,
+        Visibility::Private => ctx
+            .current_class
+            .as_deref()
+            .is_some_and(|current| php_symbol_key(current) == php_symbol_key(&declaring_class)),
+        Visibility::Protected => ctx.current_class.as_deref().is_some_and(|current| {
+            class_extends_class(ctx, current, &declaring_class)
+                || class_extends_class(ctx, &declaring_class, current)
+        }),
+    };
+    if !visible {
+        return None;
+    }
+    Some(Expr::new(
+        ExprKind::FirstClassCallable(CallableTarget::StaticMethod {
+            receiver,
+            method: method.clone(),
+        }),
+        callback.span,
+    ))
+}
+
 /// Returns the static `is_callable()` result for a literal static-method callback array.
 pub(super) fn static_array_callable_is_callable(
     ctx: &LoweringContext<'_, '_>,

@@ -1511,21 +1511,25 @@ pub(crate) fn check_function_exists(
         let cb_name = checker
             .canonical_function_name_folded(cb_name)
             .unwrap_or_else(|| cb_name.to_string());
+        // The named function is resolved here, but as an UNCALLED function: asking whether it
+        // exists is not a call, so no argument type may be invented for it. This used to check a
+        // fabricated call passing `0` for every parameter, and that `int` became the parameter
+        // type of any function nothing else called — Laravel's
+        // `if (! function_exists('lazy')) { function lazy($class, …) { … } }` then handed `int` to
+        // a `Closure` parameter and the build was refused. An undeclared parameter is `mixed`
+        // until a real call site specializes it, exactly as at the end of the pass.
+        //
+        // Errors stay unreported here, as before: a guarded polyfill for a function this build
+        // already provides is dead code, and its body is checked for real only if something
+        // calls it.
         if checker.fn_decls.contains_key(cb_name.as_str())
             && !checker.functions.contains_key(cb_name.as_str())
         {
-            if let Some(decl) = checker.fn_decls.get(cb_name.as_str()).cloned() {
-                let dummy_args: Vec<Expr> = decl
-                    .params
-                    .iter()
-                    .map(|_| Expr::new(ExprKind::IntLiteral(0), span))
-                    .collect();
-                let _ = checker.check_function_call(&cb_name, &dummy_args, span, env);
-            }
+            let _ = checker.resolve_uncalled_function(&cb_name);
         } else if checker.function_variant_groups.contains_key(cb_name.as_str())
             && !checker.functions.contains_key(cb_name.as_str())
         {
-            let _ = checker.ensure_function_variant_group_signature(&cb_name, span);
+            let _ = checker.resolve_uncalled_function_variant_group(&cb_name, span);
         }
     }
     Ok(PhpType::Bool)

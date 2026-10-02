@@ -383,6 +383,12 @@ fn eval_expr_dispatch(
                 values.null()
             }
         },
+        // `$$name` / `${expr}`: read the variable the value names, with the same undefined-name
+        // warning a literal name gets.
+        EvalExpr::DynamicVar(name) => {
+            let name = eval_dynamic_member_name(name, context, scope, values)?;
+            eval_expr(&EvalExpr::LoadVar(name), context, scope, values)
+        }
         EvalExpr::Magic(magic) => eval_magic_const(magic, context, values),
         EvalExpr::Match {
             subject,

@@ -49,6 +49,18 @@ pub unsafe extern "C" fn __elephc_eval_callable_owner_context(
         .unwrap_or(std::ptr::null_mut())
 }
 
+/// Returns the eval context of the innermost interpreted call into a registered AOT function.
+///
+/// Null when no such call is running. Generated invokers use it to resolve an interpreted
+/// callback handed to a `callable` parameter when the callback owns no context of its own.
+#[cfg(not(test))]
+#[no_mangle]
+pub extern "C" fn __elephc_eval_native_call_context() -> *mut ElephcEvalContext {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_native_call_context");
+    std::panic::catch_unwind(interpreter::current_native_call_context)
+        .unwrap_or(std::ptr::null_mut())
+}
+
 /// Returns the live eval context that declared a dynamic PHP function, or null when absent.
 ///
 /// # Safety

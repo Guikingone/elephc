@@ -228,8 +228,13 @@ pub(in crate::interpreter) fn eval_preg_match_all_set_order_array(
     let unmatched_as_null = flags & EVAL_PREG_UNMATCHED_AS_NULL != 0;
     let mut outer = values.array_new(captures.len())?;
     for (match_index, capture) in captures.iter().enumerate() {
-        let mut row = values.array_new(capture_count)?;
-        for capture_index in 0..capture_count {
+        // php's SET_ORDER rows drop trailing groups that did not participate in THAT match
+        // (`"ab, cd=5"` against `([a-z]+)(?:=([0-9]+))?` gives `["ab","ab"]` for the first and
+        // `["cd=5","cd","5"]` for the second), unless UNMATCHED_AS_NULL asks for every group.
+        // PATTERN_ORDER fills every column, so only this builder trims.
+        let row_len = capture_count.min(eval_preg_visible_capture_len(capture, unmatched_as_null));
+        let mut row = values.array_new(row_len)?;
+        for capture_index in 0..row_len {
             let key =
                 values.int(i64::try_from(capture_index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
             let value = eval_preg_capture_value(

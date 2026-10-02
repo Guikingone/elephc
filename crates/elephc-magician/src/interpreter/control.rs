@@ -130,6 +130,12 @@ pub(super) enum EvaluatedCallable {
         native_class: Option<String>,
         bridge_scope: Option<String>,
     },
+    /// A compiled callable's descriptor (a compiled closure or first-class callable) handed to
+    /// interpreted code as a `callable` value. The descriptor carries its own invoker, so it is
+    /// called directly rather than looked up by name, the way a `$f()` call already does.
+    NativeDescriptor {
+        descriptor: usize,
+    },
 }
 
 /// Bound argument tuple for direct `array_splice()` calls.

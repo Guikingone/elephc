@@ -370,3 +370,41 @@ echo ScopedConstructorChild::parentValue('name', 9)->value;
     );
     assert_eq!(out, "name:7:9");
 }
+
+/// Verifies `func_num_args()`, `func_get_args()` and `func_get_arg()` count only the arguments
+/// actually passed when a caller leaves optional parameters out -- from compiled functions,
+/// methods, static methods, constructors, and from interpreted code calling a compiled function.
+///
+/// Default materialization fills every omitted optional parameter before the call, so the body
+/// counted every declared parameter: Laravel's `response()` answers `func_num_args() === 0` with
+/// the response factory, and `response()->json(...)` failed with "Method
+/// Illuminate\Http\Response::json does not exist". The caller now records the count it passed.
+#[test]
+fn test_func_args_count_only_what_the_caller_passed() {
+    let out = compile_and_run(
+        r#"<?php
+function resp($content = null, $status = 200) {
+    return func_num_args() === 0
+        ? "factory"
+        : "response:" . func_num_args() . ":" . json_encode(func_get_args());
+}
+echo resp(), "|", resp("x"), "|", resp("x", 201), "|", resp("x", 201, "extra"), "\n";
+class K {
+    public function __construct($x = 0) { echo "ctor", func_num_args(), json_encode(func_get_args()), " "; }
+    public function m($a = 1, $b = 2) { return func_num_args() . json_encode(func_get_args()); }
+    public static function s($a = 1) { return func_num_args() . ":" . (func_num_args() > 0 ? func_get_arg(0) : "-"); }
+}
+$k = new K();
+$k2 = new K(7);
+echo "|", $k->m(), "|", $k->m(5), "|", K::s(), "|", K::s(3), "\n";
+$code = 'echo resp(), "|", resp("y"), "|", resp("y", 1, 2), "\n";';
+eval($code);
+"#,
+    );
+    assert_eq!(
+        out,
+        "factory|response:1:[\"x\"]|response:2:[\"x\",201]|response:3:[\"x\",201,\"extra\"]\n\
+         ctor0[] ctor1[7] |0[]|1[5]|0:-|1:3\n\
+         factory|response:1:[\"y\"]|response:3:[\"y\",1,2]\n"
+    );
+}
