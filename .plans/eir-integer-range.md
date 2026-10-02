@@ -108,3 +108,23 @@ Validation passed: 206 EIR unit tests, 21 range codegen tests, all five target
 emitters with both null representations and optimizer modes, reference/array
 ownership with heap debugging, a warning-free build, and `git diff --check`.
 The commit remains local under the ready-for-review contribution policy.
+
+## Latest rebased CI repair
+
+- [x] Inspect the failed jobs on head `5d590ee1` and compare focused optimizer-on/off runs.
+- [x] Separate native/eval ownership, output-buffer clean/flush, and multisort null-representation cases.
+- [x] Restore the array-argument eval fixture named by the existing timeout override.
+- [x] Verify the resulting cases under the CI profile in both optimizer modes and prepare the fix for publication.
+
+The failed run terminated six composite fixtures at the 60-second outer limit.
+The information-result fixture passed locally in 55.93 seconds with optimization
+enabled and 32.41 seconds with it disabled. Independent cases now have independent
+timeouts without removing PHP source operations, allocation comparisons, heap
+checks, null representations, or repetition counts. The three additional
+two-compilation eval ownership probes receive the existing 120-second Linux
+x86_64 budget; native cases and the global 60-second guard remain unchanged.
+
+Focused validation passed with zero retries: all 11 affected cases with the
+optimizer enabled and disabled, seven integer-range all-target tests, a
+warning-free build, configuration filter-name checks, and `git diff --check`.
+The full supported-target execution matrix remains the CI publication gate.
