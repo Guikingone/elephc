@@ -29,6 +29,19 @@ pub(super) fn lower_instanceof(
             if name.as_str().trim_start_matches('\\') == "static" && ctx.local_slots.contains_key("this") {
                 operands.push(ctx.load_local("this", Some(expr.span)).value);
                 None
+            } else if name.as_str().trim_start_matches('\\') == "static" && ctx.current_class.is_some() {
+                // `$value instanceof static` in a STATIC method: there is no `$this` to take the
+                // class from, and the literal name "static" matched nothing, so the test was
+                // always false -- brick/math's `BigNumber::of()` never recognised a number already
+                // of the requested class. The called class answers it, as `static::class` does.
+                let called = Expr::new(
+                    ExprKind::ClassConstant {
+                        receiver: crate::parser::ast::StaticReceiver::Static,
+                    },
+                    expr.span,
+                );
+                operands.push(lower_expr(ctx, &called).value);
+                None
             } else {
                 Some(Immediate::Data(ctx.intern_class_name(&instanceof_target_name(ctx, name.as_str()))))
             }

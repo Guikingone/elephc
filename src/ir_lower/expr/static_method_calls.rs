@@ -162,6 +162,37 @@ pub(super) fn lower_static_method_call(
             }
         }
     }
+    // `Later::method(...$args)` on a class only an eval declares: the plain route above carries one
+    // boxed operand per argument, which a spread cannot supply. The same call through the
+    // callable-array bridge takes the whole argument array, spreads and all -- PHP's own meaning
+    // for it. Laravel's `Stringable::trim()` is `Str::trim(...array_merge([$this->value],
+    // func_get_args()))` and every call died on `Class "Illuminate\Support\Str" not found`.
+    if matches!(receiver, StaticReceiver::Named(_))
+        && !plain_positional_call_args(args)
+        && !crate::types::call_args::has_named_args(args)
+    {
+        if let Some(class_name) = static_receiver_class_name(ctx, receiver) {
+            if !ctx.classes.contains_key(class_name.as_str()) {
+                ctx.declare_eval_context_local();
+                let callable = Expr::new(
+                    ExprKind::ArrayLiteral(vec![
+                        Expr::new(ExprKind::StringLiteral(class_name), expr.span),
+                        Expr::new(ExprKind::StringLiteral(dispatch_method.to_string()), expr.span),
+                    ]),
+                    expr.span,
+                );
+                let arguments = Expr::new(ExprKind::ArrayLiteral(args.to_vec()), expr.span);
+                let rewritten = Expr::new(
+                    ExprKind::FunctionCall {
+                        name: crate::names::Name::unqualified("call_user_func_array"),
+                        args: vec![callable, arguments],
+                    },
+                    expr.span,
+                );
+                return lower_expr(ctx, &rewritten);
+            }
+        }
+    }
     let sig = static_method_implementation_signature(ctx, receiver, dispatch_method)
         .or_else(|| lexical_instance_static_call_signature(ctx, receiver, dispatch_method))
         .cloned();

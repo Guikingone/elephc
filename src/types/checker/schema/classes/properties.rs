@@ -489,7 +489,7 @@ fn apply_private_parent_property_shadowing(
         refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
     } else if let Some(default) = &prop.default {
         state.declared_properties.remove(&prop.name);
-        infer_expr_type_syntactic(default)
+        infer_property_default_syntactic(default)
     } else {
         state.declared_properties.remove(&prop.name);
         PhpType::Mixed
@@ -859,7 +859,45 @@ fn refine_declared_array_type_from_default(declared_ty: PhpType, default: Option
 /// Mutable untyped properties initialized with `false` must continue accepting later boolean
 /// writes; explicit `false` property declarations retain their narrower contract.
 fn infer_untyped_property_default_type(default: &Expr) -> PhpType {
-    widen_false_literal_storage_type(infer_expr_type_syntactic(default))
+    widen_false_literal_storage_type(infer_property_default_syntactic(default))
+}
+
+/// Syntactic type of an untyped property default, with every `Class::NAME` read as `mixed`.
+///
+/// `infer_expr_type_syntactic` has no class tables, so it answers `string` for ANY scoped
+/// constant. For an enum case, or a constant of another type, that is a fabricated type: an
+/// untyped `protected $levels = ['debug' => Level::Debug, ...]` became `array<string, string>`,
+/// and `return $this->levels[$key]` cast the enum object to a string -- "Object of class
+/// Monolog\Level could not be converted to string" in Laravel's `LogManager`. The element (or the
+/// property itself, for a bare constant) is `mixed`; the container shape is unchanged.
+fn infer_property_default_syntactic(default: &Expr) -> PhpType {
+    if matches!(default.kind, ExprKind::ScopedConstantAccess { .. }) {
+        return PhpType::Mixed;
+    }
+    let inferred = infer_expr_type_syntactic(default);
+    if !default_array_holds_scoped_constant(default) {
+        return inferred;
+    }
+    match inferred {
+        PhpType::Array(_) => PhpType::Array(Box::new(PhpType::Mixed)),
+        PhpType::AssocArray { key, .. } => PhpType::AssocArray {
+            key,
+            value: Box::new(PhpType::Mixed),
+        },
+        other => other,
+    }
+}
+
+/// Whether an array-literal default holds a scoped constant (`Class::NAME`) at any depth.
+fn default_array_holds_scoped_constant(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::ScopedConstantAccess { .. } => true,
+        ExprKind::ArrayLiteral(items) => items.iter().any(default_array_holds_scoped_constant),
+        ExprKind::ArrayLiteralAssoc(pairs) => pairs
+            .iter()
+            .any(|(_, value)| default_array_holds_scoped_constant(value)),
+        _ => false,
+    }
 }
 
 /// PHP treats a plain untyped property with no explicit default as `= null`: the slot

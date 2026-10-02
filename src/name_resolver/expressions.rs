@@ -281,6 +281,17 @@ pub(super) fn resolve_expr(
                 .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
                 .collect(),
         },
+        // `new $class(Foo::class)`: the arguments are ordinary expressions in the enclosing
+        // namespace. They were left untouched, so a `::class` argument lost its namespace and
+        // Laravel's `new $collection(...)`/`new $cls(PostResource::class)` handed the callee
+        // `PostResource` instead of `App\Http\Resources\PostResource`.
+        ExprKind::NewDynamic { name_expr, args } => ExprKind::NewDynamic {
+            name_expr: Box::new(resolve_expr(name_expr, current_namespace, imports, symbols)),
+            args: args
+                .iter()
+                .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
+                .collect(),
+        },
         ExprKind::PropertyAccess { object, property } => ExprKind::PropertyAccess {
             object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
             property: property.clone(),

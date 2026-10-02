@@ -29,6 +29,11 @@ const fn semantics() -> crate::builtins::semantics::BuiltinSemantics {
         crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::MbStrtoupper);
     semantics.argument_lowering =
         crate::builtins::semantics::BuiltinArgumentLowering::NullableStringOperands;
+    // `$function($value)` with `$function = 'mb_strtoupper'` is how Laravel's `Str::plural()`
+    // matches case; a string source can select this builtin at run time.
+    semantics.callable = crate::builtins::semantics::BuiltinCallablePolicy::Dynamic(
+        crate::builtins::semantics::callable_accepts_string_source,
+    );
     semantics
 }
 

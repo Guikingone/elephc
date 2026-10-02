@@ -53,7 +53,7 @@ pub(crate) fn lower_class_relation(
 
     let target = resolve_relation_target(ctx, target_value)?;
     if matches!(target, ClassLikeTarget::Unknown) {
-        emit_boxed_bool(ctx, false);
+        emit_unknown_relation_answer(ctx, target_value, name)?;
         return store_if_result(ctx, inst);
     }
 
@@ -106,7 +106,7 @@ fn lower_runtime_class_relation(
             ctx.emitter.instruction(&format!("jnz {}", found_label));           // materialize the relation hash only for a known target
         }
     }
-    emit_boxed_bool(ctx, false);
+    emit_unknown_relation_answer(ctx, target, name)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&found_label);
@@ -117,6 +117,23 @@ fn lower_runtime_class_relation(
     abi::emit_call_label(ctx.emitter, "__rt_hash_from_name_list");
     emit_box_current_value_as_mixed(ctx.emitter, &class_relation_array_type());
     ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Answers a relation probe for a name the compile-time registry does not know.
+///
+/// With the eval bridge linked the name may belong to a class an eval declared, so the
+/// process-global eval metadata is asked first; `false` is PHP's answer for a genuinely unknown
+/// name. The boxed answer is left in the result register.
+fn emit_unknown_relation_answer(
+    ctx: &mut FunctionContext<'_>,
+    target: ValueId,
+    name: &str,
+) -> Result<()> {
+    if ctx.module.required_runtime_features.eval_bridge {
+        return super::lower_eval_global_class_relation_to_result(ctx, target, name);
+    }
+    emit_boxed_bool(ctx, false);
     Ok(())
 }
 

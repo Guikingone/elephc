@@ -340,6 +340,14 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_new(
     let stack_bytes = eval_function_call_stack_bytes(inst.operands.len());
     abi::emit_reserve_temporary_stack(ctx.emitter, stack_bytes);
     ensure_eval_context(ctx)?;
+    // The construction is written inside this frame's class body, and that lexical class is the
+    // calling scope php judges the constructor's visibility from: `BigNumber::of()` building a
+    // `BigInteger` with a PROTECTED constructor was refused "from global scope".
+    let pushed_class_scope = if current_eval_method_class(ctx).is_some() {
+        push_eval_context_class_scope(ctx)?
+    } else {
+        false
+    };
     let boxed = store_eval_function_call_args(ctx, inst, args_offset)?;
     load_eval_context_to_arg(ctx, 0);
     let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
@@ -364,6 +372,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_new(
     abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_new_object");
     abi::emit_call_label(ctx.emitter, &symbol);
+    pop_eval_context_class_scope(ctx, pushed_class_scope);
     emit_eval_status_check(ctx);
     emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     let result_reg = abi::int_result_reg(ctx.emitter);
@@ -606,6 +615,49 @@ pub(in crate::codegen::lower_inst) fn lower_eval_owner_mixed_property_get(
     miss_label: &str,
     done_label: &str,
 ) -> Result<()> {
+    lower_eval_owner_mixed_property_get_named(
+        ctx,
+        object,
+        OwnerPropertyName::Literal(property),
+        miss_label,
+        done_label,
+    )
+}
+
+/// Same read for a property named by a RUNTIME string (`$object->{$name}`).
+///
+/// Laravel's `DelegatesToResource::__get($key)` is `$this->resource->{$key}`; the runtime-name
+/// read answered null for an eval-declared model, so every API resource attribute was empty.
+pub(in crate::codegen::lower_inst) fn lower_eval_owner_mixed_dynamic_property_get(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    property_value: ValueId,
+    miss_label: &str,
+    done_label: &str,
+) -> Result<()> {
+    lower_eval_owner_mixed_property_get_named(
+        ctx,
+        object,
+        OwnerPropertyName::Runtime(property_value),
+        miss_label,
+        done_label,
+    )
+}
+
+/// How the owner property read names its property.
+#[derive(Clone, Copy)]
+enum OwnerPropertyName<'a> {
+    Literal(&'a str),
+    Runtime(ValueId),
+}
+
+fn lower_eval_owner_mixed_property_get_named(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    name: OwnerPropertyName<'_>,
+    miss_label: &str,
+    done_label: &str,
+) -> Result<()> {
     ctx.load_value_to_result(object)?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
@@ -630,14 +682,18 @@ pub(in crate::codegen::lower_inst) fn lower_eval_owner_mixed_property_get(
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     ctx.load_value_to_reg(object, object_arg)?;
-    let (property_label, property_len) = ctx.data.add_string(property.as_bytes());
     let property_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
-    abi::emit_symbol_address(ctx.emitter, property_ptr_arg, &property_label);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 3),
-        property_len as i64,
-    );
+    let property_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    match name {
+        OwnerPropertyName::Literal(property) => {
+            let (property_label, property_len) = ctx.data.add_string(property.as_bytes());
+            abi::emit_symbol_address(ctx.emitter, property_ptr_arg, &property_label);
+            abi::emit_load_int_immediate(ctx.emitter, property_len_arg, property_len as i64);
+        }
+        OwnerPropertyName::Runtime(value) => {
+            ctx.load_string_value_to_regs(value, property_ptr_arg, property_len_arg)?;
+        }
+    }
     let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
     abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
     abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);

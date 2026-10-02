@@ -337,6 +337,44 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_class_relation(
     store_if_result(ctx, inst)
 }
 
+/// Asks the eval bridge for a class relation from a frame that owns no eval context.
+///
+/// The compile-time relation registry knows only compiled classes, so a helper such as Laravel's
+/// `class_uses_recursive($model)` answered an empty relation for a model class an eval declared.
+/// The bridge is called with a null context and answers from the process-global class metadata.
+/// The boxed relation (or `false`) is left in the result register for the caller to store.
+pub(in crate::codegen::lower_inst::builtins) fn lower_eval_global_class_relation_to_result(
+    ctx: &mut FunctionContext<'_>,
+    target: ValueId,
+    name: &str,
+) -> Result<()> {
+    let relation_kind = eval_class_relation_kind(name)?;
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    let mut boxed = EvalBoxedOperands::new();
+    boxed.extend(store_eval_mixed_operand_at(ctx, target, EVAL_TEMP_CELL_OFFSET)?);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);
+    let target_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, target_arg, EVAL_TEMP_CELL_OFFSET);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        relation_kind,
+    );
+    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_class_relation");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_status_check(ctx);
+    emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    Ok(())
+}
+
 /// Lowers object class-name introspection through the eval bridge.
 ///
 /// The bridge borrows the receiver cell rather than taking it, so the box this frame made is still
@@ -469,6 +507,90 @@ pub(in crate::codegen::lower_inst::builtins) fn emit_eval_object_is_a_named_fall
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 3),
         target_len as i64,
+    );
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 4), 0);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_object_is_a");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_release_eval_boxed_operands_keeping_int_answer(ctx, &boxed);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, matched_label);
+    abi::emit_jump(ctx.emitter, native_fallback_label);
+    Ok(())
+}
+
+/// Branches on an eval-owned object's relation to a RUNTIME class-name string, with no local context.
+///
+/// `fn ($value) => $value instanceof $class` compiled into a function that owns no eval context
+/// resolves `$class` through the compile-time class table, which has never heard of a class the
+/// interpreter declared (a controller, a model): the name does not resolve and the answer was
+/// `false` for an object that IS one. Laravel's `ResolvesRouteDependencies::alreadyInParameters()`
+/// is exactly that shape, so a route-bound model was dropped and a fresh empty one injected.
+///
+/// Only a string target (a `string` operand, or a boxed string) can be asked this way; an object
+/// target or any other value goes straight to the native path, which keeps its invalid-target
+/// fatal. The bridge borrows the receiver cell, so the box this frame made is released on every
+/// exit, matched or not.
+pub(in crate::codegen::lower_inst::builtins) fn emit_eval_object_is_a_dynamic_name_fallback(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    target: ValueId,
+    target_ty: &PhpType,
+    matched_label: &str,
+    native_fallback_label: &str,
+) -> Result<()> {
+    let skip_label = ctx.next_label("eval_object_is_a_dynamic_name_skip");
+    let ask_label = ctx.next_label("eval_object_is_a_dynamic_name_ask");
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    let mut boxed = EvalBoxedOperands::new();
+    boxed.extend(store_eval_object_operand(ctx, object)?);
+    match target_ty {
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+            ctx.load_string_value_to_regs(target, ptr_reg, len_reg)?;
+            save_eval_code_string(ctx);
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            ctx.load_value_to_reg(target, abi::int_result_reg(ctx.emitter))?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #1");                      // runtime tag 1 means the boxed target is a string
+                    ctx.emitter.instruction(&format!("b.ne {}", skip_label));   // only a string names a class the bridge can look up
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 1");                      // runtime tag 1 means the boxed target is a string
+                    ctx.emitter.instruction(&format!("jne {}", skip_label));    // only a string names a class the bridge can look up
+                }
+            }
+            emit_eval_unboxed_string_result(ctx);
+            save_eval_code_string(ctx);
+        }
+        _ => {
+            abi::emit_jump(ctx.emitter, &skip_label);
+        }
+    }
+    abi::emit_jump(ctx.emitter, &ask_label);
+    ctx.emitter.label(&skip_label);
+    emit_release_eval_boxed_operands(ctx, &boxed);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    abi::emit_jump(ctx.emitter, native_fallback_label);
+
+    ctx.emitter.label(&ask_label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);
+    let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_arg, EVAL_TEMP_CELL_OFFSET);
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        EVAL_CODE_PTR_OFFSET,
+    );
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        EVAL_CODE_LEN_OFFSET,
     );
     abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 4), 0);
     let symbol = ctx

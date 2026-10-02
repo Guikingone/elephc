@@ -654,13 +654,6 @@ pub(crate) fn lower_is_a_relation(
     let object = expect_operand(inst, 0)?;
     let target = expect_operand(inst, 1)?;
     let exclude_self = name == "is_subclass_of";
-    if matches!(ctx.value_php_type(object)?, PhpType::Mixed | PhpType::Union(_))
-        && super::has_eval_context(ctx)
-    {
-        if let Some(target_class) = optional_const_string_operand(ctx, target)? {
-            return super::lower_eval_object_is_a(ctx, inst, object, &target_class, exclude_self);
-        }
-    }
     // PHP takes a CLASS NAME here as readily as an object. `is_subclass_of()` allows the string
     // form by DEFAULT (`bool $allow_string = true`); `is_a()` requires it to be asked for
     // (`$allow_string = false`). A non-constant flag cannot be folded, so the relation is computed
@@ -671,6 +664,18 @@ pub(crate) fn lower_is_a_relation(
         Some(value) => const_bool_operand(ctx, value)?,
         None => Some(allows_string_by_default),
     };
+    // The eval bridge answers an OBJECT's relation only. With strings allowed a boxed value may
+    // hold a class NAME, which that probe calls "not an object": `is_a($this->collects,
+    // JsonResource::class, true)` inside any function with an eval context was false, so Laravel's
+    // resource collections refused every resource class. Those calls take the name-based path.
+    if matches!(ctx.value_php_type(object)?, PhpType::Mixed | PhpType::Union(_))
+        && super::has_eval_context(ctx)
+        && constant_flag == Some(false)
+    {
+        if let Some(target_class) = optional_const_string_operand(ctx, target)? {
+            return super::lower_eval_object_is_a(ctx, inst, object, &target_class, exclude_self);
+        }
+    }
     let object_is_object = matches!(ctx.value_php_type(object)?, PhpType::Object(_));
     // Two class NAMES, one of them only known at run time: the static walk below can only answer
     // for literals and said false for every other pair -- including `is_a($attribute->getName(),
