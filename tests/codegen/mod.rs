@@ -33,6 +33,8 @@ mod eval_runtime_symbol_links;
 mod eval_callable_ref_errors;
 mod eval_callables;
 mod eval_closures;
+mod eval_framework_idioms;
+mod eval_framework_boundaries;
 mod eval_dynamic_properties;
 mod eval_foreach_object;
 mod eval_constructors;
